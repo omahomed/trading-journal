@@ -722,7 +722,11 @@ if page == "Command Center":
             # Exposure
             if not df_cs.empty: df_cs['Source'] = 'CanSlim'
             if not df_ts.empty: df_ts['Source'] = 'TQQQ'
-            df_open_core = pd.concat([df_cs[df_cs['Status']=='OPEN'] if not df_cs.empty else pd.DataFrame(), df_ts[df_ts['Status']=='OPEN'] if not df_ts.empty else pd.DataFrame()], ignore_index=True)
+
+            # Fix: Reset index before concat to avoid duplicate index errors
+            cs_open = df_cs[df_cs['Status']=='OPEN'].reset_index(drop=True) if not df_cs.empty else pd.DataFrame()
+            ts_open = df_ts[df_ts['Status']=='OPEN'].reset_index(drop=True) if not df_ts.empty else pd.DataFrame()
+            df_open_core = pd.concat([cs_open, ts_open], ignore_index=True)
             
             core_exp_pct = 0.0; core_pos_count = len(df_open_core)
             if not df_open_core.empty and core_nlv > 0:
@@ -1762,7 +1766,9 @@ elif page == "Period Review":
             else:
                 df_j['SPY'] = 0; df_j['Nasdaq'] = 0
         else: df_j = pd.DataFrame()
-        df_s = pd.concat([s_c, s_t], ignore_index=True)
+
+        # Fix: Reset index before concat to avoid duplicate index errors
+        df_s = pd.concat([s_c.reset_index(drop=True), s_t.reset_index(drop=True)], ignore_index=True)
         
     else:
         target_port = PORT_CANSLIM if "CanSlim" in review_scope else PORT_TQQQ
