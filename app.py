@@ -102,21 +102,61 @@ def clean_dataframe(df):
     return df
 
 def secure_save(df, filename):
-    if not os.path.exists(os.path.dirname(filename)): os.makedirs(os.path.dirname(filename))
-    if not os.path.exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
-    if os.path.exists(filename):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(filename).replace('.csv', '')}_{timestamp}.csv")
-        try: shutil.copy(filename, backup_path)
-        except: pass
-    
-    # Date formatting for CSV
-    if filename in [DETAILS_FILE, SUMMARY_FILE]:
-        date_cols = ['Date', 'Open_Date', 'Closed_Date']
-        for col in date_cols:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
-    df.to_csv(filename, index=False)
+    """
+    Save DataFrame with verification to prevent data loss.
+    Returns True if save succeeded, False otherwise.
+    """
+    try:
+        if not os.path.exists(os.path.dirname(filename)):
+            os.makedirs(os.path.dirname(filename))
+
+        # Determine backup directory (handles case where BACKUP_DIR not yet defined)
+        backup_dir = globals().get('BACKUP_DIR', os.path.join(os.path.dirname(filename), 'backups'))
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        # Create backup of existing file
+        if os.path.exists(filename):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.join(backup_dir, f"{os.path.basename(filename).replace('.csv', '')}_{timestamp}.csv")
+            try:
+                shutil.copy(filename, backup_path)
+            except:
+                pass
+
+        # Date formatting for CSV
+        if filename in [DETAILS_FILE, SUMMARY_FILE]:
+            date_cols = ['Date', 'Open_Date', 'Closed_Date']
+            for col in date_cols:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+
+        # Save to temporary file first
+        temp_file = filename + '.tmp'
+        df.to_csv(temp_file, index=False)
+
+        # Verify file was written correctly
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            # Verify we can read it back
+            test_df = pd.read_csv(temp_file)
+            if len(test_df) == len(df):
+                # Success! Replace the original
+                shutil.move(temp_file, filename)
+                return True
+            else:
+                st.error(f"⚠️ Save verification failed for {os.path.basename(filename)}")
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                return False
+        else:
+            st.error(f"⚠️ Failed to write {os.path.basename(filename)}")
+            return False
+
+    except Exception as e:
+        st.error(f"❌ Save error: {str(e)}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        return False
 
 def load_data(file):
     if not os.path.exists(file): return pd.DataFrame()
@@ -135,8 +175,28 @@ def load_data(file):
             if 'Score' not in df.columns: df['Score'] = 0
             
         if file.endswith('Details.csv') or file.endswith('Summary.csv'):
-            rename_map = {'Total_Shares': 'Shares', 'Close_Date': 'Closed_Date', 'Cost': 'Amount', 'Price': 'Amount', 'Net': 'Value'}
+            rename_map = {
+                'Total_Shares': 'Shares',
+                'Close_Date': 'Closed_Date',
+                'Cost': 'Amount',
+                'Price': 'Amount',
+                'Net': 'Value',
+                'Buy_Rule': 'Rule'  # Standardize: always use 'Rule'
+            }
             df.rename(columns={k:v for k,v in rename_map.items() if k in df.columns}, inplace=True)
+
+            # Ensure critical columns exist for Summary files
+            if file.endswith('Summary.csv'):
+                if 'Rule' not in df.columns:
+                    df['Rule'] = ''
+                if 'Buy_Notes' not in df.columns:
+                    df['Buy_Notes'] = ''
+                if 'Sell_Rule' not in df.columns:
+                    df['Sell_Rule'] = ''
+                if 'Sell_Notes' not in df.columns:
+                    df['Sell_Notes'] = ''
+                if 'Risk_Budget' not in df.columns:
+                    df['Risk_Budget'] = 0.0
             date_cols = ['Date', 'Open_Date', 'Closed_Date']
             for col in date_cols:
                 if col in df.columns: df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -271,9 +331,8 @@ def update_campaign_summary(trade_id, df_d, df_s):
                 df_s.at[i, 'Closed_Date'] = None
 
         return df_d, df_s
-    except Exception as e: 
+    except Exception as e:
         print(f"Error updating campaign: {e}")
-        return df_d, df_s
         return df_d, df_s
 
 def color_pnl(val): return 'color: #ff4b4b' if isinstance(val, (int, float)) and val < 0 else 'color: #2ca02c'
