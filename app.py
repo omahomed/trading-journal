@@ -349,6 +349,106 @@ def color_score(val):
     except: pass
     return ''
 
+# ==============================================================================
+# DATA VALIDATION MODULE
+# ==============================================================================
+
+def validate_trade_entry(action, ticker, shares, price, stop_loss=None, trade_id=None, df_s=None):
+    """
+    Validates trade entry data before saving.
+    Returns: (is_valid, error_messages_list)
+    """
+    errors = []
+
+    # 1. Basic validation
+    if not ticker or ticker.strip() == '':
+        errors.append("❌ Ticker cannot be empty")
+
+    if shares <= 0:
+        errors.append("❌ Shares must be greater than 0")
+
+    if price <= 0:
+        errors.append("❌ Price must be greater than 0")
+
+    # 2. Action-specific validation
+    if action == 'BUY':
+        if stop_loss is not None and stop_loss > 0:
+            if stop_loss >= price:
+                errors.append(f"❌ Stop loss (${stop_loss:.2f}) must be below entry price (${price:.2f})")
+
+            # Check stop width (warn if > 10%)
+            stop_width = ((price - stop_loss) / price) * 100
+            if stop_width > 10:
+                errors.append(f"⚠️ Warning: Stop is {stop_width:.1f}% wide (recommend < 8%)")
+
+    elif action == 'SELL':
+        # Check if trying to sell more than owned
+        if df_s is not None and trade_id:
+            owned = df_s[df_s['Trade_ID'] == trade_id]['Shares'].sum() if not df_s.empty else 0
+            if shares > owned:
+                errors.append(f"❌ Cannot sell {shares} shares - you only own {int(owned)}")
+
+    # 3. Duplicate Trade ID check (for new trades)
+    if action == 'BUY' and trade_id and df_s is not None:
+        if not df_s.empty and trade_id in df_s['Trade_ID'].values:
+            errors.append(f"❌ Trade ID '{trade_id}' already exists")
+
+    return len(errors) == 0, errors
+
+def validate_position_size(shares, price, equity, max_pct=25.0):
+    """
+    Validates position size against equity.
+    Returns: (is_valid, warning_message)
+    """
+    if equity <= 0:
+        return True, ""
+
+    position_value = shares * price
+    position_pct = (position_value / equity) * 100
+
+    if position_pct > max_pct:
+        return False, f"⛔ Position size {position_pct:.1f}% exceeds {max_pct}% limit"
+    elif position_pct > (max_pct * 0.8):  # Warn at 80% of limit
+        return True, f"⚠️ Warning: Position size is {position_pct:.1f}% (near {max_pct}% limit)"
+
+    return True, ""
+
+def log_audit_trail(action, trade_id, ticker, details, username="User"):
+    """
+    Logs all trade actions to audit trail.
+    """
+    try:
+        audit_file = os.path.join(os.path.dirname(DETAILS_FILE), 'Audit_Trail.csv')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        audit_entry = {
+            'Timestamp': timestamp,
+            'User': username,
+            'Action': action,
+            'Trade_ID': trade_id,
+            'Ticker': ticker,
+            'Details': details
+        }
+
+        # Load existing audit log or create new
+        if os.path.exists(audit_file):
+            audit_df = pd.read_csv(audit_file)
+        else:
+            audit_df = pd.DataFrame(columns=['Timestamp', 'User', 'Action', 'Trade_ID', 'Ticker', 'Details'])
+
+        # Append new entry
+        audit_df = pd.concat([audit_df, pd.DataFrame([audit_entry])], ignore_index=True)
+
+        # Keep last 1000 entries only
+        if len(audit_df) > 1000:
+            audit_df = audit_df.tail(1000)
+
+        audit_df.to_csv(audit_file, index=False)
+        return True
+    except Exception as e:
+        print(f"Audit log error: {e}")
+        return False
+
 def calculate_open_risk(df_d, df_s, nlv):
     if df_d.empty or df_s.empty or nlv == 0: return 0.0, 0.0
     total_risk_dollars = 0.0
@@ -2968,6 +3068,43 @@ elif page == "Trade Manager":
 
         if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
             if b_tick and b_id and b_shs > 0 and b_px > 0:
+                # --- VALIDATION CHECKS ---
+                # 1. Validate trade entry data
+                is_valid, errors = validate_trade_entry(
+                    action='BUY',
+                    ticker=b_tick,
+                    shares=b_shs,
+                    price=b_px,
+                    stop_loss=b_stop,
+                    trade_id=b_id if trade_type == "Start New Campaign" else None,
+                    df_s=df_s
+                )
+
+                # 2. Validate position size
+                equity_val = equity if 'equity' in locals() else 100000.0
+                size_valid, size_msg = validate_position_size(b_shs, b_px, equity_val, max_pct=25.0)
+
+                # Display validation errors
+                if not is_valid:
+                    for error in errors:
+                        if "Warning" in error:
+                            st.warning(error)
+                        else:
+                            st.error(error)
+
+                if not size_valid:
+                    st.error(size_msg)
+
+                # Only proceed if no critical errors
+                critical_errors = [e for e in errors if "❌" in e]
+                if critical_errors or not size_valid:
+                    st.stop()
+
+                # Show warnings but allow to proceed
+                if size_msg:
+                    st.warning(size_msg)
+
+                # --- PROCEED WITH TRADE ---
                 ts = datetime.combine(b_date, b_time).strftime("%Y-%m-%d %H:%M")
                 cost = b_shs * b_px
                 if not b_trx: b_trx = generate_trx_id(df_d, b_id, 'BUY', ts)
@@ -2992,7 +3129,15 @@ elif page == "Trade Manager":
                 df_d, df_s = update_campaign_summary(b_id, df_d, df_s) # Syncs math
                 secure_save(df_d, DETAILS_FILE)
                 secure_save(df_s, SUMMARY_FILE)
-                
+
+                # Log to audit trail
+                log_audit_trail(
+                    action='BUY',
+                    trade_id=b_id,
+                    ticker=b_tick,
+                    details=f"{b_shs} shares @ ${b_px:.2f} | Cost: ${cost:.2f} | Rule: {b_rule}"
+                )
+
                 st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
                 for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val']:
                     if k in st.session_state: del st.session_state[k]
@@ -3026,10 +3171,35 @@ elif page == "Trade Manager":
                  s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
                  
                  if st.button("LOG SELL ORDER", type="primary"):
+                    # --- VALIDATION CHECKS ---
+                    # 1. Validate trade entry data
+                    is_valid, errors = validate_trade_entry(
+                        action='SELL',
+                        ticker=s_tick,
+                        shares=s_shs,
+                        price=s_px,
+                        trade_id=s_id,
+                        df_s=df_s
+                    )
+
+                    # Display validation errors
+                    if not is_valid:
+                        for error in errors:
+                            if "Warning" in error:
+                                st.warning(error)
+                            else:
+                                st.error(error)
+
+                    # Only proceed if no critical errors
+                    critical_errors = [e for e in errors if "❌" in e]
+                    if critical_errors:
+                        st.stop()
+
+                    # --- PROCEED WITH SELL ---
                     ts = datetime.combine(s_date, s_time).strftime("%Y-%m-%d %H:%M")
                     proc = s_shs * s_px
                     if not s_trx: s_trx = generate_trx_id(df_d, s_id, 'SELL', ts)
-                    
+
                     # Log Detail (Rule = Sell Rule, Notes = Sell Note)
                     new_d = {'Trade_ID':s_id, 'Trx_ID': s_trx, 'Ticker':s_tick, 'Action':'SELL', 'Date':ts, 'Shares':s_shs, 'Amount':s_px, 'Value':proc, 'Rule':s_rule, 'Notes': s_note, 'Realized_PL': 0}
                     df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
@@ -3047,7 +3217,16 @@ elif page == "Trade Manager":
                         df_s.at[idx[0], 'Sell_Notes'] = s_note
                     
                     secure_save(df_s, SUMMARY_FILE)
-                    
+
+                    # Log to audit trail
+                    realized_pl = df_s[df_s['Trade_ID'] == s_id]['Realized_PL'].iloc[0] if not df_s[df_s['Trade_ID'] == s_id].empty else 0
+                    log_audit_trail(
+                        action='SELL',
+                        trade_id=s_id,
+                        ticker=s_tick,
+                        details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
+                    )
+
                     st.success(f"Sold. Transaction ID: {s_trx}")
                     st.rerun()
         else: st.info("No positions to sell.")
@@ -3301,9 +3480,38 @@ elif page == "Trade Manager":
     # --- TAB 5: DATABASE HEALTH ---
     with tab5:
         st.subheader("Database Maintenance")
-        if st.button("FULL REBUILD (Generate Missing Summaries)"):
-            if df_d.empty: st.error("Details file is empty.")
+        st.info("ℹ️ This tool recalculates all campaign summaries from transaction details.")
+
+        # Show what will be rebuilt
+        if not df_d.empty:
+            det_ids = df_d['Trade_ID'].unique()
+            sum_ids = df_s['Trade_ID'].unique() if not df_s.empty else []
+            missing = [tid for tid in det_ids if tid not in sum_ids]
+
+            st.write(f"**Total Campaigns:** {len(det_ids)}")
+            if missing:
+                st.warning(f"⚠️ **Missing Summaries:** {len(missing)} campaigns need summary records")
+
+        # Confirmation
+        st.markdown("---")
+        rebuild_confirm = st.checkbox("I understand this will recalculate all campaigns", key='rebuild_confirm')
+
+        if st.button("FULL REBUILD (Generate Missing Summaries)", type="secondary", disabled=not rebuild_confirm):
+            if df_d.empty:
+                st.error("Details file is empty.")
             else:
+                # Create backup before rebuild
+                backup_dir = globals().get('BACKUP_DIR', os.path.join(os.path.dirname(DETAILS_FILE), 'backups'))
+                if not os.path.exists(backup_dir):
+                    os.makedirs(backup_dir, exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_s = os.path.join(backup_dir, f"Summary_pre_rebuild_{timestamp}.csv")
+                backup_d = os.path.join(backup_dir, f"Details_pre_rebuild_{timestamp}.csv")
+                df_s.to_csv(backup_s, index=False)
+                df_d.to_csv(backup_d, index=False)
+
+                # Generate missing summaries
                 det_ids = df_d['Trade_ID'].unique()
                 sum_ids = df_s['Trade_ID'].unique() if not df_s.empty else []
                 missing = [tid for tid in det_ids if tid not in sum_ids]
@@ -3315,23 +3523,81 @@ elif page == "Trade Manager":
                     new_rows.append({'Trade_ID': str(tid), 'Ticker': first_tx['Ticker'], 'Status': 'OPEN', 'Open_Date': first_tx['Date'], 'Shares': 0, 'Total_Cost': 0, 'Realized_PL': 0})
                 if new_rows:
                     df_s = pd.concat([df_s, pd.DataFrame(new_rows)], ignore_index=True)
-                
+
+                # Rebuild all campaigns
                 all_ids = df_d['Trade_ID'].unique()
                 p=st.progress(0)
                 for i, tid in enumerate(all_ids):
                     df_d, df_s = update_campaign_summary(tid, df_d, df_s)
                     p.progress((i+1)/len(all_ids))
-                
-                secure_save(df_d, DETAILS_FILE); secure_save(df_s, SUMMARY_FILE)
-                st.success(f"Rebuilt {len(all_ids)} Campaigns."); st.rerun()
+
+                secure_save(df_d, DETAILS_FILE)
+                secure_save(df_s, SUMMARY_FILE)
+
+                # Log to audit
+                log_audit_trail(
+                    action='REBUILD',
+                    trade_id='ALL',
+                    ticker='N/A',
+                    details=f"Full database rebuild: {len(all_ids)} campaigns recalculated"
+                )
+
+                st.success(f"✅ Rebuilt {len(all_ids)} campaigns. Backup saved.")
+                st.rerun()
 
     # --- TAB 6: DELETE TRADE ---
     with tab6:
+        st.warning("⚠️ **Danger Zone**: Deleting a trade will permanently remove ALL transactions for that campaign.")
+
         del_id = st.selectbox("ID to Delete", df_s['Trade_ID'].tolist() if not df_s.empty else [])
-        if st.button("DELETE PERMANENTLY"):
-            df_s = df_s[df_s['Trade_ID']!=del_id]; df_d = df_d[df_d['Trade_ID']!=del_id]
-            secure_save(df_s, SUMMARY_FILE); secure_save(df_d, DETAILS_FILE)
-            st.success("Deleted."); st.rerun()
+
+        if del_id:
+            # Show what will be deleted
+            trade_info = df_s[df_s['Trade_ID'] == del_id]
+            if not trade_info.empty:
+                row = trade_info.iloc[0]
+                st.info(f"**{row['Ticker']}** | Status: {row['Status']} | {int(row['Shares'])} shares")
+
+                # Count transactions
+                trx_count = len(df_d[df_d['Trade_ID'] == del_id])
+                st.warning(f"This will delete **{trx_count} transaction(s)** for this trade.")
+
+        # Confirmation step
+        st.markdown("---")
+        confirm = st.text_input("Type **DELETE** to confirm (case-sensitive):", key='delete_confirm')
+
+        if st.button("DELETE PERMANENTLY", type="secondary"):
+            if confirm == "DELETE":
+                # Create backup before delete
+                backup_dir = globals().get('BACKUP_DIR', os.path.join(os.path.dirname(DETAILS_FILE), 'backups'))
+                if not os.path.exists(backup_dir):
+                    os.makedirs(backup_dir, exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_s = os.path.join(backup_dir, f"Summary_pre_delete_{del_id}_{timestamp}.csv")
+                backup_d = os.path.join(backup_dir, f"Details_pre_delete_{del_id}_{timestamp}.csv")
+                df_s.to_csv(backup_s, index=False)
+                df_d.to_csv(backup_d, index=False)
+
+                # Log to audit trail
+                log_audit_trail(
+                    action='DELETE',
+                    trade_id=del_id,
+                    ticker=trade_info.iloc[0]['Ticker'] if not trade_info.empty else 'UNKNOWN',
+                    details=f"Deleted entire campaign with {trx_count} transactions"
+                )
+
+                # Perform deletion
+                df_s = df_s[df_s['Trade_ID']!=del_id]
+                df_d = df_d[df_d['Trade_ID']!=del_id]
+                secure_save(df_s, SUMMARY_FILE)
+                secure_save(df_d, DETAILS_FILE)
+
+                st.success(f"✅ Trade {del_id} deleted. Backup saved to: {os.path.basename(backup_d)}")
+                st.rerun()
+            else:
+                st.error("❌ You must type DELETE to confirm. Deletion cancelled.")
+                st.stop()
 
 # ==============================================================================
 # TAB 7: ACTIVE CAMPAIGN SUMMARY (FAST REFRESH + RISK STATUS)
