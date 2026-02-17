@@ -719,14 +719,28 @@ if page == "Command Center":
             if not df_core_yr.empty:
                 ytd_val = ((1 + df_core_yr['Daily_Pct']).prod() - 1) * 100
             
-            # Exposure
-            if not df_cs.empty: df_cs['Source'] = 'CanSlim'
-            if not df_ts.empty: df_ts['Source'] = 'TQQQ'
+            # Exposure - Fix duplicate column/index issues
+            if not df_cs.empty:
+                # Remove any duplicate columns
+                df_cs = df_cs.loc[:, ~df_cs.columns.duplicated()].copy()
+                df_cs['Source'] = 'CanSlim'
+            if not df_ts.empty:
+                # Remove any duplicate columns
+                df_ts = df_ts.loc[:, ~df_ts.columns.duplicated()].copy()
+                df_ts['Source'] = 'TQQQ'
 
-            # Fix: Reset index before concat to avoid duplicate index errors
-            cs_open = df_cs[df_cs['Status']=='OPEN'].reset_index(drop=True) if not df_cs.empty else pd.DataFrame()
-            ts_open = df_ts[df_ts['Status']=='OPEN'].reset_index(drop=True) if not df_ts.empty else pd.DataFrame()
-            df_open_core = pd.concat([cs_open, ts_open], ignore_index=True)
+            # Filter and reset index to avoid duplicate index errors
+            if not df_cs.empty and 'Status' in df_cs.columns:
+                cs_open = df_cs[df_cs['Status']=='OPEN'].copy().reset_index(drop=True)
+            else:
+                cs_open = pd.DataFrame()
+
+            if not df_ts.empty and 'Status' in df_ts.columns:
+                ts_open = df_ts[df_ts['Status']=='OPEN'].copy().reset_index(drop=True)
+            else:
+                ts_open = pd.DataFrame()
+
+            df_open_core = pd.concat([cs_open, ts_open], ignore_index=True) if not cs_open.empty or not ts_open.empty else pd.DataFrame()
             
             core_exp_pct = 0.0; core_pos_count = len(df_open_core)
             if not df_open_core.empty and core_nlv > 0:
@@ -1767,8 +1781,13 @@ elif page == "Period Review":
                 df_j['SPY'] = 0; df_j['Nasdaq'] = 0
         else: df_j = pd.DataFrame()
 
-        # Fix: Reset index before concat to avoid duplicate index errors
-        df_s = pd.concat([s_c.reset_index(drop=True), s_t.reset_index(drop=True)], ignore_index=True)
+        # Fix: Remove duplicate columns and reset index before concat
+        if not s_c.empty:
+            s_c = s_c.loc[:, ~s_c.columns.duplicated()].copy().reset_index(drop=True)
+        if not s_t.empty:
+            s_t = s_t.loc[:, ~s_t.columns.duplicated()].copy().reset_index(drop=True)
+
+        df_s = pd.concat([s_c, s_t], ignore_index=True) if not s_c.empty or not s_t.empty else pd.DataFrame()
         
     else:
         target_port = PORT_CANSLIM if "CanSlim" in review_scope else PORT_TQQQ
