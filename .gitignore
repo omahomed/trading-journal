@@ -10,11 +10,37 @@ env/
 dist/
 build/
 
+# Portfolio Data (Personal Trading Data - NEVER COMMIT)
+portfolios/
+backups/
+
 # Data files
 *.csv
 *.xlsx
 *.png
 *.jpg
+*.json
+*.tsv
+
+# Backup & Archive Files
+*.save
+*backup*
+app_*.py
+appfinal*.py
+Lastworking_app.py
+app.archive.py
+old_scripts/
+
+# Output & Temporary Files
+output/
+*.log
+*.tmp
+select_ticker.txt
+tickers.txt
+
+# Text Files (trading notes)
+Trade_Plan_Log.txt
+Trade_Ticket.txt
 
 # IDE
 .vscode/
@@ -25,3 +51,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code
+.claude/
+
+# Streamlit
+.streamlit/secrets.toml
