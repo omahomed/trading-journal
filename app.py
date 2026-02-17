@@ -3067,7 +3067,8 @@ elif page == "Trade Manager":
         b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
 
         if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
-            if b_tick and b_id and b_shs > 0 and b_px > 0:
+            # Check for basic required fields only (let validation handle shares/price)
+            if b_tick and b_id:
                 # --- VALIDATION CHECKS ---
                 # 1. Validate trade entry data
                 is_valid, errors = validate_trade_entry(
@@ -3142,7 +3143,8 @@ elif page == "Trade Manager":
                 for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val']:
                     if k in st.session_state: del st.session_state[k]
                 st.rerun()
-            else: st.error("⚠️ Missing Data.")
+            else:
+                st.error("⚠️ Missing required fields: Ticker and Trade ID are required.")
 
     # --- TAB 2: LOG SELL ---
     with tab2:
