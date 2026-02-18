@@ -6421,6 +6421,8 @@ elif page == "IBD Market School":
             # Need 260+ days for proper lookback calculation
             fetch_start = (datetime.now() - timedelta(days=320)).strftime('%Y-%m-%d')
 
+            st.write(f"Debug {symbol}: Fetching data from {fetch_start} to {end_date}")
+
             analyzer = MarketSchoolRules(symbol)
             analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
 
@@ -6428,12 +6430,16 @@ elif page == "IBD Market School":
                 st.error(f"{symbol}: Failed to fetch data")
                 return []
 
+            st.write(f"Debug {symbol}: Fetched {len(analyzer.data)} days of data")
+            st.write(f"Debug {symbol}: Date range: {analyzer.data.index[0]} to {analyzer.data.index[-1]}")
+
             analyzer.analyze_market()
 
-            # Get current summary to ensure distribution days are calculated
-            current_summary = analyzer.get_daily_summary()
-
+            st.write(f"Debug {symbol}: Generated {len(analyzer.signals)} total signals")
             st.write(f"Debug {symbol}: Total distribution_days in analyzer: {len(analyzer.distribution_days)}")
+
+            if len(analyzer.distribution_days) > 0:
+                st.write(f"Debug {symbol}: First dist day: {analyzer.distribution_days[0].date}, Last: {analyzer.distribution_days[-1].date}")
 
             # Filter to only active distribution days (not removed)
             active_dist_days = [
