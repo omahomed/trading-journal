@@ -123,21 +123,9 @@ def secure_save(df, filename):
     If USE_DATABASE is true, also saves to PostgreSQL for validation.
     Returns True if save succeeded, False otherwise.
     """
-    # Database mode: Save to PostgreSQL (in addition to CSV during parallel operation)
-    if USE_DATABASE:
-        try:
-            # Determine table type and save accordingly
-            if filename.endswith('Trade_Log_Summary.csv') or filename.endswith('Summary.csv'):
-                # Save each row to database
-                for _, row in df.iterrows():
-                    db.save_summary_row(portfolio, row.to_dict())
-            elif filename.endswith('Trade_Log_Details.csv') or filename.endswith('Details.csv'):
-                # Details are insert-only in the database
-                # This would be called from specific transaction logging, not bulk save
-                pass  # Handled separately in transaction logging
-            # Journal saves would go here if needed
-        except Exception as e:
-            st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+    # Database mode: Database saves are now handled directly in the calling code
+    # This function only saves to CSV for backup purposes
+    # (No longer iterates through all rows - that was causing 30+ second delays!)
 
     # CSV mode (always runs for now - parallel operation)
     try:
@@ -3240,22 +3228,40 @@ elif page == "Trade Manager":
                 
                 # Save Detail
                 new_d = {'Trade_ID': b_id, 'Trx_ID': b_trx, 'Ticker': b_tick, 'Action': 'BUY', 'Date': ts, 'Shares': b_shs, 'Amount': b_px, 'Value': cost, 'Rule': b_rule, 'Notes': b_note, 'Realized_PL': 0, 'Stop_Loss': b_stop}
+
+                # Save directly to database (much faster than secure_save)
+                if USE_DATABASE:
+                    try:
+                        db.save_detail_row(portfolio, new_d)
+                    except Exception as e:
+                        st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+
                 df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
-                
+
                 if trade_type == "Start New Campaign":
                     new_s = {
-                        'Trade_ID': b_id, 'Ticker': b_tick, 'Status': 'OPEN', 'Open_Date': ts, 
-                        'Shares': 0, 'Avg_Entry': 0, 'Total_Cost': 0, 'Realized_PL': 0, 'Unrealized_PL': 0, 
-                        'Rule': b_rule, 
-                        'Notes': b_note,       
-                        'Buy_Notes': b_note,   
+                        'Trade_ID': b_id, 'Ticker': b_tick, 'Status': 'OPEN', 'Open_Date': ts,
+                        'Shares': 0, 'Avg_Entry': 0, 'Total_Cost': 0, 'Realized_PL': 0, 'Unrealized_PL': 0,
+                        'Rule': b_rule,
+                        'Notes': b_note,
+                        'Buy_Notes': b_note,
                         'Risk_Budget': risk_budget_dol,
                         'Sell_Rule': '', 'Sell_Notes': ''
                     }
+
+                    # Save new campaign to database
+                    if USE_DATABASE:
+                        try:
+                            db.save_summary_row(portfolio, new_s)
+                        except Exception as e:
+                            st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+
                     df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
-                
-                secure_save(df_d, DETAILS_FILE)
-                df_d, df_s = update_campaign_summary(b_id, df_d, df_s) # Syncs math
+
+                # Update LIFO calculations
+                df_d, df_s = update_campaign_summary(b_id, df_d, df_s)
+
+                # Save to CSV only (database already updated)
                 secure_save(df_d, DETAILS_FILE)
                 secure_save(df_s, SUMMARY_FILE)
 
