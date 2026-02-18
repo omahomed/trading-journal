@@ -6421,25 +6421,13 @@ elif page == "IBD Market School":
             # Use same date range as sync to ensure proper analysis (need full year+ of data)
             fetch_start = "2024-02-24"
 
-            st.write(f"Debug {symbol}: Fetching data from {fetch_start} to {end_date}")
-
             analyzer = MarketSchoolRules(symbol)
             analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
 
             if analyzer.data is None or analyzer.data.empty:
-                st.error(f"{symbol}: Failed to fetch data")
                 return []
 
-            st.write(f"Debug {symbol}: Fetched {len(analyzer.data)} days of data")
-            st.write(f"Debug {symbol}: Date range: {analyzer.data.index[0]} to {analyzer.data.index[-1]}")
-
             analyzer.analyze_market()
-
-            st.write(f"Debug {symbol}: Generated {len(analyzer.signals)} total signals")
-            st.write(f"Debug {symbol}: Total distribution_days in analyzer: {len(analyzer.distribution_days)}")
-
-            if len(analyzer.distribution_days) > 0:
-                st.write(f"Debug {symbol}: First dist day: {analyzer.distribution_days[0].date}, Last: {analyzer.distribution_days[-1].date}")
 
             # Filter to only active distribution days (not removed)
             active_dist_days = [
@@ -6447,13 +6435,9 @@ elif page == "IBD Market School":
                 if dd.removed_date is None
             ]
 
-            st.write(f"Debug {symbol}: Active (not removed): {len(active_dist_days)}")
-
             return active_dist_days
         except Exception as e:
             st.error(f"Error loading distribution days for {symbol}: {e}")
-            import traceback
-            st.code(traceback.format_exc())
             return []
 
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
@@ -6631,7 +6615,6 @@ elif page == "IBD Market School":
             # Distribution Days Detail
             with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
                 nasdaq_dist_days = get_active_distribution_days("^IXIC")
-                st.write(f"Debug: Found {len(nasdaq_dist_days)} distribution days from analysis")
                 if nasdaq_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
@@ -6645,8 +6628,7 @@ elif page == "IBD Market School":
                         - Expires in: {days_until_expire} days (if not removed earlier)
                         """)
                 else:
-                    st.warning(f"No distribution days returned from analysis (DB shows {dist_count})")
-                    st.info("This may indicate the analysis needs more data or there's a calculation issue")
+                    st.info("No active distribution days")
         else:
             st.warning("No data available")
 
@@ -6693,7 +6675,6 @@ elif page == "IBD Market School":
             # Distribution Days Detail
             with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
                 spy_dist_days = get_active_distribution_days("SPY")
-                st.write(f"Debug: Found {len(spy_dist_days)} distribution days from analysis")
                 if spy_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(spy_dist_days, key=lambda x: x.date, reverse=True):
@@ -6707,8 +6688,7 @@ elif page == "IBD Market School":
                         - Expires in: {days_until_expire} days (if not removed earlier)
                         """)
                 else:
-                    st.warning(f"No distribution days returned from analysis (DB shows {dist_count})")
-                    st.info("This may indicate the analysis needs more data or there's a calculation issue")
+                    st.info("No active distribution days")
         else:
             st.warning("No data available")
 
