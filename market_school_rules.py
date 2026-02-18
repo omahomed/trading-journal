@@ -628,8 +628,9 @@ class MarketSchoolRules:
                 continue
 
             # Check 25 trading days rule (not calendar days)
+            # Remove after 25 trading days have passed (on the 26th trading day)
             trading_days_old = self._count_trading_days(dist_day.date, current_date)
-            if trading_days_old >= 25:
+            if trading_days_old > 25:
                 dist_day.removed_date = current_date
                 dist_day.removal_reason = "25-day rule"
                 continue
