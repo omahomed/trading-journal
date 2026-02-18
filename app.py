@@ -6426,12 +6426,12 @@ elif page == "IBD Market School":
             signal_dict = {
                 'symbol': symbol,
                 'signal_date': summary['date'],
-                'close_price': summary['close'],
+                'close_price': float(summary['close']),  # Convert to Python float
                 'daily_change_pct': float(summary['daily_change'].rstrip('%')),
-                'market_exposure': summary['market_exposure'],
+                'market_exposure': int(summary['market_exposure']),  # Convert to Python int
                 'position_allocation': float(summary['position_allocation'].rstrip('%')) / 100,
                 'buy_switch': summary['buy_switch'] == 'ON',
-                'distribution_count': summary['distribution_count'],
+                'distribution_count': int(summary['distribution_count']),  # Convert to Python int
                 'above_21ema': bool(summary['above_21ema']),  # Convert numpy.bool to Python bool
                 'above_50ma': bool(summary['above_50ma']),  # Convert numpy.bool to Python bool
                 'buy_signals': summary.get('buy_signals'),
