@@ -8,6 +8,22 @@ from enum import Enum
 import warnings
 warnings.filterwarnings('ignore')
 
+# ============================================================================
+# KNOWN STALL DAYS FROM IBD (Manually Curated)
+# ============================================================================
+# Stall days are subjective and identified by IBD analysts based on market context.
+# Auto-detection produces false positives, so we manually code IBD-identified stalls.
+# Add new stalls here as IBD identifies them.
+KNOWN_STALLS = {
+    '^IXIC': [
+        {'date': '2025-12-05', 'loss_pct': 0.31},   # IBD identified stall
+        {'date': '2026-01-28', 'loss_pct': 0.17},   # IBD: "first stalling day in months"
+    ],
+    'SPY': [
+        # Add SPY stalls as IBD identifies them
+    ]
+}
+
 class SignalType(Enum):
     """Enumeration of all signal types"""
     # Buy Signals
@@ -524,24 +540,18 @@ class MarketSchoolRules:
         if prev is None:
             return signals
             
-        # Check for distribution day
+        # Check for distribution day (auto-detected)
         is_distribution = (current['daily_gain_pct'] <= -0.2 and current['volume_up'])
-        
-        # Check for stall day
-        # Stall: volume up, close in lower half, small move (-1% to +1%)
-        is_stall = (current['volume_up'] and
-                   current['close_position'] < 0.5 and
-                   -1.0 <= current['daily_gain_pct'] <= 1.0)
 
-        # IBD Rule: Don't count stall days if you already have more stall than distribution
-        if is_stall:
-            active_dist = [d for d in self.distribution_days if d.removed_date is None]
-            stall_count = sum(1 for d in active_dist if d.type == 'stall')
-            dist_count = sum(1 for d in active_dist if d.type == 'distribution')
+        # Check for stall day (manual from IBD list)
+        is_stall = False
+        current_date_str = current.name.strftime('%Y-%m-%d')
 
-            # Only count stall if distribution days >= stall days
-            if dist_count < stall_count:
-                is_stall = False
+        if self.symbol in KNOWN_STALLS:
+            for stall_entry in KNOWN_STALLS[self.symbol]:
+                if stall_entry['date'] == current_date_str:
+                    is_stall = True
+                    break
 
         if is_distribution or is_stall:
             dist_type = 'stall' if is_stall else 'distribution'
