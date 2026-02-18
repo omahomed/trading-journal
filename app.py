@@ -6418,8 +6418,8 @@ elif page == "IBD Market School":
         """Get currently active distribution days for a symbol."""
         try:
             end_date = datetime.now().strftime('%Y-%m-%d')
-            # Need 260+ days for proper lookback calculation
-            fetch_start = (datetime.now() - timedelta(days=320)).strftime('%Y-%m-%d')
+            # Use same date range as sync to ensure proper analysis (need full year+ of data)
+            fetch_start = "2024-02-24"
 
             st.write(f"Debug {symbol}: Fetching data from {fetch_start} to {end_date}")
 
