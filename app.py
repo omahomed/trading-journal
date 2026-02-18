@@ -6432,8 +6432,8 @@ elif page == "IBD Market School":
                 'position_allocation': float(summary['position_allocation'].rstrip('%')) / 100,
                 'buy_switch': summary['buy_switch'] == 'ON',
                 'distribution_count': summary['distribution_count'],
-                'above_21ema': summary['above_21ema'],
-                'above_50ma': summary['above_50ma'],
+                'above_21ema': bool(summary['above_21ema']),  # Convert numpy.bool to Python bool
+                'above_50ma': bool(summary['above_50ma']),  # Convert numpy.bool to Python bool
                 'buy_signals': summary.get('buy_signals'),
                 'sell_signals': summary.get('sell_signals')
             }
