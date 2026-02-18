@@ -626,11 +626,26 @@ st.sidebar.markdown("---")
 # A. SINGLE STRATEGY SELECTOR
 # This variable 'portfolio' controls the entire app context.
 portfolio = st.sidebar.selectbox(
-    "🔥 Active Strategy", 
+    "🔥 Active Strategy",
     [PORT_CANSLIM, PORT_TQQQ, PORT_457B],
     index=0,
     help="Select the account you want to manage."
 )
+
+# DEBUG: Database status indicator
+with st.sidebar.expander("🔍 Debug Info", expanded=False):
+    st.write(f"**DB_AVAILABLE:** {DB_AVAILABLE}")
+    st.write(f"**USE_DATABASE:** {USE_DATABASE}")
+    if USE_DATABASE and DB_AVAILABLE:
+        try:
+            test_df = db.load_journal(portfolio)
+            st.success(f"✅ Database connected! {len(test_df)} journal rows for {portfolio}")
+        except Exception as e:
+            st.error(f"❌ Database error: {e}")
+    elif not DB_AVAILABLE:
+        st.warning("⚠️ Database layer not available")
+    else:
+        st.info("ℹ️ Using CSV files")
 
 # B. DYNAMIC PATH CONFIGURATION
 # We define the paths IMMEDIATELY so every page knows where to look.
