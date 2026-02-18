@@ -3939,7 +3939,11 @@ elif page == "Trade Manager":
                  try:
                      j_df = load_data(JOURNAL_FILE)
                      if not j_df.empty and 'End NLV' in j_df.columns:
-                         equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+                         # Sort by date to get the latest entry
+                         if 'Day' in j_df.columns:
+                             j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                             j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+                         equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
                  except:
                      pass
                  
@@ -4258,12 +4262,22 @@ elif page == "Trade Manager":
     # --- TAB: PORTFOLIO HEAT (TRADINGVIEW ALIGNED) ---
     with tab_heat:
         st.subheader("🔥 Portfolio Volatility (Heat Check)")
-        
+
         # 1. Calculation Method Selector
         heat_mode = st.radio("Calculation Method", ["🤖 Automated (TradingView Formula)", "✍️ Manual Override"], horizontal=True)
-        
-        # Safety check for equity variable
-        calc_equity = equity if 'equity' in locals() else 100000.0
+
+        # Load current equity from journal
+        calc_equity = 100000.0
+        try:
+            j_df = load_data(JOURNAL_FILE)
+            if not j_df.empty and 'End NLV' in j_df.columns:
+                # Sort by date to get the latest entry
+                if 'Day' in j_df.columns:
+                    j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                    j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+                calc_equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
+        except:
+            pass
 
         if not df_s.empty:
             open_ops = df_s[df_s['Status'].astype(str).str.strip().str.upper() == 'OPEN'].copy()
@@ -4474,7 +4488,11 @@ elif page == "Trade Manager":
                     try:
                         j_df = load_data(JOURNAL_FILE)
                         if not j_df.empty and 'End NLV' in j_df.columns:
-                            equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+                            # Sort by date to get the latest entry
+                            if 'Day' in j_df.columns:
+                                j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                                j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+                            equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
                     except:
                         pass
                     
