@@ -6417,12 +6417,16 @@ elif page == "IBD Market School":
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
         """Store analysis results in database."""
         if not USE_DATABASE:
-            return
+            return 0
 
-        for summary in summaries:
-            # Skip dates before filter date if specified (compare as strings)
-            if filter_from_date and str(summary['date']) < str(filter_from_date.date()):
-                continue
+        saved_count = 0
+        filtered_summaries = [s for s in summaries
+                              if not filter_from_date or str(s['date']) >= str(filter_from_date.date())]
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for idx, summary in enumerate(filtered_summaries):
             signal_dict = {
                 'symbol': symbol,
                 'signal_date': summary['date'],
@@ -6440,8 +6444,16 @@ elif page == "IBD Market School":
 
             try:
                 db.save_market_signal(signal_dict)
+                saved_count += 1
+                # Update progress every record
+                progress_bar.progress((idx + 1) / len(filtered_summaries))
+                status_text.text(f"💾 Saving {symbol}: {saved_count}/{len(filtered_summaries)} records")
             except Exception as e:
                 st.warning(f"Failed to save {symbol} {summary['date']}: {e}")
+
+        progress_bar.empty()
+        status_text.empty()
+        return saved_count
 
     # === DATA REFRESH CONTROLS ===
 
@@ -6465,15 +6477,19 @@ elif page == "IBD Market School":
                 with st.spinner("📊 Analyzing Nasdaq..."):
                     nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
                     st.info(f"Found {len(nasdaq_summaries)} Nasdaq signals")
-                    sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
+
+                nasdaq_saved = sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
+                st.success(f"✅ Saved {nasdaq_saved} Nasdaq signals to database")
 
                 # SPY
                 with st.spinner("📈 Analyzing SPY..."):
                     spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
                     st.info(f"Found {len(spy_summaries)} SPY signals")
-                    sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
 
-                st.success("✅ Market signals synced from Feb 24, 2025!")
+                spy_saved = sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
+                st.success(f"✅ Saved {spy_saved} SPY signals to database")
+
+                st.success(f"🎉 Market signals synced! Total: {nasdaq_saved + spy_saved} records from Feb 24, 2025")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Sync failed: {str(e)}")
@@ -6513,7 +6529,7 @@ elif page == "IBD Market School":
     with col_nasdaq:
         st.markdown("### 🟦 NASDAQ (^IXIC)")
 
-        if nasdaq_latest:
+        if nasdaq_latest is not None:
             if USE_DATABASE:
                 close = nasdaq_latest['close_price']
                 daily_chg = nasdaq_latest['daily_change_pct']
@@ -6555,7 +6571,7 @@ elif page == "IBD Market School":
     with col_spy:
         st.markdown("### 🟩 S&P 500 (SPY)")
 
-        if spy_latest:
+        if spy_latest is not None:
             if USE_DATABASE:
                 close = spy_latest['close_price']
                 daily_chg = spy_latest['daily_change_pct']
