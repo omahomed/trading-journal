@@ -62,6 +62,7 @@ def get_db_connection():
 # ============================================
 # CORE READ OPERATIONS (Replace load_data)
 # ============================================
+@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_summary(portfolio_name, status=None):
     """
     Load trades summary for a portfolio.
@@ -141,6 +142,7 @@ def load_summary(portfolio_name, status=None):
             return df
 
 
+@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_details(portfolio_name, trade_id=None):
     """
     Load transaction details for a portfolio.
@@ -211,6 +213,7 @@ def load_details(portfolio_name, trade_id=None):
             return df
 
 
+@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_journal(portfolio_name, start_date=None, end_date=None):
     """
     Load trading journal entries.
@@ -423,6 +426,10 @@ def save_summary_row(portfolio_name, row_dict):
 
             row_id = cur.fetchone()[0]
             conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_summary.clear()
+
             return row_id
 
 
@@ -476,6 +483,10 @@ def save_detail_row(portfolio_name, row_dict):
 
             row_id = cur.fetchone()[0]
             conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_details.clear()
+
             return row_id
 
 
@@ -541,6 +552,9 @@ def sync_trade_summary(portfolio_name, trade_id, update_data):
 
             conn.commit()
 
+            # Clear cache so next load gets fresh data
+            load_summary.clear()
+
 
 # ============================================
 # BULK DELETE OPERATIONS
@@ -564,6 +578,10 @@ def delete_trade(portfolio_name, trade_id):
             """, (portfolio_id, trade_id))
 
             conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_summary.clear()
+            load_details.clear()
 
 
 # ============================================
