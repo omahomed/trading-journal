@@ -6469,27 +6469,47 @@ elif page == "IBD Market School":
         if st.button("💾 Sync to Database") and USE_DATABASE:
             try:
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                # Fetch from Feb 2024 (1 year before target) for 260-day lookback
-                fetch_start = "2024-02-24"
-                save_from = pd.Timestamp("2025-02-24")
 
-                # Nasdaq
+                # Check what dates we already have in the database
+                nasdaq_latest_date = db.get_latest_signal_date("^IXIC")
+                spy_latest_date = db.get_latest_signal_date("SPY")
+
+                # Determine fetch strategy
+                if nasdaq_latest_date is None:
+                    # Initial sync: fetch from Feb 2024 for 260-day lookback, save from Feb 2025
+                    nasdaq_fetch_start = "2024-02-24"
+                    nasdaq_save_from = pd.Timestamp("2025-02-24")
+                    st.info("📥 Initial Nasdaq sync from Feb 24, 2025")
+                else:
+                    # Daily update: fetch from 30 days before latest to ensure continuity
+                    nasdaq_fetch_start = (nasdaq_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
+                    nasdaq_save_from = pd.Timestamp(nasdaq_latest_date) + timedelta(days=1)
+                    st.info(f"🔄 Updating Nasdaq from {nasdaq_save_from.date()}")
+
+                if spy_latest_date is None:
+                    spy_fetch_start = "2024-02-24"
+                    spy_save_from = pd.Timestamp("2025-02-24")
+                    st.info("📥 Initial SPY sync from Feb 24, 2025")
+                else:
+                    spy_fetch_start = (spy_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
+                    spy_save_from = pd.Timestamp(spy_latest_date) + timedelta(days=1)
+                    st.info(f"🔄 Updating SPY from {spy_save_from.date()}")
+
+                # Nasdaq sync
                 with st.spinner("📊 Analyzing Nasdaq..."):
-                    nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
-                    st.info(f"Found {len(nasdaq_summaries)} Nasdaq signals")
+                    nasdaq_summaries = analyze_symbol("^IXIC", nasdaq_fetch_start, end_date)
 
-                nasdaq_saved = sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
-                st.success(f"✅ Saved {nasdaq_saved} Nasdaq signals to database")
+                nasdaq_saved = sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=nasdaq_save_from)
+                st.success(f"✅ Saved {nasdaq_saved} Nasdaq records")
 
-                # SPY
+                # SPY sync
                 with st.spinner("📈 Analyzing SPY..."):
-                    spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
-                    st.info(f"Found {len(spy_summaries)} SPY signals")
+                    spy_summaries = analyze_symbol("SPY", spy_fetch_start, end_date)
 
-                spy_saved = sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
-                st.success(f"✅ Saved {spy_saved} SPY signals to database")
+                spy_saved = sync_signals_to_db("SPY", spy_summaries, filter_from_date=spy_save_from)
+                st.success(f"✅ Saved {spy_saved} SPY records")
 
-                st.success(f"🎉 Market signals synced! Total: {nasdaq_saved + spy_saved} records from Feb 24, 2025")
+                st.success(f"🎉 Sync complete! Total: {nasdaq_saved + spy_saved} new records")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Sync failed: {str(e)}")
@@ -6617,7 +6637,8 @@ elif page == "IBD Market School":
     st.subheader("📈 Historical Signal Tracking (Last 30 Days)")
 
     if USE_DATABASE and not df_signals.empty:
-        df_30d = df_signals[df_signals['signal_date'] >= (datetime.now() - timedelta(days=30)).date()].copy()
+        cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=30))
+        df_30d = df_signals[df_signals['signal_date'] >= cutoff_date].copy()
 
         if not df_30d.empty:
             tab1, tab2 = st.tabs(["Exposure Levels", "Signal History"])
