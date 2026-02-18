@@ -3208,11 +3208,12 @@ elif page == "Trade Manager":
                 )
 
                 # 2. Validate position size
-                equity_val = equity if 'equity' in locals() else 100000.0
+                equity_val = def_equity  # Use the loaded equity value from risk budgeting section
                 size_valid, size_msg = validate_position_size(b_shs, b_px, equity_val, max_pct=25.0)
 
                 # Display validation errors
                 if not is_valid:
+                    st.error(f"**Validation failed with {len(errors)} error(s):**")
                     for error in errors:
                         if "Warning" in error:
                             st.warning(error)
@@ -3225,6 +3226,7 @@ elif page == "Trade Manager":
                 # Only proceed if no critical errors
                 critical_errors = [e for e in errors if "❌" in e]
                 if critical_errors or not size_valid:
+                    st.error("❌ Cannot proceed - fix validation errors above")
                     st.stop()
 
                 # Show warnings but allow to proceed
