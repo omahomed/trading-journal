@@ -632,20 +632,13 @@ portfolio = st.sidebar.selectbox(
     help="Select the account you want to manage."
 )
 
-# DEBUG: Database status indicator
-with st.sidebar.expander("🔍 Debug Info", expanded=False):
-    st.write(f"**DB_AVAILABLE:** {DB_AVAILABLE}")
-    st.write(f"**USE_DATABASE:** {USE_DATABASE}")
-    if USE_DATABASE and DB_AVAILABLE:
-        try:
-            test_df = db.load_journal(portfolio)
-            st.success(f"✅ Database connected! {len(test_df)} journal rows for {portfolio}")
-        except Exception as e:
-            st.error(f"❌ Database error: {e}")
-    elif not DB_AVAILABLE:
-        st.warning("⚠️ Database layer not available")
+# DEBUG: Database status indicator (lightweight - no queries)
+if st.sidebar.checkbox("🔍 Debug Info", value=False):
+    st.sidebar.write(f"**DB:** {DB_AVAILABLE} | **USE_DB:** {USE_DATABASE}")
+    if USE_DATABASE:
+        st.sidebar.success("✅ Database mode")
     else:
-        st.info("ℹ️ Using CSV files")
+        st.sidebar.info("CSV mode")
 
 # B. DYNAMIC PATH CONFIGURATION
 # We define the paths IMMEDIATELY so every page knows where to look.
@@ -1940,22 +1933,19 @@ elif page == "Period Review":
         except: return 0.0
 
     def get_df(p_name):
+        # Load data using database-aware load_data()
         path = os.path.join(DATA_ROOT, p_name, 'Trading_Journal_Clean.csv')
         summ_path = os.path.join(DATA_ROOT, p_name, 'Trade_Log_Summary.csv')
-        
-        if os.path.exists(path):
-            d = pd.read_csv(path)
-            if not d.empty and 'Day' in d.columns:
-                d['Day'] = pd.to_datetime(d['Day'], errors='coerce')
-                d = d.dropna(subset=['Day']).sort_values('Day')
-                for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq']:
-                    if c in d.columns: d[c] = d[c].apply(clean_num_local)
-        else: d = pd.DataFrame()
-        
-        if os.path.exists(summ_path):
-            s = pd.read_csv(summ_path)
-        else: s = pd.DataFrame()
-        
+
+        d = load_data(path)
+        if not d.empty and 'Day' in d.columns:
+            d['Day'] = pd.to_datetime(d['Day'], errors='coerce')
+            d = d.dropna(subset=['Day']).sort_values('Day')
+            for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq']:
+                if c in d.columns: d[c] = d[c].apply(clean_num_local)
+
+        s = load_data(summ_path)
+
         return d, s
 
     # LOAD DATA
@@ -3103,14 +3093,15 @@ elif page == "Trade Manager":
         # --- 2. RISK BUDGET CALCULATOR ---
         risk_budget_dol = 0.0
         # Fetch NLV for budgeting
+        # Load latest NLV from journal (database-aware)
         def_equity = 100000.0
-        if os.path.exists(JOURNAL_FILE):
-             try: 
-                 j_df = pd.read_csv(JOURNAL_FILE)
-                 if not j_df.empty:
-                    val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
-                    def_equity = float(val_str)
-             except: pass
+        try:
+            j_df = load_data(JOURNAL_FILE)
+            if not j_df.empty and 'End NLV' in j_df.columns:
+                val_str = str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',','')
+                def_equity = float(val_str)
+        except:
+            pass
 
         if trade_type == "Start New Campaign":
             st.markdown("#### 💰 Risk Budgeting")
@@ -3906,13 +3897,14 @@ elif page == "Trade Manager":
                      
                  df_open['Risk Status'] = df_open.apply(get_risk_status, axis=1)
 
-                 # Equity
+                 # Load equity from journal (database-aware)
                  equity = 100000.0
-                 if os.path.exists(JOURNAL_FILE):
-                     try: 
-                         j_df = pd.read_csv(JOURNAL_FILE)
-                         if not j_df.empty: equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
-                     except: pass
+                 try:
+                     j_df = load_data(JOURNAL_FILE)
+                     if not j_df.empty and 'End NLV' in j_df.columns:
+                         equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+                 except:
+                     pass
                  
                  df_open['Risk %'] = (df_open['Risk $'] / equity) * 100
                  df_open['Pos Size %'] = (df_open['Current Value'] / equity) * 100
@@ -3996,10 +3988,11 @@ elif page == "Trade Manager":
         RESET_DATE = pd.Timestamp("2025-12-16")
         
         # 1. LOAD JOURNAL (For Historical Chart)
+        # Load journal data (database-aware)
         p_path = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
-        
-        if os.path.exists(p_path):
-            df_j = pd.read_csv(p_path)
+        df_j = load_data(p_path)
+
+        if not df_j.empty:
             
             # Clean Data
             if not df_j.empty and 'Day' in df_j.columns:
@@ -4220,7 +4213,7 @@ elif page == "Trade Manager":
                 else:
                     st.info(f"No journal data available after reset date.")
         else:
-            st.warning("Journal file not found (required for historical chart).")
+            st.warning("No journal data found. Please log your first trading day.")
 
 # ==============================================================================
     # TAB: PORTFOLIO VOLATILITY (HEAT CHECK)
@@ -4439,12 +4432,14 @@ elif page == "Trade Manager":
                     unrealized = mkt_val - fd_cost_basis_sum
                     return_pct = (unrealized / fd_cost_basis_sum * 100) if fd_cost_basis_sum > 0 else 0.0
                     
+                    # Load equity from journal (database-aware)
                     equity = 100000.0
-                    if os.path.exists(JOURNAL_FILE):
-                        try:
-                            j_df = pd.read_csv(JOURNAL_FILE)
-                            if not j_df.empty: equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
-                        except: pass
+                    try:
+                        j_df = load_data(JOURNAL_FILE)
+                        if not j_df.empty and 'End NLV' in j_df.columns:
+                            equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+                    except:
+                        pass
                     
                     pos_size_pct = (mkt_val / equity) * 100 if equity > 0 else 0.0
 
@@ -5101,12 +5096,14 @@ elif page == "Trade Manager":
             else:
                 open_pos = pd.DataFrame()
 
+        # Load equity from journal (database-aware)
         equity = 100000.0
-        if os.path.exists(JOURNAL_FILE):
-            try:
-                j_df = pd.read_csv(JOURNAL_FILE)
-                if not j_df.empty: equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
-            except: pass
+        try:
+            j_df = load_data(JOURNAL_FILE)
+            if not j_df.empty and 'End NLV' in j_df.columns:
+                equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+        except:
+            pass
 
         if not open_pos.empty:
             # 1. SELECT TICKER
@@ -5852,17 +5849,16 @@ elif page == "Analytics":
 elif page == "Daily Report Card":
     st.header(f"📠 DAILY REPORT CARD ({CURR_PORT_NAME})")
     
-    # 1. LOAD ALL DATA
-    p_clean = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
-    p_legacy = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal.csv')
-    path_j = p_clean if os.path.exists(p_clean) else p_legacy
+    # 1. LOAD ALL DATA (database-aware)
+    path_j = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
     path_s = os.path.join(DATA_ROOT, portfolio, 'Trade_Log_Summary.csv')
     path_d = os.path.join(DATA_ROOT, portfolio, 'Trade_Log_Details.csv')
-    
-    if os.path.exists(path_j):
-        df_j = pd.read_csv(path_j)
-        df_s = load_data(path_s)
-        df_d = load_data(path_d) 
+
+    df_j = load_data(path_j)
+    df_s = load_data(path_s)
+    df_d = load_data(path_d)
+
+    if not df_j.empty: 
         
         # Data Prep
         df_j['Day'] = pd.to_datetime(df_j['Day'], errors='coerce')
@@ -6102,7 +6098,7 @@ elif page == "Daily Report Card":
         else:
             st.info("No journal entries found.")
     else:
-        st.error("Journal file not found.")
+        st.info("No journal data available. Please log your first trading day.")
 
 # ==============================================================================
 # PAGE 12: WEEKLY RETRO (OPTIMIZED WORKFLOW)
