@@ -6405,8 +6405,8 @@ elif page == "IBD Market School":
             return
 
         for summary in summaries:
-            # Skip dates before filter date if specified
-            if filter_from_date and summary['date'] < filter_from_date:
+            # Skip dates before filter date if specified (compare as strings)
+            if filter_from_date and str(summary['date']) < str(filter_from_date.date()):
                 continue
             signal_dict = {
                 'symbol': symbol,
