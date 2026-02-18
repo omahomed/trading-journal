@@ -200,13 +200,24 @@ def load_data(file):
     # If database mode is enabled, load from PostgreSQL
     if USE_DATABASE:
         try:
+            # Extract portfolio name from file path
+            # Path format: portfolios/CanSlim/Trade_Log_Summary.csv
+            portfolio_name = portfolio  # Default to current portfolio
+            if 'portfolios/' in file or 'portfolios\\' in file:
+                # Extract portfolio name from path
+                parts = file.replace('\\', '/').split('/')
+                if 'portfolios' in parts:
+                    idx = parts.index('portfolios')
+                    if idx + 1 < len(parts):
+                        portfolio_name = parts[idx + 1]
+
             # Determine which table to query based on filename
             if file.endswith('Trade_Log_Summary.csv') or file.endswith('Summary.csv'):
-                df = db.load_summary(portfolio)
+                df = db.load_summary(portfolio_name)
             elif file.endswith('Trade_Log_Details.csv') or file.endswith('Details.csv'):
-                df = db.load_details(portfolio)
+                df = db.load_details(portfolio_name)
             elif file.endswith('Trading_Journal_Clean.csv') or file.endswith('Journal.csv'):
-                df = db.load_journal(portfolio)
+                df = db.load_journal(portfolio_name)
             else:
                 # Fallback to CSV for unknown files
                 if not os.path.exists(file): return pd.DataFrame()
@@ -2323,13 +2334,13 @@ elif page == "Position Sizer":
     st.header(f"POSITION SIZING CALCULATOR ({CURR_PORT_NAME})")
     
     # --- GLOBAL DATA ---
+    # Load latest NLV from journal (database-aware)
     equity = 100000.0
-    if os.path.exists(JOURNAL_FILE):
-        try:
-            df = load_data(JOURNAL_FILE)
-            if not df.empty:
-                val_str = str(df['End NLV'].iloc[0]).replace('$','').replace(',','')
-                equity = float(val_str)
+    try:
+        df = load_data(JOURNAL_FILE)
+        if not df.empty and 'End NLV' in df.columns:
+            val_str = str(df['End NLV'].iloc[-1]).replace('$','').replace(',','')
+            equity = float(val_str)
         except: pass
     
     df_s = load_data(SUMMARY_FILE)
