@@ -3723,7 +3723,15 @@ elif page == "Trade Manager":
                     details=f"Deleted entire campaign with {trx_count} transactions"
                 )
 
-                # Perform deletion
+                # Delete from database first
+                if USE_DATABASE:
+                    try:
+                        db.delete_trade(portfolio, del_id)
+                        st.info("🗑️ Deleted from database")
+                    except Exception as e:
+                        st.warning(f"⚠️ Database delete failed: {e}. CSV deleted successfully.")
+
+                # Perform deletion from DataFrames
                 df_s = df_s[df_s['Trade_ID']!=del_id]
                 df_d = df_d[df_d['Trade_ID']!=del_id]
                 secure_save(df_s, SUMMARY_FILE)
