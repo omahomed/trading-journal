@@ -2345,10 +2345,8 @@ elif page == "Position Sizer":
                 df = df.dropna(subset=['Day']).sort_values('Day', ascending=False)
             val_str = str(df['End NLV'].iloc[0]).replace('$','').replace(',','')
             equity = float(val_str)
-            # Debug: Show loaded value
-            st.sidebar.info(f"💰 Latest NLV: ${equity:,.2f}")
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Could not load NLV: {e}")
+        pass  # Silently fall back to default
     
     df_s = load_data(SUMMARY_FILE)
     df_d = load_data(DETAILS_FILE)
@@ -3123,7 +3121,7 @@ elif page == "Trade Manager":
                 val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
                 def_equity = float(val_str)
         except Exception as e:
-            st.warning(f"⚠️ Could not load NLV for risk budgeting: {e}")
+            pass  # Silently fall back to default
 
         if trade_type == "Start New Campaign":
             st.markdown("#### 💰 Risk Budgeting")
