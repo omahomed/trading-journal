@@ -6414,7 +6414,6 @@ elif page == "IBD Market School":
             st.code(traceback.format_exc())
             return []
 
-    @st.cache_data(ttl=600, show_spinner=False)
     def get_active_distribution_days(symbol):
         """Get currently active distribution days for a symbol."""
         try:
@@ -6424,16 +6423,25 @@ elif page == "IBD Market School":
 
             analyzer = MarketSchoolRules(symbol)
             analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
+
+            if analyzer.data is None or analyzer.data.empty:
+                st.error(f"{symbol}: Failed to fetch data")
+                return []
+
             analyzer.analyze_market()
 
             # Get current summary to ensure distribution days are calculated
             current_summary = analyzer.get_daily_summary()
+
+            st.write(f"Debug {symbol}: Total distribution_days in analyzer: {len(analyzer.distribution_days)}")
 
             # Filter to only active distribution days (not removed)
             active_dist_days = [
                 dd for dd in analyzer.distribution_days
                 if dd.removed_date is None
             ]
+
+            st.write(f"Debug {symbol}: Active (not removed): {len(active_dist_days)}")
 
             return active_dist_days
         except Exception as e:
@@ -6617,6 +6625,7 @@ elif page == "IBD Market School":
             # Distribution Days Detail
             with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
                 nasdaq_dist_days = get_active_distribution_days("^IXIC")
+                st.write(f"Debug: Found {len(nasdaq_dist_days)} distribution days from analysis")
                 if nasdaq_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
@@ -6630,7 +6639,8 @@ elif page == "IBD Market School":
                         - Expires in: {days_until_expire} days (if not removed earlier)
                         """)
                 else:
-                    st.info("No active distribution days")
+                    st.warning(f"No distribution days returned from analysis (DB shows {dist_count})")
+                    st.info("This may indicate the analysis needs more data or there's a calculation issue")
         else:
             st.warning("No data available")
 
@@ -6677,6 +6687,7 @@ elif page == "IBD Market School":
             # Distribution Days Detail
             with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
                 spy_dist_days = get_active_distribution_days("SPY")
+                st.write(f"Debug: Found {len(spy_dist_days)} distribution days from analysis")
                 if spy_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(spy_dist_days, key=lambda x: x.date, reverse=True):
@@ -6690,7 +6701,8 @@ elif page == "IBD Market School":
                         - Expires in: {days_until_expire} days (if not removed earlier)
                         """)
                 else:
-                    st.info("No active distribution days")
+                    st.warning(f"No distribution days returned from analysis (DB shows {dist_count})")
+                    st.info("This may indicate the analysis needs more data or there's a calculation issue")
         else:
             st.warning("No data available")
 
