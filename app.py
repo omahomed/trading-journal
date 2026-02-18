@@ -6437,9 +6437,9 @@ elif page == "IBD Market School":
 
     with col_btn2:
         if st.button("💾 Sync to Database") and USE_DATABASE:
-            with st.spinner("Analyzing last 500 days for both indices..."):
+            with st.spinner("Analyzing from Feb 24, 2025 for both indices..."):
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                start_date = (datetime.now() - timedelta(days=500)).strftime('%Y-%m-%d')
+                start_date = "2025-02-24"
 
                 # Nasdaq
                 nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
@@ -6469,7 +6469,7 @@ elif page == "IBD Market School":
     else:
         # On-the-fly analysis (no database)
         end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=500)).strftime('%Y-%m-%d')
+        start_date = "2025-02-24"
 
         nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
         spy_summaries = analyze_symbol("SPY", start_date, end_date)
