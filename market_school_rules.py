@@ -887,11 +887,18 @@ class MarketSchoolRules:
                         'loss': f"{dist_day.loss_percent:.2f}%"
                     })
                     
-        # Get current price data
-        if target_date in self.data.index:
-            current_data = self.data.loc[target_date]
+        # Get current price data - normalize index for comparison
+        data_index_normalized = self.data.index.tz_localize(None)
+        if target_date in data_index_normalized:
+            idx_pos = list(data_index_normalized).index(target_date)
+            current_data = self.data.iloc[idx_pos]
         else:
-            current_data = self.data.iloc[-1]
+            # Find closest date
+            closest_idx = data_index_normalized.get_indexer([target_date], method='ffill')[0]
+            if closest_idx >= 0:
+                current_data = self.data.iloc[closest_idx]
+            else:
+                current_data = self.data.iloc[-1]
             
         # Calculate position allocation
         allocation = self.get_position_allocation_for_exposure(exposure)
