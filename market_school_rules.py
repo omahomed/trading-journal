@@ -528,11 +528,21 @@ class MarketSchoolRules:
         is_distribution = (current['daily_gain_pct'] <= -0.2 and current['volume_up'])
         
         # Check for stall day
+        # Stall: volume up, close in lower half, small move (-1% to +1%)
         is_stall = (current['volume_up'] and
                    current['close_position'] < 0.5 and
-                   current['give_back'] > 30 and
-                   current['intraday_gain'] > 30)
-        
+                   -1.0 <= current['daily_gain_pct'] <= 1.0)
+
+        # IBD Rule: Don't count stall days if you already have more stall than distribution
+        if is_stall:
+            active_dist = [d for d in self.distribution_days if d.removed_date is None]
+            stall_count = sum(1 for d in active_dist if d.type == 'stall')
+            dist_count = sum(1 for d in active_dist if d.type == 'distribution')
+
+            # Only count stall if distribution days >= stall days
+            if dist_count < stall_count:
+                is_stall = False
+
         if is_distribution or is_stall:
             dist_type = 'stall' if is_stall else 'distribution'
             self.distribution_days.append(DistributionDay(
@@ -591,18 +601,25 @@ class MarketSchoolRules:
                 
         return signals
         
+    def _count_trading_days(self, start_date, end_date):
+        """Count trading days between two dates using the data index."""
+        # Get all dates between start and end from the data index
+        mask = (self.data.index >= start_date) & (self.data.index <= end_date)
+        trading_days = self.data.index[mask]
+        return len(trading_days) - 1  # Exclude start date, count from day after
+
     def _update_distribution_days(self, idx: int):
         """Update distribution days - remove old ones and check 5% rally rule."""
         current = self.data.iloc[idx]
         current_date = current.name
-        
+
         for dist_day in self.distribution_days:
             if dist_day.removed_date is not None:
                 continue
-                
-            # Check 25-day rule
-            days_old = (current_date - dist_day.date).days
-            if days_old > 35:  # ~25 trading days
+
+            # Check 25 trading days rule (not calendar days)
+            trading_days_old = self._count_trading_days(dist_day.date, current_date)
+            if trading_days_old >= 25:
                 dist_day.removed_date = current_date
                 dist_day.removal_reason = "25-day rule"
                 continue
