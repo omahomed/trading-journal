@@ -6440,24 +6440,30 @@ elif page == "IBD Market School":
 
     with col_btn2:
         if st.button("💾 Sync to Database") and USE_DATABASE:
-            with st.spinner("Analyzing market signals (this may take ~60 seconds)..."):
+            try:
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                # Fetch from Oct 2023 to have enough historical data for calculations
-                # But only save signals from Feb 24, 2025 onward
-                fetch_start = "2023-10-01"
+                # Fetch from Feb 2024 (1 year before target) for 260-day lookback
+                fetch_start = "2024-02-24"
                 save_from = pd.Timestamp("2025-02-24")
 
                 # Nasdaq
-                nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
-                sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
-                time.sleep(1)
+                with st.spinner("📊 Analyzing Nasdaq..."):
+                    nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
+                    st.info(f"Found {len(nasdaq_summaries)} Nasdaq signals")
+                    sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
 
                 # SPY
-                spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
-                sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
+                with st.spinner("📈 Analyzing SPY..."):
+                    spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
+                    st.info(f"Found {len(spy_summaries)} SPY signals")
+                    sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
 
                 st.success("✅ Market signals synced from Feb 24, 2025!")
                 st.rerun()
+            except Exception as e:
+                st.error(f"❌ Sync failed: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
 
     st.markdown("---")
 
@@ -6475,7 +6481,7 @@ elif page == "IBD Market School":
     else:
         # On-the-fly analysis (no database)
         end_date = datetime.now().strftime('%Y-%m-%d')
-        fetch_start = "2023-10-01"  # Need historical data for calculations
+        fetch_start = "2024-02-24"  # 1 year for 260-day lookback
 
         nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
         spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
