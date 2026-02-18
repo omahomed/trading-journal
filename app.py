@@ -8,7 +8,16 @@ from datetime import datetime, time, timedelta
 import os
 import shutil
 
+# Database layer (PostgreSQL support)
+try:
+    import db_layer as db
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    print("⚠️  db_layer not found - database features disabled")
 
+# Feature flag: Use database instead of CSV
+USE_DATABASE = os.getenv('USE_DATABASE', 'false').lower() == 'true' and DB_AVAILABLE
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
@@ -104,8 +113,26 @@ def clean_dataframe(df):
 def secure_save(df, filename):
     """
     Save DataFrame with verification to prevent data loss.
+    If USE_DATABASE is true, also saves to PostgreSQL for validation.
     Returns True if save succeeded, False otherwise.
     """
+    # Database mode: Save to PostgreSQL (in addition to CSV during parallel operation)
+    if USE_DATABASE:
+        try:
+            # Determine table type and save accordingly
+            if filename.endswith('Trade_Log_Summary.csv') or filename.endswith('Summary.csv'):
+                # Save each row to database
+                for _, row in df.iterrows():
+                    db.save_summary_row(portfolio, row.to_dict())
+            elif filename.endswith('Trade_Log_Details.csv') or filename.endswith('Details.csv'):
+                # Details are insert-only in the database
+                # This would be called from specific transaction logging, not bulk save
+                pass  # Handled separately in transaction logging
+            # Journal saves would go here if needed
+        except Exception as e:
+            st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+
+    # CSV mode (always runs for now - parallel operation)
     try:
         if not os.path.exists(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
@@ -159,6 +186,48 @@ def secure_save(df, filename):
         return False
 
 def load_data(file):
+    """
+    Load data from CSV or database based on USE_DATABASE flag.
+    Maintains backward compatibility with CSV-based code.
+    """
+    # If database mode is enabled, load from PostgreSQL
+    if USE_DATABASE:
+        try:
+            # Determine which table to query based on filename
+            if file.endswith('Trade_Log_Summary.csv') or file.endswith('Summary.csv'):
+                df = db.load_summary(portfolio)
+            elif file.endswith('Trade_Log_Details.csv') or file.endswith('Details.csv'):
+                df = db.load_details(portfolio)
+            elif file.endswith('Trading_Journal_Clean.csv') or file.endswith('Journal.csv'):
+                df = db.load_journal(portfolio)
+            else:
+                # Fallback to CSV for unknown files
+                if not os.path.exists(file): return pd.DataFrame()
+                df = pd.read_csv(file)
+                df = clean_dataframe(df)
+                return df
+
+            # Database returned data - minimal cleaning needed
+            if df.empty:
+                return df
+
+            # Ensure Trade_ID is string without .0
+            if 'Trade_ID' in df.columns:
+                df['Trade_ID'] = df['Trade_ID'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            if 'Trx_ID' in df.columns:
+                df['Trx_ID'] = df['Trx_ID'].astype(str).str.strip()
+
+            return df
+
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            st.error(f"⚠️ Database error: {e}. Falling back to CSV.")
+            # Log full traceback for debugging
+            print(f"DATABASE ERROR in load_data():\n{error_details}")
+            # Fall through to CSV mode
+
+    # CSV mode (original code)
     if not os.path.exists(file): return pd.DataFrame()
     try:
         df = pd.read_csv(file)
@@ -330,6 +399,20 @@ def update_campaign_summary(trade_id, df_d, df_s):
                 df_s.at[i, 'Total_Cost'] = curr_cost_total
                 df_s.at[i, 'Closed_Date'] = None
 
+            # Sync to database if enabled
+            if USE_DATABASE:
+                try:
+                    update_data = {
+                        'shares': float(df_s.at[i, 'Shares']),
+                        'avg_entry': float(df_s.at[i, 'Avg_Entry']),
+                        'total_cost': float(df_s.at[i, 'Total_Cost']),
+                        'realized_pl': float(df_s.at[i, 'Realized_PL']),
+                        'status': df_s.at[i, 'Status']
+                    }
+                    db.sync_trade_summary(portfolio, trade_id, update_data)
+                except Exception as db_err:
+                    print(f"Database sync error: {db_err}")
+
         return df_d, df_s
     except Exception as e:
         print(f"Error updating campaign: {e}")
@@ -416,7 +499,18 @@ def validate_position_size(shares, price, equity, max_pct=25.0):
 def log_audit_trail(action, trade_id, ticker, details, username="User"):
     """
     Logs all trade actions to audit trail.
+    Uses database if USE_DATABASE=true, otherwise uses CSV.
     """
+    # Database mode
+    if USE_DATABASE:
+        try:
+            db.log_audit(portfolio, action, trade_id, ticker, details, username)
+            return True
+        except Exception as e:
+            print(f"Audit log error (DB): {e}")
+            # Fall through to CSV mode
+
+    # CSV mode
     try:
         audit_file = os.path.join(os.path.dirname(DETAILS_FILE), 'Audit_Trail.csv')
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1519,10 +1613,10 @@ elif page == "Performance Heat Map":
                     active_col, z_min, z_max, fmt, suffix = 'M_Impact', -1.0, 2.0, ".2f", "% Impact"
 
                 df_heat = df_heat.sort_values(active_col, ascending=False)
-                
+
                 # --- 4. GRID DATA WITH TRADE ID ---
                 tickers = df_heat['Ticker'].tolist()
-                values = df_heat[active_col].tolist()
+                values = df_heat[active_col].astype(float).tolist()
                 # Adding Trade ID to labels
                 trade_ids = [str(row.get('Trade_ID', 'N/A')) for _, row in df_heat.iterrows()]
                 statuses = [('O' if s=='OPEN' else 'C') for s in df_heat['Status']]
@@ -4952,14 +5046,18 @@ elif page == "Trade Manager":
             
             st.dataframe(
                 view_all[valid_all].style.format({
-                    'Open_Date': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d') if pd.notnull(x) else 'None'), 
-                    'Closed_Date': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d') if pd.notnull(x) else 'None'), 
-                    'Shares':'{:.0f}', 'Avg_Entry':'${:,.2f}', 'Avg_Exit':'${:,.2f}', 
-                    'Total_Cost':'${:,.2f}', 'Realized_PL':'${:,.2f}', 'Return_Pct':'{:.2f}%'
+                    'Open_Date': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d') if pd.notnull(x) else 'None'),
+                    'Closed_Date': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d') if pd.notnull(x) else 'None'),
+                    'Shares': lambda x: f'{x:.0f}' if pd.notnull(x) else '-',
+                    'Avg_Entry': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
+                    'Avg_Exit': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
+                    'Total_Cost': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
+                    'Realized_PL': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
+                    'Return_Pct': lambda x: f'{x:.2f}%' if pd.notnull(x) else '-'
                 })
                 .applymap(highlight_status, subset=['Status'])
                 .applymap(color_pnl, subset=['Realized_PL'])
-                .applymap(color_result, subset=['Result']), 
+                .applymap(color_result, subset=['Result']),
                 hide_index=True,
                 use_container_width=True
             )

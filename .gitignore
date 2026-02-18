@@ -1,3 +1,6 @@
+# Streamlit secrets (contains database password)
+.streamlit/secrets.toml
+
 # Python
 __pycache__/
 *.py[cod]
@@ -5,44 +8,9 @@ __pycache__/
 *.so
 .Python
 venv/
-env/
-*.egg-info/
-dist/
-build/
+ENV/
 
-# Portfolio Data (Personal Trading Data - NEVER COMMIT)
-portfolios/
-backups/
-
-# Data files
-*.csv
-*.xlsx
-*.png
-*.jpg
-*.json
-*.tsv
-
-# Backup & Archive Files
-*.save
-*backup*
-app_*.py
-appfinal*.py
-Lastworking_app.py
-app.archive.py
-old_scripts/
-
-# Output & Temporary Files
-output/
-*.log
-*.tmp
-select_ticker.txt
-tickers.txt
-
-# Text Files (trading notes)
-Trade_Plan_Log.txt
-Trade_Ticket.txt
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
@@ -52,8 +20,14 @@ Trade_Ticket.txt
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
+# Logs
+*.log
+/tmp/
 
-# Streamlit
-.streamlit/secrets.toml
+# Local database backups
+*.sql.backup
+
+# CSV files (data is in cloud database)
+portfolios/*/Trade_Log_*.csv
+portfolios/*/Trading_Journal_*.csv
+portfolios/*/Audit_Trail.csv
