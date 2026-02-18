@@ -331,6 +331,12 @@ def save_summary_row(portfolio_name, row_dict):
     Returns:
         int: ID of inserted/updated row
     """
+    # Clean NaT/NaN values - convert to None for SQL NULL
+    def clean_value(val):
+        if pd.isna(val) or str(val).strip() == 'NaT':
+            return None
+        return val
+
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             # Get portfolio_id
@@ -362,8 +368,8 @@ def save_summary_row(portfolio_name, row_dict):
                 cur.execute(update_query, (
                     row_dict.get('Ticker'),
                     row_dict.get('Status', 'OPEN'),
-                    row_dict.get('Open_Date'),
-                    row_dict.get('Closed_Date'),
+                    clean_value(row_dict.get('Open_Date')),
+                    clean_value(row_dict.get('Closed_Date')),
                     row_dict.get('Shares', 0),
                     row_dict.get('Avg_Entry', 0),
                     row_dict.get('Avg_Exit', 0),
@@ -397,8 +403,8 @@ def save_summary_row(portfolio_name, row_dict):
                     row_dict.get('Trade_ID'),
                     row_dict.get('Ticker'),
                     row_dict.get('Status', 'OPEN'),
-                    row_dict.get('Open_Date'),
-                    row_dict.get('Closed_Date'),
+                    clean_value(row_dict.get('Open_Date')),
+                    clean_value(row_dict.get('Closed_Date')),
                     row_dict.get('Shares', 0),
                     row_dict.get('Avg_Entry', 0),
                     row_dict.get('Avg_Exit', 0),
