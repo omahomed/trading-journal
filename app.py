@@ -6377,10 +6377,22 @@ elif page == "IBD Market School":
         try:
             analyzer = MarketSchoolRules(symbol)
             analyzer.fetch_data(start_date=start_date, end_date=end_date)
+
+            # Debug: Check data was fetched
+            if analyzer.data is None or analyzer.data.empty:
+                st.error(f"{symbol}: No data fetched from yfinance")
+                return []
+
+            st.info(f"{symbol}: Fetched {len(analyzer.data)} days of data")
+
             analyzer.analyze_market()
+            st.info(f"{symbol}: Generated {len(analyzer.signals)} total signals")
 
             summaries = []
-            for date in analyzer.data.index[260:]:  # Skip first 260 days (52-week lookback)
+            dates_to_process = analyzer.data.index[260:]
+            st.info(f"{symbol}: Processing {len(dates_to_process)} days (after 260-day lookback)")
+
+            for date in dates_to_process:
                 date_str = date.strftime('%Y-%m-%d')
                 summary = analyzer.get_daily_summary(date_str)
 
@@ -6398,6 +6410,8 @@ elif page == "IBD Market School":
             return summaries
         except Exception as e:
             st.error(f"Error analyzing {symbol}: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             return []
 
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
