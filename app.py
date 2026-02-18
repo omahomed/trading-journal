@@ -1053,16 +1053,15 @@ if page == "Dashboard":
                 s_map[t] = 'Unknown'
         return s_map
 
-    # Ensure we look for the Clean file first
+    # Load journal data (database-aware via load_data)
     p_clean = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
-    p_legacy = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal.csv')
-    final_j_path = p_clean if os.path.exists(p_clean) else p_legacy
+    df_j = load_data(p_clean)
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
 
-    if not os.path.exists(final_j_path): st.error("Journal missing.")
+    if df_j.empty:
+        st.error("Journal missing.")
     else:
-        df_j = pd.read_csv(final_j_path)
-        df_d = load_data(DETAILS_FILE)
-        df_s = load_data(SUMMARY_FILE)
         
         # --- 1. PREPARE JOURNAL DATA ---
         if 'Nsadaq' in df_j.columns: df_j.rename(columns={'Nsadaq': 'Nasdaq'}, inplace=True)
