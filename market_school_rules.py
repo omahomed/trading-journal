@@ -528,10 +528,10 @@ class MarketSchoolRules:
         is_distribution = (current['daily_gain_pct'] <= -0.2 and current['volume_up'])
         
         # Check for stall day
-        is_stall = (current['volume_up'] and 
+        is_stall = (current['volume_up'] and
                    current['close_position'] < 0.5 and
-                   current['give_back'] > 0.3 and
-                   current['intraday_gain'] > 0.3)
+                   current['give_back'] > 30 and
+                   current['intraday_gain'] > 30)
         
         if is_distribution or is_stall:
             dist_type = 'stall' if is_stall else 'distribution'
