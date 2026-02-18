@@ -1290,13 +1290,13 @@ elif page == "Daily Journal":
     st.header(f"DAILY TRADING JOURNAL ({CURR_PORT_NAME})")
     
     TARGET_FILE = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
-    if not os.path.exists(TARGET_FILE):
-        TARGET_FILE = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal.csv')
 
-    if not os.path.exists(TARGET_FILE):
+    # Load journal data (database-aware via load_data)
+    df_j = load_data(TARGET_FILE)
+
+    if df_j.empty:
         st.warning("No Journal File Found. Please go to 'Daily Routine' to log your first day.")
     else:
-        df_j = pd.read_csv(TARGET_FILE)
         df_d = load_data(DETAILS_FILE)
         
         # --- 0. DATA SANITIZATION ---
