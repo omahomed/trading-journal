@@ -6399,12 +6399,15 @@ elif page == "IBD Market School":
             st.error(f"Error analyzing {symbol}: {e}")
             return []
 
-    def sync_signals_to_db(symbol, summaries):
+    def sync_signals_to_db(symbol, summaries, filter_from_date=None):
         """Store analysis results in database."""
         if not USE_DATABASE:
             return
 
         for summary in summaries:
+            # Skip dates before filter date if specified
+            if filter_from_date and summary['date'] < filter_from_date:
+                continue
             signal_dict = {
                 'symbol': symbol,
                 'signal_date': summary['date'],
@@ -6437,20 +6440,23 @@ elif page == "IBD Market School":
 
     with col_btn2:
         if st.button("💾 Sync to Database") and USE_DATABASE:
-            with st.spinner("Analyzing from Feb 24, 2025 for both indices..."):
+            with st.spinner("Analyzing market signals (this may take ~60 seconds)..."):
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                start_date = "2025-02-24"
+                # Fetch from Oct 2023 to have enough historical data for calculations
+                # But only save signals from Feb 24, 2025 onward
+                fetch_start = "2023-10-01"
+                save_from = pd.Timestamp("2025-02-24")
 
                 # Nasdaq
-                nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
-                sync_signals_to_db("^IXIC", nasdaq_summaries)
+                nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
+                sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=save_from)
                 time.sleep(1)
 
                 # SPY
-                spy_summaries = analyze_symbol("SPY", start_date, end_date)
-                sync_signals_to_db("SPY", spy_summaries)
+                spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
+                sync_signals_to_db("SPY", spy_summaries, filter_from_date=save_from)
 
-                st.success("✅ Market signals synced!")
+                st.success("✅ Market signals synced from Feb 24, 2025!")
                 st.rerun()
 
     st.markdown("---")
@@ -6469,10 +6475,10 @@ elif page == "IBD Market School":
     else:
         # On-the-fly analysis (no database)
         end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = "2025-02-24"
+        fetch_start = "2023-10-01"  # Need historical data for calculations
 
-        nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
-        spy_summaries = analyze_symbol("SPY", start_date, end_date)
+        nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
+        spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
 
         nasdaq_latest = nasdaq_summaries[-1] if nasdaq_summaries else None
         spy_latest = spy_summaries[-1] if spy_summaries else None
