@@ -24,6 +24,33 @@ KNOWN_STALLS = {
     ]
 }
 
+# ============================================================================
+# MANUAL DISTRIBUTION DAY OVERRIDES (Due to Data Source Differences)
+# ============================================================================
+# yfinance data doesn't always match IBD's proprietary data.
+# Use these overrides to force inclusion/exclusion to match IBD exactly.
+
+# Force INCLUDE these as distributions (even if auto-detection misses them)
+MANUAL_DISTRIBUTIONS = {
+    '^IXIC': [
+        # Add NASDAQ manual distributions as needed
+    ],
+    'SPY': [
+        {'date': '2025-12-26', 'loss_pct': 0.01},  # yfinance shows -0.01%, IBD has larger loss
+    ]
+}
+
+# Force EXCLUDE these from distributions (even if auto-detection finds them)
+EXCLUDED_DISTRIBUTIONS = {
+    '^IXIC': [
+        # Add NASDAQ exclusions as needed
+    ],
+    'SPY': [
+        {'date': '2026-01-30', 'reason': 'yfinance volume up, IBD volume down'},
+        {'date': '2026-02-05', 'reason': 'yfinance volume up, IBD volume down'},
+    ]
+}
+
 class SignalType(Enum):
     """Enumeration of all signal types"""
     # Buy Signals
@@ -539,13 +566,35 @@ class MarketSchoolRules:
 
         if prev is None:
             return signals
-            
-        # Check for distribution day (auto-detected)
-        is_distribution = (current['daily_gain_pct'] <= -0.2 and current['volume_up'])
+
+        current_date_str = current.name.strftime('%Y-%m-%d')
+
+        # Check if this date is manually EXCLUDED
+        is_excluded = False
+        if self.symbol in EXCLUDED_DISTRIBUTIONS:
+            for excl in EXCLUDED_DISTRIBUTIONS[self.symbol]:
+                if excl['date'] == current_date_str:
+                    is_excluded = True
+                    break
+
+        # Check for distribution day (auto-detected, but respect exclusions)
+        is_distribution = (current['daily_gain_pct'] <= -0.2 and current['volume_up'] and not is_excluded)
+
+        # Check for manually ADDED distributions
+        is_manual_distribution = False
+        manual_loss_pct = None
+        if self.symbol in MANUAL_DISTRIBUTIONS:
+            for manual in MANUAL_DISTRIBUTIONS[self.symbol]:
+                if manual['date'] == current_date_str:
+                    is_manual_distribution = True
+                    manual_loss_pct = manual['loss_pct']
+                    break
+
+        # Combine: either auto-detected OR manually added
+        is_distribution = is_distribution or is_manual_distribution
 
         # Check for stall day (manual from IBD list)
         is_stall = False
-        current_date_str = current.name.strftime('%Y-%m-%d')
 
         if self.symbol in KNOWN_STALLS:
             for stall_entry in KNOWN_STALLS[self.symbol]:
@@ -555,12 +604,14 @@ class MarketSchoolRules:
 
         if is_distribution or is_stall:
             dist_type = 'stall' if is_stall else 'distribution'
+            # Use manual loss_pct if this is a manually added distribution
+            loss_pct = manual_loss_pct if is_manual_distribution and manual_loss_pct is not None else current['daily_gain_pct']
             self.distribution_days.append(DistributionDay(
                 date=current.name,
                 type=dist_type,
                 low=current['Low'],
                 close=current['Close'],
-                loss_percent=current['daily_gain_pct']
+                loss_percent=loss_pct
             ))
             
         # Remove old distribution days and check 5% rally rule
