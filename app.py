@@ -2339,10 +2339,16 @@ elif page == "Position Sizer":
     try:
         df = load_data(JOURNAL_FILE)
         if not df.empty and 'End NLV' in df.columns:
-            val_str = str(df['End NLV'].iloc[-1]).replace('$','').replace(',','')
+            # Sort by date to ensure we get the latest entry
+            if 'Day' in df.columns:
+                df['Day'] = pd.to_datetime(df['Day'], errors='coerce')
+                df = df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+            val_str = str(df['End NLV'].iloc[0]).replace('$','').replace(',','')
             equity = float(val_str)
-    except:
-        pass
+            # Debug: Show loaded value
+            st.sidebar.info(f"💰 Latest NLV: ${equity:,.2f}")
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Could not load NLV: {e}")
     
     df_s = load_data(SUMMARY_FILE)
     df_d = load_data(DETAILS_FILE)
@@ -3110,10 +3116,14 @@ elif page == "Trade Manager":
         try:
             j_df = load_data(JOURNAL_FILE)
             if not j_df.empty and 'End NLV' in j_df.columns:
-                val_str = str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',','')
+                # Sort by date to ensure we get the latest entry
+                if 'Day' in j_df.columns:
+                    j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                    j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+                val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
                 def_equity = float(val_str)
-        except:
-            pass
+        except Exception as e:
+            st.warning(f"⚠️ Could not load NLV for risk budgeting: {e}")
 
         if trade_type == "Start New Campaign":
             st.markdown("#### 💰 Risk Budgeting")
