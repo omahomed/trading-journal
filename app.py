@@ -17,7 +17,14 @@ except ImportError:
     print("⚠️  db_layer not found - database features disabled")
 
 # Feature flag: Use database instead of CSV
-USE_DATABASE = os.getenv('USE_DATABASE', 'false').lower() == 'true' and DB_AVAILABLE
+# Auto-enable if running on Streamlit Cloud with database secrets
+if DB_AVAILABLE and hasattr(st, 'secrets') and 'database' in st.secrets:
+    USE_DATABASE = True  # Running on Streamlit Cloud with database configured
+    print("✅ Database mode enabled (Streamlit Cloud)")
+else:
+    USE_DATABASE = os.getenv('USE_DATABASE', 'false').lower() == 'true' and DB_AVAILABLE
+    if USE_DATABASE:
+        print("✅ Database mode enabled (environment variable)")
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
