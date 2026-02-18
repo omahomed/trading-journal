@@ -6414,6 +6414,27 @@ elif page == "IBD Market School":
             st.code(traceback.format_exc())
             return []
 
+    @st.cache_data(ttl=600, show_spinner=False)
+    def get_active_distribution_days(symbol):
+        """Get currently active distribution days for a symbol."""
+        try:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            fetch_start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+
+            analyzer = MarketSchoolRules(symbol)
+            analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
+            analyzer.analyze_market()
+
+            # Filter to only active distribution days (not removed)
+            active_dist_days = [
+                dd for dd in analyzer.distribution_days
+                if dd.removed_date is None
+            ]
+
+            return active_dist_days
+        except Exception as e:
+            return []
+
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
         """Store analysis results in database."""
         if not USE_DATABASE:
@@ -6585,6 +6606,24 @@ elif page == "IBD Market School":
                     st.error(f"🔴 SELL: {sell_sigs}")
             else:
                 st.info("No new signals today")
+
+            # Distribution Days Detail
+            with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
+                nasdaq_dist_days = get_active_distribution_days("^IXIC")
+                if nasdaq_dist_days:
+                    st.markdown("**Active Distribution Days:**")
+                    for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
+                        days_ago = (datetime.now().date() - dd.date.date()).days
+                        days_until_expire = 25 - days_ago
+
+                        st.markdown(f"""
+                        **{dd.date.strftime('%Y-%m-%d')}** ({days_ago} days ago)
+                        - Type: {dd.type.upper()}
+                        - Loss: {dd.loss_percent:.2f}%
+                        - Expires in: {days_until_expire} days (if not removed earlier)
+                        """)
+                else:
+                    st.info("No active distribution days")
         else:
             st.warning("No data available")
 
@@ -6627,6 +6666,24 @@ elif page == "IBD Market School":
                     st.error(f"🔴 SELL: {sell_sigs}")
             else:
                 st.info("No new signals today")
+
+            # Distribution Days Detail
+            with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
+                spy_dist_days = get_active_distribution_days("SPY")
+                if spy_dist_days:
+                    st.markdown("**Active Distribution Days:**")
+                    for dd in sorted(spy_dist_days, key=lambda x: x.date, reverse=True):
+                        days_ago = (datetime.now().date() - dd.date.date()).days
+                        days_until_expire = 25 - days_ago
+
+                        st.markdown(f"""
+                        **{dd.date.strftime('%Y-%m-%d')}** ({days_ago} days ago)
+                        - Type: {dd.type.upper()}
+                        - Loss: {dd.loss_percent:.2f}%
+                        - Expires in: {days_until_expire} days (if not removed earlier)
+                        """)
+                else:
+                    st.info("No active distribution days")
         else:
             st.warning("No data available")
 
