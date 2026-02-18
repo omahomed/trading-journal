@@ -849,14 +849,18 @@ class MarketSchoolRules:
             target_date = self.data.index[-1]
         else:
             target_date = pd.Timestamp(date)
-            
+
+        # Normalize to tz-naive for comparison
+        target_date = pd.Timestamp(target_date).tz_localize(None)
+
         # Find state as of target date
         exposure = 0
         buy_switch = False
         signals_to_date = []
-        
+
         for signal in self.signals:
-            if signal.date <= target_date:
+            signal_date = pd.Timestamp(signal.date).tz_localize(None)
+            if signal_date <= target_date:
                 signals_to_date.append(signal)
                 if signal.affects_exposure:
                     exposure += signal.exposure_change
@@ -870,10 +874,12 @@ class MarketSchoolRules:
         # Count active distribution days as of target date
         active_dist = 0
         dist_details = []
-        
+
         for dist_day in self.distribution_days:
-            if dist_day.date <= target_date:
-                if dist_day.removed_date is None or dist_day.removed_date > target_date:
+            dist_date = pd.Timestamp(dist_day.date).tz_localize(None)
+            if dist_date <= target_date:
+                removed_date = pd.Timestamp(dist_day.removed_date).tz_localize(None) if dist_day.removed_date else None
+                if removed_date is None or removed_date > target_date:
                     active_dist += 1
                     dist_details.append({
                         'date': dist_day.date.strftime('%Y-%m-%d'),
