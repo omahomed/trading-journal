@@ -1,4 +1,7 @@
 streamlit
-plotly
 pandas
-
+yfinance
+matplotlib
+plotly
+psycopg2-binary
+numpy
