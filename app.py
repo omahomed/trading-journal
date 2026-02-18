@@ -6666,12 +6666,30 @@ elif page == "IBD Market School":
                 st.pyplot(fig)
 
             with tab2:
-                display_df = df_30d[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
+                # Add filter for symbol
+                filter_col1, filter_col2 = st.columns([1, 3])
+                with filter_col1:
+                    symbol_filter = st.radio(
+                        "Filter by Index:",
+                        options=["Both", "NASDAQ (^IXIC)", "SPY"],
+                        horizontal=False
+                    )
+
+                # Apply filter
+                if symbol_filter == "NASDAQ (^IXIC)":
+                    filtered_df = df_30d[df_30d['symbol'] == '^IXIC'].copy()
+                elif symbol_filter == "SPY":
+                    filtered_df = df_30d[df_30d['symbol'] == 'SPY'].copy()
+                else:
+                    filtered_df = df_30d.copy()
+
+                display_df = filtered_df[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
                                     'market_exposure', 'distribution_count', 'buy_signals', 'sell_signals']].copy()
                 display_df.columns = ['Date', 'Symbol', 'Close', 'Daily %', 'Exposure', 'Dist Days', 'Buy Signals', 'Sell Signals']
                 display_df = display_df.sort_values('Date', ascending=False)
 
-                st.dataframe(display_df, use_container_width=True, height=400)
+                with filter_col2:
+                    st.dataframe(display_df, use_container_width=True, height=400)
 
     # === SIGNAL LEGEND ===
 
