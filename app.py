@@ -12,9 +12,9 @@ import shutil
 try:
     import db_layer as db
     DB_AVAILABLE = True
-except ImportError:
+except (ImportError, KeyError, Exception) as e:
     DB_AVAILABLE = False
-    print("⚠️  db_layer not found - database features disabled")
+    print(f"⚠️  db_layer import failed: {type(e).__name__}: {e}")
 
 # Feature flag: Use database instead of CSV
 # Auto-enable if running on Streamlit Cloud with database secrets
