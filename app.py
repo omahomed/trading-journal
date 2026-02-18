@@ -6440,6 +6440,52 @@ elif page == "IBD Market School":
             st.error(f"Error loading distribution days for {symbol}: {e}")
             return []
 
+    def calculate_dd_changes(symbol, start_date, end_date):
+        """Calculate daily distribution day additions, removals, and notes."""
+        try:
+            analyzer = MarketSchoolRules(symbol)
+            analyzer.fetch_data(start_date="2024-02-24", end_date=end_date)
+
+            if analyzer.data is None or analyzer.data.empty:
+                return {}
+
+            analyzer.analyze_market()
+
+            # Build a dict of changes by date
+            changes_by_date = {}
+
+            # Track additions (when distribution day was created)
+            for dd in analyzer.distribution_days:
+                dd_date = pd.Timestamp(dd.date).normalize()
+                date_str = dd_date.strftime('%Y-%m-%d')
+
+                if date_str not in changes_by_date:
+                    changes_by_date[date_str] = {'added': [], 'removed': []}
+
+                changes_by_date[date_str]['added'].append({
+                    'date': dd_date,
+                    'type': dd.type,
+                    'loss': dd.loss_percent
+                })
+
+                # Track removals (when distribution day was removed)
+                if dd.removed_date:
+                    removed_date = pd.Timestamp(dd.removed_date).normalize()
+                    removed_str = removed_date.strftime('%Y-%m-%d')
+
+                    if removed_str not in changes_by_date:
+                        changes_by_date[removed_str] = {'added': [], 'removed': []}
+
+                    changes_by_date[removed_str]['removed'].append({
+                        'date': dd_date,
+                        'type': dd.type,
+                        'reason': dd.removal_reason or 'Unknown'
+                    })
+
+            return changes_by_date
+        except Exception as e:
+            return {}
+
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
         """Store analysis results in database."""
         if not USE_DATABASE:
@@ -6740,14 +6786,60 @@ elif page == "IBD Market School":
                 # Apply filter
                 if symbol_filter == "NASDAQ (^IXIC)":
                     filtered_df = df_30d[df_30d['symbol'] == '^IXIC'].copy()
+                    symbols_to_analyze = ['^IXIC']
                 elif symbol_filter == "SPY":
                     filtered_df = df_30d[df_30d['symbol'] == 'SPY'].copy()
+                    symbols_to_analyze = ['SPY']
                 else:
                     filtered_df = df_30d.copy()
+                    symbols_to_analyze = ['^IXIC', 'SPY']
 
+                # Get DD changes for filtered symbols
+                all_dd_changes = {}
+                for sym in symbols_to_analyze:
+                    end_date = datetime.now().strftime('%Y-%m-%d')
+                    start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+                    dd_changes = calculate_dd_changes(sym, start_date, end_date)
+                    for date_str, changes in dd_changes.items():
+                        if date_str not in all_dd_changes:
+                            all_dd_changes[date_str] = {}
+                        all_dd_changes[date_str][sym] = changes
+
+                # Build enhanced display dataframe
                 display_df = filtered_df[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
-                                    'market_exposure', 'distribution_count', 'buy_signals', 'sell_signals']].copy()
-                display_df.columns = ['Date', 'Symbol', 'Close', 'Daily %', 'Exposure', 'Dist Days', 'Buy Signals', 'Sell Signals']
+                                    'distribution_count', 'market_exposure', 'buy_signals', 'sell_signals']].copy()
+
+                # Add DD+, DD-, and Notes columns
+                display_df['dd_added'] = 0
+                display_df['dd_removed'] = 0
+                display_df['notes'] = ''
+
+                for idx, row in display_df.iterrows():
+                    date_str = row['signal_date'].strftime('%Y-%m-%d')
+                    symbol = row['symbol']
+
+                    if date_str in all_dd_changes and symbol in all_dd_changes[date_str]:
+                        changes = all_dd_changes[date_str][symbol]
+
+                        # Count additions and removals
+                        display_df.at[idx, 'dd_added'] = len(changes.get('added', []))
+                        display_df.at[idx, 'dd_removed'] = -len(changes.get('removed', []))
+
+                        # Build notes
+                        notes = []
+                        for removed in changes.get('removed', []):
+                            dd_date = removed['date'].strftime('%Y-%m-%d')
+                            reason = removed['reason']
+                            notes.append(f"DD {dd_date} removed ({reason})")
+
+                        display_df.at[idx, 'notes'] = ' | '.join(notes) if notes else ''
+
+                # Reorder and rename columns
+                display_df = display_df[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
+                                         'dd_added', 'dd_removed', 'distribution_count', 'market_exposure',
+                                         'buy_signals', 'sell_signals', 'notes']]
+                display_df.columns = ['Date', 'Symbol', 'Close', 'Daily %', 'DD+', 'DD-', 'Cum DD',
+                                     'Exposure', 'Buy Signals', 'Sell Signals', 'Notes']
                 display_df = display_df.sort_values('Date', ascending=False)
 
                 with filter_col2:
