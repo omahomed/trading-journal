@@ -6384,8 +6384,9 @@ elif page == "IBD Market School":
                 date_str = date.strftime('%Y-%m-%d')
                 summary = analyzer.get_daily_summary(date_str)
 
-                # Parse signals for this date
-                day_signals = [s for s in analyzer.signals if s.date == date]
+                # Parse signals for this date (normalize to date-only for comparison)
+                date_normalized = pd.Timestamp(date).normalize()
+                day_signals = [s for s in analyzer.signals if pd.Timestamp(s.date).normalize() == date_normalized]
                 buy_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('B')]
                 sell_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('S')]
 
