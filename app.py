@@ -6419,11 +6419,15 @@ elif page == "IBD Market School":
         """Get currently active distribution days for a symbol."""
         try:
             end_date = datetime.now().strftime('%Y-%m-%d')
-            fetch_start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+            # Need 260+ days for proper lookback calculation
+            fetch_start = (datetime.now() - timedelta(days=320)).strftime('%Y-%m-%d')
 
             analyzer = MarketSchoolRules(symbol)
             analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
             analyzer.analyze_market()
+
+            # Get current summary to ensure distribution days are calculated
+            current_summary = analyzer.get_daily_summary()
 
             # Filter to only active distribution days (not removed)
             active_dist_days = [
@@ -6433,6 +6437,9 @@ elif page == "IBD Market School":
 
             return active_dist_days
         except Exception as e:
+            st.error(f"Error loading distribution days for {symbol}: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             return []
 
     def sync_signals_to_db(symbol, summaries, filter_from_date=None):
