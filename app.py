@@ -2341,7 +2341,8 @@ elif page == "Position Sizer":
         if not df.empty and 'End NLV' in df.columns:
             val_str = str(df['End NLV'].iloc[-1]).replace('$','').replace(',','')
             equity = float(val_str)
-        except: pass
+    except:
+        pass
     
     df_s = load_data(SUMMARY_FILE)
     df_d = load_data(DETAILS_FILE)
