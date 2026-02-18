@@ -604,6 +604,119 @@ def get_all_open_trades():
 
 
 # ============================================
+# MARKET SIGNALS OPERATIONS
+# ============================================
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_market_signals(symbol=None, days=30):
+    """Load market signals for display (cached 10 minutes)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT symbol, signal_date, close_price, daily_change_pct,
+                       market_exposure, position_allocation, buy_switch,
+                       distribution_count, above_21ema, above_50ma,
+                       buy_signals, sell_signals, analyzed_at
+                FROM market_signals
+                WHERE signal_date >= CURRENT_DATE - INTERVAL '%s days'
+            """
+            params = [days]
+            if symbol:
+                query += " AND symbol = %s"
+                params.append(symbol)
+            query += " ORDER BY signal_date DESC, symbol"
+
+            cur.execute(query, params)
+            columns = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+            df = pd.DataFrame(rows, columns=columns)
+
+            if not df.empty:
+                df['signal_date'] = pd.to_datetime(df['signal_date'])
+                df['analyzed_at'] = pd.to_datetime(df['analyzed_at'])
+                from decimal import Decimal
+                for col in df.columns:
+                    sample = df[col].dropna()
+                    if len(sample) > 0 and isinstance(sample.iloc[0], Decimal):
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+            return df
+
+
+def save_market_signal(signal_dict):
+    """Insert or update market signal row."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM market_signals WHERE symbol = %s AND signal_date = %s",
+                (signal_dict['symbol'], signal_dict['signal_date'])
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                update_query = """
+                    UPDATE market_signals
+                    SET close_price=%s, daily_change_pct=%s, market_exposure=%s,
+                        position_allocation=%s, buy_switch=%s, distribution_count=%s,
+                        above_21ema=%s, above_50ma=%s, buy_signals=%s, sell_signals=%s,
+                        analyzed_at=CURRENT_TIMESTAMP
+                    WHERE id=%s RETURNING id
+                """
+                cur.execute(update_query, (
+                    signal_dict.get('close_price'),
+                    signal_dict.get('daily_change_pct'),
+                    signal_dict.get('market_exposure', 0),
+                    signal_dict.get('position_allocation', 0),
+                    signal_dict.get('buy_switch', False),
+                    signal_dict.get('distribution_count', 0),
+                    signal_dict.get('above_21ema', False),
+                    signal_dict.get('above_50ma', False),
+                    signal_dict.get('buy_signals'),
+                    signal_dict.get('sell_signals'),
+                    existing[0]
+                ))
+            else:
+                insert_query = """
+                    INSERT INTO market_signals (
+                        symbol, signal_date, close_price, daily_change_pct,
+                        market_exposure, position_allocation, buy_switch,
+                        distribution_count, above_21ema, above_50ma,
+                        buy_signals, sell_signals
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+                """
+                cur.execute(insert_query, (
+                    signal_dict['symbol'],
+                    signal_dict['signal_date'],
+                    signal_dict.get('close_price'),
+                    signal_dict.get('daily_change_pct'),
+                    signal_dict.get('market_exposure', 0),
+                    signal_dict.get('position_allocation', 0),
+                    signal_dict.get('buy_switch', False),
+                    signal_dict.get('distribution_count', 0),
+                    signal_dict.get('above_21ema', False),
+                    signal_dict.get('above_50ma', False),
+                    signal_dict.get('buy_signals'),
+                    signal_dict.get('sell_signals')
+                ))
+
+            row_id = cur.fetchone()[0]
+            conn.commit()
+            load_market_signals.clear()
+            return row_id
+
+
+def get_latest_signal_date(symbol):
+    """Get most recent signal date for a symbol."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT MAX(signal_date) FROM market_signals WHERE symbol = %s",
+                (symbol,)
+            )
+            result = cur.fetchone()
+            return result[0] if result and result[0] else None
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():

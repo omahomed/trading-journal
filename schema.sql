@@ -202,6 +202,31 @@ EXECUTE FUNCTION update_journal_timestamp();
 
 
 -- ============================================
+-- IBD MARKET SCHOOL: Market Signals Tracking
+-- ============================================
+CREATE TABLE IF NOT EXISTS market_signals (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(10) NOT NULL,
+    signal_date DATE NOT NULL,
+    close_price NUMERIC(12, 2) NOT NULL,
+    daily_change_pct NUMERIC(10, 4) NOT NULL,
+    market_exposure INTEGER DEFAULT 0,
+    position_allocation NUMERIC(10, 4) DEFAULT 0,
+    buy_switch BOOLEAN DEFAULT FALSE,
+    distribution_count INTEGER DEFAULT 0,
+    above_21ema BOOLEAN DEFAULT FALSE,
+    above_50ma BOOLEAN DEFAULT FALSE,
+    buy_signals VARCHAR(100),
+    sell_signals VARCHAR(100),
+    analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_signal_per_day UNIQUE (symbol, signal_date)
+);
+
+CREATE INDEX idx_signals_symbol_date ON market_signals (symbol, signal_date DESC);
+CREATE INDEX idx_signals_date ON market_signals (signal_date DESC);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 

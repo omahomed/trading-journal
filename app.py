@@ -661,17 +661,18 @@ st.sidebar.markdown("---")
 # C. PAGE NAVIGATION
 # One menu to rule them all.
 page = st.sidebar.radio("Go to Module", [
-    "Command Center", 
-    "Dashboard", 
-    "Daily Routine", 
-    "Daily Journal", 
-    "Daily Report Card", 
-    "M Factor", 
-    "Performance Heat Map", 
-    "Ticker Forensics", 
-    "Period Review", 
-    "Position Sizer", 
-    "Trade Manager", 
+    "Command Center",
+    "Dashboard",
+    "Daily Routine",
+    "Daily Journal",
+    "Daily Report Card",
+    "IBD Market School",
+    "M Factor",
+    "Performance Heat Map",
+    "Ticker Forensics",
+    "Period Review",
+    "Position Sizer",
+    "Trade Manager",
     "Analytics",
     "Weekly Retro"  # <--- ADDED HERE
 ])
@@ -6350,3 +6351,295 @@ elif page == "Weekly Retro":
             st.info("No transactions found for this week.")
     else:
         st.error("Details file not found.")
+
+# ==============================================================================
+# PAGE 13: IBD MARKET SCHOOL
+# ==============================================================================
+elif page == "IBD Market School":
+    st.title("📚 IBD MARKET SCHOOL - Market Timing Signals")
+    st.caption("Track buy/sell signals and recommended exposure for Nasdaq and SPY")
+
+    # Import market_school_rules
+    try:
+        from market_school_rules import MarketSchoolRules
+    except ImportError:
+        st.error("market_school_rules.py not found. Please ensure file is in project root.")
+        st.stop()
+
+    from datetime import datetime, timedelta
+    import time
+
+    # === HELPER FUNCTIONS ===
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def analyze_symbol(symbol, start_date, end_date):
+        """Analyze market signals for a symbol. Returns list of daily summaries."""
+        try:
+            analyzer = MarketSchoolRules(symbol)
+            analyzer.fetch_data(start_date=start_date, end_date=end_date)
+            analyzer.analyze_market()
+
+            summaries = []
+            for date in analyzer.data.index[260:]:  # Skip first 260 days (52-week lookback)
+                date_str = date.strftime('%Y-%m-%d')
+                summary = analyzer.get_daily_summary(date_str)
+
+                # Parse signals for this date
+                day_signals = [s for s in analyzer.signals if s.date == date]
+                buy_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('B')]
+                sell_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('S')]
+
+                summary['buy_signals'] = ','.join(buy_sigs) if buy_sigs else None
+                summary['sell_signals'] = ','.join(sell_sigs) if sell_sigs else None
+                summary['symbol'] = symbol
+                summaries.append(summary)
+
+            return summaries
+        except Exception as e:
+            st.error(f"Error analyzing {symbol}: {e}")
+            return []
+
+    def sync_signals_to_db(symbol, summaries):
+        """Store analysis results in database."""
+        if not USE_DATABASE:
+            return
+
+        for summary in summaries:
+            signal_dict = {
+                'symbol': symbol,
+                'signal_date': summary['date'],
+                'close_price': summary['close'],
+                'daily_change_pct': float(summary['daily_change'].rstrip('%')),
+                'market_exposure': summary['market_exposure'],
+                'position_allocation': float(summary['position_allocation'].rstrip('%')) / 100,
+                'buy_switch': summary['buy_switch'] == 'ON',
+                'distribution_count': summary['distribution_count'],
+                'above_21ema': summary['above_21ema'],
+                'above_50ma': summary['above_50ma'],
+                'buy_signals': summary.get('buy_signals'),
+                'sell_signals': summary.get('sell_signals')
+            }
+
+            try:
+                db.save_market_signal(signal_dict)
+            except Exception as e:
+                st.warning(f"Failed to save {symbol} {summary['date']}: {e}")
+
+    # === DATA REFRESH CONTROLS ===
+
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
+
+    with col_btn1:
+        if st.button("🔄 Refresh Market Data"):
+            st.cache_data.clear()
+            st.success("Cache cleared!")
+            st.rerun()
+
+    with col_btn2:
+        if st.button("💾 Sync to Database") and USE_DATABASE:
+            with st.spinner("Analyzing last 500 days for both indices..."):
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=500)).strftime('%Y-%m-%d')
+
+                # Nasdaq
+                nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
+                sync_signals_to_db("^IXIC", nasdaq_summaries)
+                time.sleep(1)
+
+                # SPY
+                spy_summaries = analyze_symbol("SPY", start_date, end_date)
+                sync_signals_to_db("SPY", spy_summaries)
+
+                st.success("✅ Market signals synced!")
+                st.rerun()
+
+    st.markdown("---")
+
+    # === LOAD DATA ===
+
+    if USE_DATABASE:
+        df_signals = db.load_market_signals(days=90)
+
+        if df_signals.empty:
+            st.warning("📭 No market signals in database. Click 'Sync to Database' to populate.")
+            st.stop()
+
+        nasdaq_latest = df_signals[df_signals['symbol'] == '^IXIC'].iloc[0] if not df_signals[df_signals['symbol'] == '^IXIC'].empty else None
+        spy_latest = df_signals[df_signals['symbol'] == 'SPY'].iloc[0] if not df_signals[df_signals['symbol'] == 'SPY'].empty else None
+    else:
+        # On-the-fly analysis (no database)
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=500)).strftime('%Y-%m-%d')
+
+        nasdaq_summaries = analyze_symbol("^IXIC", start_date, end_date)
+        spy_summaries = analyze_symbol("SPY", start_date, end_date)
+
+        nasdaq_latest = nasdaq_summaries[-1] if nasdaq_summaries else None
+        spy_latest = spy_summaries[-1] if spy_summaries else None
+
+    # === CURRENT STATUS DISPLAY ===
+
+    st.subheader("📊 Current Market Status")
+
+    col_nasdaq, col_spy = st.columns(2)
+
+    with col_nasdaq:
+        st.markdown("### 🟦 NASDAQ (^IXIC)")
+
+        if nasdaq_latest:
+            if USE_DATABASE:
+                close = nasdaq_latest['close_price']
+                daily_chg = nasdaq_latest['daily_change_pct']
+                exposure = nasdaq_latest['market_exposure']
+                allocation = nasdaq_latest['position_allocation'] * 100
+                dist_count = nasdaq_latest['distribution_count']
+                buy_switch = nasdaq_latest['buy_switch']
+                buy_sigs = nasdaq_latest['buy_signals']
+                sell_sigs = nasdaq_latest['sell_signals']
+            else:
+                close = nasdaq_latest['close']
+                daily_chg = float(nasdaq_latest['daily_change'].rstrip('%'))
+                exposure = nasdaq_latest['market_exposure']
+                allocation = float(nasdaq_latest['position_allocation'].rstrip('%'))
+                dist_count = nasdaq_latest['distribution_count']
+                buy_switch = nasdaq_latest['buy_switch'] == 'ON'
+                buy_sigs = nasdaq_latest.get('buy_signals')
+                sell_sigs = nasdaq_latest.get('sell_signals')
+
+            m1, m2 = st.columns(2)
+            m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
+            m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
+
+            m3, m4 = st.columns(2)
+            m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
+            m4.metric("Distribution Days", dist_count)
+
+            if buy_sigs or sell_sigs:
+                st.markdown("**Signals Today:**")
+                if buy_sigs:
+                    st.success(f"🟢 BUY: {buy_sigs}")
+                if sell_sigs:
+                    st.error(f"🔴 SELL: {sell_sigs}")
+            else:
+                st.info("No new signals today")
+        else:
+            st.warning("No data available")
+
+    with col_spy:
+        st.markdown("### 🟩 S&P 500 (SPY)")
+
+        if spy_latest:
+            if USE_DATABASE:
+                close = spy_latest['close_price']
+                daily_chg = spy_latest['daily_change_pct']
+                exposure = spy_latest['market_exposure']
+                allocation = spy_latest['position_allocation'] * 100
+                dist_count = spy_latest['distribution_count']
+                buy_switch = spy_latest['buy_switch']
+                buy_sigs = spy_latest['buy_signals']
+                sell_sigs = spy_latest['sell_signals']
+            else:
+                close = spy_latest['close']
+                daily_chg = float(spy_latest['daily_change'].rstrip('%'))
+                exposure = spy_latest['market_exposure']
+                allocation = float(spy_latest['position_allocation'].rstrip('%'))
+                dist_count = spy_latest['distribution_count']
+                buy_switch = spy_latest['buy_switch'] == 'ON'
+                buy_sigs = spy_latest.get('buy_signals')
+                sell_sigs = spy_latest.get('sell_signals')
+
+            m1, m2 = st.columns(2)
+            m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
+            m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
+
+            m3, m4 = st.columns(2)
+            m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
+            m4.metric("Distribution Days", dist_count)
+
+            if buy_sigs or sell_sigs:
+                st.markdown("**Signals Today:**")
+                if buy_sigs:
+                    st.success(f"🟢 BUY: {buy_sigs}")
+                if sell_sigs:
+                    st.error(f"🔴 SELL: {sell_sigs}")
+            else:
+                st.info("No new signals today")
+        else:
+            st.warning("No data available")
+
+    st.markdown("---")
+
+    # === HISTORICAL VIEW ===
+
+    st.subheader("📈 Historical Signal Tracking (Last 30 Days)")
+
+    if USE_DATABASE and not df_signals.empty:
+        df_30d = df_signals[df_signals['signal_date'] >= (datetime.now() - timedelta(days=30)).date()].copy()
+
+        if not df_30d.empty:
+            tab1, tab2 = st.tabs(["Exposure Levels", "Signal History"])
+
+            with tab1:
+                import matplotlib.pyplot as plt
+
+                fig, ax = plt.subplots(figsize=(12, 5))
+
+                nasdaq_hist = df_30d[df_30d['symbol'] == '^IXIC'].sort_values('signal_date')
+                spy_hist = df_30d[df_30d['symbol'] == 'SPY'].sort_values('signal_date')
+
+                ax.plot(nasdaq_hist['signal_date'], nasdaq_hist['market_exposure'],
+                       marker='o', label='NASDAQ', color='blue', linewidth=2)
+                ax.plot(spy_hist['signal_date'], spy_hist['market_exposure'],
+                       marker='s', label='SPY', color='green', linewidth=2)
+
+                ax.set_xlabel('Date')
+                ax.set_ylabel('Exposure Level (0-6)')
+                ax.set_title('Market Exposure Trend')
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                ax.set_ylim(-0.5, 6.5)
+
+                st.pyplot(fig)
+
+            with tab2:
+                display_df = df_30d[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
+                                    'market_exposure', 'distribution_count', 'buy_signals', 'sell_signals']].copy()
+                display_df.columns = ['Date', 'Symbol', 'Close', 'Daily %', 'Exposure', 'Dist Days', 'Buy Signals', 'Sell Signals']
+                display_df = display_df.sort_values('Date', ascending=False)
+
+                st.dataframe(display_df, use_container_width=True, height=400)
+
+    # === SIGNAL LEGEND ===
+
+    with st.expander("📖 Signal Reference Guide"):
+        col_buy, col_sell = st.columns(2)
+
+        with col_buy:
+            st.markdown("**🟢 BUY SIGNALS**")
+            st.markdown("""
+            - **B1**: Follow-Through Day (FTD)
+            - **B2**: Additional FTD
+            - **B3**: Low Above 21-day MA
+            - **B4**: Trending Above 21-day MA
+            - **B5**: Living Above 21-day MA
+            - **B6**: Low Above 50-day MA
+            - **B7**: Accumulation Day
+            - **B8**: Higher High
+            - **B9**: Downside Reversal Buyback
+            - **B10**: Distribution Day Fall Off
+            """)
+
+        with col_sell:
+            st.markdown("**🔴 SELL SIGNALS**")
+            st.markdown("""
+            - **S1**: FTD Undercut
+            - **S2**: Failed Rally
+            - **S3**: Full Distribution -1
+            - **S4**: Full Distribution
+            - **S5**: Break Below 21-day MA
+            - **S9**: Break Below 50-day MA
+            - **S10**: Bad Break
+            - **S11**: Downside Reversal Day
+            - **S12**: Lower Low
+            - **S13**: Distribution Cluster
+            """)
