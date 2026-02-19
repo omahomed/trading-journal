@@ -3234,6 +3234,15 @@ elif page == "Trade Manager":
     with tab1:
         st.caption("Live Entry Calculator")
 
+        # Show last upload attempt results (persists through rerun)
+        if 'last_upload_attempt' in st.session_state:
+            with st.expander("🔍 Last Upload Attempt Results", expanded=True):
+                attempt = st.session_state['last_upload_attempt']
+                st.json(attempt)
+                if st.button("Clear Results"):
+                    del st.session_state['last_upload_attempt']
+                    st.rerun()
+
         # Debug: Show system status
         with st.expander("🔧 System Status (Debug)", expanded=False):
             diag_cols = st.columns(3)
@@ -3529,24 +3538,38 @@ elif page == "Trade Manager":
                 # --- UPLOAD IMAGES (if provided) ---
                 print(f"[UPLOAD] Checking upload conditions: R2={R2_AVAILABLE}, DB={USE_DATABASE}, weekly={weekly_chart is not None}, daily={daily_chart is not None}")
 
+                # Save diagnostic to session state so it persists through rerun
+                st.session_state['last_upload_attempt'] = {
+                    'R2_AVAILABLE': R2_AVAILABLE,
+                    'USE_DATABASE': USE_DATABASE,
+                    'weekly_chart': weekly_chart is not None,
+                    'daily_chart': daily_chart is not None,
+                    'upload_results': []
+                }
+
                 if R2_AVAILABLE and USE_DATABASE:
                     print("[UPLOAD] Entering upload block")
+                    st.session_state['last_upload_attempt']['entered_block'] = True
                     images_uploaded = []
 
                     try:
                         # Upload Weekly Chart
                         if weekly_chart is not None:
                             print(f"[UPLOAD] About to call r2.upload_image for weekly chart")
+                            st.session_state['last_upload_attempt']['upload_results'].append('Attempting weekly upload...')
                             st.info(f"Uploading weekly chart: {weekly_chart.name}")
                             weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
                             print(f"[UPLOAD] r2.upload_image returned: {weekly_url}")
+                            st.session_state['last_upload_attempt']['upload_results'].append(f'Weekly result: {weekly_url}')
                             if weekly_url:
                                 print(f"[UPLOAD] Saving to database: {weekly_url}")
                                 db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
                                 images_uploaded.append('Weekly')
+                                st.session_state['last_upload_attempt']['upload_results'].append('Weekly: SUCCESS')
                                 print(f"[UPLOAD] Successfully saved weekly chart")
                             else:
                                 print(f"[UPLOAD] weekly_url is None - upload failed")
+                                st.session_state['last_upload_attempt']['upload_results'].append('Weekly: FAILED (None returned)')
                                 st.error("Failed to upload weekly chart to R2")
 
                         # Upload Daily Chart
