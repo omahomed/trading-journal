@@ -3593,21 +3593,35 @@ elif page == "Trade Manager":
     with tab3:
         st.subheader("🛡️ Risk Control Center")
         if st.button("REFRESH MARKET PRICES", type="primary"):
-            open_rows = df_s[df_s['Status']=='OPEN']
-            if not open_rows.empty:
-                p = st.progress(0); n=0
-                for i, r in open_rows.iterrows():
+            if USE_DATABASE:
+                # Database-first approach - use existing refresh function
+                with st.spinner("Fetching current prices..."):
                     try:
-                        tk = r['Ticker'] if r['Ticker']!='COMP' else '^IXIC'
-                        curr = yf.Ticker(tk).history(period='1d')['Close'].iloc[-1]
-                        mkt = r['Shares'] * curr
-                        unreal = mkt - r['Total_Cost']
-                        df_s.at[i, 'Unrealized_PL'] = unreal
-                        df_s.at[i, 'Return_Pct'] = (unreal/r['Total_Cost'])*100 if r['Total_Cost'] else 0
-                    except: pass
-                    n+=1; p.progress(n/len(open_rows))
-                secure_save(df_s, SUMMARY_FILE); st.success("✅ Prices Updated!"); st.rerun()
-            else: st.warning("No open positions.")
+                        result = db.refresh_open_position_prices(CURR_PORT_NAME)
+                        if 'error' in result:
+                            st.error(f"❌ {result['error']}")
+                        else:
+                            st.success(f"✅ {result['message']} (saved to database)")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Price refresh failed: {str(e)}")
+            else:
+                # CSV fallback
+                open_rows = df_s[df_s['Status']=='OPEN']
+                if not open_rows.empty:
+                    p = st.progress(0); n=0
+                    for i, r in open_rows.iterrows():
+                        try:
+                            tk = r['Ticker'] if r['Ticker']!='COMP' else '^IXIC'
+                            curr = yf.Ticker(tk).history(period='1d')['Close'].iloc[-1]
+                            mkt = r['Shares'] * curr
+                            unreal = mkt - r['Total_Cost']
+                            df_s.at[i, 'Unrealized_PL'] = unreal
+                            df_s.at[i, 'Return_Pct'] = (unreal/r['Total_Cost'])*100 if r['Total_Cost'] else 0
+                        except: pass
+                        n+=1; p.progress(n/len(open_rows))
+                    secure_save(df_s, SUMMARY_FILE); st.success("✅ Prices Updated!"); st.rerun()
+                else: st.warning("No open positions.")
 
         st.markdown("---")
         st.markdown("### 🛑 Rapid Stop Adjustment")
@@ -3632,10 +3646,43 @@ elif page == "Trade Manager":
                 mask = (df_d['Trade_ID'] == sel_id) & (df_d['Action'] == 'BUY')
                 if mask.any():
                     last_idx = df_d[mask].last_valid_index()
-                    df_d.at[last_idx, 'Stop_Loss'] = new_stop_price
-                    secure_save(df_d, DETAILS_FILE)
-                    st.success(f"✅ Stop Updated to ${new_stop_price:.2f}")
-                    st.rerun()
+
+                    if USE_DATABASE:
+                        # Database-first approach
+                        try:
+                            # Get database ID
+                            db_id = df_d.at[last_idx, '_DB_ID']
+                            if pd.isna(db_id):
+                                st.error("❌ Cannot update: Database ID not found")
+                                st.stop()
+
+                            # Prepare update dict
+                            update_dict = {
+                                'Trade_ID': df_d.at[last_idx, 'Trade_ID'],
+                                'Ticker': df_d.at[last_idx, 'Ticker'],
+                                'Action': df_d.at[last_idx, 'Action'],
+                                'Date': df_d.at[last_idx, 'Date'],
+                                'Shares': df_d.at[last_idx, 'Shares'],
+                                'Amount': df_d.at[last_idx, 'Amount'],
+                                'Value': df_d.at[last_idx, 'Value'],
+                                'Rule': df_d.at[last_idx, 'Rule'],
+                                'Notes': df_d.at[last_idx, 'Notes'],
+                                'Stop_Loss': new_stop_price,
+                                'Trx_ID': df_d.at[last_idx, 'Trx_ID']
+                            }
+
+                            # Update database
+                            db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
+                            st.success(f"✅ Stop Updated to ${new_stop_price:.2f} (saved to database)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Database update failed: {str(e)}")
+                    else:
+                        # CSV fallback
+                        df_d.at[last_idx, 'Stop_Loss'] = new_stop_price
+                        secure_save(df_d, DETAILS_FILE)
+                        st.success(f"✅ Stop Updated to ${new_stop_price:.2f}")
+                        st.rerun()
                 else: st.error("Could not find a BUY transaction.")
         else: st.info("No active positions.")
 
