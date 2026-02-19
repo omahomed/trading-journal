@@ -5774,24 +5774,106 @@ elif page == "Analytics":
             st.subheader(f"1. Scoreboard ({view_scope})")
             
             if PLOTLY_AVAILABLE:
+                # Enhanced Profit Factor Gauge
+                pf_color = "#2ca02c" if pf_val > 1.5 else ("#ffcc00" if pf_val > 1.0 else "#ff4b4b")
                 fig_pf = go.Figure(go.Indicator(
-                    mode = "gauge+number", value = pf_val, title = {'text': "Profit Factor"},
-                    gauge = {'axis': {'range': [0, 5]}, 'bar': {'color': "#2ca02c" if pf_val > 1.5 else "orange"},
-                             'steps': [{'range': [0, 1], 'color': "lightgray"}, {'range': [1, 5], 'color': "white"}]}
+                    mode = "gauge+number+delta",
+                    value = pf_val,
+                    title = {'text': "Profit Factor", 'font': {'size': 20}},
+                    delta = {'reference': 1.5, 'increasing': {'color': '#2ca02c'}, 'decreasing': {'color': '#ff4b4b'}},
+                    number = {'font': {'size': 40}},
+                    gauge = {
+                        'axis': {'range': [0, 5], 'tickwidth': 1},
+                        'bar': {'color': pf_color, 'thickness': 0.75},
+                        'bgcolor': "white",
+                        'borderwidth': 2,
+                        'bordercolor': "gray",
+                        'steps': [
+                            {'range': [0, 1], 'color': '#ffe6e6'},
+                            {'range': [1, 1.5], 'color': '#fff4e6'},
+                            {'range': [1.5, 5], 'color': '#e6ffe6'}
+                        ],
+                        'threshold': {
+                            'line': {'color': "red", 'width': 4},
+                            'thickness': 0.75,
+                            'value': 1.5
+                        }
+                    }
                 ))
-                fig_pf.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
-                
+                fig_pf.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20), paper_bgcolor="white")
+
+                # Enhanced Win Rate Gauge
+                wr_color = "#2ca02c" if bat_avg >= 50 else ("#1f77b4" if bat_avg >= 40 else "#ff4b4b")
                 fig_wr = go.Figure(go.Indicator(
-                    mode = "gauge+number", value = bat_avg, number = {'suffix': "%"}, title = {'text': "Win Rate"},
-                    gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#1f77b4"},
-                             'steps': [{'range': [0, 40], 'color': "#ff4b4b"}, {'range': [40, 100], 'color': "#2ca02c"}]}
+                    mode = "gauge+number+delta",
+                    value = bat_avg,
+                    title = {'text': "Win Rate", 'font': {'size': 20}},
+                    delta = {'reference': 50, 'increasing': {'color': '#2ca02c'}, 'decreasing': {'color': '#ff4b4b'}},
+                    number = {'suffix': "%", 'font': {'size': 40}},
+                    gauge = {
+                        'axis': {'range': [0, 100], 'tickwidth': 1},
+                        'bar': {'color': wr_color, 'thickness': 0.75},
+                        'bgcolor': "white",
+                        'borderwidth': 2,
+                        'bordercolor': "gray",
+                        'steps': [
+                            {'range': [0, 40], 'color': '#ffe6e6'},
+                            {'range': [40, 50], 'color': '#fff4e6'},
+                            {'range': [50, 100], 'color': '#e6ffe6'}
+                        ],
+                        'threshold': {
+                            'line': {'color': "black", 'width': 4},
+                            'thickness': 0.75,
+                            'value': 50
+                        }
+                    }
                 ))
-                fig_wr.update_layout(height=250, margin=dict(l=20, r=20, t=50, b=20))
-                
+                fig_wr.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20), paper_bgcolor="white")
+
+                # Enhanced Win/Loss Comparison (Butterfly Chart)
                 fig_wl = go.Figure()
-                fig_wl.add_trace(go.Bar(y=[''], x=[avg_win], name='Avg Win', orientation='h', marker=dict(color='#2ca02c'), text=f"${avg_win:,.0f}", textposition='auto'))
-                fig_wl.add_trace(go.Bar(y=[''], x=[avg_loss], name='Avg Loss', orientation='h', marker=dict(color='#ff4b4b'), text=f"${avg_loss:,.0f}", textposition='auto'))
-                fig_wl.update_layout(title=f"Win/Loss Ratio: {wl_ratio:.2f}", barmode='relative', height=250, margin=dict(l=20, r=20, t=50, b=20), xaxis=dict(showgrid=False, zeroline=True, zerolinecolor='black'), yaxis=dict(showticklabels=False))
+                fig_wl.add_trace(go.Bar(
+                    y=['Average'],
+                    x=[avg_win],
+                    name='Win',
+                    orientation='h',
+                    marker=dict(color='#2ca02c', line=dict(color='#1f7a1f', width=2)),
+                    text=f"${avg_win:,.0f}",
+                    textposition='outside',
+                    textfont=dict(size=14, color='#2ca02c', family='Arial Black')
+                ))
+                fig_wl.add_trace(go.Bar(
+                    y=['Average'],
+                    x=[avg_loss],
+                    name='Loss',
+                    orientation='h',
+                    marker=dict(color='#ff4b4b', line=dict(color='#cc0000', width=2)),
+                    text=f"${avg_loss:,.0f}",
+                    textposition='outside',
+                    textfont=dict(size=14, color='#ff4b4b', family='Arial Black')
+                ))
+                fig_wl.update_layout(
+                    title={
+                        'text': f"<b>Win/Loss Ratio: {wl_ratio:.2f}x</b><br><sub>Target: 2.0x+ for asymmetric edge</sub>",
+                        'font': {'size': 18}
+                    },
+                    barmode='relative',
+                    height=280,
+                    margin=dict(l=20, r=20, t=80, b=40),
+                    xaxis=dict(
+                        showgrid=True,
+                        gridcolor='lightgray',
+                        zeroline=True,
+                        zerolinecolor='black',
+                        zerolinewidth=2,
+                        title="Dollar Amount"
+                    ),
+                    yaxis=dict(showticklabels=True),
+                    paper_bgcolor="white",
+                    plot_bgcolor="white",
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
 
                 c1, c2, c3 = st.columns(3)
                 c1.plotly_chart(fig_pf, use_container_width=True)
@@ -5803,7 +5885,112 @@ elif page == "Analytics":
                 m2.metric("Profit Factor", f"{pf_val:.2f}")
                 m3.metric("Avg Win", f"${avg_win:,.2f}", delta_color="normal")
                 m4.metric("Avg Loss", f"${avg_loss:,.2f}", delta_color="inverse")
-            
+
+            # --- ADVANCED PERFORMANCE METRICS (NEW) ---
+            if not closed.empty:
+                st.markdown("---")
+                st.subheader("📊 Advanced Performance Metrics")
+
+                # Calculate Expectancy
+                win_prob = bat_avg / 100
+                loss_prob = 1 - win_prob
+                expectancy = (win_prob * avg_win) + (loss_prob * avg_loss)
+
+                # Calculate R-Multiple stats (if Risk_Budget exists)
+                has_risk_data = 'Risk_Budget' in closed.columns and closed['Risk_Budget'].sum() > 0
+                if has_risk_data:
+                    closed_with_r = closed[closed['Risk_Budget'] > 0].copy()
+                    closed_with_r['R_Multiple'] = closed_with_r['Realized_PL'] / closed_with_r['Risk_Budget']
+                    avg_r_multiple = closed_with_r['R_Multiple'].mean()
+                    max_r_multiple = closed_with_r['R_Multiple'].max()
+                    min_r_multiple = closed_with_r['R_Multiple'].min()
+                else:
+                    avg_r_multiple = 0
+                    max_r_multiple = 0
+                    min_r_multiple = 0
+
+                # Calculate Time in Trade
+                closed_with_dates = closed.dropna(subset=['Open_Date_DT', 'Closed_Date'])
+                if not closed_with_dates.empty:
+                    closed_with_dates['Days_Held'] = (closed_with_dates['Closed_Date'] - closed_with_dates['Open_Date_DT']).dt.days
+                    avg_hold_time = closed_with_dates['Days_Held'].mean()
+
+                    winners_time = closed_with_dates[closed_with_dates['Realized_PL'] > 0]['Days_Held'].mean() if not wins.empty else 0
+                    losers_time = closed_with_dates[closed_with_dates['Realized_PL'] <= 0]['Days_Held'].mean() if not losses.empty else 0
+                else:
+                    avg_hold_time = 0
+                    winners_time = 0
+                    losers_time = 0
+
+                # Display Advanced Metrics
+                adv1, adv2, adv3, adv4 = st.columns(4)
+
+                # Expectancy
+                exp_color = "normal" if expectancy > 0 else "inverse"
+                adv1.metric(
+                    "Expectancy",
+                    f"${expectancy:,.2f}",
+                    help="Expected $ per trade = (Win% × Avg Win) + (Loss% × Avg Loss). Positive = profitable system.",
+                    delta_color=exp_color
+                )
+
+                # R-Multiple
+                if has_risk_data:
+                    r_color = "normal" if avg_r_multiple > 0 else "inverse"
+                    adv2.metric(
+                        "Avg R-Multiple",
+                        f"{avg_r_multiple:.2f}R",
+                        help="Average reward-to-risk ratio. 2R+ means you're making 2x your risk per trade on average.",
+                        delta=f"Max: {max_r_multiple:.1f}R",
+                        delta_color=r_color
+                    )
+                else:
+                    adv2.metric(
+                        "Avg R-Multiple",
+                        "N/A",
+                        help="Risk data not available. Log trades with Risk_Budget to track R-multiples."
+                    )
+
+                # Time in Trade - Winners vs Losers
+                if avg_hold_time > 0:
+                    time_ratio = winners_time / losers_time if losers_time > 0 else 0
+                    adv3.metric(
+                        "Avg Hold Time",
+                        f"{avg_hold_time:.1f} days",
+                        help="Average days held across all closed positions."
+                    )
+
+                    time_delta = "✅ Cut losses faster" if winners_time > losers_time else "⚠️ Hold losers too long"
+                    adv4.metric(
+                        "Win/Loss Hold Ratio",
+                        f"{time_ratio:.2f}x",
+                        help="Winners held / Losers held. >1.0 = Let winners run, cut losers quick.",
+                        delta=time_delta
+                    )
+                else:
+                    adv3.metric("Avg Hold Time", "N/A")
+                    adv4.metric("Win/Loss Hold Ratio", "N/A")
+
+                # Optional: Add a visual breakdown if data available
+                if has_risk_data and PLOTLY_AVAILABLE:
+                    st.markdown("#### R-Multiple Distribution")
+                    fig_r = go.Figure()
+                    fig_r.add_trace(go.Histogram(
+                        x=closed_with_r['R_Multiple'],
+                        nbinsx=20,
+                        marker=dict(color='#1f77b4', line=dict(color='black', width=1)),
+                        name='R-Multiple Distribution'
+                    ))
+                    fig_r.update_layout(
+                        xaxis_title="R-Multiple",
+                        yaxis_title="Number of Trades",
+                        height=300,
+                        margin=dict(l=40, r=40, t=40, b=40),
+                        showlegend=False
+                    )
+                    fig_r.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Breakeven")
+                    st.plotly_chart(fig_r, use_container_width=True)
+
             # --- MARKET ENVIRONMENT (RESTORED) ---
             if len(all_sorted) >= 3:
                 st.markdown("---")
@@ -5872,7 +6059,24 @@ elif page == "Analytics":
         with tab_live:
             st.subheader(f"🔥 Live Year-to-Date Performance (2026)")
             st.caption("Consolidates trades Open in 2026 OR Closed in 2026 (including carry-over from 2025).")
-            
+
+            # Price Refresh Control
+            col_refresh1, col_refresh2 = st.columns([1, 3])
+            with col_refresh1:
+                if st.button("🔄 Refresh Prices", help="Update unrealized P/L with current market prices"):
+                    if USE_DATABASE:
+                        with st.spinner("Fetching current prices..."):
+                            try:
+                                result = db.refresh_open_position_prices(CURR_PORT_NAME)
+                                st.success(f"✅ {result['message']}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Refresh failed: {str(e)}")
+                    else:
+                        st.warning("Database mode required for price refresh")
+
+            st.markdown("---")
+
             # --- LOGIC UPDATE: INCLUDE CARRY-OVER TRADES ---
             mask_open_2026 = df_s_raw['Open_Date_DT'].dt.year == 2026
             mask_active = df_s_raw['Status'] == 'OPEN'

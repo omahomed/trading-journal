@@ -831,6 +831,87 @@ def save_journal_entry(journal_entry):
 
 
 # ============================================
+# PRICE REFRESH OPERATIONS
+# ============================================
+
+def refresh_open_position_prices(portfolio_name):
+    """
+    Fetch current market prices and update unrealized_pl for all open positions.
+
+    Args:
+        portfolio_name: Portfolio to refresh
+
+    Returns:
+        dict: Summary of refresh operation
+    """
+    import yfinance as yf
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Get portfolio_id
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Get all open positions
+            cur.execute("""
+                SELECT id, ticker, shares, avg_entry, total_cost
+                FROM trades_summary
+                WHERE portfolio_id = %s AND status = 'OPEN'
+            """, (portfolio_id,))
+
+            open_positions = cur.fetchall()
+
+            if not open_positions:
+                return {'updated': 0, 'message': 'No open positions to refresh'}
+
+            # Fetch current prices for all tickers
+            tickers = list(set([pos[1] for pos in open_positions]))  # Unique tickers
+
+            try:
+                live_data = yf.download(tickers, period="1d", progress=False)['Close']
+                if len(tickers) == 1:
+                    live_prices = {tickers[0]: float(live_data.iloc[-1])}
+                else:
+                    live_prices = {ticker: float(live_data[ticker].iloc[-1])
+                                   for ticker in tickers if ticker in live_data.columns}
+            except Exception as e:
+                return {'updated': 0, 'error': f'Price fetch failed: {str(e)}'}
+
+            # Update each position
+            updated_count = 0
+            for pos_id, ticker, shares, avg_entry, total_cost in open_positions:
+                if ticker in live_prices:
+                    current_price = live_prices[ticker]
+                    market_value = shares * current_price
+                    unrealized_pl = market_value - total_cost
+                    return_pct = (unrealized_pl / total_cost * 100) if total_cost > 0 else 0
+
+                    cur.execute("""
+                        UPDATE trades_summary
+                        SET unrealized_pl = %s,
+                            return_pct = %s,
+                            value = %s
+                        WHERE id = %s
+                    """, (unrealized_pl, return_pct, market_value, pos_id))
+
+                    updated_count += 1
+
+            conn.commit()
+
+            # Clear cache
+            load_summary.clear()
+
+            return {
+                'updated': updated_count,
+                'total_positions': len(open_positions),
+                'message': f'Updated {updated_count}/{len(open_positions)} positions'
+            }
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():
