@@ -66,14 +66,23 @@ def upload_image(
         R2 object key (path) if successful, None if failed
     """
     try:
+        print(f"[R2] Starting upload: {image_type} for {trade_id}")
+
         client = get_r2_client()
         if not client:
+            error_msg = "R2 client initialization failed - check credentials"
+            print(f"[R2 ERROR] {error_msg}")
+            st.error(error_msg)
             return None
 
         bucket_name = st.secrets.get("r2", {}).get("bucket_name")
         if not bucket_name:
-            st.error("R2 bucket_name not found in secrets")
+            error_msg = "R2 bucket_name not found in secrets"
+            print(f"[R2 ERROR] {error_msg}")
+            st.error(error_msg)
             return None
+
+        print(f"[R2] Using bucket: {bucket_name}")
 
         # Generate unique object key
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -82,11 +91,16 @@ def upload_image(
         # Format: portfolio/trade_id/image_type_timestamp.ext
         object_key = f"{portfolio_name}/{trade_id}/{image_type}_{timestamp}.{file_extension}"
 
+        print(f"[R2] Object key: {object_key}")
+
         # Read file content
         file_obj.seek(0)  # Reset file pointer
         file_content = file_obj.read()
 
+        print(f"[R2] File size: {len(file_content)} bytes")
+
         # Upload to R2
+        print(f"[R2] Uploading to bucket...")
         client.put_object(
             Bucket=bucket_name,
             Key=object_key,
@@ -101,10 +115,15 @@ def upload_image(
             }
         )
 
+        print(f"[R2] Upload successful: {object_key}")
         return object_key
 
     except Exception as e:
-        st.error(f"Failed to upload image to R2: {e}")
+        error_msg = f"Failed to upload image to R2: {type(e).__name__}: {str(e)}"
+        print(f"[R2 ERROR] {error_msg}")
+        st.error(error_msg)
+        import traceback
+        print(traceback.format_exc())
         return None
 
 
