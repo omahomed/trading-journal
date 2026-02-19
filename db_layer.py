@@ -717,6 +717,120 @@ def get_latest_signal_date(symbol):
 
 
 # ============================================
+# JOURNAL OPERATIONS
+# ============================================
+
+def save_journal_entry(journal_entry):
+    """
+    Insert or update a journal entry.
+
+    Args:
+        journal_entry: Dictionary with journal entry data
+            Required keys: portfolio_id (name), day
+            Optional keys: status, market_window, above_21ema, cash_flow,
+                          beginning_nlv, ending_nlv, daily_dollar_change,
+                          daily_percent_change, percent_invested, spy_close,
+                          nasdaq_close, market_notes, market_action, score,
+                          highlights, lowlights, mistakes, top_lesson
+
+    Returns:
+        int: ID of inserted/updated row
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Get portfolio_id from name
+            portfolio_name = journal_entry.get('portfolio_id')
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Map the field names from app.py to database column names
+            day = journal_entry.get('day')
+            status = journal_entry.get('status', 'U')
+            market_window = journal_entry.get('market_window', 'Open')
+            above_21ema = journal_entry.get('above_21ema', 0.0)
+            cash_change = journal_entry.get('cash_flow', 0.0)
+            beg_nlv = journal_entry.get('beginning_nlv', 0.0)
+            end_nlv = journal_entry.get('ending_nlv', 0.0)
+            daily_dollar_change = journal_entry.get('daily_dollar_change', 0.0)
+            daily_pct_change = journal_entry.get('daily_percent_change', 0.0)
+            pct_invested = journal_entry.get('percent_invested', 0.0)
+            spy = journal_entry.get('spy_close', 0.0)
+            nasdaq = journal_entry.get('nasdaq_close', 0.0)
+            market_notes = journal_entry.get('market_notes', '')
+            market_action = journal_entry.get('market_action', '')
+            score = journal_entry.get('score', 0)
+            highlights = journal_entry.get('highlights', '')
+            lowlights = journal_entry.get('lowlights', '')
+            mistakes = journal_entry.get('mistakes', '')
+            top_lesson = journal_entry.get('top_lesson', '')
+
+            # Check if entry exists for this portfolio and day
+            cur.execute(
+                "SELECT id FROM trading_journal WHERE portfolio_id = %s AND day = %s",
+                (portfolio_id, day)
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                # UPDATE existing entry
+                update_query = """
+                    UPDATE trading_journal
+                    SET status = %s, market_window = %s, above_21ema = %s,
+                        cash_change = %s, beg_nlv = %s, end_nlv = %s,
+                        daily_dollar_change = %s, daily_pct_change = %s,
+                        pct_invested = %s, spy = %s, nasdaq = %s,
+                        market_notes = %s, market_action = %s, score = %s,
+                        highlights = %s, lowlights = %s, mistakes = %s,
+                        top_lesson = %s
+                    WHERE id = %s
+                    RETURNING id
+                """
+                cur.execute(update_query, (
+                    status, market_window, above_21ema,
+                    cash_change, beg_nlv, end_nlv,
+                    daily_dollar_change, daily_pct_change,
+                    pct_invested, spy, nasdaq,
+                    market_notes, market_action, score,
+                    highlights, lowlights, mistakes,
+                    top_lesson,
+                    existing[0]
+                ))
+            else:
+                # INSERT new entry
+                insert_query = """
+                    INSERT INTO trading_journal (
+                        portfolio_id, day, status, market_window, above_21ema,
+                        cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                        daily_pct_change, pct_invested, spy, nasdaq,
+                        market_notes, market_action, score, highlights,
+                        lowlights, mistakes, top_lesson
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                """
+                cur.execute(insert_query, (
+                    portfolio_id, day, status, market_window, above_21ema,
+                    cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                    daily_pct_change, pct_invested, spy, nasdaq,
+                    market_notes, market_action, score, highlights,
+                    lowlights, mistakes, top_lesson
+                ))
+
+            row_id = cur.fetchone()[0]
+            conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_journal.clear()
+
+            return row_id
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():

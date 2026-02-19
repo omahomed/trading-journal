@@ -2301,18 +2301,46 @@ if page == "Daily Routine":
                     }
                     
                     # 5. SAVE
-                    new_df_row = pd.DataFrame([new_row])
-                    for c in MASTER_ORDER: 
-                        if c not in new_df_row.columns: new_df_row[c] = ''
-                    
-                    df_final = pd.concat([new_df_row[MASTER_ORDER], df_curr[MASTER_ORDER]], ignore_index=True)
-                    df_final['Sort_Key'] = pd.to_datetime(df_final['Day'], errors='coerce')
-                    df_final = df_final.sort_values('Sort_Key', ascending=False).drop(columns=['Sort_Key'])
-                    
                     try:
-                        df_final.to_csv(p_path, index=False)
-                        success_count += 1
-                    except Exception as e: st.error(f"❌ Write Failed {p_name}: {e}")
+                        if USE_DATABASE:
+                            # Save to database
+                            journal_entry = {
+                                'portfolio_id': p_name,
+                                'day': entry_date_str,
+                                'status': 'U',
+                                'market_window': 'Open',
+                                'above_21ema': 0.0,
+                                'cash_flow': cash_flow,
+                                'beginning_nlv': prev_nlv,
+                                'ending_nlv': end_nlv,
+                                'daily_dollar_change': daily_chg,
+                                'daily_percent_change': pct_val,
+                                'percent_invested': invested_pct,
+                                'spy_close': spy_val,
+                                'nasdaq_close': ndx_val,
+                                'market_notes': market_notes,
+                                'market_action': inputs['note'],
+                                'score': daily_score,
+                                'highlights': highlights,
+                                'lowlights': lowlights,
+                                'mistakes': mistakes,
+                                'top_lesson': top_lesson
+                            }
+                            db.save_journal_entry(journal_entry)
+                            success_count += 1
+                        else:
+                            # Save to CSV (local mode)
+                            new_df_row = pd.DataFrame([new_row])
+                            for c in MASTER_ORDER:
+                                if c not in new_df_row.columns: new_df_row[c] = ''
+
+                            df_final = pd.concat([new_df_row[MASTER_ORDER], df_curr[MASTER_ORDER]], ignore_index=True)
+                            df_final['Sort_Key'] = pd.to_datetime(df_final['Day'], errors='coerce')
+                            df_final = df_final.sort_values('Sort_Key', ascending=False).drop(columns=['Sort_Key'])
+                            df_final.to_csv(p_path, index=False)
+                            success_count += 1
+                    except Exception as e:
+                        st.error(f"❌ Save Failed {p_name}: {e}")
 
                 else: st.warning(f"Skipped {p_name}: NLV is 0.00")
 
