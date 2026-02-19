@@ -2163,21 +2163,53 @@ if page == "Daily Routine":
     'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson' # <--- Added these
     ]
 
-    # --- HELPER: ROBUST LOADER ---
+    # --- HELPER: ROBUST LOADER (DATABASE-AWARE) ---
     def load_and_prep_file(path):
+        # Database mode: extract portfolio name from path and use load_data
+        if USE_DATABASE:
+            try:
+                portfolio_name = None
+                if PORT_CANSLIM in path:
+                    portfolio_name = PORT_CANSLIM
+                elif PORT_TQQQ in path:
+                    portfolio_name = PORT_TQQQ
+                elif PORT_457B in path:
+                    portfolio_name = PORT_457B
+
+                if portfolio_name:
+                    df = load_data(path)  # This will use db.load_journal() in database mode
+                    if df.empty:
+                        return pd.DataFrame(columns=MASTER_ORDER)
+
+                    # Ensure Day is string format
+                    if 'Day' in df.columns:
+                        df['Day'] = pd.to_datetime(df['Day'], errors='coerce').dt.strftime('%Y-%m-%d')
+                        df = df.dropna(subset=['Day'])
+
+                    # Ensure all Master Columns exist
+                    for c in MASTER_ORDER:
+                        if c not in df.columns:
+                            df[c] = '' if c in ['Status','Market Window','Keywords','Market_Action','Market_Notes','Daily % Change'] else 0.0
+
+                    return df[MASTER_ORDER]
+            except Exception as e:
+                st.error(f"Database load error: {e}")
+                return pd.DataFrame(columns=MASTER_ORDER)
+
+        # CSV mode (local development)
         if not os.path.exists(path): return pd.DataFrame(columns=MASTER_ORDER)
         try:
             df = pd.read_csv(path)
             if len(df) == 0 or 'Day' not in df.columns: return pd.DataFrame(columns=MASTER_ORDER)
-            
+
             df['Day'] = pd.to_datetime(df['Day'], errors='coerce').dt.strftime('%Y-%m-%d')
             df = df.dropna(subset=['Day'])
-            
+
             # Ensure all Master Columns exist (This will create 'Market_Notes' if missing)
             for c in MASTER_ORDER:
                 if c not in df.columns:
                     df[c] = '' if c in ['Status','Market Window','Keywords','Market_Action','Market_Notes','Daily % Change'] else 0.0
-            
+
             return df[MASTER_ORDER]
         except: return pd.DataFrame(columns=MASTER_ORDER)
 
