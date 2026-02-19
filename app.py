@@ -3738,30 +3738,98 @@ elif page == "Trade Manager":
                     if st.button("💾 Save All Bulk Changes", type="primary"):
                         changes = False
                         affected = set()
-                        
-                        for idx, row in edited_df.iterrows():
-                            # idx matches df_d index
-                            old_stop = df_d.at[idx, 'Stop_Loss']
-                            new_stop = row['Stop_Loss']
-                            old_note = df_d.at[idx, 'Notes']
-                            new_note = row['Notes']
-                            
-                            if (pd.isna(old_stop) and new_stop > 0) or (old_stop != new_stop):
-                                df_d.at[idx, 'Stop_Loss'] = new_stop
-                                changes = True
-                                affected.add(df_d.at[idx, 'Trade_ID'])
-                            
-                            if str(old_note) != str(new_note):
-                                df_d.at[idx, 'Notes'] = new_note
-                                changes = True
-                        
-                        if changes:
-                            secure_save(df_d, DETAILS_FILE)
-                            prog = st.progress(0)
-                            for i, tid in enumerate(affected):
-                                df_d, df_s = update_campaign_summary(tid, df_d, df_s)
-                                prog.progress((i+1)/len(affected))
-                            secure_save(df_s, SUMMARY_FILE)
+
+                        if USE_DATABASE:
+                            # Database-first approach
+                            try:
+                                for idx, row in edited_df.iterrows():
+                                    # idx matches df_d index
+                                    old_stop = df_d.at[idx, 'Stop_Loss']
+                                    new_stop = row['Stop_Loss']
+                                    old_note = df_d.at[idx, 'Notes']
+                                    new_note = row['Notes']
+
+                                    needs_update = False
+                                    if (pd.isna(old_stop) and new_stop > 0) or (old_stop != new_stop):
+                                        needs_update = True
+                                        affected.add(df_d.at[idx, 'Trade_ID'])
+
+                                    if str(old_note) != str(new_note):
+                                        needs_update = True
+
+                                    if needs_update:
+                                        # Get database ID
+                                        db_id = df_d.at[idx, '_DB_ID']
+                                        if pd.isna(db_id):
+                                            st.warning(f"⚠️ Skipping row {idx}: Database ID not found")
+                                            continue
+
+                                        # Prepare update dict
+                                        update_dict = {
+                                            'Trade_ID': df_d.at[idx, 'Trade_ID'],
+                                            'Ticker': df_d.at[idx, 'Ticker'],
+                                            'Action': df_d.at[idx, 'Action'],
+                                            'Date': df_d.at[idx, 'Date'],
+                                            'Shares': df_d.at[idx, 'Shares'],
+                                            'Amount': df_d.at[idx, 'Amount'],
+                                            'Value': df_d.at[idx, 'Value'],
+                                            'Rule': df_d.at[idx, 'Rule'],
+                                            'Notes': new_note,
+                                            'Stop_Loss': new_stop,
+                                            'Trx_ID': df_d.at[idx, 'Trx_ID']
+                                        }
+
+                                        # Update database
+                                        db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
+                                        changes = True
+
+                                if changes and affected:
+                                    # Recalculate summaries for affected trades
+                                    prog = st.progress(0)
+                                    for i, tid in enumerate(affected):
+                                        df_d_temp = db.load_details(CURR_PORT_NAME, tid)
+                                        df_s_temp = db.load_summary(CURR_PORT_NAME)
+                                        df_d_temp, df_s_temp = update_campaign_summary(tid, df_d_temp, df_s_temp)
+
+                                        # Save summary
+                                        summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(tid)]
+                                        if not summary_matches.empty:
+                                            summary_row = summary_matches.iloc[0].to_dict()
+                                            db.save_summary_row(CURR_PORT_NAME, summary_row)
+
+                                        prog.progress((i+1)/len(affected))
+
+                                    st.success(f"✅ Saved {len(affected)} trade(s) to database!")
+                                    st.rerun()
+                                elif not changes:
+                                    st.info("No changes detected.")
+                            except Exception as e:
+                                st.error(f"❌ Bulk update failed: {str(e)}")
+                        else:
+                            # CSV fallback
+                            for idx, row in edited_df.iterrows():
+                                # idx matches df_d index
+                                old_stop = df_d.at[idx, 'Stop_Loss']
+                                new_stop = row['Stop_Loss']
+                                old_note = df_d.at[idx, 'Notes']
+                                new_note = row['Notes']
+
+                                if (pd.isna(old_stop) and new_stop > 0) or (old_stop != new_stop):
+                                    df_d.at[idx, 'Stop_Loss'] = new_stop
+                                    changes = True
+                                    affected.add(df_d.at[idx, 'Trade_ID'])
+
+                                if str(old_note) != str(new_note):
+                                    df_d.at[idx, 'Notes'] = new_note
+                                    changes = True
+
+                            if changes:
+                                secure_save(df_d, DETAILS_FILE)
+                                prog = st.progress(0)
+                                for i, tid in enumerate(affected):
+                                    df_d, df_s = update_campaign_summary(tid, df_d, df_s)
+                                    prog.progress((i+1)/len(affected))
+                                secure_save(df_s, SUMMARY_FILE)
                             st.success("✅ Saved!"); st.rerun()
                         else: st.info("No changes.")
                 else: st.info("No active buy tranches found.")
