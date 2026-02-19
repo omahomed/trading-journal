@@ -3775,28 +3775,96 @@ elif page == "Trade Manager":
                                     
                                     if st.form_submit_button("💾 Save Changes"):
                                         new_ts = datetime.combine(e_date, e_time).strftime("%Y-%m-%d %H:%M")
-                                        df_d.at[row_idx, 'Date'] = new_ts
-                                        df_d.at[row_idx, 'Rule'] = e_rule
-                                        df_d.at[row_idx, 'Stop_Loss'] = e_stop
-                                        df_d.at[row_idx, 'Notes'] = e_note
-                                        df_d.at[row_idx, 'Shares'] = e_shs
-                                        df_d.at[row_idx, 'Amount'] = e_amt
-                                        df_d.at[row_idx, 'Value'] = e_shs * e_amt
-                                        df_d.at[row_idx, 'Trx_ID'] = e_trx
-                                        
-                                        secure_save(df_d, DETAILS_FILE)
-                                        df_d, df_s = update_campaign_summary(edit_id, df_d, df_s)
-                                        secure_save(df_s, SUMMARY_FILE)
-                                        st.success("✅ Updated!"); st.rerun()
+
+                                        if USE_DATABASE:
+                                            # Database-first approach
+                                            try:
+                                                # Get database ID
+                                                db_id = current_row.get('_DB_ID')
+                                                if pd.isna(db_id):
+                                                    st.error("❌ Cannot update: Database ID not found. Try refreshing the page.")
+                                                    st.stop()
+
+                                                # Prepare update data
+                                                update_dict = {
+                                                    'Trade_ID': edit_id,
+                                                    'Ticker': current_row['Ticker'],
+                                                    'Action': current_row['Action'],
+                                                    'Date': new_ts,
+                                                    'Shares': e_shs,
+                                                    'Amount': e_amt,
+                                                    'Value': e_shs * e_amt,
+                                                    'Rule': e_rule,
+                                                    'Notes': e_note,
+                                                    'Stop_Loss': e_stop,
+                                                    'Trx_ID': e_trx
+                                                }
+
+                                                # Update database
+                                                db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
+
+                                                # Recalculate summary (LIFO engine will run)
+                                                df_d_temp = db.load_details(CURR_PORT_NAME, edit_id)
+                                                df_s_temp = db.load_summary(CURR_PORT_NAME)
+                                                df_d_temp, df_s_temp = update_campaign_summary(edit_id, df_d_temp, df_s_temp)
+
+                                                # Save summary back to database
+                                                summary_row = df_s_temp[df_s_temp['Trade_ID'] == edit_id].iloc[0].to_dict()
+                                                db.save_summary_row(CURR_PORT_NAME, summary_row)
+
+                                                st.success("✅ Updated in database!"); st.rerun()
+                                            except Exception as e:
+                                                st.error(f"❌ Database update failed: {str(e)}")
+                                        else:
+                                            # CSV fallback
+                                            df_d.at[row_idx, 'Date'] = new_ts
+                                            df_d.at[row_idx, 'Rule'] = e_rule
+                                            df_d.at[row_idx, 'Stop_Loss'] = e_stop
+                                            df_d.at[row_idx, 'Notes'] = e_note
+                                            df_d.at[row_idx, 'Shares'] = e_shs
+                                            df_d.at[row_idx, 'Amount'] = e_amt
+                                            df_d.at[row_idx, 'Value'] = e_shs * e_amt
+                                            df_d.at[row_idx, 'Trx_ID'] = e_trx
+
+                                            secure_save(df_d, DETAILS_FILE)
+                                            df_d, df_s = update_campaign_summary(edit_id, df_d, df_s)
+                                            secure_save(df_s, SUMMARY_FILE)
+                                            st.success("✅ Updated!"); st.rerun()
 
                             with cB:
                                 st.write("### ⚠️ Danger Zone")
                                 if st.button("🗑️ DELETE TRANSACTION", type="primary"):
-                                    df_d = df_d.drop(row_idx)
-                                    secure_save(df_d, DETAILS_FILE)
-                                    df_d, df_s = update_campaign_summary(edit_id, df_d, df_s)
-                                    secure_save(df_s, SUMMARY_FILE)
-                                    st.warning("Transaction Deleted."); st.rerun()
+                                    if USE_DATABASE:
+                                        # Database-first approach
+                                        try:
+                                            # Get database ID
+                                            db_id = current_row.get('_DB_ID')
+                                            if pd.isna(db_id):
+                                                st.error("❌ Cannot delete: Database ID not found.")
+                                                st.stop()
+
+                                            # Delete from database
+                                            db.delete_detail_row(CURR_PORT_NAME, int(db_id))
+
+                                            # Recalculate summary
+                                            df_d_temp = db.load_details(CURR_PORT_NAME, edit_id)
+                                            df_s_temp = db.load_summary(CURR_PORT_NAME)
+
+                                            if not df_d_temp.empty:
+                                                df_d_temp, df_s_temp = update_campaign_summary(edit_id, df_d_temp, df_s_temp)
+                                                summary_row = df_s_temp[df_s_temp['Trade_ID'] == edit_id].iloc[0].to_dict()
+                                                db.save_summary_row(CURR_PORT_NAME, summary_row)
+
+                                            st.warning("🗑️ Transaction deleted from database."); st.rerun()
+                                        except Exception as e:
+                                            st.error(f"❌ Delete failed: {str(e)}")
+                                    else:
+                                        # CSV fallback
+                                        df_d = df_d.drop(row_idx)
+                                        secure_save(df_d, DETAILS_FILE)
+                                        df_d, df_s = update_campaign_summary(edit_id, df_d, df_s)
+                                        secure_save(df_s, SUMMARY_FILE)
+                                        st.warning("Transaction Deleted."); st.rerun()
 
     # --- TAB 5: DATABASE HEALTH ---
     with tab5:

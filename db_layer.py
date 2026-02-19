@@ -169,6 +169,7 @@ def load_details(portfolio_name, trade_id=None):
         with conn.cursor() as cur:
             query = """
                 SELECT
+                    d.id AS "_DB_ID",
                     d.trade_id AS "Trade_ID",
                     d.ticker AS "Ticker",
                     d.action AS "Action",
@@ -498,6 +499,104 @@ def save_detail_row(portfolio_name, row_dict):
             load_details.clear()
 
             return row_id
+
+
+def update_detail_row(portfolio_name, detail_id, row_dict):
+    """
+    Update an existing transaction detail row.
+
+    Args:
+        portfolio_name: Portfolio name
+        detail_id: The id of the trades_details row to update
+        row_dict: Dictionary with column values to update
+
+    Returns:
+        bool: True if successful
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Get portfolio_id
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Verify the detail row belongs to this portfolio
+            cur.execute(
+                "SELECT id FROM trades_details WHERE id = %s AND portfolio_id = %s",
+                (detail_id, portfolio_id)
+            )
+            if not cur.fetchone():
+                raise ValueError(f"Detail row {detail_id} not found for portfolio '{portfolio_name}'")
+
+            update_query = """
+                UPDATE trades_details
+                SET trade_id = %s, ticker = %s, action = %s, date = %s,
+                    shares = %s, amount = %s, value = %s, rule = %s,
+                    notes = %s, stop_loss = %s, trx_id = %s
+                WHERE id = %s
+            """
+            cur.execute(update_query, (
+                row_dict.get('Trade_ID'),
+                row_dict.get('Ticker'),
+                row_dict.get('Action'),
+                row_dict.get('Date'),
+                row_dict.get('Shares'),
+                row_dict.get('Amount'),
+                row_dict.get('Value'),
+                row_dict.get('Rule'),
+                row_dict.get('Notes'),
+                row_dict.get('Stop_Loss'),
+                row_dict.get('Trx_ID'),
+                detail_id
+            ))
+
+            conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_details.clear()
+            load_summary.clear()
+
+            return True
+
+
+def delete_detail_row(portfolio_name, detail_id):
+    """
+    Delete a transaction detail row.
+
+    Args:
+        portfolio_name: Portfolio name
+        detail_id: The id of the trades_details row to delete
+
+    Returns:
+        bool: True if successful
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Get portfolio_id
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Delete the row (with portfolio verification)
+            cur.execute(
+                "DELETE FROM trades_details WHERE id = %s AND portfolio_id = %s",
+                (detail_id, portfolio_id)
+            )
+
+            if cur.rowcount == 0:
+                raise ValueError(f"Detail row {detail_id} not found for portfolio '{portfolio_name}'")
+
+            conn.commit()
+
+            # Clear cache
+            load_details.clear()
+            load_summary.clear()
+
+            return True
 
 
 def log_audit(portfolio_name, action, trade_id, ticker, details, username='User'):
