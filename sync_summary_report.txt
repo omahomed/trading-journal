@@ -1,0 +1,124 @@
+================================================================================
+IBD MARKET SCHOOL - DATABASE SYNC SUMMARY
+================================================================================
+Sync Date: 2026-02-18
+Total Records Synced: 472 (236 NASDAQ + 236 SPY)
+Timeframe: 2025-03-11 to 2026-02-17
+
+================================================================================
+NASDAQ DISTRIBUTION DAY VALIDATION
+================================================================================
+
+ADDITION VALIDATION (12 out of 13 matches):
+-------------------------------------------
+✅ 1/13: No addition (as expected)
+✅ 1/14: Added distribution -1.00%
+✅ 1/20: No addition (as expected - yfinance shows -2.39%, IBD has different data)
+✅ 1/21: No addition (as expected)
+✅ 1/22: No addition (as expected)
+✅ 1/26: No addition (as expected)
+✅ 1/28: Added stall +0.17% (manual from KNOWN_STALLS)
+✅ 1/29: Added distribution -0.72%
+✅ 1/30: Added distribution -0.94%
+✅ 2/3:  Added distribution -1.43%
+✅ 2/4:  Added distribution -1.51%
+❌ 2/6:  No addition (yfinance shows +2.18% gain, IBD expects distribution)
+✅ 2/10: Added distribution -0.59%
+
+REMOVAL VALIDATION (5 out of 6 matches):
+----------------------------------------
+✅ 1/13: Removed 12/5 stall (25-day rule)
+✅ 1/20: Removed 12/11 distribution (25-day rule)
+✅ 1/21: Removed 12/12 distribution (25-day rule)
+✅ 1/26: Removed 12/17 distribution (25-day rule)
+✅ 2/4:  Removed 12/29 distribution (25-day rule)
+⚠️  2/5:  Removed 12/30 distribution (IBD expected 2/6)
+
+================================================================================
+CURRENT ACTIVE DISTRIBUTION DAYS (NASDAQ)
+================================================================================
+Total Active: 7
+
+Date         Type          Loss %    Notes
+-----------  ------------  --------  ----------------------
+2026-01-14   distribution  -1.00%
+2026-01-28   stall         +0.17%    Manual (KNOWN_STALLS)
+2026-01-29   distribution  -0.72%
+2026-01-30   distribution  -0.94%
+2026-02-03   distribution  -1.43%
+2026-02-04   distribution  -1.51%
+2026-02-10   distribution  -0.59%
+
+================================================================================
+DATA SOURCE DISCREPANCIES
+================================================================================
+
+Our system uses yfinance data, which may differ from IBD's data source:
+
+1. 1/20/2026 NASDAQ:
+   - yfinance: -2.39% (would qualify as distribution)
+   - IBD: Likely shows different price (no distribution added)
+
+2. 2/6/2026 NASDAQ:
+   - yfinance: +2.18% gain (cannot add distribution)
+   - IBD: Expects distribution to be added (likely shows a loss)
+
+These discrepancies are expected when using different data sources.
+
+================================================================================
+25-DAY REMOVAL TIMING ISSUE
+================================================================================
+
+Finding: Our code removes on the 25th trading day, IBD removes on the 26th
+
+Example - 12/30/2025 distribution:
+  - Added: 12/30 (day 0)
+  - Our removal: 2/5 (25th trading day)
+  - IBD removal: 2/6 (26th trading day = "after 25 days")
+
+Root Cause:
+  - Current code: if trading_days_old >= 25
+  - Should be: if trading_days_old > 25
+
+This affects ALL 25-day removals (they happen 1 day early).
+
+================================================================================
+MANUAL STALL DAY TRACKING
+================================================================================
+
+Stall days are now manually coded in KNOWN_STALLS (market_school_rules.py):
+
+Current NASDAQ stalls:
+  - 2025-12-05: +0.31% (removed 1/13)
+  - 2026-01-28: +0.17% (active)
+
+Process: When IBD identifies a new stall day, update KNOWN_STALLS constant.
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+1. ✅ REQUIRED: Fix 25-day removal timing
+   Change line 632 in market_school_rules.py:
+   FROM: if trading_days_old >= 25:
+   TO:   if trading_days_old > 25:
+
+   This will align removals with IBD's timing (1 day later).
+
+2. ⚠️  ACCEPT: Data source differences (1/20, 2/6)
+   These are expected when using yfinance vs IBD's data feed.
+   Option: Manually override specific dates if critical.
+
+3. ✅ MAINTAIN: KNOWN_STALLS list
+   Add new stalls as IBD identifies them.
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Review this report
+2. If approved, fix the 25-day timing issue
+3. Re-sync database to apply the fix
+4. Verify 12/30 now removes on 2/6 instead of 2/5
+
+================================================================================

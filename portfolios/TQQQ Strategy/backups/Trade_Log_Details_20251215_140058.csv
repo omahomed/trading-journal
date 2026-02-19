@@ -1,0 +1,2 @@
+Trade_ID,Ticker,Action,Date,Shares,Amount,Value,Rule,Notes,Realized_PL,Stop_Loss,Trx_ID,Total_Cost,Avg_Entry,Avg_Exit
+202512-001,TQQQ,SELL,2025-12-15 13:57,2412.0,51.871,125112.852,sr8 TQQQ Strategy Exit,,-2288.9879999999953,0.0,SB1,0.0,0.0,0.0

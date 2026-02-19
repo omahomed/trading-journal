@@ -9,9 +9,8 @@ from datetime import datetime
 # Portfolio paths
 PORTFOLIOS = {
     'CanSlim': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/CanSlim',
-    # Uncomment after CanSlim is validated:
-    # 'TQQQ Strategy': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/TQQQ Strategy',
-    # '457B Plan': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/457B Plan'
+    'TQQQ Strategy': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/TQQQ Strategy',
+    '457B Plan': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/457B Plan'
 }
 
 # Database connection

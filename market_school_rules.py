@@ -31,25 +31,17 @@ KNOWN_STALLS = {
 # Use these overrides to force inclusion/exclusion to match IBD exactly.
 
 # Force INCLUDE these as distributions (even if auto-detection misses them)
+# Add entries here when IBD identifies distributions that our data doesn't detect
 MANUAL_DISTRIBUTIONS = {
-    '^IXIC': [
-        # Add NASDAQ manual distributions as needed
-    ],
-    'SPY': [
-        {'date': '2025-12-26', 'loss_pct': 0.01},  # yfinance shows -0.01%, IBD has larger loss
-        {'date': '2026-01-07', 'loss_pct': 0.32},  # Bug: auto-detection missed this
-    ]
+    '^IXIC': [],
+    'SPY': []
 }
 
 # Force EXCLUDE these from distributions (even if auto-detection finds them)
+# Add entries here when our data detects distributions that IBD doesn't have
 EXCLUDED_DISTRIBUTIONS = {
-    '^IXIC': [
-        # Add NASDAQ exclusions as needed
-    ],
-    'SPY': [
-        {'date': '2026-01-30', 'reason': 'yfinance volume up, IBD volume down'},
-        {'date': '2026-02-05', 'reason': 'yfinance volume up, IBD volume down'},
-    ]
+    '^IXIC': [],
+    'SPY': []
 }
 
 class SignalType(Enum):

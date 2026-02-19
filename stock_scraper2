@@ -1,0 +1,53 @@
+"""
+stock_scraper.py
+Purpose:
+- Download historical stock price data (Open, High, Low, Close, Volume) for multiple tickers
+- Save each ticker's cleaned data as a CSV in the 'output/' directory
+- Override existing files with new data
+"""
+import yfinance as yf
+import pandas as pd
+import os
+
+# === Configuration ===
+tickers = ["^IXIC"]  # Add any tickers here
+start_date = "1975-01-01"
+end_date = pd.Timestamp.today().strftime("%Y-%m-%d")
+output_dir = "output"
+
+# Create output directory if it doesn't exist
+os.makedirs(output_dir, exist_ok=True)
+
+# === Download and save each ticker ===
+for symbol in tickers:
+    print(f"📥 Fetching data for {symbol}...")
+    
+    # Download historical data using yfinance
+    df = yf.download(symbol, start=start_date, end=end_date, progress=False)
+    
+    if df.empty:
+        print(f"⚠️  No data for {symbol}. Skipping.")
+        continue
+    
+    # Keep essential columns
+    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    
+    # Reset index to expose 'Date' as a column
+    df.reset_index(inplace=True)
+    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+    
+    # Clean filename for symbols like ^GSPC
+    safe_symbol = symbol.replace("^", "")
+    
+    # Define output path
+    output_path = os.path.join(output_dir, f"{safe_symbol}_price_data.csv")
+    
+    # Check if file exists and notify about override
+    if os.path.exists(output_path):
+        print(f"🔄 Overriding existing file: {output_path}")
+    
+    # Save to CSV (this automatically overwrites existing files)
+    df.to_csv(output_path, index=False)
+    print(f"✅ Saved: {output_path} ({len(df)} records)")
+
+print(f"\n🎉 All data saved to '{output_dir}/' directory")

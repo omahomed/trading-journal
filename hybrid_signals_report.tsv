@@ -1,0 +1,110 @@
+Date	Signal	Name	Exp Chg	Cum Exp	% Inv	DD Chg	Cum DD	Details
+2025-02-21	S1	Distribution Day	0	0	0%	+1	1	-2.20%
+2025-02-21	S5	Break Below 21-EMA	0	0	0%		1	After 0 days
+2025-02-21	S6	Break Below 50-MA	0	0	0%		1	Close 19524.01 < MA 19683.29
+2025-02-24	S1	Distribution Day	0	0	0%	+1	2	-1.21%
+2025-02-25	S1	Distribution Day	0	0	0%	+1	3	-1.35%
+2025-02-27	S1	Distribution Day	0	0	0%	+1	4	-2.78%
+2025-02-27	S2	Distribution Cluster	0	0	0%		4	PT under pressure, floor +1
+2025-02-27	S7	Bad Break	0	0	0%		4	-2.78% in bottom quarter
+2025-03-03	S1	Distribution Day	0	0	0%	+1	5	-2.64%
+2025-03-03	S4	Full Distribution -1	0	0	0%		5	5 distribution days
+2025-03-03	S7	Bad Break	0	0	0%		5	-2.64% in bottom quarter
+2025-03-04	S1	Distribution Day	0	0	0%	+1	6	-0.35%
+2025-03-04	S10	Full Distribution	0	0	0%		6	6 distribution days
+2025-03-06	S1	Distribution Day	0	0	0%	+1	7	-2.61%
+2025-03-06	S7	Bad Break	0	0	0%		7	-2.61% in bottom quarter
+2025-03-10	S1	Distribution Day	0	0	0%	+1	8	-4.00%
+2025-03-13	S1	Distribution Day	0	0	0%	+1	9	-1.96%
+2025-03-13	S2	Distribution Cluster	0	0	0%		9	PT under pressure, floor +1
+2025-03-13	S10	Full Distribution	0	0	0%		9	9 distribution days
+2025-03-18	S1	Distribution Day	0	0	0%	+1	10	-1.71%
+2025-03-20	S1	Distribution Day	0	0	0%	+1	11	-0.33%
+2025-03-24	--	DD Removed	0	0	0%	-2	9	Old DD fell off
+2025-03-26	S1	Distribution Day	0	0	0%	+1	10	-2.04%
+2025-03-26	S5	Break Below 21-EMA	0	0	0%		10	After 0 days
+2025-03-27	S1	Distribution Day	0	0	0%	+1	11	-0.53%
+2025-03-27	S10	Full Distribution	0	0	0%		11	11 distribution days
+2025-03-28	S1	Distribution Day	0	0	0%	+1	12	-2.70%
+2025-03-28	S7	Bad Break	0	0	0%		12	-2.70% in bottom quarter
+2025-03-31	S2	Distribution Cluster	0	0	0%		12	PT under pressure, floor +1
+2025-03-31	--	DD Removed	0	0	0%	-1	11	Old DD fell off
+2025-04-01	--	DD Removed	0	0	0%	-1	10	Old DD fell off
+2025-04-02	S10	Full Distribution	0	0	0%		10	9 distribution days
+2025-04-02	--	DD Removed	0	0	0%	-1	9	Old DD fell off
+2025-04-03	S1	Distribution Day	0	0	0%	+1	10	-5.97%
+2025-04-03	S7	Bad Break	0	0	0%		10	-5.97% in bottom quarter
+2025-04-04	S1	Distribution Day	0	0	0%	+1	11	-5.82%
+2025-04-04	S7	Bad Break	0	0	0%		11	-5.82% in bottom quarter
+2025-04-04	--	DD Removed	0	0	0%	-1	10	Old DD fell off
+2025-04-07	S10	Full Distribution	0	0	0%		10	10 distribution days
+2025-04-08	S1	Distribution Day	0	0	0%	+1	11	-2.15%
+2025-04-08	S2	Distribution Cluster	0	0	0%		11	PT under pressure, floor +1
+2025-04-08	--	DD Removed	0	0	0%	-1	10	Old DD fell off
+2025-04-09	--	DD Removed	0	0	0%	-3	7	Old DD fell off
+2025-04-10	S1	Distribution Day	0	0	0%	+1	8	-4.31%
+2025-04-10	S10	Full Distribution	0	0	0%		8	8 distribution days
+2025-04-11	--	DD Removed	0	0	0%	-2	6	Old DD fell off
+2025-04-16	S1	Distribution Day	0	0	0%	+1	7	-3.07%
+2025-04-21	S1	Distribution Day	0	0	0%	+1	8	-2.55%
+2025-04-22	B1	Follow-Through Day	+1	1	30%		8	+2.71% on volume
+2025-04-23	B2	Additional FTD	+1	2	55%		8	+2.50% on volume
+2025-04-23	S4	Full Distribution -1	0	2	55%		8	5 distribution days
+2025-04-23	--	DD Removed	0	2	55%	-3	5	Old DD fell off
+2025-04-24	B7	Accumulation Day	+1	3	75%		5	+2.74%
+2025-04-25	B3	Low Above 21-EMA	+1	4	90%		5	First day above
+2025-04-25	B7	Accumulation Day	+1	5	100%		5	+1.26%
+2025-04-25	--	DD Removed	0	5	100%	-2	3	Old DD fell off
+2025-04-29	B4	Trending Above 21-EMA	+1	6	100%		3	3 consecutive days
+2025-05-01	B6	Low Above 50-MA	0	6	100%		3	Low 17688.11 > MA 17532.27
+2025-05-01	--	DD Removed	0	6	100%	-1	2	Old DD fell off
+2025-05-02	--	DD Removed	0	6	100%	-1	1	Old DD fell off
+2025-05-05	--	DD Removed	0	6	100%	-1	0	Old DD fell off
+2025-05-12	B7	Accumulation Day	0	6	100%		0	+4.35%
+2025-05-12	B8	Higher High	0	6	100%		0	> 2025-03-25
+2025-05-13	B7	Accumulation Day	0	6	100%		0	+1.61%
+2025-05-14	B5	Living Above 21-EMA	0	6	100%		0	10 days above
+2025-05-16	B9	Power-Trend ON	0	6	100%		0	Max exposure to 7, floor +2
+2025-05-21	B5	Living Above 21-EMA	+1	7	100%		0	15 days above
+2025-05-21	S1	Distribution Day	0	7	100%	+1	1	-1.41%
+2025-05-27	B7	Accumulation Day	0	7	100%		1	+2.47%
+2025-05-28	S1	Distribution Day	0	7	100%	+1	2	-0.51%
+2025-05-29	B5	Living Above 21-EMA	0	7	100%		2	20 days above
+2025-06-05	B5	Living Above 21-EMA	0	7	100%		2	25 days above
+2025-06-05	S1	Distribution Day	0	7	100%	+1	3	-0.83%
+2025-06-11	--	DD Removed	0	7	100%	-1	2	Old DD fell off
+2025-06-13	S1	Distribution Day	0	7	100%	+1	3	-1.30%
+2025-06-16	B7	Accumulation Day	0	7	100%		3	+1.52%
+2025-06-17	S1	Distribution Day	0	7	100%	+1	4	-0.91%
+2025-06-20	S1	Distribution Day	0	7	100%	+1	5	-0.51%
+2025-06-20	S4	Full Distribution -1	0	7	100%		5	5 distribution days
+2025-06-24	B7	Accumulation Day	0	7	100%		5	+1.43%
+2025-06-25	--	DD Removed	0	7	100%	-1	4	Old DD fell off
+2025-06-27	--	DD Removed	0	7	100%	-1	3	Old DD fell off
+2025-06-30	--	DD Removed	0	7	100%	-2	1	Old DD fell off
+2025-07-03	--	DD Removed	0	7	100%	-1	0	Old DD fell off
+2025-07-29	S1	Distribution Day	0	7	100%	+1	1	-0.38%
+2025-07-29	S8	Downside Reversal	-1	6	100%		1	52w high, close 7.5%
+2025-07-31	S8	Downside Reversal	-1	5	100%		1	52w high, close 11.6%
+2025-08-01	S1	Distribution Day	0	5	100%	+1	2	-2.24%
+2025-08-01	S5	Break Below 21-EMA	-1	4	90%		2	After 0 days
+2025-08-04	B3	Low Above 21-EMA	+1	5	100%		2	First day above
+2025-08-04	B7	Accumulation Day	+1	6	100%		2	+1.95%
+2025-08-05	S1	Distribution Day	0	6	100%	+1	3	-0.65%
+2025-08-06	B4	Trending Above 21-EMA	+1	7	100%		3	3 consecutive days
+2025-08-06	B7	Accumulation Day	0	7	100%		3	+1.21%
+2025-08-11	S1	Distribution Day	0	7	100%	+1	4	-0.30%
+2025-08-12	B7	Accumulation Day	0	7	100%		4	+1.39%
+2025-08-12	--	DD Removed	0	7	100%	-1	3	Old DD fell off
+2025-08-15	B5	Living Above 21-EMA	0	7	100%		3	10 days above
+2025-08-19	S1	Distribution Day	0	7	100%	+1	4	-1.46%
+2025-08-20	S1	Distribution Day	0	7	100%	+1	5	-0.67%
+2025-08-20	S4	Full Distribution -1	0	7	100%		5	5 distribution days
+2025-08-20	S5	Break Below 21-EMA	-1	6	100%		5	After 0 days
+2025-08-21	S1	Distribution Day	0	6	100%	+1	6	-0.34%
+2025-08-21	S2	Distribution Cluster	0	6	100%		6	PT under pressure, floor +1
+2025-08-21	S10	Full Distribution	0	6	100%		6	6 distribution days
+2025-08-29	S1	Distribution Day	0	6	100%	+1	7	-1.15%
+2025-09-02	S1	Distribution Day	0	6	100%	+1	8	-0.82%
+2025-09-02	S5	Break Below 21-EMA	-1	5	100%		8	After 0 days
+2025-09-03	--	DD Removed	0	5	100%	-1	7	Old DD fell off

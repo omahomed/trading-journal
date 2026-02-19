@@ -1,0 +1,2 @@
+Trade_ID,Ticker,Action,Date,Shares,Amount,Value,Rule,Notes,Realized_PL,Stop_Loss,Trx_ID,Total_Cost,Avg_Entry,Avg_Exit
+202512-001,TQQQ,BUY,2025-12-15 14:01,2412,52.82,127401.84,br7.1 TQQQ Strategy,TQQQ shares transferred from canslim account,0,48.5944,B1,,,

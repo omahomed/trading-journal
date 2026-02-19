@@ -1,0 +1,4 @@
+Trade_ID,Ticker,Status,Open_Date,Shares,Avg_Entry,Avg_Exit,Total_Cost,Realized_PL,Unrealized_PL,Buy_Rule,Notes,Amount,Value,Stop_Loss,Closed_Date,Return_Pct,Rule,Risk_Budget,Buy_Notes,Sell_Rule,Sell_Notes
+202512-001,TQQQ,CLOSED,2025-12-15 14:01,2412.0,52.82,51.871,127401.84,-2288.9879999999953,0.0,br7.1 TQQQ Strategy,TQQQ shares transferred from canslim account,0.0,0.0,0.0,2025-12-15 14:20,-1.7966679288148393,br7.1 TQQQ Strategy,0.0,,,
+202512-045,TQQQ,OPEN,2025-12-24 09:13,1920.0,55.16822916666667,0.0,105923.0,0.0,322.9980239868164,,Anticipating buy signal,0.0,0.0,0.0,,0.3163189493708508,br7.1 TQQQ Strategy,1877.087250000001,Anticipating buy signal,,
+202512-046,UPRO,OPEN,2025-12-24 09:13,160.0,119.421125,0.0,19107.379999999997,0.0,150.20422851562762,,Buy Signal Triggered. ,0.0,0.0,0.0,,0.7861058319645479,br9.1 21e Strategy,1877.087250000001,Buy Signal Triggered. ,,

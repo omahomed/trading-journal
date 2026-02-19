@@ -1,0 +1,30 @@
+[
+  {
+    "date": "2025-10-21",
+    "market_phase": "Window Open",
+    "pnl": 0.0,
+    "prep_score": 4,
+    "exec_score": 6,
+    "emot_score": 4,
+    "post_score": 1,
+    "total_score": 15,
+    "bobblehead_moved": true,
+    "thing_well": "",
+    "thing_improve": "",
+    "what_learned": ""
+  },
+  {
+    "date": "2025-10-24",
+    "market_phase": "Window Open",
+    "pnl": 0.0,
+    "prep_score": 2,
+    "exec_score": 7,
+    "emot_score": 4,
+    "post_score": 6,
+    "total_score": 19,
+    "excellence": true,
+    "thing_well": "Traded small to test the waters. ",
+    "thing_improve": "",
+    "what_learned": ""
+  }
+]

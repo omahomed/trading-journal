@@ -1,0 +1,204 @@
+"""
+stock_scraper.py
+Purpose:
+- Download historical stock price data (Open, High, Low, Close, Volume) for multiple tickers
+- Save each ticker's cleaned data as a CSV in the 'output/' directory
+- Override existing files with new data
+- Ensures today's data is included for real-time end-of-day analysis
+"""
+import yfinance as yf
+import pandas as pd
+import os
+from datetime import datetime, timedelta
+
+# === Configuration ===
+tickers = ["tsla"]  # Add any tickers here
+start_date = "2025-04-01"  # Starting from April 1, 2025 for FTD tracking
+end_date = pd.Timestamp.today().strftime("%Y-%m-%d")
+output_dir = "output"
+
+# Create output directory if it doesn't exist
+os.makedirs(output_dir, exist_ok=True)
+
+def fetch_latest_data(symbol, df):
+    """
+    Fetch today's data if it's missing (market still open or data not yet available)
+    """
+    today = pd.Timestamp.today().normalize()
+    
+    # Check if we already have today's data
+    if not df.empty:
+        last_date = pd.to_datetime(df['Date']).max()
+        if last_date.date() == today.date():
+            print(f"   ✓ Already have today's data ({today.strftime('%Y-%m-%d')})")
+            return df
+    
+    print(f"   📊 Fetching today's real-time data...")
+    ticker = yf.Ticker(symbol)
+    
+    try:
+        # Method 1: Get today's data using info and regular_market data
+        info = ticker.info
+        
+        # Extract today's values from ticker info
+        today_data = {
+            'Date': today.strftime('%Y-%m-%d'),
+            'Open': info.get('regularMarketOpen', info.get('open', None)),
+            'High': info.get('regularMarketDayHigh', info.get('dayHigh', None)),
+            'Low': info.get('regularMarketDayLow', info.get('dayLow', None)),
+            'Close': info.get('regularMarketPrice', info.get('currentPrice', info.get('regularMarketPreviousClose', None))),
+            'Volume': info.get('regularMarketVolume', info.get('volume', None))
+        }
+        
+        # Method 2: If info doesn't have all data, try history with different parameters
+        if any(v is None for v in today_data.values()):
+            print("   🔄 Info incomplete, trying history method...")
+            
+            # Get last few days including today
+            recent_hist = ticker.history(period="5d", interval="1d", prepost=True)
+            
+            if not recent_hist.empty:
+                # Check if today's data is in the history
+                latest_date = recent_hist.index[-1].date()
+                
+                if latest_date == today.date():
+                    latest = recent_hist.iloc[-1]
+                    today_data = {
+                        'Date': today.strftime('%Y-%m-%d'),
+                        'Open': latest['Open'],
+                        'High': latest['High'],
+                        'Low': latest['Low'],
+                        'Close': latest['Close'],
+                        'Volume': latest['Volume']
+                    }
+                else:
+                    # If not, try to get real-time quote
+                    print("   🔄 Today not in history, trying real-time quote...")
+                    
+                    # Get the most recent trading day data
+                    quote = ticker.history(period="1d", interval="1d", prepost=True)
+                    if not quote.empty:
+                        latest = quote.iloc[-1]
+                        today_data = {
+                            'Date': today.strftime('%Y-%m-%d'),
+                            'Open': latest['Open'],
+                            'High': latest['High'],
+                            'Low': latest['Low'],
+                            'Close': latest['Close'],
+                            'Volume': latest['Volume']
+                        }
+        
+        # Method 3: Fast info for real-time data
+        if today_data['Close'] is None or today_data['Low'] is None:
+            print("   🔄 Trying fast_info method...")
+            fast = ticker.fast_info
+            
+            if hasattr(fast, 'last_price'):
+                today_data['Close'] = today_data['Close'] or fast.last_price
+                today_data['Low'] = today_data['Low'] or fast.day_low
+                today_data['High'] = today_data['High'] or fast.day_high
+                today_data['Open'] = today_data['Open'] or fast.open
+                today_data['Volume'] = today_data['Volume'] or fast.last_volume
+        
+        # Only add if we have valid data
+        if today_data['Close'] is not None and today_data['Open'] is not None:
+            # Append today's data
+            today_df = pd.DataFrame([today_data])
+            df = pd.concat([df, today_df], ignore_index=True)
+            
+            current_time = datetime.now().strftime('%I:%M %p')
+            print(f"   ✅ Added today's data (as of {current_time}):")
+            print(f"      Open: {today_data['Open']:.2f}, High: {today_data['High']:.2f}")
+            print(f"      Low: {today_data['Low']:.2f}, Close: {today_data['Close']:.2f}")
+            print(f"      Volume: {today_data['Volume']:,.0f}")
+        else:
+            print(f"   ⚠️  Could not fetch complete data for today")
+            
+    except Exception as e:
+        print(f"   ⚠️  Error fetching today's data: {e}")
+        
+        # Last resort: manual check with recent history
+        try:
+            # Get last 10 days and check if today is included
+            recent = ticker.history(period="10d")
+            if not recent.empty:
+                for idx in reversed(range(len(recent))):
+                    if recent.index[idx].date() == today.date():
+                        row = recent.iloc[idx]
+                        today_data = {
+                            'Date': today.strftime('%Y-%m-%d'),
+                            'Open': row['Open'],
+                            'High': row['High'],
+                            'Low': row['Low'],
+                            'Close': row['Close'],
+                            'Volume': row['Volume']
+                        }
+                        today_df = pd.DataFrame([today_data])
+                        df = pd.concat([df, today_df], ignore_index=True)
+                        print(f"   ✅ Found today's data in recent history")
+                        break
+        except:
+            pass
+    
+    return df
+
+# === Download and save each ticker ===
+for symbol in tickers:
+    print(f"📥 Fetching data for {symbol} from {start_date}...")
+    
+    # Download historical data using yfinance
+    df = yf.download(symbol, start=start_date, end=end_date, progress=False)
+    
+    if df.empty:
+        print(f"⚠️  No data for {symbol}. Skipping.")
+        continue
+    
+    # Keep essential columns
+    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    
+    # Reset index to expose 'Date' as a column
+    df.reset_index(inplace=True)
+    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+    
+    # Ensure we have today's data
+    df = fetch_latest_data(symbol, df)
+    
+    # Remove any duplicate dates (keep the last one)
+    df = df.drop_duplicates(subset=['Date'], keep='last')
+    
+    # Sort by date
+    df = df.sort_values('Date').reset_index(drop=True)
+    
+    # Clean filename for symbols like ^GSPC
+    safe_symbol = symbol.replace("^", "")
+    
+    # Define output path
+    output_path = os.path.join(output_dir, f"{safe_symbol}_price_data.csv")
+    
+    # Check if file exists and notify about override
+    if os.path.exists(output_path):
+        print(f"🔄 Overriding existing file: {output_path}")
+    
+    # Save to CSV (this automatically overwrites existing files)
+    df.to_csv(output_path, index=False)
+    
+    # Show date range
+    first_date = df['Date'].iloc[0]
+    last_date = df['Date'].iloc[-1]
+    print(f"✅ Saved: {output_path} ({len(df)} records)")
+    print(f"   📅 Date range: {first_date} to {last_date}")
+
+print(f"\n🎉 All data saved to '{output_dir}/' directory")
+
+# Optional: Show market status
+now = datetime.now()
+market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)  # 4 PM ET
+if now.hour < 16:
+    print(f"\n⏰ Note: Market is still open. Data includes current values as of {now.strftime('%I:%M %p')}")
+else:
+    print(f"\n✅ Market closed. Today's final data included.")
+
+# Debug option: Show last few rows
+print("\n📋 Last 3 days of data:")
+if 'df' in locals() and not df.empty:
+    print(df.tail(3).to_string(index=False))
