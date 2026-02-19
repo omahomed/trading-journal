@@ -3523,33 +3523,70 @@ elif page == "Trade Manager":
 
                     # Log Detail (Rule = Sell Rule, Notes = Sell Note)
                     new_d = {'Trade_ID':s_id, 'Trx_ID': s_trx, 'Ticker':s_tick, 'Action':'SELL', 'Date':ts, 'Shares':s_shs, 'Amount':s_px, 'Value':proc, 'Rule':s_rule, 'Notes': s_note, 'Realized_PL': 0}
-                    df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
-                    secure_save(df_d, DETAILS_FILE)
-                    
-                    # Sync Math
-                    df_d, df_s = update_campaign_summary(s_id, df_d, df_s)
-                    
-                    # --- CRITICAL FIX: FORCE WRITE SELL DATA TO SUMMARY ---
-                    # We do this AFTER update_campaign_summary to ensure it doesn't get overwritten
-                    idx = df_s[df_s['Trade_ID'] == s_id].index
-                    if not idx.empty:
-                        df_s.at[idx[0], 'Sell_Rule'] = s_rule
-                        # Append or Overwrite notes? Overwrite is cleaner for "Last Action Reason"
-                        df_s.at[idx[0], 'Sell_Notes'] = s_note
-                    
-                    secure_save(df_s, SUMMARY_FILE)
 
-                    # Log to audit trail
-                    realized_pl = df_s[df_s['Trade_ID'] == s_id]['Realized_PL'].iloc[0] if not df_s[df_s['Trade_ID'] == s_id].empty else 0
-                    log_audit_trail(
-                        action='SELL',
-                        trade_id=s_id,
-                        ticker=s_tick,
-                        details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
-                    )
+                    if USE_DATABASE:
+                        # Database-first approach
+                        try:
+                            # Save SELL transaction to database
+                            db.save_detail_row(CURR_PORT_NAME, new_d)
 
-                    st.success(f"Sold. Transaction ID: {s_trx}")
-                    st.rerun()
+                            # Reload data and recalculate LIFO
+                            df_d_temp = db.load_details(CURR_PORT_NAME, s_id)
+                            df_s_temp = db.load_summary(CURR_PORT_NAME)
+                            df_d_temp, df_s_temp = update_campaign_summary(s_id, df_d_temp, df_s_temp)
+
+                            # Update Sell_Rule and Sell_Notes in summary (preserve after LIFO calc)
+                            summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(s_id)]
+                            if not summary_matches.empty:
+                                summary_row = summary_matches.iloc[0].to_dict()
+                                summary_row['Sell_Rule'] = s_rule
+                                summary_row['Sell_Notes'] = s_note
+                                db.save_summary_row(CURR_PORT_NAME, summary_row)
+                                realized_pl = summary_row.get('Realized_PL', 0)
+                            else:
+                                realized_pl = 0
+
+                            # Log to audit trail
+                            log_audit_trail(
+                                action='SELL',
+                                trade_id=s_id,
+                                ticker=s_tick,
+                                details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
+                            )
+
+                            st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Database save failed: {str(e)}")
+                    else:
+                        # CSV fallback
+                        df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+                        secure_save(df_d, DETAILS_FILE)
+
+                        # Sync Math
+                        df_d, df_s = update_campaign_summary(s_id, df_d, df_s)
+
+                        # --- CRITICAL FIX: FORCE WRITE SELL DATA TO SUMMARY ---
+                        # We do this AFTER update_campaign_summary to ensure it doesn't get overwritten
+                        idx = df_s[df_s['Trade_ID'] == s_id].index
+                        if not idx.empty:
+                            df_s.at[idx[0], 'Sell_Rule'] = s_rule
+                            # Append or Overwrite notes? Overwrite is cleaner for "Last Action Reason"
+                            df_s.at[idx[0], 'Sell_Notes'] = s_note
+
+                        secure_save(df_s, SUMMARY_FILE)
+
+                        # Log to audit trail
+                        realized_pl = df_s[df_s['Trade_ID'] == s_id]['Realized_PL'].iloc[0] if not df_s[df_s['Trade_ID'] == s_id].empty else 0
+                        log_audit_trail(
+                            action='SELL',
+                            trade_id=s_id,
+                            ticker=s_tick,
+                            details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
+                        )
+
+                        st.success(f"Sold. Transaction ID: {s_trx}")
+                        st.rerun()
         else: st.info("No positions to sell.")
 
     # --- TAB 3: UPDATE PRICES ---
