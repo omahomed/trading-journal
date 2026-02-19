@@ -37,6 +37,7 @@ MANUAL_DISTRIBUTIONS = {
     ],
     'SPY': [
         {'date': '2025-12-26', 'loss_pct': 0.01},  # yfinance shows -0.01%, IBD has larger loss
+        {'date': '2026-01-07', 'loss_pct': 0.32},  # Bug: auto-detection missed this
     ]
 }
 
