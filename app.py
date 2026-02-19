@@ -3066,9 +3066,8 @@ elif page == "Trade Manager":
         c_top1, c_top2 = st.columns(2)
         trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], horizontal=True)
         
-        now = datetime.now()
-        b_date = c_top2.date_input("Date", now, key="b_date_input")
-        b_time = c_top2.time_input("Time", now.time(), step=60, key="b_time_input")
+        b_date = c_top2.date_input("Date", get_current_date_ct(), key="b_date_input")
+        b_time = c_top2.time_input("Time", datetime.now().time(), step=60, key="b_time_input")
         
         st.markdown("---")
         c1, c2 = st.columns(2)
