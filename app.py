@@ -5767,7 +5767,7 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_perf, tab_live, tab_dd = st.tabs(["📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective"])
+        tab_perf, tab_live, tab_dd, tab_stats = st.tabs(["📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "📈 Career Stats"])
 
         # --- TAB 1: PERFORMANCE AUDIT (EXACT ORIGINAL) ---
         with tab_perf:
@@ -6285,6 +6285,274 @@ elif page == "Analytics":
                     st.info("Not enough data points since Dec 16 to plot curve.")
             else:
                 st.error("No Journal Data found.")
+
+        # --- TAB 4: CAREER STATS (ALL-TIME OVERVIEW) ---
+        with tab_stats:
+            st.subheader("📈 Career Stats (All-Time Overview)")
+            st.caption("Comprehensive statistics across all closed trades in your trading career")
+
+            # Use df_s_raw for all-time data (not filtered by year)
+            all_trades = df_s_raw.copy()
+            all_closed = all_trades[all_trades['Status'] == 'CLOSED'].copy()
+
+            if not all_closed.empty:
+                # Calculate all metrics
+                total_pl = all_closed['Realized_PL'].sum()
+                total_trades = len(all_closed)
+
+                winners = all_closed[all_closed['Realized_PL'] > 0]
+                losers = all_closed[all_closed['Realized_PL'] < 0]
+                break_even = all_closed[all_closed['Realized_PL'] == 0]
+
+                num_winners = len(winners)
+                num_losers = len(losers)
+                num_break_even = len(break_even)
+
+                win_rate = (num_winners / total_trades * 100) if total_trades > 0 else 0
+
+                avg_win = winners['Realized_PL'].mean() if not winners.empty else 0
+                avg_loss = losers['Realized_PL'].mean() if not losers.empty else 0
+                avg_trade = all_closed['Realized_PL'].mean() if not all_closed.empty else 0
+
+                wl_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+
+                largest_win = winners['Realized_PL'].max() if not winners.empty else 0
+                largest_loss = losers['Realized_PL'].min() if not losers.empty else 0
+
+                # Profit Factor
+                gross_profit = winners['Realized_PL'].sum() if not winners.empty else 0
+                gross_loss = abs(losers['Realized_PL'].sum()) if not losers.empty else 0
+                profit_factor = gross_profit / gross_loss if gross_loss != 0 else 0
+
+                # Consecutive wins/losses
+                def get_max_consecutive(df, condition_col, threshold):
+                    """Calculate max consecutive wins or losses"""
+                    if df.empty:
+                        return 0
+                    df_sorted = df.sort_values('Closed_Date')
+                    is_match = df_sorted[condition_col] > threshold if threshold >= 0 else df_sorted[condition_col] < threshold
+                    groups = (is_match != is_match.shift()).cumsum()
+                    consecutive = is_match.groupby(groups).sum()
+                    return int(consecutive.max()) if not consecutive.empty else 0
+
+                max_consecutive_wins = get_max_consecutive(all_closed, 'Realized_PL', 0)
+                max_consecutive_losses = get_max_consecutive(all_closed, 'Realized_PL', -0.01)
+
+                # Hold times
+                all_closed['Hold_Days'] = (all_closed['Closed_Date'] - all_closed['Open_Date_DT']).dt.total_seconds() / 86400
+                avg_hold_all = all_closed['Hold_Days'].mean() if not all_closed.empty else 0
+
+                winners_hold = winners['Hold_Days'].mean() if not winners.empty else 0
+                losers_hold = losers['Hold_Days'].mean() if not losers.empty else 0
+                scratch_hold = break_even['Hold_Days'].mean() if not break_even.empty else 0
+
+                hold_ratio = winners_hold / losers_hold if losers_hold > 0 else 0
+
+                # R-Multiple metrics
+                has_risk_data = 'Risk_Budget' in all_closed.columns and all_closed['Risk_Budget'].notna().any()
+                if has_risk_data:
+                    closed_with_r = all_closed[all_closed['Risk_Budget'] > 0].copy()
+                    closed_with_r['R_Multiple'] = closed_with_r['Realized_PL'] / closed_with_r['Risk_Budget']
+                    avg_r_multiple = closed_with_r['R_Multiple'].mean()
+                    max_r_multiple = closed_with_r['R_Multiple'].max()
+                else:
+                    avg_r_multiple = 0
+                    max_r_multiple = 0
+
+                # Expectancy
+                expectancy = (win_rate/100 * avg_win) + ((100-win_rate)/100 * avg_loss)
+
+                # Monthly Performance (if we have enough data)
+                if 'Closed_Date' in all_closed.columns:
+                    all_closed['Month'] = pd.to_datetime(all_closed['Closed_Date']).dt.to_period('M')
+                    monthly_pl = all_closed.groupby('Month')['Realized_PL'].sum()
+
+                    if not monthly_pl.empty:
+                        best_month = monthly_pl.max()
+                        worst_month = monthly_pl.min()
+                        avg_month = monthly_pl.mean()
+                        best_month_date = monthly_pl.idxmax().strftime('%b %Y')
+                        worst_month_date = monthly_pl.idxmin().strftime('%b %Y')
+                    else:
+                        best_month = worst_month = avg_month = 0
+                        best_month_date = worst_month_date = "N/A"
+                else:
+                    best_month = worst_month = avg_month = 0
+                    best_month_date = worst_month_date = "N/A"
+
+                # Open positions
+                open_trades = all_trades[all_trades['Status'] == 'OPEN']
+                num_open = len(open_trades)
+
+                # ==============================================================================
+                # DISPLAY LAYOUT
+                # ==============================================================================
+
+                # --- MONTHLY PERFORMANCE ---
+                st.markdown("### 📅 Monthly Performance")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Best Month", f"${best_month:,.2f}",
+                             delta=f"in {best_month_date}")
+                with col2:
+                    st.metric("Worst Month", f"${worst_month:,.2f}",
+                             delta=f"in {worst_month_date}",
+                             delta_color="inverse")
+                with col3:
+                    st.metric("Average Month", f"${avg_month:,.2f}")
+
+                st.markdown("---")
+
+                # --- TRADE PERFORMANCE ---
+                st.markdown("### 💰 Trade Performance")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    pl_color = "normal" if total_pl > 0 else "inverse"
+                    st.metric("Total P&L", f"${total_pl:,.2f}", delta_color=pl_color)
+                with col2:
+                    st.metric("Total Trades", f"{total_trades:,}")
+                with col3:
+                    st.metric("Average Trade", f"${avg_trade:,.2f}")
+                with col4:
+                    st.metric("Profit Factor", f"{profit_factor:.2f}",
+                             delta="✅ Good" if profit_factor > 1.5 else "⚠️ Improve")
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Winning Trades", f"{num_winners:,}",
+                             delta=f"{win_rate:.1f}% win rate")
+                with col2:
+                    st.metric("Losing Trades", f"{num_losers:,}")
+                with col3:
+                    st.metric("Break-Even Trades", f"{num_break_even:,}")
+                with col4:
+                    st.metric("Open Positions", f"{num_open:,}")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Average Winner", f"${avg_win:,.2f}",
+                             delta=f"Largest: ${largest_win:,.2f}")
+                with col2:
+                    st.metric("Average Loser", f"${avg_loss:,.2f}",
+                             delta=f"Largest: ${largest_loss:,.2f}",
+                             delta_color="inverse")
+                with col3:
+                    st.metric("Win/Loss Ratio", f"{wl_ratio:.2f}x",
+                             delta="✅ Good" if wl_ratio > 2.0 else "⚠️ Improve")
+
+                st.markdown("---")
+
+                # --- CONSISTENCY METRICS ---
+                st.markdown("### 🎯 Consistency Metrics")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Max Consecutive Wins", f"{max_consecutive_wins:,}")
+                with col2:
+                    st.metric("Max Consecutive Losses", f"{max_consecutive_losses:,}")
+                with col3:
+                    st.metric("Win Rate", f"{win_rate:.1f}%",
+                             delta="✅ Good" if win_rate >= 40 else "⚠️ Improve")
+                with col4:
+                    st.metric("Expectancy", f"${expectancy:,.2f}",
+                             delta="Per trade average")
+
+                st.markdown("---")
+
+                # --- HOLDING TIME ANALYSIS ---
+                st.markdown("### ⏱️ Holding Time Analysis")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Avg Hold Time (All)", f"{avg_hold_all:.1f} days")
+                with col2:
+                    st.metric("Winners Hold Time", f"{winners_hold:.1f} days")
+                with col3:
+                    st.metric("Losers Hold Time", f"{losers_hold:.1f} days")
+                with col4:
+                    hold_status = "✅ Cut losses faster" if hold_ratio > 1.0 else "⚠️ Hold losers too long"
+                    st.metric("Win/Loss Hold Ratio", f"{hold_ratio:.2f}x",
+                             delta=hold_status)
+
+                if num_break_even > 0:
+                    st.caption(f"ℹ️ Scratch trades held on average: {scratch_hold:.1f} days")
+
+                st.markdown("---")
+
+                # --- RISK METRICS ---
+                st.markdown("### 📊 Risk Metrics")
+                if has_risk_data:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        r_color = "normal" if avg_r_multiple > 0 else "inverse"
+                        st.metric("Avg R-Multiple", f"{avg_r_multiple:.2f}R",
+                                 delta=f"Max: {max_r_multiple:.1f}R",
+                                 delta_color=r_color)
+                    with col2:
+                        st.metric("Trade Expectancy", f"${expectancy:,.2f}",
+                                 help="Average expected P&L per trade")
+                    with col3:
+                        # Calculate realized R-Multiple (for trades with risk budget)
+                        if not closed_with_r.empty:
+                            avg_realized_r = closed_with_r['R_Multiple'].mean()
+                            st.metric("Avg Realized R", f"{avg_realized_r:.2f}R",
+                                     help="Average R achieved on closed trades")
+                        else:
+                            st.metric("Avg Realized R", "N/A")
+                else:
+                    st.info("💡 Risk metrics not available. Log trades with Risk_Budget to track R-multiples and risk-adjusted performance.")
+
+                st.markdown("---")
+
+                # --- POSITION MANAGEMENT ---
+                st.markdown("### 📈 Position Management")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Largest Profit", f"${largest_win:,.2f}",
+                             delta="Single trade")
+                with col2:
+                    st.metric("Largest Loss", f"${largest_loss:,.2f}",
+                             delta="Single trade",
+                             delta_color="inverse")
+                with col3:
+                    # Calculate % of total profit from top winners
+                    if not winners.empty and gross_profit > 0:
+                        top_3_profit = winners.nlargest(3, 'Realized_PL')['Realized_PL'].sum()
+                        top_3_pct = (top_3_profit / gross_profit * 100)
+                        st.metric("Top 3 Winners", f"{top_3_pct:.1f}%",
+                                 delta="of total profit")
+                    else:
+                        st.metric("Top 3 Winners", "N/A")
+
+                # Optional: Add a summary insight
+                st.markdown("---")
+                with st.expander("📖 How to Read These Stats"):
+                    st.markdown("""
+                    **Monthly Performance:**
+                    - Shows your best, worst, and average monthly P&L
+                    - Helps identify seasonal patterns and consistency
+
+                    **Trade Performance:**
+                    - Total P&L and trade count give the big picture
+                    - Profit Factor > 1.5 = healthy (making $1.50+ for every $1 lost)
+                    - Win Rate 40%+ = good for trend following systems
+
+                    **Consistency:**
+                    - Max consecutive wins/losses show your streak patterns
+                    - Expectancy = what you make per trade on average (should be positive!)
+
+                    **Holding Time:**
+                    - Win/Loss Hold Ratio > 1.0 = you let winners run and cut losers (good!)
+                    - < 1.0 = holding losers too long (emotional trading)
+
+                    **Risk Metrics:**
+                    - Avg R-Multiple shows reward-to-risk ratio
+                    - 2R+ means making 2x your risk per trade on average (excellent!)
+
+                    **Position Management:**
+                    - Top 3 Winners % shows concentration risk
+                    - If >50%, you rely heavily on a few big winners
+                    """)
+            else:
+                st.info("No closed trades yet. Start trading to see your career stats!")
 
 # ==============================================================================
 # PAGE 12: DAILY REPORT CARD (FIXED MARKET DATA)
