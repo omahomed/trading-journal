@@ -3296,7 +3296,7 @@ elif page == "Trade Manager":
                  st.info(f"Selling {s_tick} (Own {int(row['Shares'])} shs)")
                  
                  c1, c2 = st.columns(2)
-                 s_date = c1.date_input("Date", datetime.now(), key='s_date')
+                 s_date = c1.date_input("Date", datetime.now().date(), key='s_date')
                  s_time = c2.time_input("Time", datetime.now().time(), step=60, key='s_time')
                  
                  c3, c4 = st.columns(2)
