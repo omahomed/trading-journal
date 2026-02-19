@@ -99,7 +99,17 @@ def load_summary(portfolio_name, status=None):
                     s.rule AS "Rule",
                     s.buy_notes AS "Buy_Notes",
                     s.sell_notes AS "Sell_Notes",
-                    s.risk_budget AS "Risk_Budget"
+                    s.risk_budget AS "Risk_Budget",
+                    COALESCE(
+                        (SELECT d.rule
+                         FROM trades_details d
+                         WHERE d.trade_id = s.trade_id
+                           AND d.portfolio_id = s.portfolio_id
+                           AND d.action = 'BUY'
+                         ORDER BY d.date ASC
+                         LIMIT 1),
+                        s.rule
+                    ) AS "Buy_Rule"
                 FROM trades_summary s
                 JOIN portfolios p ON s.portfolio_id = p.id
                 WHERE p.name = %s
