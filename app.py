@@ -6300,6 +6300,9 @@ elif page == "Analytics":
                 total_pl = all_closed['Realized_PL'].sum()
                 total_trades = len(all_closed)
 
+                # Add Hold_Days column BEFORE creating winners/losers slices
+                all_closed['Hold_Days'] = (all_closed['Closed_Date'] - all_closed['Open_Date_DT']).dt.total_seconds() / 86400
+
                 winners = all_closed[all_closed['Realized_PL'] > 0]
                 losers = all_closed[all_closed['Realized_PL'] < 0]
                 break_even = all_closed[all_closed['Realized_PL'] == 0]
@@ -6338,8 +6341,7 @@ elif page == "Analytics":
                 max_consecutive_wins = get_max_consecutive(all_closed, 'Realized_PL', 0)
                 max_consecutive_losses = get_max_consecutive(all_closed, 'Realized_PL', -0.01)
 
-                # Hold times
-                all_closed['Hold_Days'] = (all_closed['Closed_Date'] - all_closed['Open_Date_DT']).dt.total_seconds() / 86400
+                # Hold times (Hold_Days already added above)
                 avg_hold_all = all_closed['Hold_Days'].mean() if not all_closed.empty else 0
 
                 winners_hold = winners['Hold_Days'].mean() if not winners.empty else 0
