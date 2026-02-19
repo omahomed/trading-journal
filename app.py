@@ -3373,6 +3373,8 @@ elif page == "Trade Manager":
         b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
 
         # --- IMAGE UPLOADS (Optional) ---
+        weekly_chart = None
+        daily_chart = None
         if R2_AVAILABLE:
             st.markdown("#### 📸 Chart Documentation (Optional)")
             st.caption("Upload weekly and daily charts to document your entry setup")
@@ -3492,19 +3494,17 @@ elif page == "Trade Manager":
                     images_uploaded = []
 
                     # Upload Weekly Chart
-                    if 'b_weekly_chart' in st.session_state and st.session_state['b_weekly_chart'] is not None:
-                        weekly_file = st.session_state['b_weekly_chart']
-                        weekly_url = r2.upload_image(weekly_file, portfolio, b_id, b_tick, 'weekly')
+                    if weekly_chart is not None:
+                        weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
                         if weekly_url:
-                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_file.name)
+                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
                             images_uploaded.append('Weekly')
 
                     # Upload Daily Chart
-                    if 'b_daily_chart' in st.session_state and st.session_state['b_daily_chart'] is not None:
-                        daily_file = st.session_state['b_daily_chart']
-                        daily_url = r2.upload_image(daily_file, portfolio, b_id, b_tick, 'daily')
+                    if daily_chart is not None:
+                        daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
                         if daily_url:
-                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_file.name)
+                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
                             images_uploaded.append('Daily')
 
                     if images_uploaded:
@@ -3544,6 +3544,7 @@ elif page == "Trade Manager":
                  s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
 
                  # --- EXIT CHART UPLOAD (Optional) ---
+                 exit_chart = None
                  if R2_AVAILABLE:
                      st.markdown("#### 📸 Exit Chart (Optional)")
                      exit_chart = st.file_uploader(
@@ -3617,11 +3618,10 @@ elif page == "Trade Manager":
                             )
 
                             # --- UPLOAD EXIT CHART (if provided) ---
-                            if R2_AVAILABLE and 's_exit_chart' in st.session_state and st.session_state['s_exit_chart'] is not None:
-                                exit_file = st.session_state['s_exit_chart']
-                                exit_url = r2.upload_image(exit_file, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                            if R2_AVAILABLE and exit_chart is not None:
+                                exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
                                 if exit_url:
-                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_file.name)
+                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
                                     st.success("📸 Exit chart uploaded!")
 
                             st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
@@ -3656,11 +3656,10 @@ elif page == "Trade Manager":
                         )
 
                         # --- UPLOAD EXIT CHART (if provided) ---
-                        if R2_AVAILABLE and USE_DATABASE and 's_exit_chart' in st.session_state and st.session_state['s_exit_chart'] is not None:
-                            exit_file = st.session_state['s_exit_chart']
-                            exit_url = r2.upload_image(exit_file, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                        if R2_AVAILABLE and USE_DATABASE and exit_chart is not None:
+                            exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
                             if exit_url:
-                                db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_file.name)
+                                db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
                                 st.success("📸 Exit chart uploaded!")
 
                         st.success(f"Sold. Transaction ID: {s_trx}")
