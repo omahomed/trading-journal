@@ -3809,8 +3809,13 @@ elif page == "Trade Manager":
                                                 df_d_temp, df_s_temp = update_campaign_summary(edit_id, df_d_temp, df_s_temp)
 
                                                 # Save summary back to database
-                                                summary_row = df_s_temp[df_s_temp['Trade_ID'] == edit_id].iloc[0].to_dict()
-                                                db.save_summary_row(CURR_PORT_NAME, summary_row)
+                                                # Ensure Trade_ID type matches
+                                                summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(edit_id)]
+                                                if not summary_matches.empty:
+                                                    summary_row = summary_matches.iloc[0].to_dict()
+                                                    db.save_summary_row(CURR_PORT_NAME, summary_row)
+                                                else:
+                                                    st.warning(f"⚠️ Summary row for Trade_ID '{edit_id}' not found after update. Transaction updated but summary may need manual refresh.")
 
                                                 st.success("✅ Updated in database!"); st.rerun()
                                             except Exception as e:
@@ -3852,8 +3857,11 @@ elif page == "Trade Manager":
 
                                             if not df_d_temp.empty:
                                                 df_d_temp, df_s_temp = update_campaign_summary(edit_id, df_d_temp, df_s_temp)
-                                                summary_row = df_s_temp[df_s_temp['Trade_ID'] == edit_id].iloc[0].to_dict()
-                                                db.save_summary_row(CURR_PORT_NAME, summary_row)
+                                                # Ensure Trade_ID type matches
+                                                summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(edit_id)]
+                                                if not summary_matches.empty:
+                                                    summary_row = summary_matches.iloc[0].to_dict()
+                                                    db.save_summary_row(CURR_PORT_NAME, summary_row)
 
                                             st.warning("🗑️ Transaction deleted from database."); st.rerun()
                                         except Exception as e:
