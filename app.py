@@ -18,6 +18,13 @@ def get_current_date_ct():
     ct_now = utc_now - timedelta(hours=6)
     return ct_now.date()
 
+def get_current_time_ct():
+    """Get current time in US Central Time (Chicago)."""
+    from datetime import timezone
+    utc_now = datetime.now(timezone.utc)
+    ct_now = utc_now - timedelta(hours=6)
+    return ct_now.time()
+
 # Database layer (PostgreSQL support)
 try:
     import db_layer as db
@@ -3231,9 +3238,9 @@ elif page == "Trade Manager":
 
         c_top1, c_top2 = st.columns(2)
         trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], horizontal=True)
-        
+
         b_date = c_top2.date_input("Date", get_current_date_ct(), key="b_date_input")
-        b_time = c_top2.time_input("Time", datetime.now().time(), step=60, key="b_time_input")
+        b_time = c_top2.time_input("Time", get_current_time_ct(), step=60, key="b_time_input")
         
         st.markdown("---")
         c1, c2 = st.columns(2)
@@ -3472,7 +3479,7 @@ elif page == "Trade Manager":
                  
                  c1, c2 = st.columns(2)
                  s_date = c1.date_input("Date", get_current_date_ct(), key='s_date')
-                 s_time = c2.time_input("Time", datetime.now().time(), step=60, key='s_time')
+                 s_time = c2.time_input("Time", get_current_time_ct(), step=60, key='s_time')
                  
                  c3, c4 = st.columns(2)
                  s_shs = c3.number_input("Shares", min_value=1, max_value=int(row['Shares']), step=1)
