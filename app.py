@@ -1539,26 +1539,132 @@ elif page == "M Factor":
     spy = get_market_state("SPY")
 
     if nasdaq and spy:
-        status = nasdaq['state']
-        
-        if status == "POWERTREND": bg = "#8A2BE2"; exp = "200% (Margin Enabled)"
-        elif status == "OPEN": bg = "#2ca02c"; exp = "100% (Full)"
-        elif status == "NEUTRAL": bg = "#ffcc00"; exp = "Max 50% (CAUTION)"
-        else: bg = "#ff4b4b"; exp = "0% (Cash / Defensive)"
+        # Dual-index confirmation logic
+        nasdaq_state = nasdaq['state']
+        spy_state = spy['state']
 
-        st.markdown(f"""<div class="market-banner" style="background-color: {bg};"><div style="font-size: 14px; opacity: 0.9;">MARKET WINDOW</div><div style="font-size: 48px; font-weight: 800; margin: 5px 0;">{status}</div><div style="font-size: 16px;">RECOMMENDED EXPOSURE: {exp}</div></div>""", unsafe_allow_html=True)
+        # Combined state logic
+        if nasdaq_state == "POWERTREND" or spy_state == "POWERTREND":
+            combined_state = "POWERTREND"  # Either index in power trend
+        elif nasdaq_state == "CLOSED" and spy_state == "CLOSED":
+            combined_state = "CLOSED"  # Both violated 50 SMA
+        elif nasdaq_state in ["NEUTRAL", "CLOSED"] or spy_state in ["NEUTRAL", "CLOSED"]:
+            combined_state = "NEUTRAL"  # At least one violated 21 EMA
+        else:
+            combined_state = "OPEN"  # Both above 21 EMA
+
+        status = combined_state
+
+        if status == "POWERTREND":
+            bg = "#8A2BE2"
+            exp = "200% (Margin Enabled)"
+            explanation = "Either index in super cycle - aggressive"
+        elif status == "OPEN":
+            bg = "#2ca02c"
+            exp = "100% (Full Exposure)"
+            explanation = "Both indices above 21 EMA - healthy"
+        elif status == "NEUTRAL":
+            bg = "#ffcc00"
+            exp = "50% Max (Caution)"
+            explanation = "1+ index violated 21 EMA - hold winners, avoid new buys"
+        else:
+            bg = "#ff4b4b"
+            exp = "0% (Defensive)"
+            explanation = "Both indices violated 50 SMA - protect capital"
+
+        st.markdown(f"""<div class="market-banner" style="background-color: {bg};"><div style="font-size: 14px; opacity: 0.9;">MARKET WINDOW</div><div style="font-size: 48px; font-weight: 800; margin: 5px 0;">{status}</div><div style="font-size: 16px;">RECOMMENDED EXPOSURE: {exp}</div><div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">{explanation}</div></div>""", unsafe_allow_html=True)
+
+        # === IBD EXPOSURE CROSS-REFERENCE ===
+        if USE_DATABASE:
+            try:
+                df_signals = db.load_market_signals(days=5)  # Get recent data
+
+                nasdaq_ibd = df_signals[df_signals['symbol'] == '^IXIC'].iloc[0] if not df_signals[df_signals['symbol'] == '^IXIC'].empty else None
+                spy_ibd = df_signals[df_signals['symbol'] == 'SPY'].iloc[0] if not df_signals[df_signals['symbol'] == 'SPY'].empty else None
+
+                if nasdaq_ibd is not None and spy_ibd is not None:
+                    st.markdown("---")
+                    st.markdown("### 📚 IBD Market School Comparison")
+
+                    col_ibd1, col_ibd2, col_ibd3 = st.columns(3)
+
+                    with col_ibd1:
+                        ibd_nasdaq_exp = nasdaq_ibd['market_exposure']
+                        ibd_nasdaq_dd = nasdaq_ibd['distribution_count']
+                        st.metric("IBD Nasdaq Exposure", f"{ibd_nasdaq_exp}/6",
+                                 delta=f"{ibd_nasdaq_dd} distribution days")
+
+                    with col_ibd2:
+                        ibd_spy_exp = spy_ibd['market_exposure']
+                        ibd_spy_dd = spy_ibd['distribution_count']
+                        st.metric("IBD SPY Exposure", f"{ibd_spy_exp}/6",
+                                 delta=f"{ibd_spy_dd} distribution days")
+
+                    with col_ibd3:
+                        avg_ibd_exp = (ibd_nasdaq_exp + ibd_spy_exp) / 2
+                        st.metric("IBD Average", f"{avg_ibd_exp:.1f}/6")
+
+                    st.caption("ℹ️ For reference: IBD uses distribution day count. M Factor uses moving average violations + leadership behavior.")
+            except Exception as e:
+                st.caption(f"IBD data unavailable: {e}")
+
+        st.markdown("---")
         c1, c2 = st.columns(2)
         
-        def make_card_html(title, d):
+        def make_card_html(title, d, individual_state):
             def arr(v): return "⬆" if v>0 else "⬇"
             def col(v): return "#2ca02c" if v>0 else "#ff4b4b"
-            
+
+            # State badge color
+            state_colors = {
+                'POWERTREND': '#8A2BE2',
+                'OPEN': '#2ca02c',
+                'NEUTRAL': '#ffcc00',
+                'CLOSED': '#ff4b4b'
+            }
+            state_bg = state_colors.get(individual_state, '#999')
+
             # --- FLATTENED STRING TO PREVENT MARKDOWN CODE BLOCK ERROR ---
-            html = f"""<div class="ticker-box"><div style="display:flex; justify-content:space-between; border-bottom: 2px solid #f0f0f0; padding-bottom:15px; margin-bottom:15px;"><span style="font-size:20px; font-weight:700;">{title}</span><span style="font-size:20px; color:#555;">${d['price']:,.2f}</span></div><div class="metric-row"><div><span style="font-weight:600;">Short (21e)</span> <span class="sub-text">({d['ema21']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d21'])};">{arr(d['d21'])} {d['s21']} <span style="font-size:13px; opacity:0.8;">({abs(d['d21']):.2f}%)</span></div></div><div class="metric-row"><div><span style="font-weight:600;">Med (50s)</span> <span class="sub-text">({d['sma50']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d50'])};">{arr(d['d50'])} {d['s50']} <span style="font-size:13px; opacity:0.8;">({abs(d['d50']):.2f}%)</span></div></div><div class="metric-row"><div><span style="font-weight:600;">Long (200s)</span> <span class="sub-text">({d['sma200']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d200'])};">{arr(d['d200'])} {d['s200']} <span style="font-size:13px; opacity:0.8;">({abs(d['d200']):.2f}%)</span></div></div></div>"""
+            html = f"""<div class="ticker-box"><div style="display:flex; justify-content:space-between; border-bottom: 2px solid #f0f0f0; padding-bottom:15px; margin-bottom:15px;"><span style="font-size:20px; font-weight:700;">{title}</span><span style="font-size:20px; color:#555;">${d['price']:,.2f}</span></div><div style="background:{state_bg}; color:white; padding:8px; border-radius:5px; text-align:center; margin-bottom:12px; font-weight:700;">{individual_state}</div><div class="metric-row"><div><span style="font-weight:600;">Short (21e)</span> <span class="sub-text">({d['ema21']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d21'])};">{arr(d['d21'])} {d['s21']} <span style="font-size:13px; opacity:0.8;">({abs(d['d21']):.2f}%)</span></div></div><div class="metric-row"><div><span style="font-weight:600;">Med (50s)</span> <span class="sub-text">({d['sma50']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d50'])};">{arr(d['d50'])} {d['s50']} <span style="font-size:13px; opacity:0.8;">({abs(d['d50']):.2f}%)</span></div></div><div class="metric-row"><div><span style="font-weight:600;">Long (200s)</span> <span class="sub-text">({d['sma200']:,.2f})</span></div><div style="font-weight:700; color:{col(d['d200'])};">{arr(d['d200'])} {d['s200']} <span style="font-size:13px; opacity:0.8;">({abs(d['d200']):.2f}%)</span></div></div></div>"""
             return html
-            
-        with c1: st.markdown(make_card_html("NASDAQ", nasdaq), unsafe_allow_html=True)
-        with c2: st.markdown(make_card_html("S&P 500", spy), unsafe_allow_html=True)
+
+        with c1: st.markdown(make_card_html("NASDAQ", nasdaq, nasdaq_state), unsafe_allow_html=True)
+        with c2: st.markdown(make_card_html("S&P 500", spy, spy_state), unsafe_allow_html=True)
+
+        st.markdown("---")
+        with st.expander("📖 M Factor Methodology"):
+            st.markdown("""
+### Market Phases
+
+**🟣 POWER TREND (200% - Margin)**
+- Either Nasdaq OR SPY shows super cycle signal
+- Super cycle = Low > 21 EMA for 3 consecutive days + up day on 3rd day
+- Maximum aggression - ride leaders hard
+
+**🟢 GROW (100% - Full Exposure)**
+- Both Nasdaq AND SPY above 21 EMA
+- Healthy market - normal buying and holding
+
+**🟡 NEUTRAL (50% Max - Caution)**
+- 1 or both indices violated 21 EMA
+- Defensive mode - hold existing winners, avoid new buys
+- Rely on individual stock signals for position management
+
+**🔴 PROTECT (0% - Defensive)**
+- Both Nasdaq AND SPY violated 50 SMA
+- No new buys - protect capital
+- Only hold positions with strong individual charts
+
+### Philosophy
+
+**21 EMA is the primary filter** - violation signals immediate caution
+
+**Dual-index confirmation** - requires both indices to agree before downgrading
+
+**Stock-first approach** - if your holdings are outperforming, don't panic sell just because indices are weak
+
+**IBD cross-reference** - use distribution day count as a "paranoia check" but don't let it override strong individual stock performance
+            """)
     else: st.error("Market Data Unavailable")
 
 # ==============================================================================
