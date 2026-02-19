@@ -914,9 +914,13 @@ def refresh_open_position_prices(portfolio_name):
             for pos_id, ticker, shares, avg_entry, total_cost in open_positions:
                 if ticker in live_prices:
                     current_price = live_prices[ticker]
-                    market_value = shares * current_price
-                    unrealized_pl = market_value - total_cost
-                    return_pct = (unrealized_pl / total_cost * 100) if total_cost > 0 else 0
+                    # Convert Decimal to float for arithmetic operations
+                    shares_float = float(shares)
+                    total_cost_float = float(total_cost)
+
+                    market_value = shares_float * current_price
+                    unrealized_pl = market_value - total_cost_float
+                    return_pct = (unrealized_pl / total_cost_float * 100) if total_cost_float > 0 else 0
 
                     cur.execute("""
                         UPDATE trades_summary
