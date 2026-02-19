@@ -848,12 +848,41 @@ def refresh_open_position_prices(portfolio_name):
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # Get portfolio_id
-            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            # Try to find portfolio - check both exact match and partial match
+            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (portfolio_name,))
             result = cur.fetchone()
+
             if not result:
-                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+                # Try partial match (in case of naming differences)
+                # Map common display names to database names
+                name_mappings = {
+                    'CanSlim (Main)': ['CanSlim', 'CanSlim (Main)', 'Canslim'],
+                    'TQQQ Strategy': ['TQQQ', 'TQQQ Strategy'],
+                    '457B Plan': ['457B', '457B Plan']
+                }
+
+                # Try to find a match
+                for display_name, db_names in name_mappings.items():
+                    if portfolio_name in db_names or any(name in portfolio_name for name in db_names):
+                        for db_name in db_names:
+                            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (db_name,))
+                            result = cur.fetchone()
+                            if result:
+                                break
+                    if result:
+                        break
+
+            if not result:
+                # List available portfolios for debugging
+                cur.execute("SELECT name FROM portfolios")
+                available = [r[0] for r in cur.fetchall()]
+                return {
+                    'updated': 0,
+                    'error': f"Portfolio '{portfolio_name}' not found. Available: {', '.join(available)}"
+                }
+
             portfolio_id = result[0]
+            actual_name = result[1]
 
             # Get all open positions
             cur.execute("""
