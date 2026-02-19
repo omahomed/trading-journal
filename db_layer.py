@@ -7,6 +7,8 @@ import os
 import streamlit as st
 from contextlib import contextmanager
 from datetime import datetime
+import time
+from decimal import Decimal
 
 # ============================================
 # CONNECTION CONFIGURATION
@@ -37,26 +39,120 @@ def get_db_config():
     }
 
 @contextmanager
-def get_db_connection():
+def get_db_connection(max_retries=3, retry_delay=1):
     """
-    Context manager for database connections.
-    Ensures connections are properly closed.
+    Context manager for database connections with retry logic.
+    Ensures connections are properly closed and auto-recovers from transient errors.
+
+    Args:
+        max_retries: Maximum number of connection attempts (default: 3)
+        retry_delay: Seconds to wait between retries (default: 1, exponential backoff)
     """
     config = get_db_config()
     conn = None
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            if 'dsn' in config:
+                conn = psycopg2.connect(config['dsn'])
+            else:
+                conn = psycopg2.connect(**config)
+            yield conn
+            return  # Success, exit retry loop
+        except psycopg2.OperationalError as e:
+            last_error = e
+            if attempt < max_retries - 1:  # Not last attempt
+                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                print(f"Database connection failed (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                # Last attempt failed, log and re-raise
+                print(f"Database connection error after {max_retries} attempts: {e}")
+                raise
+        finally:
+            if conn:
+                conn.close()
+
+
+# ============================================
+# INPUT VALIDATION
+# ============================================
+def validate_trade_id(trade_id):
+    """Validate and sanitize trade ID."""
+    if not trade_id:
+        raise ValueError("Trade_ID cannot be empty")
+    trade_id_str = str(trade_id).strip()
+    if len(trade_id_str) > 50:
+        raise ValueError(f"Trade_ID too long (max 50 chars): {trade_id_str}")
+    if len(trade_id_str) == 0:
+        raise ValueError("Trade_ID cannot be empty after trimming")
+    return trade_id_str
+
+
+def validate_shares(shares):
+    """Validate share quantity."""
     try:
-        if 'dsn' in config:
-            conn = psycopg2.connect(config['dsn'])
-        else:
-            conn = psycopg2.connect(**config)
-        yield conn
-    except psycopg2.OperationalError as e:
-        # Log error and re-raise
-        print(f"Database connection error: {e}")
-        raise
-    finally:
-        if conn:
-            conn.close()
+        shares_num = float(shares)
+        if shares_num <= 0:
+            raise ValueError(f"Shares must be positive: {shares}")
+        if shares_num > 1_000_000:
+            raise ValueError(f"Shares seems unreasonably large: {shares_num}")
+        return shares_num
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid shares value: {shares}") from e
+
+
+def validate_price(price, field_name="Price"):
+    """Validate price/amount."""
+    try:
+        price_num = float(price)
+        if price_num < 0:
+            raise ValueError(f"{field_name} cannot be negative: {price}")
+        if price_num > 1_000_000:
+            raise ValueError(f"{field_name} seems unreasonably large: {price_num}")
+        return price_num
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid {field_name}: {price}") from e
+
+
+def validate_portfolio_name(portfolio_name):
+    """Validate portfolio name."""
+    if not portfolio_name:
+        raise ValueError("Portfolio name cannot be empty")
+    portfolio_str = str(portfolio_name).strip()
+    if len(portfolio_str) > 50:
+        raise ValueError(f"Portfolio name too long (max 50 chars): {portfolio_str}")
+    return portfolio_str
+
+
+# ============================================
+# TRANSACTION HELPERS
+# ============================================
+@contextmanager
+def atomic_transaction():
+    """
+    Context manager for atomic database transactions.
+    Ensures all-or-nothing: commits if successful, rolls back if error.
+
+    Usage:
+        with atomic_transaction() as (conn, cur):
+            cur.execute("INSERT ...")
+            cur.execute("UPDATE ...")
+            # Commits automatically on success
+            # Rolls back automatically on exception
+    """
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        try:
+            yield conn, cur
+            conn.commit()  # Commit if no exceptions
+        except Exception as e:
+            conn.rollback()  # Rollback on any error
+            print(f"Transaction rolled back due to error: {e}")
+            raise
+        finally:
+            cur.close()
 
 
 # ============================================
