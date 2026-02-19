@@ -3830,8 +3830,8 @@ elif page == "Trade Manager":
                                     df_d, df_s = update_campaign_summary(tid, df_d, df_s)
                                     prog.progress((i+1)/len(affected))
                                 secure_save(df_s, SUMMARY_FILE)
-                            st.success("✅ Saved!"); st.rerun()
-                        else: st.info("No changes.")
+                                st.success("✅ Saved!"); st.rerun()
+                            else: st.info("No changes.")
                 else: st.info("No active buy tranches found.")
             else: st.info("No data.")
 
