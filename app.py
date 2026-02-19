@@ -3527,18 +3527,26 @@ elif page == "Trade Manager":
                 )
 
                 # --- UPLOAD IMAGES (if provided) ---
+                print(f"[UPLOAD] Checking upload conditions: R2={R2_AVAILABLE}, DB={USE_DATABASE}, weekly={weekly_chart is not None}, daily={daily_chart is not None}")
+
                 if R2_AVAILABLE and USE_DATABASE:
+                    print("[UPLOAD] Entering upload block")
                     images_uploaded = []
 
                     try:
                         # Upload Weekly Chart
                         if weekly_chart is not None:
+                            print(f"[UPLOAD] About to call r2.upload_image for weekly chart")
                             st.info(f"Uploading weekly chart: {weekly_chart.name}")
                             weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
+                            print(f"[UPLOAD] r2.upload_image returned: {weekly_url}")
                             if weekly_url:
+                                print(f"[UPLOAD] Saving to database: {weekly_url}")
                                 db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
                                 images_uploaded.append('Weekly')
+                                print(f"[UPLOAD] Successfully saved weekly chart")
                             else:
+                                print(f"[UPLOAD] weekly_url is None - upload failed")
                                 st.error("Failed to upload weekly chart to R2")
 
                         # Upload Daily Chart
