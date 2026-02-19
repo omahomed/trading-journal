@@ -6016,19 +6016,25 @@ elif page == "Analytics":
                 c4.metric("Env P&L (20)", f"${net_20:,.0f}")
             
             if not closed.empty:
-                strat = closed.groupby('Strat_Rule').agg(
-                    Trades=('Trade_ID','count'), 
-                    PL=('Realized_PL','sum'), 
-                    WinRate=('Realized_PL', lambda x: (x>0).mean())
-                ).sort_values('PL', ascending=False)
-                
-                st.markdown("---")
-                st.subheader("3. Strategy Breakdown")
-                st.dataframe(strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'}))
+                # Filter out "Add:" rules (these are adds to existing positions, not initial entries)
+                closed_initial = closed[~closed['Strat_Rule'].astype(str).str.contains('Add:', case=False, na=False)].copy()
 
-                st.markdown("---")
-                st.subheader("4. Rule Forensics (Drill Down)")
-                avail_rules = sorted(closed['Strat_Rule'].astype(str).unique().tolist())
+                if not closed_initial.empty:
+                    strat = closed_initial.groupby('Strat_Rule').agg(
+                        Trades=('Trade_ID','count'),
+                        PL=('Realized_PL','sum'),
+                        WinRate=('Realized_PL', lambda x: (x>0).mean())
+                    ).sort_values('PL', ascending=False)
+
+                    st.markdown("---")
+                    st.subheader("3. Strategy Breakdown")
+                    st.dataframe(strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'}))
+
+                    st.markdown("---")
+                    st.subheader("4. Rule Forensics (Drill Down)")
+                    avail_rules = sorted(closed_initial['Strat_Rule'].astype(str).unique().tolist())
+                else:
+                    st.info("No initial buy rules found (all rules contain 'Add:')")
                 sel_rule = st.selectbox("Select Strategy Rule", ["None"] + avail_rules)
                 
                 if sel_rule != "None":
@@ -6115,27 +6121,33 @@ elif page == "Analytics":
                 if 'Buy_Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Buy_Rule'].fillna("Unknown")
                 elif 'Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Rule'].fillna("Unknown")
                 else: df_mtm['Strat_Rule'] = "Unknown"
-                
-                mtm_strat = df_mtm.groupby('Strat_Rule').agg(
-                    Total_Trades=('Trade_ID', 'count'),
-                    Active_Count=('Status', lambda x: (x=='OPEN').sum()),
-                    Net_Equity=('Contribution', 'sum'),
-                    Live_WinRate=('Contribution', lambda x: (x>0).mean())
-                ).sort_values('Net_Equity', ascending=False)
-                
-                st.subheader("🏆 Strategy Leaderboard (Mark-to-Market)")
-                st.dataframe(
-                    mtm_strat.style.format({
-                        'Net_Equity': '${:,.2f}', 
-                        'Live_WinRate': '{:.1%}'
-                    })
-                    .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Net_Equity'])
-                )
-                
-                # 5. Rule Forensics (Drill Down)
-                st.markdown("---")
-                st.subheader("4. Rule Forensics (Drill Down)")
-                avail_mtm_rules = sorted(df_mtm['Strat_Rule'].astype(str).unique().tolist())
+
+                # Filter out "Add:" rules (these are adds to existing positions, not initial entries)
+                df_mtm_initial = df_mtm[~df_mtm['Strat_Rule'].astype(str).str.contains('Add:', case=False, na=False)].copy()
+
+                if not df_mtm_initial.empty:
+                    mtm_strat = df_mtm_initial.groupby('Strat_Rule').agg(
+                        Total_Trades=('Trade_ID', 'count'),
+                        Active_Count=('Status', lambda x: (x=='OPEN').sum()),
+                        Net_Equity=('Contribution', 'sum'),
+                        Live_WinRate=('Contribution', lambda x: (x>0).mean())
+                    ).sort_values('Net_Equity', ascending=False)
+
+                    st.subheader("🏆 Strategy Leaderboard (Mark-to-Market)")
+                    st.dataframe(
+                        mtm_strat.style.format({
+                            'Net_Equity': '${:,.2f}',
+                            'Live_WinRate': '{:.1%}'
+                        })
+                        .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Net_Equity'])
+                    )
+
+                    # 5. Rule Forensics (Drill Down)
+                    st.markdown("---")
+                    st.subheader("4. Rule Forensics (Drill Down)")
+                    avail_mtm_rules = sorted(df_mtm_initial['Strat_Rule'].astype(str).unique().tolist())
+                else:
+                    st.info("No initial buy rules found (all rules contain 'Add:')")
                 sel_mtm_rule = st.selectbox("Select Strategy to Inspect", ["None"] + avail_mtm_rules, key="mtm_drill")
                 
                 if sel_mtm_rule != "None":
