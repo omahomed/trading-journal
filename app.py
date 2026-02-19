@@ -3493,22 +3493,38 @@ elif page == "Trade Manager":
                 if R2_AVAILABLE and USE_DATABASE:
                     images_uploaded = []
 
-                    # Upload Weekly Chart
-                    if weekly_chart is not None:
-                        weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
-                        if weekly_url:
-                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
-                            images_uploaded.append('Weekly')
+                    try:
+                        # Upload Weekly Chart
+                        if weekly_chart is not None:
+                            st.info(f"Uploading weekly chart: {weekly_chart.name}")
+                            weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
+                            if weekly_url:
+                                db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
+                                images_uploaded.append('Weekly')
+                            else:
+                                st.error("Failed to upload weekly chart to R2")
 
-                    # Upload Daily Chart
-                    if daily_chart is not None:
-                        daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
-                        if daily_url:
-                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
-                            images_uploaded.append('Daily')
+                        # Upload Daily Chart
+                        if daily_chart is not None:
+                            st.info(f"Uploading daily chart: {daily_chart.name}")
+                            daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
+                            if daily_url:
+                                db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
+                                images_uploaded.append('Daily')
+                            else:
+                                st.error("Failed to upload daily chart to R2")
 
-                    if images_uploaded:
-                        st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
+                        if images_uploaded:
+                            st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
+                        elif weekly_chart is not None or daily_chart is not None:
+                            st.warning("Charts were selected but upload failed")
+                    except Exception as e:
+                        st.error(f"Image upload error: {str(e)}")
+                elif weekly_chart is not None or daily_chart is not None:
+                    if not R2_AVAILABLE:
+                        st.warning("⚠️ R2 storage not available - charts not uploaded")
+                    if not USE_DATABASE:
+                        st.warning("⚠️ Database mode disabled - charts not uploaded")
 
                 st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
                 for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart']:
