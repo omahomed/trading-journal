@@ -3233,7 +3233,23 @@ elif page == "Trade Manager":
 # --- TAB 1: LOG BUY ---
     with tab1:
         st.caption("Live Entry Calculator")
-        
+
+        # Debug: Show system status
+        with st.expander("🔧 System Status (Debug)", expanded=False):
+            diag_cols = st.columns(3)
+            with diag_cols[0]:
+                st.metric("R2 Storage", "✅ Available" if R2_AVAILABLE else "❌ Not Available")
+            with diag_cols[1]:
+                st.metric("Database Mode", "✅ Enabled" if USE_DATABASE else "❌ Disabled")
+            with diag_cols[2]:
+                img_status = "✅ Enabled" if (R2_AVAILABLE and USE_DATABASE) else "❌ Disabled"
+                st.metric("Image Upload", img_status)
+
+            if not R2_AVAILABLE:
+                st.error("R2 storage module failed to load. Check if boto3 is installed and R2 secrets are configured.")
+            if not USE_DATABASE:
+                st.warning("Database mode is disabled. Images require database mode to be enabled.")
+
         # Session State Init
         if 'b_tick' not in st.session_state: st.session_state['b_tick'] = ""
         if 'b_id' not in st.session_state: st.session_state['b_id'] = ""
@@ -3378,6 +3394,16 @@ elif page == "Trade Manager":
         if R2_AVAILABLE:
             st.markdown("#### 📸 Chart Documentation (Optional)")
             st.caption("Upload weekly and daily charts to document your entry setup")
+
+            # Debug: Show status
+            status_cols = st.columns([1, 1, 3])
+            with status_cols[0]:
+                st.caption(f"R2: {'✅' if R2_AVAILABLE else '❌'}")
+            with status_cols[1]:
+                st.caption(f"DB: {'✅' if USE_DATABASE else '❌'}")
+            with status_cols[2]:
+                if not (R2_AVAILABLE and USE_DATABASE):
+                    st.caption("⚠️ Images will NOT be saved")
 
             img_col1, img_col2 = st.columns(2)
             with img_col1:
