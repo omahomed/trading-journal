@@ -6028,7 +6028,10 @@ elif page == "Analytics":
 
                     st.markdown("---")
                     st.subheader("3. Strategy Breakdown")
-                    st.dataframe(strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'}))
+                    st.dataframe(
+                        strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'})
+                        .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['PL'])
+                    )
 
                     st.markdown("---")
                     st.subheader("4. Rule Forensics (Drill Down)")
