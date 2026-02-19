@@ -8,6 +8,16 @@ from datetime import datetime, time, timedelta
 import os
 import shutil
 
+# Helper function to get current date in Central Time
+def get_current_date_ct():
+    """Get current date in US Central Time (Chicago)."""
+    # UTC to Central Time: -6 hours (CST) or -5 hours (CDT)
+    # Using -6 for conservative approach
+    from datetime import timezone
+    utc_now = datetime.now(timezone.utc)
+    ct_now = utc_now - timedelta(hours=6)
+    return ct_now.date()
+
 # Database layer (PostgreSQL support)
 try:
     import db_layer as db
@@ -1347,7 +1357,7 @@ elif page == "Daily Journal":
                 df_calc['Nasdaq_Pct'] = df_calc['Nasdaq'].pct_change() * 100
                 
                 if view_opt == "Current Week":
-                    today = datetime.now().date()
+                    today = get_current_date_ct()
                     start_week = today - timedelta(days=today.weekday()) 
                     df_view = df_calc[df_calc['Day'].dt.date >= start_week]
                 elif view_opt == "By Month":
@@ -2176,7 +2186,7 @@ if page == "Daily Routine":
         st.subheader("1. General Market Data")
         c1, c2, c3, c4 = st.columns(4)
         # Use date() to avoid timezone issues
-        entry_date = c1.date_input("Date", datetime.now().date())
+        entry_date = c1.date_input("Date", get_current_date_ct())
         entry_date_str = entry_date.strftime("%Y-%m-%d")
         
         try:
@@ -3296,7 +3306,7 @@ elif page == "Trade Manager":
                  st.info(f"Selling {s_tick} (Own {int(row['Shares'])} shs)")
                  
                  c1, c2 = st.columns(2)
-                 s_date = c1.date_input("Date", datetime.now().date(), key='s_date')
+                 s_date = c1.date_input("Date", get_current_date_ct(), key='s_date')
                  s_time = c2.time_input("Time", datetime.now().time(), step=60, key='s_time')
                  
                  c3, c4 = st.columns(2)
@@ -5935,7 +5945,7 @@ elif page == "Daily Report Card":
             selected_date = st.selectbox("Select Date for Report", available_dates, index=0)
             
             # CHECK: IS THIS TODAY/RECENT?
-            is_current_report = (selected_date >= datetime.now().date() - timedelta(days=1))
+            is_current_report = (selected_date >= get_current_date_ct() - timedelta(days=1))
             
             # --- GET DAY'S DATA ---
             day_stats = df_j[df_j['Day'].dt.date == selected_date].iloc[0]
@@ -6665,7 +6675,7 @@ elif page == "IBD Market School":
                 if nasdaq_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
-                        days_ago = (datetime.now().date() - dd.date.date()).days
+                        days_ago = (get_current_date_ct() - dd.date.date()).days
                         days_until_expire = 25 - days_ago
 
                         st.markdown(f"""
@@ -6725,7 +6735,7 @@ elif page == "IBD Market School":
                 if spy_dist_days:
                     st.markdown("**Active Distribution Days:**")
                     for dd in sorted(spy_dist_days, key=lambda x: x.date, reverse=True):
-                        days_ago = (datetime.now().date() - dd.date.date()).days
+                        days_ago = (get_current_date_ct() - dd.date.date()).days
                         days_until_expire = 25 - days_ago
 
                         st.markdown(f"""
