@@ -3413,6 +3413,8 @@ elif page == "Trade Manager":
                     key='b_weekly_chart',
                     help="Upload a screenshot of the weekly chart"
                 )
+                if weekly_chart:
+                    st.caption(f"✅ Selected: {weekly_chart.name}")
             with img_col2:
                 daily_chart = st.file_uploader(
                     "Daily Chart",
@@ -3420,8 +3422,17 @@ elif page == "Trade Manager":
                     key='b_daily_chart',
                     help="Upload a screenshot of the daily chart"
                 )
+                if daily_chart:
+                    st.caption(f"✅ Selected: {daily_chart.name}")
 
         if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
+            # Debug: Show file upload state
+            st.info(f"🔍 DEBUG - weekly_chart: {weekly_chart is not None}, daily_chart: {daily_chart is not None}")
+            if weekly_chart:
+                st.info(f"📁 Weekly: {weekly_chart.name}, {weekly_chart.size} bytes")
+            if daily_chart:
+                st.info(f"📁 Daily: {daily_chart.name}, {daily_chart.size} bytes")
+
             # Check for basic required fields only (let validation handle shares/price)
             if b_tick and b_id:
                 # --- VALIDATION CHECKS ---
