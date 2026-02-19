@@ -2175,7 +2175,8 @@ if page == "Daily Routine":
     with st.form("master_routine_form"):
         st.subheader("1. General Market Data")
         c1, c2, c3, c4 = st.columns(4)
-        entry_date = c1.date_input("Date", datetime.now())
+        # Use date() to avoid timezone issues
+        entry_date = c1.date_input("Date", datetime.now().date())
         entry_date_str = entry_date.strftime("%Y-%m-%d")
         
         try:
