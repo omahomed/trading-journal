@@ -33,6 +33,14 @@ except (ImportError, KeyError, Exception) as e:
     DB_AVAILABLE = False
     print(f"⚠️  db_layer import failed: {type(e).__name__}: {e}")
 
+# R2 Storage (Cloudflare R2 for images)
+try:
+    import r2_storage as r2
+    R2_AVAILABLE = True
+except (ImportError, KeyError, Exception) as e:
+    R2_AVAILABLE = False
+    print(f"⚠️  r2_storage import failed: {type(e).__name__}: {e}")
+
 # Feature flag: Use database instead of CSV
 # Auto-enable if running on Streamlit Cloud with database secrets
 if DB_AVAILABLE and hasattr(st, 'secrets') and 'database' in st.secrets:
@@ -3364,6 +3372,27 @@ elif page == "Trade Manager":
         b_note = c_note1.text_input("Buy Rationale (Notes)", key="b_note")
         b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
 
+        # --- IMAGE UPLOADS (Optional) ---
+        if R2_AVAILABLE:
+            st.markdown("#### 📸 Chart Documentation (Optional)")
+            st.caption("Upload weekly and daily charts to document your entry setup")
+
+            img_col1, img_col2 = st.columns(2)
+            with img_col1:
+                weekly_chart = st.file_uploader(
+                    "Weekly Chart",
+                    type=['png', 'jpg', 'jpeg'],
+                    key='b_weekly_chart',
+                    help="Upload a screenshot of the weekly chart"
+                )
+            with img_col2:
+                daily_chart = st.file_uploader(
+                    "Daily Chart",
+                    type=['png', 'jpg', 'jpeg'],
+                    key='b_daily_chart',
+                    help="Upload a screenshot of the daily chart"
+                )
+
         if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
             # Check for basic required fields only (let validation handle shares/price)
             if b_tick and b_id:
@@ -3458,8 +3487,31 @@ elif page == "Trade Manager":
                     details=f"{b_shs} shares @ ${b_px:.2f} | Cost: ${cost:.2f} | Rule: {b_rule}"
                 )
 
+                # --- UPLOAD IMAGES (if provided) ---
+                if R2_AVAILABLE and USE_DATABASE:
+                    images_uploaded = []
+
+                    # Upload Weekly Chart
+                    if 'b_weekly_chart' in st.session_state and st.session_state['b_weekly_chart'] is not None:
+                        weekly_file = st.session_state['b_weekly_chart']
+                        weekly_url = r2.upload_image(weekly_file, portfolio, b_id, b_tick, 'weekly')
+                        if weekly_url:
+                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_file.name)
+                            images_uploaded.append('Weekly')
+
+                    # Upload Daily Chart
+                    if 'b_daily_chart' in st.session_state and st.session_state['b_daily_chart'] is not None:
+                        daily_file = st.session_state['b_daily_chart']
+                        daily_url = r2.upload_image(daily_file, portfolio, b_id, b_tick, 'daily')
+                        if daily_url:
+                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_file.name)
+                            images_uploaded.append('Daily')
+
+                    if images_uploaded:
+                        st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
+
                 st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
-                for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val']:
+                for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart']:
                     if k in st.session_state: del st.session_state[k]
                 st.rerun()
             else:
@@ -3490,7 +3542,17 @@ elif page == "Trade Manager":
                  s_rule = c5.selectbox("Sell Rule / Reason", SELL_RULES)
                  s_note = c6.text_input("Sell Context / Notes", key='s_note', placeholder="Why did you sell?")
                  s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
-                 
+
+                 # --- EXIT CHART UPLOAD (Optional) ---
+                 if R2_AVAILABLE:
+                     st.markdown("#### 📸 Exit Chart (Optional)")
+                     exit_chart = st.file_uploader(
+                         "Upload Exit Chart",
+                         type=['png', 'jpg', 'jpeg'],
+                         key='s_exit_chart',
+                         help="Upload a screenshot showing the exit point"
+                     )
+
                  if st.button("LOG SELL ORDER", type="primary"):
                     # --- VALIDATION CHECKS ---
                     # 1. Validate trade entry data
@@ -3554,6 +3616,14 @@ elif page == "Trade Manager":
                                 details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
                             )
 
+                            # --- UPLOAD EXIT CHART (if provided) ---
+                            if R2_AVAILABLE and 's_exit_chart' in st.session_state and st.session_state['s_exit_chart'] is not None:
+                                exit_file = st.session_state['s_exit_chart']
+                                exit_url = r2.upload_image(exit_file, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                                if exit_url:
+                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_file.name)
+                                    st.success("📸 Exit chart uploaded!")
+
                             st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
                             st.rerun()
                         except Exception as e:
@@ -3584,6 +3654,14 @@ elif page == "Trade Manager":
                             ticker=s_tick,
                             details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
                         )
+
+                        # --- UPLOAD EXIT CHART (if provided) ---
+                        if R2_AVAILABLE and USE_DATABASE and 's_exit_chart' in st.session_state and st.session_state['s_exit_chart'] is not None:
+                            exit_file = st.session_state['s_exit_chart']
+                            exit_url = r2.upload_image(exit_file, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                            if exit_url:
+                                db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_file.name)
+                                st.success("📸 Exit chart uploaded!")
 
                         st.success(f"Sold. Transaction ID: {s_trx}")
                         st.rerun()
@@ -4161,7 +4239,60 @@ elif page == "Trade Manager":
 # ==============================================================================
     with tab7:
         st.subheader("Active Campaign Summary")
-        
+
+        # --- IMAGE VIEWER FOR ACTIVE TRADES ---
+        if R2_AVAILABLE and USE_DATABASE and not df_s.empty:
+            df_open = df_s[df_s['Status'] == 'OPEN'].copy()
+            if not df_open.empty:
+                with st.expander("📸 View Entry Charts (Active Trades)"):
+                    st.caption("View weekly and daily charts for your active positions")
+
+                    # Get list of open trades
+                    open_trades = df_open[['Trade_ID', 'Ticker']].values.tolist()
+                    trade_opts = [f"{ticker} | {trade_id}" for trade_id, ticker in open_trades]
+
+                    selected = st.selectbox("Select Trade", ["Select..."] + trade_opts, key='active_img_viewer')
+
+                    if selected and selected != "Select...":
+                        ticker, trade_id = selected.split(" | ")
+                        images = db.get_trade_images(CURR_PORT_NAME, trade_id)
+
+                        if images:
+                            st.markdown(f"### {ticker} - {trade_id}")
+
+                            image_types = {img['image_type']: img for img in images}
+
+                            # Show weekly and daily (no exit for active trades)
+                            col1, col2 = st.columns(2)
+
+                            with col1:
+                                if 'weekly' in image_types:
+                                    img_data = image_types['weekly']
+                                    st.markdown("**Weekly Chart**")
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                        st.caption(f"Uploaded: {img_data['uploaded_at']}")
+                                    else:
+                                        st.warning("Failed to load weekly chart")
+                                else:
+                                    st.info("No weekly chart")
+
+                            with col2:
+                                if 'daily' in image_types:
+                                    img_data = image_types['daily']
+                                    st.markdown("**Daily Chart**")
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                        st.caption(f"Uploaded: {img_data['uploaded_at']}")
+                                    else:
+                                        st.warning("Failed to load daily chart")
+                                else:
+                                    st.info("No daily chart")
+                        else:
+                            st.info("No charts uploaded for this trade")
+
         # --- INIT SESSION STATE ---
         if 'live_prices' not in st.session_state:
             st.session_state['live_prices'] = {}
@@ -5422,7 +5553,51 @@ elif page == "Trade Manager":
 # --- TAB 10: ALL CAMPAIGNS (PRO SCOREBOARD) ---
     with tab10:
         st.subheader("All Campaigns (Summary)")
-        
+
+        # --- IMAGE VIEWER ---
+        if R2_AVAILABLE and USE_DATABASE:
+            with st.expander("📸 View Trade Charts"):
+                st.caption("Select a trade to view uploaded chart images")
+
+                # Get list of trades that have images
+                trade_options = df_s['Trade_ID'].unique().tolist()
+                selected_trade = st.selectbox("Select Trade ID", ["Select..."] + trade_options, key='img_viewer_trade')
+
+                if selected_trade and selected_trade != "Select...":
+                    # Get images for this trade
+                    images = db.get_trade_images(CURR_PORT_NAME, selected_trade)
+
+                    if images:
+                        # Get ticker for display
+                        ticker_row = df_s[df_s['Trade_ID'] == selected_trade]
+                        ticker = ticker_row['Ticker'].iloc[0] if not ticker_row.empty else "Unknown"
+
+                        st.markdown(f"### {ticker} - {selected_trade}")
+
+                        # Display images in columns
+                        image_types = {img['image_type']: img for img in images}
+
+                        # Create columns for weekly, daily, exit
+                        cols = st.columns(3)
+
+                        for idx, (img_type, col) in enumerate(zip(['weekly', 'daily', 'exit'], cols)):
+                            with col:
+                                if img_type in image_types:
+                                    img_data = image_types[img_type]
+                                    st.markdown(f"**{img_type.title()} Chart**")
+
+                                    # Download and display image
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                        st.caption(f"Uploaded: {img_data['uploaded_at']}")
+                                    else:
+                                        st.warning(f"Failed to load {img_type} chart")
+                                else:
+                                    st.info(f"No {img_type} chart")
+                    else:
+                        st.info("No charts uploaded for this trade")
+
         # 1. Prepare Data
         df_s_view = df_s.reset_index().rename(columns={'index': 'Seq_ID'})
         

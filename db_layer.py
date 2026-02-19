@@ -1190,6 +1190,222 @@ def refresh_open_position_prices(portfolio_name):
 
 
 # ============================================
+# TRADE IMAGES MANAGEMENT
+# ============================================
+def save_trade_image(portfolio_name: str, trade_id: str, ticker: str,
+                     image_type: str, image_url: str, file_name: str = None):
+    """
+    Save trade image metadata to database.
+
+    Args:
+        portfolio_name: Portfolio name (e.g., 'CanSlim')
+        trade_id: Trade ID
+        ticker: Stock ticker
+        image_type: 'weekly', 'daily', or 'exit'
+        image_url: R2 object key or URL
+        file_name: Original file name (optional)
+
+    Returns:
+        Database row ID if successful, None if failed
+    """
+    try:
+        # Map display name to database name
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Get portfolio ID
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    raise ValueError(f"Portfolio '{db_portfolio_name}' not found")
+
+                portfolio_id = result[0]
+
+                # Insert or update image record
+                query = """
+                    INSERT INTO trade_images
+                        (portfolio_id, trade_id, ticker, image_type, image_url, file_name)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (portfolio_id, trade_id, image_type)
+                    DO UPDATE SET
+                        image_url = EXCLUDED.image_url,
+                        file_name = EXCLUDED.file_name,
+                        uploaded_at = CURRENT_TIMESTAMP
+                    RETURNING id
+                """
+
+                cur.execute(query, (portfolio_id, trade_id, ticker, image_type,
+                                   image_url, file_name))
+
+                row_id = cur.fetchone()[0]
+                conn.commit()
+
+                return row_id
+
+    except Exception as e:
+        print(f"Failed to save trade image: {e}")
+        return None
+
+
+def get_trade_images(portfolio_name: str, trade_id: str):
+    """
+    Get all images for a specific trade.
+
+    Args:
+        portfolio_name: Portfolio name
+        trade_id: Trade ID
+
+    Returns:
+        List of dictionaries with image metadata
+    """
+    try:
+        # Map display name to database name
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Get portfolio ID
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    return []
+
+                portfolio_id = result[0]
+
+                # Get all images for this trade
+                query = """
+                    SELECT id, ticker, image_type, image_url, file_name, uploaded_at
+                    FROM trade_images
+                    WHERE portfolio_id = %s AND trade_id = %s
+                    ORDER BY image_type, uploaded_at DESC
+                """
+
+                cur.execute(query, (portfolio_id, trade_id))
+                rows = cur.fetchall()
+
+                images = []
+                for row in rows:
+                    images.append({
+                        'id': row[0],
+                        'ticker': row[1],
+                        'image_type': row[2],
+                        'image_url': row[3],
+                        'file_name': row[4],
+                        'uploaded_at': row[5]
+                    })
+
+                return images
+
+    except Exception as e:
+        print(f"Failed to get trade images: {e}")
+        return []
+
+
+def delete_trade_image(portfolio_name: str, trade_id: str, image_type: str):
+    """
+    Delete a specific trade image from database.
+
+    Args:
+        portfolio_name: Portfolio name
+        trade_id: Trade ID
+        image_type: 'weekly', 'daily', or 'exit'
+
+    Returns:
+        True if successful, False if failed
+    """
+    try:
+        # Map display name to database name
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Get portfolio ID
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    return False
+
+                portfolio_id = result[0]
+
+                # Delete image record
+                query = """
+                    DELETE FROM trade_images
+                    WHERE portfolio_id = %s AND trade_id = %s AND image_type = %s
+                """
+
+                cur.execute(query, (portfolio_id, trade_id, image_type))
+                conn.commit()
+
+                return True
+
+    except Exception as e:
+        print(f"Failed to delete trade image: {e}")
+        return False
+
+
+def delete_all_trade_images_db(portfolio_name: str, trade_id: str):
+    """
+    Delete all image records for a specific trade.
+
+    Args:
+        portfolio_name: Portfolio name
+        trade_id: Trade ID
+
+    Returns:
+        True if successful, False if failed
+    """
+    try:
+        # Map display name to database name
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Get portfolio ID
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    return False
+
+                portfolio_id = result[0]
+
+                # Delete all image records for this trade
+                query = """
+                    DELETE FROM trade_images
+                    WHERE portfolio_id = %s AND trade_id = %s
+                """
+
+                cur.execute(query, (portfolio_id, trade_id))
+                conn.commit()
+
+                return True
+
+    except Exception as e:
+        print(f"Failed to delete all trade images: {e}")
+        return False
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():
