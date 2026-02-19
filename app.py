@@ -5744,9 +5744,9 @@ elif page == "Analytics":
         
         all_sorted['Slump_PL'] = all_sorted.apply(get_slump_pl, axis=1)
         
-        # Ensure Strat_Rule exists
-        if 'Rule' in all_sorted.columns: all_sorted['Strat_Rule'] = all_sorted['Rule'].fillna("Unknown")
-        elif 'Buy_Rule' in all_sorted.columns: all_sorted['Strat_Rule'] = all_sorted['Buy_Rule'].fillna("Unknown")
+        # Ensure Strat_Rule exists - prioritize Buy_Rule (initial buy) over Rule (can be overwritten by adds)
+        if 'Buy_Rule' in all_sorted.columns: all_sorted['Strat_Rule'] = all_sorted['Buy_Rule'].fillna("Unknown")
+        elif 'Rule' in all_sorted.columns: all_sorted['Strat_Rule'] = all_sorted['Rule'].fillna("Unknown")
         else: all_sorted['Strat_Rule'] = "Unknown"
 
         # Create closed from all_sorted (which has Strat_Rule) instead of df_s
@@ -6111,8 +6111,9 @@ elif page == "Analytics":
                 st.markdown("---")
                 
                 # 4. Strategy Leaderboard
-                if 'Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Rule'].fillna("Unknown")
-                elif 'Buy_Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Buy_Rule'].fillna("Unknown")
+                # Prioritize Buy_Rule (initial buy) over Rule (can be overwritten by adds)
+                if 'Buy_Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Buy_Rule'].fillna("Unknown")
+                elif 'Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Rule'].fillna("Unknown")
                 else: df_mtm['Strat_Rule'] = "Unknown"
                 
                 mtm_strat = df_mtm.groupby('Strat_Rule').agg(
