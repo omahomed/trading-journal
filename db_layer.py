@@ -515,11 +515,31 @@ def update_detail_row(portfolio_name, detail_id, row_dict):
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # Get portfolio_id
-            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            # Try to find portfolio - check both exact match and partial match
+            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (portfolio_name,))
             result = cur.fetchone()
+
+            if not result:
+                # Try partial match with name mappings
+                name_mappings = {
+                    'CanSlim (Main)': ['CanSlim', 'CanSlim (Main)', 'Canslim'],
+                    'TQQQ Strategy': ['TQQQ', 'TQQQ Strategy'],
+                    '457B Plan': ['457B', '457B Plan']
+                }
+
+                for display_name, db_names in name_mappings.items():
+                    if portfolio_name in db_names or any(name in portfolio_name for name in db_names):
+                        for db_name in db_names:
+                            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (db_name,))
+                            result = cur.fetchone()
+                            if result:
+                                break
+                    if result:
+                        break
+
             if not result:
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
+
             portfolio_id = result[0]
 
             # Verify the detail row belongs to this portfolio
@@ -574,11 +594,31 @@ def delete_detail_row(portfolio_name, detail_id):
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # Get portfolio_id
-            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            # Try to find portfolio - check both exact match and partial match
+            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (portfolio_name,))
             result = cur.fetchone()
+
+            if not result:
+                # Try partial match with name mappings
+                name_mappings = {
+                    'CanSlim (Main)': ['CanSlim', 'CanSlim (Main)', 'Canslim'],
+                    'TQQQ Strategy': ['TQQQ', 'TQQQ Strategy'],
+                    '457B Plan': ['457B', '457B Plan']
+                }
+
+                for display_name, db_names in name_mappings.items():
+                    if portfolio_name in db_names or any(name in portfolio_name for name in db_names):
+                        for db_name in db_names:
+                            cur.execute("SELECT id, name FROM portfolios WHERE name = %s", (db_name,))
+                            result = cur.fetchone()
+                            if result:
+                                break
+                    if result:
+                        break
+
             if not result:
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
+
             portfolio_id = result[0]
 
             # Delete the row (with portfolio verification)
