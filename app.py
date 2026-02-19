@@ -5749,8 +5749,8 @@ elif page == "Analytics":
         elif 'Buy_Rule' in all_sorted.columns: all_sorted['Strat_Rule'] = all_sorted['Buy_Rule'].fillna("Unknown")
         else: all_sorted['Strat_Rule'] = "Unknown"
 
-        closed = df_s[df_s['Status']=='CLOSED'].copy()
-        if 'Strat_Rule' not in closed.columns: closed['Strat_Rule'] = "Unknown"
+        # Create closed from all_sorted (which has Strat_Rule) instead of df_s
+        closed = all_sorted[all_sorted['Status']=='CLOSED'].copy()
         
         wins = closed[closed['Realized_PL'] > 0]
         losses = closed[closed['Realized_PL'] <= 0]
