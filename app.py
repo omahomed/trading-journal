@@ -1361,7 +1361,7 @@ elif page == "Trading Overview":
             closed_trades = df_summary[df_summary['Status'].str.lower() == 'closed']
             total_trades = len(closed_trades)
             if total_trades > 0:
-                wins = len(closed_trades[closed_trades['P&L'] > 0])
+                wins = len(closed_trades[closed_trades['Realized_PL'] > 0])
                 win_rate = (wins / total_trades) * 100
 
             # Count active trades
@@ -1504,10 +1504,10 @@ elif page == "Trading Overview":
                 trade_id = trade.get('Trade_ID', 'N/A')
                 ticker = trade.get('Ticker', 'N/A')
                 status = trade.get('Status', 'N/A')
-                pnl = clean_num(trade.get('P&L', 0))
+                pnl = clean_num(trade.get('Realized_PL', 0))
                 r_mult = clean_num(trade.get('R', 0))
-                entry_date = trade.get('Entry_Date', 'N/A')
-                exit_date = trade.get('Exit_Date', 'N/A')
+                entry_date = trade.get('Open_Date', 'N/A')
+                exit_date = trade.get('Closed_Date', 'N/A')
 
                 # Color coding
                 if status.lower() == 'closed':
