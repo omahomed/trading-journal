@@ -73,6 +73,8 @@ def upload_image(
             error_msg = "R2 client initialization failed - check credentials"
             print(f"[R2 ERROR] {error_msg}")
             st.error(error_msg)
+            if 'last_upload_attempt' in st.session_state:
+                st.session_state['last_upload_attempt']['error'] = error_msg
             return None
 
         bucket_name = st.secrets.get("r2", {}).get("bucket_name")
@@ -80,6 +82,8 @@ def upload_image(
             error_msg = "R2 bucket_name not found in secrets"
             print(f"[R2 ERROR] {error_msg}")
             st.error(error_msg)
+            if 'last_upload_attempt' in st.session_state:
+                st.session_state['last_upload_attempt']['error'] = error_msg
             return None
 
         print(f"[R2] Using bucket: {bucket_name}")
@@ -123,7 +127,14 @@ def upload_image(
         print(f"[R2 ERROR] {error_msg}")
         st.error(error_msg)
         import traceback
-        print(traceback.format_exc())
+        traceback_str = traceback.format_exc()
+        print(traceback_str)
+
+        # Save error to session state so it persists through rerun
+        if 'last_upload_attempt' in st.session_state:
+            st.session_state['last_upload_attempt']['error'] = error_msg
+            st.session_state['last_upload_attempt']['traceback'] = traceback_str
+
         return None
 
 
