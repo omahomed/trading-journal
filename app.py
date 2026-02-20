@@ -658,13 +658,6 @@ portfolio = st.sidebar.selectbox(
 )
 
 # DEBUG: Database status indicator (lightweight - no queries)
-if st.sidebar.checkbox("🔍 Debug Info", value=False):
-    st.sidebar.write(f"**DB:** {DB_AVAILABLE} | **USE_DB:** {USE_DATABASE}")
-    if USE_DATABASE:
-        st.sidebar.success("✅ Database mode")
-    else:
-        st.sidebar.info("CSV mode")
-
 # B. DYNAMIC PATH CONFIGURATION
 # We define the paths IMMEDIATELY so every page knows where to look.
 ACTIVE_DIR = os.path.join(DATA_ROOT, portfolio)
