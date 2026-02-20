@@ -704,41 +704,41 @@ with st.sidebar:
 
     # 📊 DASHBOARDS (expanded by default)
     with st.expander("📊 Dashboards", expanded=True):
+        nav_button("Command Center", "🎯")
         nav_button("Dashboard", "📊")
         nav_button("Trading Overview", "📈")
-        nav_button("Command Center", "🎯")
 
     # 💼 TRADING OPERATIONS
     with st.expander("💼 Trading Ops", expanded=True):
-        nav_button("Trade Manager", "📝")
         nav_button("Active Campaign Summary", "📋")
         nav_button("Position Sizer", "🔢")
+        nav_button("Trade Manager", "📝")
 
-    # 🎯 RISK & ANALYTICS
-    with st.expander("🎯 Risk & Analytics", expanded=False):
-        nav_button("Risk Manager", "🛡️")
-        nav_button("Portfolio Heat", "🔥")
-        nav_button("Performance Audit", "📊")
+    # 🛡️ RISK MANAGEMENT
+    with st.expander("🛡️ Risk Management", expanded=False):
         nav_button("Earnings Planner", "💣")
+        nav_button("Portfolio Heat", "🔥")
+        nav_button("Risk Manager", "🛡️")
 
     # 📅 DAILY WORKFLOW
     with st.expander("📅 Daily Workflow", expanded=False):
-        nav_button("Daily Routine", "🌅")
         nav_button("Daily Journal", "📔")
         nav_button("Daily Report Card", "📊")
+        nav_button("Daily Routine", "🌅")
+        nav_button("Weekly Retro", "🔄")
 
     # 📈 MARKET INTELLIGENCE
     with st.expander("📈 Market Intel", expanded=False):
         nav_button("IBD Market School", "🏫")
         nav_button("M Factor", "📊")
-        nav_button("Performance Heat Map", "🔥")
 
     # 🔍 DEEP DIVE
     with st.expander("🔍 Deep Dive", expanded=False):
-        nav_button("Ticker Forensics", "🔬")
-        nav_button("Period Review", "⏱️")
         nav_button("Analytics", "📈")
-        nav_button("Weekly Retro", "🔄")
+        nav_button("Performance Audit", "📊")
+        nav_button("Performance Heat Map", "🔥")
+        nav_button("Period Review", "⏱️")
+        nav_button("Ticker Forensics", "🔬")
 
     # ⚙️ LEGACY
     with st.expander("⚙️ Legacy", expanded=False):
