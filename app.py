@@ -1229,25 +1229,8 @@ if page == "Dashboard":
 
             fig = go.Figure()
 
-            # Fill areas (portfolio vs 21 SMA)
-            # Green fill (above 21 SMA)
-            df_above = df_j[df_j['LTD_Pct'] >= df_j['EC_21SMA']].copy()
-            if not df_above.empty:
-                fig.add_trace(go.Scatter(
-                    x=df_above['Day'], y=df_above['LTD_Pct'],
-                    fill='tonexty',
-                    mode='none',
-                    fillcolor='rgba(0, 255, 0, 0.15)',
-                    showlegend=False,
-                    hoverinfo='skip'
-                ))
-                fig.add_trace(go.Scatter(
-                    x=df_above['Day'], y=df_above['EC_21SMA'],
-                    mode='none',
-                    fillcolor='rgba(0, 255, 0, 0.15)',
-                    showlegend=False,
-                    hoverinfo='skip'
-                ))
+            # Fill areas removed for cleaner look
+            # (Can be re-enabled if desired)
 
             # Benchmarks
             if 'SPY_Bench' in df_j.columns:
