@@ -1317,40 +1317,47 @@ if page == "Dashboard":
             shapes = []
             annotations = []
             if 'Nasdaq' in df_j.columns and 'NDX_21SMA' in df_j.columns:
-                # Create regime indicator (1 = green/above, 0 = red/below)
-                df_j['Regime'] = (df_j['Nasdaq'] > df_j['NDX_21SMA']).astype(int)
+                # Filter out NaN values for proper regime detection
+                df_regime = df_j[df_j['NDX_21SMA'].notna()].copy()
 
-                # Find regime changes to create continuous colored sections
-                regime_changes = df_j[df_j['Regime'] != df_j['Regime'].shift()].index.tolist()
-                if not regime_changes:
-                    regime_changes = [0]
-                if regime_changes[0] != 0:
-                    regime_changes.insert(0, 0)
-                regime_changes.append(len(df_j) - 1)
+                if not df_regime.empty:
+                    # Create regime indicator (True = green/above, False = red/below)
+                    df_regime['Regime'] = df_regime['Nasdaq'] >= df_regime['NDX_21SMA']
 
-                for i in range(len(regime_changes) - 1):
-                    start_idx = regime_changes[i]
-                    end_idx = regime_changes[i + 1]
+                    # Find regime changes to create continuous colored sections
+                    df_regime['Regime_Change'] = df_regime['Regime'] != df_regime['Regime'].shift()
+                    change_points = df_regime[df_regime['Regime_Change']].index.tolist()
 
-                    regime_val = df_j['Regime'].iloc[start_idx]
-                    start_date = df_j['Day'].iloc[start_idx]
-                    end_date = df_j['Day'].iloc[end_idx]
+                    # Add start and end points
+                    if df_regime.index[0] not in change_points:
+                        change_points.insert(0, df_regime.index[0])
+                    if df_regime.index[-1] not in change_points:
+                        change_points.append(df_regime.index[-1])
 
-                    # Green when above 21 EMA, red when below
-                    color = 'rgba(0, 200, 0, 0.4)' if regime_val == 1 else 'rgba(255, 0, 0, 0.4)'
+                    for i in range(len(change_points) - 1):
+                        start_idx = change_points[i]
+                        end_idx = change_points[i + 1]
 
-                    shapes.append(dict(
-                        type='rect',
-                        xref='x',
-                        yref='paper',
-                        x0=start_date,
-                        x1=end_date,
-                        y0=0.97,  # Top of chart
-                        y1=1.0,   # Very top
-                        fillcolor=color,
-                        line=dict(width=0),
-                        layer='below'
-                    ))
+                        regime_val = df_regime.loc[start_idx, 'Regime']
+                        start_date = df_regime.loc[start_idx, 'Day']
+                        end_date = df_regime.loc[end_idx, 'Day']
+
+                        # Bright green when above 21 EMA, bright red when below
+                        color = 'green' if regime_val else 'red'
+
+                        shapes.append(dict(
+                            type='rect',
+                            xref='x',
+                            yref='paper',
+                            x0=start_date,
+                            x1=end_date,
+                            y0=0.97,
+                            y1=1.0,
+                            fillcolor=color,
+                            opacity=0.4,
+                            line=dict(width=0),
+                            layer='below'
+                        ))
 
                 # Add label for market regime bar
                 annotations.append(dict(
