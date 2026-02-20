@@ -1312,6 +1312,59 @@ if page == "Dashboard":
                 opacity=0.6
             ))
 
+            # === MARKET REGIME INDICATOR BAR ===
+            # Add colored rectangles showing when Nasdaq is above/below 21 EMA
+            shapes = []
+            annotations = []
+            if 'Nasdaq' in df_j.columns and 'NDX_21SMA' in df_j.columns:
+                # Create regime indicator (1 = green/above, 0 = red/below)
+                df_j['Regime'] = (df_j['Nasdaq'] > df_j['NDX_21SMA']).astype(int)
+
+                # Find regime changes to create continuous colored sections
+                regime_changes = df_j[df_j['Regime'] != df_j['Regime'].shift()].index.tolist()
+                if not regime_changes:
+                    regime_changes = [0]
+                if regime_changes[0] != 0:
+                    regime_changes.insert(0, 0)
+                regime_changes.append(len(df_j) - 1)
+
+                for i in range(len(regime_changes) - 1):
+                    start_idx = regime_changes[i]
+                    end_idx = regime_changes[i + 1]
+
+                    regime_val = df_j['Regime'].iloc[start_idx]
+                    start_date = df_j['Day'].iloc[start_idx]
+                    end_date = df_j['Day'].iloc[end_idx]
+
+                    # Green when above 21 EMA, red when below
+                    color = 'rgba(0, 200, 0, 0.4)' if regime_val == 1 else 'rgba(255, 0, 0, 0.4)'
+
+                    shapes.append(dict(
+                        type='rect',
+                        xref='x',
+                        yref='paper',
+                        x0=start_date,
+                        x1=end_date,
+                        y0=0.97,  # Top of chart
+                        y1=1.0,   # Very top
+                        fillcolor=color,
+                        line=dict(width=0),
+                        layer='below'
+                    ))
+
+                # Add label for market regime bar
+                annotations.append(dict(
+                    text='MARKET TREND (COMP vs 21s)',
+                    xref='paper',
+                    yref='paper',
+                    x=0.5,
+                    y=0.985,
+                    showarrow=False,
+                    font=dict(size=9, color='black'),
+                    xanchor='center',
+                    yanchor='middle'
+                ))
+
             # Layout
             fig.update_layout(
                 xaxis_title='Date',
@@ -1325,7 +1378,7 @@ if page == "Dashboard":
                     tickfont=dict(color='#e67e22')
                 ),
                 hovermode='x unified',
-                height=600,
+                height=700,
                 legend=dict(
                     orientation='h',
                     yanchor='bottom',
@@ -1333,7 +1386,9 @@ if page == "Dashboard":
                     xanchor='left',
                     x=0
                 ),
-                template='plotly_white'
+                template='plotly_white',
+                shapes=shapes,
+                annotations=annotations
             )
 
             # Add 100% exposure reference line
