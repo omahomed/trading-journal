@@ -3235,13 +3235,15 @@ elif page == "Trade Manager":
         st.caption("Live Entry Calculator")
 
         # Show last upload attempt results (persists through rerun)
-        if 'last_upload_attempt' in st.session_state:
-            with st.expander("🔍 Last Upload Attempt Results", expanded=True):
+        with st.expander("🔍 Last Upload Attempt Results", expanded=True):
+            if 'last_upload_attempt' in st.session_state:
                 attempt = st.session_state['last_upload_attempt']
                 st.json(attempt)
                 if st.button("Clear Results"):
                     del st.session_state['last_upload_attempt']
                     st.rerun()
+            else:
+                st.info("No upload attempts yet. Upload a file and log a trade to see results here.")
 
         # Debug: Show system status
         with st.expander("🔧 System Status (Debug)", expanded=False):
