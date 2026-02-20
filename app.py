@@ -1213,7 +1213,7 @@ if page == "Dashboard":
 
         st.markdown("---")
 
-        # === EQUITY CURVE (ALL ELEMENTS PRESERVED) ===
+        # === EQUITY CURVE (INTERACTIVE PLOTLY) ===
         st.markdown("### 📈 Equity Curve")
 
         # Calculate moving averages
@@ -1223,62 +1223,128 @@ if page == "Dashboard":
         if 'Nasdaq' in df_j.columns:
             df_j['NDX_21SMA'] = df_j['Nasdaq'].rolling(window=21).mean()
 
-        # Single chart (no bottom strip)
-        plt.style.use('bmh')
-        fig, ax1 = plt.subplots(1, 1, figsize=(12, 7))
+        if PLOTLY_AVAILABLE:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
 
-        # Market trend bar at top
-        if 'Nasdaq' in df_j.columns:
-            ax1.fill_between(df_j['Day'], 0.97, 1.0, transform=ax1.transAxes,
-                           where=(df_j['Nasdaq']>=df_j['NDX_21SMA']), color='green', alpha=0.4, zorder=0)
-            ax1.fill_between(df_j['Day'], 0.97, 1.0, transform=ax1.transAxes,
-                           where=(df_j['Nasdaq']<df_j['NDX_21SMA']), color='red', alpha=0.4, zorder=0)
-            ax1.text(0.5, 0.985, "MARKET TREND (COMP vs 21s)", transform=ax1.transAxes,
-                    ha='center', fontsize=8, fontweight='bold')
+            fig = go.Figure()
 
-        # Plot benchmarks
-        lbl_port = f"Portfolio ({df_j['LTD_Pct'].iloc[-1]:+.1f}%)"
-        if 'SPY_Bench' in df_j.columns:
-            lbl_spy = f"SPY ({df_j['SPY_Bench'].iloc[-1]:+.1f}%)"
-            ax1.plot(df_j['Day'], df_j['SPY_Bench'], color='gray', linestyle='-',
-                    linewidth=1.5, alpha=0.7, label=lbl_spy)
-        if 'NDX_Bench' in df_j.columns:
-            lbl_ndx = f"Nasdaq ({df_j['NDX_Bench'].iloc[-1]:+.1f}%)"
-            ax1.plot(df_j['Day'], df_j['NDX_Bench'], color='#1f77b4', linestyle='-',
-                    linewidth=1.5, alpha=0.7, label=lbl_ndx)
+            # Fill areas (portfolio vs 21 SMA)
+            # Green fill (above 21 SMA)
+            df_above = df_j[df_j['LTD_Pct'] >= df_j['EC_21SMA']].copy()
+            if not df_above.empty:
+                fig.add_trace(go.Scatter(
+                    x=df_above['Day'], y=df_above['LTD_Pct'],
+                    fill='tonexty',
+                    mode='none',
+                    fillcolor='rgba(0, 255, 0, 0.15)',
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+                fig.add_trace(go.Scatter(
+                    x=df_above['Day'], y=df_above['EC_21SMA'],
+                    mode='none',
+                    fillcolor='rgba(0, 255, 0, 0.15)',
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
 
-        # Portfolio and MAs
-        ax1.plot(df_j['Day'], df_j['LTD_Pct'], color='darkblue', linewidth=2.5, label=lbl_port)
-        ax1.plot(df_j['Day'], df_j['EC_10SMA'], color='purple', linewidth=1.2, label='10 SMA')
-        ax1.plot(df_j['Day'], df_j['EC_21SMA'], color='green', linewidth=1.2, label='21 SMA')
-        ax1.plot(df_j['Day'], df_j['EC_50SMA'], color='red', linewidth=1.2, label='50 SMA')
+            # Benchmarks
+            if 'SPY_Bench' in df_j.columns:
+                lbl_spy = f"SPY ({df_j['SPY_Bench'].iloc[-1]:+.1f}%)"
+                fig.add_trace(go.Scatter(
+                    x=df_j['Day'], y=df_j['SPY_Bench'],
+                    mode='lines',
+                    name=lbl_spy,
+                    line=dict(color='gray', width=1.5),
+                    opacity=0.7
+                ))
 
-        # Fill between portfolio and 21 SMA
-        ax1.fill_between(df_j['Day'], df_j['LTD_Pct'], df_j['EC_21SMA'],
-                        where=(df_j['LTD_Pct'] >= df_j['EC_21SMA']), interpolate=True,
-                        color='green', alpha=0.15)
-        ax1.fill_between(df_j['Day'], df_j['LTD_Pct'], df_j['EC_21SMA'],
-                        where=(df_j['LTD_Pct'] < df_j['EC_21SMA']), interpolate=True,
-                        color='red', alpha=0.15)
+            if 'NDX_Bench' in df_j.columns:
+                lbl_ndx = f"Nasdaq ({df_j['NDX_Bench'].iloc[-1]:+.1f}%)"
+                fig.add_trace(go.Scatter(
+                    x=df_j['Day'], y=df_j['NDX_Bench'],
+                    mode='lines',
+                    name=lbl_ndx,
+                    line=dict(color='#1f77b4', width=1.5),
+                    opacity=0.7
+                ))
 
-        ax1.legend(loc='upper left', frameon=True, framealpha=0.9)
-        ax1.set_title("Equity Curve (LTD)", fontsize=14, fontweight='bold')
-        ax1.set_ylabel("Return %")
+            # Moving averages
+            fig.add_trace(go.Scatter(
+                x=df_j['Day'], y=df_j['EC_50SMA'],
+                mode='lines',
+                name='50 SMA',
+                line=dict(color='red', width=1.2)
+            ))
 
-        # Right axis: Exposure
-        ax1b = ax1.twinx()
-        exp_color = '#e67e22'
-        ax1b.fill_between(df_j['Day'], df_j['% Invested'], 0, color=exp_color, alpha=0.3, label='Exposure %')
-        ax1b.plot(df_j['Day'], df_j['% Invested'], color=exp_color, linewidth=1, alpha=0.6)
-        ax1b.axhline(100, color='black', linestyle='--', linewidth=0.8, alpha=0.4)
-        ax1b.set_ylim(0, 1000)
-        ax1b.set_yticks([0, 100, 200])
-        ax1b.set_ylabel("% Exposure", color=exp_color, fontsize=9)
-        ax1b.tick_params(axis='y', labelcolor=exp_color)
-        ax1b.grid(False)
+            fig.add_trace(go.Scatter(
+                x=df_j['Day'], y=df_j['EC_21SMA'],
+                mode='lines',
+                name='21 SMA',
+                line=dict(color='green', width=1.2)
+            ))
 
-        plt.tight_layout()
-        st.pyplot(fig)
+            fig.add_trace(go.Scatter(
+                x=df_j['Day'], y=df_j['EC_10SMA'],
+                mode='lines',
+                name='10 SMA',
+                line=dict(color='purple', width=1.2)
+            ))
+
+            # Portfolio (main line - on top)
+            lbl_port = f"Portfolio ({df_j['LTD_Pct'].iloc[-1]:+.1f}%)"
+            fig.add_trace(go.Scatter(
+                x=df_j['Day'], y=df_j['LTD_Pct'],
+                mode='lines',
+                name=lbl_port,
+                line=dict(color='darkblue', width=2.5)
+            ))
+
+            # Exposure on secondary y-axis
+            fig.add_trace(go.Scatter(
+                x=df_j['Day'], y=df_j['% Invested'],
+                mode='lines',
+                name='Exposure %',
+                line=dict(color='#e67e22', width=1),
+                fill='tozeroy',
+                fillcolor='rgba(230, 126, 34, 0.3)',
+                yaxis='y2',
+                opacity=0.6
+            ))
+
+            # Layout
+            fig.update_layout(
+                xaxis_title='Date',
+                yaxis_title='Return %',
+                yaxis2=dict(
+                    title='% Exposure',
+                    overlaying='y',
+                    side='right',
+                    range=[0, 1000],
+                    tickvals=[0, 100, 200],
+                    titlefont=dict(color='#e67e22'),
+                    tickfont=dict(color='#e67e22')
+                ),
+                hovermode='x unified',
+                height=600,
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='left',
+                    x=0
+                ),
+                template='plotly_white'
+            )
+
+            # Add 100% exposure reference line
+            fig.add_hline(y=100, line_dash='dash', line_color='black',
+                         opacity=0.4, line_width=0.8, yref='y2')
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Plotly not available. Install plotly for interactive charts.")
 
 # ==============================================================================
 # PAGE 2B: DASHBOARD (LEGACY - ORIGINAL VERSION)
