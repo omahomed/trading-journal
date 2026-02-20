@@ -1592,7 +1592,7 @@ elif page == "Trading Overview":
                 <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">YTD Return</div>
                 <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{ytd_return:.2f}%</div>
                 <div style="font-size: 18px; opacity: 0.95;">
-                    ↑ {'+' if ytd_spy_delta >= 0 else ''}{ytd_spy_delta:.2f}% SPY | {'+' if ytd_nasdaq_delta >= 0 else ''}{ytd_nasdaq_delta:.2f}% NDX
+                    SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%
                 </div>
             </div>
             """, unsafe_allow_html=True)
