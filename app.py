@@ -8116,13 +8116,17 @@ elif page == "Trade Journal":
             )
 
         with col_f2:
-            # Get unique tickers
+            # Get unique tickers for hint
             all_tickers = sorted(df_s['Ticker'].unique().tolist())
-            ticker_filter = st.selectbox(
-                "Ticker",
-                ["All"] + all_tickers,
-                index=0
-            )
+            ticker_filter = st.text_input(
+                "Ticker (or leave blank for All)",
+                value="",
+                placeholder="e.g., SNDK",
+                help=f"Available: {', '.join(all_tickers)}"
+            ).strip().upper()
+            # Convert empty to "All"
+            if not ticker_filter:
+                ticker_filter = "All"
 
         with col_f3:
             sort_by = st.selectbox(
