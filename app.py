@@ -8103,25 +8103,19 @@ elif page == "Trade Journal":
     if df_s.empty:
         st.info("No trades found. Start logging trades in Trade Manager!")
     else:
-        # === STATUS FILTER (Radio Buttons) ===
-        st.markdown("### Filter Status")
-        status_filter = st.radio(
-            "Filter Status",
-            ["All", "Open", "Closed"],
-            index=0,
-            horizontal=True,
-            label_visibility="collapsed"
-        )
+        # === FILTERS ===
+        st.markdown("### 🔍 Filters")
 
-        st.markdown("---")
-
-        # === OTHER FILTERS ===
-        st.markdown("### 🔍 Additional Filters")
-
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 
         with col_f1:
+            status_filter = st.selectbox(
+                "Status",
+                ["All", "Open", "Closed"],
+                index=0
+            )
 
+        with col_f2:
             # Get unique tickers
             all_tickers = sorted(df_s['Ticker'].unique().tolist())
             ticker_filter = st.selectbox(
@@ -8130,14 +8124,14 @@ elif page == "Trade Journal":
                 index=0
             )
 
-        with col_f2:
+        with col_f3:
             sort_by = st.selectbox(
                 "Sort By",
                 ["Newest First", "Oldest First", "Best P&L", "Worst P&L", "Ticker A-Z"],
                 index=0
             )
 
-        with col_f3:
+        with col_f4:
             # Date range filter
             date_range = st.selectbox(
                 "Date Range",
