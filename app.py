@@ -8413,52 +8413,57 @@ elif page == "Trade Journal":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # === IMAGES ===
-                if R2_AVAILABLE and USE_DATABASE:
-                    images = db.get_trade_images(CURR_PORT_NAME, trade_id)
+                # === CHARTS (In Expander) ===
+                with st.expander(f"📊 Charts - {ticker}", expanded=False):
+                    if R2_AVAILABLE and USE_DATABASE:
+                        images = db.get_trade_images(CURR_PORT_NAME, trade_id)
 
-                    if images:
-                        image_types = {img['image_type']: img for img in images}
+                        if images:
+                            image_types = {img['image_type']: img for img in images}
 
-                        # Display images in columns
-                        cols = st.columns(3 if not is_open else 2)
+                            # Display images in columns
+                            cols = st.columns(3 if not is_open else 2)
 
-                        with cols[0]:
-                            if 'weekly' in image_types:
-                                img_data = image_types['weekly']
-                                st.markdown("**📊 Weekly Chart**")
-                                image_bytes = r2.download_image(img_data['image_url'])
-                                if image_bytes:
-                                    st.image(image_bytes, use_container_width=True)
-                                else:
-                                    st.info("Chart not available")
-                            else:
-                                st.info("No weekly chart")
-
-                        with cols[1]:
-                            if 'daily' in image_types:
-                                img_data = image_types['daily']
-                                st.markdown("**📈 Daily Chart**")
-                                image_bytes = r2.download_image(img_data['image_url'])
-                                if image_bytes:
-                                    st.image(image_bytes, use_container_width=True)
-                                else:
-                                    st.info("Chart not available")
-                            else:
-                                st.info("No daily chart")
-
-                        if not is_open and len(cols) > 2:
-                            with cols[2]:
-                                if 'exit' in image_types:
-                                    img_data = image_types['exit']
-                                    st.markdown("**🎯 Exit Chart**")
+                            with cols[0]:
+                                if 'weekly' in image_types:
+                                    img_data = image_types['weekly']
+                                    st.markdown("**📊 Weekly Chart**")
                                     image_bytes = r2.download_image(img_data['image_url'])
                                     if image_bytes:
                                         st.image(image_bytes, use_container_width=True)
                                     else:
                                         st.info("Chart not available")
                                 else:
-                                    st.info("No exit chart")
+                                    st.info("No weekly chart")
+
+                            with cols[1]:
+                                if 'daily' in image_types:
+                                    img_data = image_types['daily']
+                                    st.markdown("**📈 Daily Chart**")
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                    else:
+                                        st.info("Chart not available")
+                                else:
+                                    st.info("No daily chart")
+
+                            if not is_open and len(cols) > 2:
+                                with cols[2]:
+                                    if 'exit' in image_types:
+                                        img_data = image_types['exit']
+                                        st.markdown("**🎯 Exit Chart**")
+                                        image_bytes = r2.download_image(img_data['image_url'])
+                                        if image_bytes:
+                                            st.image(image_bytes, use_container_width=True)
+                                        else:
+                                            st.info("Chart not available")
+                                    else:
+                                        st.info("No exit chart")
+                        else:
+                            st.info("No charts available for this trade")
+                    else:
+                        st.info("Chart display requires R2 storage and database connection")
 
                 # === TRANSACTION DETAILS & NOTES (Using Active Campaign Detailed Logic) ===
                 with st.expander(f"📊 Transaction Details & Notes - {ticker}"):
