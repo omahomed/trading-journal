@@ -1453,13 +1453,13 @@ elif page == "Trading Overview":
 
         if not df_summary.empty:
             closed_trades = df_summary[df_summary['Status'].str.lower() == 'closed'].copy()
-            total_trades = len(closed_trades)
+            closed_trades_count = len(closed_trades)
 
-            if total_trades > 0:
+            if closed_trades_count > 0:
                 closed_trades['Realized_PL'] = closed_trades['Realized_PL'].apply(clean_num_local)
                 wins = len(closed_trades[closed_trades['Realized_PL'] > 0])
-                losses = total_trades - wins
-                win_rate = (wins / total_trades) * 100
+                losses = closed_trades_count - wins
+                win_rate = (wins / closed_trades_count) * 100
 
                 # Profit Factor
                 total_wins = closed_trades[closed_trades['Realized_PL'] > 0]['Realized_PL'].sum()
@@ -1490,6 +1490,9 @@ elif page == "Trading Overview":
 
             # Count active trades
             active_trades = len(df_summary[df_summary['Status'].str.lower().isin(['active', 'open'])])
+
+            # Total trades = closed + active
+            total_trades = closed_trades_count + active_trades
 
         # Max Drawdown from equity curve
         if not df_journal.empty and 'Equity_Curve' in df_journal.columns:
