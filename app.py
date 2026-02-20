@@ -1323,6 +1323,60 @@ elif page == "Trading Overview":
     st.title("📊 TRADING OVERVIEW")
     st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
 
+    # === DATE FILTER ===
+    st.markdown("### 📅 Date Range Filter")
+
+    col_filter1, col_filter2, col_filter3 = st.columns([2, 2, 1])
+
+    today = get_current_date_ct()
+
+    with col_filter1:
+        # Preset date ranges
+        date_preset = st.selectbox(
+            "Quick Select",
+            ["All Time", "Today", "This Week", "This Month", "Last 30 Days", "Last Month", "This Quarter", "YTD", "Custom Range"],
+            index=0
+        )
+
+    # Calculate date range based on preset
+    if date_preset == "Today":
+        start_date = today
+        end_date = today
+    elif date_preset == "This Week":
+        start_date = today - timedelta(days=today.weekday())
+        end_date = today
+    elif date_preset == "This Month":
+        start_date = today.replace(day=1)
+        end_date = today
+    elif date_preset == "Last 30 Days":
+        start_date = today - timedelta(days=30)
+        end_date = today
+    elif date_preset == "Last Month":
+        first_this_month = today.replace(day=1)
+        end_date = first_this_month - timedelta(days=1)
+        start_date = end_date.replace(day=1)
+    elif date_preset == "This Quarter":
+        quarter = (today.month - 1) // 3
+        start_date = datetime(today.year, quarter * 3 + 1, 1).date()
+        end_date = today
+    elif date_preset == "YTD":
+        start_date = datetime(today.year, 1, 1).date()
+        end_date = today
+    elif date_preset == "Custom Range":
+        with col_filter2:
+            start_date = st.date_input("Start Date", value=today - timedelta(days=90))
+        with col_filter3:
+            end_date = st.date_input("End Date", value=today)
+    else:  # All Time
+        start_date = None
+        end_date = None
+
+    if date_preset != "Custom Range" and date_preset != "All Time":
+        with col_filter2:
+            st.info(f"📆 {start_date.strftime('%b %d, %Y')} → {end_date.strftime('%b %d, %Y')}")
+
+    st.markdown("---")
+
     # === LOAD DATA ===
     df_summary = load_data(SUMMARY_FILE)
     df_journal = load_data(JOURNAL_FILE)
@@ -1340,22 +1394,38 @@ elif page == "Trading Overview":
             except: return 0.0
 
         # === PREPARE JOURNAL DATA ===
+        df_journal_full = df_journal.copy()  # Keep full dataset for reference
+
         if not df_journal.empty:
             df_journal['Day'] = pd.to_datetime(df_journal['Day'], errors='coerce')
             df_journal = df_journal.sort_values('Day')
 
             # Clean numeric columns
-            for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change']:
+            for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq']:
                 if c in df_journal.columns:
                     df_journal[c] = df_journal[c].apply(clean_num_local)
 
-            # Calculate cash-flow-adjusted equity curve
+            # Calculate cash-flow-adjusted equity curve on FULL dataset first
             df_journal['Adjusted_Beg'] = df_journal['Beg NLV'] + df_journal['Cash -/+']
             df_journal['Daily_Pct'] = 0.0
             mask = df_journal['Adjusted_Beg'] != 0
             df_journal.loc[mask, 'Daily_Pct'] = (df_journal.loc[mask, 'End NLV'] - df_journal.loc[mask, 'Adjusted_Beg']) / df_journal.loc[mask, 'Adjusted_Beg']
             df_journal['Equity_Curve'] = (1 + df_journal['Daily_Pct']).cumprod()
             df_journal['LTD_Pct'] = (df_journal['Equity_Curve'] - 1) * 100
+
+            # FILTER BY DATE RANGE (if not "All Time")
+            if start_date is not None and end_date is not None:
+                df_journal = df_journal[(df_journal['Day'].dt.date >= start_date) & (df_journal['Day'].dt.date <= end_date)]
+
+        # === FILTER SUMMARY DATA BY DATE RANGE ===
+        if not df_summary.empty and start_date is not None and end_date is not None:
+            if 'Closed_Date' in df_summary.columns:
+                df_summary['Closed_Date'] = pd.to_datetime(df_summary['Closed_Date'], errors='coerce')
+                # Show closed trades in range OR currently open trades
+                df_summary = df_summary[
+                    ((df_summary['Closed_Date'].dt.date >= start_date) & (df_summary['Closed_Date'].dt.date <= end_date)) |
+                    (df_summary['Status'].str.lower().isin(['active', 'open']))
+                ]
         # === 1. CALCULATE ALL METRICS ===
         # Journal metrics
         current_nlv = 0
@@ -1426,8 +1496,109 @@ elif page == "Trading Overview":
             drawdown = (df_journal['Equity_Curve'] - running_max) / running_max
             max_drawdown = drawdown.min() * 100  # Convert to percentage
 
+        # YTD Return with SPY comparison
+        ytd_return = 0
+        ytd_spy_delta = 0
+        if not df_journal_full.empty:
+            df_journal_full['Day'] = pd.to_datetime(df_journal_full['Day'], errors='coerce')
+            curr_year = datetime.now().year
+            df_ytd = df_journal_full[df_journal_full['Day'].dt.year == curr_year].copy()
+
+            if not df_ytd.empty and 'Daily_Pct' in df_ytd.columns:
+                ytd_return = ((1 + df_ytd['Daily_Pct']).prod() - 1) * 100
+
+                # SPY comparison
+                if 'SPY' in df_journal_full.columns:
+                    prior_year_data = df_journal_full[(df_journal_full['Day'].dt.year < curr_year) & (df_journal_full['SPY'] > 0)]
+                    if not prior_year_data.empty:
+                        start_spy = prior_year_data['SPY'].iloc[-1]
+                    elif not df_ytd.empty and not df_ytd['SPY'].eq(0).all():
+                        start_spy = df_ytd.loc[df_ytd['SPY'] > 0, 'SPY'].iloc[0]
+                    else:
+                        start_spy = 0.0
+                    curr_spy = df_journal_full['SPY'].iloc[-1]
+                    if start_spy > 0:
+                        ytd_spy = ((curr_spy / start_spy) - 1) * 100
+                        ytd_spy_delta = ytd_return - ytd_spy
+
+        # Live Exposure (from current positions)
+        live_exposure_pct = 0
+        num_positions = 0
+        risk_pct = 0
+        if not df_summary.empty and current_nlv > 0:
+            df_open = df_summary[df_summary['Status'].str.lower().isin(['active', 'open'])].copy()
+            if not df_open.empty:
+                num_positions = len(df_open)
+
+                # Get live prices
+                try:
+                    tickers = df_open['Ticker'].unique().tolist()
+                    live_batch = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+
+                    def get_live_price(r):
+                        try:
+                            if len(tickers) == 1:
+                                val = float(live_batch) if not pd.isna(live_batch) else float(r.get('Avg_Entry', 0))
+                                return val
+                            else:
+                                val = live_batch.get(r['Ticker'])
+                                return float(val) if not pd.isna(val) else float(r.get('Avg_Entry', 0))
+                        except:
+                            return float(r.get('Avg_Entry', 0))
+
+                    df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
+                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open.get('Shares', 0)
+                    live_exposure_pct = (df_open['Mkt_Val'].sum() / current_nlv) * 100
+
+                    # Calculate risk if stop loss data available
+                    if not df_details.empty:
+                        def get_true_stop(trade_id):
+                            txs = df_details[df_details['Trade_ID'] == trade_id]
+                            if txs.empty: return 0.0
+                            if 'Date' in txs.columns:
+                                txs['Date'] = pd.to_datetime(txs['Date'], errors='coerce')
+                                txs = txs.sort_values('Date')
+                            valid_stops = txs['Stop_Loss'].dropna()
+                            valid_stops = valid_stops[valid_stops > 0.01]
+                            if not valid_stops.empty: return float(valid_stops.iloc[-1])
+                            return 0.0
+
+                        df_open['Stop_Loss'] = df_open['Trade_ID'].apply(get_true_stop)
+                        df_open['R_Dol'] = (df_open['Cur_Px'] - df_open['Stop_Loss']) * df_open.get('Shares', 0)
+                        risk_dol = df_open[df_open['R_Dol'] > 0]['R_Dol'].sum()
+                        risk_pct = (risk_dol / current_nlv) * 100
+                except:
+                    pass
+
         # === 2. DISPLAY METRICS CARDS ===
         st.markdown("### 📊 Performance Snapshot")
+
+        # Row 0: Featured metrics (YTD & Live Exposure)
+        col_ytd, col_live = st.columns(2)
+
+        with col_ytd:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); padding: 25px; border-radius: 12px; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">YTD Return</div>
+                <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{ytd_return:.2f}%</div>
+                <div style="font-size: 18px; opacity: 0.95;">
+                    ↑ {'+' if ytd_spy_delta >= 0 else ''}{ytd_spy_delta:.2f}% SPY
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_live:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%); padding: 25px; border-radius: 12px; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">Live Exposure</div>
+                <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{live_exposure_pct:.1f}%</div>
+                <div style="font-size: 18px; opacity: 0.95;">
+                    ↑ {num_positions}/12 Pos | Risk: {risk_pct:.2f}%
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<div style='margin: 15px 0;'></div>", unsafe_allow_html=True)
 
         # Row 1: Primary metrics
         col1, col2, col3, col4 = st.columns(4)
