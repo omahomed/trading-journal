@@ -1316,6 +1316,266 @@ if page == "Dashboard":
         else: st.info("Data loaded but empty rows.")
 
 # ==============================================================================
+# PAGE 2: DASHBOARD - TRADING OVERVIEW
+# ==============================================================================
+elif page == "Dashboard":
+    st.title("📊 TRADING DASHBOARD")
+    st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
+
+    # === LOAD DATA ===
+    df_summary = load_data(SUMMARY_FILE)
+    df_journal = load_data(JOURNAL_FILE)
+    df_details = load_data(DETAILS_FILE)
+
+    if df_summary.empty and df_journal.empty:
+        st.warning("No trading data found. Start logging trades in Trade Manager.")
+    else:
+        # === 1. KEY METRICS CARDS ===
+        st.markdown("### 📈 Performance Snapshot")
+
+        # Calculate key metrics
+        current_nlv = 0
+        daily_change = 0
+        daily_pct = 0
+
+        if not df_journal.empty:
+            df_journal['Day'] = pd.to_datetime(df_journal['Day'], errors='coerce')
+            df_journal = df_journal.sort_values('Day', ascending=False)
+
+            # Get most recent day
+            if 'End NLV' in df_journal.columns:
+                latest = df_journal.iloc[0]
+                current_nlv = clean_num(latest.get('End NLV', 0))
+                daily_change = clean_num(latest.get('Daily $ Change', 0))
+                if current_nlv > 0:
+                    daily_pct = (daily_change / current_nlv) * 100
+
+        # Calculate win rate and active trades
+        win_rate = 0
+        total_trades = 0
+        wins = 0
+        active_trades = 0
+
+        if not df_summary.empty:
+            closed_trades = df_summary[df_summary['Status'].str.lower() == 'closed']
+            total_trades = len(closed_trades)
+            if total_trades > 0:
+                wins = len(closed_trades[closed_trades['P&L'] > 0])
+                win_rate = (wins / total_trades) * 100
+
+            # Count active trades
+            active_trades = len(df_summary[df_summary['Status'].str.lower().isin(['active', 'open'])])
+
+        # Get market status from M Factor
+        market_status = "UNKNOWN"
+        market_color = "#999"
+        market_exposure = "N/A"
+
+        try:
+            # Simplified market state check (using yfinance)
+            import yfinance as yf
+            nasdaq_data = yf.download("^IXIC", period="60d", progress=False)
+            spy_data = yf.download("SPY", period="60d", progress=False)
+
+            if not nasdaq_data.empty and not spy_data.empty:
+                # Simple check: both above 21 EMA = OPEN, both below 50 SMA = CLOSED
+                nasdaq_data['21EMA'] = nasdaq_data['Close'].ewm(span=21, adjust=False).mean()
+                nasdaq_data['50SMA'] = nasdaq_data['Close'].rolling(50).mean()
+                spy_data['21EMA'] = spy_data['Close'].ewm(span=21, adjust=False).mean()
+                spy_data['50SMA'] = spy_data['Close'].rolling(50).mean()
+
+                nasdaq_above_21 = nasdaq_data['Close'].iloc[-1] > nasdaq_data['21EMA'].iloc[-1]
+                spy_above_21 = spy_data['Close'].iloc[-1] > spy_data['21EMA'].iloc[-1]
+                nasdaq_above_50 = nasdaq_data['Close'].iloc[-1] > nasdaq_data['50SMA'].iloc[-1]
+                spy_above_50 = spy_data['Close'].iloc[-1] > spy_data['50SMA'].iloc[-1]
+
+                if nasdaq_above_21 and spy_above_21:
+                    market_status = "OPEN"
+                    market_color = "#2ca02c"
+                    market_exposure = "100%"
+                elif (not nasdaq_above_50) and (not spy_above_50):
+                    market_status = "CLOSED"
+                    market_color = "#ff4b4b"
+                    market_exposure = "0%"
+                else:
+                    market_status = "NEUTRAL"
+                    market_color = "#ffcc00"
+                    market_exposure = "50%"
+        except:
+            pass
+
+        # Display metrics cards
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Account Value</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">${current_nlv:,.0f}</div>
+                <div style="font-size: 16px; color: {'#90EE90' if daily_change >= 0 else '#ffcccb'};">
+                    {'+' if daily_change >= 0 else ''}{daily_change:,.0f} ({'+' if daily_pct >= 0 else ''}{daily_pct:.2f}%)
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Win Rate</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{win_rate:.1f}%</div>
+                <div style="font-size: 16px;">{wins}W / {total_trades - wins}L ({total_trades} total)</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col3:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Active Trades</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{active_trades}</div>
+                <div style="font-size: 16px;">Open Positions</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col4:
+            st.markdown(f"""
+            <div style="background: {market_color}; padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Market Status</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{market_status}</div>
+                <div style="font-size: 16px;">Exposure: {market_exposure}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # === 2. EQUITY CURVE ===
+        st.markdown("### 📈 Equity Curve")
+
+        if not df_journal.empty and 'End NLV' in df_journal.columns:
+            df_eq = df_journal[['Day', 'End NLV']].copy()
+            df_eq = df_eq.sort_values('Day')
+            df_eq['End NLV'] = pd.to_numeric(df_eq['End NLV'], errors='coerce')
+
+            if PLOTLY_AVAILABLE:
+                import plotly.graph_objects as go
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=df_eq['Day'],
+                    y=df_eq['End NLV'],
+                    mode='lines',
+                    fill='tozeroy',
+                    line=dict(color='#667eea', width=3),
+                    fillcolor='rgba(102, 126, 234, 0.2)',
+                    name='Account Value'
+                ))
+                fig.update_layout(
+                    title='Account Value Over Time',
+                    xaxis_title='Date',
+                    yaxis_title='Account Value ($)',
+                    hovermode='x unified',
+                    height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                fig, ax = plt.subplots(figsize=(12, 4))
+                ax.plot(df_eq['Day'], df_eq['End NLV'], linewidth=2, color='#667eea')
+                ax.fill_between(df_eq['Day'], df_eq['End NLV'], alpha=0.3, color='#667eea')
+                ax.set_title('Account Value Over Time', fontsize=14, fontweight='bold')
+                ax.set_xlabel('Date')
+                ax.set_ylabel('Account Value ($)')
+                ax.yaxis.set_major_formatter(mtick.StrMethodFormatter('${x:,.0f}'))
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                st.pyplot(fig)
+        else:
+            st.info("No equity curve data available")
+
+        st.markdown("---")
+
+        # === 3. RECENT TRADES ===
+        st.markdown("### 🎯 Recent Trades")
+
+        if not df_summary.empty:
+            # Get recent trades (last 10)
+            df_recent = df_summary.sort_values('Trade_ID', ascending=False).head(10)
+
+            for idx, trade in df_recent.iterrows():
+                trade_id = trade.get('Trade_ID', 'N/A')
+                ticker = trade.get('Ticker', 'N/A')
+                status = trade.get('Status', 'N/A')
+                pnl = clean_num(trade.get('P&L', 0))
+                r_mult = clean_num(trade.get('R', 0))
+                entry_date = trade.get('Entry_Date', 'N/A')
+                exit_date = trade.get('Exit_Date', 'N/A')
+
+                # Color coding
+                if status.lower() == 'closed':
+                    status_color = "#2ca02c" if pnl > 0 else "#ff4b4b"
+                    status_emoji = "✅" if pnl > 0 else "❌"
+                else:
+                    status_color = "#4facfe"
+                    status_emoji = "🔵"
+
+                col_info, col_image = st.columns([3, 1])
+
+                with col_info:
+                    st.markdown(f"""
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 5px solid {status_color}; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <span style="font-size: 18px; font-weight: 700;">{status_emoji} {ticker}</span>
+                                <span style="font-size: 14px; color: #666; margin-left: 10px;">{trade_id}</span>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 20px; font-weight: 700; color: {status_color};">
+                                    ${pnl:,.2f}
+                                </div>
+                                <div style="font-size: 14px; color: #666;">
+                                    {r_mult:.2f}R
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 13px; color: #666;">
+                            Entry: {entry_date} {f'• Exit: {exit_date}' if status.lower() == 'closed' else '• Active'}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col_image:
+                    # Try to load trade image if available
+                    if R2_AVAILABLE and USE_DATABASE:
+                        try:
+                            images = db.get_trade_images(CURR_PORT_NAME, trade_id)
+                            if images:
+                                # Show first available image (weekly, daily, or exit)
+                                for img_type in ['weekly', 'daily', 'exit']:
+                                    matching = [img for img in images if img['image_type'] == img_type]
+                                    if matching:
+                                        image_data = matching[0]
+                                        image_bytes = r2.download_image(image_data['image_url'])
+                                        if image_bytes:
+                                            st.image(image_bytes, use_container_width=True)
+                                            break
+                        except:
+                            pass
+        else:
+            st.info("No trades found")
+
+        # === 4. QUICK LINKS ===
+        st.markdown("---")
+        st.markdown("### ⚡ Quick Actions")
+
+        col_a, col_b, col_c, col_d = st.columns(4)
+        with col_a:
+            st.markdown("**[Trade Manager](#)** 📝\n\nLog new trades or update existing positions")
+        with col_b:
+            st.markdown("**[M Factor](#)** 🎯\n\nCheck current market conditions")
+        with col_c:
+            st.markdown("**[Analytics](#)** 📊\n\nDeep dive into performance metrics")
+        with col_d:
+            st.markdown("**[Daily Journal](#)** 📔\n\nReview daily trading logs")
+
+# ==============================================================================
 # PAGE 3: DAILY JOURNAL (CLEAN & FINAL)
 # ==============================================================================
 elif page == "Daily Journal":
