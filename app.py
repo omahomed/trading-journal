@@ -1394,8 +1394,6 @@ elif page == "Trading Overview":
             except: return 0.0
 
         # === PREPARE JOURNAL DATA ===
-        df_journal_full = df_journal.copy()  # Keep full dataset for reference
-
         if not df_journal.empty:
             df_journal['Day'] = pd.to_datetime(df_journal['Day'], errors='coerce')
             df_journal = df_journal.sort_values('Day')
@@ -1413,9 +1411,12 @@ elif page == "Trading Overview":
             df_journal['Equity_Curve'] = (1 + df_journal['Daily_Pct']).cumprod()
             df_journal['LTD_Pct'] = (df_journal['Equity_Curve'] - 1) * 100
 
-            # FILTER BY DATE RANGE (if not "All Time")
-            if start_date is not None and end_date is not None:
-                df_journal = df_journal[(df_journal['Day'].dt.date >= start_date) & (df_journal['Day'].dt.date <= end_date)]
+        # Keep full dataset for YTD calculation AFTER processing
+        df_journal_full = df_journal.copy()
+
+        # FILTER BY DATE RANGE (if not "All Time")
+        if not df_journal.empty and start_date is not None and end_date is not None:
+            df_journal = df_journal[(df_journal['Day'].dt.date >= start_date) & (df_journal['Day'].dt.date <= end_date)]
 
         # === FILTER SUMMARY DATA BY DATE RANGE ===
         if not df_summary.empty and start_date is not None and end_date is not None:
@@ -1496,15 +1497,18 @@ elif page == "Trading Overview":
             drawdown = (df_journal['Equity_Curve'] - running_max) / running_max
             max_drawdown = drawdown.min() * 100  # Convert to percentage
 
-        # YTD Return with SPY comparison
+        # YTD Return with SPY and Nasdaq comparison
         ytd_return = 0
         ytd_spy_delta = 0
-        if not df_journal_full.empty:
-            df_journal_full['Day'] = pd.to_datetime(df_journal_full['Day'], errors='coerce')
+        ytd_nasdaq_delta = 0
+        spy_ytd = 0
+        nasdaq_ytd = 0
+
+        if not df_journal_full.empty and 'Daily_Pct' in df_journal_full.columns:
             curr_year = datetime.now().year
             df_ytd = df_journal_full[df_journal_full['Day'].dt.year == curr_year].copy()
 
-            if not df_ytd.empty and 'Daily_Pct' in df_ytd.columns:
+            if not df_ytd.empty:
                 ytd_return = ((1 + df_ytd['Daily_Pct']).prod() - 1) * 100
 
                 # SPY comparison
@@ -1518,8 +1522,22 @@ elif page == "Trading Overview":
                         start_spy = 0.0
                     curr_spy = df_journal_full['SPY'].iloc[-1]
                     if start_spy > 0:
-                        ytd_spy = ((curr_spy / start_spy) - 1) * 100
-                        ytd_spy_delta = ytd_return - ytd_spy
+                        spy_ytd = ((curr_spy / start_spy) - 1) * 100
+                        ytd_spy_delta = ytd_return - spy_ytd
+
+                # Nasdaq comparison
+                if 'Nasdaq' in df_journal_full.columns:
+                    prior_year_data_ndx = df_journal_full[(df_journal_full['Day'].dt.year < curr_year) & (df_journal_full['Nasdaq'] > 0)]
+                    if not prior_year_data_ndx.empty:
+                        start_nasdaq = prior_year_data_ndx['Nasdaq'].iloc[-1]
+                    elif not df_ytd.empty and not df_ytd['Nasdaq'].eq(0).all():
+                        start_nasdaq = df_ytd.loc[df_ytd['Nasdaq'] > 0, 'Nasdaq'].iloc[0]
+                    else:
+                        start_nasdaq = 0.0
+                    curr_nasdaq = df_journal_full['Nasdaq'].iloc[-1]
+                    if start_nasdaq > 0:
+                        nasdaq_ytd = ((curr_nasdaq / start_nasdaq) - 1) * 100
+                        ytd_nasdaq_delta = ytd_return - nasdaq_ytd
 
         # Live Exposure (from current positions)
         live_exposure_pct = 0
@@ -1582,7 +1600,7 @@ elif page == "Trading Overview":
                 <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">YTD Return</div>
                 <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{ytd_return:.2f}%</div>
                 <div style="font-size: 18px; opacity: 0.95;">
-                    ↑ {'+' if ytd_spy_delta >= 0 else ''}{ytd_spy_delta:.2f}% SPY
+                    ↑ {'+' if ytd_spy_delta >= 0 else ''}{ytd_spy_delta:.2f}% SPY | {'+' if ytd_nasdaq_delta >= 0 else ''}{ytd_nasdaq_delta:.2f}% NDX
                 </div>
             </div>
             """, unsafe_allow_html=True)
