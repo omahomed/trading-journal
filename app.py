@@ -8209,36 +8209,93 @@ elif page == "Trade Journal":
                 # Calculate metrics
                 is_open = status.upper() == 'OPEN'
 
-                # P&L and Return
-                if is_open:
-                    pl = trade.get('Unrealized_PL', 0)
-                    pl_label = "Unrealized P&L"
-                else:
-                    pl = trade.get('Realized_PL', 0)
-                    pl_label = "Realized P&L"
-
-                try:
-                    pl_val = float(str(pl).replace('$', '').replace(',', ''))
-                except:
-                    pl_val = 0.0
-
-                # Return %
+                # Get avg entry/exit first
                 avg_entry = trade.get('Avg_Entry', 0)
                 avg_exit = trade.get('Avg_Exit', 0)
 
                 try:
                     avg_entry_val = float(str(avg_entry).replace('$', '').replace(',', ''))
-                    if is_open:
-                        # For open trades, we'd need current price - use what we have
-                        return_pct = 0.0  # Could enhance with live price
-                    else:
-                        avg_exit_val = float(str(avg_exit).replace('$', '').replace(',', ''))
-                        if avg_entry_val > 0:
-                            return_pct = ((avg_exit_val - avg_entry_val) / avg_entry_val) * 100
-                        else:
-                            return_pct = 0.0
+                    avg_exit_val = float(str(avg_exit).replace('$', '').replace(',', ''))
                 except:
-                    return_pct = 0.0
+                    avg_entry_val = 0.0
+                    avg_exit_val = 0.0
+
+                # === Calculate LIFO-based P&L for OPEN trades (use live price) ===
+                if is_open:
+                    # Run LIFO engine to get accurate unrealized P&L
+                    target_df = df_d[df_d['Trade_ID'] == trade_id].copy()
+
+                    if not target_df.empty:
+                        # Sort transactions
+                        target_df['Type_Rank'] = target_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+                        if 'Date' in target_df.columns:
+                            target_df['Date'] = pd.to_datetime(target_df['Date'], errors='coerce')
+                            target_df = target_df.sort_values(['Date', 'Type_Rank'])
+
+                        # LIFO engine
+                        inventory = []
+                        fd_realized_pl = 0.0
+                        fd_remaining_shares = 0.0
+                        fd_cost_basis_sum = 0.0
+
+                        for tidx, row in target_df.iterrows():
+                            if row['Action'] == 'BUY':
+                                p = float(row.get('Amount', row.get('Price', 0.0)))
+                                inventory.append({'idx': tidx, 'qty': row['Shares'], 'price': p})
+
+                            elif row['Action'] == 'SELL':
+                                to_sell = row['Shares']
+                                sell_price = float(row.get('Amount', row.get('Price', 0.0)))
+                                cost_basis_accum = 0.0
+                                sold_qty_accum = 0.0
+
+                                while to_sell > 0 and inventory:
+                                    last = inventory[-1]
+                                    take = min(to_sell, last['qty'])
+                                    cost_basis_accum += (take * last['price'])
+                                    sold_qty_accum += take
+                                    last['qty'] -= take
+                                    to_sell -= take
+                                    if last['qty'] < 0.00001:
+                                        inventory.pop()
+
+                                revenue = sold_qty_accum * sell_price
+                                true_pl = revenue - cost_basis_accum
+                                fd_realized_pl += true_pl
+
+                        for item in inventory:
+                            fd_remaining_shares += item['qty']
+                            fd_cost_basis_sum += (item['qty'] * item['price'])
+
+                        # Get live price
+                        try:
+                            live_px = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
+                        except:
+                            live_px = avg_entry_val
+
+                        # Calculate unrealized P&L with live price
+                        mkt_val = fd_remaining_shares * live_px
+                        pl_val = mkt_val - fd_cost_basis_sum
+                        return_pct = (pl_val / fd_cost_basis_sum * 100) if fd_cost_basis_sum > 0 else 0.0
+                        pl_label = "Unrealized P&L"
+                    else:
+                        # Fallback if no detail data
+                        pl_val = 0.0
+                        return_pct = 0.0
+                        pl_label = "Unrealized P&L"
+                else:
+                    # For closed trades, use summary data
+                    pl = trade.get('Realized_PL', 0)
+                    pl_label = "Realized P&L"
+                    try:
+                        pl_val = float(str(pl).replace('$', '').replace(',', ''))
+                    except:
+                        pl_val = 0.0
+
+                    if avg_entry_val > 0:
+                        return_pct = ((avg_exit_val - avg_entry_val) / avg_entry_val) * 100
+                    else:
+                        return_pct = 0.0
 
                 # Days held
                 open_date = trade.get('Open_Date')
