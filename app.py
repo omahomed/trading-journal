@@ -8091,6 +8091,12 @@ elif page == "Trade Journal":
     st.header("📔 Trade Journal")
     st.caption("Visual review of all your trades with embedded charts")
 
+    # Clear search state to force fresh search each time page is visited
+    if 'last_visited_page' not in st.session_state or st.session_state.last_visited_page != 'Trade Journal':
+        if 'journal_searched' in st.session_state:
+            del st.session_state.journal_searched
+    st.session_state.last_visited_page = 'Trade Journal'
+
     # Load data
     if not os.path.exists(DETAILS_FILE):
         pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
