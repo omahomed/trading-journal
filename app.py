@@ -1511,33 +1511,25 @@ elif page == "Trading Overview":
             if not df_ytd.empty:
                 ytd_return = ((1 + df_ytd['Daily_Pct']).prod() - 1) * 100
 
-                # SPY comparison
-                if 'SPY' in df_journal_full.columns:
-                    prior_year_data = df_journal_full[(df_journal_full['Day'].dt.year < curr_year) & (df_journal_full['SPY'] > 0)]
-                    if not prior_year_data.empty:
-                        start_spy = prior_year_data['SPY'].iloc[-1]
-                    elif not df_ytd.empty and not df_ytd['SPY'].eq(0).all():
-                        start_spy = df_ytd.loc[df_ytd['SPY'] > 0, 'SPY'].iloc[0]
-                    else:
-                        start_spy = 0.0
-                    curr_spy = df_journal_full['SPY'].iloc[-1]
-                    if start_spy > 0:
-                        spy_ytd = ((curr_spy / start_spy) - 1) * 100
-                        ytd_spy_delta = ytd_return - spy_ytd
+                # SPY YTD Return (use YTD data only)
+                if 'SPY' in df_ytd.columns and not df_ytd['SPY'].eq(0).all():
+                    spy_data = df_ytd[df_ytd['SPY'] > 0]
+                    if not spy_data.empty:
+                        start_spy = spy_data['SPY'].iloc[0]  # First SPY value of the year
+                        curr_spy = spy_data['SPY'].iloc[-1]  # Latest SPY value of the year
+                        if start_spy > 0:
+                            spy_ytd = ((curr_spy / start_spy) - 1) * 100
+                            ytd_spy_delta = ytd_return - spy_ytd
 
-                # Nasdaq comparison
-                if 'Nasdaq' in df_journal_full.columns:
-                    prior_year_data_ndx = df_journal_full[(df_journal_full['Day'].dt.year < curr_year) & (df_journal_full['Nasdaq'] > 0)]
-                    if not prior_year_data_ndx.empty:
-                        start_nasdaq = prior_year_data_ndx['Nasdaq'].iloc[-1]
-                    elif not df_ytd.empty and not df_ytd['Nasdaq'].eq(0).all():
-                        start_nasdaq = df_ytd.loc[df_ytd['Nasdaq'] > 0, 'Nasdaq'].iloc[0]
-                    else:
-                        start_nasdaq = 0.0
-                    curr_nasdaq = df_journal_full['Nasdaq'].iloc[-1]
-                    if start_nasdaq > 0:
-                        nasdaq_ytd = ((curr_nasdaq / start_nasdaq) - 1) * 100
-                        ytd_nasdaq_delta = ytd_return - nasdaq_ytd
+                # Nasdaq YTD Return (use YTD data only)
+                if 'Nasdaq' in df_ytd.columns and not df_ytd['Nasdaq'].eq(0).all():
+                    nasdaq_data = df_ytd[df_ytd['Nasdaq'] > 0]
+                    if not nasdaq_data.empty:
+                        start_nasdaq = nasdaq_data['Nasdaq'].iloc[0]  # First Nasdaq value of the year
+                        curr_nasdaq = nasdaq_data['Nasdaq'].iloc[-1]  # Latest Nasdaq value of the year
+                        if start_nasdaq > 0:
+                            nasdaq_ytd = ((curr_nasdaq / start_nasdaq) - 1) * 100
+                            ytd_nasdaq_delta = ytd_return - nasdaq_ytd
 
         # Live Exposure (from current positions)
         live_exposure_pct = 0
@@ -1663,7 +1655,7 @@ elif page == "Trading Overview":
         st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
 
         # Row 2: Secondary metrics
-        col5, col6, col7, col8 = st.columns(4)
+        col5, col6, col7 = st.columns(3)
 
         with col5:
             streak_color = "#2ca02c" if streak_type == "Win" else "#ff4b4b"
@@ -1690,15 +1682,6 @@ elif page == "Trading Overview":
                 <div style="font-size: 14px; opacity: 0.9;">Max Drawdown</div>
                 <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{max_drawdown:.1f}%</div>
                 <div style="font-size: 16px;">Peak to Trough</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        with col8:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9; color: #333;">Open Positions</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0; color: #333;">{active_trades}</div>
-                <div style="font-size: 16px; color: #555;">Active Now</div>
             </div>
             """, unsafe_allow_html=True)
 
