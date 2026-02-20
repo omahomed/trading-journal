@@ -8380,88 +8380,185 @@ elif page == "Trade Journal":
                                 else:
                                     st.info("No exit chart")
 
-                # === TRANSACTION DETAILS & NOTES ===
+                # === TRANSACTION DETAILS & NOTES (Using Active Campaign Detailed Logic) ===
                 with st.expander(f"📊 Transaction Details & Notes - {ticker}"):
                     # Get all transactions for this trade
-                    trade_txns = df_d[df_d['Trade_ID'] == trade_id].copy()
+                    target_df = df_d[df_d['Trade_ID'] == trade_id].copy()
 
-                    if not trade_txns.empty:
-                        # === FLIGHT DECK METRICS ===
-                        st.markdown("### 🚀 Flight Deck")
+                    if not target_df.empty:
+                        # === RUN LIFO ENGINE (Same as Active Campaign Detailed) ===
+                        target_df['Type_Rank'] = target_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+                        if 'Date' in target_df.columns:
+                            target_df['Date'] = pd.to_datetime(target_df['Date'], errors='coerce')
+                            target_df = target_df.sort_values(['Date', 'Type_Rank'])
 
-                        # Calculate metrics like Active Campaign Detailed
-                        if 'Date' in trade_txns.columns:
-                            trade_txns['Date'] = pd.to_datetime(trade_txns['Date'], errors='coerce')
-                            trade_txns = trade_txns.sort_values('Date')
+                        remaining_map = {}
+                        lifo_pl_map = {}
+                        inventory = []
+                        fd_realized_pl = 0.0
+                        fd_remaining_shares = 0.0
+                        fd_cost_basis_sum = 0.0
 
-                        # Get current/last price
-                        shares_held = float(trade.get('Shares', 0))
-                        avg_entry_price = avg_entry_val
+                        for idx, row in target_df.iterrows():
+                            if row['Action'] == 'BUY':
+                                p = float(row.get('Amount', row.get('Price', 0.0)))
+                                inventory.append({'idx': idx, 'qty': row['Shares'], 'price': p})
+                                remaining_map[idx] = row['Shares']
 
-                        if is_open:
-                            # For open trades, try to get current price (could enhance with live price later)
-                            current_price = avg_entry_val  # Placeholder - could fetch live
-                        else:
-                            current_price = avg_exit_val
+                            elif row['Action'] == 'SELL':
+                                to_sell = row['Shares']
+                                sell_price = float(row.get('Amount', row.get('Price', 0.0)))
+                                cost_basis_accum = 0.0
+                                sold_qty_accum = 0.0
 
-                        # Calculate Flight Deck metrics
-                        total_cost = float(str(trade.get('Total_Cost', 0)).replace('$', '').replace(',', ''))
+                                while to_sell > 0 and inventory:
+                                    last = inventory[-1]
+                                    take = min(to_sell, last['qty'])
 
-                        # Original cost (first buy)
-                        first_buy = trade_txns[trade_txns['Action'].str.upper() == 'BUY'].head(1)
-                        if not first_buy.empty:
-                            orig_shares = float(first_buy.iloc[0].get('Shares', 0))
-                            orig_price = float(str(first_buy.iloc[0].get('Amount', 0)).replace('$', '').replace(',', ''))
-                            orig_cost = orig_shares * orig_price
-                        else:
-                            orig_cost = total_cost
+                                    cost_basis_accum += (take * last['price'])
+                                    sold_qty_accum += take
 
-                        # Display Flight Deck
-                        fd_cols = st.columns(7)
+                                    last['qty'] -= take
+                                    to_sell -= take
+                                    remaining_map[last['idx']] = last['qty']
 
-                        fd_cols[0].metric("Current Price", f"${current_price:,.2f}")
-                        fd_cols[1].metric("Orig Cost", f"${orig_cost:,.2f}")
-                        fd_cols[2].metric("Avg Cost", f"${avg_entry_val:,.2f}")
-                        fd_cols[3].metric("Shares Held", f"{shares_held:.0f}")
+                                    if last['qty'] < 0.00001:
+                                        inventory.pop()
 
-                        if is_open:
-                            unrealized = pl_val
-                            realized = 0.0  # Could sum realized from partial sells
-                            fd_cols[4].metric("Unrealized P&L", f"${unrealized:,.2f}",
-                                            delta=f"{return_pct:.2f}%")
-                            fd_cols[5].metric("Realized P&L", f"${realized:,.2f}")
-                        else:
-                            realized = pl_val
-                            fd_cols[4].metric("Unrealized P&L", "$0.00")
-                            fd_cols[5].metric("Realized P&L", f"${realized:,.2f}",
-                                            delta=f"{return_pct:.2f}%")
+                                revenue = sold_qty_accum * sell_price
+                                true_pl = revenue - cost_basis_accum
+                                lifo_pl_map[idx] = true_pl
+                                fd_realized_pl += true_pl
 
-                        total_equity = shares_held * current_price
-                        position_size_pct = (total_equity / 100000) * 100  # Placeholder equity
-                        fd_cols[6].metric("Total Equity", f"${total_equity:,.2f}",
-                                        delta=f"{position_size_pct:.2f}% Size")
+                        for item in inventory:
+                            fd_remaining_shares += item['qty']
+                            fd_cost_basis_sum += (item['qty'] * item['price'])
+
+                        # Apply LIFO results to DataFrame
+                        display_df = target_df.copy()
+                        display_df['Remaining_Shares'] = display_df.index.map(remaining_map).fillna(0)
+                        display_df['Realized_PL'] = display_df.index.map(lifo_pl_map).fillna(0)
+                        display_df['Status'] = display_df['Remaining_Shares'].apply(lambda x: 'Open' if x > 0 else 'Closed')
+
+                        # === FLIGHT DECK ===
+                        try:
+                            live_px = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
+                        except:
+                            live_px = avg_entry_val
+
+                        shares = fd_remaining_shares if is_open else 0
+                        avg_cost = (fd_cost_basis_sum / shares) if shares > 0 else avg_entry_val
+                        mkt_val = shares * live_px
+                        unrealized = mkt_val - fd_cost_basis_sum if is_open else 0
+                        return_pct_calc = (unrealized / fd_cost_basis_sum * 100) if fd_cost_basis_sum > 0 else 0.0
+
+                        # Original avg cost (initial buys only)
+                        orig_avg_cost = 0.0
+                        if 'Trx_ID' in target_df.columns:
+                            init_buys = target_df[target_df['Trx_ID'].astype(str).str.upper().str.startswith('B')]
+                            if not init_buys.empty:
+                                init_val = (init_buys['Shares'] * init_buys['Amount']).sum()
+                                init_shs = init_buys['Shares'].sum()
+                                orig_avg_cost = init_val / init_shs if init_shs > 0 else 0.0
+
+                        # Get equity for position size
+                        equity = 100000.0
+                        try:
+                            j_df = load_data(JOURNAL_FILE)
+                            if not j_df.empty and 'End NLV' in j_df.columns:
+                                if 'Day' in j_df.columns:
+                                    j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                                    j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+                                equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
+                        except:
+                            pass
+
+                        pos_size_pct = (mkt_val / equity) * 100 if equity > 0 else 0.0
+
+                        st.markdown(f"### 🚁 Flight Deck: {ticker}")
+                        f1, f2, f3, f4, f5, f6, f7 = st.columns(7)
+                        f1.metric("Current Price", f"${live_px:,.2f}")
+                        f2.metric("Orig Cost", f"${orig_avg_cost:,.2f}", help="Avg Cost of Initial Buys")
+                        f3.metric("Avg Cost", f"${avg_cost:,.2f}", help="Current Cost Basis")
+                        f4.metric("Shares Held", f"{int(shares):,}")
+                        f5.metric("Unrealized P&L", f"${unrealized:,.2f}", f"{return_pct_calc:.2f}%")
+                        f6.metric("Realized P&L", f"${fd_realized_pl:,.2f}")
+                        f7.metric("Total Equity", f"${mkt_val:,.2f}", f"{pos_size_pct:.1f}% Size")
 
                         st.markdown("---")
 
-                        # === TRANSACTION TABLE ===
+                        # === TRANSACTION TABLE (All columns like Active Campaign Detailed) ===
                         st.markdown("### 📋 Transaction History")
 
-                        # Format the transaction table
-                        display_cols = ['Date', 'Action', 'Shares', 'Amount', 'Stop_Loss', 'Value', 'Rule', 'Notes']
-                        available_cols = [c for c in display_cols if c in trade_txns.columns]
+                        # Calculate unrealized and return % per transaction
+                        def calc_unrealized(row):
+                            if row['Action'] == 'BUY' and row['Remaining_Shares'] > 0:
+                                entry = float(row.get('Amount', row.get('Price', 0.0)))
+                                return (live_px - entry) * row['Remaining_Shares']
+                            return 0.0
+                        display_df['Unrealized_PL'] = display_df.apply(calc_unrealized, axis=1)
 
-                        if available_cols:
-                            display_df = trade_txns[available_cols].copy()
+                        def calc_return_pct(row):
+                            if row['Action'] == 'BUY' and row['Remaining_Shares'] > 0:
+                                entry = float(row.get('Amount', row.get('Price', 0.0)))
+                                if entry > 0:
+                                    return ((live_px - entry) / entry) * 100
+                            return 0.0
+                        display_df['Return_Pct'] = display_df.apply(calc_return_pct, axis=1)
 
-                            # Format for display
-                            if 'Date' in display_df.columns:
-                                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                        # Add campaign start date
+                        display_df['Campaign_Start'] = open_date if pd.notna(open_date) else 'N/A'
 
-                            st.dataframe(
-                                display_df,
-                                use_container_width=True,
-                                height=min(len(display_df) * 35 + 38, 400)
-                            )
+                        # Negate shares and value for sells
+                        display_df['Shares'] = display_df.apply(lambda x: -x['Shares'] if x['Action'] == 'SELL' else x['Shares'], axis=1)
+
+                        if 'Value' not in display_df.columns and 'Amount' in display_df.columns:
+                            display_df['Value'] = display_df['Shares'].abs() * display_df['Amount']
+
+                        display_df['Value'] = display_df.apply(lambda x: -x['Value'] if x['Action'] == 'SELL' else x['Value'], axis=1)
+
+                        # Define columns (same as Active Campaign Detailed)
+                        final_cols = ['Trade_ID', 'Trx_ID', 'Campaign_Start', 'Date', 'Ticker', 'Action', 'Status',
+                                    'Shares', 'Remaining_Shares', 'Amount', 'Stop_Loss', 'Value',
+                                    'Realized_PL', 'Unrealized_PL', 'Return_Pct', 'Rule', 'Notes']
+                        show_cols = [c for c in final_cols if c in display_df.columns]
+
+                        # Color function for P&L
+                        def color_pnl(val):
+                            try:
+                                if isinstance(val, str):
+                                    val = float(val.replace('$', '').replace(',', '').replace('%', ''))
+                                if val > 0:
+                                    return 'color: #2ca02c'
+                                elif val < 0:
+                                    return 'color: #ff4b4b'
+                            except:
+                                pass
+                            return ''
+
+                        def color_neg_value(val):
+                            try:
+                                if isinstance(val, str):
+                                    val = float(val.replace('$', '').replace(',', ''))
+                                if val < 0:
+                                    return 'color: #ff4b4b'
+                            except:
+                                pass
+                            return ''
+
+                        st.dataframe(
+                            display_df[show_cols].style.format({
+                                'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None',
+                                'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None'),
+                                'Amount':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}',
+                                'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}',
+                                'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
+                            })
+                            .applymap(color_pnl, subset=['Value','Realized_PL','Unrealized_PL', 'Return_Pct'])
+                            .applymap(color_neg_value, subset=['Shares']),
+                            height=min(len(display_df) * 35 + 38, 500),
+                            use_container_width=True
+                        )
 
                         st.markdown("---")
 
