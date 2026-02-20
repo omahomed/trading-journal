@@ -7017,7 +7017,14 @@ elif page == "Trade Manager":
 elif page == "Active Campaign Summary":
     st.subheader("Active Campaign Summary")
 
+    # Load data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
 
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
 
     # --- IMAGE VIEWER FOR ACTIVE TRADES ---
 
@@ -7670,13 +7677,19 @@ elif page == "Active Campaign Summary":
 # RISK MANAGER
 # ====================================================================
 elif page == "Risk Manager":
-    import numpy as np 
-
+    import numpy as np
     import matplotlib.pyplot as plt
 
     st.subheader(f"Risk Manager ({CURR_PORT_NAME})")
 
-    
+    # Load data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
+
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
 
     # --- CONFIGURATION ---
 
@@ -8155,6 +8168,15 @@ elif page == "Risk Manager":
 elif page == "Portfolio Heat":
     st.subheader("🔥 Portfolio Volatility (Heat Check)")
 
+    # Load data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
+
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
+
 
 
     # 1. Calculation Method Selector
@@ -8412,11 +8434,16 @@ elif page == "Earnings Planner":
 
     st.caption("Binary Event Logic: Principal Protection (House Money Buffer).")
 
-    
-
     # Load Data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
 
-    if 'df_s' in locals() and not df_s.empty:
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
+
+    if not df_s.empty:
 
         open_pos = df_s[df_s['Status'] == 'OPEN'].copy()
 
@@ -8717,9 +8744,14 @@ elif page == "Performance Audit":
 
     st.markdown("Analysis of outlier trades to determine 'R' efficiency and P&L concentration.")
 
-    
-
     # Load necessary data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
+
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
 
     if not df_s.empty:
 
