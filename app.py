@@ -8139,9 +8139,19 @@ elif page == "Trade Journal":
                 index=0
             )
 
+        # Search button
+        search_clicked = st.button("🔍 Search Trades", type="primary", use_container_width=True)
+
         st.markdown("---")
 
-        # === APPLY FILTERS ===
+        # === APPLY FILTERS (only if search clicked) ===
+        if not search_clicked and 'journal_searched' not in st.session_state:
+            st.info("👆 Select your filters and click **Search Trades** to view your journal")
+            st.stop()
+
+        # Mark that search was performed
+        st.session_state['journal_searched'] = True
+
         df_filtered = df_s.copy()
 
         # Status filter
@@ -8370,8 +8380,94 @@ elif page == "Trade Journal":
                                 else:
                                     st.info("No exit chart")
 
-                # === NOTES ===
-                with st.expander(f"📝 Notes & Details for {ticker}"):
+                # === TRANSACTION DETAILS & NOTES ===
+                with st.expander(f"📊 Transaction Details & Notes - {ticker}"):
+                    # Get all transactions for this trade
+                    trade_txns = df_d[df_d['Trade_ID'] == trade_id].copy()
+
+                    if not trade_txns.empty:
+                        # === FLIGHT DECK METRICS ===
+                        st.markdown("### 🚀 Flight Deck")
+
+                        # Calculate metrics like Active Campaign Detailed
+                        if 'Date' in trade_txns.columns:
+                            trade_txns['Date'] = pd.to_datetime(trade_txns['Date'], errors='coerce')
+                            trade_txns = trade_txns.sort_values('Date')
+
+                        # Get current/last price
+                        shares_held = float(trade.get('Shares', 0))
+                        avg_entry_price = avg_entry_val
+
+                        if is_open:
+                            # For open trades, try to get current price (could enhance with live price later)
+                            current_price = avg_entry_val  # Placeholder - could fetch live
+                        else:
+                            current_price = avg_exit_val
+
+                        # Calculate Flight Deck metrics
+                        total_cost = float(str(trade.get('Total_Cost', 0)).replace('$', '').replace(',', ''))
+
+                        # Original cost (first buy)
+                        first_buy = trade_txns[trade_txns['Action'].str.upper() == 'BUY'].head(1)
+                        if not first_buy.empty:
+                            orig_shares = float(first_buy.iloc[0].get('Shares', 0))
+                            orig_price = float(str(first_buy.iloc[0].get('Amount', 0)).replace('$', '').replace(',', ''))
+                            orig_cost = orig_shares * orig_price
+                        else:
+                            orig_cost = total_cost
+
+                        # Display Flight Deck
+                        fd_cols = st.columns(7)
+
+                        fd_cols[0].metric("Current Price", f"${current_price:,.2f}")
+                        fd_cols[1].metric("Orig Cost", f"${orig_cost:,.2f}")
+                        fd_cols[2].metric("Avg Cost", f"${avg_entry_val:,.2f}")
+                        fd_cols[3].metric("Shares Held", f"{shares_held:.0f}")
+
+                        if is_open:
+                            unrealized = pl_val
+                            realized = 0.0  # Could sum realized from partial sells
+                            fd_cols[4].metric("Unrealized P&L", f"${unrealized:,.2f}",
+                                            delta=f"{return_pct:.2f}%")
+                            fd_cols[5].metric("Realized P&L", f"${realized:,.2f}")
+                        else:
+                            realized = pl_val
+                            fd_cols[4].metric("Unrealized P&L", "$0.00")
+                            fd_cols[5].metric("Realized P&L", f"${realized:,.2f}",
+                                            delta=f"{return_pct:.2f}%")
+
+                        total_equity = shares_held * current_price
+                        position_size_pct = (total_equity / 100000) * 100  # Placeholder equity
+                        fd_cols[6].metric("Total Equity", f"${total_equity:,.2f}",
+                                        delta=f"{position_size_pct:.2f}% Size")
+
+                        st.markdown("---")
+
+                        # === TRANSACTION TABLE ===
+                        st.markdown("### 📋 Transaction History")
+
+                        # Format the transaction table
+                        display_cols = ['Date', 'Action', 'Shares', 'Amount', 'Stop_Loss', 'Value', 'Rule', 'Notes']
+                        available_cols = [c for c in display_cols if c in trade_txns.columns]
+
+                        if available_cols:
+                            display_df = trade_txns[available_cols].copy()
+
+                            # Format for display
+                            if 'Date' in display_df.columns:
+                                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M')
+
+                            st.dataframe(
+                                display_df,
+                                use_container_width=True,
+                                height=min(len(display_df) * 35 + 38, 400)
+                            )
+
+                        st.markdown("---")
+
+                    # === NOTES ===
+                    st.markdown("### 📝 Trade Notes")
+
                     note_col1, note_col2 = st.columns(2)
 
                     with note_col1:
