@@ -686,9 +686,9 @@ st.sidebar.markdown("---")
 # C. PAGE NAVIGATION
 # One menu to rule them all.
 page = st.sidebar.radio("Go to Module", [
-    "Command Center",
-    "Trading Overview",
     "Dashboard",
+    "Trading Overview",
+    "Command Center",
     "Dashboard (Legacy)",
     "Daily Routine",
     "Daily Journal",
@@ -701,7 +701,7 @@ page = st.sidebar.radio("Go to Module", [
     "Position Sizer",
     "Trade Manager",
     "Analytics",
-    "Weekly Retro"  # <--- ADDED HERE
+    "Weekly Retro"
 ])
 
 st.sidebar.markdown("---")
