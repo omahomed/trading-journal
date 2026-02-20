@@ -8275,9 +8275,20 @@ elif page == "Trade Journal":
 
                         # Calculate unrealized P&L with live price
                         mkt_val = fd_remaining_shares * live_px
-                        pl_val = mkt_val - fd_cost_basis_sum
-                        return_pct = (pl_val / fd_cost_basis_sum * 100) if fd_cost_basis_sum > 0 else 0.0
-                        pl_label = "Unrealized P&L"
+                        unrealized_pl = mkt_val - fd_cost_basis_sum
+
+                        # Total P&L = Realized + Unrealized
+                        pl_val = fd_realized_pl + unrealized_pl
+
+                        # Return % based on total cost basis (all buys)
+                        total_cost_basis = 0.0
+                        for tidx, row in target_df.iterrows():
+                            if row['Action'] == 'BUY':
+                                p = float(row.get('Amount', row.get('Price', 0.0)))
+                                total_cost_basis += (row['Shares'] * p)
+
+                        return_pct = (pl_val / total_cost_basis * 100) if total_cost_basis > 0 else 0.0
+                        pl_label = "Total P&L"
                     else:
                         # Fallback if no detail data
                         pl_val = 0.0
