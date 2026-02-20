@@ -705,6 +705,7 @@ with st.sidebar:
     with st.expander("💼 Trading Ops", expanded=True):
         nav_button("Active Campaign Summary", "📋")
         nav_button("Position Sizer", "🔢")
+        nav_button("Trade Journal", "📔")
         nav_button("Trade Manager", "📝")
 
     # 🛡️ RISK MANAGEMENT
@@ -8082,6 +8083,315 @@ elif page == "Performance Audit":
 
 # ==============================================================================
 
+
+# ==============================================================================
+# TRADE JOURNAL - Unified view of all trades with card layout
+# ==============================================================================
+elif page == "Trade Journal":
+    st.header("📔 Trade Journal")
+    st.caption("Visual review of all your trades with embedded charts")
+
+    # Load data
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
+
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
+
+    if df_s.empty:
+        st.info("No trades found. Start logging trades in Trade Manager!")
+    else:
+        # === FILTERS ===
+        st.markdown("### 🔍 Filters")
+
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+
+        with col_f1:
+            status_filter = st.selectbox(
+                "Status",
+                ["All", "Open", "Closed"],
+                index=0
+            )
+
+        with col_f2:
+            # Get unique tickers
+            all_tickers = sorted(df_s['Ticker'].unique().tolist())
+            ticker_filter = st.selectbox(
+                "Ticker",
+                ["All"] + all_tickers,
+                index=0
+            )
+
+        with col_f3:
+            sort_by = st.selectbox(
+                "Sort By",
+                ["Newest First", "Oldest First", "Best P&L", "Worst P&L", "Ticker A-Z"],
+                index=0
+            )
+
+        with col_f4:
+            # Date range filter
+            date_range = st.selectbox(
+                "Date Range",
+                ["All Time", "Last 7 Days", "Last 30 Days", "Last 90 Days", "This Year"],
+                index=0
+            )
+
+        st.markdown("---")
+
+        # === APPLY FILTERS ===
+        df_filtered = df_s.copy()
+
+        # Status filter
+        if status_filter == "Open":
+            df_filtered = df_filtered[df_filtered['Status'].str.upper() == 'OPEN']
+        elif status_filter == "Closed":
+            df_filtered = df_filtered[df_filtered['Status'].str.upper() == 'CLOSED']
+
+        # Ticker filter
+        if ticker_filter != "All":
+            df_filtered = df_filtered[df_filtered['Ticker'] == ticker_filter]
+
+        # Date range filter
+        if 'Open_Date' in df_filtered.columns:
+            df_filtered['Open_Date'] = pd.to_datetime(df_filtered['Open_Date'], errors='coerce')
+            today = pd.Timestamp.now()
+
+            if date_range == "Last 7 Days":
+                df_filtered = df_filtered[df_filtered['Open_Date'] >= (today - pd.Timedelta(days=7))]
+            elif date_range == "Last 30 Days":
+                df_filtered = df_filtered[df_filtered['Open_Date'] >= (today - pd.Timedelta(days=30))]
+            elif date_range == "Last 90 Days":
+                df_filtered = df_filtered[df_filtered['Open_Date'] >= (today - pd.Timedelta(days=90))]
+            elif date_range == "This Year":
+                df_filtered = df_filtered[df_filtered['Open_Date'].dt.year == today.year]
+
+        # === SORTING ===
+        if sort_by == "Newest First":
+            if 'Open_Date' in df_filtered.columns:
+                df_filtered = df_filtered.sort_values('Open_Date', ascending=False)
+        elif sort_by == "Oldest First":
+            if 'Open_Date' in df_filtered.columns:
+                df_filtered = df_filtered.sort_values('Open_Date', ascending=True)
+        elif sort_by == "Best P&L":
+            if 'Realized_PL' in df_filtered.columns:
+                df_filtered = df_filtered.sort_values('Realized_PL', ascending=False)
+        elif sort_by == "Worst P&L":
+            if 'Realized_PL' in df_filtered.columns:
+                df_filtered = df_filtered.sort_values('Realized_PL', ascending=True)
+        elif sort_by == "Ticker A-Z":
+            df_filtered = df_filtered.sort_values('Ticker', ascending=True)
+
+        # === DISPLAY TRADES AS CARDS ===
+        if df_filtered.empty:
+            st.info("No trades match your filters.")
+        else:
+            st.markdown(f"### {len(df_filtered)} Trades Found")
+
+            # Display each trade as a card
+            for idx, trade in df_filtered.iterrows():
+                trade_id = trade['Trade_ID']
+                ticker = trade['Ticker']
+                status = trade['Status']
+
+                # Calculate metrics
+                is_open = status.upper() == 'OPEN'
+
+                # P&L and Return
+                if is_open:
+                    pl = trade.get('Unrealized_PL', 0)
+                    pl_label = "Unrealized P&L"
+                else:
+                    pl = trade.get('Realized_PL', 0)
+                    pl_label = "Realized P&L"
+
+                try:
+                    pl_val = float(str(pl).replace('$', '').replace(',', ''))
+                except:
+                    pl_val = 0.0
+
+                # Return %
+                avg_entry = trade.get('Avg_Entry', 0)
+                avg_exit = trade.get('Avg_Exit', 0)
+
+                try:
+                    avg_entry_val = float(str(avg_entry).replace('$', '').replace(',', ''))
+                    if is_open:
+                        # For open trades, we'd need current price - use what we have
+                        return_pct = 0.0  # Could enhance with live price
+                    else:
+                        avg_exit_val = float(str(avg_exit).replace('$', '').replace(',', ''))
+                        if avg_entry_val > 0:
+                            return_pct = ((avg_exit_val - avg_entry_val) / avg_entry_val) * 100
+                        else:
+                            return_pct = 0.0
+                except:
+                    return_pct = 0.0
+
+                # Days held
+                open_date = trade.get('Open_Date')
+                if pd.notna(open_date):
+                    open_dt = pd.to_datetime(open_date, errors='coerce')
+                    if pd.notna(open_dt):
+                        if is_open:
+                            days_held = (pd.Timestamp.now() - open_dt).days
+                        else:
+                            closed_date = trade.get('Closed_Date')
+                            if pd.notna(closed_date):
+                                closed_dt = pd.to_datetime(closed_date, errors='coerce')
+                                if pd.notna(closed_dt):
+                                    days_held = (closed_dt - open_dt).days
+                                else:
+                                    days_held = 0
+                            else:
+                                days_held = 0
+                    else:
+                        days_held = 0
+                else:
+                    days_held = 0
+
+                # Card color based on P&L
+                if pl_val > 0:
+                    card_color = "#d4edda"  # Light green
+                    border_color = "#28a745"  # Green
+                elif pl_val < 0:
+                    card_color = "#f8d7da"  # Light red
+                    border_color = "#dc3545"  # Red
+                else:
+                    card_color = "#fff3cd"  # Light yellow
+                    border_color = "#ffc107"  # Yellow
+
+                # Status badge color
+                status_color = "#28a745" if is_open else "#6c757d"
+
+                # === CARD HTML ===
+                st.markdown(f"""
+                <div style="
+                    background: {card_color};
+                    border-left: 5px solid {border_color};
+                    border-radius: 8px;
+                    padding: 20px;
+                    margin-bottom: 20px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <div>
+                            <span style="font-size: 24px; font-weight: bold; color: #333;">{ticker}</span>
+                            <span style="
+                                margin-left: 10px;
+                                padding: 4px 12px;
+                                background: {status_color};
+                                color: white;
+                                border-radius: 12px;
+                                font-size: 12px;
+                                font-weight: bold;
+                            ">{status.upper()}</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 20px; font-weight: bold; color: {border_color};">
+                                {'+' if pl_val >= 0 else ''}${pl_val:,.2f}
+                            </div>
+                            <div style="font-size: 14px; color: #666;">
+                                {'+' if return_pct >= 0 else ''}{return_pct:.2f}%
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 15px;">
+                        <div>
+                            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Entry</div>
+                            <div style="font-size: 16px; font-weight: 600;">${avg_entry_val:,.2f}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Exit</div>
+                            <div style="font-size: 16px; font-weight: 600;">{'$' + f'{avg_exit_val:,.2f}' if not is_open else 'Active'}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Shares</div>
+                            <div style="font-size: 16px; font-weight: 600;">{trade.get('Shares', 0)}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Days Held</div>
+                            <div style="font-size: 16px; font-weight: 600;">{days_held}</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 12px; color: #666;">
+                        <strong>Trade ID:</strong> {trade_id} |
+                        <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # === IMAGES ===
+                if R2_AVAILABLE and USE_DATABASE:
+                    images = db.get_trade_images(CURR_PORT_NAME, trade_id)
+
+                    if images:
+                        image_types = {img['image_type']: img for img in images}
+
+                        # Display images in columns
+                        cols = st.columns(3 if not is_open else 2)
+
+                        with cols[0]:
+                            if 'weekly' in image_types:
+                                img_data = image_types['weekly']
+                                st.markdown("**📊 Weekly Chart**")
+                                image_bytes = r2.download_image(img_data['image_url'])
+                                if image_bytes:
+                                    st.image(image_bytes, use_container_width=True)
+                                else:
+                                    st.info("Chart not available")
+                            else:
+                                st.info("No weekly chart")
+
+                        with cols[1]:
+                            if 'daily' in image_types:
+                                img_data = image_types['daily']
+                                st.markdown("**📈 Daily Chart**")
+                                image_bytes = r2.download_image(img_data['image_url'])
+                                if image_bytes:
+                                    st.image(image_bytes, use_container_width=True)
+                                else:
+                                    st.info("Chart not available")
+                            else:
+                                st.info("No daily chart")
+
+                        if not is_open and len(cols) > 2:
+                            with cols[2]:
+                                if 'exit' in image_types:
+                                    img_data = image_types['exit']
+                                    st.markdown("**🎯 Exit Chart**")
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                    else:
+                                        st.info("Chart not available")
+                                else:
+                                    st.info("No exit chart")
+
+                # === NOTES ===
+                with st.expander(f"📝 Notes & Details for {ticker}"):
+                    note_col1, note_col2 = st.columns(2)
+
+                    with note_col1:
+                        st.markdown("**Entry Notes**")
+                        buy_notes = trade.get('Buy_Notes', trade.get('Notes', ''))
+                        st.write(buy_notes if buy_notes else "_No entry notes_")
+
+                        st.markdown("**Setup/Rule**")
+                        st.write(trade.get('Rule', '_Not specified_'))
+
+                    with note_col2:
+                        if not is_open:
+                            st.markdown("**Exit Notes**")
+                            sell_notes = trade.get('Sell_Notes', '')
+                            st.write(sell_notes if sell_notes else "_No exit notes_")
+
+                            st.markdown("**Exit Rule**")
+                            st.write(trade.get('Sell_Rule', '_Not specified_'))
+
+                st.markdown("---")
 
 # ==============================================================================
 # PAGE 11: ANALYTICS (REVERTED TAB 1 + DRILL-DOWN LIVE TAB)
