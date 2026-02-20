@@ -5343,8 +5343,8 @@ elif page == "Trade Manager":
                 st.dataframe(
                     display_df[show_cols].sort_values(['Trade_ID', 'Date']).style
                     .format({
-                        'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None', 
-                        'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None'), 
+                        'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
+                        'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None'), 
                         'Amount':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}', 
                         'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}', 
                         'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
@@ -5567,7 +5567,7 @@ elif page == "Trade Manager":
                 st.dataframe(
                     display_df[show_cols].sort_values(['Trade_ID', 'Date']).style
                     .format({
-                        'Date': lambda x: pd.to_datetime(x).strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None', 
+                        'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None', 
                         'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Value':'${:,.2f}', 
                         'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
                     })
@@ -8646,8 +8646,8 @@ elif page == "Trade Journal":
 
                         st.dataframe(
                             display_df[show_cols].style.format({
-                                'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None',
-                                'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else 'None'),
+                                'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
+                                'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None'),
                                 'Amount':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}',
                                 'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}',
                                 'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
