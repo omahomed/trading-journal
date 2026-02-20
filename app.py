@@ -8558,6 +8558,15 @@ elif page == "Trade Journal":
                         # === TRANSACTION TABLE (All columns like Active Campaign Detailed) ===
                         st.markdown("### 📋 Transaction History")
 
+                        # Status filter for transaction rows
+                        trx_status_filter = st.radio(
+                            "Filter Status",
+                            ["All", "Open", "Closed"],
+                            index=0,
+                            horizontal=True,
+                            key=f'trx_status_{trade_id}'
+                        )
+
                         # Calculate unrealized and return % per transaction
                         def calc_unrealized(row):
                             if row['Action'] == 'BUY' and row['Remaining_Shares'] > 0:
@@ -8584,6 +8593,10 @@ elif page == "Trade Journal":
                             display_df['Value'] = display_df['Shares'].abs() * display_df['Amount']
 
                         display_df['Value'] = display_df.apply(lambda x: -x['Value'] if x['Action'] == 'SELL' else x['Value'], axis=1)
+
+                        # Apply status filter to transaction rows
+                        if trx_status_filter != "All":
+                            display_df = display_df[display_df['Status'] == trx_status_filter]
 
                         # Define columns (same as Active Campaign Detailed)
                         final_cols = ['Trade_ID', 'Trx_ID', 'Campaign_Start', 'Date', 'Ticker', 'Action', 'Status',
