@@ -1040,9 +1040,245 @@ if page == "Dashboard":
     st.title("📊 DASHBOARD")
     st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
 
-    # === MODERN DASHBOARD IMPLEMENTATION ===
-    # Will implement modern version here
-    st.info("🚧 Modern Dashboard - Under Construction. Use Dashboard (Legacy) for now.")
+    # === HELPER FUNCTIONS ===
+    def fmt_money(val):
+        try:
+            if isinstance(val, str):
+                val = float(val.replace('$', '').replace(',', ''))
+            return f"${val:,.2f}"
+        except:
+            return "$0.00"
+
+    def clean_num_local(x):
+        try:
+            if isinstance(x, str):
+                return float(x.replace('$', '').replace(',', '').replace('%', '').strip())
+            return float(x)
+        except: return 0.0
+
+    # === LOAD DATA ===
+    p_clean = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
+    df_j = load_data(p_clean)
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
+
+    if df_j.empty:
+        st.error("Journal data missing. Please log trades in Trade Manager.")
+    else:
+        # === PREPARE DATA ===
+        if 'Nsadaq' in df_j.columns: df_j.rename(columns={'Nsadaq': 'Nasdaq'}, inplace=True)
+        df_j['Day'] = pd.to_datetime(df_j['Day'], errors='coerce')
+        df_j = df_j.dropna(subset=['Day']).sort_values('Day')
+
+        # Clean numeric columns
+        for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq', '% Invested']:
+            if c in df_j.columns: df_j[c] = df_j[c].apply(clean_num_local)
+
+        # Calculate equity curve
+        df_j['Adjusted_Beg'] = df_j['Beg NLV'] + df_j['Cash -/+']
+        df_j['Daily_Pct'] = 0.0
+        mask = df_j['Adjusted_Beg'] != 0
+        df_j.loc[mask, 'Daily_Pct'] = (df_j.loc[mask, 'End NLV'] - df_j.loc[mask, 'Adjusted_Beg']) / df_j.loc[mask, 'Adjusted_Beg']
+        df_j['Equity_Curve'] = (1 + df_j['Daily_Pct']).cumprod()
+        df_j['LTD_Pct'] = (df_j['Equity_Curve'] - 1) * 100
+
+        # Benchmarks
+        if 'SPY' in df_j.columns and not df_j['SPY'].eq(0).all():
+            start_spy = df_j.loc[df_j['SPY'] > 0, 'SPY'].iloc[0]
+            df_j['SPY_Bench'] = ((df_j['SPY'] / start_spy) - 1) * 100
+        if 'Nasdaq' in df_j.columns and not df_j['Nasdaq'].eq(0).all():
+            start_ndx = df_j.loc[df_j['Nasdaq'] > 0, 'Nasdaq'].iloc[0]
+            df_j['NDX_Bench'] = ((df_j['Nasdaq'] / start_ndx) - 1) * 100
+
+        # YTD calculation
+        curr_year = datetime.now().year
+        df_ytd = df_j[df_j['Day'].dt.year == curr_year].copy()
+        ytd_val = 0.0
+        ytd_spy = 0.0
+        if not df_ytd.empty:
+            ytd_val = ((1 + df_ytd['Daily_Pct']).prod() - 1) * 100
+            if 'SPY' in df_j.columns:
+                prior_year_data = df_j[(df_j['Day'].dt.year < curr_year) & (df_j['SPY'] > 0)]
+                if not prior_year_data.empty:
+                    start_s = prior_year_data['SPY'].iloc[-1]
+                elif not df_ytd.empty and not df_ytd['SPY'].eq(0).all():
+                    start_s = df_ytd.loc[df_ytd['SPY'] > 0, 'SPY'].iloc[0]
+                else:
+                    start_s = 0.0
+                curr_spy = df_j['SPY'].iloc[-1]
+                if start_s > 0:
+                    ytd_spy = ((curr_spy / start_s) - 1) * 100
+
+        # Live data
+        curr_nlv = df_j['End NLV'].iloc[-1]
+        daily_dol = df_j['Daily $ Change'].iloc[-1]
+        daily_pct_display = df_j['Daily_Pct'].iloc[-1] * 100
+        ltd_return = df_j['LTD_Pct'].iloc[-1]
+
+        calc_exposure_pct = 0.0
+        num_open_pos = 0
+        risk_pct = 0.0
+
+        if not df_s.empty and curr_nlv > 0:
+            df_open = df_s[df_s['Status'] == 'OPEN'].copy()
+            if not df_open.empty:
+                num_open_pos = len(df_open)
+
+                # Get live prices
+                tickers = df_open['Ticker'].unique().tolist()
+                try:
+                    live_batch = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+
+                    def get_live_price(r):
+                        try:
+                            if len(tickers) == 1:
+                                val = float(live_batch) if not pd.isna(live_batch) else float(r['Avg_Entry'])
+                                return val
+                            else:
+                                val = live_batch.get(r['Ticker'])
+                                return float(val) if not pd.isna(val) else float(r['Avg_Entry'])
+                        except: return float(r['Avg_Entry'])
+
+                    df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
+                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open['Shares']
+                    calc_exposure_pct = (df_open['Mkt_Val'].sum() / curr_nlv) * 100
+
+                    # Calculate risk
+                    def get_true_stop(trade_id):
+                        txs = df_d[df_d['Trade_ID'] == trade_id]
+                        if txs.empty: return 0.0
+                        if 'Date' in txs.columns:
+                            txs['Date'] = pd.to_datetime(txs['Date'], errors='coerce')
+                            txs = txs.sort_values('Date')
+                        valid_stops = txs['Stop_Loss'].dropna()
+                        valid_stops = valid_stops[valid_stops > 0.01]
+                        if not valid_stops.empty: return float(valid_stops.iloc[-1])
+                        return 0.0
+
+                    df_open['Stop_Loss'] = df_open['Trade_ID'].apply(get_true_stop)
+                    df_open['R_Dol'] = (df_open['Cur_Px'] - df_open['Stop_Loss']) * df_open['Shares']
+                    risk_dol = df_open[df_open['R_Dol'] > 0]['R_Dol'].sum()
+                    risk_pct = (risk_dol / curr_nlv) * 100
+                except:
+                    pass
+
+        # === MODERN METRICS CARDS ===
+        st.markdown("### 📊 Performance Snapshot")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Net Liq Value</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">${curr_nlv:,.0f}</div>
+                <div style="font-size: 16px; color: {'#90EE90' if daily_dol >= 0 else '#ffcccb'};">
+                    {'+' if daily_dol >= 0 else ''}{daily_dol:,.0f} ({'+' if daily_pct_display >= 0 else ''}{daily_pct_display:.2f}%)
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col2:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">LTD Return</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{ltd_return:.2f}%</div>
+                <div style="font-size: 16px;">Life to Date</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col3:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">YTD Return</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{ytd_val:.2f}%</div>
+                <div style="font-size: 16px; color: #f0f0f0;">
+                    SPY: {'+' if ytd_spy >= 0 else ''}{ytd_spy:.2f}%
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col4:
+            limit = 12
+            mode_color = "#2ca02c" if num_open_pos <= limit else "#ff4b4b"
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Live Exposure</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{calc_exposure_pct:.1f}%</div>
+                <div style="font-size: 16px;">
+                    {num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # === EQUITY CURVE (ALL ELEMENTS PRESERVED) ===
+        st.markdown("### 📈 Equity Curve")
+
+        # Calculate moving averages
+        df_j['EC_10SMA'] = df_j['LTD_Pct'].rolling(window=10).mean()
+        df_j['EC_21SMA'] = df_j['LTD_Pct'].rolling(window=21).mean()
+        df_j['EC_50SMA'] = df_j['LTD_Pct'].rolling(window=50).mean()
+        if 'Nasdaq' in df_j.columns:
+            df_j['NDX_21SMA'] = df_j['Nasdaq'].rolling(window=21).mean()
+
+        # Single chart (no bottom strip)
+        plt.style.use('bmh')
+        fig, ax1 = plt.subplots(1, 1, figsize=(12, 7))
+
+        # Market trend bar at top
+        if 'Nasdaq' in df_j.columns:
+            ax1.fill_between(df_j['Day'], 0.97, 1.0, transform=ax1.transAxes,
+                           where=(df_j['Nasdaq']>=df_j['NDX_21SMA']), color='green', alpha=0.4, zorder=0)
+            ax1.fill_between(df_j['Day'], 0.97, 1.0, transform=ax1.transAxes,
+                           where=(df_j['Nasdaq']<df_j['NDX_21SMA']), color='red', alpha=0.4, zorder=0)
+            ax1.text(0.5, 0.985, "MARKET TREND (COMP vs 21s)", transform=ax1.transAxes,
+                    ha='center', fontsize=8, fontweight='bold')
+
+        # Plot benchmarks
+        lbl_port = f"Portfolio ({df_j['LTD_Pct'].iloc[-1]:+.1f}%)"
+        if 'SPY_Bench' in df_j.columns:
+            lbl_spy = f"SPY ({df_j['SPY_Bench'].iloc[-1]:+.1f}%)"
+            ax1.plot(df_j['Day'], df_j['SPY_Bench'], color='gray', linestyle='-',
+                    linewidth=1.5, alpha=0.7, label=lbl_spy)
+        if 'NDX_Bench' in df_j.columns:
+            lbl_ndx = f"Nasdaq ({df_j['NDX_Bench'].iloc[-1]:+.1f}%)"
+            ax1.plot(df_j['Day'], df_j['NDX_Bench'], color='#1f77b4', linestyle='-',
+                    linewidth=1.5, alpha=0.7, label=lbl_ndx)
+
+        # Portfolio and MAs
+        ax1.plot(df_j['Day'], df_j['LTD_Pct'], color='darkblue', linewidth=2.5, label=lbl_port)
+        ax1.plot(df_j['Day'], df_j['EC_10SMA'], color='purple', linewidth=1.2, label='10 SMA')
+        ax1.plot(df_j['Day'], df_j['EC_21SMA'], color='green', linewidth=1.2, label='21 SMA')
+        ax1.plot(df_j['Day'], df_j['EC_50SMA'], color='red', linewidth=1.2, label='50 SMA')
+
+        # Fill between portfolio and 21 SMA
+        ax1.fill_between(df_j['Day'], df_j['LTD_Pct'], df_j['EC_21SMA'],
+                        where=(df_j['LTD_Pct'] >= df_j['EC_21SMA']), interpolate=True,
+                        color='green', alpha=0.15)
+        ax1.fill_between(df_j['Day'], df_j['LTD_Pct'], df_j['EC_21SMA'],
+                        where=(df_j['LTD_Pct'] < df_j['EC_21SMA']), interpolate=True,
+                        color='red', alpha=0.15)
+
+        ax1.legend(loc='upper left', frameon=True, framealpha=0.9)
+        ax1.set_title("Equity Curve (LTD)", fontsize=14, fontweight='bold')
+        ax1.set_ylabel("Return %")
+
+        # Right axis: Exposure
+        ax1b = ax1.twinx()
+        exp_color = '#e67e22'
+        ax1b.fill_between(df_j['Day'], df_j['% Invested'], 0, color=exp_color, alpha=0.3, label='Exposure %')
+        ax1b.plot(df_j['Day'], df_j['% Invested'], color=exp_color, linewidth=1, alpha=0.6)
+        ax1b.axhline(100, color='black', linestyle='--', linewidth=0.8, alpha=0.4)
+        ax1b.set_ylim(0, 1000)
+        ax1b.set_yticks([0, 100, 200])
+        ax1b.set_ylabel("% Exposure", color=exp_color, fontsize=9)
+        ax1b.tick_params(axis='y', labelcolor=exp_color)
+        ax1b.grid(False)
+
+        plt.tight_layout()
+        st.pyplot(fig)
 
 # ==============================================================================
 # PAGE 2B: DASHBOARD (LEGACY - ORIGINAL VERSION)
