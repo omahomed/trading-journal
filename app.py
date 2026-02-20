@@ -1095,8 +1095,11 @@ if page == "Dashboard":
         df_ytd = df_j[df_j['Day'].dt.year == curr_year].copy()
         ytd_val = 0.0
         ytd_spy = 0.0
+        ytd_nasdaq = 0.0
         if not df_ytd.empty:
             ytd_val = ((1 + df_ytd['Daily_Pct']).prod() - 1) * 100
+
+            # SPY YTD
             if 'SPY' in df_j.columns:
                 prior_year_data = df_j[(df_j['Day'].dt.year < curr_year) & (df_j['SPY'] > 0)]
                 if not prior_year_data.empty:
@@ -1108,6 +1111,19 @@ if page == "Dashboard":
                 curr_spy = df_j['SPY'].iloc[-1]
                 if start_s > 0:
                     ytd_spy = ((curr_spy / start_s) - 1) * 100
+
+            # Nasdaq YTD
+            if 'Nasdaq' in df_j.columns:
+                prior_year_data_ndx = df_j[(df_j['Day'].dt.year < curr_year) & (df_j['Nasdaq'] > 0)]
+                if not prior_year_data_ndx.empty:
+                    start_ndx = prior_year_data_ndx['Nasdaq'].iloc[-1]
+                elif not df_ytd.empty and not df_ytd['Nasdaq'].eq(0).all():
+                    start_ndx = df_ytd.loc[df_ytd['Nasdaq'] > 0, 'Nasdaq'].iloc[0]
+                else:
+                    start_ndx = 0.0
+                curr_nasdaq = df_j['Nasdaq'].iloc[-1]
+                if start_ndx > 0:
+                    ytd_nasdaq = ((curr_nasdaq / start_ndx) - 1) * 100
 
         # Live data
         curr_nlv = df_j['End NLV'].iloc[-1]
@@ -1193,7 +1209,7 @@ if page == "Dashboard":
                 <div style="font-size: 14px; opacity: 0.9;">YTD Return</div>
                 <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{ytd_val:.2f}%</div>
                 <div style="font-size: 16px; color: #f0f0f0;">
-                    SPY: {'+' if ytd_spy >= 0 else ''}{ytd_spy:.2f}%
+                    SPY: {'+' if ytd_spy >= 0 else ''}{ytd_spy:.2f}% | NDX: {'+' if ytd_nasdaq >= 0 else ''}{ytd_nasdaq:.2f}%
                 </div>
             </div>
             """, unsafe_allow_html=True)
