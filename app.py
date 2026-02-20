@@ -8118,14 +8118,16 @@ elif page == "Trade Journal":
         with col_f2:
             # Get unique tickers for hint
             all_tickers = sorted(df_s['Ticker'].unique().tolist())
-            ticker_filter = st.text_input(
-                "Ticker (or leave blank for All)",
+            ticker_input = st.text_input(
+                "Ticker(s) - comma separated",
                 value="",
-                placeholder="e.g., SNDK",
-                help=f"Available: {', '.join(all_tickers)}"
+                placeholder="e.g., SNDK or SNDK, FIG, AAPL",
+                help=f"Enter one or more tickers separated by commas. Available: {', '.join(all_tickers)}"
             ).strip().upper()
-            # Convert empty to "All"
-            if not ticker_filter:
+            # Parse tickers
+            if ticker_input:
+                ticker_filter = [t.strip() for t in ticker_input.split(',') if t.strip()]
+            else:
                 ticker_filter = "All"
 
         with col_f3:
@@ -8164,9 +8166,9 @@ elif page == "Trade Journal":
         elif status_filter == "Closed":
             df_filtered = df_filtered[df_filtered['Status'].str.upper() == 'CLOSED']
 
-        # Ticker filter
+        # Ticker filter (supports multiple tickers)
         if ticker_filter != "All":
-            df_filtered = df_filtered[df_filtered['Ticker'] == ticker_filter]
+            df_filtered = df_filtered[df_filtered['Ticker'].isin(ticker_filter)]
 
         # Date range filter
         if 'Open_Date' in df_filtered.columns:
