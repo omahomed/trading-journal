@@ -689,6 +689,7 @@ page = st.sidebar.radio("Go to Module", [
     "Command Center",
     "Trading Overview",
     "Dashboard",
+    "Dashboard (Legacy)",
     "Daily Routine",
     "Daily Journal",
     "Daily Report Card",
@@ -1033,12 +1034,23 @@ if page == "Command Center":
         else: st.info("No history available.")
 
 # ==============================================================================
-# PAGE 2: DASHBOARD (HYBRID + SECTOR INTELLIGENCE - PRECISION FIX)
+# PAGE 2: DASHBOARD (NEW MODERN VERSION)
 # ==============================================================================
 if page == "Dashboard":
+    st.title("📊 DASHBOARD")
+    st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
+
+    # === MODERN DASHBOARD IMPLEMENTATION ===
+    # Will implement modern version here
+    st.info("🚧 Modern Dashboard - Under Construction. Use Dashboard (Legacy) for now.")
+
+# ==============================================================================
+# PAGE 2B: DASHBOARD (LEGACY - ORIGINAL VERSION)
+# ==============================================================================
+elif page == "Dashboard (Legacy)":
     # Fix Sidebar Variable Name
-    CURR_PORT_NAME = portfolio 
-    
+    CURR_PORT_NAME = portfolio
+
     st.header(f"MARKET DASHBOARD: {CURR_PORT_NAME}")
     
     # --- HELPER: ROBUST FORMATTER ---
