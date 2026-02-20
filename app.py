@@ -685,99 +685,79 @@ DETAILS_FILE = os.path.join(ACTIVE_DIR, 'Trade_Log_Details.csv')
 st.sidebar.markdown("---")
 
 # C. PAGE NAVIGATION
-# Beautiful icon-based navigation with option_menu
+# Collapsible navigation with expanders (matches Streamlit theme)
 
-# ====== OLD NAVIGATION (COMMENTED FOR EASY REVERT) ======
-# Uncomment below and remove option_menu section to revert
-# page = st.sidebar.radio("Go to Module", [
-#     "Dashboard",
-#     "Trading Overview",
-#     "Command Center",
-#     "Dashboard (Legacy)",
-#     "Daily Routine",
-#     "Daily Journal",
-#     "Daily Report Card",
-#     "IBD Market School",
-#     "M Factor",
-#     "Performance Heat Map",
-#     "Ticker Forensics",
-#     "Period Review",
-#     "Position Sizer",
-#     "Trade Manager",
-#     "Analytics",
-#     "Weekly Retro"
-# ])
-# ====== END OLD NAVIGATION ======
+# Initialize session state for page selection
+if 'page' not in st.session_state:
+    st.session_state.page = "Dashboard"
+
+# Navigation UI
 with st.sidebar:
-    page = option_menu(
-        menu_title="Navigation",
-        options=[
-            # 📊 Dashboards
-            "Dashboard",
-            "Trading Overview",
-            "Command Center",
-            "─────────",
-            # 💼 Trading Operations
-            "Trade Manager",
-            "Position Sizer",
-            "─────────",
-            # 📅 Daily Workflow
-            "Daily Routine",
-            "Daily Journal",
-            "Daily Report Card",
-            "─────────",
-            # 📈 Market Intelligence
-            "IBD Market School",
-            "M Factor",
-            "Performance Heat Map",
-            "─────────",
-            # 🔍 Deep Dive
-            "Ticker Forensics",
-            "Period Review",
-            "Analytics",
-            "Weekly Retro",
-            "─────────",
-            # ⚙️ Legacy
-            "Dashboard (Legacy)"
-        ],
-        icons=[
-            # 📊 Dashboards
-            "speedometer2", "graph-up", "command",
-            None,  # Divider
-            # 💼 Trading Operations
-            "clipboard-check", "calculator",
-            None,  # Divider
-            # 📅 Daily Workflow
-            "sunrise", "journal-text", "card-checklist",
-            None,  # Divider
-            # 📈 Market Intelligence
-            "building", "activity", "grid-3x3",
-            None,  # Divider
-            # 🔍 Deep Dive
-            "search", "clock-history", "graph-up-arrow", "arrow-repeat",
-            None,  # Divider
-            # ⚙️ Legacy
-            "gear"
-        ],
-        menu_icon="cast",
-        default_index=0,  # Dashboard is default
-        styles={
-            "container": {"padding": "5px", "background-color": "#0E1117"},
-            "icon": {"color": "#fafafa", "font-size": "16px"},
-            "nav-link": {
-                "font-size": "14px",
-                "text-align": "left",
-                "margin": "2px 0px",
-                "padding": "8px 12px",
-                "--hover-color": "#262730",
-            },
-            "nav-link-selected": {"background-color": "#667eea"},
-        }
-    )
+    st.markdown("### 🧭 Navigation")
 
-    # Skip dividers - if user clicks a divider, default to Dashboard
-    if page == "─────────":
-        page = "Dashboard"
+    # Helper function to create nav button
+    def nav_button(label, icon=""):
+        icon_text = f"{icon} " if icon else ""
+        if st.button(f"{icon_text}{label}", key=f"nav_{label}", use_container_width=True):
+            st.session_state.page = label
+            st.rerun()
+
+    # 📊 DASHBOARDS (expanded by default)
+    with st.expander("📊 Dashboards", expanded=True):
+        nav_button("Dashboard", "📊")
+        nav_button("Trading Overview", "📈")
+        nav_button("Command Center", "🎯")
+
+    # 💼 TRADING OPERATIONS
+    with st.expander("💼 Trading Ops", expanded=True):
+        nav_button("Trade Manager", "📝")
+        nav_button("Position Sizer", "🔢")
+
+    # 📅 DAILY WORKFLOW
+    with st.expander("📅 Daily Workflow", expanded=False):
+        nav_button("Daily Routine", "🌅")
+        nav_button("Daily Journal", "📔")
+        nav_button("Daily Report Card", "📊")
+
+    # 📈 MARKET INTELLIGENCE
+    with st.expander("📈 Market Intel", expanded=False):
+        nav_button("IBD Market School", "🏫")
+        nav_button("M Factor", "📊")
+        nav_button("Performance Heat Map", "🔥")
+
+    # 🔍 DEEP DIVE
+    with st.expander("🔍 Deep Dive", expanded=False):
+        nav_button("Ticker Forensics", "🔬")
+        nav_button("Period Review", "⏱️")
+        nav_button("Analytics", "📈")
+        nav_button("Weekly Retro", "🔄")
+
+    # ⚙️ LEGACY
+    with st.expander("⚙️ Legacy", expanded=False):
+        nav_button("Dashboard (Legacy)", "⚙️")
+
+# Get page from session state
+page = st.session_state.page
+
+# ====== OLD NAVIGATIONS (COMMENTED FOR EASY REVERT) ======
+# Option 1: Original radio button
+# page = st.sidebar.radio("Go to Module", [
+#     "Dashboard", "Trading Overview", "Command Center", "Dashboard (Legacy)",
+#     "Daily Routine", "Daily Journal", "Daily Report Card", "IBD Market School",
+#     "M Factor", "Performance Heat Map", "Ticker Forensics", "Period Review",
+#     "Position Sizer", "Trade Manager", "Analytics", "Weekly Retro"
+# ])
+
+# Option 2: option_menu (icon-based but not collapsible)
+# from streamlit_option_menu import option_menu
+# with st.sidebar:
+#     page = option_menu(
+#         menu_title="Navigation",
+#         options=["Dashboard", "Trading Overview", ...],
+#         icons=["speedometer2", "graph-up", ...],
+#         default_index=0
+#     )
+# ====== END OLD NAVIGATIONS ======
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
