@@ -1318,12 +1318,11 @@ if page == "Dashboard":
                 xaxis_title='Date',
                 yaxis_title='Return %',
                 yaxis2=dict(
-                    title='% Exposure',
+                    title=dict(text='% Exposure', font=dict(color='#e67e22')),
                     overlaying='y',
                     side='right',
                     range=[0, 1000],
                     tickvals=[0, 100, 200],
-                    titlefont=dict(color='#e67e22'),
                     tickfont=dict(color='#e67e22')
                 ),
                 hovermode='x unified',
