@@ -711,7 +711,15 @@ with st.sidebar:
     # 💼 TRADING OPERATIONS
     with st.expander("💼 Trading Ops", expanded=True):
         nav_button("Trade Manager", "📝")
+        nav_button("Active Campaign Summary", "📋")
         nav_button("Position Sizer", "🔢")
+
+    # 🎯 RISK & ANALYTICS
+    with st.expander("🎯 Risk & Analytics", expanded=False):
+        nav_button("Risk Manager", "🛡️")
+        nav_button("Portfolio Heat", "🔥")
+        nav_button("Performance Audit", "📊")
+        nav_button("Earnings Planner", "💣")
 
     # 📅 DAILY WORKFLOW
     with st.expander("📅 Daily Workflow", expanded=False):
@@ -7000,6 +7008,2096 @@ elif page == "Trade Manager":
         else:
             st.warning("Summary file empty.")
 
+
+
+
+# ====================================================================
+# ACTIVE CAMPAIGN SUMMARY
+# ====================================================================
+elif page == "Active Campaign Summary":
+    st.subheader("Active Campaign Summary")
+
+
+
+    # --- IMAGE VIEWER FOR ACTIVE TRADES ---
+
+    if R2_AVAILABLE and USE_DATABASE and not df_s.empty:
+
+        df_open = df_s[df_s['Status'] == 'OPEN'].copy()
+
+        if not df_open.empty:
+
+            with st.expander("📸 View Entry Charts (Active Trades)"):
+
+                st.caption("View weekly and daily charts for your active positions")
+
+
+
+                # Get list of open trades
+
+                open_trades = df_open[['Trade_ID', 'Ticker']].values.tolist()
+
+                trade_opts = [f"{ticker} | {trade_id}" for trade_id, ticker in open_trades]
+
+
+
+                selected = st.selectbox("Select Trade", ["Select..."] + trade_opts, key='active_img_viewer')
+
+
+
+                if selected and selected != "Select...":
+
+                    ticker, trade_id = selected.split(" | ")
+
+                    images = db.get_trade_images(CURR_PORT_NAME, trade_id)
+
+
+
+                    if images:
+
+                        st.markdown(f"### {ticker} - {trade_id}")
+
+
+
+                        image_types = {img['image_type']: img for img in images}
+
+
+
+                        # Show weekly and daily (no exit for active trades)
+
+                        col1, col2 = st.columns(2)
+
+
+
+                        with col1:
+
+                            if 'weekly' in image_types:
+
+                                img_data = image_types['weekly']
+
+                                st.markdown("**Weekly Chart**")
+
+                                image_bytes = r2.download_image(img_data['image_url'])
+
+                                if image_bytes:
+
+                                    st.image(image_bytes, use_container_width=True)
+
+                                    st.caption(f"Uploaded: {img_data['uploaded_at']}")
+
+                                else:
+
+                                    st.warning("Failed to load weekly chart")
+
+                            else:
+
+                                st.info("No weekly chart")
+
+
+
+                        with col2:
+
+                            if 'daily' in image_types:
+
+                                img_data = image_types['daily']
+
+                                st.markdown("**Daily Chart**")
+
+                                image_bytes = r2.download_image(img_data['image_url'])
+
+                                if image_bytes:
+
+                                    st.image(image_bytes, use_container_width=True)
+
+                                    st.caption(f"Uploaded: {img_data['uploaded_at']}")
+
+                                else:
+
+                                    st.warning("Failed to load daily chart")
+
+                            else:
+
+                                st.info("No daily chart")
+
+                    else:
+
+                        st.info("No charts uploaded for this trade")
+
+
+
+    # --- INIT SESSION STATE ---
+
+    if 'live_prices' not in st.session_state:
+
+        st.session_state['live_prices'] = {}
+
+        st.session_state['last_update'] = None
+
+
+
+    if not df_s.empty:
+
+         df_open = df_s[df_s['Status'] == 'OPEN'].copy()
+
+         
+
+         if not df_open.empty:
+
+             
+
+             # --- 0. ON-DEMAND REFRESH (FAST MODE) ---
+
+             c_btn, c_info = st.columns([1, 3])
+
+             
+
+             if c_btn.button("🔄 Refresh Live Prices"):
+
+                 tickers = df_open['Ticker'].unique().tolist()
+
+                 if tickers:
+
+                     with st.spinner("Fetching current prices..."):
+
+                         try:
+
+                             # 1. Download only 1 day (Much faster, less data)
+
+                             data = yf.download(tickers, period="1d", progress=False)['Close']
+
+                             
+
+                             new_prices = {}
+
+                             
+
+                             if len(tickers) == 1:
+
+                                 val = data.iloc[-1]
+
+                                 if hasattr(val, 'iloc'): val = val.iloc[0]
+
+                                 new_prices[tickers[0]] = float(val)
+
+                             else:
+
+                                 # Check valid columns
+
+                                 valid_cols = [t for t in tickers if t in data.columns]
+
+                                 last_row = data.iloc[-1]
+
+                                 
+
+                                 for t in valid_cols:
+
+                                     try:
+
+                                         val = last_row[t]
+
+                                         new_prices[t] = float(val)
+
+                                     except: pass
+
+                             
+
+                             # Update Session
+
+                             st.session_state['live_prices'] = new_prices
+
+                             st.session_state['last_update'] = datetime.now().strftime("%H:%M:%S")
+
+                             st.success("Prices Updated!")
+
+                             
+
+                         except Exception as e:
+
+                             st.warning(f"Could not fetch prices. Using saved values.")
+
+
+
+             # Show status
+
+             if st.session_state['last_update']:
+
+                 c_info.caption(f"Last Update: {st.session_state['last_update']}")
+
+             else:
+
+                 c_info.info("Using saved data. Click Refresh to update.")
+
+
+
+             # --- 1. LIFO ENGINE (UNCHANGED) ---
+
+             def run_lifo_engine(row):
+
+                 tid = row['Trade_ID']
+
+                 
+
+                 def force_float(x):
+
+                     try: return float(str(x).replace('$','').replace(',',''))
+
+                     except: return 0.0
+
+                 
+
+                 summary_stop = force_float(row.get('Stop_Loss', 0))
+
+                 summary_entry = force_float(row.get('Avg_Entry', 0))
+
+                 shares = force_float(row.get('Shares', 0))
+
+
+
+                 tid_str = str(tid).strip()
+
+                 df_d['Trade_ID_Str'] = df_d['Trade_ID'].astype(str).str.strip()
+
+                 subset = df_d[df_d['Trade_ID_Str'] == tid_str].copy()
+
+                 
+
+                 if subset.empty:
+
+                     eff_stop = summary_stop if summary_stop > 0 else summary_entry
+
+                     risk = max(0.0, (summary_entry - eff_stop) * shares)
+
+                     proj = (eff_stop - summary_entry) * shares
+
+                     return risk, eff_stop, summary_entry, proj, 0.0
+
+
+
+                 subset['Type_Rank'] = subset['Action'].apply(lambda x: 0 if str(x).upper() == 'BUY' else 1)
+
+                 if 'Date' in subset.columns:
+
+                     subset['Date'] = pd.to_datetime(subset['Date'], errors='coerce')
+
+                     subset = subset.sort_values(['Date', 'Type_Rank'])
+
+                 
+
+                 inventory = [] 
+
+                 realized_bank = 0.0 
+
+                 
+
+                 for _, tx in subset.iterrows():
+
+                     action = str(tx.get('Action', '')).upper()
+
+                     tx_shares = abs(force_float(tx.get('Shares', 0)))
+
+                     
+
+                     if action == 'BUY':
+
+                         price = force_float(tx.get('Amount', tx.get('Price', 0.0)))
+
+                         if price == 0: price = summary_entry
+
+                         stop = force_float(tx.get('Stop_Loss', tx.get('Stop', 0.0)))
+
+                         if stop == 0: stop = price 
+
+                         inventory.append({'qty': tx_shares, 'price': price, 'stop': stop})
+
+                         
+
+                     elif action == 'SELL':
+
+                         to_sell = tx_shares
+
+                         sell_price = force_float(tx.get('Amount', tx.get('Price', 0.0)))
+
+                         cost_basis_accum = 0.0
+
+                         sold_qty_accum = 0.0
+
+                         
+
+                         while to_sell > 0 and inventory:
+
+                             last = inventory[-1] 
+
+                             take = min(to_sell, last['qty'])
+
+                             cost_basis_accum += (take * last['price'])
+
+                             sold_qty_accum += take
+
+                             last['qty'] -= take
+
+                             to_sell -= take
+
+                             if last['qty'] < 0.00001: inventory.pop()
+
+                         
+
+                         revenue = sold_qty_accum * sell_price
+
+                         realized_bank += (revenue - cost_basis_accum)
+
+
+
+                 inventory_proj_pl = 0.0
+
+                 total_open_shares = 0.0
+
+                 weighted_cost = 0.0
+
+                 weighted_stop = 0.0 
+
+                 
+
+                 for item in inventory:
+
+                     qty = item['qty']
+
+                     price = item['price']
+
+                     stop = item['stop']
+
+                     if qty > 0:
+
+                         total_open_shares += qty
+
+                         weighted_cost += (qty * price)
+
+                         weighted_stop += (qty * stop)
+
+                         inventory_proj_pl += (stop - price) * qty
+
+                 
+
+                 avg_cost = (weighted_cost / total_open_shares) if total_open_shares > 0 else summary_entry
+
+                 avg_log_stop = (weighted_stop / total_open_shares) if total_open_shares > 0 else 0.0
+
+
+
+                 master_stop = summary_stop if summary_stop > 0 else (avg_log_stop if avg_log_stop > 0 else avg_cost)
+
+                 initial_risk = max(0.0, (avg_cost - master_stop) * total_open_shares)
+
+                 final_projected_floor = inventory_proj_pl + realized_bank
+
+                 
+
+                 return initial_risk, master_stop, avg_cost, final_projected_floor, realized_bank
+
+
+
+             metrics = df_open.apply(run_lifo_engine, axis=1, result_type='expand')
+
+             
+
+             df_open['Risk $'] = metrics[0]
+
+             df_open['Avg Stop'] = metrics[1]
+
+             df_open['Avg_Entry'] = metrics[2]
+
+             df_open['Projected P&L'] = metrics[3]
+
+             df_open['Realized Bank'] = metrics[4]
+
+             
+
+             # --- 2. UPDATE FINANCIALS ---
+
+             def get_live_price(row):
+
+                 if row['Ticker'] in st.session_state['live_prices']: 
+
+                     return st.session_state['live_prices'][row['Ticker']]
+
+                 try: return float(row.get('Current_Price', 0)) if float(row.get('Current_Price', 0)) > 0 else float(row['Avg_Entry'])
+
+                 except: return float(row['Avg_Entry'])
+
+
+
+             df_open['Current Price'] = df_open.apply(get_live_price, axis=1)
+
+             df_open['Current Value'] = df_open['Shares'] * df_open['Current Price']
+
+             df_open['Unrealized_PL'] = (df_open['Current Price'] - df_open['Avg_Entry']) * df_open['Shares']
+
+             
+
+             df_open['Return_Pct'] = df_open.apply(
+
+                 lambda x: ((x['Current Price'] - x['Avg_Entry']) / x['Avg_Entry'] * 100) if x['Avg_Entry'] != 0 else 0.0, 
+
+                 axis=1
+
+             )
+
+
+
+             df_open['Safe_Stop'] = df_open.apply(lambda x: x['Avg Stop'] if x['Avg Stop'] > 0 else x['Avg_Entry'], axis=1)
+
+             df_open['Open Risk Equity'] = (df_open['Current Price'] - df_open['Safe_Stop']) * df_open['Shares']
+
+             
+
+             def get_days_held(val):
+
+                 try:
+
+                     tid_str = str(val).strip()
+
+                     rows = df_d[df_d['Trade_ID_Str'] == tid_str]
+
+                     if not rows.empty and 'Date' in rows:
+
+                         dates = pd.to_datetime(rows['Date'], errors='coerce')
+
+                         return (pd.Timestamp.now() - dates.min()).days
+
+                     return 0
+
+                 except: return 0
+
+             
+
+             df_open['Days Held'] = df_open['Trade_ID'].apply(get_days_held)
+
+
+
+             # --- 3. NEW: RISK STATUS (REPLACED TREND) ---
+
+             def get_risk_status(row):
+
+                 # If Risk $ is 0, it means Stop >= Cost (or net financed)
+
+                 if row['Risk $'] <= 0.01:
+
+                     return "🆓 Free Roll"
+
+                 else:
+
+                     return "⚠️ At Risk"
+
+                 
+
+             df_open['Risk Status'] = df_open.apply(get_risk_status, axis=1)
+
+
+
+             # Load equity from journal (database-aware)
+
+             equity = 100000.0
+
+             try:
+
+                 j_df = load_data(JOURNAL_FILE)
+
+                 if not j_df.empty and 'End NLV' in j_df.columns:
+
+                     # Sort by date to get the latest entry
+
+                     if 'Day' in j_df.columns:
+
+                         j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+
+                         j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+
+                     equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
+
+             except:
+
+                 pass
+
+             
+
+             df_open['Risk %'] = (df_open['Risk $'] / equity) * 100
+
+             df_open['Pos Size %'] = (df_open['Current Value'] / equity) * 100
+
+
+
+             # --- 4. DISPLAY METRICS ---
+
+             total_mkt = df_open['Current Value'].sum()
+
+             total_unreal = df_open['Unrealized_PL'].sum()
+
+             total_realized_bank = df_open['Realized Bank'].sum()
+
+             total_initial_risk = df_open['Risk $'].sum() 
+
+             total_open_risk_equity = df_open['Open Risk Equity'].sum() 
+
+             
+
+             live_exp = (total_mkt / equity) * 100
+
+             
+
+             m1, m2, m3, m4, m5, m6 = st.columns(6)
+
+             m1.metric("Open Positions", len(df_open))
+
+             m2.metric("Total Market Value", f"${total_mkt:,.2f}")
+
+             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of ${equity:,.0f}")
+
+             
+
+             m4.metric(
+
+                 "Total Unrealized P&L", 
+
+                 f"${total_unreal:,.2f}", 
+
+                 f"Realized: ${total_realized_bank:,.2f}", 
+
+                 delta_color="off"
+
+             )
+
+             
+
+             ir_pct = (total_initial_risk / equity) * 100
+
+             m5.metric("Initial Risk", f"${total_initial_risk:,.2f}", f"{ir_pct:.2f}% of NLV", delta_color="off")
+
+             
+
+             or_pct = (total_open_risk_equity / equity) * 100
+
+             m6.metric("Open Risk (Heat)", f"${total_open_risk_equity:,.2f}", f"{or_pct:.2f}% of NLV", delta_color="inverse")
+
+             
+
+             # --- 5. DATAFRAME ---
+
+             if 'Return_Pct' in df_open.columns:
+
+                 df_open = df_open.sort_values(by='Return_Pct', ascending=False)
+
+             
+
+             # UPDATED COLUMNS: Removed Trend Status, Added Risk Status
+
+             cols = ['Trade_ID', 'Ticker', 'Days Held', 'Risk Status', 'Return_Pct', 'Pos Size %', 
+
+                     'Shares', 'Avg_Entry', 'Current Price', 'Avg Stop', 'Risk_Budget', 
+
+                     'Risk $', 'Risk %', 'Current Value', 'Unrealized_PL', 'Projected P&L']
+
+             
+
+             final_cols = [c for c in cols if c in df_open.columns]
+
+             
+
+             st.dataframe(
+
+                 df_open[final_cols].style.format({
+
+                     'Shares':'{:.0f}', 'Total_Cost':'${:,.2f}', 'Unrealized_PL':'${:,.2f}', 'Avg_Entry':'${:,.2f}', 
+
+                     'Current Price':'${:,.2f}', 'Return_Pct':'{:.2f}%', 'Current Value': '${:,.2f}', 'Pos Size %': '{:.1f}%', 
+
+                     'Avg Stop': '${:,.2f}', 'Risk $': '${:,.2f}', 'Risk %': '{:.2f}%', 'Risk_Budget': '${:,.2f}', 'Days Held': '{:.0f}',
+
+                     'Projected P&L': '${:,.2f}'
+
+                 }).applymap(color_pnl, subset=['Unrealized_PL', 'Return_Pct', 'Projected P&L']),
+
+                 height=(len(df_open) + 1) * 35 + 3,
+
+                 use_container_width=True
+
+             )
+
+             
+
+             # --- 6. MONITOR ---
+
+             st.markdown("---"); st.subheader("🛡️ Risk Monitor")
+
+             all_clear = True
+
+             for _, r in df_open.iterrows():
+
+                 budget = 0.0
+
+                 try: budget = float(str(r.get('Risk_Budget', 0)).replace('$','').replace(',',''))
+
+                 except: pass
+
+                 
+
+                 if r['Risk $'] > (budget + 5):
+
+                     st.warning(f"⚠️ **{r['Ticker']}**: Initial Risk (${r['Risk $']:.0f}) > Budget (${budget:.0f}).")
+
+                     all_clear = False
+
+                 
+
+                 if r['Return_Pct'] <= -7.0:
+
+                     st.error(f"🔴 **{r['Ticker']}**: Down {r['Return_Pct']:.2f}%. Violates Stop Rule.")
+
+                     all_clear = False
+
+             if all_clear: st.success("✅ System Health Good.")
+
+             
+
+         else: st.info("No open positions.")
+
+    else: st.info("No data available.")
+
+
+
+# --- TAB RISK: RISK MANAGER (FULL ENGINE CLONE) ---
+
+
+# ====================================================================
+# RISK MANAGER
+# ====================================================================
+elif page == "Risk Manager":
+    import numpy as np 
+
+    import matplotlib.pyplot as plt
+
+    st.subheader(f"Risk Manager ({CURR_PORT_NAME})")
+
+    
+
+    # --- CONFIGURATION ---
+
+    RESET_DATE = pd.Timestamp("2025-12-16")
+
+    
+
+    # 1. LOAD JOURNAL (For Historical Chart)
+
+    # Load journal data (database-aware)
+
+    p_path = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
+
+    df_j = load_data(p_path)
+
+
+
+    if not df_j.empty:
+
+        
+
+        # Clean Data
+
+        if not df_j.empty and 'Day' in df_j.columns:
+
+            df_j['Day'] = pd.to_datetime(df_j['Day'], errors='coerce')
+
+            df_j.sort_values('Day', inplace=True) 
+
+            
+
+            def clean_num_rm(x):
+
+                try:
+
+                    if isinstance(x, str):
+
+                        return float(x.replace('$', '').replace(',', '').replace('%', '').strip())
+
+                    return float(x)
+
+                except: return 0.0
+
+
+
+            for c in ['End NLV', 'Beg NLV', 'Cash -/+']: 
+
+                if c in df_j.columns: df_j[c] = df_j[c].apply(clean_num_rm)
+
+            
+
+            # Filter for Reset Date
+
+            df_active = df_j[df_j['Day'] >= RESET_DATE].copy()
+
+            
+
+            if not df_active.empty:
+
+                curr_nlv = df_active['End NLV'].iloc[-1]
+
+                peak_nlv = df_active['End NLV'].max()
+
+                
+
+                # Drawdown Metrics
+
+                dd_dol = peak_nlv - curr_nlv
+
+                dd_pct = (dd_dol / peak_nlv) * 100 if peak_nlv > 0 else 0.0
+
+                
+
+                # Hard Decks (UPDATED TRIGGERS: 7.5%, 12.5%, 15%)
+
+                deck_l1 = peak_nlv * 0.925  # -7.5%
+
+                deck_l2 = peak_nlv * 0.875  # -12.5%
+
+                deck_l3 = peak_nlv * 0.850  # -15.0%
+
+                dist_l1 = curr_nlv - deck_l1
+
+
+
+                # ==========================================================
+
+                # 2. CALCULATE LIVE OPEN RISK (EXACT ENGINE CLONE)
+
+                # ==========================================================
+
+                current_open_risk = 0.0
+
+                
+
+                if not df_s.empty:
+
+                    # A. Filter Open Positions
+
+                    if 'Status' in df_s.columns:
+
+                        df_s['Status_Clean'] = df_s['Status'].astype(str).str.strip().str.upper()
+
+                        df_open = df_s[df_s['Status_Clean'] == 'OPEN'].copy()
+
+                    else: df_open = pd.DataFrame()
+
+                    
+
+                    if not df_open.empty:
+
+                        # B. Get Live Prices
+
+                        tickers = df_open['Ticker'].unique().tolist()
+
+                        live_prices = {}
+
+                        if tickers:
+
+                            try:
+
+                                data = yf.download(tickers, period="1d", progress=False)['Close']
+
+                                if len(tickers) == 1:
+
+                                    val = data.iloc[-1]
+
+                                    if isinstance(val, pd.Series): val = val.iloc[0]
+
+                                    live_prices[tickers[0]] = float(val)
+
+                                else:
+
+                                    last_row = data.iloc[-1]
+
+                                    for t in tickers:
+
+                                        if t in last_row.index:
+
+                                            live_prices[t] = float(last_row[t])
+
+                            except: pass
+
+
+
+                        # C. DEFINE THE ENGINE
+
+                        def calculate_risk_exact(row):
+
+                            tid = row['Trade_ID']
+
+                            
+
+                            # Helpers
+
+                            def force_float(x):
+
+                                try: return float(str(x).replace('$','').replace(',',''))
+
+                                except: return 0.0
+
+                            
+
+                            summary_stop = force_float(row.get('Stop_Loss', 0))
+
+                            summary_entry = force_float(row.get('Avg_Entry', 0))
+
+                            shares = force_float(row.get('Shares', 0))
+
+                            
+
+                            ticker = row.get('Ticker')
+
+                            current_price = live_prices.get(ticker, force_float(row.get('Current_Price', summary_entry)))
+
+                            
+
+                            tid_str = str(tid).strip()
+
+                            df_d['Trade_ID_Str'] = df_d['Trade_ID'].astype(str).str.strip()
+
+                            subset = df_d[df_d['Trade_ID_Str'] == tid_str].copy()
+
+                            
+
+                            avg_log_stop = 0.0
+
+                            if not subset.empty:
+
+                                subset['Type_Rank'] = subset['Action'].apply(lambda x: 0 if str(x).upper() == 'BUY' else 1)
+
+                                if 'Date' in subset.columns:
+
+                                    subset['Date'] = pd.to_datetime(subset['Date'], errors='coerce')
+
+                                    subset = subset.sort_values(['Date', 'Type_Rank'])
+
+                                
+
+                                inventory = []
+
+                                for _, tx in subset.iterrows():
+
+                                    action = str(tx.get('Action', '')).upper()
+
+                                    s = abs(force_float(tx.get('Shares', 0)))
+
+                                    if action == 'BUY':
+
+                                        pr = force_float(tx.get('Amount', tx.get('Price', 0.0)))
+
+                                        if pr == 0: pr = summary_entry
+
+                                        st = force_float(tx.get('Stop_Loss', tx.get('Stop', 0.0)))
+
+                                        if st == 0: st = pr
+
+                                        inventory.append({'qty': s, 'stop': st})
+
+                                    elif action == 'SELL':
+
+                                        sell_q = s
+
+                                        while sell_q > 0 and inventory:
+
+                                            last = inventory[-1]
+
+                                            take = min(sell_q, last['qty'])
+
+                                            last['qty'] -= take
+
+                                            sell_q -= take
+
+                                            if last['qty'] < 0.00001: inventory.pop()
+
+                                
+
+                                tot_q = 0.0
+
+                                w_st = 0.0
+
+                                for i in inventory:
+
+                                    if i['qty'] > 0:
+
+                                        tot_q += i['qty']
+
+                                        w_st += (i['qty'] * i['stop'])
+
+                                
+
+                                if tot_q > 0:
+
+                                    avg_log_stop = w_st / tot_q
+
+
+
+                            master_stop = summary_stop if summary_stop > 0 else (avg_log_stop if avg_log_stop > 0 else summary_entry)
+
+                            heat = max(0.0, (current_price - master_stop) * shares)
+
+                            return heat
+
+
+
+                        df_open['Calculated_Heat'] = df_open.apply(calculate_risk_exact, axis=1)
+
+                        current_open_risk = df_open['Calculated_Heat'].sum()
+
+
+
+                # --- 3. HEADS UP DISPLAY ---
+
+                st.markdown(f"### Current Status: ${curr_nlv:,.2f}")
+
+                
+
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric("Current Peak (HWM)", f"${peak_nlv:,.2f}")
+
+                col1.caption(f"Since {RESET_DATE.strftime('%m/%d/%y')}")
+
+                
+
+                col2.metric("Current Drawdown", f"-{dd_pct:.2f}%", f"-${dd_dol:,.2f}", delta_color="inverse")
+
+                
+
+                # UPDATED STATUS LOGIC
+
+                status_txt = "🟢 ALL CLEAR"
+
+                if dd_pct >= 15.0: status_txt = "☠️ GO TO CASH"
+
+                elif dd_pct >= 12.5: status_txt = "🟠 MAX 30% INVESTED"
+
+                elif dd_pct >= 7.5: status_txt = "🟡 REMOVE MARGIN"
+
+                
+
+                col3.metric("Required Action", status_txt)
+
+                
+
+                # Stop Out Floor
+
+                stop_out_floor_val = curr_nlv - current_open_risk
+
+                
+
+                if dd_pct < 7.5:
+
+                    col3.caption(f"Buffer: ${dist_l1:,.0f} to Level 1")
+
+                
+
+                col3.caption(f"Total Open Risk: -${current_open_risk:,.2f}")
+
+
+
+                st.markdown("---")
+
+
+
+                # --- 4. VISUALIZATION (UPDATED: HORIZONTAL LINES) ---
+
+                st.subheader("📉 The Hard Deck")
+
+                
+
+                dates = df_active['Day']
+
+                nlvs = df_active['End NLV']
+
+                hwm_series = df_active['End NLV'].cummax()
+
+
+
+                fig, ax = plt.subplots(figsize=(10, 6))
+
+                
+
+                # Main Series (Historical)
+
+                ax.plot(dates, nlvs, color='black', linewidth=2.5, label='Net Liquidity')
+
+                ax.plot(dates, hwm_series, color='gray', linestyle='--', linewidth=1, alpha=0.5, label='Peak (HWM)')
+
+                
+
+                # Hard Decks (Horizontal Lines based on CURRENT Peak)
+
+                # using axhline for full width lines
+
+                ax.axhline(y=deck_l1, color='#f1c40f', linewidth=1.5, alpha=0.8, label='L1: Remove Margin (-7.5%)')
+
+                ax.axhline(y=deck_l2, color='#e67e22', linewidth=1.5, alpha=0.8, label='L2: 30% Invested (-12.5%)')
+
+                ax.axhline(y=deck_l3, color='#c0392b', linewidth=2, alpha=0.8, label='L3: Cash (-15%)')
+
+                
+
+                # Stop Floor (Horizontal Line based on CURRENT Status)
+
+                # If all stops hit today, this is where you land.
+
+                ax.axhline(y=stop_out_floor_val, color='red', linestyle='--', linewidth=2, label=f'Stop-Out Floor')
+
+
+
+                # Dynamic Scaling
+
+                # We want to see at least the floor and the peak
+
+                vals_to_see = [stop_out_floor_val, deck_l3, curr_nlv, peak_nlv]
+
+                min_view = min(vals_to_see)
+
+                max_view = peak_nlv
+
+                
+
+                if not np.isnan(min_view) and not np.isnan(max_view):
+
+                    ax.set_ylim(bottom=min_view * 0.98, top=max_view * 1.01)
+
+
+
+                ax.set_title(f"Risk Levels relative to Peak (Dynamic)")
+
+                ax.set_ylabel("Account Value ($)")
+
+                ax.legend(loc='upper left')
+
+                ax.grid(True, linestyle='--', alpha=0.3)
+
+                
+
+                st.pyplot(fig)
+
+                
+
+                # --- 5. FUSE BOX INSTRUCTIONS (UPDATED) ---
+
+                st.markdown("### 🧨 Fuse Box Protocols")
+
+                f1, f2, f3 = st.columns(3)
+
+                
+
+                # LEVEL 1
+
+                f1.markdown("#### 🟡 LEVEL 1")
+
+                f1.markdown(f"**Trigger:** -7.5% DD (**${deck_l1:,.0f}**)")
+
+                if curr_nlv <= deck_l1: f1.error("❌ FUSE BLOWN")
+
+                else: f1.success("✅ SECURE")
+
+                f1.info("**Action:** Remove Margin.\n\nLockout New Buys until steady.")
+
+
+
+                # LEVEL 2
+
+                f2.markdown("#### 🟠 LEVEL 2")
+
+                f2.markdown(f"**Trigger:** -12.5% DD (**${deck_l2:,.0f}**)")
+
+                if curr_nlv <= deck_l2: f2.error("❌ FUSE BLOWN")
+
+                else: f2.success("✅ SECURE")
+
+                f2.warning("**Action:** Max 30% Invested.\n\nManage winners only. Cut loose ends.")
+
+
+
+                # LEVEL 3
+
+                f3.markdown("#### ☠️ LEVEL 3")
+
+                f3.markdown(f"**Trigger:** -15% DD (**${deck_l3:,.0f}**)")
+
+                if curr_nlv <= deck_l3: f3.error("❌ FUSE BLOWN")
+
+                else: f3.success("✅ SECURE")
+
+                f3.error("**Action:** GO TO CASH.\n\nProtection Mode. No trading for 48hrs.")
+
+
+
+            else:
+
+                st.info(f"No journal data available after reset date.")
+
+    else:
+
+        st.warning("No journal data found. Please log your first trading day.")
+
+
+
+# ==============================================================================
+
+# TAB: PORTFOLIO VOLATILITY (HEAT CHECK)
+
+# ==============================================================================
+
+# --- TAB: PORTFOLIO HEAT (TRADINGVIEW ALIGNED) ---
+
+
+# ====================================================================
+# PORTFOLIO HEAT
+# ====================================================================
+elif page == "Portfolio Heat":
+    st.subheader("🔥 Portfolio Volatility (Heat Check)")
+
+
+
+    # 1. Calculation Method Selector
+
+    heat_mode = st.radio("Calculation Method", ["🤖 Automated (TradingView Formula)", "✍️ Manual Override"], horizontal=True)
+
+
+
+    # Load current equity from journal
+
+    calc_equity = 100000.0
+
+    try:
+
+        j_df = load_data(JOURNAL_FILE)
+
+        if not j_df.empty and 'End NLV' in j_df.columns:
+
+            # Sort by date to get the latest entry
+
+            if 'Day' in j_df.columns:
+
+                j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+
+                j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+
+            calc_equity = float(str(j_df['End NLV'].iloc[0]).replace('$','').replace(',',''))
+
+    except:
+
+        pass
+
+
+
+    if not df_s.empty:
+
+        open_ops = df_s[df_s['Status'].astype(str).str.strip().str.upper() == 'OPEN'].copy()
+
+        
+
+        if not open_ops.empty:
+
+            vol_data = []
+
+            tickers_list = open_ops['Ticker'].unique().tolist()
+
+
+
+            if heat_mode == "🤖 Automated (TradingView Formula)":
+
+                st.info(f"📡 Syncing with TV 'SMA-Fixed' formula for {len(tickers_list)} positions...")
+
+                my_bar = st.progress(0)
+
+                
+
+                try:
+
+                    # Fetching 40 days of data to calculate a 21-period SMA
+
+                    # group_by='ticker' makes it easy to loop through multiple stocks
+
+                    batch_data = yf.download(
+
+                        tickers_list, 
+
+                        period="40d", 
+
+                        interval="1d", 
+
+                        progress=False, 
+
+                        group_by='ticker'
+
+                    )
+
+                except Exception as e:
+
+                    st.error(f"Download failed: {e}")
+
+                    batch_data = pd.DataFrame()
+
+
+
+                for i, ticker in enumerate(tickers_list):
+
+                    my_bar.progress((i + 1) / len(tickers_list))
+
+                    atr_pct = 0.0
+
+                    
+
+                    try:
+
+                        # Handling single vs multiple ticker return formats
+
+                        if len(tickers_list) > 1:
+
+                            df_t = batch_data[ticker].copy().dropna()
+
+                        else:
+
+                            df_t = batch_data.copy().dropna()
+
+                        
+
+                        if len(df_t) >= 21:
+
+                            # TRADINGVIEW "FIXED" FORMULA
+
+                            # TR = max(high-low, abs(high-prev_close), abs(low-prev_close))
+
+                            df_t['H-L'] = df_t['High'] - df_t['Low']
+
+                            df_t['H-PC'] = (df_t['High'] - df_t['Close'].shift(1)).abs()
+
+                            df_t['L-PC'] = (df_t['Low'] - df_t['Close'].shift(1)).abs()
+
+                            df_t['TR'] = df_t[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+
+                            
+
+                            # ATR% = (SMA of TR / SMA of Lows) * 100
+
+                            sma_tr = df_t['TR'].tail(21).mean()
+
+                            sma_low = df_t['Low'].tail(21).mean()
+
+                            
+
+                            if sma_low > 0:
+
+                                atr_pct = (sma_tr / sma_low) * 100
+
+                    except:
+
+                        atr_pct = 0.0
+
+                    
+
+                    # Calculate portfolio weighting
+
+                    row = open_ops[open_ops['Ticker'] == ticker].iloc[0]
+
+                    weight_pct = (row['Total_Cost'] / calc_equity) * 100
+
+                    vol_data.append({
+
+                        "Ticker": ticker, 
+
+                        "Weight (%)": weight_pct, 
+
+                        "ATR (21S) %": atr_pct, 
+
+                        "Heat Contribution": weight_pct * (atr_pct / 100)
+
+                    })
+
+                my_bar.empty()
+
+
+
+            else:
+
+                # ✍️ MANUAL OVERRIDE MODE
+
+                st.warning("Enter the ATR% (21S) value directly from your TradingView Table:")
+
+                c_man = st.columns(4)
+
+                for i, ticker in enumerate(tickers_list):
+
+                    col_idx = i % 4
+
+                    row = open_ops[open_ops['Ticker'] == ticker].iloc[0]
+
+                    weight_pct = (row['Total_Cost'] / calc_equity) * 100
+
+                    
+
+                    with c_man[col_idx]:
+
+                        m_atr = st.number_input(f"{ticker} ATR%", value=5.0, step=0.1, key=f"man_atr_{ticker}")
+
+                        vol_data.append({
+
+                            "Ticker": ticker, 
+
+                            "Weight (%)": weight_pct, 
+
+                            "ATR (21S) %": m_atr, 
+
+                            "Heat Contribution": weight_pct * (m_atr / 100)
+
+                        })
+
+
+
+            # 3. DISPLAY RESULTS
+
+            df_vol = pd.DataFrame(vol_data)
+
+            total_heat = df_vol['Heat Contribution'].sum()
+
+            
+
+            # Check heat against MO Risk Rules (Target < 2.5%)
+
+            m1, m2, m3 = st.columns(3)
+
+            heat_color = "normal" if total_heat < 2.5 else "inverse"
+
+            m1.metric("Total Portfolio Heat", f"{total_heat:.2f}%", delta="Target < 2.5%", delta_color=heat_color)
+
+            m2.metric("Avg Stock Volatility", f"{df_vol['ATR (21S) %'].mean():.2f}%")
+
+            m3.metric("Equity Basis", f"${calc_equity:,.0f}")
+
+
+
+            st.dataframe(df_vol.style.format({
+
+                "Weight (%)": "{:.1f}%", 
+
+                "ATR (21S) %": "{:.2f}%", 
+
+                "Heat Contribution": "{:.2f}%"
+
+            }).background_gradient(subset=["Heat Contribution"], cmap="Oranges"), use_container_width=True)
+
+            
+
+        else:
+
+            st.info("No open positions found to calculate heat.")
+
+    else:
+
+        st.warning("Trade Summary (df_s) is currently empty.")
+
+
+
+# ==============================================================================
+
+# TAB 8: ACTIVE CAMPAIGN DETAILED (DYNAMIC FLIGHT DECK + ORIG COST)
+
+# ==============================================================================
+
+
+# ====================================================================
+# EARNINGS PLANNER
+# ====================================================================
+elif page == "Earnings Planner":
+    st.subheader("💣 Earnings Risk Planner")
+
+    st.caption("Binary Event Logic: Principal Protection (House Money Buffer).")
+
+    
+
+    # Load Data
+
+    if 'df_s' in locals() and not df_s.empty:
+
+        open_pos = df_s[df_s['Status'] == 'OPEN'].copy()
+
+    else:
+
+        if os.path.exists(SUMMARY_FILE):
+
+            open_pos = pd.read_csv(SUMMARY_FILE)
+
+            open_pos = open_pos[open_pos['Status'] == 'OPEN'].copy()
+
+        else:
+
+            open_pos = pd.DataFrame()
+
+
+
+    # Load equity from journal (database-aware)
+
+    equity = 100000.0
+
+    try:
+
+        j_df = load_data(JOURNAL_FILE)
+
+        if not j_df.empty and 'End NLV' in j_df.columns:
+
+            equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+
+    except:
+
+        pass
+
+
+
+    if not open_pos.empty:
+
+        # 1. SELECT TICKER
+
+        tickers = sorted(open_pos['Ticker'].unique())
+
+        c_sel, c_blank = st.columns([1, 2])
+
+        sel_ticker = c_sel.selectbox("Select Ticker into Earnings", tickers)
+
+        
+
+        # Get Position Data
+
+        row = open_pos[open_pos['Ticker'] == sel_ticker].iloc[0]
+
+        shares = float(row['Shares'])
+
+        avg_cost = float(row['Avg_Entry'])
+
+        
+
+        # FIX 1: Price Default Logic
+
+        # Priority: Session Cache -> Row Current Price -> 0.0 (Manual)
+
+        def_price = 0.0
+
+        if 'live_prices' in st.session_state and sel_ticker in st.session_state['live_prices']:
+
+            def_price = st.session_state['live_prices'][sel_ticker]
+
+        elif 'Current_Price' in row and float(row['Current_Price']) > 0:
+
+            def_price = float(row['Current_Price'])
+
+        
+
+        # Fallback: If price is 0, we leave it 0 so user notices they need to input it
+
+        # We explicitly DO NOT use avg_cost as default to avoid confusion
+
+        
+
+        # INPUTS SECTION
+
+        st.markdown("---")
+
+        st.markdown("#### 1. Setup & Cushion Check")
+
+        
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        curr_price = c1.number_input("Current Price ($)", value=float(def_price), step=0.10, format="%.2f")
+
+        nlv_val = c2.number_input("Account Equity (NLV)", value=float(equity), step=1000.0)
+
+        shares_held = c3.number_input("Shares Held", value=int(shares), step=1)
+
+        cost_basis = c4.number_input("Avg Cost ($)", value=float(avg_cost), disabled=True)
+
+
+
+        # CALCULATE CUSHION
+
+        # Guard against zero division or zero price
+
+        if avg_cost > 0 and curr_price > 0:
+
+            unrealized_pct = ((curr_price - avg_cost) / avg_cost) * 100
+
+            unrealized_dlr = (curr_price - avg_cost) * shares_held
+
+        else:
+
+            unrealized_pct = 0.0
+
+            unrealized_dlr = 0.0
+
+        
+
+        # VISUAL CUSHION CHECK
+
+        if unrealized_pct >= 10.0:
+
+            st.success(f"✅ **PASS:** Cushion is {unrealized_pct:.2f}% (${unrealized_dlr:,.0f}). You have earned the right to hold.")
+
+        elif unrealized_pct > 0:
+
+            st.warning(f"⚠️ **THIN ICE:** Cushion is only {unrealized_pct:.2f}%. Any gap will likely eat principal.")
+
+        else:
+
+            st.error(f"❌ **FAIL:** You are underwater (-${abs(unrealized_dlr):,.0f}). Strategy Rule: **SELL ALL** before earnings.")
+
+
+
+        st.markdown("---")
+
+        st.markdown("#### 2. Stress Test Parameters")
+
+        
+
+        r1, r2, r3 = st.columns(3)
+
+        risk_tol_pct = r1.slider("Max Capital Risk %", 0.1, 1.0, 0.5, 0.05, help="Max % of PRINCIPAL you are willing to lose.")
+
+        
+
+        # FIX 2: Expected Move in DOLLARS
+
+        exp_move_dlr = r2.number_input("Implied Move (+/- $)", value=5.00, step=0.50, help="Enter the Market Maker Move (Straddle Price) in Dollars.")
+
+        
+
+        stress_mult = r3.radio("Stress Multiplier", [1.5, 2.0], index=1, horizontal=True)
+
+
+
+        # CALCULATIONS
+
+        # 1. The Gap
+
+        gap_dlr = exp_move_dlr * stress_mult
+
+        disaster_price = curr_price - gap_dlr
+
+        
+
+        # 2. The Drop (Market Value Loss)
+
+        # This is how much equity vanishes from the screen
+
+        total_drop_equity = gap_dlr * shares_held
+
+        
+
+        # FIX 3: Principal Risk Calculation
+
+        # Capital Risk = (Avg Cost - Disaster Price) * Shares
+
+        # If Disaster Price > Avg Cost, we are still profitable (Risk = 0)
+
+        if disaster_price < avg_cost:
+
+            principal_risk_dlr = (avg_cost - disaster_price) * shares_held
+
+        else:
+
+            principal_risk_dlr = 0.0 # House Money absorbed it all
+
+        
+
+        pct_impact_principal = (principal_risk_dlr / nlv_val) * 100
+
+        max_allowed_loss = nlv_val * (risk_tol_pct / 100)
+
+        
+
+        # OUTPUTS
+
+        st.markdown("---")
+
+        st.markdown("#### 3. The Verdict")
+
+        
+
+        k1, k2, k3, k4 = st.columns(4)
+
+        k1.metric("Disaster Price", f"${disaster_price:.2f}", f"-${gap_dlr:.2f} Gap")
+
+        k2.metric("Profit Buffer", f"${unrealized_dlr:,.0f}", "Your Cushion")
+
+        k3.metric("Projected Drawdown", f"-${total_drop_equity:,.0f}", "Equity Drop", delta_color="off")
+
+        
+
+        # The Critical Metric
+
+        k4.metric("Risk to Principal", f"${principal_risk_dlr:,.0f}", f"{pct_impact_principal:.2f}% of NLV", delta_color="inverse")
+
+
+
+        st.markdown("---")
+
+        
+
+        # LOGIC ENGINE
+
+        if principal_risk_dlr <= max_allowed_loss:
+
+            if principal_risk_dlr == 0:
+
+                st.success(f"🛡️ **SAFE (HOUSE MONEY):** Even with a ${gap_dlr:.2f} gap, price (${disaster_price:.2f}) stays above your cost (${avg_cost:.2f}). No principal at risk.")
+
+            else:
+
+                st.success(f"✅ **APPROVED:** Principal risk is ${principal_risk_dlr:,.0f} ({pct_impact_principal:.2f}%), which is within your {risk_tol_pct}% budget.")
+
+        else:
+
+            # Calculate Trim needed to protect PRINCIPAL
+
+            # Target Loss = Max Allowed
+
+            # Current Loss = Principal Risk
+
+            # Excess Loss = Principal Risk - Max Allowed
+
+            # Shares to Sell = Excess Loss / (Avg Cost - Disaster Price)
+
+            
+
+            loss_per_share = avg_cost - disaster_price
+
+            excess_loss = principal_risk_dlr - max_allowed_loss
+
+            
+
+            import math
+
+            if loss_per_share > 0:
+
+                shares_to_trim = math.ceil(excess_loss / loss_per_share)
+
+            else:
+
+                shares_to_trim = 0 # Should not happen in else block
+
+            
+
+            safe_shares = shares_held - shares_to_trim
+
+            
+
+            st.error(f"⛔ **RISK EXCEEDED:** You risk losing **{pct_impact_principal:.2f}%** of your starting capital.")
+
+            
+
+            c_act1, c_act2 = st.columns(2)
+
+            c_act1.metric("REQUIRED TRIM", f"-{shares_to_trim} Shares", "Sell Before Close")
+
+            c_act2.metric("Max Safe Hold", f"{safe_shares} Shares", f"Protects {risk_tol_pct}% Principal")
+
+
+
+    else:
+
+        st.info("No open positions found to analyze.")
+
+
+
+# --- TAB 11: PERFORMANCE AUDIT (WITH PERIOD SELECTOR & FIXED MATH) ---
+
+
+# ====================================================================
+# PERFORMANCE AUDIT
+# ====================================================================
+elif page == "Performance Audit":
+    st.subheader("🏆 Performance Audit: The Best & The Worst")
+
+    st.markdown("Analysis of outlier trades to determine 'R' efficiency and P&L concentration.")
+
+    
+
+    # Load necessary data
+
+    if not df_s.empty:
+
+        
+
+        # --- 1. PERIOD SELECTOR ---
+
+        c_scope1, c_scope2 = st.columns(2)
+
+        scope_mode = c_scope1.selectbox("Analysis Period", ["All Time", "Current Year (YTD)", "Previous Year", "Custom Range"])
+
+        
+
+        # Filter Logic
+
+        audit_source = df_s[df_s['Status'] == 'CLOSED'].copy()
+
+        audit_source['Closed_Date'] = pd.to_datetime(audit_source['Closed_Date'], errors='coerce')
+
+        
+
+        start_d, end_d = None, None
+
+        now = datetime.now()
+
+        
+
+        if scope_mode == "Current Year (YTD)":
+
+            start_d = datetime(now.year, 1, 1)
+
+            end_d = now
+
+        elif scope_mode == "Previous Year":
+
+            start_d = datetime(now.year - 1, 1, 1)
+
+            end_d = datetime(now.year - 1, 12, 31)
+
+        elif scope_mode == "Custom Range":
+
+            d_range = c_scope2.date_input("Select Range", [now - timedelta(days=90), now])
+
+            if len(d_range) == 2:
+
+                start_d, end_d = datetime.combine(d_range[0], datetime.min.time()), datetime.combine(d_range[1], datetime.max.time())
+
+
+
+        # Apply Filter
+
+        if start_d and end_d:
+
+            # Filter by Closed Date
+
+            audit_df = audit_source[
+
+                (audit_source['Closed_Date'] >= start_d) & 
+
+                (audit_source['Closed_Date'] <= end_d)
+
+            ].copy()
+
+            st.caption(f"Showing trades closed between {start_d.strftime('%Y-%m-%d')} and {end_d.strftime('%Y-%m-%d')}")
+
+        else:
+
+            audit_df = audit_source.copy()
+
+            st.caption("Showing ALL closed trades.")
+
+        
+
+        st.markdown("---")
+
+
+
+        if not audit_df.empty:
+
+            if st.button("🚀 RUN AUDIT", type="primary"):
+
+                
+
+                # 2. PREPARE HISTORY FOR NLV LOOKUP
+
+                p_clean = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
+
+                p_legacy = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal.csv')
+
+                path_j = p_clean if os.path.exists(p_clean) else p_legacy
+
+                
+
+                df_j_hist = pd.DataFrame()
+
+                if os.path.exists(path_j):
+
+                    try:
+
+                        df_j_hist = pd.read_csv(path_j)
+
+                        df_j_hist['Day'] = pd.to_datetime(df_j_hist['Day'], errors='coerce')
+
+                        df_j_hist = df_j_hist.sort_values('Day', ascending=True)
+
+                        
+
+                        def clean_nlv_audit(x):
+
+                            try: return float(str(x).replace('$', '').replace(',', '').strip())
+
+                            except: return 0.0
+
+                        if 'End NLV' in df_j_hist.columns:
+
+                            df_j_hist['End NLV'] = df_j_hist['End NLV'].apply(clean_nlv_audit)
+
+                    except: pass
+
+
+
+                # 3. CALCULATION ENGINE
+
+                results = []
+
+                progress_bar = st.progress(0)
+
+                total_rows = len(audit_df)
+
+                
+
+                for i, (idx, row) in enumerate(audit_df.iterrows()):
+
+                    progress_bar.progress((i + 1) / total_rows)
+
+                    
+
+                    # A. Risk Budget & R-Multiple
+
+                    budget = row.get('Risk_Budget', 0.0)
+
+                    
+
+                    if budget <= 0:
+
+                        open_date = pd.to_datetime(row['Open_Date'])
+
+                        if not df_j_hist.empty:
+
+                            prior = df_j_hist[df_j_hist['Day'] < open_date]
+
+                            if not prior.empty:
+
+                                budget = prior.iloc[-1]['End NLV'] * 0.005
+
+                            else: budget = 500.0
+
+                        else: budget = 500.0
+
+                    
+
+                    realized = row['Realized_PL']
+
+                    r_mult = realized / budget if budget > 0 else 0.0
+
+                    
+
+                    # B. Exit Efficiency
+
+                    eff_val = 0.0
+
+                    try:
+
+                        o_date = pd.to_datetime(row['Open_Date']).tz_localize(None)
+
+                        c_date = row['Closed_Date'].tz_localize(None) if pd.notnull(row['Closed_Date']) else datetime.now()
+
+                        
+
+                        h_data = yf.Ticker(row['Ticker']).history(start=o_date, end=c_date + timedelta(days=1))
+
+                        if not h_data.empty:
+
+                            period_high = h_data['High'].max()
+
+                            if row['Shares'] > 0:
+
+                                calc_exit = (row['Realized_PL'] / row['Shares']) + row['Avg_Entry']
+
+                                if period_high > 0:
+
+                                    eff_val = (calc_exit / period_high) * 100
+
+                    except: pass
+
+                    
+
+                    results.append({
+
+                        'Trade_ID': row['Trade_ID'],
+
+                        'Ticker': row['Ticker'],
+
+                        'Open_Date': row['Open_Date'],
+
+                        'Closed_Date': row['Closed_Date'], # <--- ADDED CLOSED DATE
+
+                        'Net P&L': realized,
+
+                        'Return %': row.get('Return_Pct', 0.0),
+
+                        'Risk Budget': budget,
+
+                        'R-Multiple': r_mult,
+
+                        'Exit Eff %': eff_val
+
+                    })
+
+                
+
+                res_df = pd.DataFrame(results)
+
+                progress_bar.empty()
+
+                
+
+                # 4. SORTING
+
+                top_15 = res_df.sort_values('Net P&L', ascending=False).head(15)
+
+                bot_15 = res_df.sort_values('Net P&L', ascending=True).head(15)
+
+                
+
+                # 5. AGGREGATE STATS (CORRECTED MATH)
+
+                # Calculate Total Gross Profit (Sum of all positives) and Total Gross Loss (Sum of all negatives)
+
+                gross_profit = res_df[res_df['Net P&L'] > 0]['Net P&L'].sum()
+
+                gross_loss = res_df[res_df['Net P&L'] < 0]['Net P&L'].sum() # This is a negative number
+
+                net_pl = gross_profit + gross_loss
+
+                
+
+                top_sum = top_15['Net P&L'].sum()
+
+                bot_sum = bot_15['Net P&L'].sum()
+
+                
+
+                # Ratios
+
+                pct_top_of_gross = (top_sum / gross_profit * 100) if gross_profit != 0 else 0
+
+                pct_bot_of_loss = (bot_sum / gross_loss * 100) if gross_loss != 0 else 0 # e.g. -15k / -20k = 75%
+
+                
+
+                # --- DISPLAY METRICS ---
+
+                st.markdown("### 📊 Concentration Analysis (Pareto)")
+
+                c1, c2, c3, c4 = st.columns(4)
+
+                c1.metric("Net P&L (Period)", f"${net_pl:,.2f}")
+
+                c2.metric("Total Gross Profit", f"${gross_profit:,.2f}")
+
+                c3.metric("Total Gross Loss", f"${gross_loss:,.2f}")
+
+                c4.metric("Profit Factor", f"{abs(gross_profit/gross_loss):.2f}" if gross_loss != 0 else "Inf")
+
+                
+
+                st.markdown("#### Outlier Impact")
+
+                k1, k2 = st.columns(2)
+
+                k1.metric("Top 15 Winners Sum", f"${top_sum:,.2f}", f"{pct_top_of_gross:.1f}% of Gross Profit")
+
+                k2.metric("Bottom 15 Losers Sum", f"${bot_sum:,.2f}", f"{pct_bot_of_loss:.1f}% of Gross Loss", delta_color="inverse")
+
+                
+
+                st.markdown("---")
+
+                
+
+                # --- TOP 15 TABLE ---
+
+                st.subheader("🟢 Top 15 Best Trades")
+
+                st.dataframe(
+
+                    top_15.style
+
+                    .format({
+
+                        'Net P&L': '${:,.2f}', 'Return %': '{:.2f}%', 
+
+                        'Risk Budget': '${:,.0f}', 'R-Multiple': '{:+.2f}R',
+
+                        'Exit Eff %': '{:.1f}%',
+
+                        'Open_Date': lambda x: pd.to_datetime(x).strftime('%Y-%m-%d') if pd.notnull(x) else '',
+
+                        'Closed_Date': lambda x: pd.to_datetime(x).strftime('%Y-%m-%d') if pd.notnull(x) else ''
+
+                    })
+
+                    .applymap(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
+
+                    use_container_width=True,
+
+                    height=550
+
+                )
+
+                
+
+                st.markdown("---")
+
+                
+
+                # --- BOTTOM 15 TABLE ---
+
+                st.subheader("🔴 Top 15 Worst Trades")
+
+                st.dataframe(
+
+                    bot_15.style
+
+                    .format({
+
+                        'Net P&L': '${:,.2f}', 'Return %': '{:.2f}%', 
+
+                        'Risk Budget': '${:,.0f}', 'R-Multiple': '{:+.2f}R',
+
+                        'Exit Eff %': '{:.1f}%',
+
+                        'Open_Date': lambda x: pd.to_datetime(x).strftime('%Y-%m-%d') if pd.notnull(x) else '',
+
+                        'Closed_Date': lambda x: pd.to_datetime(x).strftime('%Y-%m-%d') if pd.notnull(x) else ''
+
+                    })
+
+                    .applymap(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
+
+                    use_container_width=True,
+
+                    height=550
+
+                )
+
+                
+
+        else:
+
+            st.info("No closed trades found for this period.")
+
+    else:
+
+        st.warning("Summary file empty.")
+
+
+
+
+
+
+
+# ==============================================================================
+
+# PAGE 11: ANALYTICS (REVERTED TAB 1 + DRILL-DOWN LIVE TAB)
+
+# ==============================================================================
 
 
 # ==============================================================================
