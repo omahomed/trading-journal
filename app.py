@@ -687,6 +687,7 @@ st.sidebar.markdown("---")
 # One menu to rule them all.
 page = st.sidebar.radio("Go to Module", [
     "Command Center",
+    "Trading Overview",
     "Dashboard",
     "Daily Routine",
     "Daily Journal",
@@ -1316,10 +1317,10 @@ if page == "Dashboard":
         else: st.info("Data loaded but empty rows.")
 
 # ==============================================================================
-# PAGE 2: DASHBOARD - TRADING OVERVIEW
+# PAGE 2: TRADING OVERVIEW
 # ==============================================================================
-elif page == "Dashboard":
-    st.title("📊 TRADING DASHBOARD")
+elif page == "Trading Overview":
+    st.title("📊 TRADING OVERVIEW")
     st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
 
     # === LOAD DATA ===
