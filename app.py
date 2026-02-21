@@ -8506,19 +8506,19 @@ elif page == "Trade Journal":
 
                                     if weekly_upload:
                                         img_bytes = weekly_upload.read()
-                                        url = r2.upload_image(img_bytes, ticker, 'weekly')
+                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'weekly')
                                         db.save_trade_image(CURR_PORT_NAME, trade_id, 'weekly', url)
                                         upload_count += 1
 
                                     if daily_upload:
                                         img_bytes = daily_upload.read()
-                                        url = r2.upload_image(img_bytes, ticker, 'daily')
+                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'daily')
                                         db.save_trade_image(CURR_PORT_NAME, trade_id, 'daily', url)
                                         upload_count += 1
 
                                     if exit_upload:
                                         img_bytes = exit_upload.read()
-                                        url = r2.upload_image(img_bytes, ticker, 'exit')
+                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'exit')
                                         db.save_trade_image(CURR_PORT_NAME, trade_id, 'exit', url)
                                         upload_count += 1
 
