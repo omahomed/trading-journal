@@ -8467,7 +8467,11 @@ elif page == "Trade Journal":
                         st.markdown("---")
                         st.markdown("### 📤 Upload/Update Charts")
 
-                        upload_col1, upload_col2, upload_col3 = st.columns(3 if not is_open else 2)
+                        # Create columns based on trade status
+                        if not is_open:
+                            upload_col1, upload_col2, upload_col3 = st.columns(3)
+                        else:
+                            upload_col1, upload_col2 = st.columns(2)
 
                         with upload_col1:
                             weekly_upload = st.file_uploader(
@@ -8483,6 +8487,7 @@ elif page == "Trade Journal":
                                 key=f'daily_upload_{trade_id}'
                             )
 
+                        # Exit chart only for closed trades
                         if not is_open:
                             with upload_col3:
                                 exit_upload = st.file_uploader(
