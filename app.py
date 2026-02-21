@@ -8505,22 +8505,22 @@ elif page == "Trade Journal":
                                     upload_count = 0
 
                                     if weekly_upload:
-                                        img_bytes = weekly_upload.read()
-                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'weekly')
-                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'weekly', url)
-                                        upload_count += 1
+                                        url = r2.upload_image(weekly_upload, CURR_PORT_NAME, trade_id, ticker, 'weekly')
+                                        if url:
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'weekly', url, weekly_upload.name)
+                                            upload_count += 1
 
                                     if daily_upload:
-                                        img_bytes = daily_upload.read()
-                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'daily')
-                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'daily', url)
-                                        upload_count += 1
+                                        url = r2.upload_image(daily_upload, CURR_PORT_NAME, trade_id, ticker, 'daily')
+                                        if url:
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'daily', url, daily_upload.name)
+                                            upload_count += 1
 
                                     if exit_upload:
-                                        img_bytes = exit_upload.read()
-                                        url = r2.upload_image(img_bytes, CURR_PORT_NAME, trade_id, ticker, 'exit')
-                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'exit', url)
-                                        upload_count += 1
+                                        url = r2.upload_image(exit_upload, CURR_PORT_NAME, trade_id, ticker, 'exit')
+                                        if url:
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'exit', url, exit_upload.name)
+                                            upload_count += 1
 
                                     st.success(f"✅ Successfully uploaded {upload_count} chart(s)! Refresh to see changes.")
                                 except Exception as e:
