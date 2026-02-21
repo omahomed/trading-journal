@@ -8430,7 +8430,7 @@ elif page == "Trade Journal":
                                     st.markdown("**📊 Weekly Chart**")
                                     image_bytes = r2.download_image(img_data['image_url'])
                                     if image_bytes:
-                                        st.image(image_bytes, use_container_width=True)
+                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
                                     else:
                                         st.info("Chart not available")
                                 else:
@@ -8442,7 +8442,7 @@ elif page == "Trade Journal":
                                     st.markdown("**📈 Daily Chart**")
                                     image_bytes = r2.download_image(img_data['image_url'])
                                     if image_bytes:
-                                        st.image(image_bytes, use_container_width=True)
+                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
                                     else:
                                         st.info("Chart not available")
                                 else:
@@ -8455,7 +8455,7 @@ elif page == "Trade Journal":
                                         st.markdown("**🎯 Exit Chart**")
                                         image_bytes = r2.download_image(img_data['image_url'])
                                         if image_bytes:
-                                            st.image(image_bytes, use_container_width=True)
+                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
                                         else:
                                             st.info("Chart not available")
                                     else:
