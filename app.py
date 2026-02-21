@@ -8462,6 +8462,67 @@ elif page == "Trade Journal":
                                         st.info("No exit chart")
                         else:
                             st.info("No charts available for this trade")
+
+                        # === UPLOAD/UPDATE CHARTS ===
+                        st.markdown("---")
+                        st.markdown("### 📤 Upload/Update Charts")
+
+                        upload_col1, upload_col2, upload_col3 = st.columns(3 if not is_open else 2)
+
+                        with upload_col1:
+                            weekly_upload = st.file_uploader(
+                                "📊 Weekly Chart",
+                                type=['png', 'jpg', 'jpeg'],
+                                key=f'weekly_upload_{trade_id}'
+                            )
+
+                        with upload_col2:
+                            daily_upload = st.file_uploader(
+                                "📈 Daily Chart",
+                                type=['png', 'jpg', 'jpeg'],
+                                key=f'daily_upload_{trade_id}'
+                            )
+
+                        if not is_open:
+                            with upload_col3:
+                                exit_upload = st.file_uploader(
+                                    "🎯 Exit Chart",
+                                    type=['png', 'jpg', 'jpeg'],
+                                    key=f'exit_upload_{trade_id}'
+                                )
+                        else:
+                            exit_upload = None
+
+                        # Upload button
+                        if st.button("💾 Save Charts", key=f'save_charts_{trade_id}', type="primary"):
+                            if weekly_upload or daily_upload or exit_upload:
+                                try:
+                                    upload_count = 0
+
+                                    if weekly_upload:
+                                        img_bytes = weekly_upload.read()
+                                        url = r2.upload_image(img_bytes, ticker, 'weekly')
+                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'weekly', url)
+                                        upload_count += 1
+
+                                    if daily_upload:
+                                        img_bytes = daily_upload.read()
+                                        url = r2.upload_image(img_bytes, ticker, 'daily')
+                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'daily', url)
+                                        upload_count += 1
+
+                                    if exit_upload:
+                                        img_bytes = exit_upload.read()
+                                        url = r2.upload_image(img_bytes, ticker, 'exit')
+                                        db.save_trade_image(CURR_PORT_NAME, trade_id, 'exit', url)
+                                        upload_count += 1
+
+                                    st.success(f"✅ Successfully uploaded {upload_count} chart(s)! Refresh to see changes.")
+                                except Exception as e:
+                                    st.error(f"❌ Error uploading charts: {e}")
+                            else:
+                                st.warning("⚠️ Please select at least one chart to upload")
+
                     else:
                         st.info("Chart display requires R2 storage and database connection")
 
