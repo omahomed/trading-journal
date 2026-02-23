@@ -4559,13 +4559,21 @@ elif page == "Trade Manager":
                             )
 
                             # --- UPLOAD EXIT CHART (if provided) ---
+                            chart_uploaded = False
                             if R2_AVAILABLE and exit_chart is not None:
-                                exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
-                                if exit_url:
-                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
-                                    st.success("📸 Exit chart uploaded!")
+                                try:
+                                    exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                                    if exit_url:
+                                        db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
+                                        chart_uploaded = True
+                                except Exception as chart_err:
+                                    st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
 
-                            st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
+                            # Always show success for the sell transaction
+                            if chart_uploaded:
+                                st.success(f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded | Saved to database")
+                            else:
+                                st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Database save failed: {str(e)}")
@@ -4597,13 +4605,21 @@ elif page == "Trade Manager":
                         )
 
                         # --- UPLOAD EXIT CHART (if provided) ---
+                        chart_uploaded = False
                         if R2_AVAILABLE and USE_DATABASE and exit_chart is not None:
-                            exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
-                            if exit_url:
-                                db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
-                                st.success("📸 Exit chart uploaded!")
+                            try:
+                                exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                                if exit_url:
+                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
+                                    chart_uploaded = True
+                            except Exception as chart_err:
+                                st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
 
-                        st.success(f"Sold. Transaction ID: {s_trx}")
+                        # Always show success for the sell transaction
+                        if chart_uploaded:
+                            st.success(f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded")
+                        else:
+                            st.success(f"✅ Sold! Transaction ID: {s_trx}")
                         st.rerun()
         else: st.info("No positions to sell.")
 
