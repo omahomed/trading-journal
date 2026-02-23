@@ -4460,6 +4460,11 @@ elif page == "Trade Manager":
 
     # --- TAB 2: LOG SELL ---
     with tab2:
+        # Display success message from previous sell if exists
+        if 'sell_success' in st.session_state:
+            st.success(st.session_state.sell_success)
+            del st.session_state.sell_success
+
         open_opts = df_s[df_s['Status']=='OPEN'].copy()
         if not open_opts.empty:
              open_opts = open_opts.sort_values('Ticker')
@@ -4569,11 +4574,11 @@ elif page == "Trade Manager":
                                 except Exception as chart_err:
                                     st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
 
-                            # Always show success for the sell transaction
+                            # Store success message in session state for display after rerun
                             if chart_uploaded:
-                                st.success(f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded | Saved to database")
+                                st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded | Saved to database"
                             else:
-                                st.success(f"✅ Sold! Transaction ID: {s_trx} | Saved to database")
+                                st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Saved to database"
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Database save failed: {str(e)}")
@@ -4615,11 +4620,11 @@ elif page == "Trade Manager":
                             except Exception as chart_err:
                                 st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
 
-                        # Always show success for the sell transaction
+                        # Store success message in session state for display after rerun
                         if chart_uploaded:
-                            st.success(f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded")
+                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded"
                         else:
-                            st.success(f"✅ Sold! Transaction ID: {s_trx}")
+                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx}"
                         st.rerun()
         else: st.info("No positions to sell.")
 
