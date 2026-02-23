@@ -664,11 +664,11 @@ ACTIVE_DIR = os.path.join(DATA_ROOT, portfolio)
 BACKUP_DIR = os.path.join(ACTIVE_DIR, 'backups') # <--- Added this back for safety
 
 if portfolio == PORT_CANSLIM:
-    CURR_PORT_NAME = "CanSlim (Main)"
+    CURR_PORT_NAME = "CanSlim"
 elif portfolio == PORT_TQQQ:
     CURR_PORT_NAME = "TQQQ Strategy"
 else:
-    CURR_PORT_NAME = "457B (Retirement)"
+    CURR_PORT_NAME = "457B Plan"
 
 # Standardized Filenames (Since they are the same for all folders now)
 JOURNAL_FILE = os.path.join(ACTIVE_DIR, 'Trading_Journal_Clean.csv')
