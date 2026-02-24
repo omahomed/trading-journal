@@ -319,6 +319,31 @@ def load_data(file):
         return df
     except: return pd.DataFrame()
 
+def load_trade_data():
+    """Load and prepare trade detail/summary DataFrames with schema fixes.
+    Used by Trade Manager, Log Buy, and Log Sell pages.
+    Returns: (df_d, df_s)
+    """
+    if not os.path.exists(DETAILS_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
+    if not os.path.exists(SUMMARY_FILE):
+        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
+
+    df_d = load_data(DETAILS_FILE)
+    df_s = load_data(SUMMARY_FILE)
+
+    if 'Risk_Budget' not in df_s.columns:
+        df_s['Risk_Budget'] = 0.0
+
+    if 'Buy_Rule' in df_s.columns and 'Rule' not in df_s.columns:
+        df_s.rename(columns={'Buy_Rule': 'Rule'}, inplace=True)
+    if 'Rule' not in df_s.columns: df_s['Rule'] = ""
+
+    for col in ['Buy_Notes', 'Sell_Rule', 'Sell_Notes']:
+        if col not in df_s.columns: df_s[col] = ""
+
+    return df_d, df_s
+
 def generate_trx_id(df_d, trade_id, action, date_str):
     if df_d.empty: return "B1" if action == 'BUY' else "S1"
     txs = df_d[df_d['Trade_ID'] == trade_id].copy()
@@ -704,6 +729,8 @@ with st.sidebar:
     # 💼 TRADING OPERATIONS
     with st.expander("💼 Trading Ops", expanded=True):
         nav_button("Active Campaign Summary", "📋")
+        nav_button("Log Buy", "🟢")
+        nav_button("Log Sell", "🔴")
         nav_button("Position Sizer", "🔢")
         nav_button("Trade Journal", "📔")
         nav_button("Trade Manager", "📝")
@@ -4029,45 +4056,529 @@ elif page == "Position Sizer":
                 st.error("Please ensure Ticker, Price, and ATR are entered correctly.")
 
 # ==============================================================================
+# PAGE: LOG BUY (Standalone)
+# ==============================================================================
+elif page == "Log Buy":
+    st.header(f"LOG BUY ({CURR_PORT_NAME})")
+    df_d, df_s = load_trade_data()
+
+    st.caption("Live Entry Calculator")
+
+    # Show last upload attempt results (persists through rerun)
+    with st.expander("🔍 Last Upload Attempt Results", expanded=True):
+        if 'last_upload_attempt' in st.session_state:
+            attempt = st.session_state['last_upload_attempt']
+            st.json(attempt)
+            if st.button("Clear Results"):
+                del st.session_state['last_upload_attempt']
+                st.rerun()
+        else:
+            st.info("No upload attempts yet. Upload a file and log a trade to see results here.")
+
+    # Debug: Show system status
+    with st.expander("🔧 System Status (Debug)", expanded=False):
+        diag_cols = st.columns(3)
+        with diag_cols[0]:
+            st.metric("R2 Storage", "✅ Available" if R2_AVAILABLE else "❌ Not Available")
+        with diag_cols[1]:
+            st.metric("Database Mode", "✅ Enabled" if USE_DATABASE else "❌ Disabled")
+        with diag_cols[2]:
+            img_status = "✅ Enabled" if (R2_AVAILABLE and USE_DATABASE) else "❌ Disabled"
+            st.metric("Image Upload", img_status)
+
+        if not R2_AVAILABLE:
+            st.error("R2 storage module failed to load. Check if boto3 is installed and R2 secrets are configured.")
+        if not USE_DATABASE:
+            st.warning("Database mode is disabled. Images require database mode to be enabled.")
+
+    # Session State Init
+    if 'b_tick' not in st.session_state: st.session_state['b_tick'] = ""
+    if 'b_id' not in st.session_state: st.session_state['b_id'] = ""
+    if 'b_shs' not in st.session_state: st.session_state['b_shs'] = 0
+    if 'b_px' not in st.session_state: st.session_state['b_px'] = 0.0
+    if 'b_note' not in st.session_state: st.session_state['b_note'] = ""
+    if 'b_trx' not in st.session_state: st.session_state['b_trx'] = ""
+    if 'b_sl_pct' not in st.session_state: st.session_state['b_sl_pct'] = 8.0
+    if 'b_stop_val' not in st.session_state: st.session_state['b_stop_val'] = 0.0
+
+    c_top1, c_top2 = st.columns(2)
+    trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], horizontal=True)
+
+    b_date = c_top2.date_input("Date", get_current_date_ct(), key="b_date_input")
+    b_time = c_top2.time_input("Time", get_current_time_ct(), step=60, key="b_time_input")
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+
+    # --- 1. TICKER & STRATEGY SELECTION ---
+    if trade_type == "Start New Campaign":
+        b_tick = c1.text_input("Ticker Symbol", key="b_tick")
+        if b_tick: b_tick = b_tick.upper()
+
+        now_ym = datetime.now().strftime("%Y%m")
+        default_id = f"{now_ym}-001"
+        if not df_s.empty:
+            relevant_ids = [str(x) for x in df_s['Trade_ID'] if str(x).startswith(now_ym)]
+            if relevant_ids:
+                try:
+                    last_seq = max([int(x.split('-')[-1]) for x in relevant_ids if '-' in x])
+                    new_seq = last_seq + 1
+                    default_id = f"{now_ym}-{new_seq:03d}"
+                except: pass
+        if st.session_state['b_id'] == "": st.session_state['b_id'] = default_id
+        b_id = c2.text_input("Trade ID", key="b_id")
+        b_rule = st.selectbox("Buy Rule", BUY_RULES)
+    else:
+        # Scale In Logic
+        open_opts = df_s[df_s['Status']=='OPEN'].copy()
+        b_tick, b_id = "", ""
+        if not open_opts.empty:
+            open_opts = open_opts.sort_values('Ticker')
+            opts = ["Select..."] + [f"{r['Ticker']} | {r['Trade_ID']}" for _, r in open_opts.iterrows()]
+            sel_camp = c1.selectbox("Select Existing Campaign", opts, key="b_scale_sel")
+            if sel_camp and sel_camp != "Select...":
+                b_tick, b_id = sel_camp.split(" | ")
+                curr_row = open_opts[open_opts['Trade_ID']==b_id].iloc[0]
+                c2.info(f"Holding: {int(curr_row['Shares'])} shs @ ${curr_row['Avg_Entry']:.2f}")
+        else: c1.warning("No Open Campaigns.")
+        b_rule = st.selectbox("Add Rule", BUY_RULES)
+
+    # --- 2. RISK BUDGET CALCULATOR ---
+    risk_budget_dol = 0.0
+    def_equity = 100000.0
+    try:
+        j_df = load_data(JOURNAL_FILE)
+        if not j_df.empty and 'End NLV' in j_df.columns:
+            if 'Day' in j_df.columns:
+                j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+            val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
+            def_equity = float(val_str)
+    except Exception as e:
+        pass
+
+    if trade_type == "Start New Campaign":
+        st.markdown("#### 💰 Risk Budgeting")
+        rb1, rb2, rb3 = st.columns(3)
+        risk_pct_input = rb1.number_input("Risk % of Equity", value=0.50, step=0.05, format="%.2f")
+        risk_budget_dol = def_equity * (risk_pct_input / 100)
+
+        rb2.metric("Account Equity (Prev)", f"${def_equity:,.2f}")
+        rb3.metric("Hard Risk Budget ($)", f"${risk_budget_dol:.2f}")
+    else:
+        if b_id:
+            orig_budget = df_s[df_s['Trade_ID'] == b_id]['Risk_Budget'].iloc[0]
+            risk_budget_dol = float(orig_budget)
+            st.caption(f"Original Risk Budget for {b_id}: ${risk_budget_dol:,.2f}")
+
+    # --- 3. EXECUTION DETAILS ---
+    c3, c4 = st.columns(2)
+    b_shs = c3.number_input("Shares to Add", min_value=0, step=1, key="b_shs")
+    b_px = c4.number_input("Price ($)", min_value=0.0, step=0.1, format="%.2f", key="b_px")
+
+    # --- RBM STOP CALCULATION (THE GUARDRAIL) ---
+    rbm_stop = 0.0
+    if risk_budget_dol > 0 and b_shs > 0:
+        if trade_type == "Start New Campaign":
+            risk_per_share_allowable = risk_budget_dol / b_shs
+            rbm_stop = b_px - risk_per_share_allowable
+        else:
+            existing_shares = df_s[df_s['Trade_ID'] == b_id]['Shares'].iloc[0]
+            existing_cost = df_s[df_s['Trade_ID'] == b_id]['Total_Cost'].iloc[0]
+            new_cost = b_shs * b_px
+            total_shares = existing_shares + b_shs
+            rbm_stop = (existing_cost + new_cost - risk_budget_dol) / total_shares
+
+        st.info(f"🛑 **RBM Stop (Hard Deck):** ${rbm_stop:.2f} (To maintain total ${risk_budget_dol:.0f} risk)")
+
+    st.markdown("#### 🛡️ Risk Management")
+    c_stop1, c_stop2 = st.columns(2)
+    with c_stop1: stop_mode = st.radio("Stop Loss Mode", ["Price Level ($)", "Percentage (%)"], horizontal=True)
+    with c_stop2:
+        if stop_mode == "Percentage (%)":
+            sl_pct = st.number_input("Stop Loss %", value=8.0, step=0.5, format="%.1f", key="b_sl_pct")
+            b_stop = b_px * (1 - (sl_pct/100)) if b_px > 0 else 0.0
+            st.metric("Calculated Stop", f"${b_stop:.2f}", delta=f"-{sl_pct}%")
+        else:
+            def_val = float(b_px * 0.92) if (st.session_state['b_stop_val'] == 0.0 and b_px > 0) else st.session_state['b_stop_val']
+            b_stop = st.number_input("Stop Price ($)", min_value=0.0, step=0.1, value=def_val, format="%.2f", key="b_stop_val")
+            if b_px > 0 and b_stop > 0:
+                actual_pct = ((b_px - b_stop) / b_px) * 100
+                st.caption(f"Implied Risk: {actual_pct:.2f}%")
+
+    # --- VALIDATION MESSAGE ---
+    if rbm_stop > 0:
+        if b_stop < rbm_stop:
+            total_shs_calc = b_shs if trade_type == "Start New Campaign" else (df_s[df_s['Trade_ID'] == b_id]['Shares'].iloc[0] + b_shs)
+            excess_risk = (rbm_stop - b_stop) * total_shs_calc
+            st.error(f"⚠️ **RISK VIOLATION:** Your stop (${b_stop:.2f}) is too wide! It exceeds budget by ${excess_risk:.2f}.")
+        elif b_stop >= b_px and trade_type == "Start New Campaign":
+            st.warning("⚠️ Stop Price is above Entry Price.")
+        else:
+            st.success(f"✅ **WITHIN BUDGET:** Your stop respects the Risk Limit (Above ${rbm_stop:.2f}).")
+
+    st.markdown("---")
+    c_note1, c_note2 = st.columns(2)
+    b_note = c_note1.text_input("Buy Rationale (Notes)", key="b_note")
+    b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
+
+    # --- IMAGE UPLOADS (Optional) ---
+    weekly_chart = None
+    daily_chart = None
+    if R2_AVAILABLE:
+        st.markdown("#### 📸 Chart Documentation (Optional)")
+        st.caption("Upload weekly and daily charts to document your entry setup")
+
+        status_cols = st.columns([1, 1, 3])
+        with status_cols[0]:
+            st.caption(f"R2: {'✅' if R2_AVAILABLE else '❌'}")
+        with status_cols[1]:
+            st.caption(f"DB: {'✅' if USE_DATABASE else '❌'}")
+        with status_cols[2]:
+            if not (R2_AVAILABLE and USE_DATABASE):
+                st.caption("⚠️ Images will NOT be saved")
+
+        img_col1, img_col2 = st.columns(2)
+        with img_col1:
+            weekly_chart = st.file_uploader(
+                "Weekly Chart",
+                type=['png', 'jpg', 'jpeg'],
+                key='b_weekly_chart',
+                help="Upload a screenshot of the weekly chart"
+            )
+            if weekly_chart:
+                st.caption(f"✅ Selected: {weekly_chart.name}")
+        with img_col2:
+            daily_chart = st.file_uploader(
+                "Daily Chart",
+                type=['png', 'jpg', 'jpeg'],
+                key='b_daily_chart',
+                help="Upload a screenshot of the daily chart"
+            )
+            if daily_chart:
+                st.caption(f"✅ Selected: {daily_chart.name}")
+
+    if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
+        st.info(f"🔍 DEBUG - weekly_chart: {weekly_chart is not None}, daily_chart: {daily_chart is not None}")
+        if weekly_chart:
+            st.info(f"📁 Weekly: {weekly_chart.name}, {weekly_chart.size} bytes")
+        if daily_chart:
+            st.info(f"📁 Daily: {daily_chart.name}, {daily_chart.size} bytes")
+
+        if b_tick and b_id:
+            is_valid, errors = validate_trade_entry(
+                action='BUY',
+                ticker=b_tick,
+                shares=b_shs,
+                price=b_px,
+                stop_loss=b_stop,
+                trade_id=b_id if trade_type == "Start New Campaign" else None,
+                df_s=df_s
+            )
+
+            equity_val = def_equity
+            size_valid, size_msg = validate_position_size(b_shs, b_px, equity_val, max_pct=25.0)
+
+            if not is_valid:
+                st.error(f"**Validation failed with {len(errors)} error(s):**")
+                for error in errors:
+                    if "Warning" in error:
+                        st.warning(error)
+                    else:
+                        st.error(error)
+
+            if not size_valid:
+                st.error(size_msg)
+
+            critical_errors = [e for e in errors if "❌" in e]
+            if critical_errors or not size_valid:
+                st.error("❌ Cannot proceed - fix validation errors above")
+                st.stop()
+
+            if size_msg:
+                st.warning(size_msg)
+
+            # --- PROCEED WITH TRADE ---
+            ts = datetime.combine(b_date, b_time).strftime("%Y-%m-%d %H:%M")
+            cost = b_shs * b_px
+            if not b_trx: b_trx = generate_trx_id(df_d, b_id, 'BUY', ts)
+
+            if trade_type == "Start New Campaign":
+                new_s = {
+                    'Trade_ID': b_id, 'Ticker': b_tick, 'Status': 'OPEN', 'Open_Date': ts,
+                    'Shares': 0, 'Avg_Entry': 0, 'Total_Cost': 0, 'Realized_PL': 0, 'Unrealized_PL': 0,
+                    'Rule': b_rule,
+                    'Notes': b_note,
+                    'Buy_Notes': b_note,
+                    'Risk_Budget': risk_budget_dol,
+                    'Sell_Rule': '', 'Sell_Notes': ''
+                }
+
+                if USE_DATABASE:
+                    try:
+                        db.save_summary_row(portfolio, new_s)
+                    except Exception as e:
+                        st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+
+                df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
+
+            new_d = {'Trade_ID': b_id, 'Trx_ID': b_trx, 'Ticker': b_tick, 'Action': 'BUY', 'Date': ts, 'Shares': b_shs, 'Amount': b_px, 'Value': cost, 'Rule': b_rule, 'Notes': b_note, 'Realized_PL': 0, 'Stop_Loss': b_stop}
+
+            if USE_DATABASE:
+                try:
+                    db.save_detail_row(portfolio, new_d)
+                except Exception as e:
+                    st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+
+            df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+
+            df_d, df_s = update_campaign_summary(b_id, df_d, df_s)
+
+            secure_save(df_d, DETAILS_FILE)
+            secure_save(df_s, SUMMARY_FILE)
+
+            log_audit_trail(
+                action='BUY',
+                trade_id=b_id,
+                ticker=b_tick,
+                details=f"{b_shs} shares @ ${b_px:.2f} | Cost: ${cost:.2f} | Rule: {b_rule}"
+            )
+
+            # --- UPLOAD IMAGES (if provided) ---
+            print(f"[UPLOAD] Checking upload conditions: R2={R2_AVAILABLE}, DB={USE_DATABASE}, weekly={weekly_chart is not None}, daily={daily_chart is not None}")
+
+            st.session_state['last_upload_attempt'] = {
+                'R2_AVAILABLE': R2_AVAILABLE,
+                'USE_DATABASE': USE_DATABASE,
+                'weekly_chart': weekly_chart is not None,
+                'daily_chart': daily_chart is not None,
+                'upload_results': []
+            }
+
+            if R2_AVAILABLE and USE_DATABASE:
+                print("[UPLOAD] Entering upload block")
+                st.session_state['last_upload_attempt']['entered_block'] = True
+                images_uploaded = []
+
+                try:
+                    if weekly_chart is not None:
+                        print(f"[UPLOAD] About to call r2.upload_image for weekly chart")
+                        st.session_state['last_upload_attempt']['upload_results'].append('Attempting weekly upload...')
+                        st.info(f"Uploading weekly chart: {weekly_chart.name}")
+                        weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
+                        print(f"[UPLOAD] r2.upload_image returned: {weekly_url}")
+                        st.session_state['last_upload_attempt']['upload_results'].append(f'Weekly result: {weekly_url}')
+                        if weekly_url:
+                            print(f"[UPLOAD] Saving to database: {weekly_url}")
+                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
+                            images_uploaded.append('Weekly')
+                            st.session_state['last_upload_attempt']['upload_results'].append('Weekly: SUCCESS')
+                            print(f"[UPLOAD] Successfully saved weekly chart")
+                        else:
+                            print(f"[UPLOAD] weekly_url is None - upload failed")
+                            st.session_state['last_upload_attempt']['upload_results'].append('Weekly: FAILED (None returned)')
+                            st.error("Failed to upload weekly chart to R2")
+
+                    if daily_chart is not None:
+                        st.info(f"Uploading daily chart: {daily_chart.name}")
+                        daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
+                        if daily_url:
+                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
+                            images_uploaded.append('Daily')
+                        else:
+                            st.error("Failed to upload daily chart to R2")
+
+                    if images_uploaded:
+                        st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
+                    elif weekly_chart is not None or daily_chart is not None:
+                        st.warning("Charts were selected but upload failed")
+                except Exception as e:
+                    st.error(f"Image upload error: {str(e)}")
+            elif weekly_chart is not None or daily_chart is not None:
+                if not R2_AVAILABLE:
+                    st.warning("⚠️ R2 storage not available - charts not uploaded")
+                if not USE_DATABASE:
+                    st.warning("⚠️ Database mode disabled - charts not uploaded")
+
+            st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
+            for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart']:
+                if k in st.session_state: del st.session_state[k]
+            st.rerun()
+        else:
+            st.error("⚠️ Missing required fields: Ticker and Trade ID are required.")
+
+# ==============================================================================
+# PAGE: LOG SELL (Standalone)
+# ==============================================================================
+elif page == "Log Sell":
+    st.header(f"LOG SELL ({CURR_PORT_NAME})")
+    df_d, df_s = load_trade_data()
+
+    # Display success message from previous sell if exists
+    if 'sell_success' in st.session_state:
+        st.success(st.session_state.sell_success)
+        del st.session_state.sell_success
+
+    open_opts = df_s[df_s['Status']=='OPEN'].copy()
+    if not open_opts.empty:
+        open_opts = open_opts.sort_values('Ticker')
+        s_opts = [f"{r['Ticker']} | {r['Trade_ID']}" for _, r in open_opts.iterrows()]
+        sel_sell = st.selectbox("Select Trade to Sell", s_opts)
+        if sel_sell:
+            s_tick, s_id = sel_sell.split(" | ")
+            row = open_opts[open_opts['Trade_ID']==s_id].iloc[0]
+            st.info(f"Selling {s_tick} (Own {int(row['Shares'])} shs)")
+
+            c1, c2 = st.columns(2)
+            s_date = c1.date_input("Date", get_current_date_ct(), key='s_date')
+            s_time = c2.time_input("Time", get_current_time_ct(), step=60, key='s_time')
+
+            c3, c4 = st.columns(2)
+            s_shs = c3.number_input("Shares", min_value=1, max_value=int(row['Shares']), step=1)
+            s_px = c4.number_input("Price", min_value=0.0, step=0.1)
+
+            # --- EXPLICIT SELL RULE & NOTES ---
+            c5, c6 = st.columns(2)
+            s_rule = c5.selectbox("Sell Rule / Reason", SELL_RULES)
+            s_note = c6.text_input("Sell Context / Notes", key='s_note', placeholder="Why did you sell?")
+            s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
+
+            # --- EXIT CHART UPLOAD (Optional) ---
+            exit_chart = None
+            if R2_AVAILABLE:
+                st.markdown("#### 📸 Exit Chart (Optional)")
+                exit_chart = st.file_uploader(
+                    "Upload Exit Chart",
+                    type=['png', 'jpg', 'jpeg'],
+                    key='s_exit_chart',
+                    help="Upload a screenshot showing the exit point"
+                )
+
+            if st.button("LOG SELL ORDER", type="primary"):
+                # --- VALIDATION CHECKS ---
+                is_valid, errors = validate_trade_entry(
+                    action='SELL',
+                    ticker=s_tick,
+                    shares=s_shs,
+                    price=s_px,
+                    trade_id=s_id,
+                    df_s=df_s
+                )
+
+                if not is_valid:
+                    for error in errors:
+                        if "Warning" in error:
+                            st.warning(error)
+                        else:
+                            st.error(error)
+
+                critical_errors = [e for e in errors if "❌" in e]
+                if critical_errors:
+                    st.stop()
+
+                # --- PROCEED WITH SELL ---
+                ts = datetime.combine(s_date, s_time).strftime("%Y-%m-%d %H:%M")
+                proc = s_shs * s_px
+                if not s_trx: s_trx = generate_trx_id(df_d, s_id, 'SELL', ts)
+
+                new_d = {'Trade_ID':s_id, 'Trx_ID': s_trx, 'Ticker':s_tick, 'Action':'SELL', 'Date':ts, 'Shares':s_shs, 'Amount':s_px, 'Value':proc, 'Rule':s_rule, 'Notes': s_note, 'Realized_PL': 0}
+
+                if USE_DATABASE:
+                    try:
+                        db.save_detail_row(CURR_PORT_NAME, new_d)
+
+                        df_d_temp = db.load_details(CURR_PORT_NAME, s_id)
+                        df_s_temp = db.load_summary(CURR_PORT_NAME)
+                        df_d_temp, df_s_temp = update_campaign_summary(s_id, df_d_temp, df_s_temp)
+
+                        summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(s_id)]
+                        if not summary_matches.empty:
+                            summary_row = summary_matches.iloc[0].to_dict()
+                            summary_row['Sell_Rule'] = s_rule
+                            summary_row['Sell_Notes'] = s_note
+                            db.save_summary_row(CURR_PORT_NAME, summary_row)
+                            realized_pl = summary_row.get('Realized_PL', 0)
+                        else:
+                            realized_pl = 0
+
+                        log_audit_trail(
+                            action='SELL',
+                            trade_id=s_id,
+                            ticker=s_tick,
+                            details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
+                        )
+
+                        chart_uploaded = False
+                        if R2_AVAILABLE and exit_chart is not None:
+                            try:
+                                exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                                if exit_url:
+                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
+                                    chart_uploaded = True
+                            except Exception as chart_err:
+                                st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
+
+                        if chart_uploaded:
+                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded | Saved to database"
+                        else:
+                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Saved to database"
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Database save failed: {str(e)}")
+                else:
+                    # CSV fallback
+                    df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+                    secure_save(df_d, DETAILS_FILE)
+
+                    df_d, df_s = update_campaign_summary(s_id, df_d, df_s)
+
+                    idx = df_s[df_s['Trade_ID'] == s_id].index
+                    if not idx.empty:
+                        df_s.at[idx[0], 'Sell_Rule'] = s_rule
+                        df_s.at[idx[0], 'Sell_Notes'] = s_note
+
+                    secure_save(df_s, SUMMARY_FILE)
+
+                    realized_pl = df_s[df_s['Trade_ID'] == s_id]['Realized_PL'].iloc[0] if not df_s[df_s['Trade_ID'] == s_id].empty else 0
+                    log_audit_trail(
+                        action='SELL',
+                        trade_id=s_id,
+                        ticker=s_tick,
+                        details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
+                    )
+
+                    chart_uploaded = False
+                    if R2_AVAILABLE and USE_DATABASE and exit_chart is not None:
+                        try:
+                            exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
+                            if exit_url:
+                                db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
+                                chart_uploaded = True
+                        except Exception as chart_err:
+                            st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
+
+                    if chart_uploaded:
+                        st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded"
+                    else:
+                        st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx}"
+                    st.rerun()
+    else: st.info("No positions to sell.")
+
+# ==============================================================================
 # PAGE 10: TRADE MANAGER (FULL CONTEXT: BUY/SELL NOTES & RULES)
 # ==============================================================================
 elif page == "Trade Manager":
     st.header(f"TRADE MANAGER ({CURR_PORT_NAME})")
-    
-    # Initialize files if missing
-    if not os.path.exists(DETAILS_FILE): 
-        pd.DataFrame(columns=['Trade_ID','Ticker','Action','Date','Shares','Amount','Value','Rule','Notes','Realized_PL','Stop_Loss','Trx_ID']).to_csv(DETAILS_FILE, index=False)
-    if not os.path.exists(SUMMARY_FILE): 
-        pd.DataFrame(columns=['Trade_ID','Ticker','Status','Open_Date','Total_Shares','Avg_Entry','Avg_Exit','Total_Cost','Realized_PL','Unrealized_PL','Rule','Notes','Buy_Notes','Sell_Rule','Sell_Notes']).to_csv(SUMMARY_FILE, index=False)
-    
-    df_d = load_data(DETAILS_FILE)
-    df_s = load_data(SUMMARY_FILE)
-    
-    # --- SCHEMA UPDATE: Add Risk_Budget ---
-    if 'Risk_Budget' not in df_s.columns:
-        df_s['Risk_Budget'] = 0.0 # Initialize with 0
-        # Optional: Backfill logic could go here, but 0 is safer for now.
 
-    
-    # --- SCHEMA FIXES ---
-    # 1. Rename legacy 'Buy_Rule' -> 'Rule'
-    if 'Buy_Rule' in df_s.columns and 'Rule' not in df_s.columns:
-        df_s.rename(columns={'Buy_Rule': 'Rule'}, inplace=True)
-    if 'Rule' not in df_s.columns: df_s['Rule'] = ""
-
-    # 2. Ensure new dedicated Note/Rule columns exist
-    for col in ['Buy_Notes', 'Sell_Rule', 'Sell_Notes']:
-        if col not in df_s.columns: df_s[col] = ""
+    df_d, df_s = load_trade_data()
 
     valid_sum_cols = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Shares', 'Avg_Entry', 'Total_Cost', 'Unrealized_PL', 'Return_Pct', 'Rule', 'Buy_Notes', 'Sell_Rule']
     valid_sum_cols = [c for c in valid_sum_cols if c in df_s.columns]
 
     # --------------------------------------------------------------------------
-    # TAB LIST (Operational tabs only - Analytics moved to standalone modules)
+    # TAB LIST (Operational tabs only)
     # --------------------------------------------------------------------------
-    tab1, tab2, tab3, tab4, tab5, tab6, tab8, tab9, tab_cy, tab10 = st.tabs([
-        "Log Buy",
-        "Log Sell",
+    tab3, tab4, tab5, tab6, tab8, tab9, tab_cy, tab10 = st.tabs([
         "Update Prices",
         "Edit Transaction",
         "Database Health",
@@ -4078,555 +4589,14 @@ elif page == "Trade Manager":
         "All Campaigns"
     ])
 
-    # Note: The following tabs are now standalone modules:
+    # Note: The following are now standalone pages:
+    # - Log Buy → 💼 Trading Ops section
+    # - Log Sell → 💼 Trading Ops section
     # - Active Campaign Summary → 💼 Trading Ops section
-    # - Risk Manager → 🎯 Risk & Analytics section
-    # - Portfolio Heat → 🎯 Risk & Analytics section
-    # - Earnings Planner → 🎯 Risk & Analytics section
-    # - Performance Audit → 🎯 Risk & Analytics section
-
-# --- TAB 1: LOG BUY ---
-    with tab1:
-        st.caption("Live Entry Calculator")
-
-        # Show last upload attempt results (persists through rerun)
-        with st.expander("🔍 Last Upload Attempt Results", expanded=True):
-            if 'last_upload_attempt' in st.session_state:
-                attempt = st.session_state['last_upload_attempt']
-                st.json(attempt)
-                if st.button("Clear Results"):
-                    del st.session_state['last_upload_attempt']
-                    st.rerun()
-            else:
-                st.info("No upload attempts yet. Upload a file and log a trade to see results here.")
-
-        # Debug: Show system status
-        with st.expander("🔧 System Status (Debug)", expanded=False):
-            diag_cols = st.columns(3)
-            with diag_cols[0]:
-                st.metric("R2 Storage", "✅ Available" if R2_AVAILABLE else "❌ Not Available")
-            with diag_cols[1]:
-                st.metric("Database Mode", "✅ Enabled" if USE_DATABASE else "❌ Disabled")
-            with diag_cols[2]:
-                img_status = "✅ Enabled" if (R2_AVAILABLE and USE_DATABASE) else "❌ Disabled"
-                st.metric("Image Upload", img_status)
-
-            if not R2_AVAILABLE:
-                st.error("R2 storage module failed to load. Check if boto3 is installed and R2 secrets are configured.")
-            if not USE_DATABASE:
-                st.warning("Database mode is disabled. Images require database mode to be enabled.")
-
-        # Session State Init
-        if 'b_tick' not in st.session_state: st.session_state['b_tick'] = ""
-        if 'b_id' not in st.session_state: st.session_state['b_id'] = ""
-        if 'b_shs' not in st.session_state: st.session_state['b_shs'] = 0
-        if 'b_px' not in st.session_state: st.session_state['b_px'] = 0.0
-        if 'b_note' not in st.session_state: st.session_state['b_note'] = ""
-        if 'b_trx' not in st.session_state: st.session_state['b_trx'] = ""
-        if 'b_sl_pct' not in st.session_state: st.session_state['b_sl_pct'] = 8.0
-        if 'b_stop_val' not in st.session_state: st.session_state['b_stop_val'] = 0.0
-
-        c_top1, c_top2 = st.columns(2)
-        trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], horizontal=True)
-
-        b_date = c_top2.date_input("Date", get_current_date_ct(), key="b_date_input")
-        b_time = c_top2.time_input("Time", get_current_time_ct(), step=60, key="b_time_input")
-        
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        
-        # --- 1. TICKER & STRATEGY SELECTION ---
-        if trade_type == "Start New Campaign":
-            b_tick = c1.text_input("Ticker Symbol", key="b_tick")
-            if b_tick: b_tick = b_tick.upper() 
-            
-            now_ym = datetime.now().strftime("%Y%m") 
-            default_id = f"{now_ym}-001"
-            if not df_s.empty:
-                relevant_ids = [str(x) for x in df_s['Trade_ID'] if str(x).startswith(now_ym)]
-                if relevant_ids:
-                    try:
-                        last_seq = max([int(x.split('-')[-1]) for x in relevant_ids if '-' in x])
-                        new_seq = last_seq + 1
-                        default_id = f"{now_ym}-{new_seq:03d}"
-                    except: pass
-            if st.session_state['b_id'] == "": st.session_state['b_id'] = default_id  
-            b_id = c2.text_input("Trade ID", key="b_id")
-            b_rule = st.selectbox("Buy Rule", BUY_RULES)
-        else:
-            # Scale In Logic
-            open_opts = df_s[df_s['Status']=='OPEN'].copy()
-            b_tick, b_id = "", ""
-            if not open_opts.empty:
-                open_opts = open_opts.sort_values('Ticker')
-                opts = ["Select..."] + [f"{r['Ticker']} | {r['Trade_ID']}" for _, r in open_opts.iterrows()]
-                sel_camp = c1.selectbox("Select Existing Campaign", opts, key="b_scale_sel")
-                if sel_camp and sel_camp != "Select...":
-                    b_tick, b_id = sel_camp.split(" | ")
-                    curr_row = open_opts[open_opts['Trade_ID']==b_id].iloc[0]
-                    c2.info(f"Holding: {int(curr_row['Shares'])} shs @ ${curr_row['Avg_Entry']:.2f}")
-            else: c1.warning("No Open Campaigns.")
-            b_rule = st.selectbox("Add Rule", BUY_RULES)
-
-        # --- 2. RISK BUDGET CALCULATOR ---
-        risk_budget_dol = 0.0
-        # Fetch NLV for budgeting
-        # Load latest NLV from journal (database-aware)
-        def_equity = 100000.0
-        try:
-            j_df = load_data(JOURNAL_FILE)
-            if not j_df.empty and 'End NLV' in j_df.columns:
-                # Sort by date to ensure we get the latest entry
-                if 'Day' in j_df.columns:
-                    j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
-                    j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
-                val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
-                def_equity = float(val_str)
-        except Exception as e:
-            pass  # Silently fall back to default
-
-        if trade_type == "Start New Campaign":
-            st.markdown("#### 💰 Risk Budgeting")
-            rb1, rb2, rb3 = st.columns(3)
-            risk_pct_input = rb1.number_input("Risk % of Equity", value=0.50, step=0.05, format="%.2f")
-            risk_budget_dol = def_equity * (risk_pct_input / 100)
-            
-            rb2.metric("Account Equity (Prev)", f"${def_equity:,.2f}")
-            rb3.metric("Hard Risk Budget ($)", f"${risk_budget_dol:.2f}")
-        else:
-            # For scale-ins, we pull the original budget assigned to that Trade ID
-            if b_id:
-                orig_budget = df_s[df_s['Trade_ID'] == b_id]['Risk_Budget'].iloc[0]
-                risk_budget_dol = float(orig_budget)
-                st.caption(f"Original Risk Budget for {b_id}: ${risk_budget_dol:,.2f}")
-
-        # --- 3. EXECUTION DETAILS ---
-        c3, c4 = st.columns(2)
-        b_shs = c3.number_input("Shares to Add", min_value=0, step=1, key="b_shs")
-        b_px = c4.number_input("Price ($)", min_value=0.0, step=0.1, format="%.2f", key="b_px")
-        
-        # --- RBM STOP CALCULATION (THE GUARDRAIL) ---
-        # UPDATED: Now works for both New and Scale-ins
-        rbm_stop = 0.0
-        if risk_budget_dol > 0 and b_shs > 0:
-            if trade_type == "Start New Campaign":
-                risk_per_share_allowable = risk_budget_dol / b_shs
-                rbm_stop = b_px - risk_per_share_allowable
-            else:
-                # Scale-in math: (Total Cost + New Cost - Budget) / Total Shares
-                existing_shares = df_s[df_s['Trade_ID'] == b_id]['Shares'].iloc[0]
-                existing_cost = df_s[df_s['Trade_ID'] == b_id]['Total_Cost'].iloc[0]
-                new_cost = b_shs * b_px
-                total_shares = existing_shares + b_shs
-                rbm_stop = (existing_cost + new_cost - risk_budget_dol) / total_shares
-            
-            st.info(f"🛑 **RBM Stop (Hard Deck):** ${rbm_stop:.2f} (To maintain total ${risk_budget_dol:.0f} risk)")
-
-        st.markdown("#### 🛡️ Risk Management")
-        c_stop1, c_stop2 = st.columns(2)
-        with c_stop1: stop_mode = st.radio("Stop Loss Mode", ["Price Level ($)", "Percentage (%)"], horizontal=True)
-        with c_stop2:
-            if stop_mode == "Percentage (%)":
-                sl_pct = st.number_input("Stop Loss %", value=8.0, step=0.5, format="%.1f", key="b_sl_pct")
-                b_stop = b_px * (1 - (sl_pct/100)) if b_px > 0 else 0.0
-                st.metric("Calculated Stop", f"${b_stop:.2f}", delta=f"-{sl_pct}%")
-            else:
-                def_val = float(b_px * 0.92) if (st.session_state['b_stop_val'] == 0.0 and b_px > 0) else st.session_state['b_stop_val']
-                b_stop = st.number_input("Stop Price ($)", min_value=0.0, step=0.1, value=def_val, format="%.2f", key="b_stop_val")
-                if b_px > 0 and b_stop > 0: 
-                    actual_pct = ((b_px - b_stop) / b_px) * 100
-                    st.caption(f"Implied Risk: {actual_pct:.2f}%")
-        
-        # --- VALIDATION MESSAGE ---
-        if rbm_stop > 0:
-            if b_stop < rbm_stop:
-                # For scale-ins, we look at total shares to calculate dollar violation
-                total_shs_calc = b_shs if trade_type == "Start New Campaign" else (df_s[df_s['Trade_ID'] == b_id]['Shares'].iloc[0] + b_shs)
-                excess_risk = (rbm_stop - b_stop) * total_shs_calc
-                st.error(f"⚠️ **RISK VIOLATION:** Your stop (${b_stop:.2f}) is too wide! It exceeds budget by ${excess_risk:.2f}.")
-            elif b_stop >= b_px and trade_type == "Start New Campaign":
-                st.warning("⚠️ Stop Price is above Entry Price.")
-            else:
-                st.success(f"✅ **WITHIN BUDGET:** Your stop respects the Risk Limit (Above ${rbm_stop:.2f}).")
-
-        st.markdown("---")
-        c_note1, c_note2 = st.columns(2)
-        b_note = c_note1.text_input("Buy Rationale (Notes)", key="b_note")
-        b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
-
-        # --- IMAGE UPLOADS (Optional) ---
-        weekly_chart = None
-        daily_chart = None
-        if R2_AVAILABLE:
-            st.markdown("#### 📸 Chart Documentation (Optional)")
-            st.caption("Upload weekly and daily charts to document your entry setup")
-
-            # Debug: Show status
-            status_cols = st.columns([1, 1, 3])
-            with status_cols[0]:
-                st.caption(f"R2: {'✅' if R2_AVAILABLE else '❌'}")
-            with status_cols[1]:
-                st.caption(f"DB: {'✅' if USE_DATABASE else '❌'}")
-            with status_cols[2]:
-                if not (R2_AVAILABLE and USE_DATABASE):
-                    st.caption("⚠️ Images will NOT be saved")
-
-            img_col1, img_col2 = st.columns(2)
-            with img_col1:
-                weekly_chart = st.file_uploader(
-                    "Weekly Chart",
-                    type=['png', 'jpg', 'jpeg'],
-                    key='b_weekly_chart',
-                    help="Upload a screenshot of the weekly chart"
-                )
-                if weekly_chart:
-                    st.caption(f"✅ Selected: {weekly_chart.name}")
-            with img_col2:
-                daily_chart = st.file_uploader(
-                    "Daily Chart",
-                    type=['png', 'jpg', 'jpeg'],
-                    key='b_daily_chart',
-                    help="Upload a screenshot of the daily chart"
-                )
-                if daily_chart:
-                    st.caption(f"✅ Selected: {daily_chart.name}")
-
-        if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
-            # Debug: Show file upload state
-            st.info(f"🔍 DEBUG - weekly_chart: {weekly_chart is not None}, daily_chart: {daily_chart is not None}")
-            if weekly_chart:
-                st.info(f"📁 Weekly: {weekly_chart.name}, {weekly_chart.size} bytes")
-            if daily_chart:
-                st.info(f"📁 Daily: {daily_chart.name}, {daily_chart.size} bytes")
-
-            # Check for basic required fields only (let validation handle shares/price)
-            if b_tick and b_id:
-                # --- VALIDATION CHECKS ---
-                # 1. Validate trade entry data
-                is_valid, errors = validate_trade_entry(
-                    action='BUY',
-                    ticker=b_tick,
-                    shares=b_shs,
-                    price=b_px,
-                    stop_loss=b_stop,
-                    trade_id=b_id if trade_type == "Start New Campaign" else None,
-                    df_s=df_s
-                )
-
-                # 2. Validate position size
-                equity_val = def_equity  # Use the loaded equity value from risk budgeting section
-                size_valid, size_msg = validate_position_size(b_shs, b_px, equity_val, max_pct=25.0)
-
-                # Display validation errors
-                if not is_valid:
-                    st.error(f"**Validation failed with {len(errors)} error(s):**")
-                    for error in errors:
-                        if "Warning" in error:
-                            st.warning(error)
-                        else:
-                            st.error(error)
-
-                if not size_valid:
-                    st.error(size_msg)
-
-                # Only proceed if no critical errors
-                critical_errors = [e for e in errors if "❌" in e]
-                if critical_errors or not size_valid:
-                    st.error("❌ Cannot proceed - fix validation errors above")
-                    st.stop()
-
-                # Show warnings but allow to proceed
-                if size_msg:
-                    st.warning(size_msg)
-
-                # --- PROCEED WITH TRADE ---
-                ts = datetime.combine(b_date, b_time).strftime("%Y-%m-%d %H:%M")
-                cost = b_shs * b_px
-                if not b_trx: b_trx = generate_trx_id(df_d, b_id, 'BUY', ts)
-                
-                # IMPORTANT: For new campaigns, create summary FIRST (foreign key requirement)
-                if trade_type == "Start New Campaign":
-                    new_s = {
-                        'Trade_ID': b_id, 'Ticker': b_tick, 'Status': 'OPEN', 'Open_Date': ts,
-                        'Shares': 0, 'Avg_Entry': 0, 'Total_Cost': 0, 'Realized_PL': 0, 'Unrealized_PL': 0,
-                        'Rule': b_rule,
-                        'Notes': b_note,
-                        'Buy_Notes': b_note,
-                        'Risk_Budget': risk_budget_dol,
-                        'Sell_Rule': '', 'Sell_Notes': ''
-                    }
-
-                    # Save new campaign to database FIRST (before detail)
-                    if USE_DATABASE:
-                        try:
-                            db.save_summary_row(portfolio, new_s)
-                        except Exception as e:
-                            st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
-
-                    df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
-
-                # Now save the detail (summary exists now, so foreign key is satisfied)
-                new_d = {'Trade_ID': b_id, 'Trx_ID': b_trx, 'Ticker': b_tick, 'Action': 'BUY', 'Date': ts, 'Shares': b_shs, 'Amount': b_px, 'Value': cost, 'Rule': b_rule, 'Notes': b_note, 'Realized_PL': 0, 'Stop_Loss': b_stop}
-
-                # Save directly to database (much faster than secure_save)
-                if USE_DATABASE:
-                    try:
-                        db.save_detail_row(portfolio, new_d)
-                    except Exception as e:
-                        st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
-
-                df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
-
-                # Update LIFO calculations
-                df_d, df_s = update_campaign_summary(b_id, df_d, df_s)
-
-                # Save to CSV only (database already updated)
-                secure_save(df_d, DETAILS_FILE)
-                secure_save(df_s, SUMMARY_FILE)
-
-                # Log to audit trail
-                log_audit_trail(
-                    action='BUY',
-                    trade_id=b_id,
-                    ticker=b_tick,
-                    details=f"{b_shs} shares @ ${b_px:.2f} | Cost: ${cost:.2f} | Rule: {b_rule}"
-                )
-
-                # --- UPLOAD IMAGES (if provided) ---
-                print(f"[UPLOAD] Checking upload conditions: R2={R2_AVAILABLE}, DB={USE_DATABASE}, weekly={weekly_chart is not None}, daily={daily_chart is not None}")
-
-                # Save diagnostic to session state so it persists through rerun
-                st.session_state['last_upload_attempt'] = {
-                    'R2_AVAILABLE': R2_AVAILABLE,
-                    'USE_DATABASE': USE_DATABASE,
-                    'weekly_chart': weekly_chart is not None,
-                    'daily_chart': daily_chart is not None,
-                    'upload_results': []
-                }
-
-                if R2_AVAILABLE and USE_DATABASE:
-                    print("[UPLOAD] Entering upload block")
-                    st.session_state['last_upload_attempt']['entered_block'] = True
-                    images_uploaded = []
-
-                    try:
-                        # Upload Weekly Chart
-                        if weekly_chart is not None:
-                            print(f"[UPLOAD] About to call r2.upload_image for weekly chart")
-                            st.session_state['last_upload_attempt']['upload_results'].append('Attempting weekly upload...')
-                            st.info(f"Uploading weekly chart: {weekly_chart.name}")
-                            weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
-                            print(f"[UPLOAD] r2.upload_image returned: {weekly_url}")
-                            st.session_state['last_upload_attempt']['upload_results'].append(f'Weekly result: {weekly_url}')
-                            if weekly_url:
-                                print(f"[UPLOAD] Saving to database: {weekly_url}")
-                                db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
-                                images_uploaded.append('Weekly')
-                                st.session_state['last_upload_attempt']['upload_results'].append('Weekly: SUCCESS')
-                                print(f"[UPLOAD] Successfully saved weekly chart")
-                            else:
-                                print(f"[UPLOAD] weekly_url is None - upload failed")
-                                st.session_state['last_upload_attempt']['upload_results'].append('Weekly: FAILED (None returned)')
-                                st.error("Failed to upload weekly chart to R2")
-
-                        # Upload Daily Chart
-                        if daily_chart is not None:
-                            st.info(f"Uploading daily chart: {daily_chart.name}")
-                            daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
-                            if daily_url:
-                                db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
-                                images_uploaded.append('Daily')
-                            else:
-                                st.error("Failed to upload daily chart to R2")
-
-                        if images_uploaded:
-                            st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
-                        elif weekly_chart is not None or daily_chart is not None:
-                            st.warning("Charts were selected but upload failed")
-                    except Exception as e:
-                        st.error(f"Image upload error: {str(e)}")
-                elif weekly_chart is not None or daily_chart is not None:
-                    if not R2_AVAILABLE:
-                        st.warning("⚠️ R2 storage not available - charts not uploaded")
-                    if not USE_DATABASE:
-                        st.warning("⚠️ Database mode disabled - charts not uploaded")
-
-                st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
-                for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart']:
-                    if k in st.session_state: del st.session_state[k]
-                st.rerun()
-            else:
-                st.error("⚠️ Missing required fields: Ticker and Trade ID are required.")
-
-    # --- TAB 2: LOG SELL ---
-    with tab2:
-        # Display success message from previous sell if exists
-        if 'sell_success' in st.session_state:
-            st.success(st.session_state.sell_success)
-            del st.session_state.sell_success
-
-        open_opts = df_s[df_s['Status']=='OPEN'].copy()
-        if not open_opts.empty:
-             open_opts = open_opts.sort_values('Ticker')
-             s_opts = [f"{r['Ticker']} | {r['Trade_ID']}" for _, r in open_opts.iterrows()]
-             sel_sell = st.selectbox("Select Trade to Sell", s_opts)
-             if sel_sell:
-                 s_tick, s_id = sel_sell.split(" | ")
-                 row = open_opts[open_opts['Trade_ID']==s_id].iloc[0]
-                 st.info(f"Selling {s_tick} (Own {int(row['Shares'])} shs)")
-                 
-                 c1, c2 = st.columns(2)
-                 s_date = c1.date_input("Date", get_current_date_ct(), key='s_date')
-                 s_time = c2.time_input("Time", get_current_time_ct(), step=60, key='s_time')
-                 
-                 c3, c4 = st.columns(2)
-                 s_shs = c3.number_input("Shares", min_value=1, max_value=int(row['Shares']), step=1)
-                 s_px = c4.number_input("Price", min_value=0.0, step=0.1)
-                 
-                 # --- NEW: EXPLICIT SELL RULE & NOTES ---
-                 c5, c6 = st.columns(2)
-                 s_rule = c5.selectbox("Sell Rule / Reason", SELL_RULES)
-                 s_note = c6.text_input("Sell Context / Notes", key='s_note', placeholder="Why did you sell?")
-                 s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
-
-                 # --- EXIT CHART UPLOAD (Optional) ---
-                 exit_chart = None
-                 if R2_AVAILABLE:
-                     st.markdown("#### 📸 Exit Chart (Optional)")
-                     exit_chart = st.file_uploader(
-                         "Upload Exit Chart",
-                         type=['png', 'jpg', 'jpeg'],
-                         key='s_exit_chart',
-                         help="Upload a screenshot showing the exit point"
-                     )
-
-                 if st.button("LOG SELL ORDER", type="primary"):
-                    # --- VALIDATION CHECKS ---
-                    # 1. Validate trade entry data
-                    is_valid, errors = validate_trade_entry(
-                        action='SELL',
-                        ticker=s_tick,
-                        shares=s_shs,
-                        price=s_px,
-                        trade_id=s_id,
-                        df_s=df_s
-                    )
-
-                    # Display validation errors
-                    if not is_valid:
-                        for error in errors:
-                            if "Warning" in error:
-                                st.warning(error)
-                            else:
-                                st.error(error)
-
-                    # Only proceed if no critical errors
-                    critical_errors = [e for e in errors if "❌" in e]
-                    if critical_errors:
-                        st.stop()
-
-                    # --- PROCEED WITH SELL ---
-                    ts = datetime.combine(s_date, s_time).strftime("%Y-%m-%d %H:%M")
-                    proc = s_shs * s_px
-                    if not s_trx: s_trx = generate_trx_id(df_d, s_id, 'SELL', ts)
-
-                    # Log Detail (Rule = Sell Rule, Notes = Sell Note)
-                    new_d = {'Trade_ID':s_id, 'Trx_ID': s_trx, 'Ticker':s_tick, 'Action':'SELL', 'Date':ts, 'Shares':s_shs, 'Amount':s_px, 'Value':proc, 'Rule':s_rule, 'Notes': s_note, 'Realized_PL': 0}
-
-                    if USE_DATABASE:
-                        # Database-first approach
-                        try:
-                            # Save SELL transaction to database
-                            db.save_detail_row(CURR_PORT_NAME, new_d)
-
-                            # Reload data and recalculate LIFO
-                            df_d_temp = db.load_details(CURR_PORT_NAME, s_id)
-                            df_s_temp = db.load_summary(CURR_PORT_NAME)
-                            df_d_temp, df_s_temp = update_campaign_summary(s_id, df_d_temp, df_s_temp)
-
-                            # Update Sell_Rule and Sell_Notes in summary (preserve after LIFO calc)
-                            summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(s_id)]
-                            if not summary_matches.empty:
-                                summary_row = summary_matches.iloc[0].to_dict()
-                                summary_row['Sell_Rule'] = s_rule
-                                summary_row['Sell_Notes'] = s_note
-                                db.save_summary_row(CURR_PORT_NAME, summary_row)
-                                realized_pl = summary_row.get('Realized_PL', 0)
-                            else:
-                                realized_pl = 0
-
-                            # Log to audit trail
-                            log_audit_trail(
-                                action='SELL',
-                                trade_id=s_id,
-                                ticker=s_tick,
-                                details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
-                            )
-
-                            # --- UPLOAD EXIT CHART (if provided) ---
-                            chart_uploaded = False
-                            if R2_AVAILABLE and exit_chart is not None:
-                                try:
-                                    exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
-                                    if exit_url:
-                                        db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
-                                        chart_uploaded = True
-                                except Exception as chart_err:
-                                    st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
-
-                            # Store success message in session state for display after rerun
-                            if chart_uploaded:
-                                st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded | Saved to database"
-                            else:
-                                st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Saved to database"
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Database save failed: {str(e)}")
-                    else:
-                        # CSV fallback
-                        df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
-                        secure_save(df_d, DETAILS_FILE)
-
-                        # Sync Math
-                        df_d, df_s = update_campaign_summary(s_id, df_d, df_s)
-
-                        # --- CRITICAL FIX: FORCE WRITE SELL DATA TO SUMMARY ---
-                        # We do this AFTER update_campaign_summary to ensure it doesn't get overwritten
-                        idx = df_s[df_s['Trade_ID'] == s_id].index
-                        if not idx.empty:
-                            df_s.at[idx[0], 'Sell_Rule'] = s_rule
-                            # Append or Overwrite notes? Overwrite is cleaner for "Last Action Reason"
-                            df_s.at[idx[0], 'Sell_Notes'] = s_note
-
-                        secure_save(df_s, SUMMARY_FILE)
-
-                        # Log to audit trail
-                        realized_pl = df_s[df_s['Trade_ID'] == s_id]['Realized_PL'].iloc[0] if not df_s[df_s['Trade_ID'] == s_id].empty else 0
-                        log_audit_trail(
-                            action='SELL',
-                            trade_id=s_id,
-                            ticker=s_tick,
-                            details=f"{s_shs} shares @ ${s_px:.2f} | Proceeds: ${proc:.2f} | Rule: {s_rule} | P&L: ${realized_pl:.2f}"
-                        )
-
-                        # --- UPLOAD EXIT CHART (if provided) ---
-                        chart_uploaded = False
-                        if R2_AVAILABLE and USE_DATABASE and exit_chart is not None:
-                            try:
-                                exit_url = r2.upload_image(exit_chart, CURR_PORT_NAME, s_id, s_tick, 'exit')
-                                if exit_url:
-                                    db.save_trade_image(CURR_PORT_NAME, s_id, s_tick, 'exit', exit_url, exit_chart.name)
-                                    chart_uploaded = True
-                            except Exception as chart_err:
-                                st.warning(f"⚠️ Sell saved but chart upload failed: {chart_err}")
-
-                        # Store success message in session state for display after rerun
-                        if chart_uploaded:
-                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded"
-                        else:
-                            st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx}"
-                        st.rerun()
-        else: st.info("No positions to sell.")
+    # - Risk Manager → 🛡️ Risk Management section
+    # - Portfolio Heat → 🛡️ Risk Management section
+    # - Earnings Planner → 🛡️ Risk Management section
+    # - Performance Audit → 🔍 Deep Dive section
 
     # --- TAB 3: UPDATE PRICES ---
     with tab3:
@@ -8111,6 +8081,17 @@ elif page == "Performance Audit":
 elif page == "Trade Journal":
     st.header("📔 Trade Journal")
     st.caption("Visual review of all your trades with embedded charts")
+
+    # Quick action buttons
+    _ac1, _ac2, _ac3 = st.columns([1, 1, 4])
+    with _ac1:
+        if st.button("🟢 Log Buy", key="tj_log_buy", use_container_width=True):
+            st.session_state.page = "Log Buy"
+            st.rerun()
+    with _ac2:
+        if st.button("🔴 Log Sell", key="tj_log_sell", use_container_width=True):
+            st.session_state.page = "Log Sell"
+            st.rerun()
 
     # Clear search state to force fresh search each time page is visited
     if 'last_visited_page' not in st.session_state or st.session_state.last_visited_page != 'Trade Journal':
