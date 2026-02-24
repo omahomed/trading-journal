@@ -722,7 +722,6 @@ with st.sidebar:
 
     # 📊 DASHBOARDS (expanded by default)
     with st.expander("📊 Dashboards", expanded=True):
-        nav_button("Command Center", "🎯")
         nav_button("Dashboard", "📊")
         nav_button("Trading Overview", "📈")
 
@@ -791,331 +790,6 @@ page = st.session_state.page
 st.sidebar.markdown("---")
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
-# ==============================================================================
-# PAGE 1: COMMAND CENTER (UPDATED CIRCUIT BREAKERS: 7.5% / 12.5% / 15%)
-# ==============================================================================
-if page == "Command Center":
-    st.title("COMMAND CENTER")
-
-    # --- CONFIGURATION ---
-    RESET_DATE = pd.Timestamp("2025-12-16") 
-
-    # --- 1. ROBUST DATA LOADER ---
-    def clean_num_local(x):
-        try:
-            if isinstance(x, str):
-                return float(x.replace('$', '').replace(',', '').replace('%', '').strip())
-            return float(x)
-        except: return 0.0
-
-    p_c_j = os.path.join(DATA_ROOT, PORT_CANSLIM, 'Trading_Journal_Clean.csv')
-    p_c_s = os.path.join(DATA_ROOT, PORT_CANSLIM, 'Trade_Log_Summary.csv')
-    p_c_d = os.path.join(DATA_ROOT, PORT_CANSLIM, 'Trade_Log_Details.csv')
-    p_t_j = os.path.join(DATA_ROOT, PORT_TQQQ, 'Trading_Journal_Clean.csv')
-    p_t_s = os.path.join(DATA_ROOT, PORT_TQQQ, 'Trade_Log_Summary.csv')
-    p_t_d = os.path.join(DATA_ROOT, PORT_TQQQ, 'Trade_Log_Details.csv')
-    p_r_j = os.path.join(DATA_ROOT, PORT_457B, 'Trading_Journal_Clean.csv')
-
-    def load_clean(p):
-        d = load_data(p)
-        if not d.empty and 'Day' in d.columns:
-            d['Day'] = pd.to_datetime(d['Day'], errors='coerce')
-            d.sort_values('Day', inplace=True) 
-            for c in ['Beg NLV', 'End NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq']:
-                if c in d.columns: d[c] = d[c].apply(clean_num_local)
-            
-            if 'Daily $ Change' in d.columns:
-                d['Trusted_PL'] = d['Daily $ Change'].fillna(0.0)
-            else:
-                d['Trusted_PL'] = d['End NLV'] - d['Beg NLV'] - d['Cash -/+']
-
-            d['Adjusted_Beg'] = d['Beg NLV'] + d['Cash -/+']
-            d['Trusted_Ret'] = 0.0
-            mask = d['Adjusted_Beg'] != 0
-            d.loc[mask, 'Trusted_Ret'] = d.loc[mask, 'Trusted_PL'] / d.loc[mask, 'Adjusted_Beg']
-        return d
-
-    df_cj, df_cs, df_cd = load_clean(p_c_j), load_data(p_c_s), load_data(p_c_d)
-    df_tj, df_ts, df_td = load_clean(p_t_j), load_data(p_t_s), load_data(p_t_d)
-    df_rj = load_clean(p_r_j)
-
-    # --- 2. METRICS ENGINE ---
-    def get_smart_metrics(df):
-        if df.empty: return 0, 0, 0, 0, 0, df
-        df['Daily_PL'] = df.get('Trusted_PL', 0.0)
-        df['Daily_Ret'] = df.get('Trusted_Ret', 0.0)
-        df['EC'] = (1 + df['Daily_Ret']).cumprod()
-        hwm_ec = df['EC'].max()
-        curr_ec = df['EC'].iloc[-1]
-        dd = ((curr_ec - hwm_ec) / hwm_ec) * 100 if hwm_ec > 0 else 0
-        curr_nlv = df['End NLV'].iloc[-1]
-        day_chg = df['Daily_PL'].iloc[-1]
-        ec_21 = df['EC'].ewm(span=21, adjust=False).mean().iloc[-1]
-        return curr_nlv, day_chg, dd, curr_ec, ec_21, df
-
-    can_nlv, can_chg, can_dd, can_ec, can_21, df_cj_c = get_smart_metrics(df_cj.copy())
-    tqq_nlv, tqq_chg, tqq_dd, tqq_ec, tqq_21, df_tj_c = get_smart_metrics(df_tj.copy())
-    ret_nlv, ret_chg, ret_dd, ret_ec, ret_21, df_rj_c = get_smart_metrics(df_rj.copy())
-
-    # --- 3. UPDATED FUSE BOX CALCULATIONS (PR4) ---
-    def calc_reset_dd(df):
-        if not df.empty:
-            df_post = df[df['Day'] > RESET_DATE]
-            if not df_post.empty:
-                hwm = df_post['End NLV'].max()
-                curr = df_post['End NLV'].iloc[-1]
-                return ((curr - hwm) / hwm) * 100 if hwm > 0 else 0.0
-        return 0.0
-
-    can_dd = calc_reset_dd(df_cj_c)
-    ret_dd = calc_reset_dd(df_rj_c)
-
-    tot_nlv = can_nlv + tqq_nlv + ret_nlv
-    tot_day_chg = can_chg + tqq_chg + ret_chg
-
-    # --- 4. COMBINED CORE LOGIC ---
-    df_core = pd.DataFrame()
-    d1 = df_cj_c['Day'].tolist() if not df_cj_c.empty else []
-    d2 = df_tj_c['Day'].tolist() if not df_tj_c.empty else []
-    core_dates = sorted(list(set(d1 + d2)))
-
-    if core_dates:
-        def reindex_core(df, dates):
-            if df.empty: return pd.DataFrame(index=dates, columns=['End NLV', 'Trusted_PL', 'Beg NLV', 'Cash -/+']).fillna(0)
-            df = df.set_index('Day').reindex(dates)
-            df['End NLV'] = df['End NLV'].fillna(method='ffill').fillna(0)
-            df['Trusted_PL'] = df['Trusted_PL'].fillna(0.0) 
-            df['Cash -/+'] = df['Cash -/+'].fillna(0.0)
-            df['Beg NLV'] = df['End NLV'] - df['Trusted_PL'] - df['Cash -/+']
-            return df
-        
-        c_core = reindex_core(df_cj_c, core_dates)
-        t_core = reindex_core(df_tj_c, core_dates)
-        df_core = pd.DataFrame(index=core_dates)
-        df_core['End NLV'] = c_core['End NLV'] + t_core['End NLV']
-        df_core['Daily_PL'] = c_core['Trusted_PL'] + t_core['Trusted_PL']
-        df_core['Cash -/+'] = c_core['Cash -/+'] + t_core['Cash -/+']
-        df_core['Beg NLV'] = c_core['Beg NLV'] + t_core['Beg NLV']
-        denom_core = df_core['Beg NLV'] + df_core['Cash -/+']
-        df_core['Daily_Pct'] = 0.0
-        mask_c = denom_core != 0
-        df_core.loc[mask_c, 'Daily_Pct'] = df_core.loc[mask_c, 'Daily_PL'] / denom_core.loc[mask_c]
-        df_core['EC'] = (1 + df_core['Daily_Pct']).cumprod()
-        df_core['LTD_Pct'] = (df_core['EC'] - 1) * 100
-
-# --- TABS ---
-    tab_dash, tab_core, tab_hist = st.tabs(["📊 Pilot's Panel", "⚔️ Trading Core (Combined)", "📜 Historical Data"])
-
-    # --- TAB 1: PILOT'S PANEL (FIXED TQQQ + UPDATED CIRCUIT BREAKERS) ---
-    with tab_dash:
-        st.markdown(f"### 🏦 Total Net Worth: **${tot_nlv:,.2f}**")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Daily Net P&L", f"${tot_day_chg:+,.2f}", delta_color="normal")
-        
-        # --- CANSLIM PRECISION YTD ---
-        can_ytd_str = "0.00%"
-        if not df_cj_c.empty:
-            curr_yr = datetime.now().year
-            df_yr = df_cj_c[df_cj_c['Day'].dt.year == curr_yr]
-            if not df_yr.empty:
-                ytd_raw = (1 + df_yr['Daily_Ret']).prod() - 1
-                can_ytd_str = f"{ytd_raw * 100:.2f}%"
-
-        c2.metric("CanSlim (Main)", f"${can_nlv:,.2f}", f"YTD: {can_ytd_str}")
-        c3.metric("TQQQ Strat", f"${tqq_nlv:,.2f}", f"{tqq_dd:.2f}% DD")
-        c4.metric("457B Plan", f"${ret_nlv:,.2f}", f"{ret_dd:.2f}% DD")
-        st.markdown("---")
-
-        # --- THE THREE COLUMNS ---
-        col_1, col_2, col_3 = st.columns(3)
-        
-        # --- PRE-FETCH MARKET DATA (NASDAQ) ---
-        try:
-            nas_hist = yf.Ticker("^IXIC").history(period="6mo")
-            nas_hist['21EMA'] = nas_hist['Close'].ewm(span=21, adjust=False).mean()
-            curr_nas = nas_hist['Close'].iloc[-1]
-            nas_21 = nas_hist['21EMA'].iloc[-1]
-            
-            # General Market Window (Nasdaq > 21e)
-            m_state_gen = "OPEN" if curr_nas > nas_21 else "CLOSED"
-            m_color_gen = "green" if curr_nas > nas_21 else "orange"
-        except:
-            m_state_gen = "UNKNOWN"; m_color_gen = "gray"
-
-        # === 1. TQQQ STRATEGY (RESTORED) ===
-        with col_1:
-            st.markdown("#### ⚡ TQQQ Strategy")
-            
-            tqqq_invested = False
-            if not df_ts.empty and 'Status' in df_ts.columns:
-                if not df_ts[df_ts['Status'] == 'OPEN'].empty: tqqq_invested = True
-            
-            try:
-                # Logic based on Rule br7.1: Lows > 21EMA for 3 days + Up Day
-                if not nas_hist.empty:
-                    # Calculate Setup (Low > 21e)
-                    consecutive = 0
-                    for i in range(len(nas_hist)):
-                        idx = -(i+1)
-                        if nas_hist.iloc[idx]['Low'] > nas_hist.iloc[idx]['21EMA']: consecutive += 1
-                        else: break
-                    
-                    is_up_day = False
-                    if len(nas_hist) >= 2: is_up_day = nas_hist['Close'].iloc[-1] > nas_hist['Close'].iloc[-2]
-                    
-                    buy_signal = (consecutive >= 3 and is_up_day) #
-                    
-                    # Strategy Window Logic
-                    if tqqq_invested or buy_signal:
-                        mw_state = "OPEN"; mw_color = "green"
-                    else:
-                        mw_state = "CLOSED"; mw_color = "red"
-
-                    st.markdown(f"**Market Window:** :{mw_color}[**{mw_state}**]")
-                    st.markdown(f"##### Setup: **{consecutive}** Days (Low > 21e)")
-                    
-                    # Status Messaging
-                    if not tqqq_invested:
-                        if buy_signal: st.success("✅ **BUY SIGNAL** (Rule br7.1)")
-                        elif consecutive >= 3: st.warning("⏳ **WAITING UP DAY**")
-                        else: st.info(f"🛡️ **CASH** (Scanning...)")
-                    else:
-                        if curr_nas < nas_21:
-                            # Rule sr8: Sell if price trades 0.2% below breakdown day low
-                            buffer_px = nas_hist['Low'].iloc[-1] * 0.998
-                            st.error(f"⚠️ **SELL SIGNAL** (Exit if ^IXIC < {buffer_px:,.2f})")
-                        else: st.success("🚀 **INVESTED** (Trend Hold)")
-            except:
-                st.warning("⚠️ Market Data Connection Error")
-
-        # === 2. CANSLIM (MAIN) FUSE BOX (7.5% / 12.5% / 15%) ===
-        with col_2:
-            st.markdown("#### 🌳 CanSlim (Main)")
-            st.markdown(f"**Market Window:** :{m_color_gen}[**{m_state_gen}**]")
-            st.markdown(f"##### Circuit (Reset {RESET_DATE.strftime('%m/%d')})")
-            
-            fuse_b = abs(can_dd) 
-            if fuse_b < 7.5:
-                st.success(f"🟢 **CLEAR** (DD: -{fuse_b:.2f}%)")
-            elif 7.5 <= fuse_b < 12.5:
-                st.warning(f"⚠️ **LEVEL 1: LOCKOUT** (DD: -{fuse_b:.2f}%)")
-                st.caption("Action: No new buys. Manage winners. Remove laggards.") #
-            elif 12.5 <= fuse_b < 15.0:
-                st.error(f"🛑 **LEVEL 2: 50% CASH** (DD: -{fuse_b:.2f}%)") #
-            else:
-                st.error(f"☠️ **LEVEL 3: UNCLE POINT** (DD: -{fuse_b:.2f}%)") #
-                st.toast("🚨 GO TO CASH IMMEDIATELY", icon="🔥")
-
-        # === 3. 457B PLAN FUSE BOX (7.5% / 12.5% / 15%) ===
-        with col_3:
-            st.markdown("#### 🛡️ 457B Plan")
-            st.markdown(f"**Market Window:** :{m_color_gen}[**{m_state_gen}**]")
-            st.markdown(f"##### Circuit (Reset {RESET_DATE.strftime('%m/%d')})")
-            
-            fuse_r = abs(ret_dd)
-            if fuse_r < 7.5:
-                st.success(f"🟢 **CLEAR** (DD: -{fuse_r:.2f}%)")
-            elif 7.5 <= fuse_r < 12.5:
-                st.warning(f"⚠️ **LEVEL 1** (DD: -{fuse_r:.2f}%)")
-            elif 12.5 <= fuse_r < 15.0:
-                st.error(f"🛑 **LEVEL 2** (DD: -{fuse_r:.2f}%)")
-            else:
-                st.error(f"☠️ **LEVEL 3** (DD: -{fuse_r:.2f}%)")
-
-    # --- TAB 2: TRADING CORE ---
-    with tab_core:
-        st.header("⚔️ TRADING CORE (CanSlim + TQQQ)")
-        
-        if not df_core.empty:
-            core_nlv = df_core['End NLV'].iloc[-1]
-            core_day_pl = df_core['Daily_PL'].iloc[-1]
-            core_day_pct = df_core['Daily_Pct'].iloc[-1] * 100
-            
-            # Core YTD
-            curr_yr = datetime.now().year
-            df_core['Year'] = df_core.index.year
-            df_core_yr = df_core[df_core['Year'] == curr_yr]
-            ytd_val = 0.0
-            if not df_core_yr.empty:
-                ytd_val = ((1 + df_core_yr['Daily_Pct']).prod() - 1) * 100
-            
-            # Exposure - Fix duplicate column/index issues
-            if not df_cs.empty:
-                # Remove any duplicate columns
-                df_cs = df_cs.loc[:, ~df_cs.columns.duplicated()].copy()
-                df_cs['Source'] = 'CanSlim'
-            if not df_ts.empty:
-                # Remove any duplicate columns
-                df_ts = df_ts.loc[:, ~df_ts.columns.duplicated()].copy()
-                df_ts['Source'] = 'TQQQ'
-
-            # Filter and reset index to avoid duplicate index errors
-            if not df_cs.empty and 'Status' in df_cs.columns:
-                cs_open = df_cs[df_cs['Status']=='OPEN'].copy().reset_index(drop=True)
-            else:
-                cs_open = pd.DataFrame()
-
-            if not df_ts.empty and 'Status' in df_ts.columns:
-                ts_open = df_ts[df_ts['Status']=='OPEN'].copy().reset_index(drop=True)
-            else:
-                ts_open = pd.DataFrame()
-
-            df_open_core = pd.concat([cs_open, ts_open], ignore_index=True) if not cs_open.empty or not ts_open.empty else pd.DataFrame()
-            
-            core_exp_pct = 0.0; core_pos_count = len(df_open_core)
-            if not df_open_core.empty and core_nlv > 0:
-                df_open_core['Mkt_Val'] = df_open_core['Total_Cost'] + df_open_core['Unrealized_PL']
-                core_exp_pct = (df_open_core['Mkt_Val'].sum() / core_nlv) * 100
-            
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Trading Core NLV", f"${core_nlv:,.2f}", f"{core_day_pl:+,.2f} ({core_day_pct:+.2f}%)")
-            m2.metric("LTD Return", f"{df_core['LTD_Pct'].iloc[-1]:.2f}%")
-            m3.metric("YTD Return", f"{ytd_val:.2f}%")
-            m4.metric("Combined Exposure", f"{core_exp_pct:.1f}%", f"{core_pos_count} Pos")
-            st.markdown("---")
-            
-            # PLOTS
-            df_core['EC_8EMA'] = df_core['LTD_Pct'].ewm(span=8, adjust=False).mean()
-            df_core['EC_21EMA'] = df_core['LTD_Pct'].ewm(span=21, adjust=False).mean()
-            
-            plt.style.use('bmh')
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [3, 1]})
-            
-            last_port = df_core['LTD_Pct'].iloc[-1]
-            ax1.plot(df_core.index, df_core['LTD_Pct'], color='darkblue', linewidth=2.5, label=f"Core ({last_port:+.1f}%)")
-            ax1.plot(df_core.index, df_core['EC_8EMA'], color='purple', linewidth=1.2, label='8 EMA')
-            ax1.plot(df_core.index, df_core['EC_21EMA'], color='green', linewidth=1.2, label='21 EMA')
-            
-            if 'SPY_Bench' in df_core.columns:
-                last_spy = df_core['SPY_Bench'].iloc[-1]
-                ax1.plot(df_core.index, df_core['SPY_Bench'], color='gray', alpha=0.5, label=f"SPY ({last_spy:+.1f}%)")
-            
-            ax1.fill_between(df_core.index, df_core['LTD_Pct'], df_core['EC_21EMA'], where=(df_core['LTD_Pct'] >= df_core['EC_21EMA']), interpolate=True, color='green', alpha=0.1)
-            ax1.fill_between(df_core.index, df_core['LTD_Pct'], df_core['EC_21EMA'], where=(df_core['LTD_Pct'] < df_core['EC_21EMA']), interpolate=True, color='red', alpha=0.1)
-            ax1.legend(loc='upper left'); ax1.set_title("Trading Core Equity Curve"); ax1.set_ylabel("Return %")
-            
-            colors = ['green' if x >= 0 else 'red' for x in df_core['Daily_PL']]
-            ax2.bar(df_core.index, df_core['Daily_PL'], color=colors)
-            ax2.set_title("Combined Daily P&L ($)")
-            st.pyplot(fig)
-        else: st.info("No data in Trading Accounts.")
-
-    # --- TAB 3: HISTORY ---
-    with tab_hist:
-        st.header("📜 Trading Core History")
-        if not df_core.empty:
-            hist_view = df_core[['Beg NLV', 'Cash -/+', 'End NLV', 'Daily_PL', 'Daily_Pct']].sort_index(ascending=False).copy()
-            hist_view.columns = ['Start Equity', 'Cash Flow', 'End Equity', 'Daily P&L ($)', 'Daily Return %']
-            
-            st.dataframe(
-                hist_view.style.format({
-                    'Start Equity': '${:,.2f}', 'Cash Flow': '${:,.2f}', 'End Equity': '${:,.2f}',
-                    'Daily P&L ($)': '${:+,.2f}', 'Daily Return %': '{:+.2%}'
-                })
-                .applymap(lambda x: 'color: #2ca02c' if x >= 0 else 'color: #ff4b4b', subset=['Daily P&L ($)', 'Daily Return %'])
-                , use_container_width=True, height=600
-            )
-        else: st.info("No history available.")
 
 # ==============================================================================
 # PAGE 2: DASHBOARD (NEW MODERN VERSION)
@@ -2932,9 +2606,6 @@ elif page == "Ticker Forensics":
 elif page == "Period Review":
     st.header("PERIODIC REVIEW")
     
-    # 1. SCOPE SELECTOR
-    review_scope = st.radio("Review Scope", ["⚔️ Combined Core (CanSlim + TQQQ)", f"🌳 {PORT_CANSLIM}", f"⚡ {PORT_TQQQ}"], horizontal=True)
-    
     # --- DATA ENGINE ---
     def clean_num_local(x):
         try:
@@ -2960,54 +2631,7 @@ elif page == "Period Review":
         return d, s
 
     # LOAD DATA
-    if "Combined" in review_scope:
-        df_c, s_c = get_df(PORT_CANSLIM)
-        df_t, s_t = get_df(PORT_TQQQ)
-        
-        if not df_c.empty or not df_t.empty:
-            dates_c = df_c['Day'].tolist() if not df_c.empty else []
-            dates_t = df_t['Day'].tolist() if not df_t.empty else []
-            all_dates = sorted(list(set(dates_c + dates_t)))
-            
-            def reindex_port(df, dates):
-                if df.empty: return pd.DataFrame(index=dates, columns=['End NLV', 'Beg NLV', 'Cash -/+', 'Daily $ Change']).fillna(0)
-                df = df.set_index('Day').reindex(dates)
-                df['End NLV'] = df['End NLV'].fillna(method='ffill').fillna(0)
-                df['Beg NLV'] = df['Beg NLV'].fillna(method='ffill').fillna(0)
-                df['Cash -/+'] = df['Cash -/+'].fillna(0)
-                df['Daily $ Change'] = df['Daily $ Change'].fillna(0)
-                df['Beg NLV'] = df['End NLV'] - df['Daily $ Change'] - df['Cash -/+']
-                return df
-
-            rc = reindex_port(df_c, all_dates)
-            rt = reindex_port(df_t, all_dates)
-            
-            df_j = pd.DataFrame(index=all_dates)
-            df_j['Day'] = pd.to_datetime(all_dates)
-            df_j['End NLV'] = rc['End NLV'] + rt['End NLV']
-            df_j['Beg NLV'] = rc['Beg NLV'] + rt['Beg NLV']
-            df_j['Cash -/+'] = rc['Cash -/+'] + rt['Cash -/+']
-            df_j['Daily $ Change'] = rc['Daily $ Change'] + rt['Daily $ Change']
-            
-            if not df_c.empty:
-                bench = df_c.set_index('Day')[['SPY', 'Nasdaq']].reindex(all_dates).fillna(method='ffill')
-                df_j['SPY'] = bench['SPY'].values
-                df_j['Nasdaq'] = bench['Nasdaq'].values
-            else:
-                df_j['SPY'] = 0; df_j['Nasdaq'] = 0
-        else: df_j = pd.DataFrame()
-
-        # Fix: Remove duplicate columns and reset index before concat
-        if not s_c.empty:
-            s_c = s_c.loc[:, ~s_c.columns.duplicated()].copy().reset_index(drop=True)
-        if not s_t.empty:
-            s_t = s_t.loc[:, ~s_t.columns.duplicated()].copy().reset_index(drop=True)
-
-        df_s = pd.concat([s_c, s_t], ignore_index=True) if not s_c.empty or not s_t.empty else pd.DataFrame()
-        
-    else:
-        target_port = PORT_CANSLIM if "CanSlim" in review_scope else PORT_TQQQ
-        df_j, df_s = get_df(target_port)
+    df_j, df_s = get_df(PORT_CANSLIM)
 
     # --- RENDER ENGINE ---
     if not df_j.empty:
@@ -3304,10 +2928,11 @@ if page == "Daily Routine":
                         try: prev_nlv = clean_num(df_curr.iloc[0]['End NLV'])
                         except: prev_nlv = 0.0
                         
-                    # 3. MATH
+                    # 3. MATH (TWR: denominator includes cash flow to match Dashboard)
                     if prev_nlv > 0:
                         daily_chg = end_nlv - prev_nlv - cash_flow
-                        pct_val = (daily_chg / prev_nlv) * 100
+                        adj_beg = prev_nlv + cash_flow
+                        pct_val = (daily_chg / adj_beg) * 100 if adj_beg != 0 else 0.0
                     elif cash_flow > 0:
                         daily_chg = end_nlv - cash_flow
                         pct_val = (daily_chg / cash_flow) * 100
@@ -6623,7 +6248,79 @@ elif page == "Risk Manager":
     import numpy as np
     import matplotlib.pyplot as plt
 
-    st.subheader(f"Risk Manager ({CURR_PORT_NAME})")
+    RESET_DATE = pd.Timestamp("2026-02-24")
+
+    # === COMMAND CENTER HEADER: CanSlim + 457B Combined View ===
+    def _clean_rm(x):
+        try: return float(str(x).replace('$','').replace(',','').replace('%','').strip()) if isinstance(x, str) else float(x)
+        except: return 0.0
+
+    def _load_jrn_rm(port_name):
+        p = os.path.join(DATA_ROOT, port_name, 'Trading_Journal_Clean.csv')
+        d = load_data(p)
+        if not d.empty and 'Day' in d.columns:
+            d['Day'] = pd.to_datetime(d['Day'], errors='coerce')
+            d.sort_values('Day', inplace=True)
+            for c in ['End NLV', 'Beg NLV', 'Cash -/+', 'Daily $ Change']:
+                if c in d.columns: d[c] = d[c].apply(_clean_rm)
+        return d
+
+    def _reset_dd_rm(df):
+        if df.empty: return 0.0, 0.0
+        dp = df[df['Day'] >= RESET_DATE]
+        if dp.empty: return (df['End NLV'].iloc[-1] if not df.empty else 0.0), 0.0
+        hwm = dp['End NLV'].max()
+        curr = dp['End NLV'].iloc[-1]
+        dd = ((curr - hwm) / hwm) * 100 if hwm > 0 else 0.0
+        return curr, dd
+
+    df_hdr_c = _load_jrn_rm(PORT_CANSLIM)
+    df_hdr_r = _load_jrn_rm(PORT_457B)
+    can_nlv_h, can_dd_h = _reset_dd_rm(df_hdr_c)
+    ret_nlv_h, ret_dd_h = _reset_dd_rm(df_hdr_r)
+
+    can_day_h = df_hdr_c['Daily $ Change'].iloc[-1] if not df_hdr_c.empty and 'Daily $ Change' in df_hdr_c.columns else 0.0
+    can_ytd_h = "—"
+    if not df_hdr_c.empty and 'Beg NLV' in df_hdr_c.columns:
+        dy = df_hdr_c[df_hdr_c['Day'].dt.year == datetime.now().year].copy()
+        if not dy.empty:
+            dy['AB'] = dy['Beg NLV'] + dy['Cash -/+']
+            dy['DR'] = 0.0
+            m = dy['AB'] != 0
+            dy.loc[m, 'DR'] = (dy.loc[m, 'End NLV'] - dy.loc[m, 'AB']) / dy.loc[m, 'AB']
+            can_ytd_h = f"{((1 + dy['DR']).prod() - 1) * 100:.2f}%"
+
+    mw_state_h = "UNKNOWN"; mw_color_h = "gray"
+    try:
+        nh = yf.Ticker("^IXIC").history(period="3mo")
+        nh['21EMA'] = nh['Close'].ewm(span=21, adjust=False).mean()
+        mw_state_h = "OPEN" if nh['Close'].iloc[-1] > nh['21EMA'].iloc[-1] else "CLOSED"
+        mw_color_h = "green" if mw_state_h == "OPEN" else "orange"
+    except: pass
+
+    st.title("RISK MANAGER")
+    st.markdown(f"**Total Net Worth: ${can_nlv_h + ret_nlv_h:,.2f}** &nbsp;|&nbsp; Market Window: :{mw_color_h}[**{mw_state_h}**] &nbsp;|&nbsp; Reset: {RESET_DATE.strftime('%m/%d/%y')}")
+
+    hc1, hc2, hc3, hc4 = st.columns(4)
+    hc1.metric("CanSlim NLV", f"${can_nlv_h:,.2f}", f"Day: {can_day_h:+,.2f}")
+    hc1.caption(f"YTD: {can_ytd_h}")
+
+    fuse_c = abs(can_dd_h)
+    if fuse_c < 7.5:    hc2.success(f"🌳 CanSlim: 🟢 CLEAR (DD: -{fuse_c:.2f}%)")
+    elif fuse_c < 12.5: hc2.warning(f"🌳 CanSlim: ⚠️ L1 LOCKOUT (DD: -{fuse_c:.2f}%)")
+    elif fuse_c < 15.0: hc2.error(f"🌳 CanSlim: 🛑 L2 50% CASH (DD: -{fuse_c:.2f}%)")
+    else:               hc2.error(f"🌳 CanSlim: ☠️ GO TO CASH (DD: -{fuse_c:.2f}%)")
+
+    hc3.metric("457B Plan NLV", f"${ret_nlv_h:,.2f}", f"DD: {ret_dd_h:.2f}%")
+
+    fuse_r = abs(ret_dd_h)
+    if fuse_r < 7.5:    hc4.success(f"🛡️ 457B: 🟢 CLEAR (DD: -{fuse_r:.2f}%)")
+    elif fuse_r < 12.5: hc4.warning(f"🛡️ 457B: ⚠️ L1 (DD: -{fuse_r:.2f}%)")
+    elif fuse_r < 15.0: hc4.error(f"🛡️ 457B: 🛑 L2 (DD: -{fuse_r:.2f}%)")
+    else:               hc4.error(f"🛡️ 457B: ☠️ L3 (DD: -{fuse_r:.2f}%)")
+
+    st.markdown("---")
+    st.subheader(f"Hard Deck Analysis ({CURR_PORT_NAME})")
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
@@ -6634,11 +6331,6 @@ elif page == "Risk Manager":
     df_d = load_data(DETAILS_FILE)
     df_s = load_data(SUMMARY_FILE)
 
-    # --- CONFIGURATION ---
-
-    RESET_DATE = pd.Timestamp("2025-12-16")
-
-    
 
     # 1. LOAD JOURNAL (For Historical Chart)
 
@@ -9809,7 +9501,7 @@ elif page == "Daily Report Card":
                 snapshot_df = snapshot_df.sort_values('Return', ascending=False)
 
             # --- 4. RISK PROTOCOL ---
-            RESET_DATE = pd.Timestamp("2025-12-16")
+            RESET_DATE = pd.Timestamp("2026-02-24")
             hist_slice = df_j[df_j['Day'] <= pd.Timestamp(selected_date)].sort_values('Day')
             hist_slice_post = hist_slice[hist_slice['Day'] >= RESET_DATE]
             
