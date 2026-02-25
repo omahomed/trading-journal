@@ -2907,7 +2907,7 @@ if page == "Daily Routine":
                 sec_val = inputs['sec']
                 cash_flow = inputs['cash_flow']
                 
-                if end_nlv > 0:
+                if end_nlv > 0 or cash_flow != 0:  # allow NLV=0 with cash outflow (account close-out)
                     df_curr = load_and_prep_file(p_path)
                     
                     # 1. DUPLICATE CHECK
