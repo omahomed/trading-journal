@@ -6250,77 +6250,7 @@ elif page == "Risk Manager":
 
     RESET_DATE = pd.Timestamp("2026-02-24")
 
-    # === COMMAND CENTER HEADER: CanSlim + 457B Combined View ===
-    def _clean_rm(x):
-        try: return float(str(x).replace('$','').replace(',','').replace('%','').strip()) if isinstance(x, str) else float(x)
-        except: return 0.0
-
-    def _load_jrn_rm(port_name):
-        p = os.path.join(DATA_ROOT, port_name, 'Trading_Journal_Clean.csv')
-        d = load_data(p)
-        if not d.empty and 'Day' in d.columns:
-            d['Day'] = pd.to_datetime(d['Day'], errors='coerce')
-            d.sort_values('Day', inplace=True)
-            for c in ['End NLV', 'Beg NLV', 'Cash -/+', 'Daily $ Change']:
-                if c in d.columns: d[c] = d[c].apply(_clean_rm)
-        return d
-
-    def _reset_dd_rm(df):
-        if df.empty: return 0.0, 0.0
-        dp = df[df['Day'] >= RESET_DATE]
-        if dp.empty: return (df['End NLV'].iloc[-1] if not df.empty else 0.0), 0.0
-        hwm = dp['End NLV'].max()
-        curr = dp['End NLV'].iloc[-1]
-        dd = ((curr - hwm) / hwm) * 100 if hwm > 0 else 0.0
-        return curr, dd
-
-    df_hdr_c = _load_jrn_rm(PORT_CANSLIM)
-    df_hdr_r = _load_jrn_rm(PORT_457B)
-    can_nlv_h, can_dd_h = _reset_dd_rm(df_hdr_c)
-    ret_nlv_h, ret_dd_h = _reset_dd_rm(df_hdr_r)
-
-    can_day_h = df_hdr_c['Daily $ Change'].iloc[-1] if not df_hdr_c.empty and 'Daily $ Change' in df_hdr_c.columns else 0.0
-    can_ytd_h = "—"
-    if not df_hdr_c.empty and 'Beg NLV' in df_hdr_c.columns:
-        dy = df_hdr_c[df_hdr_c['Day'].dt.year == datetime.now().year].copy()
-        if not dy.empty:
-            dy['AB'] = dy['Beg NLV'] + dy['Cash -/+']
-            dy['DR'] = 0.0
-            m = dy['AB'] != 0
-            dy.loc[m, 'DR'] = (dy.loc[m, 'End NLV'] - dy.loc[m, 'AB']) / dy.loc[m, 'AB']
-            can_ytd_h = f"{((1 + dy['DR']).prod() - 1) * 100:.2f}%"
-
-    mw_state_h = "UNKNOWN"; mw_color_h = "gray"
-    try:
-        nh = yf.Ticker("^IXIC").history(period="3mo")
-        nh['21EMA'] = nh['Close'].ewm(span=21, adjust=False).mean()
-        mw_state_h = "OPEN" if nh['Close'].iloc[-1] > nh['21EMA'].iloc[-1] else "CLOSED"
-        mw_color_h = "green" if mw_state_h == "OPEN" else "orange"
-    except: pass
-
-    st.title("RISK MANAGER")
-    st.markdown(f"**Total Net Worth: ${can_nlv_h + ret_nlv_h:,.2f}** &nbsp;|&nbsp; Market Window: :{mw_color_h}[**{mw_state_h}**] &nbsp;|&nbsp; Reset: {RESET_DATE.strftime('%m/%d/%y')}")
-
-    hc1, hc2, hc3, hc4 = st.columns(4)
-    hc1.metric("CanSlim NLV", f"${can_nlv_h:,.2f}", f"Day: {can_day_h:+,.2f}")
-    hc1.caption(f"YTD: {can_ytd_h}")
-
-    fuse_c = abs(can_dd_h)
-    if fuse_c < 7.5:    hc2.success(f"🌳 CanSlim: 🟢 CLEAR (DD: -{fuse_c:.2f}%)")
-    elif fuse_c < 12.5: hc2.warning(f"🌳 CanSlim: ⚠️ L1 LOCKOUT (DD: -{fuse_c:.2f}%)")
-    elif fuse_c < 15.0: hc2.error(f"🌳 CanSlim: 🛑 L2 50% CASH (DD: -{fuse_c:.2f}%)")
-    else:               hc2.error(f"🌳 CanSlim: ☠️ GO TO CASH (DD: -{fuse_c:.2f}%)")
-
-    hc3.metric("457B Plan NLV", f"${ret_nlv_h:,.2f}", f"DD: {ret_dd_h:.2f}%")
-
-    fuse_r = abs(ret_dd_h)
-    if fuse_r < 7.5:    hc4.success(f"🛡️ 457B: 🟢 CLEAR (DD: -{fuse_r:.2f}%)")
-    elif fuse_r < 12.5: hc4.warning(f"🛡️ 457B: ⚠️ L1 (DD: -{fuse_r:.2f}%)")
-    elif fuse_r < 15.0: hc4.error(f"🛡️ 457B: 🛑 L2 (DD: -{fuse_r:.2f}%)")
-    else:               hc4.error(f"🛡️ 457B: ☠️ L3 (DD: -{fuse_r:.2f}%)")
-
-    st.markdown("---")
-    st.subheader(f"Hard Deck Analysis ({CURR_PORT_NAME})")
+    st.subheader(f"Risk Manager ({CURR_PORT_NAME})")
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
