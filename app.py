@@ -3766,33 +3766,6 @@ elif page == "Log Buy":
 
     st.caption("Live Entry Calculator")
 
-    # Show last upload attempt results (persists through rerun)
-    with st.expander("🔍 Last Upload Attempt Results", expanded=True):
-        if 'last_upload_attempt' in st.session_state:
-            attempt = st.session_state['last_upload_attempt']
-            st.json(attempt)
-            if st.button("Clear Results"):
-                del st.session_state['last_upload_attempt']
-                st.rerun()
-        else:
-            st.info("No upload attempts yet. Upload a file and log a trade to see results here.")
-
-    # Debug: Show system status
-    with st.expander("🔧 System Status (Debug)", expanded=False):
-        diag_cols = st.columns(3)
-        with diag_cols[0]:
-            st.metric("R2 Storage", "✅ Available" if R2_AVAILABLE else "❌ Not Available")
-        with diag_cols[1]:
-            st.metric("Database Mode", "✅ Enabled" if USE_DATABASE else "❌ Disabled")
-        with diag_cols[2]:
-            img_status = "✅ Enabled" if (R2_AVAILABLE and USE_DATABASE) else "❌ Disabled"
-            st.metric("Image Upload", img_status)
-
-        if not R2_AVAILABLE:
-            st.error("R2 storage module failed to load. Check if boto3 is installed and R2 secrets are configured.")
-        if not USE_DATABASE:
-            st.warning("Database mode is disabled. Images require database mode to be enabled.")
-
     # Session State Init
     if 'b_tick' not in st.session_state: st.session_state['b_tick'] = ""
     if 'b_id' not in st.session_state: st.session_state['b_id'] = ""
