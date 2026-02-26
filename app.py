@@ -3584,19 +3584,23 @@ elif page == "Position Sizer":
                 
                 tier_name = "Tier 3 (Defense)"
                 tol_pct = 0.50
-                
+                atr_multiplier = 1.0
+
                 if cushion_pct >= 20.0:
                     tier_name = "Tier 1 (High Cushion)"
                     tol_pct = 1.00
+                    atr_multiplier = 2.0
                 elif cushion_pct >= 5.0:
                     tier_name = "Tier 2 (Moderate)"
                     tol_pct = 0.65
-                    
+                    atr_multiplier = 1.5
+
                 daily_risk_budget = vs_equity * (tol_pct / 100)
-                
-                # 2. Calculate Volatility Limit (ATR)
+                atr_risk_budget = daily_risk_budget * atr_multiplier
+
+                # 2. Calculate Volatility Limit (ATR) - scaled by confidence multiplier
                 atr_decimal = vs_atr_pct / 100
-                max_shares_vol = int(daily_risk_budget / (vs_price * atr_decimal))
+                max_shares_vol = int(atr_risk_budget / (vs_price * atr_decimal))
                 
                 # 3. Calculate Technical Limit (MA - Buffer)
                 max_shares_tech = 999999
@@ -3632,16 +3636,16 @@ elif page == "Position Sizer":
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Risk Budget", f"${daily_risk_budget:,.0f}", f"{tol_pct}% Risk ({tier_name})")
                 k2.metric("Volatility Risk", f"{vs_atr_pct:.2f}%", f"ATR (Noise)")
-                
-                if effective_stop > 0:
-                    k3.metric("Effective Stop", f"${effective_stop:.2f}", f"{vs_buffer_pct}% below ${vs_ma_level}")
-                else:
-                    k3.metric("Profit Cushion", f"{cushion_pct:.2f}%", tier_name, delta_color="off")
-                
+                k3.metric("Profit Cushion", f"{cushion_pct:.2f}%", tier_name, delta_color="off")
+
+                if atr_multiplier > 1.0:
+                    st.info(f"🎯 **Confidence Boost:** ATR budget scaled {atr_multiplier:.1f}x (${atr_risk_budget:,.0f}) — earned by {cushion_pct:.1f}% profit cushion")
+
                 st.markdown("---")
-                
+
                 m1, m2, m3 = st.columns(3)
-                m1.metric("ATR Limit", f"{max_shares_vol} shs", "Based on Noise", delta_color="off")
+                atr_delta = f"{atr_multiplier:.1f}x Confidence" if atr_multiplier > 1.0 else "Based on Noise"
+                m1.metric("ATR Limit", f"{max_shares_vol} shs", atr_delta, delta_color="off")
                 
                 if vol_mode.startswith("🆕") and effective_stop > 0:
                     delta_color = "normal" if max_shares_tech < max_shares_vol else "off"
@@ -3671,9 +3675,14 @@ elif page == "Position Sizer":
                         trim_val = diff_shares * vs_price
                         v3.metric("Action Required", f"TRIM {int(diff_shares)}", f"Sell ${trim_val:,.0f}", delta_color="normal")
                         st.warning(f"⚠️ **OVERWEIGHT:** You are holding {int(diff_shares)} shares too many for this volatility/technical profile.")
+                    elif diff_shares < 0:
+                        add_room = abs(int(diff_shares))
+                        add_val = add_room * vs_price
+                        v3.metric("Action Required", f"CAN ADD {add_room}", f"Buy up to ${add_val:,.0f}")
+                        st.success(f"✅ **Room to add** up to {add_room} shares ({add_val / vs_equity * 100:.1f}% of NLV) within limits.")
                     else:
-                        v3.metric("Action Required", "NONE", "✅ Safe", delta_color="off")
-                        st.success(f"✅ **SAFE:** Your position is within the {final_max_shares} share limit.")
+                        v3.metric("Action Required", "AT LIMIT", "No room to add", delta_color="off")
+                        st.info(f"ℹ️ Position is exactly at the {final_max_shares} share limit.")
             else:
                 st.error("Please ensure Ticker, Price, and ATR are entered correctly.")
 
