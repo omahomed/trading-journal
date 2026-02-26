@@ -3286,61 +3286,107 @@ elif page == "Position Sizer":
 
     # --- TAB 3: PYRAMIDING (ADD ON) ---
     with tab_add:
-        st.caption("Calculate shares to add and new stop to protect total equity.")
+        st.caption("Scale up to target weight while respecting your global stop and risk budget.")
         open_positions = df_s[df_s['Status'] == 'OPEN'].sort_values('Ticker')
-        
+
         if not open_positions.empty:
             sel_pos = st.selectbox("Select Holding", options=open_positions['Ticker'].unique().tolist(), key="add_sel")
             row = open_positions[open_positions['Ticker'] == sel_pos].iloc[0]
-            
+
             # Fetch Price safely
             try: live_price = yf.Ticker(row['Ticker']).history(period="1d")['Close'].iloc[-1]
             except: live_price = row.get('Avg_Entry', 100)
-            
+
             c1, c2 = st.columns(2)
             curr_price = c1.number_input("Current Price ($)", min_value=0.01, value=float(live_price), step=0.1, key=f"add_cp_{row['Ticker']}")
             acct_val_add = c2.number_input("Account Equity ($)", value=equity, disabled=True, key="add_av")
-            
-            st.markdown(f"**Current Status:** {int(row['Shares'])} shares @ ${row['Avg_Entry']:.2f} ({(row['Total_Cost']/equity)*100:.1f}% Weight)")
+
+            curr_weight = (row['Shares'] * curr_price / equity) * 100 if equity > 0 else 0
+            st.markdown(f"**Current Status:** {int(row['Shares'])} shares @ ${row['Avg_Entry']:.2f} ({curr_weight:.1f}% Weight)")
             st.markdown("---")
-            
+
+            # Target & Risk sliders
             c3, c4 = st.columns(2)
             target_mode_add = c3.select_slider("Target Total Position Size", options=list(size_map.keys()), value="Full (10%)", key="add_ts_mode")
             target_size_pct = size_map[target_mode_add]
             max_risk_pct = c4.slider("Max Total Risk % (Capital)", 0.25, 1.25, 0.75, 0.05, key="add_mr")
-            
+
+            # Global Stop: MA Level + Buffer
+            st.markdown("---")
+            s1, s2 = st.columns(2)
+            add_ma_level = s1.number_input("Key MA Level ($)", value=0.0, step=0.1, help="Price of the Moving Average (e.g. 21e/50s).", key="add_ma_level")
+            add_buffer_pct = s2.number_input("Buffer (%)", value=1.0, step=0.1, help="Wiggle room below the MA.", key="add_buffer")
+
+            if add_ma_level > 0:
+                calc_stop = add_ma_level * (1 - add_buffer_pct / 100)
+                stop_dist = ((curr_price - calc_stop) / curr_price * 100) if curr_price > 0 else 0
+                st.info(f"📍 **Calculated Stop:** ${calc_stop:.2f} (MA ${add_ma_level:.2f} − {add_buffer_pct:.1f}% buffer) — {stop_dist:.1f}% below current price")
+
+            st.markdown("---")
+
             if st.button("Calculate Add-On", key="add_btn"):
-                target_value = acct_val_add * (target_size_pct / 100)
-                current_value = row['Shares'] * curr_price 
-                value_to_add = target_value - current_value
-                
-                if value_to_add <= 0:
-                    st.error(f"You are already over the target weight! (Current: ${current_value:,.0f} vs Target: ${target_value:,.0f})")
+                # Validate stop
+                if add_ma_level <= 0:
+                    st.error("Enter a Key MA Level to calculate your global stop.")
                 else:
-                    shares_to_add = math.floor(value_to_add / curr_price)
-                    total_shares = row['Shares'] + shares_to_add
-                    new_avg_cost = ((row['Shares'] * row['Avg_Entry']) + (shares_to_add * curr_price)) / total_shares
-                    cost_of_add = shares_to_add * curr_price
-                    
-                    allowed_risk_dollars = acct_val_add * (max_risk_pct / 100)
-                    required_cushion_per_share = allowed_risk_dollars / total_shares
-                    new_stop_price = curr_price - required_cushion_per_share
-                    stop_dist_pct = (required_cushion_per_share / curr_price) * 100
-                    
-                    st.markdown("### ➕ PYRAMID TICKET")
-                    k1, k2, k3, k4 = st.columns(4)
-                    k1.metric("ADD SHARES", f"+{shares_to_add}")
-                    k2.metric("EST. COST", f"${cost_of_add:,.2f}")
-                    k3.metric("NEW TOTAL", f"{int(total_shares)}")
-                    k4.metric("AVG COST (Est)", f"${new_avg_cost:.2f}")
-                    
-                    st.markdown("### 🛡️ RISK MANAGEMENT")
-                    r1, r2 = st.columns(2)
-                    r1.metric("SUGGESTED NEW STOP", f"${new_stop_price:.2f}", delta=f"-{stop_dist_pct:.2f}% from Current")
-                    r2.metric("TOTAL RISK", f"${allowed_risk_dollars:,.0f}", f"{max_risk_pct}% of Equity")
-                    
-                    if new_stop_price > curr_price: st.error("❌ IMPOSSIBLE RISK.")
-                    elif new_stop_price > row['Avg_Entry']: st.success("✅ PROFIT LOCK ACTIVE.")
+                    calc_stop = add_ma_level * (1 - add_buffer_pct / 100)
+                    risk_per_share = curr_price - calc_stop
+
+                    if risk_per_share <= 0:
+                        st.error(f"❌ **INVALID** — Stop (${calc_stop:.2f}) is at or above current price (${curr_price:.2f}).")
+                    else:
+                        current_shares = int(row['Shares'])
+                        current_value = current_shares * curr_price
+
+                        # What you WANT (target)
+                        target_value = acct_val_add * (target_size_pct / 100)
+                        target_total_shares = math.floor(target_value / curr_price)
+                        target_add = target_total_shares - current_shares
+
+                        # What you can AFFORD (risk-limited)
+                        max_risk_dollars = acct_val_add * (max_risk_pct / 100)
+                        max_total_shares = math.floor(max_risk_dollars / risk_per_share)
+                        affordable_add = max_total_shares - current_shares
+
+                        if target_add <= 0:
+                            st.error(f"You are already at or above the target weight! (Current: ${current_value:,.0f} vs Target: ${target_value:,.0f})")
+                        elif affordable_add <= 0:
+                            risk_at_current = current_shares * risk_per_share
+                            st.error(f"🚫 **NO ADD** — Your current {current_shares} shares already risk ${risk_at_current:,.0f} (budget: ${max_risk_dollars:,.0f}). Tighten your stop or reduce position.")
+                        else:
+                            # Recommendation = min of want and afford
+                            recommended_add = min(target_add, affordable_add)
+                            new_total = current_shares + recommended_add
+                            new_avg_cost = ((current_shares * row['Avg_Entry']) + (recommended_add * curr_price)) / new_total
+                            cost_of_add = recommended_add * curr_price
+                            total_risk_at_new = new_total * risk_per_share
+                            new_weight = (new_total * curr_price / acct_val_add) * 100
+
+                            # --- PYRAMID TICKET ---
+                            st.markdown("### ➕ PYRAMID TICKET")
+                            k1, k2, k3, k4 = st.columns(4)
+                            k1.metric("ADD SHARES", f"+{recommended_add}")
+                            k2.metric("EST. COST", f"${cost_of_add:,.2f}")
+                            k3.metric("NEW TOTAL", f"{new_total} shs", f"{new_weight:.1f}% Weight")
+                            k4.metric("NEW AVG COST", f"${new_avg_cost:.2f}", f"From ${row['Avg_Entry']:.2f}")
+
+                            # --- RISK MANAGEMENT ---
+                            st.markdown("### 🛡️ RISK MANAGEMENT")
+                            r1, r2, r3 = st.columns(3)
+                            r1.metric("Global Stop", f"${calc_stop:.2f}", f"-{(risk_per_share/curr_price)*100:.1f}% from price")
+                            r2.metric("Total Risk at New Size", f"${total_risk_at_new:,.0f}", f"{(total_risk_at_new/acct_val_add)*100:.2f}% of NLV")
+                            r3.metric("Risk Budget", f"${max_risk_dollars:,.0f}", f"{max_risk_pct}% of Equity")
+
+                            # --- VERDICT ---
+                            st.markdown("### 🏛️ The Verdict")
+                            if affordable_add >= target_add:
+                                st.success(f"✅ **ADD {recommended_add} shares** to reach {new_weight:.1f}% — Total risk ${total_risk_at_new:,.0f} within ${max_risk_dollars:,.0f} budget.")
+                            else:
+                                target_risk = target_total_shares * risk_per_share
+                                st.warning(
+                                    f"⚠️ **RISK LIMIT:** Full target ({target_add} shares) would risk ${target_risk:,.0f} (over ${max_risk_dollars:,.0f} budget). "
+                                    f"**Safe add: {recommended_add} shares** ({new_weight:.1f}% weight). Scale up on next pullback to MA."
+                                )
         else:
             st.info("No Open Positions found in Summary file.")
 
