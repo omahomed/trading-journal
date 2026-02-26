@@ -3640,6 +3640,7 @@ elif page == "Position Sizer":
         vs_ma_level = 0.0
         vs_buffer_pct = 1.0
         
+        vs_target_pct = 0.0
         if vol_mode.startswith("🆕"):
             vs_ma_level = e3.number_input("Key MA Level ($)", value=0.0, step=0.1, help="Price of the Moving Average (e.g. 21e/50s).", key="vs_ma_level")
             vs_buffer_pct = e4.number_input("Buffer (%)", value=1.0, step=0.1, help="Wiggle room below the MA.", key="vs_buffer")
@@ -3647,6 +3648,8 @@ elif page == "Position Sizer":
                 calc_stop = vs_ma_level * (1 - vs_buffer_pct / 100)
                 stop_dist = ((vs_price - calc_stop) / vs_price * 100) if vs_price > 0 else 0
                 st.info(f"📍 **Calculated Stop:** ${calc_stop:.2f} (MA ${vs_ma_level:.2f} − {vs_buffer_pct:.1f}% buffer) — {stop_dist:.1f}% below entry")
+            vs_target_mode = st.select_slider("Target Position Size", options=list(size_map.keys()), value="Full (10%)", key="vs_target_slider")
+            vs_target_pct = size_map[vs_target_mode]
 
         st.markdown("---")
         
@@ -3698,14 +3701,21 @@ elif page == "Position Sizer":
                 
                 # 4. Hard Cap (20% NLV)
                 max_shares_cap = int((vs_equity * 0.20) / vs_price)
-                
+
+                # 4b. Target Position Size cap (New Trade mode only)
+                max_shares_target = 999999
+                if vol_mode.startswith("🆕") and vs_target_pct > 0:
+                    max_shares_target = int((vs_equity * vs_target_pct / 100) / vs_price)
+
                 # 5. Final Decision (Min of all)
-                final_max_shares = min(max_shares_vol, max_shares_tech, max_shares_cap)
+                final_max_shares = min(max_shares_vol, max_shares_tech, max_shares_cap, max_shares_target)
                 final_max_val = final_max_shares * vs_price
-                
+
                 # Determine Limiting Factor
                 limit_reason = "Volatility (ATR)"
-                if final_max_shares == max_shares_cap: limit_reason = "Hard Cap (20%)"
+                if final_max_shares == max_shares_target and max_shares_target < min(max_shares_vol, max_shares_tech, max_shares_cap):
+                    limit_reason = f"Target Size ({vs_target_pct}%)"
+                elif final_max_shares == max_shares_cap: limit_reason = "Hard Cap (20%)"
                 elif final_max_shares == max_shares_tech: limit_reason = f"MA Support (${vs_ma_level})"
                 
                 # 6. Display Results
