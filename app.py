@@ -3360,13 +3360,14 @@ elif page == "Position Sizer":
             try: live_price_t = yf.Ticker(row_t['Ticker']).history(period="1d")['Close'].iloc[-1]
             except: live_price_t = row_t.get('Avg_Entry', 100)
             
-            t1, t2, t3 = st.columns(3)
+            t1, t2, t3, t4 = st.columns(4)
             curr_price_t = t1.number_input("Current Price ($)", value=float(live_price_t), step=0.1, key=f"trim_cp_{row_t['Ticker']}")
+            trim_equity = t2.number_input("Account NLV ($)", value=equity, step=100.0, help="Override with current intraday NLV for accurate sizing.", key="trim_nlv")
             curr_val_t = row_t['Shares'] * curr_price_t
-            curr_weight_t = (curr_val_t / equity) * 100
-            
-            t2.metric("Current Weight", f"{curr_weight_t:.1f}%")
-            t3.metric("Current Value", f"${curr_val_t:,.0f}")
+            curr_weight_t = (curr_val_t / trim_equity) * 100 if trim_equity > 0 else 0
+
+            t3.metric("Current Weight", f"{curr_weight_t:.1f}%")
+            t4.metric("Current Value", f"${curr_val_t:,.0f}")
             
             st.markdown("---")
             
@@ -3379,11 +3380,11 @@ elif page == "Position Sizer":
                     st.warning(f"⚠️ Target ({target_weight_t}%) is higher than Current ({curr_weight_t:.1f}%). No trim needed.")
                 else:
                     # A. Basic Trim Math
-                    target_val_t = equity * (target_weight_t / 100)
+                    target_val_t = trim_equity * (target_weight_t / 100)
                     value_to_sell = curr_val_t - target_val_t
-                    shares_to_sell = math.ceil(value_to_sell / curr_price_t) 
+                    shares_to_sell = math.ceil(value_to_sell / curr_price_t)
                     remaining_shares = row_t['Shares'] - shares_to_sell
-                    actual_new_weight = (remaining_shares * curr_price_t / equity) * 100
+                    actual_new_weight = (remaining_shares * curr_price_t / trim_equity) * 100
                     
                     # B. LIFO ENGINE (Calculate Cost Basis of Specific Shares)
                     lifo_pnl = 0.0
