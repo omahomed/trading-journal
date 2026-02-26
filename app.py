@@ -3062,7 +3062,7 @@ elif page == "Position Sizer":
     tab_new, tab_manage, tab_add, tab_trim, tab_vol, tab_pyr = st.tabs([
         "🆕 Plan New Trade",
         "🔗 Manage Active Campaign",
-        "➕ Add (Pyramid)",
+        "📐 Scale In Sizer",
         "✂️ Trim (Sell Down)",
         "⚖️ Volatility Sizer",
         "🔺 Pyramid Sizer"
