@@ -3037,12 +3037,13 @@ elif page == "Position Sizer":
     size_map = {"Shotgun (2.5%)": 2.5, "Half (5%)": 5.0, "Full (10%)": 10.0, "Core (15%)": 15.0, "Core+1 (20%)": 20.0, "Max (25%)": 25.0, "30%": 30.0, "35%": 35.0, "40%": 40.0, "45%": 45.0, "50%": 50.0}
 
     # UPDATED TABS LIST
-    tab_new, tab_manage, tab_add, tab_trim, tab_vol = st.tabs([
-        "🆕 Plan New Trade", 
-        "🔗 Manage Active Campaign", 
-        "➕ Add (Pyramid)", 
+    tab_new, tab_manage, tab_add, tab_trim, tab_vol, tab_pyr = st.tabs([
+        "🆕 Plan New Trade",
+        "🔗 Manage Active Campaign",
+        "➕ Add (Pyramid)",
         "✂️ Trim (Sell Down)",
-        "⚖️ Volatility Sizer"
+        "⚖️ Volatility Sizer",
+        "🔺 Pyramid Sizer"
     ])
     
     # --- TAB 1: PLAN NEW TRADE ---
@@ -3685,6 +3686,210 @@ elif page == "Position Sizer":
                         st.info(f"ℹ️ Position is exactly at the {final_max_shares} share limit.")
             else:
                 st.error("Please ensure Ticker, Price, and ATR are entered correctly.")
+
+    # ==========================================================================
+    # TAB 6: PYRAMID SIZER
+    # ==========================================================================
+    with tab_pyr:
+        st.subheader("🔺 Pyramid Sizer")
+        st.caption("Size add-on purchases to winning positions. Enforces pace: max 20% of current shares per add, gated by last buy's profit.")
+
+        with st.expander("ℹ️ Pyramid Rules"):
+            st.markdown("""
+            **How it works:**
+            1. Each add is capped at **20% of your current shares**
+            2. Your last buy must be up **at least 5%** for a full-size add
+            3. If last buy is up **less than 5%**, the add scales proportionally: `(profit% / 5%) × 20%`
+            4. If last buy is **flat or down**, no add is allowed
+            5. The add is also capped by your ATR limit and 20% hard cap
+            """)
+
+        # --- Position Selection (Audit mode only) ---
+        pyr_ticker = ""
+        pyr_price = 0.0
+        pyr_shares = 0.0
+        pyr_avg_cost = 0.0
+        pyr_inventory = []
+        pyr_trade_id = ""
+
+        if not df_s.empty:
+            open_ops = df_s[df_s['Status'] == 'OPEN']
+            if not open_ops.empty:
+                c1, c2, c3 = st.columns(3)
+                opts = [f"{r['Ticker']} ({int(r['Shares'])} shs)" for _, r in open_ops.iterrows()]
+                sel_pyr = c1.selectbox("Select Position", opts, key="pyr_sel")
+                pyr_ticker = sel_pyr.split(" ")[0]
+
+                row = open_ops[open_ops['Ticker'] == pyr_ticker].iloc[0]
+                pyr_shares = float(row['Shares'])
+                pyr_trade_id = row['Trade_ID']
+
+                # --- LIFO ENGINE (clone from vol sizer) ---
+                lifo_cost = float(row['Avg_Entry'])
+
+                if not df_d.empty:
+                    tid = row['Trade_ID']
+                    trxs = df_d[df_d['Trade_ID'] == tid].copy()
+                    if not trxs.empty:
+                        trxs['Type_Rank'] = trxs['Action'].apply(lambda x: 0 if str(x).upper() == 'BUY' else 1)
+                        if 'Date' in trxs.columns: trxs = trxs.sort_values(['Date', 'Type_Rank'])
+
+                        pyr_inventory = []
+                        for _, tx in trxs.iterrows():
+                            action = str(tx.get('Action', '')).upper()
+                            tx_shares = abs(float(str(tx.get('Shares', 0)).replace(',','')))
+
+                            if action == 'BUY':
+                                price = float(str(tx.get('Amount', tx.get('Price', 0.0))).replace('$','').replace(',',''))
+                                if price == 0: price = float(row['Avg_Entry'])
+                                pyr_inventory.append({'qty': tx_shares, 'price': price})
+                            elif action == 'SELL':
+                                qty_to_sell = tx_shares
+                                while qty_to_sell > 0 and pyr_inventory:
+                                    last = pyr_inventory[-1]
+                                    take = min(qty_to_sell, last['qty'])
+                                    last['qty'] -= take
+                                    qty_to_sell -= take
+                                    if last['qty'] < 0.00001: pyr_inventory.pop()
+
+                        total_rem_shares = sum(i['qty'] for i in pyr_inventory)
+                        total_rem_cost = sum(i['qty'] * i['price'] for i in pyr_inventory)
+                        if total_rem_shares > 0:
+                            lifo_cost = total_rem_cost / total_rem_shares
+
+                pyr_avg_cost = lifo_cost
+
+                try:
+                    fetch_p = yf.Ticker(pyr_ticker).history(period="1d")['Close'].iloc[-1]
+                    auto_price = float(fetch_p)
+                except: auto_price = float(row.get('Current_Price', 0))
+
+                pyr_price = c2.number_input("Current Price ($)", value=auto_price, step=0.1, key=f"pyr_px_{pyr_ticker}")
+                c3.metric("Avg Cost", f"${pyr_avg_cost:,.2f}")
+
+                st.markdown("---")
+
+                # --- ATR & Equity Inputs ---
+                e1, e2 = st.columns(2)
+                pyr_equity = e1.number_input("Account Equity (NLV)", value=equity, step=1000.0, key="pyr_eq")
+                pyr_atr_pct = e2.number_input("ATR % (21-Day)", value=5.0, step=0.1, key="pyr_atr")
+
+                if st.button("Run Pyramid Analysis", type="primary", key="pyr_btn"):
+                    if pyr_ticker and pyr_price > 0 and pyr_atr_pct > 0 and pyr_inventory:
+
+                        # === 1. LAST BUY ANALYSIS ===
+                        last_buy = pyr_inventory[-1]
+                        last_buy_price = last_buy['price']
+                        last_buy_profit_pct = ((pyr_price - last_buy_price) / last_buy_price) * 100
+
+                        # Get last buy date from transaction history
+                        last_buy_date = "N/A"
+                        if not df_d.empty:
+                            buy_txs = df_d[(df_d['Trade_ID'] == pyr_trade_id) & (df_d['Action'].str.upper() == 'BUY')].sort_values('Date')
+                            if not buy_txs.empty:
+                                last_buy_date = str(buy_txs.iloc[-1].get('Date', 'N/A'))[:10]
+
+                        st.markdown(f"### 📊 Pyramid Analysis: {pyr_ticker}")
+
+                        # --- Last Buy Info ---
+                        b1, b2, b3 = st.columns(3)
+                        b1.metric("Last Buy Price", f"${last_buy_price:,.2f}", f"Date: {last_buy_date}")
+                        b2.metric("Last Buy P&L", f"{last_buy_profit_pct:.2f}%",
+                                  f"${pyr_price - last_buy_price:,.2f}/share",
+                                  delta_color="normal" if last_buy_profit_pct >= 0 else "inverse")
+                        cushion_pct = ((pyr_price - pyr_avg_cost) / pyr_avg_cost) * 100 if pyr_avg_cost > 0 else 0
+                        b3.metric("Total Cushion", f"{cushion_pct:.2f}%", f"Avg Cost: ${pyr_avg_cost:,.2f}")
+
+                        st.markdown("---")
+
+                        # === 2. PYRAMID PACING RULE ===
+                        base_add_pct = 0.20
+                        threshold_pct = 5.0
+
+                        if last_buy_profit_pct >= threshold_pct:
+                            scale_factor = 1.0
+                        elif last_buy_profit_pct > 0:
+                            scale_factor = last_buy_profit_pct / threshold_pct
+                        else:
+                            scale_factor = 0.0
+
+                        pyramid_max_shares = int(pyr_shares * base_add_pct * scale_factor)
+
+                        # === 3. ATR / HARD CAP CEILING (same as vol sizer) ===
+                        tier_name = "Tier 3 (Defense)"
+                        tol_pct = 0.50
+                        atr_multiplier = 1.0
+
+                        if cushion_pct >= 20.0:
+                            tier_name = "Tier 1 (High Cushion)"
+                            tol_pct = 1.00
+                            atr_multiplier = 2.0
+                        elif cushion_pct >= 5.0:
+                            tier_name = "Tier 2 (Moderate)"
+                            tol_pct = 0.65
+                            atr_multiplier = 1.5
+
+                        daily_risk_budget = pyr_equity * (tol_pct / 100)
+                        atr_risk_budget = daily_risk_budget * atr_multiplier
+                        atr_decimal = pyr_atr_pct / 100
+                        max_shares_atr = int(atr_risk_budget / (pyr_price * atr_decimal))
+                        max_shares_cap = int((pyr_equity * 0.20) / pyr_price)
+                        position_ceiling = min(max_shares_atr, max_shares_cap)
+                        room_to_add = max(0, position_ceiling - int(pyr_shares))
+
+                        # === 4. FINAL PYRAMID ALLOWED ===
+                        pyramid_allowed = min(pyramid_max_shares, room_to_add)
+                        pyramid_value = pyramid_allowed * pyr_price
+
+                        # === 5. DISPLAY ===
+                        st.markdown("### 🔺 Pyramid Calculation")
+
+                        p1, p2, p3 = st.columns(3)
+                        base_add = int(pyr_shares * base_add_pct)
+                        p1.metric("Base Add (20%)", f"{base_add} shs", f"20% of {int(pyr_shares)} shares")
+                        p2.metric("Scale Factor", f"{scale_factor:.0%}",
+                                  f"Last buy up {last_buy_profit_pct:.1f}% (need 5%)")
+                        p3.metric("Pyramid Max", f"{pyramid_max_shares} shs",
+                                  f"After scaling")
+
+                        st.markdown("---")
+
+                        r1, r2, r3 = st.columns(3)
+                        r1.metric("Position Ceiling", f"{position_ceiling} shs",
+                                  f"{tier_name} | {atr_multiplier:.1f}x ATR", delta_color="off")
+                        r2.metric("Current Position", f"{int(pyr_shares)} shs",
+                                  f"{pyr_shares * pyr_price / pyr_equity * 100:.1f}% Weight")
+                        r3.metric("Room to Add", f"{room_to_add} shs",
+                                  f"Before hitting ceiling")
+
+                        # === 6. VERDICT ===
+                        st.markdown("### 🏛️ The Verdict")
+
+                        if scale_factor == 0:
+                            st.error(f"🚫 **NO ADD** — Last buy is {'down' if last_buy_profit_pct < 0 else 'flat'} ({last_buy_profit_pct:.2f}%). Wait for it to work.")
+                        elif pyramid_allowed == 0 and pyramid_max_shares > 0:
+                            st.warning(f"⚠️ **NO ROOM** — Pyramid says {pyramid_max_shares} shares, but position is at ATR/cap ceiling ({position_ceiling} shs).")
+                        elif pyramid_allowed > 0:
+                            binding = "Pyramid pace" if pyramid_allowed == pyramid_max_shares else "ATR/Cap ceiling"
+                            st.success(f"✅ **ADD {pyramid_allowed} shares** (${pyramid_value:,.0f}) — Limited by: {binding}")
+                            v1, v2, v3 = st.columns(3)
+                            new_total = int(pyr_shares) + pyramid_allowed
+                            new_weight = (new_total * pyr_price / pyr_equity) * 100
+                            v1.metric("Add Shares", f"{pyramid_allowed} shs", f"${pyramid_value:,.0f}")
+                            v2.metric("New Total", f"{new_total} shs", f"{new_weight:.1f}% Weight")
+                            new_avg = (pyr_avg_cost * pyr_shares + pyr_price * pyramid_allowed) / new_total
+                            v3.metric("New Avg Cost", f"${new_avg:,.2f}", f"From ${pyr_avg_cost:,.2f}")
+                        else:
+                            st.info("ℹ️ Scale factor resulted in 0 shares. Last buy needs more profit before adding.")
+
+                    elif not pyr_inventory:
+                        st.error("No buy transactions found for this position.")
+                    else:
+                        st.error("Please ensure Price and ATR are entered correctly.")
+            else:
+                st.info("No open positions found. Open a position first to use the Pyramid Sizer.")
+        else:
+            st.info("No trade data available.")
 
 # ==============================================================================
 # PAGE: LOG BUY (Standalone)
