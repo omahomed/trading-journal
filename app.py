@@ -7262,12 +7262,16 @@ elif page == "Earnings Planner":
 
 
 
-    # Load equity from journal (database-aware)
+    # Load equity from journal (database-aware) — same pattern as Position Sizer
     ep_equity = 100000.0
     try:
         j_df = load_data(JOURNAL_FILE)
         if not j_df.empty and 'End NLV' in j_df.columns:
-            ep_equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
+            if 'Day' in j_df.columns:
+                j_df['Day'] = pd.to_datetime(j_df['Day'], errors='coerce')
+                j_df = j_df.dropna(subset=['Day']).sort_values('Day', ascending=False)
+            val_str = str(j_df['End NLV'].iloc[0]).replace('$','').replace(',','')
+            ep_equity = float(val_str)
     except:
         pass
 
