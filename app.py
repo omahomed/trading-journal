@@ -2776,7 +2776,6 @@ if page == "Daily Routine":
     # 1. DEFINE PATHS
     PORTFOLIO_MAP = {
         PORT_CANSLIM: os.path.join(DATA_ROOT, PORT_CANSLIM, 'Trading_Journal_Clean.csv'),
-        PORT_TQQQ:    os.path.join(DATA_ROOT, PORT_TQQQ, 'Trading_Journal_Clean.csv'),
         PORT_457B:    os.path.join(DATA_ROOT, PORT_457B, 'Trading_Journal_Clean.csv')
     }
 
@@ -2796,8 +2795,6 @@ if page == "Daily Routine":
                 portfolio_name = None
                 if PORT_CANSLIM in path:
                     portfolio_name = PORT_CANSLIM
-                elif PORT_TQQQ in path:
-                    portfolio_name = PORT_TQQQ
                 elif PORT_457B in path:
                     portfolio_name = PORT_457B
 
@@ -2860,7 +2857,7 @@ if page == "Daily Routine":
         
         st.subheader("2. Portfolio Updates")
         input_keys = {} 
-        for p_name in [PORT_CANSLIM, PORT_TQQQ, PORT_457B]:
+        for p_name in [PORT_CANSLIM, PORT_457B]:
             do_update = st.checkbox(f"Update {p_name}?", value=True, key=f"chk_{p_name}")
             if do_update:
                 c_a, c_b, c_c, c_d = st.columns([1, 1, 1, 2])
