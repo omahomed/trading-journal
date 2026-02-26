@@ -3597,7 +3597,11 @@ elif page == "Position Sizer":
         if vol_mode.startswith("🆕"):
             vs_ma_level = e3.number_input("Key MA Level ($)", value=0.0, step=0.1, help="Price of the Moving Average (e.g. 21e/50s).", key="vs_ma_level")
             vs_buffer_pct = e4.number_input("Buffer (%)", value=1.0, step=0.1, help="Wiggle room below the MA.", key="vs_buffer")
-        
+            if vs_ma_level > 0:
+                calc_stop = vs_ma_level * (1 - vs_buffer_pct / 100)
+                stop_dist = ((vs_price - calc_stop) / vs_price * 100) if vs_price > 0 else 0
+                st.info(f"📍 **Calculated Stop:** ${calc_stop:.2f} (MA ${vs_ma_level:.2f} − {vs_buffer_pct:.1f}% buffer) — {stop_dist:.1f}% below entry")
+
         st.markdown("---")
         
         if st.button("Run Sizing Audit", type="primary", key="vs_btn"):
