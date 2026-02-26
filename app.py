@@ -718,6 +718,9 @@ with st.sidebar:
         icon_text = f"{icon} " if icon else ""
         if st.button(f"{icon_text}{label}", key=f"nav_{label}", use_container_width=True):
             st.session_state.page = label
+            # Clear Trade Journal search state when navigating away
+            if label != "Trade Journal" and '_tj_prev_page' in st.session_state:
+                del st.session_state['_tj_prev_page']
             st.rerun()
 
     # 📊 DASHBOARDS (expanded by default)
@@ -7748,17 +7751,20 @@ elif page == "Trade Journal":
     with _ac1:
         if st.button("🟢 Log Buy", key="tj_log_buy", use_container_width=True):
             st.session_state.page = "Log Buy"
+            if '_tj_prev_page' in st.session_state: del st.session_state['_tj_prev_page']
             st.rerun()
     with _ac2:
         if st.button("🔴 Log Sell", key="tj_log_sell", use_container_width=True):
             st.session_state.page = "Log Sell"
+            if '_tj_prev_page' in st.session_state: del st.session_state['_tj_prev_page']
             st.rerun()
 
-    # Clear search state to force fresh search each time page is visited
-    if 'last_visited_page' not in st.session_state or st.session_state.last_visited_page != 'Trade Journal':
+    # Track page entry to clear stale search results
+    if st.session_state.get('_tj_prev_page') != 'Trade Journal':
+        # First time entering Trade Journal — clear old search
         if 'journal_searched' in st.session_state:
-            del st.session_state.journal_searched
-    st.session_state.last_visited_page = 'Trade Journal'
+            del st.session_state['journal_searched']
+    st.session_state['_tj_prev_page'] = 'Trade Journal'
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
@@ -7820,12 +7826,12 @@ elif page == "Trade Journal":
         st.markdown("---")
 
         # === APPLY FILTERS (only if search clicked) ===
-        if not search_clicked and 'journal_searched' not in st.session_state:
+        if search_clicked:
+            st.session_state['journal_searched'] = True
+
+        if 'journal_searched' not in st.session_state:
             st.info("👆 Select your filters and click **Search Trades** to view your journal")
             st.stop()
-
-        # Mark that search was performed
-        st.session_state['journal_searched'] = True
 
         df_filtered = df_s.copy()
 
