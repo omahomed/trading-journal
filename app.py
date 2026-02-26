@@ -3036,6 +3036,28 @@ elif page == "Position Sizer":
     
     size_map = {"Shotgun (2.5%)": 2.5, "Half (5%)": 5.0, "Full (10%)": 10.0, "Core (15%)": 15.0, "Core+1 (20%)": 20.0, "Max (25%)": 25.0, "30%": 30.0, "35%": 35.0, "40%": 40.0, "45%": 45.0, "50%": 50.0}
 
+    @st.cache_data(ttl=300)
+    def fetch_price_and_atr(ticker):
+        """Fetch current price and 21-day ATR% in one yfinance call."""
+        try:
+            hist = yf.Ticker(ticker).history(period="3mo")
+            if hist.empty: return 0.0, 5.0
+            current_price = float(hist['Close'].iloc[-1])
+            atr_pct = 5.0
+            if len(hist) >= 21:
+                hist['TR'] = pd.concat([
+                    hist['High'] - hist['Low'],
+                    (hist['High'] - hist['Close'].shift(1)).abs(),
+                    (hist['Low'] - hist['Close'].shift(1)).abs()
+                ], axis=1).max(axis=1)
+                sma_tr = hist['TR'].tail(21).mean()
+                sma_low = hist['Low'].tail(21).mean()
+                if sma_low > 0:
+                    atr_pct = (sma_tr / sma_low) * 100
+            return current_price, round(atr_pct, 2)
+        except:
+            return 0.0, 5.0
+
     # UPDATED TABS LIST
     tab_new, tab_manage, tab_add, tab_trim, tab_vol, tab_pyr = st.tabs([
         "🆕 Plan New Trade",
@@ -3480,13 +3502,19 @@ elif page == "Position Sizer":
         vs_price = 0.0
         vs_avg_cost = 0.0
         vs_shares = 0.0
-        
+        auto_atr = 5.0  # default, updated below when ticker is known
+
         c1, c2, c3 = st.columns(3)
-        
+
         if vol_mode.startswith("🆕"):
             # New Trade Mode
             vs_ticker = c1.text_input("Ticker Symbol", placeholder="XYZ", key="vs_tk_new").upper()
-            vs_price = c2.number_input("Entry Price ($)", value=0.0, step=0.1, key="vs_px_new")
+            if vs_ticker:
+                auto_price_new, auto_atr = fetch_price_and_atr(vs_ticker)
+                def_price = auto_price_new if auto_price_new > 0 else 0.0
+            else:
+                def_price = 0.0
+            vs_price = c2.number_input("Entry Price ($)", value=def_price, step=0.1, key=f"vs_px_new_{vs_ticker}")
             vs_avg_cost = vs_price 
             
         else:
@@ -3542,14 +3570,12 @@ elif page == "Position Sizer":
                     
                     vs_avg_cost = lifo_cost
                     # -------------------------------------------------------------------
-                    
-                    try: 
-                        fetch_p = yf.Ticker(vs_ticker).history(period="1d")['Close'].iloc[-1]
-                        auto_price = float(fetch_p)
-                    except: auto_price = float(row.get('Current_Price', 0))
-                    
+
+                    auto_price, auto_atr = fetch_price_and_atr(vs_ticker)
+                    if auto_price == 0: auto_price = float(row.get('Current_Price', 0))
+
                     vs_price = c2.number_input("Current Price ($)", value=auto_price, step=0.1, key=f"vs_px_{vs_ticker}")
-                    c3.metric("Avg Cost", f"${vs_avg_cost:,.2f}") # Layout preserved
+                    c3.metric("Avg Cost", f"${vs_avg_cost:,.2f}")
                 else:
                     st.info("No open positions found to audit.")
             else:
@@ -3561,7 +3587,7 @@ elif page == "Position Sizer":
         # Split into 4 columns to fit the new Buffer input
         e1, e2, e3, e4 = st.columns(4)
         vs_equity = e1.number_input("Account Equity (NLV)", value=equity, step=1000.0, key="vs_eq")
-        vs_atr_pct = e2.number_input("ATR % (21-Day)", value=5.0, step=0.1, help="Enter 21-Day ATR %.", key="vs_atr_manual")
+        vs_atr_pct = e2.number_input("ATR % (21-Day)", value=auto_atr, step=0.1, help="Auto-calculated from 21-day price data. Adjust if needed.", key=f"vs_atr_{vs_ticker}")
         
         # UPDATED: Split "Stop" into "MA Level" and "Buffer"
         vs_ma_level = 0.0
@@ -3759,10 +3785,8 @@ elif page == "Position Sizer":
 
                 pyr_avg_cost = lifo_cost
 
-                try:
-                    fetch_p = yf.Ticker(pyr_ticker).history(period="1d")['Close'].iloc[-1]
-                    auto_price = float(fetch_p)
-                except: auto_price = float(row.get('Current_Price', 0))
+                auto_price, auto_atr_pyr = fetch_price_and_atr(pyr_ticker)
+                if auto_price == 0: auto_price = float(row.get('Current_Price', 0))
 
                 pyr_price = c2.number_input("Current Price ($)", value=auto_price, step=0.1, key=f"pyr_px_{pyr_ticker}")
                 c3.metric("Avg Cost", f"${pyr_avg_cost:,.2f}")
@@ -3772,7 +3796,7 @@ elif page == "Position Sizer":
                 # --- ATR & Equity Inputs ---
                 e1, e2 = st.columns(2)
                 pyr_equity = e1.number_input("Account Equity (NLV)", value=equity, step=1000.0, key="pyr_eq")
-                pyr_atr_pct = e2.number_input("ATR % (21-Day)", value=5.0, step=0.1, key="pyr_atr")
+                pyr_atr_pct = e2.number_input("ATR % (21-Day)", value=auto_atr_pyr, step=0.1, help="Auto-calculated from 21-day price data. Adjust if needed.", key=f"pyr_atr_{pyr_ticker}")
 
                 if st.button("Run Pyramid Analysis", type="primary", key="pyr_btn"):
                     if pyr_ticker and pyr_price > 0 and pyr_atr_pct > 0 and pyr_inventory:
