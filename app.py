@@ -7263,19 +7263,12 @@ elif page == "Earnings Planner":
 
 
     # Load equity from journal (database-aware)
-
-    equity = 100000.0
-
+    ep_equity = 100000.0
     try:
-
         j_df = load_data(JOURNAL_FILE)
-
         if not j_df.empty and 'End NLV' in j_df.columns:
-
-            equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
-
+            ep_equity = float(str(j_df['End NLV'].iloc[-1]).replace('$','').replace(',',''))
     except:
-
         pass
 
 
@@ -7302,25 +7295,17 @@ elif page == "Earnings Planner":
 
         
 
-        # FIX 1: Price Default Logic
-
-        # Priority: Session Cache -> Row Current Price -> 0.0 (Manual)
-
+        # Price Default Logic: yfinance -> Session Cache -> Row Current Price -> 0.0
         def_price = 0.0
-
-        if 'live_prices' in st.session_state and sel_ticker in st.session_state['live_prices']:
-
+        try:
+            live_fetch = yf.Ticker(sel_ticker).history(period="1d")['Close'].iloc[-1]
+            if live_fetch > 0: def_price = float(live_fetch)
+        except:
+            pass
+        if def_price == 0 and 'live_prices' in st.session_state and sel_ticker in st.session_state['live_prices']:
             def_price = st.session_state['live_prices'][sel_ticker]
-
-        elif 'Current_Price' in row and float(row['Current_Price']) > 0:
-
+        if def_price == 0 and 'Current_Price' in row and float(row['Current_Price']) > 0:
             def_price = float(row['Current_Price'])
-
-        
-
-        # Fallback: If price is 0, we leave it 0 so user notices they need to input it
-
-        # We explicitly DO NOT use avg_cost as default to avoid confusion
 
         
 
@@ -7336,7 +7321,7 @@ elif page == "Earnings Planner":
 
         curr_price = c1.number_input("Current Price ($)", value=float(def_price), step=0.10, format="%.2f")
 
-        nlv_val = c2.number_input("Account Equity (NLV)", value=float(equity), step=1000.0)
+        nlv_val = c2.number_input("Account Equity (NLV)", value=float(ep_equity), step=1000.0)
 
         shares_held = c3.number_input("Shares Held", value=int(shares), step=1)
 
