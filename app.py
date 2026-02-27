@@ -9975,24 +9975,22 @@ elif page == "IBD Market School":
                 nasdaq_latest_date = db.get_latest_signal_date("^IXIC")
                 spy_latest_date = db.get_latest_signal_date("SPY")
 
-                # Determine fetch strategy
+                # Always fetch full history (need 260-day lookback for indicators)
+                # Only save new dates after what's already in DB
+                nasdaq_fetch_start = "2024-02-24"
+                spy_fetch_start = "2024-02-24"
+
                 if nasdaq_latest_date is None:
-                    # Initial sync: fetch from Feb 2024 for 260-day lookback, save from Feb 2025
-                    nasdaq_fetch_start = "2024-02-24"
                     nasdaq_save_from = pd.Timestamp("2025-02-24")
                     st.info("📥 Initial Nasdaq sync from Feb 24, 2025")
                 else:
-                    # Daily update: fetch from 30 days before latest to ensure continuity
-                    nasdaq_fetch_start = (nasdaq_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
                     nasdaq_save_from = pd.Timestamp(nasdaq_latest_date) + timedelta(days=1)
                     st.info(f"🔄 Updating Nasdaq from {nasdaq_save_from.date()}")
 
                 if spy_latest_date is None:
-                    spy_fetch_start = "2024-02-24"
                     spy_save_from = pd.Timestamp("2025-02-24")
                     st.info("📥 Initial SPY sync from Feb 24, 2025")
                 else:
-                    spy_fetch_start = (spy_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
                     spy_save_from = pd.Timestamp(spy_latest_date) + timedelta(days=1)
                     st.info(f"🔄 Updating SPY from {spy_save_from.date()}")
 
@@ -10049,11 +10047,11 @@ elif page == "IBD Market School":
                 end_date = datetime.now().strftime('%Y-%m-%d')
 
                 for sym, sym_latest_date in [("^IXIC", nasdaq_latest_date), ("SPY", spy_latest_date)]:
+                    # Always fetch full history (need 260-day lookback for indicators)
+                    fetch_start = "2024-02-24"
                     if sym_latest_date is None:
-                        fetch_start = "2024-02-24"
                         save_from = pd.Timestamp("2025-02-24")
                     else:
-                        fetch_start = (sym_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
                         save_from = pd.Timestamp(sym_latest_date) + timedelta(days=1)
 
                     summaries = analyze_symbol(sym, fetch_start, end_date)
