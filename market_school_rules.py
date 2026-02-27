@@ -19,9 +19,6 @@ KNOWN_STALLS = {
         {'date': '2025-12-05', 'loss_pct': 0.31},   # IBD identified stall
         {'date': '2026-01-28', 'loss_pct': 0.17},   # IBD: "first stalling day in months"
     ],
-    'SPY': [
-        # Add SPY stalls as IBD identifies them
-    ]
 }
 
 # ============================================================================
@@ -34,14 +31,12 @@ KNOWN_STALLS = {
 # Add entries here when IBD identifies distributions that our data doesn't detect
 MANUAL_DISTRIBUTIONS = {
     '^IXIC': [],
-    'SPY': []
 }
 
 # Force EXCLUDE these from distributions (even if auto-detection finds them)
 # Add entries here when our data detects distributions that IBD doesn't have
 EXCLUDED_DISTRIBUTIONS = {
     '^IXIC': [],
-    'SPY': []
 }
 
 class SignalType(Enum):

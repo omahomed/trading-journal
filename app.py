@@ -2152,13 +2152,12 @@ elif page == "M Factor":
                 df_signals = db.load_market_signals(days=5)  # Get recent data
 
                 nasdaq_ibd = df_signals[df_signals['symbol'] == '^IXIC'].iloc[0] if not df_signals[df_signals['symbol'] == '^IXIC'].empty else None
-                spy_ibd = df_signals[df_signals['symbol'] == 'SPY'].iloc[0] if not df_signals[df_signals['symbol'] == 'SPY'].empty else None
 
-                if nasdaq_ibd is not None and spy_ibd is not None:
+                if nasdaq_ibd is not None:
                     st.markdown("---")
                     st.markdown("### 📚 IBD Market School Comparison")
 
-                    col_ibd1, col_ibd2, col_ibd3 = st.columns(3)
+                    col_ibd1, col_ibd2 = st.columns(2)
 
                     with col_ibd1:
                         ibd_nasdaq_exp = nasdaq_ibd['market_exposure']
@@ -2167,14 +2166,7 @@ elif page == "M Factor":
                                  delta=f"{ibd_nasdaq_dd} distribution days")
 
                     with col_ibd2:
-                        ibd_spy_exp = spy_ibd['market_exposure']
-                        ibd_spy_dd = spy_ibd['distribution_count']
-                        st.metric("IBD SPY Exposure", f"{ibd_spy_exp}/6",
-                                 delta=f"{ibd_spy_dd} distribution days")
-
-                    with col_ibd3:
-                        avg_ibd_exp = (ibd_nasdaq_exp + ibd_spy_exp) / 2
-                        st.metric("IBD Average", f"{avg_ibd_exp:.1f}/6")
+                        st.metric("IBD Buy Switch", "ON ✅" if nasdaq_ibd['buy_switch'] else "OFF ❌")
 
                     st.caption("ℹ️ For reference: IBD uses distribution day count. M Factor uses moving average violations + leadership behavior.")
             except Exception as e:
@@ -9786,7 +9778,7 @@ elif page == "Weekly Retro":
 # ==============================================================================
 elif page == "IBD Market School":
     st.title("📚 IBD MARKET SCHOOL - Market Timing Signals")
-    st.caption("Track buy/sell signals and recommended exposure for Nasdaq and SPY")
+    st.caption("Track buy/sell signals and recommended exposure for Nasdaq")
 
     # Import market_school_rules
     try:
@@ -9973,12 +9965,10 @@ elif page == "IBD Market School":
 
                 # Check what dates we already have in the database
                 nasdaq_latest_date = db.get_latest_signal_date("^IXIC")
-                spy_latest_date = db.get_latest_signal_date("SPY")
 
                 # Always fetch full history (need 260-day lookback for indicators)
                 # Only save new dates after what's already in DB
                 nasdaq_fetch_start = "2024-02-24"
-                spy_fetch_start = "2024-02-24"
 
                 if nasdaq_latest_date is None:
                     nasdaq_save_from = pd.Timestamp("2025-02-24")
@@ -9987,28 +9977,13 @@ elif page == "IBD Market School":
                     nasdaq_save_from = pd.Timestamp(nasdaq_latest_date) + timedelta(days=1)
                     st.info(f"🔄 Updating Nasdaq from {nasdaq_save_from.date()}")
 
-                if spy_latest_date is None:
-                    spy_save_from = pd.Timestamp("2025-02-24")
-                    st.info("📥 Initial SPY sync from Feb 24, 2025")
-                else:
-                    spy_save_from = pd.Timestamp(spy_latest_date) + timedelta(days=1)
-                    st.info(f"🔄 Updating SPY from {spy_save_from.date()}")
-
                 # Nasdaq sync
                 with st.spinner("📊 Analyzing Nasdaq..."):
                     nasdaq_summaries = analyze_symbol("^IXIC", nasdaq_fetch_start, end_date)
 
                 nasdaq_saved = sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=nasdaq_save_from)
-                st.success(f"✅ Saved {nasdaq_saved} Nasdaq records")
 
-                # SPY sync
-                with st.spinner("📈 Analyzing SPY..."):
-                    spy_summaries = analyze_symbol("SPY", spy_fetch_start, end_date)
-
-                spy_saved = sync_signals_to_db("SPY", spy_summaries, filter_from_date=spy_save_from)
-                st.success(f"✅ Saved {spy_saved} SPY records")
-
-                st.success(f"🎉 Sync complete! Total: {nasdaq_saved + spy_saved} new records")
+                st.success(f"🎉 Sync complete! Saved {nasdaq_saved} Nasdaq records")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Sync failed: {str(e)}")
@@ -10020,42 +9995,37 @@ elif page == "IBD Market School":
     # === AUTO-SYNC: Check if data is stale and sync if needed ===
     if USE_DATABASE:
         nasdaq_latest_date = db.get_latest_signal_date("^IXIC")
-        spy_latest_date = db.get_latest_signal_date("SPY")
         today_date = pd.Timestamp.now().normalize().date()
 
-        # Check if either symbol is missing recent data
+        # Check if Nasdaq is missing recent data
         # Only auto-sync on weekdays and if data is at least 1 business day stale
         needs_sync = False
-        if nasdaq_latest_date is None or spy_latest_date is None:
+        if nasdaq_latest_date is None:
             needs_sync = True
         else:
             nasdaq_dt = nasdaq_latest_date.date() if hasattr(nasdaq_latest_date, 'date') else nasdaq_latest_date
-            spy_dt = spy_latest_date.date() if hasattr(spy_latest_date, 'date') else spy_latest_date
-            latest_dt = min(nasdaq_dt, spy_dt)
             # Calculate the most recent expected trading day
             check_date = today_date
             # If weekend, step back to Friday
             while check_date.weekday() >= 5:  # 5=Sat, 6=Sun
                 check_date -= timedelta(days=1)
-            if latest_dt < check_date:
+            if nasdaq_dt < check_date:
                 needs_sync = True
 
         if needs_sync:
             # Clear cache first so analyze_symbol fetches fresh data
             st.cache_data.clear()
-            with st.spinner("📡 Auto-syncing market data..."):
+            with st.spinner("📡 Auto-syncing Nasdaq data..."):
                 end_date = datetime.now().strftime('%Y-%m-%d')
+                # Always fetch full history (need 260-day lookback for indicators)
+                fetch_start = "2024-02-24"
+                if nasdaq_latest_date is None:
+                    save_from = pd.Timestamp("2025-02-24")
+                else:
+                    save_from = pd.Timestamp(nasdaq_latest_date) + timedelta(days=1)
 
-                for sym, sym_latest_date in [("^IXIC", nasdaq_latest_date), ("SPY", spy_latest_date)]:
-                    # Always fetch full history (need 260-day lookback for indicators)
-                    fetch_start = "2024-02-24"
-                    if sym_latest_date is None:
-                        save_from = pd.Timestamp("2025-02-24")
-                    else:
-                        save_from = pd.Timestamp(sym_latest_date) + timedelta(days=1)
-
-                    summaries = analyze_symbol(sym, fetch_start, end_date)
-                    sync_signals_to_db(sym, summaries, filter_from_date=save_from)
+                summaries = analyze_symbol("^IXIC", fetch_start, end_date)
+                sync_signals_to_db("^IXIC", summaries, filter_from_date=save_from)
 
             st.cache_data.clear()
 
@@ -10069,143 +10039,76 @@ elif page == "IBD Market School":
             st.stop()
 
         nasdaq_latest = df_signals[df_signals['symbol'] == '^IXIC'].iloc[0] if not df_signals[df_signals['symbol'] == '^IXIC'].empty else None
-        spy_latest = df_signals[df_signals['symbol'] == 'SPY'].iloc[0] if not df_signals[df_signals['symbol'] == 'SPY'].empty else None
     else:
         # On-the-fly analysis (no database)
         end_date = datetime.now().strftime('%Y-%m-%d')
         fetch_start = "2024-02-24"  # 1 year for 260-day lookback
 
         nasdaq_summaries = analyze_symbol("^IXIC", fetch_start, end_date)
-        spy_summaries = analyze_symbol("SPY", fetch_start, end_date)
-
         nasdaq_latest = nasdaq_summaries[-1] if nasdaq_summaries else None
-        spy_latest = spy_summaries[-1] if spy_summaries else None
 
     # === CURRENT STATUS DISPLAY ===
 
     st.subheader("📊 Current Market Status")
 
-    col_nasdaq, col_spy = st.columns(2)
+    st.markdown("### 🟦 NASDAQ (^IXIC)")
 
-    with col_nasdaq:
-        st.markdown("### 🟦 NASDAQ (^IXIC)")
-
-        if nasdaq_latest is not None:
-            if USE_DATABASE:
-                close = nasdaq_latest['close_price']
-                daily_chg = nasdaq_latest['daily_change_pct']
-                exposure = nasdaq_latest['market_exposure']
-                allocation = nasdaq_latest['position_allocation'] * 100
-                dist_count = nasdaq_latest['distribution_count']
-                buy_switch = nasdaq_latest['buy_switch']
-                buy_sigs = nasdaq_latest['buy_signals']
-                sell_sigs = nasdaq_latest['sell_signals']
-            else:
-                close = nasdaq_latest['close']
-                daily_chg = float(nasdaq_latest['daily_change'].rstrip('%'))
-                exposure = nasdaq_latest['market_exposure']
-                allocation = float(nasdaq_latest['position_allocation'].rstrip('%'))
-                dist_count = nasdaq_latest['distribution_count']
-                buy_switch = nasdaq_latest['buy_switch'] == 'ON'
-                buy_sigs = nasdaq_latest.get('buy_signals')
-                sell_sigs = nasdaq_latest.get('sell_signals')
-
-            m1, m2 = st.columns(2)
-            m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
-            m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
-
-            m3, m4 = st.columns(2)
-            m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
-            m4.metric("Distribution Days", dist_count)
-
-            if buy_sigs or sell_sigs:
-                st.markdown("**Signals Today:**")
-                if buy_sigs:
-                    st.success(f"🟢 BUY: {buy_sigs}")
-                if sell_sigs:
-                    st.error(f"🔴 SELL: {sell_sigs}")
-            else:
-                st.info("No new signals today")
-
-            # Distribution Days Detail
-            with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
-                nasdaq_dist_days = get_active_distribution_days("^IXIC")
-                if nasdaq_dist_days:
-                    st.markdown("**Active Distribution Days:**")
-                    for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
-                        days_ago = (get_current_date_ct() - dd.date.date()).days
-                        days_until_expire = 25 - days_ago
-
-                        st.markdown(f"""
-                        **{dd.date.strftime('%Y-%m-%d')}** ({days_ago} days ago)
-                        - Type: {dd.type.upper()}
-                        - Loss: {dd.loss_percent:.2f}%
-                        - Expires in: {days_until_expire} days (if not removed earlier)
-                        """)
-                else:
-                    st.info("No active distribution days")
+    if nasdaq_latest is not None:
+        if USE_DATABASE:
+            close = nasdaq_latest['close_price']
+            daily_chg = nasdaq_latest['daily_change_pct']
+            exposure = nasdaq_latest['market_exposure']
+            allocation = nasdaq_latest['position_allocation'] * 100
+            dist_count = nasdaq_latest['distribution_count']
+            buy_switch = nasdaq_latest['buy_switch']
+            buy_sigs = nasdaq_latest['buy_signals']
+            sell_sigs = nasdaq_latest['sell_signals']
         else:
-            st.warning("No data available")
+            close = nasdaq_latest['close']
+            daily_chg = float(nasdaq_latest['daily_change'].rstrip('%'))
+            exposure = nasdaq_latest['market_exposure']
+            allocation = float(nasdaq_latest['position_allocation'].rstrip('%'))
+            dist_count = nasdaq_latest['distribution_count']
+            buy_switch = nasdaq_latest['buy_switch'] == 'ON'
+            buy_sigs = nasdaq_latest.get('buy_signals')
+            sell_sigs = nasdaq_latest.get('sell_signals')
 
-    with col_spy:
-        st.markdown("### 🟩 S&P 500 (SPY)")
+        m1, m2 = st.columns(2)
+        m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
+        m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
 
-        if spy_latest is not None:
-            if USE_DATABASE:
-                close = spy_latest['close_price']
-                daily_chg = spy_latest['daily_change_pct']
-                exposure = spy_latest['market_exposure']
-                allocation = spy_latest['position_allocation'] * 100
-                dist_count = spy_latest['distribution_count']
-                buy_switch = spy_latest['buy_switch']
-                buy_sigs = spy_latest['buy_signals']
-                sell_sigs = spy_latest['sell_signals']
-            else:
-                close = spy_latest['close']
-                daily_chg = float(spy_latest['daily_change'].rstrip('%'))
-                exposure = spy_latest['market_exposure']
-                allocation = float(spy_latest['position_allocation'].rstrip('%'))
-                dist_count = spy_latest['distribution_count']
-                buy_switch = spy_latest['buy_switch'] == 'ON'
-                buy_sigs = spy_latest.get('buy_signals')
-                sell_sigs = spy_latest.get('sell_signals')
+        m3, m4 = st.columns(2)
+        m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
+        m4.metric("Distribution Days", dist_count)
 
-            m1, m2 = st.columns(2)
-            m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
-            m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
-
-            m3, m4 = st.columns(2)
-            m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
-            m4.metric("Distribution Days", dist_count)
-
-            if buy_sigs or sell_sigs:
-                st.markdown("**Signals Today:**")
-                if buy_sigs:
-                    st.success(f"🟢 BUY: {buy_sigs}")
-                if sell_sigs:
-                    st.error(f"🔴 SELL: {sell_sigs}")
-            else:
-                st.info("No new signals today")
-
-            # Distribution Days Detail
-            with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
-                spy_dist_days = get_active_distribution_days("SPY")
-                if spy_dist_days:
-                    st.markdown("**Active Distribution Days:**")
-                    for dd in sorted(spy_dist_days, key=lambda x: x.date, reverse=True):
-                        days_ago = (get_current_date_ct() - dd.date.date()).days
-                        days_until_expire = 25 - days_ago
-
-                        st.markdown(f"""
-                        **{dd.date.strftime('%Y-%m-%d')}** ({days_ago} days ago)
-                        - Type: {dd.type.upper()}
-                        - Loss: {dd.loss_percent:.2f}%
-                        - Expires in: {days_until_expire} days (if not removed earlier)
-                        """)
-                else:
-                    st.info("No active distribution days")
+        if buy_sigs or sell_sigs:
+            st.markdown("**Signals Today:**")
+            if buy_sigs:
+                st.success(f"🟢 BUY: {buy_sigs}")
+            if sell_sigs:
+                st.error(f"🔴 SELL: {sell_sigs}")
         else:
-            st.warning("No data available")
+            st.info("No new signals today")
+
+        # Distribution Days Detail
+        with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
+            nasdaq_dist_days = get_active_distribution_days("^IXIC")
+            if nasdaq_dist_days:
+                st.markdown("**Active Distribution Days:**")
+                for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
+                    days_ago = (get_current_date_ct() - dd.date.date()).days
+                    days_until_expire = 25 - days_ago
+
+                    st.markdown(f"""
+                    **{dd.date.strftime('%Y-%m-%d')}** ({days_ago} days ago)
+                    - Type: {dd.type.upper()}
+                    - Loss: {dd.loss_percent:.2f}%
+                    - Expires in: {days_until_expire} days (if not removed earlier)
+                    """)
+            else:
+                st.info("No active distribution days")
+    else:
+        st.warning("No Nasdaq data available")
 
     st.markdown("---")
 
@@ -10226,12 +10129,9 @@ elif page == "IBD Market School":
                 fig, ax = plt.subplots(figsize=(12, 5))
 
                 nasdaq_hist = df_30d[df_30d['symbol'] == '^IXIC'].sort_values('signal_date')
-                spy_hist = df_30d[df_30d['symbol'] == 'SPY'].sort_values('signal_date')
 
                 ax.plot(nasdaq_hist['signal_date'], nasdaq_hist['market_exposure'],
                        marker='o', label='NASDAQ', color='blue', linewidth=2)
-                ax.plot(spy_hist['signal_date'], spy_hist['market_exposure'],
-                       marker='s', label='SPY', color='green', linewidth=2)
 
                 ax.set_xlabel('Date')
                 ax.set_ylabel('Exposure Level (0-6)')
@@ -10243,25 +10143,8 @@ elif page == "IBD Market School":
                 st.pyplot(fig)
 
             with tab2:
-                # Add filter for symbol
-                filter_col1, filter_col2 = st.columns([1, 3])
-                with filter_col1:
-                    symbol_filter = st.radio(
-                        "Filter by Index:",
-                        options=["Both", "NASDAQ (^IXIC)", "SPY"],
-                        horizontal=False
-                    )
-
-                # Apply filter
-                if symbol_filter == "NASDAQ (^IXIC)":
-                    filtered_df = df_30d[df_30d['symbol'] == '^IXIC'].copy()
-                    symbols_to_analyze = ['^IXIC']
-                elif symbol_filter == "SPY":
-                    filtered_df = df_30d[df_30d['symbol'] == 'SPY'].copy()
-                    symbols_to_analyze = ['SPY']
-                else:
-                    filtered_df = df_30d.copy()
-                    symbols_to_analyze = ['^IXIC', 'SPY']
+                filtered_df = df_30d[df_30d['symbol'] == '^IXIC'].copy()
+                symbols_to_analyze = ['^IXIC']
 
                 # Get DD changes for filtered symbols
                 all_dd_changes = {}
@@ -10304,15 +10187,14 @@ elif page == "IBD Market School":
                         display_df.at[idx, 'notes'] = ' | '.join(notes) if notes else ''
 
                 # Reorder and rename columns
-                display_df = display_df[['signal_date', 'symbol', 'close_price', 'daily_change_pct',
+                display_df = display_df[['signal_date', 'close_price', 'daily_change_pct',
                                          'dd_added', 'dd_removed', 'distribution_count', 'market_exposure',
                                          'buy_signals', 'sell_signals', 'notes']]
-                display_df.columns = ['Date', 'Symbol', 'Close', 'Daily %', 'DD+', 'DD-', 'Cum DD',
+                display_df.columns = ['Date', 'Close', 'Daily %', 'DD+', 'DD-', 'Cum DD',
                                      'Exposure', 'Buy Signals', 'Sell Signals', 'Notes']
                 display_df = display_df.sort_values('Date', ascending=False)
 
-                with filter_col2:
-                    st.dataframe(display_df, use_container_width=True, height=400)
+                st.dataframe(display_df, use_container_width=True, height=400)
 
     # === SIGNAL LEGEND ===
 
