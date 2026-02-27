@@ -10019,6 +10019,46 @@ elif page == "IBD Market School":
 
     st.markdown("---")
 
+    # === AUTO-SYNC: Check if data is stale and sync if needed ===
+    if USE_DATABASE:
+        nasdaq_latest_date = db.get_latest_signal_date("^IXIC")
+        spy_latest_date = db.get_latest_signal_date("SPY")
+        today_date = pd.Timestamp.now().normalize().date()
+
+        # Check if either symbol is missing recent data
+        # Only auto-sync on weekdays and if data is at least 1 business day stale
+        needs_sync = False
+        if nasdaq_latest_date is None or spy_latest_date is None:
+            needs_sync = True
+        else:
+            nasdaq_dt = nasdaq_latest_date.date() if hasattr(nasdaq_latest_date, 'date') else nasdaq_latest_date
+            spy_dt = spy_latest_date.date() if hasattr(spy_latest_date, 'date') else spy_latest_date
+            latest_dt = min(nasdaq_dt, spy_dt)
+            # Calculate the most recent expected trading day
+            check_date = today_date
+            # If weekend, step back to Friday
+            while check_date.weekday() >= 5:  # 5=Sat, 6=Sun
+                check_date -= timedelta(days=1)
+            if latest_dt < check_date:
+                needs_sync = True
+
+        if needs_sync:
+            with st.spinner("📡 Auto-syncing market data..."):
+                end_date = datetime.now().strftime('%Y-%m-%d')
+
+                for sym, sym_latest_date in [("^IXIC", nasdaq_latest_date), ("SPY", spy_latest_date)]:
+                    if sym_latest_date is None:
+                        fetch_start = "2024-02-24"
+                        save_from = pd.Timestamp("2025-02-24")
+                    else:
+                        fetch_start = (sym_latest_date - timedelta(days=30)).strftime('%Y-%m-%d')
+                        save_from = pd.Timestamp(sym_latest_date) + timedelta(days=1)
+
+                    summaries = analyze_symbol(sym, fetch_start, end_date)
+                    sync_signals_to_db(sym, summaries, filter_from_date=save_from)
+
+            st.cache_data.clear()
+
     # === LOAD DATA ===
 
     if USE_DATABASE:
