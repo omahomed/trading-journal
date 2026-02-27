@@ -10043,6 +10043,8 @@ elif page == "IBD Market School":
                 needs_sync = True
 
         if needs_sync:
+            # Clear cache first so analyze_symbol fetches fresh data
+            st.cache_data.clear()
             with st.spinner("📡 Auto-syncing market data..."):
                 end_date = datetime.now().strftime('%Y-%m-%d')
 
