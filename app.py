@@ -1995,8 +1995,13 @@ elif page == "Daily Journal":
                         sel_del = st.selectbox("Select Log to Delete", options)
                         if st.button("DELETE ENTRY"):
                             date_to_del = sel_del.split("|")[0].strip()
-                            df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != date_to_del]
-                            secure_save(df_j, TARGET_FILE); st.success(f"Deleted entry for {date_to_del}"); st.rerun()
+                            if USE_DATABASE:
+                                db.delete_journal_entry(CURR_PORT_NAME, date_to_del)
+                            else:
+                                df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != date_to_del]
+                                secure_save(df_j, TARGET_FILE)
+                            st.success(f"Deleted entry for {date_to_del}")
+                            st.rerun()
             
             with col_m2:
                 st.subheader("Repair Market Data")

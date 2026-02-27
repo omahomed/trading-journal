@@ -1075,6 +1075,38 @@ def save_journal_entry(journal_entry):
             return row_id
 
 
+def delete_journal_entry(portfolio_name, day):
+    """
+    Delete a journal entry by portfolio name and date.
+
+    Args:
+        portfolio_name: Name of the portfolio
+        day: Date string (YYYY-MM-DD) of the entry to delete
+
+    Returns:
+        bool: True if a row was deleted
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            cur.execute(
+                "DELETE FROM trading_journal WHERE portfolio_id = %s AND day = %s RETURNING id",
+                (portfolio_id, day)
+            )
+            deleted = cur.fetchone()
+            conn.commit()
+
+            # Clear cache so next load gets fresh data
+            load_journal.clear()
+
+            return deleted is not None
+
+
 # ============================================
 # PRICE REFRESH OPERATIONS
 # ============================================
