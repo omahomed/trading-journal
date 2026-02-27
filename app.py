@@ -1985,43 +1985,115 @@ elif page == "Daily Journal":
 
         # --- TAB 2: MANAGE LOGS ---
         with tab_manage:
-            col_m1, col_m2 = st.columns(2)
-            with col_m1:
-                st.subheader("Delete Incorrect Entries")
+            st.subheader("Edit / Correct Entry")
+            if not df_j.empty:
+                df_j_edit = df_j.dropna(subset=['Day']).sort_values('Day', ascending=False).copy()
+                if not df_j_edit.empty:
+                    options = [f"{row['Day'].strftime('%Y-%m-%d')} | End NLV: ${float(row['End NLV']):,.2f}" for i, row in df_j_edit.iterrows()]
+                    sel_edit = st.selectbox("Select Entry to Edit", options, key="edit_entry_sel")
+                    edit_date = sel_edit.split("|")[0].strip()
+
+                    # Load selected entry
+                    sel_row = df_j_edit[df_j_edit['Day'].dt.strftime('%Y-%m-%d') == edit_date].iloc[0]
+
+                    with st.form("edit_journal_entry"):
+                        e1, e2, e3, e4 = st.columns(4)
+                        edit_end_nlv = e1.number_input("End NLV ($)", value=float(sel_row['End NLV']), step=100.0, format="%.2f", key="edit_nlv")
+                        edit_beg_nlv = e2.number_input("Beg NLV ($)", value=float(sel_row['Beg NLV']), step=100.0, format="%.2f", key="edit_beg")
+                        edit_cash = e3.number_input("Cash -/+", value=float(sel_row.get('Cash -/+', 0)), step=100.0, format="%.2f", key="edit_cash")
+
+                        # Calculate % invested from holdings
+                        curr_invested = float(sel_row.get('% Invested', 0))
+                        edit_invested = e4.number_input("% Invested", value=curr_invested, step=1.0, format="%.2f", key="edit_invested")
+
+                        e5, e6, e7, e8 = st.columns(4)
+                        edit_spy = e5.number_input("SPY Close", value=float(sel_row.get('SPY', 0)), format="%.2f", key="edit_spy")
+                        edit_ndx = e6.number_input("Nasdaq Close", value=float(sel_row.get('Nasdaq', 0)), format="%.2f", key="edit_ndx")
+                        edit_score = e7.number_input("Score", value=int(sel_row.get('Score', 3)), min_value=1, max_value=5, key="edit_score")
+
+                        edit_notes = st.text_input("Market Notes", value=str(sel_row.get('Market_Notes', '') or ''), key="edit_notes")
+                        edit_action = st.text_input("Market Action", value=str(sel_row.get('Market_Action', '') or ''), key="edit_action")
+
+                        fc1, fc2 = st.columns(2)
+                        save_edit = fc1.form_submit_button("💾 SAVE CHANGES", type="primary")
+                        delete_edit = fc2.form_submit_button("🗑️ DELETE ENTRY")
+
+                    if save_edit:
+                        # Recalculate daily change
+                        adj_beg = edit_beg_nlv + edit_cash
+                        daily_chg = edit_end_nlv - edit_beg_nlv - edit_cash
+                        pct_val = (daily_chg / adj_beg) * 100 if adj_beg != 0 else 0.0
+
+                        if USE_DATABASE:
+                            journal_entry = {
+                                'portfolio_id': CURR_PORT_NAME,
+                                'day': edit_date,
+                                'status': str(sel_row.get('Status', 'U')),
+                                'market_window': str(sel_row.get('Market Window', 'Open')),
+                                'above_21ema': float(sel_row.get('> 21e', 0)),
+                                'cash_flow': edit_cash,
+                                'beginning_nlv': edit_beg_nlv,
+                                'ending_nlv': edit_end_nlv,
+                                'daily_dollar_change': daily_chg,
+                                'daily_percent_change': pct_val,
+                                'percent_invested': edit_invested,
+                                'spy_close': edit_spy,
+                                'nasdaq_close': edit_ndx,
+                                'market_notes': edit_notes,
+                                'market_action': edit_action,
+                                'score': edit_score,
+                                'highlights': str(sel_row.get('Highlights', '') or ''),
+                                'lowlights': str(sel_row.get('Lowlights', '') or ''),
+                                'mistakes': str(sel_row.get('Mistakes', '') or ''),
+                                'top_lesson': str(sel_row.get('Top_Lesson', '') or ''),
+                            }
+                            db.save_journal_entry(journal_entry)
+                        else:
+                            idx = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') == edit_date].index[0]
+                            df_j.at[idx, 'End NLV'] = edit_end_nlv
+                            df_j.at[idx, 'Beg NLV'] = edit_beg_nlv
+                            df_j.at[idx, 'Cash -/+'] = edit_cash
+                            df_j.at[idx, 'Daily $ Change'] = daily_chg
+                            df_j.at[idx, 'Daily % Change'] = f"{pct_val:.2f}%"
+                            df_j.at[idx, '% Invested'] = edit_invested
+                            df_j.at[idx, 'SPY'] = edit_spy
+                            df_j.at[idx, 'Nasdaq'] = edit_ndx
+                            df_j.at[idx, 'Market_Notes'] = edit_notes
+                            df_j.at[idx, 'Market_Action'] = edit_action
+                            df_j.at[idx, 'Score'] = edit_score
+                            secure_save(df_j, TARGET_FILE)
+                        st.success(f"Updated entry for {edit_date}")
+                        st.rerun()
+
+                    if delete_edit:
+                        if USE_DATABASE:
+                            db.delete_journal_entry(CURR_PORT_NAME, edit_date)
+                        else:
+                            df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != edit_date]
+                            secure_save(df_j, TARGET_FILE)
+                        st.success(f"Deleted entry for {edit_date}")
+                        st.rerun()
+
+            st.markdown("---")
+
+            st.subheader("Repair Market Data")
+            force_update = st.checkbox("Force Overwrite Existing Data")
+            if st.button("RUN MARKET DATA SYNC"):
                 if not df_j.empty:
-                    df_j_del = df_j.dropna(subset=['Day']).sort_values('Day', ascending=False).copy()
-                    if not df_j_del.empty:
-                        options = [f"{row['Day'].strftime('%Y-%m-%d')} | End NLV: ${float(row['End NLV']):,.2f}" for i, row in df_j_del.iterrows()]
-                        sel_del = st.selectbox("Select Log to Delete", options)
-                        if st.button("DELETE ENTRY"):
-                            date_to_del = sel_del.split("|")[0].strip()
-                            if USE_DATABASE:
-                                db.delete_journal_entry(CURR_PORT_NAME, date_to_del)
-                            else:
-                                df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != date_to_del]
-                                secure_save(df_j, TARGET_FILE)
-                            st.success(f"Deleted entry for {date_to_del}")
-                            st.rerun()
-            
-            with col_m2:
-                st.subheader("Repair Market Data")
-                force_update = st.checkbox("Force Overwrite Existing Data")
-                if st.button("RUN MARKET DATA SYNC"):
-                    if not df_j.empty:
-                        try:
-                            start_d = df_j['Day'].min(); end_d = df_j['Day'].max() + timedelta(days=1)
-                            spy_hist = yf.Ticker("SPY").history(start=start_d, end=end_d)['Close'].tz_localize(None)
-                            ndx_hist = yf.Ticker("^IXIC").history(start=start_d, end=end_d)['Close'].tz_localize(None)
-                            
-                            for idx, row in df_j.iterrows():
-                                d = row['Day'].normalize().replace(tzinfo=None)
-                                if force_update or row['SPY'] == 0:
-                                    if d in spy_hist.index: df_j.at[idx, 'SPY'] = spy_hist.loc[d]
-                                if force_update or row['Nasdaq'] == 0:
-                                    if d in ndx_hist.index: df_j.at[idx, 'Nasdaq'] = ndx_hist.loc[d]
-                            
-                            secure_save(df_j, TARGET_FILE); st.success("✅ Sync Complete!"); st.rerun()
-                        except Exception as e: st.error(f"Sync Error: {e}")
+                    try:
+                        start_d = df_j['Day'].min(); end_d = df_j['Day'].max() + timedelta(days=1)
+                        spy_hist = yf.Ticker("SPY").history(start=start_d, end=end_d)['Close'].tz_localize(None)
+                        ndx_hist = yf.Ticker("^IXIC").history(start=start_d, end=end_d)['Close'].tz_localize(None)
+
+                        for idx, row in df_j.iterrows():
+                            d = row['Day'].normalize().replace(tzinfo=None)
+                            if force_update or row['SPY'] == 0:
+                                if d in spy_hist.index: df_j.at[idx, 'SPY'] = spy_hist.loc[d]
+                            if force_update or row['Nasdaq'] == 0:
+                                if d in ndx_hist.index: df_j.at[idx, 'Nasdaq'] = ndx_hist.loc[d]
+
+                        secure_save(df_j, TARGET_FILE); st.success("✅ Sync Complete!"); st.rerun()
+                    except Exception as e: st.error(f"Sync Error: {e}")
 
 # ==============================================================================
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
