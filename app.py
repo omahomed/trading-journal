@@ -7816,7 +7816,7 @@ elif page == "Trade Journal":
     st.caption("Visual review of all your trades with embedded charts")
 
     # Quick action buttons
-    _ac1, _ac2, _ac3 = st.columns([1, 1, 4])
+    _ac1, _ac2, _ac3, _ac4 = st.columns([1, 1, 1, 3])
     with _ac1:
         if st.button("🟢 Log Buy", key="tj_log_buy", use_container_width=True):
             st.session_state.page = "Log Buy"
@@ -7825,6 +7825,11 @@ elif page == "Trade Journal":
     with _ac2:
         if st.button("🔴 Log Sell", key="tj_log_sell", use_container_width=True):
             st.session_state.page = "Log Sell"
+            if '_tj_prev_page' in st.session_state: del st.session_state['_tj_prev_page']
+            st.rerun()
+    with _ac3:
+        if st.button("📝 Edit Trades", key="tj_edit_trades", use_container_width=True):
+            st.session_state.page = "Trade Manager"
             if '_tj_prev_page' in st.session_state: del st.session_state['_tj_prev_page']
             st.rerun()
 
