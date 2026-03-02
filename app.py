@@ -6163,6 +6163,8 @@ elif page == "Active Campaign Summary":
 
              df_open['Unrealized_PL'] = (df_open['Current Price'] - df_open['Avg_Entry']) * df_open['Shares']
 
+             df_open['Overall_PL'] = df_open['Unrealized_PL'] + df_open['Realized Bank']
+
              
 
              df_open['Return_Pct'] = df_open.apply(
@@ -6265,6 +6267,8 @@ elif page == "Active Campaign Summary":
 
              total_realized_bank = df_open['Realized Bank'].sum()
 
+             total_overall = df_open['Overall_PL'].sum()
+
              total_initial_risk = df_open['Risk $'].sum() 
 
              total_open_risk_equity = df_open['Open Risk Equity'].sum() 
@@ -6287,11 +6291,11 @@ elif page == "Active Campaign Summary":
 
              m4.metric(
 
-                 "Total Unrealized P&L", 
+                 "Overall P&L",
 
-                 f"${total_unreal:,.2f}", 
+                 f"${total_overall:,.2f}",
 
-                 f"Realized: ${total_realized_bank:,.2f}", 
+                 f"Unreal: ${total_unreal:,.2f} | Real: ${total_realized_bank:,.2f}",
 
                  delta_color="off"
 
@@ -6321,11 +6325,11 @@ elif page == "Active Campaign Summary":
 
              # UPDATED COLUMNS: Removed Trend Status, Added Risk Status
 
-             cols = ['Trade_ID', 'Ticker', 'Days Held', 'Risk Status', 'Return_Pct', 'Pos Size %', 
+             cols = ['Trade_ID', 'Ticker', 'Days Held', 'Risk Status', 'Return_Pct', 'Pos Size %',
 
-                     'Shares', 'Avg_Entry', 'Current Price', 'Avg Stop', 'Risk_Budget', 
+                     'Shares', 'Avg_Entry', 'Current Price', 'Avg Stop', 'Risk_Budget',
 
-                     'Risk $', 'Risk %', 'Current Value', 'Unrealized_PL', 'Projected P&L']
+                     'Risk $', 'Risk %', 'Current Value', 'Overall_PL', 'Projected P&L']
 
              
 
@@ -6337,15 +6341,15 @@ elif page == "Active Campaign Summary":
 
                  df_open[final_cols].style.format({
 
-                     'Shares':'{:.0f}', 'Total_Cost':'${:,.2f}', 'Unrealized_PL':'${:,.2f}', 'Avg_Entry':'${:,.2f}', 
+                     'Shares':'{:.0f}', 'Total_Cost':'${:,.2f}', 'Overall_PL':'${:,.2f}', 'Avg_Entry':'${:,.2f}',
 
-                     'Current Price':'${:,.2f}', 'Return_Pct':'{:.2f}%', 'Current Value': '${:,.2f}', 'Pos Size %': '{:.1f}%', 
+                     'Current Price':'${:,.2f}', 'Return_Pct':'{:.2f}%', 'Current Value': '${:,.2f}', 'Pos Size %': '{:.1f}%',
 
                      'Avg Stop': '${:,.2f}', 'Risk $': '${:,.2f}', 'Risk %': '{:.2f}%', 'Risk_Budget': '${:,.2f}', 'Days Held': '{:.0f}',
 
                      'Projected P&L': '${:,.2f}'
 
-                 }).applymap(color_pnl, subset=['Unrealized_PL', 'Return_Pct', 'Projected P&L']),
+                 }).applymap(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']),
 
                  height=(len(df_open) + 1) * 35 + 3,
 
