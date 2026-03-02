@@ -4644,10 +4644,45 @@ elif page == "Trade Manager":
             if not all_ids:
                 st.info("No trades recorded yet.")
             else:
+                # Build lookup: Trade_ID -> Ticker, Status
+                id_ticker_map = {}
+                for tid in all_ids:
+                    try:
+                        ticker = df_d[df_d['Trade_ID'].astype(str) == tid]['Ticker'].iloc[0]
+                        status = df_s[df_s['Trade_ID'].astype(str) == tid]['Status'].iloc[0] if not df_s.empty else ''
+                        id_ticker_map[tid] = (ticker, status)
+                    except:
+                        id_ticker_map[tid] = ('???', '')
+
+                # Search filters
+                sf1, sf2, sf3 = st.columns([2, 1, 1])
+                ticker_search = sf1.text_input("Search by Ticker", placeholder="e.g. GOOGL", key="edit_ticker_search").strip().upper()
+                all_tickers = sorted(set(t for t, s in id_ticker_map.values() if t != '???'))
+                status_filter = sf2.selectbox("Status", ["All", "OPEN", "CLOSED"], key="edit_status_filter")
+                sort_order = sf3.selectbox("Sort", ["Newest First", "Oldest First", "Ticker A-Z"], key="edit_sort_order")
+
+                # Apply filters
+                filtered_ids = all_ids
+                if ticker_search:
+                    filtered_ids = [tid for tid in filtered_ids if ticker_search in id_ticker_map[tid][0].upper()]
+                if status_filter != "All":
+                    filtered_ids = [tid for tid in filtered_ids if id_ticker_map[tid][1] == status_filter]
+
+                # Apply sort
+                if sort_order == "Oldest First":
+                    filtered_ids = list(reversed(filtered_ids))
+                elif sort_order == "Ticker A-Z":
+                    filtered_ids = sorted(filtered_ids, key=lambda x: id_ticker_map[x][0])
+
+                if not filtered_ids:
+                    st.warning("No trades match your search.")
+
                 def fmt_func(x):
-                    try: return f"{x} | {df_d[df_d['Trade_ID'].astype(str) == x]['Ticker'].iloc[0]}"
-                    except: return str(x)
-                edit_id = st.selectbox("Select Trade ID to Edit", all_ids, format_func=fmt_func)
+                    ticker, status = id_ticker_map.get(x, ('???', ''))
+                    flag = "🟢" if status == "OPEN" else "⚪"
+                    return f"{flag} {ticker} | {x}"
+
+                edit_id = st.selectbox("Select Trade ID to Edit", filtered_ids, format_func=fmt_func) if filtered_ids else None
                 if edit_id:
                     txs = df_d[df_d['Trade_ID'].astype(str) == edit_id].reset_index().sort_values('Date', ascending=False)
                     if not txs.empty:
