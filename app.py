@@ -4965,22 +4965,32 @@ elif page == "Trade Manager":
 
                 # --- 2. RUN LIFO ENGINE FIRST (SOURCE OF TRUTH) ---
                 remaining_map = {}
-                lifo_pl_map = {} 
-                
+                lifo_pl_map = {}
+
                 fd_realized_pl = 0.0
                 fd_remaining_shares = 0.0
                 fd_cost_basis_sum = 0.0
-                
+
+                # Fetch live prices for accurate unrealized P&L
                 curr_prices = {}
-                for idx, row in df_s[df_s['Status']=='OPEN'].iterrows():
-                    if row['Shares'] > 0: 
-                        val = row['Total_Cost'] + row.get('Unrealized_PL', 0)
-                        curr_prices[row['Trade_ID']] = val / row['Shares']
-                
+                open_tickers = df_s[df_s['Status']=='OPEN'][['Trade_ID','Ticker']].drop_duplicates()
+                for _, r in open_tickers.iterrows():
+                    try:
+                        px = yf.Ticker(r['Ticker']).history(period='1d')['Close'].iloc[-1]
+                        curr_prices[r['Trade_ID']] = float(px)
+                    except:
+                        # Fallback to summary-derived price
+                        s_row = df_s[df_s['Trade_ID'] == r['Trade_ID']]
+                        if not s_row.empty and s_row.iloc[0]['Shares'] > 0:
+                            val = s_row.iloc[0]['Total_Cost'] + s_row.iloc[0].get('Unrealized_PL', 0)
+                            curr_prices[r['Trade_ID']] = val / s_row.iloc[0]['Shares']
+
                 for tid in target_df['Trade_ID'].unique():
                     subset = target_df[target_df['Trade_ID'] == tid].copy()
+                    subset['Date'] = pd.to_datetime(subset['Date'], errors='coerce')
+                    subset['Sort_Date'] = subset['Date'].dt.normalize()
                     subset['Type_Rank'] = subset['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
-                    subset = subset.sort_values(['Date', 'Type_Rank'])
+                    subset = subset.sort_values(['Sort_Date', 'Type_Rank', 'Date'])
                     
                     inventory = [] 
                     
