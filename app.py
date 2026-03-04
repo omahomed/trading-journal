@@ -4567,19 +4567,19 @@ elif page == "Trade Manager":
                                             st.warning(f"⚠️ Skipping row {idx}: Database ID not found")
                                             continue
 
-                                        # Prepare update dict
+                                        # Prepare update dict (cast numpy types to native Python)
                                         update_dict = {
-                                            'Trade_ID': df_d.at[idx, 'Trade_ID'],
-                                            'Ticker': df_d.at[idx, 'Ticker'],
-                                            'Action': df_d.at[idx, 'Action'],
-                                            'Date': df_d.at[idx, 'Date'],
-                                            'Shares': df_d.at[idx, 'Shares'],
-                                            'Amount': df_d.at[idx, 'Amount'],
-                                            'Value': df_d.at[idx, 'Value'],
-                                            'Rule': df_d.at[idx, 'Rule'],
-                                            'Notes': new_note,
-                                            'Stop_Loss': new_stop,
-                                            'Trx_ID': df_d.at[idx, 'Trx_ID']
+                                            'Trade_ID': str(df_d.at[idx, 'Trade_ID']),
+                                            'Ticker': str(df_d.at[idx, 'Ticker']),
+                                            'Action': str(df_d.at[idx, 'Action']),
+                                            'Date': str(df_d.at[idx, 'Date']),
+                                            'Shares': float(df_d.at[idx, 'Shares']),
+                                            'Amount': float(df_d.at[idx, 'Amount']),
+                                            'Value': float(df_d.at[idx, 'Value']),
+                                            'Rule': str(df_d.at[idx, 'Rule']),
+                                            'Notes': str(new_note),
+                                            'Stop_Loss': float(new_stop),
+                                            'Trx_ID': str(df_d.at[idx, 'Trx_ID'])
                                         }
 
                                         # Update database
