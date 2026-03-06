@@ -939,11 +939,20 @@ if page == "Dashboard":
                 except:
                     pass
 
-        # === DRAWDOWN CALCULATION ===
-        df_j['Peak_Equity'] = df_j['Equity_Curve'].cummax()
-        df_j['Drawdown_Pct'] = ((df_j['Equity_Curve'] - df_j['Peak_Equity']) / df_j['Peak_Equity']) * 100
-        curr_dd = df_j['Drawdown_Pct'].iloc[-1]
-        max_dd = df_j['Drawdown_Pct'].min()
+        # === DRAWDOWN CALCULATION (matches Risk Manager) ===
+        RESET_DATE = pd.Timestamp("2026-02-24")
+        df_active = df_j[df_j['Day'] >= RESET_DATE].copy()
+        if not df_active.empty:
+            peak_nlv = df_active['End NLV'].max()
+            dd_dol = peak_nlv - curr_nlv
+            curr_dd = -(dd_dol / peak_nlv) * 100 if peak_nlv > 0 else 0.0
+            # Max drawdown since reset
+            df_active['Peak_NLV'] = df_active['End NLV'].cummax()
+            df_active['DD_Pct'] = -((df_active['Peak_NLV'] - df_active['End NLV']) / df_active['Peak_NLV']) * 100
+            max_dd = df_active['DD_Pct'].min()
+        else:
+            curr_dd = 0.0
+            max_dd = 0.0
 
         # === MODERN METRICS CARDS ===
         st.markdown("### 📊 Performance Snapshot")
