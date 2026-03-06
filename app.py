@@ -939,10 +939,16 @@ if page == "Dashboard":
                 except:
                     pass
 
+        # === DRAWDOWN CALCULATION ===
+        df_j['Peak_Equity'] = df_j['Equity_Curve'].cummax()
+        df_j['Drawdown_Pct'] = ((df_j['Equity_Curve'] - df_j['Peak_Equity']) / df_j['Peak_Equity']) * 100
+        curr_dd = df_j['Drawdown_Pct'].iloc[-1]
+        max_dd = df_j['Drawdown_Pct'].min()
+
         # === MODERN METRICS CARDS ===
         st.markdown("### 📊 Performance Snapshot")
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             st.markdown(f"""
@@ -985,6 +991,16 @@ if page == "Dashboard":
                 <div style="font-size: 16px;">
                     {num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%
                 </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col5:
+            dd_color = "#90EE90" if curr_dd > -5 else ("#ffcccb" if curr_dd > -10 else "#ff6b6b")
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #4b6cb7 0%, #182848 100%); padding: 20px; border-radius: 10px; color: white;">
+                <div style="font-size: 14px; opacity: 0.9;">Drawdown</div>
+                <div style="font-size: 32px; font-weight: 700; margin: 8px 0; color: {dd_color};">{curr_dd:.2f}%</div>
+                <div style="font-size: 16px;">Max: {max_dd:.2f}%</div>
             </div>
             """, unsafe_allow_html=True)
 
