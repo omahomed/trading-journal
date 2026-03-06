@@ -945,14 +945,20 @@ if page == "Dashboard":
         if not df_active.empty:
             peak_nlv = df_active['End NLV'].max()
             dd_dol = peak_nlv - curr_nlv
-            curr_dd = -(dd_dol / peak_nlv) * 100 if peak_nlv > 0 else 0.0
-            # Max drawdown since reset
-            df_active['Peak_NLV'] = df_active['End NLV'].cummax()
-            df_active['DD_Pct'] = -((df_active['Peak_NLV'] - df_active['End NLV']) / df_active['Peak_NLV']) * 100
-            max_dd = df_active['DD_Pct'].min()
+            dd_pct_abs = (dd_dol / peak_nlv) * 100 if peak_nlv > 0 else 0.0
+            curr_dd = -dd_pct_abs
+            # Determine level (matches Risk Manager hard decks)
+            if dd_pct_abs >= 15.0:
+                dd_level = "L3: Go to Cash"
+            elif dd_pct_abs >= 12.5:
+                dd_level = "L2: Max 30%"
+            elif dd_pct_abs >= 7.5:
+                dd_level = "L1: No Margin"
+            else:
+                dd_level = "Clear"
         else:
             curr_dd = 0.0
-            max_dd = 0.0
+            dd_level = "Clear"
 
         # === MODERN METRICS CARDS ===
         st.markdown("### 📊 Performance Snapshot")
@@ -1004,12 +1010,19 @@ if page == "Dashboard":
             """, unsafe_allow_html=True)
 
         with col5:
-            dd_color = "#90EE90" if curr_dd > -5 else ("#ffcccb" if curr_dd > -10 else "#ff6b6b")
+            if dd_level == "Clear":
+                dd_color = "#90EE90"
+            elif dd_level.startswith("L1"):
+                dd_color = "#FFD700"
+            elif dd_level.startswith("L2"):
+                dd_color = "#FFA500"
+            else:
+                dd_color = "#ff6b6b"
             st.markdown(f"""
             <div style="background: linear-gradient(135deg, #4b6cb7 0%, #182848 100%); padding: 20px; border-radius: 10px; color: white;">
                 <div style="font-size: 14px; opacity: 0.9;">Drawdown</div>
                 <div style="font-size: 32px; font-weight: 700; margin: 8px 0; color: {dd_color};">{curr_dd:.2f}%</div>
-                <div style="font-size: 16px;">Max: {max_dd:.2f}%</div>
+                <div style="font-size: 16px; color: {dd_color};">{dd_level}</div>
             </div>
             """, unsafe_allow_html=True)
 
