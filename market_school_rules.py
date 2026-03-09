@@ -136,7 +136,9 @@ class MarketSchoolRules:
         self.marked_highs = []
         self.marked_lows = []
         
-        # 52-week high tracking for 10% decline requirement
+        # Reference high for correction detection
+        # Tracks the peak of the current bull cycle, resets after each FTD
+        self.reference_high = None
         self.recent_high = None
         self.recent_high_date = None
         self.market_in_correction = False
@@ -233,23 +235,34 @@ class MarketSchoolRules:
         
     def check_market_correction(self, idx: int) -> bool:
         """
-        Check if market has declined 10% from 52-week high.
-        
+        Check if market has declined 5% from the reference high.
+
+        The reference high tracks the peak of the current bull cycle,
+        not the rolling 52-week high. It resets after each FTD so that
+        the next correction is measured from the new cycle's peak.
+
         Args:
             idx: Current index in data
-            
+
         Returns:
-            True if market is in correction (down 10%+ from high)
+            True if market is in correction (down 5%+ from reference high)
         """
         current = self.data.iloc[idx]
-        
-        # Update 52-week high tracking
+
+        # Initialize reference high from 52-week high if not set
+        if self.reference_high is None:
+            self.reference_high = current['high_52w']
+
+        # Update 52-week high tracking (kept for display purposes)
         if current['High'] >= current['high_52w']:
             self.recent_high = current['High']
             self.recent_high_date = current.name
-            
-        # Check if we're down 10% or more
-        if current['decline_from_high'] <= -10:
+
+        # Calculate decline from reference high (not 52-week high)
+        decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
+
+        # Check if we're down 5% or more from reference high
+        if decline_from_ref <= -5:
             if not self.market_in_correction:
                 self.market_in_correction = True
             return True
@@ -260,20 +273,21 @@ class MarketSchoolRules:
     def detect_rally_start(self, idx: int) -> bool:
         """
         Detect if a new rally attempt is starting.
-        
+
         Args:
             idx: Current index in data
-            
+
         Returns:
             True if rally is starting
         """
         if idx < 5:
             return False
-            
+
         current = self.data.iloc[idx]
-        
+
         # Only look for rally start if we're in correction
-        if not self.check_market_correction(idx):
+        # (correction state is managed by the main loop)
+        if not self.market_in_correction:
             return False
             
         # Look for a potential low
@@ -322,8 +336,8 @@ class MarketSchoolRules:
         if not current['volume_up']:
             return None
             
-        # Check for 1.2% gain
-        if current['daily_gain_pct'] >= 1.2:
+        # Check for 1.0% gain
+        if current['daily_gain_pct'] >= 1.0:
             signal_type = SignalType.B1 if not self.ftd_date else SignalType.B2
             
             signal = Signal(
@@ -339,6 +353,9 @@ class MarketSchoolRules:
                 self.ftd_date = current.name
                 self.ftd_close = current['Close']
                 self.buy_switch = True
+                # Reset reference high for new bull cycle
+                self.reference_high = current['High']
+                self.market_in_correction = False
                 
             return signal
             
@@ -838,6 +855,8 @@ class MarketSchoolRules:
         self.market_exposure = 0
         self.buy_switch = False
         self.distribution_days = []
+        self.reference_high = None
+        self.market_in_correction = False
 
         # Reset rally tracking
         self.rally_start_date = None
@@ -848,8 +867,30 @@ class MarketSchoolRules:
         
         # Process each day
         for idx in range(260, len(self.data)):  # Start after 52-week high can be calculated
+            current = self.data.iloc[idx]
             daily_signals = []
-            
+
+            # Track reference high during non-correction periods
+            if self.reference_high is None:
+                self.reference_high = current['high_52w']
+            elif not self.market_in_correction and current['High'] > self.reference_high:
+                self.reference_high = current['High']
+
+            # Check if market has entered a new correction (5% decline from reference high)
+            # This runs EVERY day, not just when rally_start_date is None
+            if not self.market_in_correction:
+                decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
+                if decline_from_ref <= -5:
+                    self.market_in_correction = True
+                    # Reset rally tracking for new correction cycle
+                    self.rally_start_date = None
+                    self.rally_low = None
+                    self.rally_low_idx = None
+                    self.ftd_date = None
+                    self.ftd_close = None
+                    if self.buy_switch:
+                        self.buy_switch = False
+
             # Check for market correction and rally start
             if not self.rally_start_date:
                 self.detect_rally_start(idx)
