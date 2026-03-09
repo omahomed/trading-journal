@@ -10030,6 +10030,42 @@ elif page == "IBD Market School":
             st.error(f"Error loading distribution days for {symbol}: {e}")
             return []
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def get_correction_state(symbol):
+        """Get current correction/rally/FTD state from a fresh analysis."""
+        try:
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            fetch_start = "2024-02-24"
+
+            analyzer = MarketSchoolRules(symbol)
+            analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
+
+            if analyzer.data is None or analyzer.data.empty:
+                return None
+
+            analyzer.analyze_market()
+
+            last_idx = len(analyzer.data) - 1
+            last_date = analyzer.data.index[-1]
+
+            # Calculate days since rally start
+            rally_day = None
+            if analyzer.rally_low_idx is not None:
+                rally_day = last_idx - analyzer.rally_low_idx
+
+            return {
+                'market_in_correction': analyzer.market_in_correction,
+                'buy_switch': analyzer.buy_switch,
+                'rally_start_date': analyzer.rally_start_date.strftime('%Y-%m-%d') if analyzer.rally_start_date else None,
+                'rally_low': analyzer.rally_low,
+                'rally_day': rally_day,
+                'ftd_date': analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
+                'reference_high': analyzer.reference_high,
+                'as_of': last_date.strftime('%Y-%m-%d'),
+            }
+        except Exception:
+            return None
+
     def calculate_dd_changes(symbol, start_date, end_date):
         """Calculate daily distribution day additions, removals, and notes."""
         try:
@@ -10258,6 +10294,33 @@ elif page == "IBD Market School":
                 st.error(f"🔴 SELL: {sell_sigs}")
         else:
             st.info("No new signals today")
+
+        # Correction / Rally / FTD State Banner
+        corr_state = get_correction_state("^IXIC")
+        if corr_state:
+            if corr_state['market_in_correction']:
+                decline_pct = ((close - corr_state['reference_high']) / corr_state['reference_high']) * 100 if corr_state['reference_high'] else 0
+                if corr_state['rally_start_date'] and corr_state['rally_day'] is not None:
+                    day_num = corr_state['rally_day']
+                    ftd_window = "— in FTD window (days 4-25)" if 4 <= day_num <= 25 else ""
+                    if day_num < 4:
+                        ftd_window = f"— FTD eligible from Day 4 ({4 - day_num} more days)"
+                    st.warning(
+                        f"**MARKET IN CORRECTION** ({decline_pct:.1f}% from ref high ${corr_state['reference_high']:,.2f})  \n"
+                        f"Rally Day {day_num} from {corr_state['rally_start_date']} (low ${corr_state['rally_low']:,.2f}) "
+                        f"{ftd_window}  \n"
+                        f"**Status: Looking for Follow-Through Day**"
+                    )
+                else:
+                    st.error(
+                        f"**MARKET IN CORRECTION** ({decline_pct:.1f}% from ref high ${corr_state['reference_high']:,.2f})  \n"
+                        f"**Status: Waiting for rally attempt**"
+                    )
+            elif corr_state['ftd_date']:
+                st.success(
+                    f"**CONFIRMED UPTREND** — FTD on {corr_state['ftd_date']}  \n"
+                    f"Reference high: ${corr_state['reference_high']:,.2f}"
+                )
 
         # Distribution Days Detail
         with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
