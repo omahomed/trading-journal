@@ -5812,12 +5812,13 @@ elif page == "Trade Manager":
 
                 # --- 2. TWO-STAGE FILTER ---
                 cy_tickers = sorted(cy_detail_df['Ticker'].dropna().unique().tolist())
+                st.markdown(f"**{len(cy_tickers)} tickers** across **{len(cy_ids)} campaigns**")
                 cf1, cf2 = st.columns(2)
-                cy_tick_filter = cf1.multiselect("1. Ticker(s)", options=cy_tickers, default=[], placeholder="Search tickers...", key="cy_det_tick")
+                cy_sel_tick = cf1.selectbox("1. Select Ticker", cy_tickers, index=None, placeholder="Type to search...", key="cy_det_tick")
 
                 cy_sel_id = None
-                if cy_tick_filter:
-                    cy_subset = cy_detail_df[cy_detail_df['Ticker'].isin(cy_tick_filter)]
+                if cy_sel_tick:
+                    cy_subset = cy_detail_df[cy_detail_df['Ticker'] == cy_sel_tick]
                     cy_trade_ids = sorted(cy_subset['Trade_ID'].unique().tolist(), reverse=True)
                     cy_sel_id = cf2.selectbox("2. Select Campaign ID", cy_trade_ids, key="cy_det_id")
 
