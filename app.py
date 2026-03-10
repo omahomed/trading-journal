@@ -8238,6 +8238,8 @@ elif page == "Trade Journal":
                 # === Core/Add P&L Classification ===
                 core_pl = 0.0
                 add_pl = 0.0
+                core_cost = 0.0
+                add_cost = 0.0
                 b1_price = 0.0
                 band_low = 0.0
                 band_high = 0.0
@@ -8254,14 +8256,20 @@ elif page == "Trade Journal":
 
                         for buy_idx, buy_row in buys.iterrows():
                             buy_price = float(buy_row.get('Amount', buy_row.get('Price', 0.0)))
+                            lot_cost = buy_price * buy_row['Shares']
                             lot_pl = buy_realized_pl.get(buy_idx, 0.0)
                             # For open buys, include unrealized P&L
                             if is_open and remaining_map.get(buy_idx, 0) > 0:
                                 lot_pl += (live_px - buy_price) * remaining_map[buy_idx]
                             if band_low <= buy_price <= band_high:
                                 core_pl += lot_pl
+                                core_cost += lot_cost
                             else:
                                 add_pl += lot_pl
+                                add_cost += lot_cost
+
+                core_return_pct = (core_pl / core_cost * 100) if core_cost > 0 else 0.0
+                add_return_pct = (add_pl / add_cost * 100) if add_cost > 0 else 0.0
 
                 # Days held
                 open_date = trade.get('Open_Date')
@@ -8354,11 +8362,15 @@ elif page == "Trade Journal":
                     '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Core P&L</div>' +
                     f'<div style="font-size: 16px; font-weight: 600; color: {"#28a745" if core_pl >= 0 else "#dc3545"};">' +
                     f'{"+" if core_pl >= 0 else ""}${core_pl:,.2f}</div>' +
+                    f'<div style="font-size: 12px; color: {"#28a745" if core_return_pct >= 0 else "#dc3545"};">' +
+                    f'{"+" if core_return_pct >= 0 else ""}{core_return_pct:.2f}%</div>' +
                     '</div>' +
                     '<div>' +
                     '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Add P&L</div>' +
                     f'<div style="font-size: 16px; font-weight: 600; color: {"#28a745" if add_pl >= 0 else "#dc3545"};">' +
                     f'{"+" if add_pl >= 0 else ""}${add_pl:,.2f}</div>' +
+                    (f'<div style="font-size: 12px; color: {"#28a745" if add_return_pct >= 0 else "#dc3545"};">' +
+                    f'{"+" if add_return_pct >= 0 else ""}{add_return_pct:.2f}%</div>' if add_cost > 0 else '') +
                     '</div>' +
                     '<div>' +
                     '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Core Band</div>' +
