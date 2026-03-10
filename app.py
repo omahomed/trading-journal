@@ -10301,7 +10301,7 @@ elif page == "IBD Market School":
             if corr_state['market_in_correction']:
                 decline_pct = ((close - corr_state['reference_high']) / corr_state['reference_high']) * 100 if corr_state['reference_high'] else 0
                 if corr_state['rally_start_date'] and corr_state['rally_day'] is not None:
-                    day_num = corr_state['rally_day']
+                    day_num = corr_state['rally_day'] + 1  # Day 1 = rally low day
                     ftd_window = "— in FTD window (days 4-25)" if 4 <= day_num <= 25 else ""
                     if day_num < 4:
                         ftd_window = f"— FTD eligible from Day 4 ({4 - day_num} more days)"
