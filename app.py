@@ -3426,15 +3426,39 @@ elif page == "Position Sizer":
         # 0. TIER CHEAT SHEET
         with st.expander("ℹ️ View Tier System Rules"):
             st.markdown("""
-            **The Tolerance Tiers:**
-            * **Tier 1 (High Cushion):** Profit > 20% ⮕ **1.00% Risk**
-            * **Tier 2 (Moderate):** Profit 5% to 20% ⮕ **0.65% Risk**
-            * **Tier 3 (Defense):** Profit < 5% (or New) ⮕ **0.50% Risk**
+            **Sizing Mode (New Trades — Equity Curve State):**
+            * **Defense:** 0.50% Risk — equity curve flat/down
+            * **Normal:** 0.75% Risk — equity curve recovering
+            * **Offense:** 1.00% Risk — equity curve strong, confirmed uptrend
+
+            **Stock Volatility Profile (New Trades — Stock Character):**
+            * **Tight:** 1.0x ATR — low-volatility, tight setups
+            * **Normal:** 1.25x ATR — standard growth stocks
+            * **High-Vol:** 1.5x ATR — high-volatility names
+
+            **Tolerance Tiers (Active Positions — Profit Cushion):**
+            * **Tier 1 (High Cushion):** Profit > 20% ⮕ 1.00% Risk, 2.0x ATR
+            * **Tier 2 (Moderate):** Profit 5% to 20% ⮕ 0.65% Risk, 1.5x ATR
+            * **Tier 3 (Defense):** Profit < 5% ⮕ 0.50% Risk, 1.0x ATR
             """)
 
         # 1. MODE SELECTION
-        vol_mode = st.radio("Sizing Context", ["🆕 New Trade (Defense Mode)", "🔍 Audit Active Position"], horizontal=True, key="vs_mode")
-        
+        vol_mode = st.radio("Sizing Context", ["🆕 New Trade", "🔍 Audit Active Position"], horizontal=True, key="vs_mode")
+
+        # 1b. SIZING MODE + VOL PROFILE (New Trade only)
+        sizing_mode = None
+        vol_profile = None
+        if vol_mode.startswith("🆕"):
+            sm_col1, sm_col2 = st.columns(2)
+            with sm_col1:
+                sizing_mode = st.radio("Sizing Mode",
+                    ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+                    horizontal=True, key="vs_sizing_mode")
+            with sm_col2:
+                vol_profile = st.radio("Stock Volatility Profile",
+                    ["Tight (1.0x)", "Normal (1.25x)", "High-Vol (1.5x)"],
+                    horizontal=True, key="vs_vol_profile")
+
         # 2. DATA INPUTS
         vs_ticker = ""
         vs_price = 0.0
@@ -3548,24 +3572,40 @@ elif page == "Position Sizer":
             if vs_ticker and vs_price > 0 and vs_atr_pct > 0:
                 
                 # 1. Determine Tier & Budget
-                cushion_pct = 0.0
                 if vol_mode.startswith("🆕"):
-                    cushion_pct = 0.0 
-                elif vs_avg_cost > 0:
-                    cushion_pct = ((vs_price - vs_avg_cost) / vs_avg_cost) * 100
-                
-                tier_name = "Tier 3 (Defense)"
-                tol_pct = 0.50
-                atr_multiplier = 1.0
+                    # New Trade: use Sizing Mode + Stock Vol Profile toggles
+                    if sizing_mode and sizing_mode.startswith("⚔️"):
+                        tier_name = "Offense Mode"
+                        tol_pct = 1.00
+                    elif sizing_mode and sizing_mode.startswith("⚖️"):
+                        tier_name = "Normal Mode"
+                        tol_pct = 0.75
+                    else:
+                        tier_name = "Defense Mode"
+                        tol_pct = 0.50
 
-                if cushion_pct >= 20.0:
-                    tier_name = "Tier 1 (High Cushion)"
-                    tol_pct = 1.00
-                    atr_multiplier = 2.0
-                elif cushion_pct >= 5.0:
-                    tier_name = "Tier 2 (Moderate)"
-                    tol_pct = 0.65
-                    atr_multiplier = 1.5
+                    if vol_profile and vol_profile.startswith("High"):
+                        atr_multiplier = 1.5
+                    elif vol_profile and vol_profile.startswith("Normal"):
+                        atr_multiplier = 1.25
+                    else:
+                        atr_multiplier = 1.0
+                else:
+                    # Audit Mode: use Tolerance Tiers (cushion-based)
+                    cushion_pct = ((vs_price - vs_avg_cost) / vs_avg_cost * 100) if vs_avg_cost > 0 else 0.0
+
+                    tier_name = "Tier 3 (Defense)"
+                    tol_pct = 0.50
+                    atr_multiplier = 1.0
+
+                    if cushion_pct >= 20.0:
+                        tier_name = "Tier 1 (High Cushion)"
+                        tol_pct = 1.00
+                        atr_multiplier = 2.0
+                    elif cushion_pct >= 5.0:
+                        tier_name = "Tier 2 (Moderate)"
+                        tol_pct = 0.65
+                        atr_multiplier = 1.5
 
                 daily_risk_budget = vs_equity * (tol_pct / 100)
                 atr_risk_budget = daily_risk_budget * atr_multiplier
@@ -3615,10 +3655,17 @@ elif page == "Position Sizer":
                 k1, k2, k3 = st.columns(3)
                 k1.metric("Risk Budget", f"${daily_risk_budget:,.0f}", f"{tol_pct}% Risk ({tier_name})")
                 k2.metric("Volatility Risk", f"{vs_atr_pct:.2f}%", f"ATR (Noise)")
-                k3.metric("Profit Cushion", f"{cushion_pct:.2f}%", tier_name, delta_color="off")
+                if vol_mode.startswith("🆕"):
+                    vol_label = vol_profile if vol_profile else "Tight (1.0x)"
+                    k3.metric("Vol Profile", vol_label, f"{atr_multiplier:.1f}x ATR", delta_color="off")
+                else:
+                    k3.metric("Profit Cushion", f"{cushion_pct:.2f}%", tier_name, delta_color="off")
 
                 if atr_multiplier > 1.0:
-                    st.info(f"🎯 **Confidence Boost:** ATR budget scaled {atr_multiplier:.1f}x (${atr_risk_budget:,.0f}) — earned by {cushion_pct:.1f}% profit cushion")
+                    if vol_mode.startswith("🆕"):
+                        st.info(f"🎯 **ATR Boost:** ATR budget scaled {atr_multiplier:.1f}x (${atr_risk_budget:,.0f}) — stock volatility profile")
+                    else:
+                        st.info(f"🎯 **Confidence Boost:** ATR budget scaled {atr_multiplier:.1f}x (${atr_risk_budget:,.0f}) — earned by {cushion_pct:.1f}% profit cushion")
 
                 st.markdown("---")
 
