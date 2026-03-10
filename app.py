@@ -12,18 +12,14 @@ import shutil
 # Helper function to get current date in Central Time
 def get_current_date_ct():
     """Get current date in US Central Time (Chicago)."""
-    # UTC to Central Time: -6 hours (CST) or -5 hours (CDT)
-    # Using -6 for conservative approach
-    from datetime import timezone
-    utc_now = datetime.now(timezone.utc)
-    ct_now = utc_now - timedelta(hours=6)
+    from zoneinfo import ZoneInfo
+    ct_now = datetime.now(ZoneInfo("America/Chicago"))
     return ct_now.date()
 
 def get_current_time_ct():
     """Get current time in US Central Time (Chicago)."""
-    from datetime import timezone
-    utc_now = datetime.now(timezone.utc)
-    ct_now = utc_now - timedelta(hours=6)
+    from zoneinfo import ZoneInfo
+    ct_now = datetime.now(ZoneInfo("America/Chicago"))
     return ct_now.time()
 
 # Database layer (PostgreSQL support)
