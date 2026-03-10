@@ -5709,6 +5709,107 @@ elif page == "Trade Manager":
             cy_detail_df = df_d[df_d['Trade_ID'].isin(cy_ids)].copy()
 
             if not cy_detail_df.empty:
+                # --- EXPORT ALL: Comprehensive CSV with LIFO + Core/Add for all 2026 trades ---
+                if st.button("📥 Export All 2026 Trades to CSV", key="cy_export_btn"):
+                    all_rows = []
+                    for tid in cy_ids:
+                        t_df = cy_detail_df[cy_detail_df['Trade_ID'] == tid].copy()
+                        if t_df.empty: continue
+                        t_df['Date'] = pd.to_datetime(t_df['Date'], errors='coerce')
+                        t_df['Type_Rank'] = t_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+                        t_df = t_df.sort_values(['Date', 'Type_Rank'])
+                        t_calc = t_df.reset_index(drop=True)
+
+                        # LIFO engine
+                        inv = []
+                        ba = {}
+                        for ix, r in t_calc.iterrows():
+                            if r['Action'] == 'BUY':
+                                inv.append({'idx': ix, 'price': r['Amount'], 'qty': r['Shares']})
+                                ba[ix] = {'pl': 0.0, 'sold_cost': 0.0, 'sold_val': 0.0, 'sold_qty': 0.0}
+                            elif r['Action'] == 'SELL':
+                                ts = r['Shares']
+                                sp = r['Amount']
+                                while ts > 0 and inv:
+                                    lt = inv.pop()
+                                    tk = min(ts, lt['qty'])
+                                    sc = tk * lt['price']
+                                    sr = tk * sp
+                                    ba[lt['idx']]['pl'] += sr - sc
+                                    ba[lt['idx']]['sold_cost'] += sc
+                                    ba[lt['idx']]['sold_val'] += sr
+                                    ba[lt['idx']]['sold_qty'] += tk
+                                    lt['qty'] -= tk
+                                    ts -= tk
+                                    if lt['qty'] > 0.0001: inv.append(lt)
+
+                        # Compute columns
+                        for ix, r in t_calc.iterrows():
+                            if r['Action'] == 'SELL':
+                                t_calc.at[ix, 'Lot P&L'] = r.get('Realized_PL', 0.0)
+                                t_calc.at[ix, 'Return %'] = 0.0
+                                t_calc.at[ix, 'Exit_Price'] = None
+                            elif ix in ba:
+                                d = ba[ix]
+                                t_calc.at[ix, 'Lot P&L'] = d['pl']
+                                t_calc.at[ix, 'Return %'] = ((d['sold_val'] - d['sold_cost']) / d['sold_cost'] * 100) if d['sold_cost'] > 0 else 0.0
+                                t_calc.at[ix, 'Exit_Price'] = (d['sold_val'] / d['sold_qty']) if d['sold_qty'] > 0 else None
+                            else:
+                                t_calc.at[ix, 'Lot P&L'] = 0.0
+                                t_calc.at[ix, 'Return %'] = 0.0
+                                t_calc.at[ix, 'Exit_Price'] = None
+
+                        # Core/Add classification
+                        t_calc['Category'] = ''
+                        b1 = t_calc[(t_calc['Action'] == 'BUY') & (t_calc['Trx_ID'].astype(str).str.upper().str.startswith('B'))]
+                        if not b1.empty:
+                            bp = float(b1.iloc[0]['Amount'])
+                            bl = bp * 0.975
+                            bh = bp * 1.025
+                            t_calc['B1_Price'] = bp
+                            t_calc['Core_Band_Low'] = bl
+                            t_calc['Core_Band_High'] = bh
+                            for ix, r in t_calc.iterrows():
+                                if r['Action'] == 'BUY':
+                                    t_calc.at[ix, 'Category'] = 'Core' if bl <= r['Amount'] <= bh else 'Add'
+
+                        # Trade status from summary
+                        s_row = df_s[df_s['Trade_ID'] == tid]
+                        if not s_row.empty:
+                            t_calc['Trade_Status'] = s_row.iloc[0]['Status']
+                            t_calc['Open_Date'] = s_row.iloc[0].get('Open_Date', '')
+                            t_calc['Closed_Date'] = s_row.iloc[0].get('Closed_Date', '')
+
+                        # Negate shares/value for sells
+                        t_calc['Shares'] = t_calc.apply(lambda x: -x['Shares'] if x['Action'] == 'SELL' else x['Shares'], axis=1)
+                        if 'Value' in t_calc.columns:
+                            t_calc['Value'] = t_calc.apply(lambda x: -x['Value'] if x['Action'] == 'SELL' else x['Value'], axis=1)
+
+                        all_rows.append(t_calc)
+
+                    if all_rows:
+                        export_df = pd.concat(all_rows, ignore_index=True)
+                        export_cols = ['Trade_ID', 'Trx_ID', 'Date', 'Ticker', 'Action', 'Category', 'Trade_Status',
+                                       'Shares', 'Amount', 'Exit_Price', 'Value', 'Lot P&L', 'Return %',
+                                       'B1_Price', 'Core_Band_Low', 'Core_Band_High',
+                                       'Open_Date', 'Closed_Date', 'Stop_Loss', 'Rule', 'Notes']
+                        export_cols = [c for c in export_cols if c in export_df.columns]
+                        export_df = export_df[export_cols].sort_values(['Ticker', 'Trade_ID', 'Date'])
+
+                        csv_data = export_df.to_csv(index=False)
+                        st.download_button(
+                            label="⬇️ Download CSV",
+                            data=csv_data,
+                            file_name="2026_detailed_trade_log.csv",
+                            mime="text/csv",
+                            key="cy_download_csv"
+                        )
+                        st.success(f"✅ Ready! {len(export_df)} rows across {len(cy_ids)} campaigns.")
+                    else:
+                        st.warning("No data to export.")
+
+                st.markdown("---")
+
                 # --- 2. TWO-STAGE FILTER ---
                 cy_tickers = sorted(cy_detail_df['Ticker'].dropna().unique().tolist())
                 cf1, cf2 = st.columns(2)
