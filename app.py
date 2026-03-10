@@ -8299,18 +8299,15 @@ elif page == "Trade Journal":
             )
 
         with col_f2:
-            # Get unique tickers for hint
             all_tickers = sorted(df_s['Ticker'].unique().tolist())
-            ticker_input = st.text_input(
-                "Ticker(s) - comma separated",
-                value="",
-                placeholder="e.g., SNDK or SNDK, FIG, AAPL",
-                help=f"Enter one or more tickers separated by commas. Available: {', '.join(all_tickers)}"
-            ).strip().upper()
-            # Parse tickers
-            if ticker_input:
-                ticker_filter = [t.strip() for t in ticker_input.split(',') if t.strip()]
-            else:
+            ticker_filter = st.multiselect(
+                "Ticker(s)",
+                options=all_tickers,
+                default=[],
+                placeholder="Search tickers...",
+                key="tj_ticker_search"
+            )
+            if not ticker_filter:
                 ticker_filter = "All"
 
         with col_f3:
