@@ -5813,11 +5813,11 @@ elif page == "Trade Manager":
                 # --- 2. TWO-STAGE FILTER ---
                 cy_tickers = sorted(cy_detail_df['Ticker'].dropna().unique().tolist())
                 cf1, cf2 = st.columns(2)
-                cy_sel_tick = cf1.selectbox("1. Search Ticker", [""] + cy_tickers, index=0, format_func=lambda x: "Search tickers..." if x == "" else x, key="cy_det_tick")
+                cy_tick_filter = cf1.multiselect("1. Ticker(s)", options=cy_tickers, default=[], placeholder="Search tickers...", key="cy_det_tick")
 
                 cy_sel_id = None
-                if cy_sel_tick:
-                    cy_subset = cy_detail_df[cy_detail_df['Ticker'] == cy_sel_tick]
+                if cy_tick_filter:
+                    cy_subset = cy_detail_df[cy_detail_df['Ticker'].isin(cy_tick_filter)]
                     cy_trade_ids = sorted(cy_subset['Trade_ID'].unique().tolist(), reverse=True)
                     cy_sel_id = cf2.selectbox("2. Select Campaign ID", cy_trade_ids, key="cy_det_id")
 
@@ -5946,7 +5946,9 @@ elif page == "Trade Manager":
                             display_df_cy[show_cols_cy].sort_values(['Trade_ID', 'Date']).style
                             .format({
                                 'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
-                                'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Value':'${:,.2f}',
+                                'Shares':'{:.0f}', 'Amount':'${:,.2f}',
+                                'Exit_Price': lambda x: f'${x:,.2f}' if pd.notna(x) else '',
+                                'Value':'${:,.2f}',
                                 'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
                             })
                             .applymap(color_pnl, subset=['Lot P&L', 'Return %'])
