@@ -324,6 +324,25 @@ class MarketSchoolRules:
         # Check if rally low has been undercut (do this FIRST, regardless of FTD window)
         lows_since_rally = self.data.iloc[self.rally_low_idx:idx+1]['Low']
         if lows_since_rally.min() < self.rally_low:
+            if self.ftd_date:
+                # FTD was confirmed but rally low undercut — void the FTD
+                desc = "Follow-Through Day Undercut" if current['Close'] < self.rally_low else "Failed Rally - FTD Voided"
+                sig_type = SignalType.S1 if current['Close'] < self.rally_low else SignalType.S2
+                signal = Signal(
+                    date=current.name,
+                    signal_type=sig_type,
+                    price=current['Close'],
+                    description=desc,
+                    affects_exposure=True,
+                    exposure_change=-self.market_exposure
+                )
+                self.buy_switch = False
+                self.market_exposure = 0
+                self.ftd_date = None
+                self.ftd_close = None
+                self.rally_start_date = None
+                self.market_in_correction = True
+                return signal
             self.rally_start_date = None
             return None
 
@@ -751,49 +770,47 @@ class MarketSchoolRules:
         """Check for failed rally attempt (S1, S2)."""
         if not self.rally_start_date or not self.ftd_date:
             return None
-            
+
         current = self.data.iloc[idx]
-        
-        # S1: Follow-Through Day Undercut
-        if self.ftd_date and current['Close'] < self.rally_low:
+
+        # S1: Follow-Through Day Undercut (close below rally low)
+        if current['Close'] < self.rally_low:
             signal = Signal(
                 date=current.name,
                 signal_type=SignalType.S1,
                 price=current['Close'],
                 description="Follow-Through Day Undercut",
                 affects_exposure=True,
-                exposure_change=-1
+                exposure_change=-self.market_exposure
             )
-            return signal
-            
-        # S2: Failed Rally Attempt
-        if current['Low'] < self.rally_low:
-            is_major_low = not self.buy_switch
-            
-            if is_major_low:
-                signal = Signal(
-                    date=current.name,
-                    signal_type=SignalType.S2,
-                    price=current['Close'],
-                    description="Failed Rally - Major Low",
-                    affects_exposure=True,
-                    exposure_change=-self.market_exposure
-                )
-                self.buy_switch = False
-                self.market_exposure = 0
-            else:
-                signal = Signal(
-                    date=current.name,
-                    signal_type=SignalType.S2,
-                    price=current['Close'],
-                    description="Failed Rally - Minor Low",
-                    affects_exposure=True,
-                    exposure_change=-2
-                )
-                
+            # FTD voided — back to correction
+            self.buy_switch = False
+            self.market_exposure = 0
+            self.ftd_date = None
+            self.ftd_close = None
             self.rally_start_date = None
+            self.market_in_correction = True
             return signal
-            
+
+        # S2: Failed Rally Attempt (intraday low breaches rally low)
+        if current['Low'] < self.rally_low:
+            signal = Signal(
+                date=current.name,
+                signal_type=SignalType.S2,
+                price=current['Close'],
+                description="Failed Rally - FTD Voided",
+                affects_exposure=True,
+                exposure_change=-self.market_exposure
+            )
+            # FTD voided — back to correction
+            self.buy_switch = False
+            self.market_exposure = 0
+            self.ftd_date = None
+            self.ftd_close = None
+            self.rally_start_date = None
+            self.market_in_correction = True
+            return signal
+
         return None
         
     def apply_restraint_rule(self, signals: List[Signal]) -> List[Signal]:
