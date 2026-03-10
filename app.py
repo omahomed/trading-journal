@@ -5004,6 +5004,9 @@ elif page == "Trade Manager":
                 # --- 2. RUN LIFO ENGINE FIRST (SOURCE OF TRUTH) ---
                 remaining_map = {}
                 lifo_pl_map = {}
+                buy_realized_pl = {}   # Back-attribute realized P&L to each BUY lot
+                buy_exit_price = {}    # Weighted avg exit price per BUY lot
+                buy_shares_sold = {}   # Shares sold from each BUY lot
 
                 fd_realized_pl = 0.0
                 fd_remaining_shares = 0.0
@@ -5045,16 +5048,25 @@ elif page == "Trade Manager":
                             sold_qty_accum = 0.0
                             
                             while to_sell > 0 and inventory:
-                                last = inventory[-1] 
+                                last = inventory[-1]
                                 take = min(to_sell, last['qty'])
-                                
+
                                 cost_basis_accum += (take * last['price'])
                                 sold_qty_accum += take
-                                
+
+                                # Back-attribute P&L to the BUY lot
+                                lot_pl = take * (sell_price - last['price'])
+                                buy_realized_pl[last['idx']] = buy_realized_pl.get(last['idx'], 0) + lot_pl
+                                prev_sold = buy_shares_sold.get(last['idx'], 0)
+                                buy_shares_sold[last['idx']] = prev_sold + take
+                                total_sold = buy_shares_sold[last['idx']]
+                                prev_avg = buy_exit_price.get(last['idx'], 0)
+                                buy_exit_price[last['idx']] = (prev_avg * prev_sold + sell_price * take) / total_sold
+
                                 last['qty'] -= take
                                 to_sell -= take
                                 remaining_map[last['idx']] = last['qty']
-                                
+
                                 if last['qty'] < 0.00001: inventory.pop()
                             
                             revenue = sold_qty_accum * sell_price
@@ -5069,7 +5081,10 @@ elif page == "Trade Manager":
                 # Apply to DataFrame
                 display_df = target_df.copy()
                 display_df['Remaining_Shares'] = display_df.index.map(remaining_map).fillna(0)
-                display_df['Realized_PL'] = display_df.index.map(lifo_pl_map).fillna(0)
+                # Realized_PL: SELL rows get lifo_pl_map, BUY rows get buy_realized_pl
+                combined_pl = {**buy_realized_pl, **lifo_pl_map}
+                display_df['Realized_PL'] = display_df.index.map(combined_pl).fillna(0)
+                display_df['Exit_Price'] = display_df.index.map(buy_exit_price)
                 
                 # --- CALCULATE STATUS COLUMN ---
                 display_df['Status'] = display_df['Remaining_Shares'].apply(lambda x: 'Open' if x > 0 else 'Closed')
@@ -5137,10 +5152,17 @@ elif page == "Trade Manager":
                 display_df['Unrealized_PL'] = display_df.apply(calc_unrealized, axis=1)
 
                 def calc_return_pct(row):
-                    if row['Action'] == 'BUY' and row['Remaining_Shares'] > 0:
-                         price = live_px if tick_filter != "All" else curr_prices.get(row['Trade_ID'], 0)
-                         entry = float(row.get('Amount', row.get('Price', 0.0)))
-                         if entry > 0: return ((price - entry) / entry) * 100
+                    if row['Action'] == 'BUY':
+                        entry = float(row.get('Amount', row.get('Price', 0.0)))
+                        if row['Remaining_Shares'] > 0:
+                            # Open: unrealized return from current price
+                            price = live_px if tick_filter != "All" else curr_prices.get(row['Trade_ID'], 0)
+                            if entry > 0: return ((price - entry) / entry) * 100
+                        elif row.name in buy_realized_pl:
+                            # Closed: realized return from LIFO back-attribution
+                            original_shares = abs(float(row['Shares']))
+                            cost_basis = entry * original_shares
+                            if cost_basis > 0: return (buy_realized_pl[row.name] / cost_basis) * 100
                     return 0.0
                 display_df['Return_Pct'] = display_df.apply(calc_return_pct, axis=1)
 
@@ -5158,7 +5180,7 @@ elif page == "Trade Manager":
                 if status_filter != "All":
                     display_df = display_df[display_df['Status'] == status_filter]
                 
-                final_cols = ['Trade_ID', 'Trx_ID', 'Campaign_Start', 'Date', 'Ticker', 'Action', 'Status', 'Shares', 'Remaining_Shares', 'Amount', 'Stop_Loss', 'Value', 'Realized_PL', 'Unrealized_PL', 'Return_Pct', 'Rule', 'Notes']
+                final_cols = ['Trade_ID', 'Trx_ID', 'Campaign_Start', 'Date', 'Ticker', 'Action', 'Status', 'Shares', 'Remaining_Shares', 'Amount', 'Exit_Price', 'Stop_Loss', 'Value', 'Realized_PL', 'Unrealized_PL', 'Return_Pct', 'Rule', 'Notes']
                 show_cols = [c for c in final_cols if c in display_df.columns]
                 
                 st.dataframe(
@@ -5166,7 +5188,7 @@ elif page == "Trade Manager":
                     .format({
                         'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
                         'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None'), 
-                        'Amount':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}', 
+                        'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}',
                         'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}', 
                         'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
                     })
@@ -5228,7 +5250,7 @@ elif page == "Trade Manager":
                 for idx, row in calc_df.iterrows():
                     if row['Action'] == 'BUY':
                         inventory.append({'idx': idx, 'price': row['Amount'], 'qty': row['Shares']})
-                        buy_attribution[idx] = {'pl': 0.0, 'sold_cost': 0.0, 'sold_val': 0.0}
+                        buy_attribution[idx] = {'pl': 0.0, 'sold_cost': 0.0, 'sold_val': 0.0, 'sold_qty': 0.0}
                     elif row['Action'] == 'SELL':
                         to_sell = row['Shares']
                         sell_price = row['Amount']
@@ -5241,6 +5263,7 @@ elif page == "Trade Manager":
                             buy_attribution[last['idx']]['pl'] += seg_pl
                             buy_attribution[last['idx']]['sold_cost'] += seg_cost
                             buy_attribution[last['idx']]['sold_val'] += seg_rev
+                            buy_attribution[last['idx']]['sold_qty'] += take
                             last['qty'] -= take
                             to_sell -= take
                             if last['qty'] > 0.0001: inventory.append(last)
@@ -5257,8 +5280,17 @@ elif page == "Trade Manager":
                             return ((data['sold_val'] - data['sold_cost']) / data['sold_cost']) * 100
                     return 0.0
 
+                def get_exit_price(idx, action):
+                    if action == 'BUY' and idx in buy_attribution:
+                        data = buy_attribution[idx]
+                        qty = data.get('sold_qty', 0)
+                        if qty > 0:
+                            return data['sold_val'] / qty
+                    return None
+
                 calc_df['Lot P&L'] = calc_df.apply(lambda x: get_lifo_pl(x.name, x['Action'], x['Realized_PL']), axis=1)
                 calc_df['Return %'] = calc_df.apply(lambda x: get_lifo_ret(x.name, x['Action']), axis=1)
+                calc_df['Exit_Price'] = calc_df.apply(lambda x: get_exit_price(x.name, x['Action']), axis=1)
                 
                 # --- B. CALCULATE METRICS ---
                 realized_pl = calc_df[calc_df['Action'] == 'BUY']['Lot P&L'].sum()
@@ -5382,14 +5414,14 @@ elif page == "Trade Manager":
                 display_df['Value'] = display_df.apply(lambda x: -x['Value'] if x['Action'] == 'SELL' else x['Value'], axis=1)
                 
                 # ADDED 'Trx_ID' back to the list
-                cols = ['Trade_ID', 'Trx_ID', 'Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Value', 'Lot P&L', 'Return %', 'Rule', 'Notes']
+                cols = ['Trade_ID', 'Trx_ID', 'Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Exit_Price', 'Value', 'Lot P&L', 'Return %', 'Rule', 'Notes']
                 show_cols = [c for c in cols if c in display_df.columns]
                 
                 st.dataframe(
                     display_df[show_cols].sort_values(['Trade_ID', 'Date']).style
                     .format({
                         'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None', 
-                        'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Value':'${:,.2f}', 
+                        'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Value':'${:,.2f}',
                         'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
                     })
                     .applymap(color_pnl, subset=['Lot P&L', 'Return %'])
@@ -8375,6 +8407,9 @@ elif page == "Trade Journal":
 
                         remaining_map = {}
                         lifo_pl_map = {}
+                        buy_realized_pl = {}
+                        buy_exit_price = {}
+                        buy_shares_sold = {}
                         inventory = []
                         fd_realized_pl = 0.0
                         fd_remaining_shares = 0.0
@@ -8399,6 +8434,15 @@ elif page == "Trade Journal":
                                     cost_basis_accum += (take * last['price'])
                                     sold_qty_accum += take
 
+                                    # Back-attribute P&L to the BUY lot
+                                    lot_pl = take * (sell_price - last['price'])
+                                    buy_realized_pl[last['idx']] = buy_realized_pl.get(last['idx'], 0) + lot_pl
+                                    prev_sold = buy_shares_sold.get(last['idx'], 0)
+                                    buy_shares_sold[last['idx']] = prev_sold + take
+                                    total_sold = buy_shares_sold[last['idx']]
+                                    prev_avg = buy_exit_price.get(last['idx'], 0)
+                                    buy_exit_price[last['idx']] = (prev_avg * prev_sold + sell_price * take) / total_sold
+
                                     last['qty'] -= take
                                     to_sell -= take
                                     remaining_map[last['idx']] = last['qty']
@@ -8418,7 +8462,9 @@ elif page == "Trade Journal":
                         # Apply LIFO results to DataFrame
                         display_df = target_df.copy()
                         display_df['Remaining_Shares'] = display_df.index.map(remaining_map).fillna(0)
-                        display_df['Realized_PL'] = display_df.index.map(lifo_pl_map).fillna(0)
+                        combined_pl = {**buy_realized_pl, **lifo_pl_map}
+                        display_df['Realized_PL'] = display_df.index.map(combined_pl).fillna(0)
+                        display_df['Exit_Price'] = display_df.index.map(buy_exit_price)
                         display_df['Status'] = display_df['Remaining_Shares'].apply(lambda x: 'Open' if x > 0 else 'Closed')
 
                         # === FLIGHT DECK ===
@@ -8489,10 +8535,15 @@ elif page == "Trade Journal":
                         display_df['Unrealized_PL'] = display_df.apply(calc_unrealized, axis=1)
 
                         def calc_return_pct(row):
-                            if row['Action'] == 'BUY' and row['Remaining_Shares'] > 0:
+                            if row['Action'] == 'BUY':
                                 entry = float(row.get('Amount', row.get('Price', 0.0)))
-                                if entry > 0:
-                                    return ((live_px - entry) / entry) * 100
+                                if row['Remaining_Shares'] > 0:
+                                    if entry > 0:
+                                        return ((live_px - entry) / entry) * 100
+                                elif row.name in buy_realized_pl:
+                                    original_shares = abs(float(row['Shares']))
+                                    cost_basis = entry * original_shares
+                                    if cost_basis > 0: return (buy_realized_pl[row.name] / cost_basis) * 100
                             return 0.0
                         display_df['Return_Pct'] = display_df.apply(calc_return_pct, axis=1)
 
@@ -8513,7 +8564,7 @@ elif page == "Trade Journal":
 
                         # Define columns (same as Active Campaign Detailed)
                         final_cols = ['Trade_ID', 'Trx_ID', 'Campaign_Start', 'Date', 'Ticker', 'Action', 'Status',
-                                    'Shares', 'Remaining_Shares', 'Amount', 'Stop_Loss', 'Value',
+                                    'Shares', 'Remaining_Shares', 'Amount', 'Exit_Price', 'Stop_Loss', 'Value',
                                     'Realized_PL', 'Unrealized_PL', 'Return_Pct', 'Rule', 'Notes']
                         show_cols = [c for c in final_cols if c in display_df.columns]
 
@@ -8544,7 +8595,7 @@ elif page == "Trade Journal":
                             display_df[show_cols].style.format({
                                 'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
                                 'Campaign_Start': lambda x: x if isinstance(x, str) else (x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None'),
-                                'Amount':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}',
+                                'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Stop_Loss':'${:,.2f}', 'Value':'${:,.2f}',
                                 'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}',
                                 'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
                             })
