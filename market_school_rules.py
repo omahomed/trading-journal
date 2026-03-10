@@ -346,9 +346,10 @@ class MarketSchoolRules:
             self.rally_start_date = None
             return None
 
-        # Check if we're in valid FTD window (days 4-25 of rally)
+        # Check if we're in valid FTD window (days 4-25 of rally, 1-indexed)
+        # Day 1 = rally low day, so Day 4 = idx offset 3, Day 25 = idx offset 24
         days_since_rally = idx - self.rally_low_idx
-        if days_since_rally < 4 or days_since_rally > 25:
+        if days_since_rally < 3 or days_since_rally > 24:
             return None
 
         # Volume requirement
