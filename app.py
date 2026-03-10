@@ -5813,10 +5813,10 @@ elif page == "Trade Manager":
                 # --- 2. TWO-STAGE FILTER ---
                 cy_tickers = sorted(cy_detail_df['Ticker'].dropna().unique().tolist())
                 cf1, cf2 = st.columns(2)
-                cy_sel_tick = cf1.selectbox("1. Select Ticker", ["All"] + cy_tickers, key="cy_det_tick")
+                cy_sel_tick = cf1.selectbox("1. Search Ticker", [""] + cy_tickers, index=0, format_func=lambda x: "Search tickers..." if x == "" else x, key="cy_det_tick")
 
                 cy_sel_id = None
-                if cy_sel_tick != "All":
+                if cy_sel_tick:
                     cy_subset = cy_detail_df[cy_detail_df['Ticker'] == cy_sel_tick]
                     cy_trade_ids = sorted(cy_subset['Trade_ID'].unique().tolist(), reverse=True)
                     cy_sel_id = cf2.selectbox("2. Select Campaign ID", cy_trade_ids, key="cy_det_id")
