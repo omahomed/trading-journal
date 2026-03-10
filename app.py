@@ -8137,67 +8137,81 @@ elif page == "Trade Journal":
                     avg_entry_val = 0.0
                     avg_exit_val = 0.0
 
-                # === Calculate LIFO-based P&L for OPEN trades (use live price) ===
-                if is_open:
-                    # Run LIFO engine to get accurate unrealized P&L
-                    target_df = df_d[df_d['Trade_ID'] == trade_id].copy()
+                # === Calculate LIFO-based P&L (both open and closed) ===
+                target_df = df_d[df_d['Trade_ID'] == trade_id].copy()
+                buy_realized_pl = {}
+                remaining_map = {}
+                live_px = avg_entry_val
 
-                    if not target_df.empty:
-                        # Sort transactions
-                        target_df['Type_Rank'] = target_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
-                        if 'Date' in target_df.columns:
-                            target_df['Date'] = pd.to_datetime(target_df['Date'], errors='coerce')
-                            target_df = target_df.sort_values(['Date', 'Type_Rank'])
+                if not target_df.empty:
+                    # Sort transactions
+                    target_df['Type_Rank'] = target_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
+                    if 'Date' in target_df.columns:
+                        target_df['Date'] = pd.to_datetime(target_df['Date'], errors='coerce')
+                        target_df = target_df.sort_values(['Date', 'Type_Rank'])
 
-                        # LIFO engine
-                        inventory = []
-                        fd_realized_pl = 0.0
-                        fd_remaining_shares = 0.0
-                        fd_cost_basis_sum = 0.0
+                    # LIFO engine
+                    inventory = []
+                    fd_realized_pl = 0.0
+                    fd_remaining_shares = 0.0
+                    fd_cost_basis_sum = 0.0
+                    buy_shares_sold = {}
+                    buy_exit_price = {}
+                    lifo_pl_map = {}
 
-                        for tidx, row in target_df.iterrows():
-                            if row['Action'] == 'BUY':
-                                p = float(row.get('Amount', row.get('Price', 0.0)))
-                                inventory.append({'idx': tidx, 'qty': row['Shares'], 'price': p})
+                    for tidx, row in target_df.iterrows():
+                        if row['Action'] == 'BUY':
+                            p = float(row.get('Amount', row.get('Price', 0.0)))
+                            inventory.append({'idx': tidx, 'qty': row['Shares'], 'price': p})
+                            remaining_map[tidx] = row['Shares']
 
-                            elif row['Action'] == 'SELL':
-                                to_sell = row['Shares']
-                                sell_price = float(row.get('Amount', row.get('Price', 0.0)))
-                                cost_basis_accum = 0.0
-                                sold_qty_accum = 0.0
+                        elif row['Action'] == 'SELL':
+                            to_sell = row['Shares']
+                            sell_price = float(row.get('Amount', row.get('Price', 0.0)))
+                            cost_basis_accum = 0.0
+                            sold_qty_accum = 0.0
 
-                                while to_sell > 0 and inventory:
-                                    last = inventory[-1]
-                                    take = min(to_sell, last['qty'])
-                                    cost_basis_accum += (take * last['price'])
-                                    sold_qty_accum += take
-                                    last['qty'] -= take
-                                    to_sell -= take
-                                    if last['qty'] < 0.00001:
-                                        inventory.pop()
+                            while to_sell > 0 and inventory:
+                                last = inventory[-1]
+                                take = min(to_sell, last['qty'])
+                                cost_basis_accum += (take * last['price'])
+                                sold_qty_accum += take
 
-                                revenue = sold_qty_accum * sell_price
-                                true_pl = revenue - cost_basis_accum
-                                fd_realized_pl += true_pl
+                                # Back-attribute P&L to the BUY lot
+                                lot_pl = take * (sell_price - last['price'])
+                                buy_realized_pl[last['idx']] = buy_realized_pl.get(last['idx'], 0) + lot_pl
+                                prev_sold = buy_shares_sold.get(last['idx'], 0)
+                                buy_shares_sold[last['idx']] = prev_sold + take
+                                total_sold = buy_shares_sold[last['idx']]
+                                prev_avg = buy_exit_price.get(last['idx'], 0)
+                                buy_exit_price[last['idx']] = (prev_avg * prev_sold + sell_price * take) / total_sold
 
-                        for item in inventory:
-                            fd_remaining_shares += item['qty']
-                            fd_cost_basis_sum += (item['qty'] * item['price'])
+                                last['qty'] -= take
+                                to_sell -= take
+                                remaining_map[last['idx']] = last['qty']
+                                if last['qty'] < 0.00001:
+                                    inventory.pop()
 
-                        # Get live price
+                            revenue = sold_qty_accum * sell_price
+                            true_pl = revenue - cost_basis_accum
+                            lifo_pl_map[tidx] = true_pl
+                            fd_realized_pl += true_pl
+
+                    for item in inventory:
+                        fd_remaining_shares += item['qty']
+                        fd_cost_basis_sum += (item['qty'] * item['price'])
+
+                    if is_open:
+                        # Get live price for open trades
                         try:
                             live_px = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
                         except:
                             live_px = avg_entry_val
 
-                        # Calculate unrealized P&L with live price
                         mkt_val = fd_remaining_shares * live_px
                         unrealized_pl = mkt_val - fd_cost_basis_sum
-
-                        # Total P&L = Realized + Unrealized
                         pl_val = fd_realized_pl + unrealized_pl
 
-                        # Return % based on total cost basis (all buys)
                         total_cost_basis = 0.0
                         for tidx, row in target_df.iterrows():
                             if row['Action'] == 'BUY':
@@ -8207,23 +8221,47 @@ elif page == "Trade Journal":
                         return_pct = (pl_val / total_cost_basis * 100) if total_cost_basis > 0 else 0.0
                         pl_label = "Total P&L"
                     else:
-                        # Fallback if no detail data
-                        pl_val = 0.0
-                        return_pct = 0.0
-                        pl_label = "Unrealized P&L"
+                        # Closed trade
+                        pl_val = fd_realized_pl
+                        total_cost_basis = 0.0
+                        for tidx, row in target_df.iterrows():
+                            if row['Action'] == 'BUY':
+                                p = float(row.get('Amount', row.get('Price', 0.0)))
+                                total_cost_basis += (row['Shares'] * p)
+                        return_pct = (pl_val / total_cost_basis * 100) if total_cost_basis > 0 else 0.0
+                        pl_label = "Realized P&L"
                 else:
-                    # For closed trades, use summary data
-                    pl = trade.get('Realized_PL', 0)
-                    pl_label = "Realized P&L"
-                    try:
-                        pl_val = float(str(pl).replace('$', '').replace(',', ''))
-                    except:
-                        pl_val = 0.0
+                    pl_val = 0.0
+                    return_pct = 0.0
+                    pl_label = "P&L"
 
-                    if avg_entry_val > 0:
-                        return_pct = ((avg_exit_val - avg_entry_val) / avg_entry_val) * 100
-                    else:
-                        return_pct = 0.0
+                # === Core/Add P&L Classification ===
+                core_pl = 0.0
+                add_pl = 0.0
+                b1_price = 0.0
+                band_low = 0.0
+                band_high = 0.0
+                has_core_add = False
+
+                if not target_df.empty and 'Trx_ID' in target_df.columns:
+                    buys = target_df[target_df['Action'] == 'BUY']
+                    b1_rows = buys[buys['Trx_ID'].astype(str).str.upper().str.startswith('B')]
+                    if not b1_rows.empty:
+                        b1_price = float(b1_rows.iloc[0].get('Amount', b1_rows.iloc[0].get('Price', 0.0)))
+                        band_low = b1_price * 0.975
+                        band_high = b1_price * 1.025
+                        has_core_add = True
+
+                        for buy_idx, buy_row in buys.iterrows():
+                            buy_price = float(buy_row.get('Amount', buy_row.get('Price', 0.0)))
+                            lot_pl = buy_realized_pl.get(buy_idx, 0.0)
+                            # For open buys, include unrealized P&L
+                            if is_open and remaining_map.get(buy_idx, 0) > 0:
+                                lot_pl += (live_px - buy_price) * remaining_map[buy_idx]
+                            if band_low <= buy_price <= band_high:
+                                core_pl += lot_pl
+                            else:
+                                add_pl += lot_pl
 
                 # Days held
                 open_date = trade.get('Open_Date')
@@ -8311,6 +8349,26 @@ elif page == "Trade Journal":
                             <div style="font-size: 16px; font-weight: 600;">{days_held}</div>
                         </div>
                     </div>
+                    {'<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 15px;">' +
+                    '<div>' +
+                    '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Core P&L</div>' +
+                    f'<div style="font-size: 16px; font-weight: 600; color: {"#28a745" if core_pl >= 0 else "#dc3545"};">' +
+                    f'{"+" if core_pl >= 0 else ""}${core_pl:,.2f}</div>' +
+                    '</div>' +
+                    '<div>' +
+                    '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Add P&L</div>' +
+                    f'<div style="font-size: 16px; font-weight: 600; color: {"#28a745" if add_pl >= 0 else "#dc3545"};">' +
+                    f'{"+" if add_pl >= 0 else ""}${add_pl:,.2f}</div>' +
+                    '</div>' +
+                    '<div>' +
+                    '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Core Band</div>' +
+                    f'<div style="font-size: 14px;">${band_low:,.2f} – ${band_high:,.2f}</div>' +
+                    '</div>' +
+                    '<div>' +
+                    '<div style="font-size: 11px; color: #666; text-transform: uppercase;">B1 Price</div>' +
+                    f'<div style="font-size: 16px; font-weight: 600;">${b1_price:,.2f}</div>' +
+                    '</div>' +
+                    '</div>' if has_core_add else ''}
                     <div style="font-size: 12px; color: #666;">
                         <strong>Trade ID:</strong> {trade_id} |
                         <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}
@@ -8438,71 +8496,8 @@ elif page == "Trade Journal":
 
                 # === TRANSACTION DETAILS & NOTES (Using Active Campaign Detailed Logic) ===
                 with st.expander(f"📊 Transaction Details & Notes - {ticker}"):
-                    # Get all transactions for this trade
-                    target_df = df_d[df_d['Trade_ID'] == trade_id].copy()
-
                     if not target_df.empty:
-                        # === RUN LIFO ENGINE (Same as Active Campaign Detailed) ===
-                        target_df['Type_Rank'] = target_df['Action'].apply(lambda x: 0 if x == 'BUY' else 1)
-                        if 'Date' in target_df.columns:
-                            target_df['Date'] = pd.to_datetime(target_df['Date'], errors='coerce')
-                            target_df = target_df.sort_values(['Date', 'Type_Rank'])
-
-                        remaining_map = {}
-                        lifo_pl_map = {}
-                        buy_realized_pl = {}
-                        buy_exit_price = {}
-                        buy_shares_sold = {}
-                        inventory = []
-                        fd_realized_pl = 0.0
-                        fd_remaining_shares = 0.0
-                        fd_cost_basis_sum = 0.0
-
-                        for idx, row in target_df.iterrows():
-                            if row['Action'] == 'BUY':
-                                p = float(row.get('Amount', row.get('Price', 0.0)))
-                                inventory.append({'idx': idx, 'qty': row['Shares'], 'price': p})
-                                remaining_map[idx] = row['Shares']
-
-                            elif row['Action'] == 'SELL':
-                                to_sell = row['Shares']
-                                sell_price = float(row.get('Amount', row.get('Price', 0.0)))
-                                cost_basis_accum = 0.0
-                                sold_qty_accum = 0.0
-
-                                while to_sell > 0 and inventory:
-                                    last = inventory[-1]
-                                    take = min(to_sell, last['qty'])
-
-                                    cost_basis_accum += (take * last['price'])
-                                    sold_qty_accum += take
-
-                                    # Back-attribute P&L to the BUY lot
-                                    lot_pl = take * (sell_price - last['price'])
-                                    buy_realized_pl[last['idx']] = buy_realized_pl.get(last['idx'], 0) + lot_pl
-                                    prev_sold = buy_shares_sold.get(last['idx'], 0)
-                                    buy_shares_sold[last['idx']] = prev_sold + take
-                                    total_sold = buy_shares_sold[last['idx']]
-                                    prev_avg = buy_exit_price.get(last['idx'], 0)
-                                    buy_exit_price[last['idx']] = (prev_avg * prev_sold + sell_price * take) / total_sold
-
-                                    last['qty'] -= take
-                                    to_sell -= take
-                                    remaining_map[last['idx']] = last['qty']
-
-                                    if last['qty'] < 0.00001:
-                                        inventory.pop()
-
-                                revenue = sold_qty_accum * sell_price
-                                true_pl = revenue - cost_basis_accum
-                                lifo_pl_map[idx] = true_pl
-                                fd_realized_pl += true_pl
-
-                        for item in inventory:
-                            fd_remaining_shares += item['qty']
-                            fd_cost_basis_sum += (item['qty'] * item['price'])
-
-                        # Apply LIFO results to DataFrame
+                        # LIFO already ran before card — reuse results
                         display_df = target_df.copy()
                         display_df['Remaining_Shares'] = display_df.index.map(remaining_map).fillna(0)
                         combined_pl = {**buy_realized_pl, **lifo_pl_map}
