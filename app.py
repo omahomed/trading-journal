@@ -4406,7 +4406,7 @@ elif page == "Trade Manager":
     # --------------------------------------------------------------------------
     # TAB LIST (Operational tabs only)
     # --------------------------------------------------------------------------
-    tab3, tab4, tab5, tab6, tab8, tab9, tab_cy, tab10 = st.tabs([
+    tab3, tab4, tab5, tab6, tab8, tab9, tab_cy, tab_cy_detail, tab10 = st.tabs([
         "Update Prices",
         "Edit Transaction",
         "Database Health",
@@ -4414,6 +4414,7 @@ elif page == "Trade Manager":
         "Active Campaign Detailed",
         "Detailed Trade Log",
         "CY Campaigns (2026)",
+        "2026 Detail Log",
         "All Campaigns"
     ])
 
@@ -5687,6 +5688,176 @@ elif page == "Trade Manager":
                 else: st.info("No trades match your filters.")
             else: st.info("No trades found for 2026 or Rollovers.")
         else: st.warning("Summary Database is empty.")
+
+# --- TAB CY DETAIL: 2026 DETAILED TRADE LOG ---
+    with tab_cy_detail:
+        st.subheader("📋 2026 Detailed Trade Log")
+        st.caption("All 2026 campaigns (opened in 2026 + rollovers from 2025). Per-lot LIFO attribution with Core/Add classification.")
+
+        if not df_s.empty:
+            # --- 1. CY 2026 FILTER ---
+            df_s['Open_DT'] = pd.to_datetime(df_s['Open_Date'], errors='coerce')
+            df_s['Close_DT'] = pd.to_datetime(df_s['Closed_Date'], errors='coerce')
+            cutoff_2026 = pd.Timestamp("2026-01-01")
+
+            cy_mask_detail = (
+                (df_s['Open_DT'] >= cutoff_2026) |
+                (df_s['Status'] == 'OPEN') |
+                (df_s['Close_DT'] >= cutoff_2026)
+            )
+            cy_ids = df_s[cy_mask_detail]['Trade_ID'].unique().tolist()
+            cy_detail_df = df_d[df_d['Trade_ID'].isin(cy_ids)].copy()
+
+            if not cy_detail_df.empty:
+                # --- 2. TWO-STAGE FILTER ---
+                cy_tickers = sorted(cy_detail_df['Ticker'].dropna().unique().tolist())
+                cf1, cf2 = st.columns(2)
+                cy_sel_tick = cf1.selectbox("1. Select Ticker", ["All"] + cy_tickers, key="cy_det_tick")
+
+                cy_sel_id = None
+                if cy_sel_tick != "All":
+                    cy_subset = cy_detail_df[cy_detail_df['Ticker'] == cy_sel_tick]
+                    cy_trade_ids = sorted(cy_subset['Trade_ID'].unique().tolist(), reverse=True)
+                    cy_sel_id = cf2.selectbox("2. Select Campaign ID", cy_trade_ids, key="cy_det_id")
+
+                    if cy_sel_id:
+                        camp_txs = cy_subset[cy_subset['Trade_ID'] == cy_sel_id].sort_values('Date')
+
+                        # --- 3. RUN LIFO ENGINE ---
+                        calc_df = camp_txs.copy().reset_index()
+                        buy_attribution = {}
+                        inventory = []
+
+                        for idx, row in calc_df.iterrows():
+                            if row['Action'] == 'BUY':
+                                inventory.append({'idx': idx, 'price': row['Amount'], 'qty': row['Shares']})
+                                buy_attribution[idx] = {'pl': 0.0, 'sold_cost': 0.0, 'sold_val': 0.0, 'sold_qty': 0.0}
+                            elif row['Action'] == 'SELL':
+                                to_sell = row['Shares']
+                                sell_price = row['Amount']
+                                while to_sell > 0 and inventory:
+                                    last = inventory.pop()
+                                    take = min(to_sell, last['qty'])
+                                    seg_cost = take * last['price']
+                                    seg_rev = take * sell_price
+                                    seg_pl = seg_rev - seg_cost
+                                    buy_attribution[last['idx']]['pl'] += seg_pl
+                                    buy_attribution[last['idx']]['sold_cost'] += seg_cost
+                                    buy_attribution[last['idx']]['sold_val'] += seg_rev
+                                    buy_attribution[last['idx']]['sold_qty'] += take
+                                    last['qty'] -= take
+                                    to_sell -= take
+                                    if last['qty'] > 0.0001: inventory.append(last)
+
+                        def get_lifo_pl_cy(idx, action, original_pl):
+                            if action == 'SELL': return original_pl
+                            if idx in buy_attribution: return buy_attribution[idx]['pl']
+                            return 0.0
+
+                        def get_lifo_ret_cy(idx, action):
+                            if action == 'BUY' and idx in buy_attribution:
+                                data = buy_attribution[idx]
+                                if data['sold_cost'] > 0:
+                                    return ((data['sold_val'] - data['sold_cost']) / data['sold_cost']) * 100
+                            return 0.0
+
+                        def get_exit_price_cy(idx, action):
+                            if action == 'BUY' and idx in buy_attribution:
+                                data = buy_attribution[idx]
+                                qty = data.get('sold_qty', 0)
+                                if qty > 0:
+                                    return data['sold_val'] / qty
+                            return None
+
+                        calc_df['Lot P&L'] = calc_df.apply(lambda x: get_lifo_pl_cy(x.name, x['Action'], x['Realized_PL']), axis=1)
+                        calc_df['Return %'] = calc_df.apply(lambda x: get_lifo_ret_cy(x.name, x['Action']), axis=1)
+                        calc_df['Exit_Price'] = calc_df.apply(lambda x: get_exit_price_cy(x.name, x['Action']), axis=1)
+
+                        # --- 4. CORE/ADD CLASSIFICATION ---
+                        calc_df['Category'] = ''
+                        b1_rows = calc_df[(calc_df['Action'] == 'BUY') & (calc_df['Trx_ID'].astype(str).str.upper().str.startswith('B'))]
+                        b1_price_cy = 0.0
+                        band_low_cy = 0.0
+                        band_high_cy = 0.0
+
+                        if not b1_rows.empty:
+                            b1_price_cy = float(b1_rows.iloc[0]['Amount'])
+                            band_low_cy = b1_price_cy * 0.975
+                            band_high_cy = b1_price_cy * 1.025
+
+                            def classify_buy(row):
+                                if row['Action'] != 'BUY': return ''
+                                if band_low_cy <= row['Amount'] <= band_high_cy: return 'Core'
+                                return 'Add'
+                            calc_df['Category'] = calc_df.apply(classify_buy, axis=1)
+
+                        # --- 5. FLIGHT DECK ---
+                        realized_pl_cy = calc_df[calc_df['Action'] == 'BUY']['Lot P&L'].sum()
+                        camp_sum_cy = df_s[df_s['Trade_ID'] == cy_sel_id]
+                        is_closed_cy = False
+                        if not camp_sum_cy.empty and camp_sum_cy.iloc[0]['Status'] == 'CLOSED':
+                            is_closed_cy = True
+
+                        buys_cy = calc_df[calc_df['Action'] == 'BUY']
+                        avg_in_cy = (buys_cy['Amount'] * buys_cy['Shares']).sum() / buys_cy['Shares'].sum() if not buys_cy.empty else 0
+
+                        # Core/Add aggregation
+                        core_buys = calc_df[(calc_df['Action'] == 'BUY') & (calc_df['Category'] == 'Core')]
+                        add_buys = calc_df[(calc_df['Action'] == 'BUY') & (calc_df['Category'] == 'Add')]
+                        core_pl_cy = core_buys['Lot P&L'].sum() if not core_buys.empty else 0.0
+                        add_pl_cy = add_buys['Lot P&L'].sum() if not add_buys.empty else 0.0
+                        core_cost_cy = (core_buys['Amount'] * core_buys['Shares']).sum() if not core_buys.empty else 0.0
+                        add_cost_cy = (add_buys['Amount'] * add_buys['Shares']).sum() if not add_buys.empty else 0.0
+                        core_ret_cy = (core_pl_cy / core_cost_cy * 100) if core_cost_cy > 0 else 0.0
+                        add_ret_cy = (add_pl_cy / add_cost_cy * 100) if add_cost_cy > 0 else 0.0
+                        total_cost_cy = core_cost_cy + add_cost_cy
+                        total_ret_cy = (realized_pl_cy / total_cost_cy * 100) if total_cost_cy > 0 else 0.0
+
+                        st.markdown(f"### 🚁 Flight Deck: {cy_sel_tick} ({cy_sel_id})")
+                        fd1, fd2, fd3, fd4 = st.columns(4)
+                        fd1.metric("Total P&L", f"${realized_pl_cy:+,.2f}", f"{total_ret_cy:+.2f}% Return")
+                        fd2.metric("Avg Entry", f"${avg_in_cy:.2f}", f"{'CLOSED' if is_closed_cy else 'OPEN'}")
+
+                        core_delta = f"{core_ret_cy:+.2f}% | ${core_cost_cy:,.0f} deployed"
+                        fd3.metric("Core P&L", f"${core_pl_cy:+,.2f}", core_delta, delta_color="off")
+
+                        if add_cost_cy > 0:
+                            add_delta = f"{add_ret_cy:+.2f}% | ${add_cost_cy:,.0f} deployed"
+                            fd4.metric("Add P&L", f"${add_pl_cy:+,.2f}", add_delta, delta_color="off")
+                        else:
+                            fd4.metric("Add P&L", "$0.00", "No adds")
+
+                        if b1_price_cy > 0:
+                            st.info(f"**Core Band:** ${band_low_cy:,.2f} – ${band_high_cy:,.2f} (B1 = ${b1_price_cy:,.2f} ± 2.5%)")
+
+                        st.markdown("---")
+
+                        # --- 6. TRANSACTION TABLE ---
+                        st.markdown("#### 📜 Transaction History (LIFO + Core/Add)")
+                        display_df_cy = calc_df.copy()
+                        display_df_cy['Shares'] = display_df_cy.apply(lambda x: -x['Shares'] if x['Action'] == 'SELL' else x['Shares'], axis=1)
+                        display_df_cy['Value'] = display_df_cy.apply(lambda x: -x['Value'] if x['Action'] == 'SELL' else x['Value'], axis=1)
+
+                        cols_cy = ['Trade_ID', 'Trx_ID', 'Date', 'Ticker', 'Action', 'Category', 'Shares', 'Amount', 'Exit_Price', 'Value', 'Lot P&L', 'Return %', 'Rule', 'Notes']
+                        show_cols_cy = [c for c in cols_cy if c in display_df_cy.columns]
+
+                        st.dataframe(
+                            display_df_cy[show_cols_cy].sort_values(['Trade_ID', 'Date']).style
+                            .format({
+                                'Date': lambda x: x.strftime('%Y-%m-%d %H:%M') if isinstance(x, (pd.Timestamp, datetime)) else 'None',
+                                'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Value':'${:,.2f}',
+                                'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
+                            })
+                            .applymap(color_pnl, subset=['Lot P&L', 'Return %'])
+                            .applymap(color_neg_value, subset=['Shares']),
+                            use_container_width=True
+                        )
+                else:
+                    st.info("Select a ticker to view campaign details.")
+            else:
+                st.info("No 2026 campaigns found.")
+        else:
+            st.warning("Summary Database is empty.")
 
 # --- TAB 10: ALL CAMPAIGNS (PRO SCOREBOARD) ---
     with tab10:
