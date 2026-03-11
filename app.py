@@ -6766,8 +6766,10 @@ elif page == "Active Campaign Summary":
                  
 
                  if r['Risk $'] > (budget + 5):
-
-                     st.warning(f"⚠️ **{r['Ticker']}**: Initial Risk (${r['Risk $']:.0f}) > Budget (${budget:.0f}).")
+                     total_cost = float(r.get('Total_Cost', 0))
+                     total_shares = float(r.get('Shares', 0))
+                     rbm_stop = (total_cost - budget) / total_shares if total_shares > 0 else 0.0
+                     st.warning(f"⚠️ **{r['Ticker']}**: Initial Risk (${r['Risk $']:.0f}) > Budget (${budget:.0f}). Raise stop to **${rbm_stop:.2f}** to stay within budget.")
 
                      all_clear = False
 
