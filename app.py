@@ -90,19 +90,15 @@ BUY_RULES = [
     # 5. Reversals
     "br5.1 Undercut & Rally", "br5.2 Upside Reversal", 
     # 6. Gaps
-    "br6.1 Gapper", 
+    "br6.1 Gapper", "br6.2 Continuation Gap Up",
     # 7. Strategies
-    "br7.1 TQQQ Strategy", 
+    "br7.1 TQQQ Strategy", "br7.2 New High after Gentle PB", "br7.3 JL Century Mark", 
     # 8. Trendline Breaks
     "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break", 
     # 9. Moving Average Strategies
     "br9.1 21e Strategy", 
-    # 10. Pyramiding / Adds (Formerly Add Rules)
-    "br10.1 Add: New High after Gentle PB", "br10.2 Add: KMA Pullback", 
-    "br10.3 Add: KMA Reclaim", "br10.4 Add: JL Century",
-    "br10.5 Add: Continuation Gap Up", "br10.6 Add: High Low Support", 
-    "br10.7 Add: 3 Weeks Tight", "br10.8 Add: Generic Scale-In",
-    "br10.9 Add: Upside Reversal", "br10.10 Add: Consolidation Pivot",
+    # 10. Pyramiding / Adds
+    "br10.4 Add: JL Century", "br10.7 Add: 3 Weeks Tight",
     # Misc
     "ns No Setup"
 ]
@@ -3955,7 +3951,7 @@ elif page == "Log Buy":
                 except: pass
         if st.session_state['b_id'] == "": st.session_state['b_id'] = default_id
         b_id = c2.text_input("Trade ID", key="b_id")
-        b_rule = st.selectbox("Buy Rule", BUY_RULES)
+        b_rule = st.selectbox("Buy Rule", BUY_RULES, index=None, placeholder="Type to search rules...")
     else:
         # Scale In Logic
         open_opts = df_s[df_s['Status']=='OPEN'].copy()
@@ -3969,7 +3965,7 @@ elif page == "Log Buy":
                 curr_row = open_opts[open_opts['Trade_ID']==b_id].iloc[0]
                 c2.info(f"Holding: {int(curr_row['Shares'])} shs @ ${curr_row['Avg_Entry']:.2f}")
         else: c1.warning("No Open Campaigns.")
-        b_rule = st.selectbox("Add Rule", BUY_RULES)
+        b_rule = st.selectbox("Add Rule", BUY_RULES, index=None, placeholder="Type to search rules...")
 
     # --- 2. RISK BUDGET CALCULATOR ---
     risk_budget_dol = 0.0
