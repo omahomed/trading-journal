@@ -6486,7 +6486,7 @@ elif page == "Active Campaign Summary":
 
 
 
-                 master_stop = summary_stop if summary_stop > 0 else (avg_log_stop if avg_log_stop > 0 else avg_cost)
+                 master_stop = avg_log_stop if avg_log_stop > 0 else (summary_stop if summary_stop > 0 else avg_cost)
 
                  initial_risk = max(0.0, (avg_cost - master_stop) * total_open_shares)
 
@@ -7053,7 +7053,7 @@ elif page == "Risk Manager":
 
 
 
-                            master_stop = summary_stop if summary_stop > 0 else (avg_log_stop if avg_log_stop > 0 else summary_entry)
+                            master_stop = avg_log_stop if avg_log_stop > 0 else (summary_stop if summary_stop > 0 else summary_entry)
 
                             heat = max(0.0, (current_price - master_stop) * shares)
 
