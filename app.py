@@ -4419,41 +4419,9 @@ elif page == "Trade Manager":
     # - Earnings Planner → 🛡️ Risk Management section
     # - Performance Audit → 🔍 Deep Dive section
 
-    # --- TAB 3: UPDATE PRICES ---
+    # --- TAB 3: RISK CONTROL CENTER ---
     with tab3:
         st.subheader("🛡️ Risk Control Center")
-        if st.button("REFRESH MARKET PRICES", type="primary"):
-            if USE_DATABASE:
-                # Database-first approach - use existing refresh function
-                with st.spinner("Fetching current prices..."):
-                    try:
-                        result = db.refresh_open_position_prices(CURR_PORT_NAME)
-                        if 'error' in result:
-                            st.error(f"❌ {result['error']}")
-                        else:
-                            st.success(f"✅ {result['message']} (saved to database)")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Price refresh failed: {str(e)}")
-            else:
-                # CSV fallback
-                open_rows = df_s[df_s['Status']=='OPEN']
-                if not open_rows.empty:
-                    p = st.progress(0); n=0
-                    for i, r in open_rows.iterrows():
-                        try:
-                            tk = r['Ticker'] if r['Ticker']!='COMP' else '^IXIC'
-                            curr = yf.Ticker(tk).history(period='1d')['Close'].iloc[-1]
-                            mkt = r['Shares'] * curr
-                            unreal = mkt - r['Total_Cost']
-                            df_s.at[i, 'Unrealized_PL'] = unreal
-                            df_s.at[i, 'Return_Pct'] = (unreal/r['Total_Cost'])*100 if r['Total_Cost'] else 0
-                        except: pass
-                        n+=1; p.progress(n/len(open_rows))
-                    secure_save(df_s, SUMMARY_FILE); st.success("✅ Prices Updated!"); st.rerun()
-                else: st.warning("No open positions.")
-
-        st.markdown("---")
         st.markdown("### 🛑 Rapid Stop Adjustment")
         open_pos = df_s[df_s['Status'] == 'OPEN'].sort_values('Ticker')
         if not open_pos.empty:
