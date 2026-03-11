@@ -4441,38 +4441,33 @@ elif page == "Trade Manager":
             
             if c_up3.button("UPDATE STOP LOSS"):
                 mask = (df_d['Trade_ID'] == sel_id) & (df_d['Action'] == 'BUY')
-                if mask.any():
-                    last_idx = df_d[mask].last_valid_index()
-
+                buy_rows = df_d[mask]
+                if not buy_rows.empty:
                     if USE_DATABASE:
-                        # Database-first approach
                         try:
-                            # Get database ID
-                            db_id = df_d.at[last_idx, '_DB_ID']
-                            if pd.isna(db_id):
-                                st.error("❌ Cannot update: Database ID not found")
-                                st.stop()
-
-                            # Prepare update dict — cast numpy types to native Python for PostgreSQL
                             def to_native(v):
                                 if hasattr(v, 'item'): return v.item()
                                 return v
-                            update_dict = {
-                                'Trade_ID': to_native(df_d.at[last_idx, 'Trade_ID']),
-                                'Ticker': to_native(df_d.at[last_idx, 'Ticker']),
-                                'Action': to_native(df_d.at[last_idx, 'Action']),
-                                'Date': to_native(df_d.at[last_idx, 'Date']),
-                                'Shares': to_native(df_d.at[last_idx, 'Shares']),
-                                'Amount': to_native(df_d.at[last_idx, 'Amount']),
-                                'Value': to_native(df_d.at[last_idx, 'Value']),
-                                'Rule': to_native(df_d.at[last_idx, 'Rule']),
-                                'Notes': to_native(df_d.at[last_idx, 'Notes']),
-                                'Stop_Loss': float(new_stop_price),
-                                'Trx_ID': to_native(df_d.at[last_idx, 'Trx_ID'])
-                            }
 
-                            # Update database
-                            db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
+                            # Update ALL buy lots for this campaign
+                            for row_idx in buy_rows.index:
+                                db_id = df_d.at[row_idx, '_DB_ID']
+                                if pd.isna(db_id):
+                                    continue
+                                update_dict = {
+                                    'Trade_ID': to_native(df_d.at[row_idx, 'Trade_ID']),
+                                    'Ticker': to_native(df_d.at[row_idx, 'Ticker']),
+                                    'Action': to_native(df_d.at[row_idx, 'Action']),
+                                    'Date': to_native(df_d.at[row_idx, 'Date']),
+                                    'Shares': to_native(df_d.at[row_idx, 'Shares']),
+                                    'Amount': to_native(df_d.at[row_idx, 'Amount']),
+                                    'Value': to_native(df_d.at[row_idx, 'Value']),
+                                    'Rule': to_native(df_d.at[row_idx, 'Rule']),
+                                    'Notes': to_native(df_d.at[row_idx, 'Notes']),
+                                    'Stop_Loss': float(new_stop_price),
+                                    'Trx_ID': to_native(df_d.at[row_idx, 'Trx_ID'])
+                                }
+                                db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
 
                             # Recalculate summary so Active Campaign Manager reflects the new stop
                             df_d_temp = db.load_details(CURR_PORT_NAME, sel_id)
@@ -4482,13 +4477,14 @@ elif page == "Trade Manager":
                             if not summary_matches.empty:
                                 db.save_summary_row(CURR_PORT_NAME, summary_matches.iloc[0].to_dict())
 
-                            st.success(f"✅ Stop Updated to ${new_stop_price:.2f} (saved to database)")
+                            st.success(f"✅ Stop Updated to ${new_stop_price:.2f} for {len(buy_rows)} lot(s) (saved to database)")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Database update failed: {str(e)}")
                     else:
-                        # CSV fallback
-                        df_d.at[last_idx, 'Stop_Loss'] = new_stop_price
+                        # CSV fallback — update all buy lots
+                        for row_idx in buy_rows.index:
+                            df_d.at[row_idx, 'Stop_Loss'] = new_stop_price
                         secure_save(df_d, DETAILS_FILE)
                         df_d, df_s = update_campaign_summary(sel_id, df_d, df_s)
                         secure_save(df_s, SUMMARY_FILE)
