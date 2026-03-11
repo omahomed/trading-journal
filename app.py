@@ -96,11 +96,7 @@ BUY_RULES = [
     # 8. Trendline Breaks
     "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break", 
     # 9. Moving Average Strategies
-    "br9.1 21e Strategy", 
-    # 10. Pyramiding / Adds
-    "br10.4 Add: JL Century", "br10.7 Add: 3 Weeks Tight",
-    # Misc
-    "ns No Setup"
+    "br9.1 21e Strategy",
 ]
 
 # Note: ADD_RULES list is deprecated/merged into BUY_RULES
