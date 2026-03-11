@@ -4486,19 +4486,22 @@ elif page == "Trade Manager":
                                 st.error("❌ Cannot update: Database ID not found")
                                 st.stop()
 
-                            # Prepare update dict
+                            # Prepare update dict — cast numpy types to native Python for PostgreSQL
+                            def to_native(v):
+                                if hasattr(v, 'item'): return v.item()
+                                return v
                             update_dict = {
-                                'Trade_ID': df_d.at[last_idx, 'Trade_ID'],
-                                'Ticker': df_d.at[last_idx, 'Ticker'],
-                                'Action': df_d.at[last_idx, 'Action'],
-                                'Date': df_d.at[last_idx, 'Date'],
-                                'Shares': df_d.at[last_idx, 'Shares'],
-                                'Amount': df_d.at[last_idx, 'Amount'],
-                                'Value': df_d.at[last_idx, 'Value'],
-                                'Rule': df_d.at[last_idx, 'Rule'],
-                                'Notes': df_d.at[last_idx, 'Notes'],
-                                'Stop_Loss': new_stop_price,
-                                'Trx_ID': df_d.at[last_idx, 'Trx_ID']
+                                'Trade_ID': to_native(df_d.at[last_idx, 'Trade_ID']),
+                                'Ticker': to_native(df_d.at[last_idx, 'Ticker']),
+                                'Action': to_native(df_d.at[last_idx, 'Action']),
+                                'Date': to_native(df_d.at[last_idx, 'Date']),
+                                'Shares': to_native(df_d.at[last_idx, 'Shares']),
+                                'Amount': to_native(df_d.at[last_idx, 'Amount']),
+                                'Value': to_native(df_d.at[last_idx, 'Value']),
+                                'Rule': to_native(df_d.at[last_idx, 'Rule']),
+                                'Notes': to_native(df_d.at[last_idx, 'Notes']),
+                                'Stop_Loss': float(new_stop_price),
+                                'Trx_ID': to_native(df_d.at[last_idx, 'Trx_ID'])
                             }
 
                             # Update database
