@@ -4421,7 +4421,6 @@ elif page == "Trade Manager":
 
     # --- TAB 3: RISK CONTROL CENTER ---
     with tab3:
-        st.subheader("🛡️ Risk Control Center")
         st.markdown("### 🛑 Rapid Stop Adjustment")
         open_pos = df_s[df_s['Status'] == 'OPEN'].sort_values('Ticker')
         if not open_pos.empty:
