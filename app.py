@@ -4473,6 +4473,15 @@ elif page == "Trade Manager":
 
                             # Update database
                             db.update_detail_row(CURR_PORT_NAME, int(db_id), update_dict)
+
+                            # Recalculate summary so Active Campaign Manager reflects the new stop
+                            df_d_temp = db.load_details(CURR_PORT_NAME, sel_id)
+                            df_s_temp = db.load_summary(CURR_PORT_NAME)
+                            df_d_temp, df_s_temp = update_campaign_summary(sel_id, df_d_temp, df_s_temp)
+                            summary_matches = df_s_temp[df_s_temp['Trade_ID'].astype(str) == str(sel_id)]
+                            if not summary_matches.empty:
+                                db.save_summary_row(CURR_PORT_NAME, summary_matches.iloc[0].to_dict())
+
                             st.success(f"✅ Stop Updated to ${new_stop_price:.2f} (saved to database)")
                             st.rerun()
                         except Exception as e:
@@ -4481,6 +4490,8 @@ elif page == "Trade Manager":
                         # CSV fallback
                         df_d.at[last_idx, 'Stop_Loss'] = new_stop_price
                         secure_save(df_d, DETAILS_FILE)
+                        df_d, df_s = update_campaign_summary(sel_id, df_d, df_s)
+                        secure_save(df_s, SUMMARY_FILE)
                         st.success(f"✅ Stop Updated to ${new_stop_price:.2f}")
                         st.rerun()
                 else: st.error("Could not find a BUY transaction.")
