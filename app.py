@@ -2023,6 +2023,12 @@ elif page == "Daily Journal":
                     sel_row = df_j_edit[df_j_edit['Day'].dt.strftime('%Y-%m-%d') == edit_date].iloc[0]
 
                     with st.form("edit_journal_entry"):
+                        ed_c1, ed_c2 = st.columns([1, 3])
+                        edit_new_date = ed_c1.date_input("Entry Date", value=pd.to_datetime(edit_date).date(), key="edit_date")
+                        edit_new_date_str = edit_new_date.strftime("%Y-%m-%d")
+                        if edit_new_date_str != edit_date:
+                            ed_c2.info(f"Date will change: {edit_date} → {edit_new_date_str}")
+
                         e1, e2, e3, e4 = st.columns(4)
                         edit_end_nlv = e1.number_input("End NLV ($)", value=float(sel_row['End NLV']), step=100.0, format="%.2f", key="edit_nlv")
                         edit_beg_nlv = e2.number_input("Beg NLV ($)", value=float(sel_row['Beg NLV']), step=100.0, format="%.2f", key="edit_beg")
@@ -2049,11 +2055,15 @@ elif page == "Daily Journal":
                         adj_beg = edit_beg_nlv + edit_cash
                         daily_chg = edit_end_nlv - edit_beg_nlv - edit_cash
                         pct_val = (daily_chg / adj_beg) * 100 if adj_beg != 0 else 0.0
+                        date_changed = edit_new_date_str != edit_date
 
                         if USE_DATABASE:
+                            # If date changed, delete old entry first
+                            if date_changed:
+                                db.delete_journal_entry(CURR_PORT_NAME, edit_date)
                             journal_entry = {
                                 'portfolio_id': CURR_PORT_NAME,
-                                'day': edit_date,
+                                'day': edit_new_date_str,
                                 'status': str(sel_row.get('Status', 'U')),
                                 'market_window': str(sel_row.get('Market Window', 'Open')),
                                 'above_21ema': float(sel_row.get('> 21e', 0)),
@@ -2075,20 +2085,42 @@ elif page == "Daily Journal":
                             }
                             db.save_journal_entry(journal_entry)
                         else:
-                            idx = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') == edit_date].index[0]
-                            df_j.at[idx, 'End NLV'] = edit_end_nlv
-                            df_j.at[idx, 'Beg NLV'] = edit_beg_nlv
-                            df_j.at[idx, 'Cash -/+'] = edit_cash
-                            df_j.at[idx, 'Daily $ Change'] = daily_chg
-                            df_j.at[idx, 'Daily % Change'] = f"{pct_val:.2f}%"
-                            df_j.at[idx, '% Invested'] = edit_invested
-                            df_j.at[idx, 'SPY'] = edit_spy
-                            df_j.at[idx, 'Nasdaq'] = edit_ndx
-                            df_j.at[idx, 'Market_Notes'] = edit_notes
-                            df_j.at[idx, 'Market_Action'] = edit_action
-                            df_j.at[idx, 'Score'] = edit_score
+                            if date_changed:
+                                # Remove old date row and append with new date
+                                df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != edit_date]
+                            idx_list = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') == (edit_new_date_str if date_changed else edit_date)].index
+                            if date_changed or len(idx_list) == 0:
+                                new_row = sel_row.copy()
+                                new_row['Day'] = pd.to_datetime(edit_new_date_str)
+                                new_row['End NLV'] = edit_end_nlv
+                                new_row['Beg NLV'] = edit_beg_nlv
+                                new_row['Cash -/+'] = edit_cash
+                                new_row['Daily $ Change'] = daily_chg
+                                new_row['Daily % Change'] = f"{pct_val:.2f}%"
+                                new_row['% Invested'] = edit_invested
+                                new_row['SPY'] = edit_spy
+                                new_row['Nasdaq'] = edit_ndx
+                                new_row['Market_Notes'] = edit_notes
+                                new_row['Market_Action'] = edit_action
+                                new_row['Score'] = edit_score
+                                df_j = pd.concat([df_j, pd.DataFrame([new_row])], ignore_index=True)
+                                df_j = df_j.sort_values('Day', ascending=False)
+                            else:
+                                idx = idx_list[0]
+                                df_j.at[idx, 'End NLV'] = edit_end_nlv
+                                df_j.at[idx, 'Beg NLV'] = edit_beg_nlv
+                                df_j.at[idx, 'Cash -/+'] = edit_cash
+                                df_j.at[idx, 'Daily $ Change'] = daily_chg
+                                df_j.at[idx, 'Daily % Change'] = f"{pct_val:.2f}%"
+                                df_j.at[idx, '% Invested'] = edit_invested
+                                df_j.at[idx, 'SPY'] = edit_spy
+                                df_j.at[idx, 'Nasdaq'] = edit_ndx
+                                df_j.at[idx, 'Market_Notes'] = edit_notes
+                                df_j.at[idx, 'Market_Action'] = edit_action
+                                df_j.at[idx, 'Score'] = edit_score
                             secure_save(df_j, TARGET_FILE)
-                        st.success(f"Updated entry for {edit_date}")
+                        msg = f"Moved entry from {edit_date} → {edit_new_date_str}" if date_changed else f"Updated entry for {edit_date}"
+                        st.success(msg)
                         st.rerun()
 
                     if delete_edit:
