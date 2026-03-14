@@ -691,6 +691,96 @@ def get_combined_market_status():
     latest_transition = max(nasdaq['transition_date'], spy['transition_date'])
     return status, latest_transition
 
+def compute_historical_market_windows(dates):
+    """Compute M Factor market window for a list of historical dates.
+    Returns dict mapping date_str -> status string.
+    """
+    if not dates:
+        return {}
+
+    # Fetch enough data: 60-day lookback needs data from well before earliest date
+    earliest = min(dates)
+    fetch_start = (earliest - pd.Timedelta(days=120)).strftime('%Y-%m-%d')
+    latest = max(dates)
+    fetch_end = (latest + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+
+    try:
+        ndx_df = yf.Ticker("^IXIC").history(start=fetch_start, end=fetch_end)
+        spy_df = yf.Ticker("SPY").history(start=fetch_start, end=fetch_end)
+    except:
+        return {}
+
+    if ndx_df.empty or spy_df.empty:
+        return {}
+
+    def calc_state_on_date(df, target_date):
+        """Run M Factor state machine up to target_date using 60-day window."""
+        mask = df.index <= target_date
+        available = df[mask]
+        if len(available) < 30:
+            return "Open"
+
+        available = available.copy()
+        available['21EMA'] = available['Close'].ewm(span=21, adjust=False).mean()
+        available['50SMA'] = available['Close'].rolling(window=50).mean()
+        available['Prev_Close'] = available['Close'].shift(1)
+        available['Is_Up'] = available['Close'] > available['Prev_Close']
+
+        subset = available.iloc[-60:]
+        state = "OPEN"
+        setup_low_21 = None; setup_low_50 = None; pt_streak = 0
+
+        for _, row in subset.iterrows():
+            close = row['Close']; low = row['Low']
+            ema21 = row['21EMA']; sma50 = row['50SMA']
+            is_up = row['Is_Up']
+
+            if low > ema21: pt_streak += 1
+            else: pt_streak = 0
+
+            if close < sma50:
+                if setup_low_50 is None: setup_low_50 = low
+                elif low < (setup_low_50 * 0.998): state = "CLOSED"
+            else:
+                setup_low_50 = None
+                if state == "CLOSED": state = "NEUTRAL"
+
+            if state != "CLOSED":
+                if close < ema21:
+                    if state == "POWERTREND":
+                        state = "NEUTRAL"; setup_low_21 = low; pt_streak = 0
+                    else:
+                        if setup_low_21 is None: setup_low_21 = low
+                        elif low < (setup_low_21 * 0.998): state = "NEUTRAL"
+                else:
+                    setup_low_21 = None
+                    if state == "NEUTRAL": state = "OPEN"
+                    if state in ["OPEN", "POWERTREND"]:
+                        if pt_streak >= 3 and is_up: state = "POWERTREND"
+                        elif state == "POWERTREND" and pt_streak == 0: state = "OPEN"
+
+        return state
+
+    results = {}
+    for target in dates:
+        target_ts = pd.Timestamp(target)
+        ndx_state = calc_state_on_date(ndx_df, target_ts)
+        spy_state = calc_state_on_date(spy_df, target_ts)
+
+        if ndx_state == "POWERTREND" or spy_state == "POWERTREND":
+            combined = "Powertrend"
+        elif ndx_state == "CLOSED" and spy_state == "CLOSED":
+            combined = "Closed"
+        elif ndx_state in ["NEUTRAL", "CLOSED"] or spy_state in ["NEUTRAL", "CLOSED"]:
+            combined = "Neutral"
+        else:
+            combined = "Open"
+
+        date_str = target_ts.strftime('%Y-%m-%d')
+        results[date_str] = combined
+
+    return results
+
 def calculate_open_risk(df_d, df_s, nlv):
     if df_d.empty or df_s.empty or nlv == 0: return 0.0, 0.0
     total_risk_dollars = 0.0
@@ -2255,6 +2345,64 @@ elif page == "Daily Journal":
 
                         secure_save(df_j, TARGET_FILE); st.success("✅ Sync Complete!"); st.rerun()
                     except Exception as e: st.error(f"Sync Error: {e}")
+
+            st.markdown("---")
+            st.subheader("Backfill Market Window (2026)")
+            st.caption("Retroactively compute M Factor status for all 2026 journal entries.")
+            if st.button("🔄 BACKFILL MARKET WINDOW"):
+                if not df_j.empty:
+                    try:
+                        df_2026 = df_j[df_j['Day'].dt.year == 2026].copy()
+                        if df_2026.empty:
+                            st.warning("No 2026 entries found.")
+                        else:
+                            dates_to_fill = [d for d in df_2026['Day'].tolist()]
+                            with st.spinner(f"Computing M Factor for {len(dates_to_fill)} dates..."):
+                                window_map = compute_historical_market_windows(dates_to_fill)
+
+                            updated = 0
+                            for idx, row in df_j.iterrows():
+                                if row['Day'].year != 2026:
+                                    continue
+                                date_str = row['Day'].strftime('%Y-%m-%d')
+                                if date_str in window_map:
+                                    new_window = window_map[date_str]
+                                    df_j.at[idx, 'Market Window'] = new_window
+                                    # Also update in database if applicable
+                                    if USE_DATABASE:
+                                        journal_entry = {
+                                            'portfolio_id': CURR_PORT_NAME,
+                                            'day': date_str,
+                                            'status': str(row.get('Status', 'U')),
+                                            'market_window': new_window,
+                                            'above_21ema': float(row.get('> 21e', 0)),
+                                            'cash_flow': float(row.get('Cash -/+', 0)),
+                                            'beginning_nlv': float(row.get('Beg NLV', 0)),
+                                            'ending_nlv': float(row.get('End NLV', 0)),
+                                            'daily_dollar_change': float(row.get('Daily $ Change', 0)),
+                                            'daily_percent_change': float(str(row.get('Daily % Change', '0')).replace('%', '') or 0),
+                                            'percent_invested': float(row.get('% Invested', 0)),
+                                            'spy_close': float(row.get('SPY', 0)),
+                                            'nasdaq_close': float(row.get('Nasdaq', 0)),
+                                            'market_notes': str(row.get('Market_Notes', '') or ''),
+                                            'market_action': str(row.get('Market_Action', '') or ''),
+                                            'score': int(row.get('Score', 0) or 0),
+                                            'highlights': str(row.get('Highlights', '') or ''),
+                                            'lowlights': str(row.get('Lowlights', '') or ''),
+                                            'mistakes': str(row.get('Mistakes', '') or ''),
+                                            'top_lesson': str(row.get('Top_Lesson', '') or ''),
+                                        }
+                                        db.save_journal_entry(journal_entry)
+                                    updated += 1
+
+                            if not USE_DATABASE:
+                                secure_save(df_j, TARGET_FILE)
+                            st.success(f"✅ Updated Market Window for {updated} entries!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Backfill Error: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
 # ==============================================================================
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
