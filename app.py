@@ -2183,12 +2183,21 @@ elif page == "Daily Journal":
                 def color_score(val):
                     """Colors the Score column based on the 1-5 scale."""
                     color = ''
-                    if val == 5: color = 'background-color: #008000; color: white;' # Dark Green
-                    elif val == 4: color = 'background-color: #90EE90; color: black;' # Light Green
-                    elif val == 3: color = 'background-color: #FFFFE0; color: black;' # Light Yellow
-                    elif val == 2: color = 'background-color: #FFD700; color: black;' # Gold/Orange
-                    elif val == 1: color = 'background-color: #FF4B4B; color: white;' # Red
+                    if val == 5: color = 'background-color: #008000; color: white;'
+                    elif val == 4: color = 'background-color: #90EE90; color: black;'
+                    elif val == 3: color = 'background-color: #FFFFE0; color: black;'
+                    elif val == 2: color = 'background-color: #FFD700; color: black;'
+                    elif val == 1: color = 'background-color: #FF4B4B; color: white;'
                     return color
+
+                def color_market_window(val):
+                    """Colors the Market Window column to match M Factor."""
+                    v = str(val).strip().upper()
+                    if v == 'POWERTREND': return 'background-color: #8A2BE2; color: white;'
+                    elif v == 'OPEN': return 'background-color: #2ca02c; color: white;'
+                    elif v == 'NEUTRAL': return 'background-color: #ffcc00; color: black;'
+                    elif v == 'CLOSED': return 'background-color: #ff4b4b; color: white;'
+                    return ''
 
                 st.dataframe(
                     df_view.sort_values('Day', ascending=False)[valid_cols]
@@ -2200,8 +2209,9 @@ elif page == "Daily Journal":
                         'Nasdaq_Pct': '{:+.2f}%',
                         'Score': '{:.0f}'
                     })
-                    .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns]) 
-                    .applymap(color_score, subset=['Score']), 
+                    .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
+                    .applymap(color_score, subset=['Score'])
+                    .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns]),
                     hide_index=True, 
                     use_container_width=True
                 )
