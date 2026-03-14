@@ -235,7 +235,7 @@ class MarketSchoolRules:
         
     def check_market_correction(self, idx: int) -> bool:
         """
-        Check if market has declined 5% from the reference high.
+        Check if market has declined 7% from the reference high.
 
         The reference high tracks the peak of the current bull cycle,
         not the rolling 52-week high. It resets after each FTD so that
@@ -245,7 +245,7 @@ class MarketSchoolRules:
             idx: Current index in data
 
         Returns:
-            True if market is in correction (down 5%+ from reference high)
+            True if market is in correction (down 7%+ from reference high)
         """
         current = self.data.iloc[idx]
 
@@ -261,8 +261,8 @@ class MarketSchoolRules:
         # Calculate decline from reference high (not 52-week high)
         decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
 
-        # Check if we're down 5% or more from reference high
-        if decline_from_ref <= -5:
+        # Check if we're down 7% or more from reference high
+        if decline_from_ref <= -7:
             if not self.market_in_correction:
                 self.market_in_correction = True
             return True
@@ -342,6 +342,11 @@ class MarketSchoolRules:
                 self.ftd_close = None
                 self.rally_start_date = None
                 self.market_in_correction = True
+                # Clear distribution days — correction resets the count
+                for dd in self.distribution_days:
+                    if dd.removed_date is None:
+                        dd.removed_date = current.name
+                        dd.removal_reason = 'FTD undercut - back to correction'
                 return signal
             self.rally_start_date = None
             return None
@@ -376,6 +381,9 @@ class MarketSchoolRules:
                 # Reset reference high for new bull cycle
                 self.reference_high = current['High']
                 self.market_in_correction = False
+                # Reset distribution day count — new uptrend starts fresh
+                self.distribution_days = []
+                self.active_distribution_count = 0
                 
             return signal
             
@@ -592,6 +600,10 @@ class MarketSchoolRules:
         if prev is None:
             return signals
 
+        # Don't count distribution days during correction — only in confirmed uptrend
+        if self.market_in_correction:
+            return signals
+
         current_date_str = current.name.strftime('%Y-%m-%d')
 
         # Check if this date is manually EXCLUDED
@@ -791,6 +803,11 @@ class MarketSchoolRules:
             self.ftd_close = None
             self.rally_start_date = None
             self.market_in_correction = True
+            # Clear distribution days — correction resets the count
+            for dd in self.distribution_days:
+                if dd.removed_date is None:
+                    dd.removed_date = current.name
+                    dd.removal_reason = 'FTD undercut - back to correction'
             return signal
 
         # S2: Failed Rally Attempt (intraday low breaches rally low)
@@ -810,6 +827,11 @@ class MarketSchoolRules:
             self.ftd_close = None
             self.rally_start_date = None
             self.market_in_correction = True
+            # Clear distribution days — correction resets the count
+            for dd in self.distribution_days:
+                if dd.removed_date is None:
+                    dd.removed_date = current.name
+                    dd.removal_reason = 'Failed rally - back to correction'
             return signal
 
         return None
@@ -894,11 +916,11 @@ class MarketSchoolRules:
             elif not self.market_in_correction and current['High'] > self.reference_high:
                 self.reference_high = current['High']
 
-            # Check if market has entered a new correction (5% decline from reference high)
+            # Check if market has entered a new correction (7% decline from reference high)
             # This runs EVERY day, not just when rally_start_date is None
             if not self.market_in_correction:
                 decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
-                if decline_from_ref <= -5:
+                if decline_from_ref <= -7:
                     self.market_in_correction = True
                     # Reset rally tracking for new correction cycle
                     self.rally_start_date = None
@@ -908,6 +930,11 @@ class MarketSchoolRules:
                     self.ftd_close = None
                     if self.buy_switch:
                         self.buy_switch = False
+                    # Mark all active distribution days as removed — they don't carry into correction
+                    for dd in self.distribution_days:
+                        if dd.removed_date is None:
+                            dd.removed_date = current.name
+                            dd.removal_reason = 'Market entered correction'
 
             # Check for market correction and rally start
             if not self.rally_start_date:
