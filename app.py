@@ -2164,16 +2164,17 @@ elif page == "Daily Journal":
                     df_view = df_calc
 
                 show_cols = [
-                    'Day', 
+                    'Day',
+                    'Market Window',  # <--- Market status
                     'Score',          # <--- Process first!
-                    'Daily_Pct', 
-                    'SPY_Pct', 
-                    'Nasdaq_Pct', 
-                    'Market_Action', 
-                    'Mistakes', 
+                    'Daily_Pct',
+                    'SPY_Pct',
+                    'Nasdaq_Pct',
+                    'Market_Action',
+                    'Mistakes',
                     'Top_Lesson',
-                    'Highlights', 
-                    'Lowlights', 
+                    'Highlights',
+                    'Lowlights',
                     'Market_Notes',
                     'End NLV'         # <--- P&L last
                 ]
