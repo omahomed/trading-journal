@@ -713,6 +713,10 @@ def compute_historical_market_windows(dates):
     if ndx_df.empty or spy_df.empty:
         return {}
 
+    # Strip timezone info to avoid tz-naive vs tz-aware comparison errors
+    ndx_df.index = ndx_df.index.tz_localize(None)
+    spy_df.index = spy_df.index.tz_localize(None)
+
     def calc_state_on_date(df, target_date):
         """Run M Factor state machine up to target_date using 60-day window."""
         mask = df.index <= target_date
