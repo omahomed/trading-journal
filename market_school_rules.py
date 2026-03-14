@@ -935,6 +935,15 @@ class MarketSchoolRules:
                         if dd.removed_date is None:
                             dd.removed_date = current.name
                             dd.removal_reason = 'Market entered correction'
+                    # Retroactively find rally start — the actual low likely occurred
+                    # before the 7% correction threshold was reached
+                    lookback = min(idx, 10)
+                    recent_slice = self.data.iloc[idx-lookback:idx+1]
+                    low_date = recent_slice['Low'].idxmin()
+                    low_pos = self.data.index.get_loc(low_date)
+                    self.rally_start_date = low_date
+                    self.rally_low = self.data.iloc[low_pos]['Low']
+                    self.rally_low_idx = low_pos
 
             # Check for market correction and rally start
             if not self.rally_start_date:

@@ -10450,6 +10450,10 @@ elif page == "IBD Market School":
 
             analyzer.analyze_market()
 
+            # Log retroactive rally if set during correction entry
+            if analyzer.rally_start_date and not any('Rally START' in l and analyzer.rally_start_date.strftime('%Y-%m-%d') in l for l in rally_log):
+                rally_log.append(f"Rally START (retroactive) {analyzer.rally_start_date.strftime('%Y-%m-%d')} low={analyzer.rally_low:.2f}")
+
             last_idx = len(analyzer.data) - 1
             last_date = analyzer.data.index[-1]
 
