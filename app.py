@@ -588,6 +588,109 @@ def log_audit_trail(action, trade_id, ticker, details, username="User"):
         print(f"Audit log error: {e}")
         return False
 
+# --- MARKET STATE HELPERS (used by M Factor + Daily Routine) ---
+@st.cache_data(ttl=300, show_spinner=False)
+def get_market_state(ticker):
+    """Compute M Factor market state for a given index ticker."""
+    try:
+        df = yf.Ticker(ticker).history(period="2y")
+        if df.empty: return None
+
+        df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
+        df['50SMA'] = df['Close'].rolling(window=50).mean()
+        df['200SMA'] = df['Close'].rolling(window=200).mean()
+        df['Prev_Close'] = df['Close'].shift(1)
+        df['Is_Up'] = df['Close'] > df['Prev_Close']
+
+        def pct_diff(a, b): return ((a - b) / b) * 100
+
+        def calc_streak(ma_col):
+            curr_close = df['Close'].iloc[-1]
+            curr_ma = df[ma_col].iloc[-1]
+            is_above = curr_close > curr_ma
+            count = 0
+            for i in range(len(df)-1, -1, -1):
+                c = df['Close'].iloc[i]; m = df[ma_col].iloc[i]
+                if is_above:
+                    if c > m: count += 1
+                    else: break
+                else:
+                    if c < m: count += 1
+                    else: break
+            return count
+
+        streak_21 = calc_streak('21EMA')
+        streak_50 = calc_streak('50SMA')
+        streak_200 = calc_streak('200SMA')
+
+        subset = df.iloc[-60:].copy()
+        state = "OPEN"
+        setup_low_21 = None; setup_low_50 = None; pt_streak = 0
+        transition_date = subset.index[0]
+        prev_state = "OPEN"
+
+        for date, row in subset.iterrows():
+            close = row['Close']; low = row['Low']
+            ema21 = row['21EMA']; sma50 = row['50SMA']
+            is_up = row['Is_Up']
+
+            if low > ema21: pt_streak += 1
+            else: pt_streak = 0
+
+            if close < sma50:
+                if setup_low_50 is None: setup_low_50 = low
+                elif low < (setup_low_50 * 0.998): state = "CLOSED"
+            else:
+                setup_low_50 = None
+                if state == "CLOSED": state = "NEUTRAL"
+
+            if state != "CLOSED":
+                if close < ema21:
+                    if state == "POWERTREND":
+                        state = "NEUTRAL"; setup_low_21 = low; pt_streak = 0
+                    else:
+                        if setup_low_21 is None: setup_low_21 = low
+                        elif low < (setup_low_21 * 0.998): state = "NEUTRAL"
+                else:
+                    setup_low_21 = None
+                    if state == "NEUTRAL": state = "OPEN"
+                    if state in ["OPEN", "POWERTREND"]:
+                        if pt_streak >= 3 and is_up: state = "POWERTREND"
+                        elif state == "POWERTREND" and pt_streak == 0: state = "OPEN"
+
+            if state != prev_state:
+                transition_date = date
+                prev_state = state
+
+        curr = subset.iloc[-1]
+        return {
+            'price': curr['Close'], 'state': state,
+            'ema21': curr['21EMA'], 'd21': pct_diff(curr['Close'], curr['21EMA']),
+            'sma50': curr['50SMA'], 'd50': pct_diff(curr['Close'], curr['50SMA']),
+            'sma200': curr['200SMA'], 'd200': pct_diff(curr['Close'], curr['200SMA']),
+            's21': streak_21, 's50': streak_50, 's200': streak_200,
+            'transition_date': transition_date
+        }
+    except: return None
+
+def get_combined_market_status():
+    """Get combined M Factor market window status from Nasdaq + SPY."""
+    nasdaq = get_market_state("^IXIC")
+    spy = get_market_state("SPY")
+    if not nasdaq or not spy:
+        return "Open", None
+    ns, ss = nasdaq['state'], spy['state']
+    if ns == "POWERTREND" or ss == "POWERTREND":
+        status = "Powertrend"
+    elif ns == "CLOSED" and ss == "CLOSED":
+        status = "Closed"
+    elif ns in ["NEUTRAL", "CLOSED"] or ss in ["NEUTRAL", "CLOSED"]:
+        status = "Neutral"
+    else:
+        status = "Open"
+    latest_transition = max(nasdaq['transition_date'], spy['transition_date'])
+    return status, latest_transition
+
 def calculate_open_risk(df_d, df_s, nlv):
     if df_d.empty or df_s.empty or nlv == 0: return 0.0, 0.0
     total_risk_dollars = 0.0
@@ -2163,85 +2266,6 @@ elif page == "M Factor":
     
     if st.button("Refresh Market Data"): st.cache_data.clear()
 
-    def get_market_state(ticker):
-        try:
-            # 1. FETCH DATA
-            df = yf.Ticker(ticker).history(period="2y")
-            if df.empty: return None
-            
-            # 2. CALCULATE INDICATORS
-            df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
-            df['50SMA'] = df['Close'].rolling(window=50).mean()
-            df['200SMA'] = df['Close'].rolling(window=200).mean()
-            df['Prev_Close'] = df['Close'].shift(1)
-            df['Is_Up'] = df['Close'] > df['Prev_Close']
-            
-            def pct_diff(a, b): return ((a - b) / b) * 100
-            
-            # --- HELPER: CALCULATE STREAK FOR ANY MA ---
-            def calc_streak(ma_col):
-                curr_close = df['Close'].iloc[-1]
-                curr_ma = df[ma_col].iloc[-1]
-                is_above = curr_close > curr_ma
-                count = 0
-                for i in range(len(df)-1, -1, -1):
-                    c = df['Close'].iloc[i]; m = df[ma_col].iloc[i]
-                    if is_above:
-                        if c > m: count += 1
-                        else: break
-                    else:
-                        if c < m: count += 1
-                        else: break
-                return count
-
-            streak_21 = calc_streak('21EMA')
-            streak_50 = calc_streak('50SMA')
-            streak_200 = calc_streak('200SMA')
-            
-            # 3. DETERMINE STATE (LOOP)
-            subset = df.iloc[-60:].copy() 
-            state = "OPEN" 
-            setup_low_21 = None; setup_low_50 = None; pt_streak = 0
-            
-            for date, row in subset.iterrows():
-                close = row['Close']; low = row['Low']
-                ema21 = row['21EMA']; sma50 = row['50SMA']
-                is_up = row['Is_Up']
-                
-                if low > ema21: pt_streak += 1
-                else: pt_streak = 0
-                
-                if close < sma50:
-                    if setup_low_50 is None: setup_low_50 = low
-                    elif low < (setup_low_50 * 0.998): state = "CLOSED"
-                else:
-                    setup_low_50 = None
-                    if state == "CLOSED": state = "NEUTRAL"
-                
-                if state != "CLOSED":
-                    if close < ema21:
-                        if state == "POWERTREND":
-                            state = "NEUTRAL"; setup_low_21 = low; pt_streak = 0
-                        else:
-                            if setup_low_21 is None: setup_low_21 = low
-                            elif low < (setup_low_21 * 0.998): state = "NEUTRAL"
-                    else:
-                        setup_low_21 = None
-                        if state == "NEUTRAL": state = "OPEN"
-                        if state in ["OPEN", "POWERTREND"]:
-                            if pt_streak >= 3 and is_up: state = "POWERTREND"
-                            elif state == "POWERTREND" and pt_streak == 0: state = "OPEN"
-
-            curr = subset.iloc[-1]
-            return {
-                'price': curr['Close'], 'state': state, 
-                'ema21': curr['21EMA'], 'd21': pct_diff(curr['Close'], curr['21EMA']), 
-                'sma50': curr['50SMA'], 'd50': pct_diff(curr['Close'], curr['50SMA']), 
-                'sma200': curr['200SMA'], 'd200': pct_diff(curr['Close'], curr['200SMA']),
-                's21': streak_21, 's50': streak_50, 's200': streak_200
-            }
-        except: return None
-
     nasdaq = get_market_state("^IXIC")
     spy = get_market_state("SPY")
 
@@ -2279,7 +2303,8 @@ elif page == "M Factor":
             exp = "0% (Defensive)"
             explanation = "Both indices violated 50 SMA - protect capital"
 
-        st.markdown(f"""<div class="market-banner" style="background-color: {bg};"><div style="font-size: 14px; opacity: 0.9;">MARKET WINDOW</div><div style="font-size: 48px; font-weight: 800; margin: 5px 0;">{status}</div><div style="font-size: 16px;">RECOMMENDED EXPOSURE: {exp}</div><div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">{explanation}</div></div>""", unsafe_allow_html=True)
+        latest_transition = max(nasdaq['transition_date'], spy['transition_date'])
+        st.markdown(f"""<div class="market-banner" style="background-color: {bg};"><div style="font-size: 14px; opacity: 0.9;">MARKET WINDOW</div><div style="font-size: 48px; font-weight: 800; margin: 5px 0;">{status}</div><div style="font-size: 16px;">RECOMMENDED EXPOSURE: {exp}</div><div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">{explanation}</div><div style="font-size: 13px; opacity: 0.9; margin-top: 8px;">Window entered {status} on {latest_transition.strftime('%b %d, %Y')}</div></div>""", unsafe_allow_html=True)
 
         # === IBD EXPOSURE CROSS-REFERENCE ===
         if USE_DATABASE:
@@ -3027,7 +3052,8 @@ if page == "Daily Routine":
 
         if st.form_submit_button("💾 LOG SELECTED ACCOUNTS", type="primary"):
             success_count = 0
-            
+            live_market_window, _ = get_combined_market_status()
+
             for p_name, inputs in input_keys.items():
                 p_path = PORTFOLIO_MAP[p_name]
                 end_nlv = inputs['nlv']
@@ -3072,7 +3098,7 @@ if page == "Daily Routine":
                     
                     # 4. CREATE ROW (Updated with Review Data)
                     new_row = {
-                        'Day': entry_date_str, 'Status': 'U', 'Market Window': 'Open', '> 21e': 0.0,
+                        'Day': entry_date_str, 'Status': 'U', 'Market Window': live_market_window, '> 21e': 0.0,
                         'Cash -/+': cash_flow, 'Beg NLV': prev_nlv, 'End NLV': end_nlv,
                         'Daily $ Change': daily_chg, 'Daily % Change': daily_pct_str,
                         '% Invested': invested_pct, 'SPY': spy_val, 'Nasdaq': ndx_val,
@@ -3093,7 +3119,7 @@ if page == "Daily Routine":
                                 'portfolio_id': p_name,
                                 'day': entry_date_str,
                                 'status': 'U',
-                                'market_window': 'Open',
+                                'market_window': live_market_window,
                                 'above_21ema': 0.0,
                                 'cash_flow': cash_flow,
                                 'beginning_nlv': prev_nlv,
