@@ -2215,6 +2215,32 @@ elif page == "Daily Journal":
                     hide_index=True, 
                     use_container_width=True
                 )
+                # --- CLICKABLE TRADE ACTIONS ---
+                if 'Market_Action' in df_view.columns:
+                    actions_with_tickers = df_view[df_view['Market_Action'].astype(str).str.contains(r'[A-Z]{2,}', na=False)]
+                    if not actions_with_tickers.empty:
+                        st.markdown("---")
+                        st.subheader("Trade Actions")
+                        sorted_actions = actions_with_tickers.sort_values('Day', ascending=False)
+                        for _, row in sorted_actions.head(10).iterrows():
+                            action_str = str(row['Market_Action'])
+                            day_str = row['Day'].strftime('%m/%d') if hasattr(row['Day'], 'strftime') else str(row['Day'])
+                            # Extract tickers from action string (e.g., "BUY: NVDA (100), SELL: GOOG (50)")
+                            import re
+                            tickers_found = re.findall(r'[A-Z]{2,5}', action_str)
+                            # Remove common non-ticker words
+                            skip_words = {'BUY', 'SELL', 'ADD', 'TRIM', 'THE', 'FOR', 'AND', 'NEW'}
+                            tickers_found = [t for t in tickers_found if t not in skip_words]
+                            if tickers_found:
+                                cols = st.columns([1] + [1] * len(tickers_found))
+                                cols[0].markdown(f"**{day_str}:** {action_str}")
+                                for i, ticker in enumerate(tickers_found):
+                                    if cols[i + 1].button(f"📔 {ticker}", key=f"tj_nav_{day_str}_{ticker}"):
+                                        st.session_state.page = "Trade Journal"
+                                        st.session_state['tj_ticker_search'] = [ticker]
+                                        st.session_state['journal_searched'] = True
+                                        st.rerun()
+
             else: st.info("No journal entries found.")
 
         # --- TAB 2: MANAGE LOGS ---
@@ -3153,14 +3179,37 @@ if page == "Daily Routine":
             return df[MASTER_ORDER]
         except: return pd.DataFrame(columns=MASTER_ORDER)
 
-    # 2. MASTER FORM
+    # 2. AUTO-DETECT TRADE ACTIONS PER PORTFOLIO FOR SELECTED DATE
+    def get_trade_actions_for_date(portfolio_name, date_str):
+        """Look up trades executed on a given date and return formatted action string."""
+        try:
+            details_path = os.path.join(DATA_ROOT, portfolio_name, 'Trade_Log_Details.csv')
+            df_details = load_data(details_path)
+            if df_details.empty or 'Date' not in df_details.columns:
+                return ""
+            df_details['Date'] = pd.to_datetime(df_details['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+            day_trades = df_details[df_details['Date'] == date_str]
+            if day_trades.empty:
+                return ""
+            actions = []
+            for _, row in day_trades.iterrows():
+                action = str(row.get('Action', '')).upper()
+                ticker = str(row.get('Ticker', ''))
+                shares = row.get('Shares', 0)
+                label = "BUY" if action == "BUY" else "SELL" if action == "SELL" else "ADD" if action == "ADD" else action
+                actions.append(f"{label}: {ticker} ({int(shares)})")
+            return ", ".join(actions)
+        except:
+            return ""
+
+    # 3. MASTER FORM
     with st.form("master_routine_form"):
         st.subheader("1. General Market Data")
         c1, c2, c3, c4 = st.columns(4)
         # Use date() to avoid timezone issues
         entry_date = c1.date_input("Date", get_current_date_ct())
         entry_date_str = entry_date.strftime("%Y-%m-%d")
-        
+
         try:
             live_spy = yf.Ticker("SPY").history(period='1d')['Close'].iloc[-1]
             live_ndx = yf.Ticker("^IXIC").history(period='1d')['Close'].iloc[-1]
@@ -3168,13 +3217,13 @@ if page == "Daily Routine":
 
         spy_val = c3.number_input("SPY Close", value=float(live_spy), format="%.2f")
         ndx_val = c4.number_input("Nasdaq Close", value=float(live_ndx), format="%.2f")
-        
+
         # GLOBAL NOTE INPUT
         market_notes = st.text_input("Market/Global Notes", placeholder="e.g., FTD on Nasdaq? Volatility Spike? CPI Data?")
         st.markdown("---")
-        
+
         st.subheader("2. Portfolio Updates")
-        input_keys = {} 
+        input_keys = {}
         for p_name in [PORT_CANSLIM, PORT_457B]:
             do_update = st.checkbox(f"Update {p_name}?", value=True, key=f"chk_{p_name}")
             if do_update:
@@ -3182,10 +3231,11 @@ if page == "Daily Routine":
                 nlv_in = c_a.number_input(f"Closing NLV ({p_name})", value=0.0, step=100.0, format="%.2f", key=f"nlv_{p_name}")
                 sec_in = c_b.number_input(f"Total Holdings ({p_name})", value=0.0, step=100.0, format="%.2f", key=f"sec_{p_name}")
                 cash_flow_in = c_c.number_input(f"Cash Added/Removed ({p_name})", value=0.0, step=100.0, format="%.2f", key=f"cf_{p_name}")
-                
-                # PORTFOLIO SPECIFIC NOTE INPUT
-                note_in = c_d.text_input(f"Actions ({p_name})", key=f"note_{p_name}", placeholder="e.g. BUY: NVDA, SELL: GOOG")
-                
+
+                # AUTO-POPULATE ACTIONS FROM TRADE LOGS
+                auto_actions = get_trade_actions_for_date(p_name, entry_date_str)
+                note_in = c_d.text_input(f"Actions ({p_name})", value=auto_actions, key=f"note_{p_name}", placeholder="e.g. BUY: NVDA, SELL: GOOG")
+
                 input_keys[p_name] = {'nlv': nlv_in, 'sec': sec_in, 'cash_flow': cash_flow_in, 'note': note_in}
             st.divider()
 
@@ -8470,10 +8520,11 @@ elif page == "Trade Journal":
             st.rerun()
 
     # Track page entry to clear stale search results
+    # Skip clearing if navigating here with a pre-set ticker (e.g., from Daily Journal)
     if st.session_state.get('_tj_prev_page') != 'Trade Journal':
-        # First time entering Trade Journal — clear old search
-        if 'journal_searched' in st.session_state:
-            del st.session_state['journal_searched']
+        if 'tj_ticker_search' not in st.session_state or not st.session_state['tj_ticker_search']:
+            if 'journal_searched' in st.session_state:
+                del st.session_state['journal_searched']
     st.session_state['_tj_prev_page'] = 'Trade Journal'
 
     # Load data
