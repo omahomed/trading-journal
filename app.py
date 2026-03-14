@@ -10665,9 +10665,14 @@ elif page == "IBD Market School":
         m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
         m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
 
+        # Get live correction state and distribution count (not stale DB values)
+        corr_state = get_correction_state("^IXIC")
+        live_dist_days = get_active_distribution_days("^IXIC")
+        live_dist_count = len(live_dist_days)
+
         m3, m4 = st.columns(2)
         m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
-        m4.metric("Distribution Days", dist_count)
+        m4.metric("Distribution Days", live_dist_count)
 
         if buy_sigs or sell_sigs:
             st.markdown("**Signals Today:**")
@@ -10677,9 +10682,6 @@ elif page == "IBD Market School":
                 st.error(f"🔴 SELL: {sell_sigs}")
         else:
             st.info("No new signals today")
-
-        # Correction / Rally / FTD State Banner
-        corr_state = get_correction_state("^IXIC")
         if corr_state:
             if corr_state['market_in_correction']:
                 decline_pct = ((close - corr_state['reference_high']) / corr_state['reference_high']) * 100 if corr_state['reference_high'] else 0
@@ -10706,11 +10708,10 @@ elif page == "IBD Market School":
                 )
 
         # Distribution Days Detail
-        with st.expander(f"📋 Distribution Days Detail ({dist_count} active)"):
-            nasdaq_dist_days = get_active_distribution_days("^IXIC")
-            if nasdaq_dist_days:
+        with st.expander(f"📋 Distribution Days Detail ({live_dist_count} active)"):
+            if live_dist_days:
                 st.markdown("**Active Distribution Days:**")
-                for dd in sorted(nasdaq_dist_days, key=lambda x: x.date, reverse=True):
+                for dd in sorted(live_dist_days, key=lambda x: x.date, reverse=True):
                     days_ago = (get_current_date_ct() - dd.date.date()).days
                     days_until_expire = 25 - days_ago
 
