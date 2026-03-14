@@ -10413,7 +10413,6 @@ elif page == "IBD Market School":
             st.error(f"Error loading distribution days for {symbol}: {e}")
             return []
 
-    @st.cache_data(ttl=3600, show_spinner=False)
     def get_correction_state(symbol):
         """Get current correction/rally/FTD state from a fresh analysis."""
         try:
@@ -10425,6 +10424,29 @@ elif page == "IBD Market School":
 
             if analyzer.data is None or analyzer.data.empty:
                 return None
+
+            # Instrument rally tracking for debug
+            rally_log = []
+            orig_detect = analyzer.detect_rally_start
+            orig_ftd_check = analyzer.check_follow_through_day
+
+            def debug_detect_rally(idx):
+                result = orig_detect(idx)
+                if result:
+                    d = analyzer.data.iloc[idx]
+                    rally_log.append(f"Rally START {d.name.strftime('%Y-%m-%d')} low={analyzer.rally_low:.2f}")
+                return result
+
+            def debug_ftd_check(idx):
+                old_rally = analyzer.rally_start_date
+                result = orig_ftd_check(idx)
+                if old_rally and not analyzer.rally_start_date:
+                    d = analyzer.data.iloc[idx]
+                    rally_log.append(f"Rally RESET on {d.name.strftime('%Y-%m-%d')} (was {old_rally.strftime('%Y-%m-%d')})")
+                return result
+
+            analyzer.detect_rally_start = debug_detect_rally
+            analyzer.check_follow_through_day = debug_ftd_check
 
             analyzer.analyze_market()
 
@@ -10445,9 +10467,11 @@ elif page == "IBD Market School":
                 'ftd_date': analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
                 'reference_high': analyzer.reference_high,
                 'as_of': last_date.strftime('%Y-%m-%d'),
+                'rally_debug_log': rally_log,
             }
-        except Exception:
-            return None
+        except Exception as e:
+            import traceback
+            return {'error': f"{e}\n{traceback.format_exc()}"}
 
     def calculate_dd_changes(symbol, start_date, end_date):
         """Calculate daily distribution day additions, removals, and notes."""
@@ -10701,6 +10725,14 @@ elif page == "IBD Market School":
                         f"**MARKET IN CORRECTION** ({decline_pct:.1f}% from ref high ${corr_state['reference_high']:,.2f})  \n"
                         f"**Status: Waiting for rally attempt**"
                     )
+            # Debug: Rally tracking log
+            if corr_state.get('rally_debug_log'):
+                with st.expander("🔍 Rally Detection Debug Log"):
+                    for entry in corr_state['rally_debug_log']:
+                        st.text(entry)
+            if corr_state.get('error'):
+                st.error(f"Debug error: {corr_state['error']}")
+
             elif corr_state['ftd_date']:
                 st.success(
                     f"**CONFIRMED UPTREND** — FTD on {corr_state['ftd_date']}  \n"
