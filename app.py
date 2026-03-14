@@ -10413,7 +10413,6 @@ elif page == "IBD Market School":
             st.error(f"Error loading distribution days for {symbol}: {e}")
             return []
 
-    @st.cache_data(ttl=3600, show_spinner=False)
     def get_correction_state(symbol):
         """Get current correction/rally/FTD state from a fresh analysis."""
         try:
