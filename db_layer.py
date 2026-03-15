@@ -354,6 +354,7 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.nasdaq AS "Nasdaq",
                         j.market_notes AS "Market_Notes",
                         j.market_action AS "Market_Action",
+                        j.portfolio_heat AS "Portfolio_Heat",
                         j.score AS "Score",
                         j.highlights AS "Highlights",
                         j.lowlights AS "Lowlights",
@@ -1006,6 +1007,7 @@ def save_journal_entry(journal_entry):
             nasdaq = journal_entry.get('nasdaq_close', 0.0)
             market_notes = journal_entry.get('market_notes', '')
             market_action = journal_entry.get('market_action', '')
+            portfolio_heat = journal_entry.get('portfolio_heat', 0.0)
             score = journal_entry.get('score', 0)
             highlights = journal_entry.get('highlights', '')
             lowlights = journal_entry.get('lowlights', '')
@@ -1027,7 +1029,8 @@ def save_journal_entry(journal_entry):
                         cash_change = %s, beg_nlv = %s, end_nlv = %s,
                         daily_dollar_change = %s, daily_pct_change = %s,
                         pct_invested = %s, spy = %s, nasdaq = %s,
-                        market_notes = %s, market_action = %s, score = %s,
+                        market_notes = %s, market_action = %s,
+                        portfolio_heat = %s, score = %s,
                         highlights = %s, lowlights = %s, mistakes = %s,
                         top_lesson = %s
                     WHERE id = %s
@@ -1038,7 +1041,8 @@ def save_journal_entry(journal_entry):
                     cash_change, beg_nlv, end_nlv,
                     daily_dollar_change, daily_pct_change,
                     pct_invested, spy, nasdaq,
-                    market_notes, market_action, score,
+                    market_notes, market_action,
+                    portfolio_heat, score,
                     highlights, lowlights, mistakes,
                     top_lesson,
                     existing[0]
@@ -1050,11 +1054,11 @@ def save_journal_entry(journal_entry):
                         portfolio_id, day, status, market_window, above_21ema,
                         cash_change, beg_nlv, end_nlv, daily_dollar_change,
                         daily_pct_change, pct_invested, spy, nasdaq,
-                        market_notes, market_action, score, highlights,
-                        lowlights, mistakes, top_lesson
+                        market_notes, market_action, portfolio_heat, score,
+                        highlights, lowlights, mistakes, top_lesson
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING id
                 """
@@ -1062,8 +1066,8 @@ def save_journal_entry(journal_entry):
                     portfolio_id, day, status, market_window, above_21ema,
                     cash_change, beg_nlv, end_nlv, daily_dollar_change,
                     daily_pct_change, pct_invested, spy, nasdaq,
-                    market_notes, market_action, score, highlights,
-                    lowlights, mistakes, top_lesson
+                    market_notes, market_action, portfolio_heat, score,
+                    highlights, lowlights, mistakes, top_lesson
                 ))
 
             row_id = cur.fetchone()[0]

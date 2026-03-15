@@ -48,6 +48,18 @@ else:
     if USE_DATABASE:
         print("✅ Database mode enabled (environment variable)")
 
+# --- DB MIGRATIONS (safe to run repeatedly) ---
+if USE_DATABASE:
+    try:
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS portfolio_heat NUMERIC(10, 4) DEFAULT 0
+                """)
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️  DB migration note: {e}")
+
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
 APP_VERSION = "16.0 (Clean Workflow)"
@@ -690,6 +702,74 @@ def get_combined_market_status():
         status = "Open"
     latest_transition = max(nasdaq['transition_date'], spy['transition_date'])
     return status, latest_transition
+
+def compute_portfolio_heat(portfolio_name, equity=None):
+    """Compute portfolio heat (ATR-weighted) for current open positions.
+    Same formula as Portfolio Heat page: Heat = sum(Weight% * ATR%/100).
+    Returns heat as a percentage (e.g., 2.5 means 2.5%).
+    """
+    try:
+        summary_path = os.path.join(DATA_ROOT, portfolio_name, 'Trade_Log_Summary.csv')
+        df_s = load_data(summary_path)
+        if df_s.empty or 'Status' not in df_s.columns:
+            return 0.0
+
+        open_pos = df_s[df_s['Status'].str.strip().str.upper() == 'OPEN'].copy()
+        if open_pos.empty:
+            return 0.0
+
+        # Use provided equity or try to get from journal
+        if equity is None or equity <= 0:
+            journal_path = os.path.join(DATA_ROOT, portfolio_name, 'Trading_Journal_Clean.csv')
+            df_j = load_data(journal_path)
+            if df_j.empty:
+                return 0.0
+            df_j['End NLV'] = pd.to_numeric(
+                df_j['End NLV'].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False),
+                errors='coerce'
+            ).fillna(0)
+            equity = df_j['End NLV'].iloc[-1] if not df_j.empty else 0.0
+            if equity <= 0:
+                return 0.0
+
+        tickers = open_pos['Ticker'].unique().tolist()
+        if not tickers:
+            return 0.0
+
+        # Batch download price data (40 days for 21-period SMA)
+        batch_data = yf.download(tickers, period="40d", interval="1d", progress=False, group_by='ticker')
+        if batch_data.empty:
+            return 0.0
+
+        total_heat = 0.0
+        for ticker in tickers:
+            try:
+                if len(tickers) > 1:
+                    df_t = batch_data[ticker].copy().dropna()
+                else:
+                    df_t = batch_data.copy().dropna()
+
+                atr_pct = 0.0
+                if len(df_t) >= 21:
+                    df_t['H-L'] = df_t['High'] - df_t['Low']
+                    df_t['H-PC'] = (df_t['High'] - df_t['Close'].shift(1)).abs()
+                    df_t['L-PC'] = (df_t['Low'] - df_t['Close'].shift(1)).abs()
+                    df_t['TR'] = df_t[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+                    sma_tr = df_t['TR'].tail(21).mean()
+                    sma_low = df_t['Low'].tail(21).mean()
+                    if sma_low > 0:
+                        atr_pct = (sma_tr / sma_low) * 100
+
+                row = open_pos[open_pos['Ticker'] == ticker].iloc[0]
+                total_cost = float(row.get('Total_Cost', 0))
+                weight_pct = (total_cost / equity) * 100 if equity > 0 else 0
+                total_heat += weight_pct * (atr_pct / 100)
+            except:
+                continue
+
+        return round(total_heat, 4)
+    except:
+        return 0.0
 
 def compute_historical_market_windows(dates):
     """Compute M Factor market window for a list of historical dates.
@@ -2177,6 +2257,7 @@ elif page == "Daily Journal":
                     'Score',
                     'Daily_Pct',
                     'LTD_Pct',
+                    'Portfolio_Heat',
                     'SPY_Pct',
                     'Nasdaq_Pct',
                     'Market_Notes',
@@ -2214,6 +2295,7 @@ elif page == "Daily Journal":
                         'End NLV': '${:,.2f}',
                         'Daily_Pct': '{:+.2f}%',
                         'LTD_Pct': '{:+.2f}%',
+                        'Portfolio_Heat': '{:.2f}%',
                         'SPY_Pct': '{:+.2f}%',
                         'Nasdaq_Pct': '{:+.2f}%',
                         'Score': '{:.0f}'
@@ -2428,6 +2510,54 @@ elif page == "Daily Journal":
                         st.error(f"Backfill Error: {e}")
                         import traceback
                         st.code(traceback.format_exc())
+
+            st.markdown("---")
+            st.subheader("Backfill Portfolio Heat")
+            heat_date = st.date_input("Date to backfill", value=date(2026, 3, 13), key="heat_backfill_date")
+            if st.button("🔥 COMPUTE & SAVE PORTFOLIO HEAT"):
+                heat_date_str = heat_date.strftime('%Y-%m-%d')
+                with st.spinner(f"Computing portfolio heat for {heat_date_str}..."):
+                    # Get equity on that date
+                    day_row = df_j[df_j['Day'].dt.date == heat_date]
+                    if day_row.empty:
+                        st.error(f"No journal entry for {heat_date_str}")
+                    else:
+                        equity = float(day_row.iloc[0]['End NLV'])
+                        heat = compute_portfolio_heat(CURR_PORT_NAME, equity=equity)
+                        st.info(f"Computed Portfolio Heat: **{heat:.4f}%**")
+
+                        if USE_DATABASE:
+                            row = day_row.iloc[0]
+                            journal_entry = {
+                                'portfolio_id': CURR_PORT_NAME,
+                                'day': heat_date_str,
+                                'status': str(row.get('Status', 'U')),
+                                'market_window': str(row.get('Market Window', '') or ''),
+                                'above_21ema': float(row.get('> 21e', 0)),
+                                'cash_flow': float(row.get('Cash -/+', 0)),
+                                'beginning_nlv': float(row.get('Beg NLV', 0)),
+                                'ending_nlv': float(row.get('End NLV', 0)),
+                                'daily_dollar_change': float(row.get('Daily $ Change', 0)),
+                                'daily_percent_change': float(str(row.get('Daily % Change', '0')).replace('%', '') or 0),
+                                'percent_invested': float(row.get('% Invested', 0)),
+                                'spy_close': float(row.get('SPY', 0)),
+                                'nasdaq_close': float(row.get('Nasdaq', 0)),
+                                'market_notes': str(row.get('Market_Notes', '') or ''),
+                                'market_action': str(row.get('Market_Action', '') or ''),
+                                'portfolio_heat': heat,
+                                'score': int(row.get('Score', 0) or 0),
+                                'highlights': str(row.get('Highlights', '') or ''),
+                                'lowlights': str(row.get('Lowlights', '') or ''),
+                                'mistakes': str(row.get('Mistakes', '') or ''),
+                                'top_lesson': str(row.get('Top_Lesson', '') or ''),
+                            }
+                            db.save_journal_entry(journal_entry)
+                        else:
+                            df_j.loc[day_row.index[0], 'Portfolio_Heat'] = heat
+                            secure_save(df_j, TARGET_FILE)
+
+                        st.success(f"✅ Portfolio Heat saved for {heat_date_str}: {heat:.4f}%")
+                        st.rerun()
 
 # ==============================================================================
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
@@ -3109,10 +3239,11 @@ if page == "Daily Routine":
 
     # THE GOLDEN STANDARD (Added 4 Review Columns)
     MASTER_ORDER = [
-    'Day', 'Status', 'Market Window', '> 21e', 'Cash -/+', 
-    'Beg NLV', 'End NLV', 'Daily $ Change', 'Daily % Change', 
+    'Day', 'Status', 'Market Window', '> 21e', 'Cash -/+',
+    'Beg NLV', 'End NLV', 'Daily $ Change', 'Daily % Change',
     '% Invested', 'SPY', 'Nasdaq', 'Market_Notes', 'Market_Action',
-    'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson' # <--- Added these
+    'Portfolio_Heat',
+    'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson'
     ]
 
     # --- HELPER: ROBUST LOADER (DATABASE-AWARE) ---
@@ -3292,7 +3423,10 @@ if page == "Daily Routine":
                     
                     daily_pct_str = f"{pct_val:.2f}%"
                     invested_pct = (sec_val / end_nlv) * 100 if end_nlv > 0 else 0.0
-                    
+
+                    # Compute portfolio heat (ATR-weighted)
+                    heat_val = compute_portfolio_heat(p_name, equity=end_nlv)
+
                     # 4. CREATE ROW (Updated with Review Data)
                     new_row = {
                         'Day': entry_date_str, 'Status': 'U', 'Market Window': live_market_window, '> 21e': 0.0,
@@ -3301,11 +3435,12 @@ if page == "Daily Routine":
                         '% Invested': invested_pct, 'SPY': spy_val, 'Nasdaq': ndx_val,
                         'Market_Notes': market_notes,
                         'Market_Action': inputs['note'],
-                        'Score': daily_score,         # <--- Now uses the slider value
-                        'Highlights': highlights,     # <--- New
-                        'Lowlights': lowlights,       # <--- New
-                        'Mistakes': mistakes,         # <--- New
-                        'Top_Lesson': top_lesson      # <--- New
+                        'Portfolio_Heat': heat_val,
+                        'Score': daily_score,
+                        'Highlights': highlights,
+                        'Lowlights': lowlights,
+                        'Mistakes': mistakes,
+                        'Top_Lesson': top_lesson
                     }
                     
                     # 5. SAVE
@@ -3328,6 +3463,7 @@ if page == "Daily Routine":
                                 'nasdaq_close': ndx_val,
                                 'market_notes': market_notes,
                                 'market_action': inputs['note'],
+                                'portfolio_heat': heat_val,
                                 'score': daily_score,
                                 'highlights': highlights,
                                 'lowlights': lowlights,
