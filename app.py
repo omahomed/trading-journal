@@ -2148,8 +2148,11 @@ elif page == "Daily Journal":
                     mask = denom != 0
                     df_calc.loc[mask, 'Daily_Pct'] = (df_calc['End NLV'] - denom) / denom * 100
                 
-                # LTD (Life-to-Date) cumulative TWR
-                df_calc['_daily_dec'] = df_calc['Daily_Pct'] / 100
+                # LTD (Life-to-Date) — same method as Dashboard equity curve
+                df_calc['Adjusted_Beg'] = df_calc['Beg NLV'] + df_calc['Cash -/+']
+                df_calc['_daily_dec'] = 0.0
+                _mask = df_calc['Adjusted_Beg'] != 0
+                df_calc.loc[_mask, '_daily_dec'] = (df_calc.loc[_mask, 'End NLV'] - df_calc.loc[_mask, 'Adjusted_Beg']) / df_calc.loc[_mask, 'Adjusted_Beg']
                 df_calc['LTD_Pct'] = ((1 + df_calc['_daily_dec']).cumprod() - 1) * 100
 
                 df_calc['SPY_Pct'] = df_calc['SPY'].pct_change() * 100
