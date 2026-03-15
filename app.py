@@ -2148,6 +2148,10 @@ elif page == "Daily Journal":
                     mask = denom != 0
                     df_calc.loc[mask, 'Daily_Pct'] = (df_calc['End NLV'] - denom) / denom * 100
                 
+                # LTD (Life-to-Date) cumulative TWR
+                df_calc['_daily_dec'] = df_calc['Daily_Pct'] / 100
+                df_calc['LTD_Pct'] = ((1 + df_calc['_daily_dec']).cumprod() - 1) * 100
+
                 df_calc['SPY_Pct'] = df_calc['SPY'].pct_change() * 100
                 df_calc['Nasdaq_Pct'] = df_calc['Nasdaq'].pct_change() * 100
                 
@@ -2165,18 +2169,19 @@ elif page == "Daily Journal":
 
                 show_cols = [
                     'Day',
-                    'Market Window',  # <--- Market status
-                    'Score',          # <--- Process first!
+                    'Market Window',
+                    'End NLV',
+                    'Score',
                     'Daily_Pct',
+                    'LTD_Pct',
                     'SPY_Pct',
                     'Nasdaq_Pct',
+                    'Market_Notes',
                     'Market_Action',
                     'Mistakes',
                     'Top_Lesson',
                     'Highlights',
                     'Lowlights',
-                    'Market_Notes',
-                    'End NLV'         # <--- P&L last
                 ]
                 valid_cols = [c for c in show_cols if c in df_view.columns]
                 
@@ -2202,14 +2207,15 @@ elif page == "Daily Journal":
                 st.dataframe(
                     df_view.sort_values('Day', ascending=False)[valid_cols]
                     .style.format({
-                        'Day': '{:%m/%d/%y}', 
-                        'End NLV': '${:,.2f}', 
-                        'Daily_Pct': '{:+.2f}%', 
-                        'SPY_Pct': '{:+.2f}%', 
+                        'Day': '{:%m/%d/%y}',
+                        'End NLV': '${:,.2f}',
+                        'Daily_Pct': '{:+.2f}%',
+                        'LTD_Pct': '{:+.2f}%',
+                        'SPY_Pct': '{:+.2f}%',
                         'Nasdaq_Pct': '{:+.2f}%',
                         'Score': '{:.0f}'
                     })
-                    .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
+                    .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'LTD_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
                     .applymap(color_score, subset=['Score'])
                     .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns]),
                     hide_index=True, 
