@@ -2233,6 +2233,12 @@ elif page == "Daily Journal":
                 df_calc.loc[_mask, '_daily_dec'] = (df_calc.loc[_mask, 'End NLV'] - df_calc.loc[_mask, 'Adjusted_Beg']) / df_calc.loc[_mask, 'Adjusted_Beg']
                 df_calc['LTD_Pct'] = ((1 + df_calc['_daily_dec']).cumprod() - 1) * 100
 
+                # Ensure Portfolio_Heat is numeric
+                if 'Portfolio_Heat' in df_calc.columns:
+                    df_calc['Portfolio_Heat'] = pd.to_numeric(df_calc['Portfolio_Heat'], errors='coerce').fillna(0.0)
+                else:
+                    df_calc['Portfolio_Heat'] = 0.0
+
                 df_calc['SPY_Pct'] = df_calc['SPY'].pct_change() * 100
                 df_calc['Nasdaq_Pct'] = df_calc['Nasdaq'].pct_change() * 100
                 
@@ -2247,6 +2253,13 @@ elif page == "Daily Journal":
                     df_view = df_calc[df_calc['Month_Str'] == sel_month] if sel_month else df_calc
                 else:
                     df_view = df_calc
+
+                # DEBUG: Show Portfolio_Heat status
+                heat_nonzero = df_view[df_view['Portfolio_Heat'] > 0] if 'Portfolio_Heat' in df_view.columns else pd.DataFrame()
+                if not heat_nonzero.empty:
+                    st.caption(f"🔥 Portfolio Heat data: {len(heat_nonzero)} entries with values")
+                else:
+                    st.caption(f"⚠️ Portfolio_Heat column {'exists' if 'Portfolio_Heat' in df_view.columns else 'MISSING'}, all values zero. Columns: {[c for c in df_view.columns if 'heat' in c.lower() or 'Heat' in c]}")
 
                 show_cols = [
                     'Day',
