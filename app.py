@@ -10133,67 +10133,50 @@ elif page == "Daily Report Card":
             prev_adj = day_stats['Beg NLV'] + day_stats['Cash -/+']
             day_pct = (day_dol / prev_adj * 100) if prev_adj != 0 else 0.0
 
-            # --- FETCH SPY / NASDAQ DATA (daily + YTD) ---
-            spy_daily_pct = 0.0
-            ndx_daily_pct = 0.0
-            spy_ytd_pct = 0.0
-            ndx_ytd_pct = 0.0
+            # --- SPY / NASDAQ: DAILY + YTD (from journal data, same as Dashboard) ---
             spy_chg_str = "N/A"
             ndx_chg_str = "N/A"
             spy_ytd_str = "N/A"
             ndx_ytd_str = "N/A"
 
             sel_year = selected_date.year
-            # Fetch from mid-December prior year to ensure we get last trading day of prior year
-            ytd_start = pd.Timestamp(f"{sel_year - 1}-12-15")
-            end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
 
-            try:
-                spy_hist = yf.Ticker("SPY").history(start=ytd_start, end=end_fetch)
-                ndx_hist = yf.Ticker("^IXIC").history(start=ytd_start, end=end_fetch)
-                if not spy_hist.empty:
-                    spy_hist.index = spy_hist.index.date
-                if not ndx_hist.empty:
-                    ndx_hist.index = ndx_hist.index.date
+            # Daily change: use journal's SPY/Nasdaq columns (already cleaned as numbers)
+            # These store closing prices; compute daily % from previous row
+            df_j_sorted = df_j.sort_values('Day')
+            sel_idx = df_j_sorted[df_j_sorted['Day'].dt.date == selected_date].index
+            if len(sel_idx) > 0 and 'SPY' in df_j_sorted.columns:
+                row_pos = df_j_sorted.index.get_loc(sel_idx[0])
+                if row_pos > 0:
+                    spy_today = df_j_sorted.iloc[row_pos]['SPY']
+                    spy_prev = df_j_sorted.iloc[row_pos - 1]['SPY']
+                    ndx_today = df_j_sorted.iloc[row_pos]['Nasdaq']
+                    ndx_prev = df_j_sorted.iloc[row_pos - 1]['Nasdaq']
+                    if spy_prev > 0:
+                        spy_chg_str = f"{((spy_today - spy_prev) / spy_prev * 100):+.2f}%"
+                    if ndx_prev > 0:
+                        ndx_chg_str = f"{((ndx_today - ndx_prev) / ndx_prev * 100):+.2f}%"
 
-                # Remove duplicate dates (keep last)
-                spy_hist = spy_hist[~pd.Index(spy_hist.index).duplicated(keep='last')]
-                ndx_hist = ndx_hist[~pd.Index(ndx_hist.index).duplicated(keep='last')]
+            # YTD: same method as Dashboard — prior year's last close vs selected date's close
+            if 'SPY' in df_j.columns:
+                prior_year = df_j_sorted[(df_j_sorted['Day'].dt.year < sel_year) & (df_j_sorted['SPY'] > 0)]
+                sel_row_spy = df_j_sorted[(df_j_sorted['Day'].dt.date <= selected_date) & (df_j_sorted['SPY'] > 0)]
+                if not prior_year.empty and not sel_row_spy.empty:
+                    spy_base = prior_year.iloc[-1]['SPY']
+                    spy_curr = sel_row_spy.iloc[-1]['SPY']
+                    if spy_base > 0:
+                        spy_ytd_pct = ((spy_curr - spy_base) / spy_base) * 100
+                        spy_ytd_str = f"{spy_ytd_pct:+.2f}%"
 
-                # Daily change
-                if selected_date in spy_hist.index:
-                    curr_loc = list(spy_hist.index).index(selected_date)
-                    if curr_loc > 0:
-                        spy_daily_pct = ((spy_hist.iloc[curr_loc]['Close'] - spy_hist.iloc[curr_loc - 1]['Close']) / spy_hist.iloc[curr_loc - 1]['Close']) * 100
-                        spy_chg_str = f"{spy_daily_pct:+.2f}%"
-                else:
-                    spy_chg_str = "Market Closed"
-
-                if selected_date in ndx_hist.index:
-                    n_loc = list(ndx_hist.index).index(selected_date)
-                    if n_loc > 0:
-                        ndx_daily_pct = ((ndx_hist.iloc[n_loc]['Close'] - ndx_hist.iloc[n_loc - 1]['Close']) / ndx_hist.iloc[n_loc - 1]['Close']) * 100
-                        ndx_chg_str = f"{ndx_daily_pct:+.2f}%"
-
-                # YTD
-                jan1 = date(sel_year, 1, 1)
-                spy_dates = list(spy_hist.index)
-                spy_prior_dates = [d for d in spy_dates if d < jan1]
-                if spy_prior_dates and selected_date in spy_dates:
-                    spy_base = float(spy_hist.loc[spy_hist.index == spy_prior_dates[-1], 'Close'].iloc[0])
-                    spy_sel = float(spy_hist.loc[spy_hist.index == selected_date, 'Close'].iloc[0])
-                    spy_ytd_pct = ((spy_sel - spy_base) / spy_base) * 100
-                    spy_ytd_str = f"{spy_ytd_pct:+.2f}%"
-
-                ndx_dates = list(ndx_hist.index)
-                ndx_prior_dates = [d for d in ndx_dates if d < jan1]
-                if ndx_prior_dates and selected_date in ndx_dates:
-                    ndx_base = float(ndx_hist.loc[ndx_hist.index == ndx_prior_dates[-1], 'Close'].iloc[0])
-                    ndx_sel = float(ndx_hist.loc[ndx_hist.index == selected_date, 'Close'].iloc[0])
-                    ndx_ytd_pct = ((ndx_sel - ndx_base) / ndx_base) * 100
-                    ndx_ytd_str = f"{ndx_ytd_pct:+.2f}%"
-            except Exception as ytd_err:
-                st.caption(f"Market data error: {ytd_err}")
+            if 'Nasdaq' in df_j.columns:
+                prior_year_ndx = df_j_sorted[(df_j_sorted['Day'].dt.year < sel_year) & (df_j_sorted['Nasdaq'] > 0)]
+                sel_row_ndx = df_j_sorted[(df_j_sorted['Day'].dt.date <= selected_date) & (df_j_sorted['Nasdaq'] > 0)]
+                if not prior_year_ndx.empty and not sel_row_ndx.empty:
+                    ndx_base = prior_year_ndx.iloc[-1]['Nasdaq']
+                    ndx_curr = sel_row_ndx.iloc[-1]['Nasdaq']
+                    if ndx_base > 0:
+                        ndx_ytd_pct = ((ndx_curr - ndx_base) / ndx_base) * 100
+                        ndx_ytd_str = f"{ndx_ytd_pct:+.2f}%"
 
             # --- PORTFOLIO YTD (TWR - matches Dashboard) ---
             port_ytd_pct = 0.0
