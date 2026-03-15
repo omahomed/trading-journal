@@ -5,7 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 import math
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 import os
 import shutil
 
