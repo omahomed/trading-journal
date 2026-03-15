@@ -2254,13 +2254,6 @@ elif page == "Daily Journal":
                 else:
                     df_view = df_calc
 
-                # DEBUG: Show Portfolio_Heat status
-                heat_nonzero = df_view[df_view['Portfolio_Heat'] > 0] if 'Portfolio_Heat' in df_view.columns else pd.DataFrame()
-                if not heat_nonzero.empty:
-                    st.caption(f"🔥 Portfolio Heat data: {len(heat_nonzero)} entries with values")
-                else:
-                    st.caption(f"⚠️ Portfolio_Heat column {'exists' if 'Portfolio_Heat' in df_view.columns else 'MISSING'}, all values zero. Columns: {[c for c in df_view.columns if 'heat' in c.lower() or 'Heat' in c]}")
-
                 show_cols = [
                     'Day',
                     'Market Window',
