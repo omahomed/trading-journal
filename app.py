@@ -10151,8 +10151,14 @@ elif page == "Daily Report Card":
             try:
                 spy_hist = yf.Ticker("SPY").history(start=ytd_start, end=end_fetch)
                 ndx_hist = yf.Ticker("^IXIC").history(start=ytd_start, end=end_fetch)
-                spy_hist.index = spy_hist.index.date
-                ndx_hist.index = ndx_hist.index.date
+                if not spy_hist.empty:
+                    spy_hist.index = spy_hist.index.tz_localize(None).date if hasattr(spy_hist.index, 'tz_localize') else spy_hist.index.date
+                if not ndx_hist.empty:
+                    ndx_hist.index = ndx_hist.index.tz_localize(None).date if hasattr(ndx_hist.index, 'tz_localize') else ndx_hist.index.date
+
+                # Remove duplicate dates (keep last)
+                spy_hist = spy_hist[~pd.Index(spy_hist.index).duplicated(keep='last')]
+                ndx_hist = ndx_hist[~pd.Index(ndx_hist.index).duplicated(keep='last')]
 
                 # Daily change
                 if selected_date in spy_hist.index:
@@ -10168,23 +10174,29 @@ elif page == "Daily Report Card":
                     if n_loc > 0:
                         ndx_daily_pct = ((ndx_hist.iloc[n_loc]['Close'] - ndx_hist.iloc[n_loc - 1]['Close']) / ndx_hist.iloc[n_loc - 1]['Close']) * 100
                         ndx_chg_str = f"{ndx_daily_pct:+.2f}%"
+            except:
+                pass
 
-                # YTD: find last trading day of prior year
+            # YTD: separate try block so daily errors don't block YTD and vice versa
+            try:
                 jan1 = date(sel_year, 1, 1)
-                spy_prior = spy_hist[spy_hist.index < jan1]
-                ndx_prior = ndx_hist[ndx_hist.index < jan1]
+                if not spy_hist.empty:
+                    spy_prior = spy_hist[spy_hist.index < jan1]
+                    spy_on_date = spy_hist[spy_hist.index == selected_date]
+                    if not spy_prior.empty and not spy_on_date.empty:
+                        spy_base = float(spy_prior.iloc[-1]['Close'])
+                        spy_sel = float(spy_on_date.iloc[0]['Close'])
+                        spy_ytd_pct = ((spy_sel - spy_base) / spy_base) * 100
+                        spy_ytd_str = f"{spy_ytd_pct:+.2f}%"
 
-                if not spy_prior.empty and selected_date in spy_hist.index:
-                    spy_base = spy_prior.iloc[-1]['Close']
-                    spy_sel = spy_hist.loc[selected_date]['Close']
-                    spy_ytd_pct = ((spy_sel - spy_base) / spy_base) * 100
-                    spy_ytd_str = f"{spy_ytd_pct:+.2f}%"
-
-                if not ndx_prior.empty and selected_date in ndx_hist.index:
-                    ndx_base = ndx_prior.iloc[-1]['Close']
-                    ndx_sel = ndx_hist.loc[selected_date]['Close']
-                    ndx_ytd_pct = ((ndx_sel - ndx_base) / ndx_base) * 100
-                    ndx_ytd_str = f"{ndx_ytd_pct:+.2f}%"
+                if not ndx_hist.empty:
+                    ndx_prior = ndx_hist[ndx_hist.index < jan1]
+                    ndx_on_date = ndx_hist[ndx_hist.index == selected_date]
+                    if not ndx_prior.empty and not ndx_on_date.empty:
+                        ndx_base = float(ndx_prior.iloc[-1]['Close'])
+                        ndx_sel = float(ndx_on_date.iloc[0]['Close'])
+                        ndx_ytd_pct = ((ndx_sel - ndx_base) / ndx_base) * 100
+                        ndx_ytd_str = f"{ndx_ytd_pct:+.2f}%"
             except:
                 pass
 
