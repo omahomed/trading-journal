@@ -2215,27 +2215,28 @@ elif page == "Daily Journal":
                     hide_index=True, 
                     use_container_width=True
                 )
-                # --- CLICKABLE TRADE ACTIONS ---
+                # --- CLICKABLE TRADE ACTIONS (2026 only) ---
                 if 'Market_Action' in df_view.columns:
-                    actions_with_tickers = df_view[df_view['Market_Action'].astype(str).str.contains(r'[A-Z]{2,}', na=False)]
-                    if not actions_with_tickers.empty:
+                    import re
+                    df_2026_actions = df_view[
+                        (df_view['Day'].dt.year == 2026) &
+                        (df_view['Market_Action'].astype(str).str.contains(r'[A-Z]{2,}', na=False))
+                    ]
+                    if not df_2026_actions.empty:
                         st.markdown("---")
                         st.subheader("Trade Actions")
-                        sorted_actions = actions_with_tickers.sort_values('Day', ascending=False)
-                        for _, row in sorted_actions.head(10).iterrows():
+                        sorted_actions = df_2026_actions.sort_values('Day', ascending=False)
+                        for row_idx, (_, row) in enumerate(sorted_actions.head(10).iterrows()):
                             action_str = str(row['Market_Action'])
                             day_str = row['Day'].strftime('%m/%d') if hasattr(row['Day'], 'strftime') else str(row['Day'])
-                            # Extract tickers from action string (e.g., "BUY: NVDA (100), SELL: GOOG (50)")
-                            import re
                             tickers_found = re.findall(r'[A-Z]{2,5}', action_str)
-                            # Remove common non-ticker words
-                            skip_words = {'BUY', 'SELL', 'ADD', 'TRIM', 'THE', 'FOR', 'AND', 'NEW'}
-                            tickers_found = [t for t in tickers_found if t not in skip_words]
+                            skip_words = {'BUY', 'SELL', 'ADD', 'TRIM', 'THE', 'FOR', 'AND', 'NEW', 'STOP', 'LOSS', 'CUT'}
+                            tickers_found = list(dict.fromkeys(t for t in tickers_found if t not in skip_words))
                             if tickers_found:
-                                cols = st.columns([1] + [1] * len(tickers_found))
+                                cols = st.columns([2] + [1] * len(tickers_found))
                                 cols[0].markdown(f"**{day_str}:** {action_str}")
                                 for i, ticker in enumerate(tickers_found):
-                                    if cols[i + 1].button(f"📔 {ticker}", key=f"tj_nav_{day_str}_{ticker}"):
+                                    if cols[i + 1].button(f"📔 {ticker}", key=f"tj_nav_{row_idx}_{i}_{ticker}"):
                                         st.session_state.page = "Trade Journal"
                                         st.session_state['tj_ticker_search'] = [ticker]
                                         st.session_state['journal_searched'] = True
