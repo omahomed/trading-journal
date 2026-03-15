@@ -419,26 +419,20 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                     # Add Portfolio_Heat if column exists in DB
                     if 'Portfolio_Heat' not in df.columns:
                         try:
-                            cur.execute("""
-                                SELECT column_name FROM information_schema.columns
-                                WHERE table_name = 'trading_journal' AND column_name = 'portfolio_heat'
-                            """)
-                            if cur.fetchone():
-                                heat_query = f"""
-                                    SELECT j.day, j.portfolio_heat
-                                    FROM trading_journal j
-                                    JOIN portfolios p ON j.portfolio_id = p.id
-                                    WHERE p.name = '{portfolio_name}'
-                                """
-                                cur.execute(heat_query)
-                                heat_rows = cur.fetchall()
-                                if heat_rows:
-                                    heat_df = pd.DataFrame(heat_rows, columns=['Day', 'Portfolio_Heat'])
-                                    heat_df['Day'] = pd.to_datetime(heat_df['Day'], errors='coerce')
-                                    from decimal import Decimal
-                                    heat_df['Portfolio_Heat'] = pd.to_numeric(heat_df['Portfolio_Heat'], errors='coerce').fillna(0)
-                                    df = df.merge(heat_df, on='Day', how='left')
-                                    df['Portfolio_Heat'] = df['Portfolio_Heat'].fillna(0)
+                            heat_query = f"""
+                                SELECT j.day, j.portfolio_heat
+                                FROM trading_journal j
+                                JOIN portfolios p ON j.portfolio_id = p.id
+                                WHERE p.name = '{portfolio_name}'
+                            """
+                            cur.execute(heat_query)
+                            heat_rows = cur.fetchall()
+                            if heat_rows:
+                                heat_df = pd.DataFrame(heat_rows, columns=['Day', 'Portfolio_Heat'])
+                                heat_df['Day'] = pd.to_datetime(heat_df['Day'], errors='coerce')
+                                heat_df['Portfolio_Heat'] = pd.to_numeric(heat_df['Portfolio_Heat'], errors='coerce').fillna(0)
+                                df = df.merge(heat_df, on='Day', how='left')
+                                df['Portfolio_Heat'] = df['Portfolio_Heat'].fillna(0)
                             else:
                                 df['Portfolio_Heat'] = 0.0
                         except:
@@ -1035,14 +1029,6 @@ def save_journal_entry(journal_entry):
             market_notes = journal_entry.get('market_notes', '')
             market_action = journal_entry.get('market_action', '')
             portfolio_heat = journal_entry.get('portfolio_heat', 0.0)
-
-            # Check if portfolio_heat column exists
-            cur.execute("""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name = 'trading_journal' AND column_name = 'portfolio_heat'
-            """)
-            has_heat_col = cur.fetchone() is not None
-
             score = journal_entry.get('score', 0)
             highlights = journal_entry.get('highlights', '')
             lowlights = journal_entry.get('lowlights', '')
@@ -1057,8 +1043,8 @@ def save_journal_entry(journal_entry):
             existing = cur.fetchone()
 
             if existing:
-                # UPDATE existing entry
-                if has_heat_col:
+                # UPDATE existing entry — try with portfolio_heat, fall back without
+                try:
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, above_21ema = %s,
@@ -1083,7 +1069,8 @@ def save_journal_entry(journal_entry):
                         top_lesson,
                         existing[0]
                     ))
-                else:
+                except Exception:
+                    conn.rollback()
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, above_21ema = %s,
@@ -1107,8 +1094,8 @@ def save_journal_entry(journal_entry):
                         existing[0]
                     ))
             else:
-                # INSERT new entry
-                if has_heat_col:
+                # INSERT new entry — try with portfolio_heat, fall back without
+                try:
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, above_21ema,
@@ -1129,7 +1116,8 @@ def save_journal_entry(journal_entry):
                         market_notes, market_action, portfolio_heat, score,
                         highlights, lowlights, mistakes, top_lesson
                     ))
-                else:
+                except Exception:
+                    conn.rollback()
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, above_21ema,

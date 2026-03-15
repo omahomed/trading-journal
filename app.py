@@ -53,14 +53,8 @@ if USE_DATABASE:
     try:
         with db.get_db_connection() as conn:
             with conn.cursor() as cur:
-                # Check if column exists first, then add if missing
-                cur.execute("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'trading_journal' AND column_name = 'portfolio_heat'
-                """)
-                if not cur.fetchone():
-                    cur.execute("ALTER TABLE trading_journal ADD COLUMN portfolio_heat NUMERIC(10, 4) DEFAULT 0")
-                    conn.commit()
+                cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS portfolio_heat NUMERIC(10, 4) DEFAULT 0")
+            conn.commit()
     except Exception as e:
         print(f"⚠️  DB migration note: {e}")
 
