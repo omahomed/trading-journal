@@ -2332,6 +2332,16 @@ elif page == "Daily Journal":
                     elif v == 'CLOSED': return 'background-color: #ff4b4b; color: white;'
                     return ''
 
+                def color_atr(val):
+                    """Green < 1, Yellow 1-1.25, Red > 1.25 (matching Market Window colors)."""
+                    try:
+                        v = float(val)
+                    except (ValueError, TypeError):
+                        return ''
+                    if v < 1.0: return 'background-color: #2ca02c; color: white;'
+                    elif v <= 1.25: return 'background-color: #ffcc00; color: black;'
+                    else: return 'background-color: #ff4b4b; color: white;'
+
                 st.dataframe(
                     df_view.sort_values('Day', ascending=False)[valid_cols]
                     .style.format({
@@ -2348,7 +2358,8 @@ elif page == "Daily Journal":
                     })
                     .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'LTD_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
                     .applymap(color_score, subset=['Score'])
-                    .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns]),
+                    .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns])
+                    .applymap(color_atr, subset=[c for c in ['SPY_ATR', 'Nasdaq_ATR'] if c in df_view.columns]),
                     hide_index=True, 
                     use_container_width=True
                 )
