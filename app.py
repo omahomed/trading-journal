@@ -2215,32 +2215,6 @@ elif page == "Daily Journal":
                     hide_index=True, 
                     use_container_width=True
                 )
-                # --- CLICKABLE TRADE ACTIONS (2026 only) ---
-                if 'Market_Action' in df_view.columns:
-                    import re
-                    df_2026_actions = df_view[
-                        (df_view['Day'].dt.year == 2026) &
-                        (df_view['Market_Action'].astype(str).str.contains(r'[A-Z]{2,}', na=False))
-                    ]
-                    if not df_2026_actions.empty:
-                        st.markdown("---")
-                        st.subheader("Trade Actions")
-                        sorted_actions = df_2026_actions.sort_values('Day', ascending=False)
-                        for row_idx, (_, row) in enumerate(sorted_actions.head(10).iterrows()):
-                            action_str = str(row['Market_Action'])
-                            day_str = row['Day'].strftime('%m/%d') if hasattr(row['Day'], 'strftime') else str(row['Day'])
-                            tickers_found = re.findall(r'[A-Z]{2,5}', action_str)
-                            skip_words = {'BUY', 'SELL', 'ADD', 'TRIM', 'THE', 'FOR', 'AND', 'NEW', 'STOP', 'LOSS', 'CUT'}
-                            tickers_found = list(dict.fromkeys(t for t in tickers_found if t not in skip_words))
-                            if tickers_found:
-                                cols = st.columns([2] + [1] * len(tickers_found))
-                                cols[0].markdown(f"**{day_str}:** {action_str}")
-                                for i, ticker in enumerate(tickers_found):
-                                    if cols[i + 1].button(f"📔 {ticker}", key=f"tj_nav_{row_idx}_{i}_{ticker}"):
-                                        st.session_state.page = "Trade Journal"
-                                        st.session_state['tj_ticker_search'] = [ticker]
-                                        st.session_state['journal_searched'] = True
-                                        st.rerun()
 
             else: st.info("No journal entries found.")
 
@@ -10118,7 +10092,7 @@ elif page == "Analytics":
 # ==============================================================================
 elif page == "Daily Report Card":
     st.header(f"📠 DAILY REPORT CARD ({CURR_PORT_NAME})")
-    
+
     # 1. LOAD ALL DATA (database-aware)
     path_j = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
     path_s = os.path.join(DATA_ROOT, portfolio, 'Trade_Log_Summary.csv')
@@ -10128,12 +10102,12 @@ elif page == "Daily Report Card":
     df_s = load_data(path_s)
     df_d = load_data(path_d)
 
-    if not df_j.empty: 
-        
+    if not df_j.empty:
+
         # Data Prep
         df_j['Day'] = pd.to_datetime(df_j['Day'], errors='coerce')
         df_j = df_j.dropna(subset=['Day']).sort_values('Day', ascending=False)
-        
+
         # Helper Clean
         def clean_num_local(x):
             try: return float(str(x).replace('$', '').replace(',', '').replace('%', '').strip())
@@ -10141,230 +10115,390 @@ elif page == "Daily Report Card":
 
         for c in ['End NLV', 'Beg NLV', 'Cash -/+', 'Daily $ Change', 'SPY', 'Nasdaq']:
             if c in df_j.columns: df_j[c] = df_j[c].apply(clean_num_local)
-        
+
         # 2. DATE SELECTOR
         available_dates = df_j['Day'].dt.date.unique()
         if len(available_dates) > 0:
             selected_date = st.selectbox("Select Date for Report", available_dates, index=0)
-            
+
             # CHECK: IS THIS TODAY/RECENT?
             is_current_report = (selected_date >= get_current_date_ct() - timedelta(days=1))
-            
+
             # --- GET DAY'S DATA ---
             day_stats = df_j[df_j['Day'].dt.date == selected_date].iloc[0]
-            
-            # --- 1. STATE OF THE MARKET (ROBUST FETCH) ---
-            m_factor_str = "N/A"
-            spy_chg_str = "0.00%"
-            ndx_chg_str = "0.00%"
-            
-            # Fetch a wider window to ensure we catch the trading days
-            start_fetch = pd.Timestamp(selected_date) - pd.Timedelta(days=7)
-            end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
-            
-            try:
-                # 1. FETCH DATA
-                spy_hist = yf.Ticker("SPY").history(start=start_fetch, end=end_fetch)
-                ndx_hist = yf.Ticker("^IXIC").history(start=start_fetch, end=end_fetch)
-                
-                # 2. NORMALIZE INDEX TO SIMPLE DATES (Fixes Timezone Mismatch)
-                spy_hist.index = spy_hist.index.date
-                ndx_hist.index = ndx_hist.index.date
-                
-                # 3. LOCATE SELECTED DATE (OR LATEST AVAILABLE IN WINDOW)
-                # We iterate backwards from selected_date to find the first valid trading day
-                check_date = selected_date
-                
-                if check_date in spy_hist.index:
-                    # Perfect match
-                    curr_loc = spy_hist.index.get_loc(check_date)
-                    if curr_loc > 0:
-                        # SPY
-                        spy_close = spy_hist.iloc[curr_loc]['Close']
-                        spy_prev = spy_hist.iloc[curr_loc - 1]['Close']
-                        spy_pct = ((spy_close - spy_prev) / spy_prev) * 100
-                        spy_chg_str = f"{spy_pct:+.2f}%"
-                        
-                        # NDX
-                        if check_date in ndx_hist.index:
-                            n_loc = ndx_hist.index.get_loc(check_date)
-                            ndx_close = ndx_hist.iloc[n_loc]['Close']
-                            ndx_prev = ndx_hist.iloc[n_loc - 1]['Close']
-                            ndx_pct = ((ndx_close - ndx_prev) / ndx_prev) * 100
-                            ndx_chg_str = f"{ndx_pct:+.2f}%"
-                            
-                            # M-FACTOR LOGIC (NDX > 21EMA)
-                            # We need a longer lookback for EMA, so we fetch just NDX long history separately
-                            long_ndx = yf.Ticker("^IXIC").history(start=pd.Timestamp(selected_date) - pd.Timedelta(days=60), end=end_fetch)
-                            long_ndx.index = long_ndx.index.date
-                            long_ndx['21EMA'] = long_ndx['Close'].ewm(span=21, adjust=False).mean()
-                            
-                            if check_date in long_ndx.index:
-                                hist_close = long_ndx.loc[check_date]['Close']
-                                hist_ema = long_ndx.loc[check_date]['21EMA']
-                                trend = "UPTREND (Open)" if hist_close > hist_ema else "PRESSURE (Caution)"
-                                m_factor_str = f"{trend} | NDX > 21e: {hist_close > hist_ema}"
-                else:
-                    spy_chg_str = "Closed/No Data"
-                    
-            except Exception as e: 
-                m_factor_str = "Data Error"
-                # st.error(f"Debug: {e}") # Uncomment to see error if needed
 
-            # --- PREP TRADE DATA ---
-            # 1. TRADES OPENED TODAY
-            bought_today = pd.DataFrame()
-            if not df_d.empty:
-                df_d['Date_Obj'] = pd.to_datetime(df_d['Date'], errors='coerce')
-                bought_today = df_d[
-                    (df_d['Action'] == 'BUY') & 
-                    (df_d['Date_Obj'].dt.date == selected_date)
-                ]
-
-            # 2. TRADES CLOSED TODAY
-            sold_today = pd.DataFrame()
-            if not df_s.empty:
-                df_s['Closed_Date'] = pd.to_datetime(df_s['Closed_Date'], errors='coerce')
-                sold_today = df_s[
-                    (df_s['Status'] == 'CLOSED') & 
-                    (df_s['Closed_Date'].dt.date == selected_date)
-                ]
-
-            # 3. ACTIVE CAMPAIGNS (LIVE STATE)
-            open_pos_snapshot = []
-            if is_current_report and not df_s.empty:
-                current_open = df_s[df_s['Status'] == 'OPEN'].copy()
-                
-                for _, row in current_open.iterrows():
-                    tkr = row['Ticker']
-                    try:
-                        live_p = yf.Ticker(tkr).history(period='1d')['Close'].iloc[-1]
-                    except: 
-                        if row['Shares'] > 0:
-                            live_p = (row['Total_Cost'] + row['Unrealized_PL']) / row['Shares']
-                        else: live_p = row['Avg_Entry']
-                    
-                    mkt_val = row['Shares'] * live_p
-                    unreal = mkt_val - row['Total_Cost']
-                    ret = (unreal / row['Total_Cost']) * 100 if row['Total_Cost'] else 0
-                    
-                    open_pos_snapshot.append({
-                        'Ticker': tkr,
-                        'Price': live_p,
-                        'Mkt_Value': mkt_val,
-                        'Unreal_PL': unreal,
-                        'Return': ret
-                    })
-                
-            snapshot_df = pd.DataFrame(open_pos_snapshot)
-            if not snapshot_df.empty:
-                snapshot_df = snapshot_df.sort_values('Return', ascending=False)
-
-            # --- 4. RISK PROTOCOL ---
-            RESET_DATE = pd.Timestamp("2026-02-24")
-            hist_slice = df_j[df_j['Day'] <= pd.Timestamp(selected_date)].sort_values('Day')
-            hist_slice_post = hist_slice[hist_slice['Day'] >= RESET_DATE]
-            
-            risk_msg = "⚪ NO DATA"
-            dd_pct = 0.0
-            
-            if not hist_slice_post.empty:
-                curr_nlv = hist_slice_post['End NLV'].iloc[-1]
-                peak_nlv = hist_slice_post['End NLV'].max()
-                dd_pct = ((curr_nlv - peak_nlv) / peak_nlv) * 100 if peak_nlv > 0 else 0.0
-                
-                if dd_pct >= -5: risk_msg = "🟢 GREEN LIGHT"
-                elif -5 > dd_pct >= -7: risk_msg = "🟡 YELLOW LIGHT"
-                elif -7 > dd_pct >= -10: risk_msg = "🟠 ORANGE LIGHT"
-                else: risk_msg = "🔴 RED LIGHT"
-
-            # --- GENERATE MARKDOWN ---
+            # --- COMPUTE METRICS ---
             nlv = day_stats['End NLV']
             day_dol = day_stats['Daily $ Change']
             prev_adj = day_stats['Beg NLV'] + day_stats['Cash -/+']
             day_pct = (day_dol / prev_adj * 100) if prev_adj != 0 else 0.0
-            
-            report = f"""
-# 📜 DAILY TRADING RECORD
+
+            # SPY / Nasdaq from journal data
+            spy_val = day_stats.get('SPY', 0.0)
+            ndx_val = day_stats.get('Nasdaq', 0.0)
+            spy_chg_str = f"{spy_val:+.2f}%" if spy_val != 0 else "N/A"
+            ndx_chg_str = f"{ndx_val:+.2f}%" if ndx_val != 0 else "N/A"
+
+            # If journal SPY/Nasdaq are zero, try live fetch
+            if spy_val == 0 or ndx_val == 0:
+                start_fetch = pd.Timestamp(selected_date) - pd.Timedelta(days=7)
+                end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
+                try:
+                    spy_hist = yf.Ticker("SPY").history(start=start_fetch, end=end_fetch)
+                    ndx_hist = yf.Ticker("^IXIC").history(start=start_fetch, end=end_fetch)
+                    spy_hist.index = spy_hist.index.date
+                    ndx_hist.index = ndx_hist.index.date
+                    if selected_date in spy_hist.index:
+                        curr_loc = spy_hist.index.get_loc(selected_date)
+                        if curr_loc > 0:
+                            spy_pct = ((spy_hist.iloc[curr_loc]['Close'] - spy_hist.iloc[curr_loc - 1]['Close']) / spy_hist.iloc[curr_loc - 1]['Close']) * 100
+                            spy_chg_str = f"{spy_pct:+.2f}%"
+                            if selected_date in ndx_hist.index:
+                                n_loc = ndx_hist.index.get_loc(selected_date)
+                                ndx_pct = ((ndx_hist.iloc[n_loc]['Close'] - ndx_hist.iloc[n_loc - 1]['Close']) / ndx_hist.iloc[n_loc - 1]['Close']) * 100
+                                ndx_chg_str = f"{ndx_pct:+.2f}%"
+                    else:
+                        spy_chg_str = "Market Closed"
+                except:
+                    pass
+
+            # Market Window from journal
+            market_window = str(day_stats.get('Market Window', '')).strip()
+            if not market_window or market_window == 'nan':
+                market_window = "N/A"
+
+            # Risk / Drawdown
+            RESET_DATE = pd.Timestamp("2026-02-24")
+            hist_slice = df_j[df_j['Day'] <= pd.Timestamp(selected_date)].sort_values('Day')
+            hist_slice_post = hist_slice[hist_slice['Day'] >= RESET_DATE]
+
+            risk_msg = "NO DATA"
+            risk_color = "gray"
+            dd_pct = 0.0
+
+            if not hist_slice_post.empty:
+                curr_nlv = hist_slice_post['End NLV'].iloc[-1]
+                peak_nlv = hist_slice_post['End NLV'].max()
+                dd_pct = ((curr_nlv - peak_nlv) / peak_nlv) * 100 if peak_nlv > 0 else 0.0
+
+                if dd_pct >= -5:
+                    risk_msg = "GREEN LIGHT"
+                    risk_color = "#2ca02c"
+                elif -5 > dd_pct >= -7:
+                    risk_msg = "YELLOW LIGHT"
+                    risk_color = "#ffcc00"
+                elif -7 > dd_pct >= -10:
+                    risk_msg = "ORANGE LIGHT"
+                    risk_color = "#ff8c00"
+                else:
+                    risk_msg = "RED LIGHT"
+                    risk_color = "#ff4b4b"
+
+            # --- PREP TRADE DATA ---
+            bought_today = pd.DataFrame()
+            sold_today_details = pd.DataFrame()
+            if not df_d.empty:
+                df_d['Date_Obj'] = pd.to_datetime(df_d['Date'], errors='coerce')
+                bought_today = df_d[
+                    (df_d['Action'] == 'BUY') &
+                    (df_d['Date_Obj'].dt.date == selected_date)
+                ]
+                sold_today_details = df_d[
+                    (df_d['Action'] == 'SELL') &
+                    (df_d['Date_Obj'].dt.date == selected_date)
+                ]
+
+            sold_today = pd.DataFrame()
+            if not df_s.empty:
+                df_s['Closed_Date'] = pd.to_datetime(df_s['Closed_Date'], errors='coerce')
+                sold_today = df_s[
+                    (df_s['Status'] == 'CLOSED') &
+                    (df_s['Closed_Date'].dt.date == selected_date)
+                ]
+
+            # =====================================================
+            # SECTION 1: HEADER METRICS ROW
+            # =====================================================
+            st.markdown(f"#### {selected_date.strftime('%A, %B %d, %Y')}")
+
+            # Market Window color badge
+            mw_colors = {
+                'POWERTREND': ('#8A2BE2', 'white'),
+                'OPEN': ('#2ca02c', 'white'),
+                'NEUTRAL': ('#ffcc00', 'black'),
+                'CLOSED': ('#ff4b4b', 'white'),
+            }
+            mw_bg, mw_fg = mw_colors.get(market_window.upper(), ('#888', 'white'))
+
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Net Liquidity", f"${nlv:,.2f}")
+            pnl_delta = f"${day_dol:+,.2f} ({day_pct:+.2f}%)"
+            mc2.metric("Daily P&L", f"${day_dol:+,.2f}", delta=f"{day_pct:+.2f}%")
+            mc3.markdown(
+                f"**Market Window**<br>"
+                f"<span style='background-color:{mw_bg}; color:{mw_fg}; padding:4px 16px; border-radius:6px; font-weight:bold; font-size:1.1em;'>"
+                f"{market_window}</span>",
+                unsafe_allow_html=True
+            )
+            mc4.markdown(
+                f"**Risk Status**<br>"
+                f"<span style='background-color:{risk_color}; color:white; padding:4px 16px; border-radius:6px; font-weight:bold; font-size:1.1em;'>"
+                f"{risk_msg}</span>",
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+            # =====================================================
+            # SECTION 2: MARKET & PERFORMANCE
+            # =====================================================
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                st.markdown("##### Market Performance")
+                mkt_data = {
+                    'Index': ['SPY', 'NASDAQ'],
+                    'Change': [spy_chg_str, ndx_chg_str],
+                }
+                st.dataframe(pd.DataFrame(mkt_data), hide_index=True, use_container_width=True)
+
+                # Drawdown info
+                st.markdown(f"**Drawdown:** {dd_pct:.2f}% from peak")
+                pct_invested = day_stats.get('% Invested', 0)
+                if pct_invested:
+                    st.markdown(f"**Invested:** {clean_num_local(pct_invested):.0f}%")
+
+            with col_right:
+                st.markdown("##### Market Notes")
+                market_notes = str(day_stats.get('Market_Notes', '') or '')
+                if market_notes and market_notes != 'nan':
+                    st.info(market_notes)
+                else:
+                    st.caption("No market notes logged.")
+
+                market_action = str(day_stats.get('Market_Action', '') or '')
+                if market_action and market_action != 'nan':
+                    st.markdown(f"**Actions:** {market_action}")
+
+            st.divider()
+
+            # =====================================================
+            # SECTION 3: TRADE ACTIVITY (INTERACTIVE)
+            # =====================================================
+            st.markdown("##### Trade Activity")
+
+            tc1, tc2 = st.columns(2)
+
+            with tc1:
+                st.markdown("**Positions Opened**")
+                if not bought_today.empty:
+                    for ridx, (_, row) in enumerate(bought_today.iterrows()):
+                        ticker = str(row['Ticker'])
+                        shares = int(row['Shares'])
+                        price = row['Amount']
+                        value = row['Value']
+                        rule = str(row.get('Rule', ''))
+
+                        bcol1, bcol2 = st.columns([1, 3])
+                        with bcol1:
+                            if st.button(f"🔍 {ticker}", key=f"drc_buy_{ridx}_{ticker}"):
+                                st.session_state['tj_ticker_search'] = [ticker]
+                                st.session_state['journal_searched'] = True
+                                st.session_state.page = "Trade Journal"
+                                st.rerun()
+                        with bcol2:
+                            st.caption(f"{shares} shares @ ${price:.2f} = ${value:,.2f} | {rule}")
+                else:
+                    st.caption("No new positions opened.")
+
+            with tc2:
+                st.markdown("**Positions Closed**")
+                if not sold_today.empty:
+                    for ridx, (_, row) in enumerate(sold_today.iterrows()):
+                        ticker = str(row['Ticker'])
+                        realized = row['Realized_PL']
+                        ret_pct = row['Return_Pct']
+                        sell_rule = str(row.get('Sell_Rule', ''))
+                        pl_color = "green" if realized >= 0 else "red"
+
+                        scol1, scol2 = st.columns([1, 3])
+                        with scol1:
+                            if st.button(f"🔍 {ticker}", key=f"drc_sell_{ridx}_{ticker}"):
+                                st.session_state['tj_ticker_search'] = [ticker]
+                                st.session_state['journal_searched'] = True
+                                st.session_state.page = "Trade Journal"
+                                st.rerun()
+                        with scol2:
+                            st.caption(f"P&L: ${realized:+,.2f} ({ret_pct:+.2f}%) | {sell_rule}")
+                elif not sold_today_details.empty:
+                    # Show sell transactions even if campaign not fully closed
+                    for ridx, (_, row) in enumerate(sold_today_details.iterrows()):
+                        ticker = str(row['Ticker'])
+                        shares = int(row['Shares'])
+                        price = row['Amount']
+
+                        scol1, scol2 = st.columns([1, 3])
+                        with scol1:
+                            if st.button(f"🔍 {ticker}", key=f"drc_sell_d_{ridx}_{ticker}"):
+                                st.session_state['tj_ticker_search'] = [ticker]
+                                st.session_state['journal_searched'] = True
+                                st.session_state.page = "Trade Journal"
+                                st.rerun()
+                        with scol2:
+                            st.caption(f"Sold {shares} shares @ ${price:.2f}")
+                else:
+                    st.caption("No positions closed.")
+
+            st.divider()
+
+            # =====================================================
+            # SECTION 4: JOURNAL REVIEW
+            # =====================================================
+            score = int(day_stats.get('Score', 0) or 0)
+            highlights = str(day_stats.get('Highlights', '') or '')
+            lowlights = str(day_stats.get('Lowlights', '') or '')
+            mistakes = str(day_stats.get('Mistakes', '') or '')
+            top_lesson = str(day_stats.get('Top_Lesson', '') or '')
+
+            has_review = score > 0 or any(v and v != 'nan' for v in [highlights, lowlights, mistakes, top_lesson])
+
+            if has_review:
+                st.markdown("##### Daily Review")
+
+                # Score badge
+                if score > 0:
+                    score_colors = {5: '#008000', 4: '#90EE90', 3: '#FFFFE0', 2: '#FFD700', 1: '#FF4B4B'}
+                    score_fg = {5: 'white', 4: 'black', 3: 'black', 2: 'black', 1: 'white'}
+                    s_bg = score_colors.get(score, '#888')
+                    s_fg = score_fg.get(score, 'white')
+                    st.markdown(
+                        f"**Process Score:** "
+                        f"<span style='background-color:{s_bg}; color:{s_fg}; padding:3px 12px; border-radius:4px; font-weight:bold;'>"
+                        f"{score}/5</span>",
+                        unsafe_allow_html=True
+                    )
+
+                rv1, rv2 = st.columns(2)
+                with rv1:
+                    if highlights and highlights != 'nan':
+                        st.markdown(f"**Highlights:** {highlights}")
+                    if top_lesson and top_lesson != 'nan':
+                        st.markdown(f"**Top Lesson:** {top_lesson}")
+                with rv2:
+                    if lowlights and lowlights != 'nan':
+                        st.markdown(f"**Lowlights:** {lowlights}")
+                    if mistakes and mistakes != 'nan':
+                        st.markdown(f"**Mistakes:** {mistakes}")
+
+                st.divider()
+
+            # =====================================================
+            # SECTION 5: ACTIVE CAMPAIGNS (current date only)
+            # =====================================================
+            if is_current_report:
+                open_pos_snapshot = []
+                if not df_s.empty:
+                    current_open = df_s[df_s['Status'] == 'OPEN'].copy()
+                    for _, row in current_open.iterrows():
+                        tkr = row['Ticker']
+                        try:
+                            live_p = yf.Ticker(tkr).history(period='1d')['Close'].iloc[-1]
+                        except:
+                            if row['Shares'] > 0:
+                                live_p = (row['Total_Cost'] + row['Unrealized_PL']) / row['Shares']
+                            else: live_p = row['Avg_Entry']
+
+                        mkt_val = row['Shares'] * live_p
+                        unreal = mkt_val - row['Total_Cost']
+                        ret = (unreal / row['Total_Cost']) * 100 if row['Total_Cost'] else 0
+
+                        open_pos_snapshot.append({
+                            'Ticker': tkr,
+                            'Price': live_p,
+                            'Mkt Value': mkt_val,
+                            'Open P&L': unreal,
+                            'Return %': ret
+                        })
+
+                snapshot_df = pd.DataFrame(open_pos_snapshot)
+                if not snapshot_df.empty:
+                    snapshot_df = snapshot_df.sort_values('Return %', ascending=False)
+                    st.markdown("##### Active Campaigns")
+
+                    # Interactive: make tickers clickable
+                    for ridx, (_, row) in enumerate(snapshot_df.iterrows()):
+                        ticker = str(row['Ticker'])
+                        ac1, ac2, ac3, ac4 = st.columns([1, 1, 1, 1])
+                        with ac1:
+                            if st.button(f"🔍 {ticker}", key=f"drc_active_{ridx}_{ticker}"):
+                                st.session_state['tj_ticker_search'] = [ticker]
+                                st.session_state['journal_searched'] = True
+                                st.session_state.page = "Trade Journal"
+                                st.rerun()
+                        ac2.metric("Price", f"${row['Price']:.2f}")
+                        pl_val = row['Open P&L']
+                        ac3.metric("Open P&L", f"${pl_val:+,.2f}")
+                        ac4.metric("Return", f"{row['Return %']:+.2f}%")
+
+                    total_exp = sum((r['Mkt Value'] / nlv) * 100 for _, r in snapshot_df.iterrows()) if nlv != 0 else 0
+                    st.markdown(f"**Total Exposure:** {total_exp:.1f}%")
+                else:
+                    st.markdown("##### Active Campaigns")
+                    st.caption("100% CASH (no open trades)")
+
+                st.divider()
+
+            # =====================================================
+            # SECTION 6: MARKDOWN EXPORT (collapsed)
+            # =====================================================
+            with st.expander("📋 Export Report (Markdown)"):
+                # Generate markdown for copy
+                report = f"""# DAILY TRADING RECORD
 **Date:** {selected_date.strftime('%A, %B %d, %Y')}
 **Account:** {CURR_PORT_NAME}
 **Net Liquidity:** ${nlv:,.2f}
+**Market Window:** {market_window}
 
 ---
 
-### 1. 🌍 STATE OF THE MARKET (M-FACTOR)
-**Trend Status:** {m_factor_str}
-**Daily Action:**
+### Market
 * **SPY:** {spy_chg_str}
 * **NASDAQ:** {ndx_chg_str}
+* **Notes:** {day_stats.get('Market_Notes', '')}
 
-**Daily Context:**
-> {day_stats.get('Market_Notes', 'No notes logged.')}
-
----
-
-### 2. 📊 DAILY PERFORMANCE
+### Performance
 | Metric | Value |
 | :--- | :--- |
-| **Daily P&L ($)** | ${day_dol:+,.2f} |
-| **Daily Return** | {day_pct:+.2f}% |
-| **Drawdown** | {dd_pct:.2f}% (from Post-Split Peak) |
+| **Daily P&L** | ${day_dol:+,.2f} ({day_pct:+.2f}%) |
+| **Drawdown** | {dd_pct:.2f}% |
+| **Risk** | {risk_msg} |
 
-**Portfolio Actions / Notes:**
-> {day_stats.get('Market_Action', 'No actions logged.')}
-
----
-
-### 3. 🛡️ RISK MANAGER PROTOCOL
-**Current Status:** {risk_msg}
-**Drawdown Depth:** {dd_pct:.2f}%
-
----
-
-### 4. 📈 TRADES OPENED TODAY
+### Trades Opened
 """
-            if not bought_today.empty:
-                report += "| Ticker | Shares | Price | Value | Strategy |\n| :--- | :--- | :--- | :--- | :--- |\n"
-                for _, row in bought_today.iterrows():
-                    report += f"| **{row['Ticker']}** | {int(row['Shares'])} | ${row['Amount']:.2f} | ${row['Value']:,.2f} | {row.get('Rule', '')} |\n"
-            else:
-                report += "*No new positions opened today.*\n"
-
-            report += "\n---\n\n### 5. 📉 TRADES CLOSED TODAY\n"
-            if not sold_today.empty:
-                report += "| Ticker | Result P&L | Return % | Reason |\n| :--- | :--- | :--- | :--- |\n"
-                for _, row in sold_today.iterrows():
-                    report += f"| **{row['Ticker']}** | ${row['Realized_PL']:,.2f} | {row['Return_Pct']:.2f}% | {row.get('Sell_Rule', '')} |\n"
-            else:
-                report += "*No positions closed today.*\n"
-
-            report += "\n---\n\n### 6. ⚔️ ACTIVE CAMPAIGNS\n"
-            
-            if is_current_report:
-                if not snapshot_df.empty:
-                    report += "| Ticker | Close Price | Market Value | Open P&L | Return % |\n| :--- | :--- | :--- | :--- | :--- |\n"
-                    total_exp = 0
-                    for _, row in snapshot_df.iterrows():
-                        exp_pct = (row['Mkt_Value'] / nlv) * 100 if nlv != 0 else 0
-                        report += f"| **{row['Ticker']}** | ${row['Price']:.2f} | ${row['Mkt_Value']:,.2f} | ${row['Unreal_PL']:,.2f} | {row['Return']:.2f}% |\n"
-                        total_exp += exp_pct
-                    report += f"\n**Total Exposure:** {total_exp:.1f}%"
+                if not bought_today.empty:
+                    report += "| Ticker | Shares | Price | Value | Strategy |\n| :--- | :--- | :--- | :--- | :--- |\n"
+                    for _, row in bought_today.iterrows():
+                        report += f"| {row['Ticker']} | {int(row['Shares'])} | ${row['Amount']:.2f} | ${row['Value']:,.2f} | {row.get('Rule', '')} |\n"
                 else:
-                    report += "**100% CASH** (or no open trades found)\n"
-            else:
-                 report += "*(Historical snapshot not available for past dates. View Trade Log for details.)*"
+                    report += "*None*\n"
 
-            # --- RENDER ---
-            c_view, c_copy = st.columns([2, 1])
-            with c_view:
-                st.markdown("### 👁️ Report Preview")
-                with st.container(border=True):
-                    st.markdown(report)
-            
-            with c_copy:
-                st.markdown("### 📋 Copy for Records")
-                st.text_area("Raw Text", report, height=400)
-            
+                report += "\n### Trades Closed\n"
+                if not sold_today.empty:
+                    report += "| Ticker | P&L | Return | Reason |\n| :--- | :--- | :--- | :--- |\n"
+                    for _, row in sold_today.iterrows():
+                        report += f"| {row['Ticker']} | ${row['Realized_PL']:,.2f} | {row['Return_Pct']:.2f}% | {row.get('Sell_Rule', '')} |\n"
+                else:
+                    report += "*None*\n"
+
+                if has_review:
+                    report += f"\n### Review (Score: {score}/5)\n"
+                    if highlights and highlights != 'nan': report += f"* **Highlights:** {highlights}\n"
+                    if lowlights and lowlights != 'nan': report += f"* **Lowlights:** {lowlights}\n"
+                    if mistakes and mistakes != 'nan': report += f"* **Mistakes:** {mistakes}\n"
+                    if top_lesson and top_lesson != 'nan': report += f"* **Top Lesson:** {top_lesson}\n"
+
+                st.text_area("Raw Text", report, height=300)
+
         else:
             st.info("No journal entries found.")
     else:
