@@ -10188,17 +10188,19 @@ elif page == "Daily Report Card":
             except:
                 pass
 
-            # --- PORTFOLIO YTD ---
+            # --- PORTFOLIO YTD (TWR - matches Dashboard) ---
             port_ytd_pct = 0.0
             port_ytd_str = "N/A"
             jan1_ts = pd.Timestamp(f"{sel_year}-01-01")
             ytd_journal = df_j[(df_j['Day'] >= jan1_ts) & (df_j['Day'].dt.date <= selected_date)].sort_values('Day')
             if not ytd_journal.empty:
-                first_nlv = ytd_journal.iloc[0]['Beg NLV']
-                if first_nlv > 0:
-                    total_cash = ytd_journal['Cash -/+'].sum()
-                    port_ytd_pct = ((nlv - first_nlv - total_cash) / first_nlv) * 100
-                    port_ytd_str = f"{port_ytd_pct:+.2f}%"
+                ytd_j = ytd_journal.copy()
+                ytd_j['Adjusted_Beg'] = ytd_j['Beg NLV'] + ytd_j['Cash -/+']
+                mask = ytd_j['Adjusted_Beg'] != 0
+                ytd_j['Daily_Pct'] = 0.0
+                ytd_j.loc[mask, 'Daily_Pct'] = (ytd_j.loc[mask, 'End NLV'] - ytd_j.loc[mask, 'Adjusted_Beg']) / ytd_j.loc[mask, 'Adjusted_Beg']
+                port_ytd_pct = ((1 + ytd_j['Daily_Pct']).prod() - 1) * 100
+                port_ytd_str = f"{port_ytd_pct:+.2f}%"
 
             # Market Window from journal
             market_window = str(day_stats.get('Market Window', '')).strip()
