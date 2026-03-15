@@ -2637,7 +2637,7 @@ elif page == "Daily Journal":
                                             saved += 1
                                 conn.commit()
                             st.success(f"✅ Updated {saved} journal entries with SPY/Nasdaq ATR")
-                            load_data.clear()
+                            db.load_journal.clear()
                         except Exception as e:
                             st.error(f"DB Error: {e}")
                     elif not USE_DATABASE:
