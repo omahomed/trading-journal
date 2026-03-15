@@ -2525,37 +2525,36 @@ elif page == "Daily Journal":
                         st.info(f"Computed Portfolio Heat: **{heat:.4f}%**")
 
                         if USE_DATABASE:
-                            row = day_row.iloc[0]
-                            journal_entry = {
-                                'portfolio_id': CURR_PORT_NAME,
-                                'day': heat_date_str,
-                                'status': str(row.get('Status', 'U')),
-                                'market_window': str(row.get('Market Window', '') or ''),
-                                'above_21ema': float(row.get('> 21e', 0)),
-                                'cash_flow': float(row.get('Cash -/+', 0)),
-                                'beginning_nlv': float(row.get('Beg NLV', 0)),
-                                'ending_nlv': float(row.get('End NLV', 0)),
-                                'daily_dollar_change': float(row.get('Daily $ Change', 0)),
-                                'daily_percent_change': float(str(row.get('Daily % Change', '0')).replace('%', '') or 0),
-                                'percent_invested': float(row.get('% Invested', 0)),
-                                'spy_close': float(row.get('SPY', 0)),
-                                'nasdaq_close': float(row.get('Nasdaq', 0)),
-                                'market_notes': str(row.get('Market_Notes', '') or ''),
-                                'market_action': str(row.get('Market_Action', '') or ''),
-                                'portfolio_heat': heat,
-                                'score': int(row.get('Score', 0) or 0),
-                                'highlights': str(row.get('Highlights', '') or ''),
-                                'lowlights': str(row.get('Lowlights', '') or ''),
-                                'mistakes': str(row.get('Mistakes', '') or ''),
-                                'top_lesson': str(row.get('Top_Lesson', '') or ''),
-                            }
-                            db.save_journal_entry(journal_entry)
+                            # Direct UPDATE just for portfolio_heat
+                            try:
+                                with db.get_db_connection() as conn:
+                                    with conn.cursor() as cur:
+                                        cur.execute("""
+                                            UPDATE trading_journal
+                                            SET portfolio_heat = %s
+                                            WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s)
+                                            AND day = %s
+                                        """, (heat, CURR_PORT_NAME, heat_date_str))
+                                    conn.commit()
+
+                                    # Verify
+                                    with conn.cursor() as cur:
+                                        cur.execute("""
+                                            SELECT portfolio_heat FROM trading_journal
+                                            WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s)
+                                            AND day = %s
+                                        """, (CURR_PORT_NAME, heat_date_str))
+                                        result = cur.fetchone()
+                                        if result:
+                                            st.success(f"✅ Portfolio Heat saved: {heat:.4f}% (DB value: {result[0]})")
+                                        else:
+                                            st.error("No row found for that date")
+                            except Exception as e:
+                                st.error(f"DB Error: {e}")
                         else:
                             df_j.loc[day_row.index[0], 'Portfolio_Heat'] = heat
                             secure_save(df_j, TARGET_FILE)
-
-                        st.success(f"✅ Portfolio Heat saved for {heat_date_str}: {heat:.4f}%")
-                        st.rerun()
+                            st.success(f"✅ Portfolio Heat saved for {heat_date_str}: {heat:.4f}%")
 
 # ==============================================================================
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
