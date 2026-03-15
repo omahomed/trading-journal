@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS trading_journal (
     market_notes TEXT,
     market_action VARCHAR(100),
     portfolio_heat NUMERIC(10, 4) DEFAULT 0,
+    spy_atr NUMERIC(10, 4) DEFAULT 0,
+    nasdaq_atr NUMERIC(10, 4) DEFAULT 0,
     score INTEGER DEFAULT 0,
     highlights TEXT,
     lowlights TEXT,

@@ -54,6 +54,8 @@ if USE_DATABASE:
         with db.get_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS portfolio_heat NUMERIC(10, 4) DEFAULT 0")
+                cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS spy_atr NUMERIC(10, 4) DEFAULT 0")
+                cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS nasdaq_atr NUMERIC(10, 4) DEFAULT 0")
             conn.commit()
     except Exception as e:
         print(f"⚠️  DB migration note: {e}")
@@ -768,6 +770,41 @@ def compute_portfolio_heat(portfolio_name, equity=None):
         return float(round(total_heat, 4))
     except:
         return 0.0
+
+def compute_index_atr(ticker, start_date, end_date):
+    """Compute daily ATR% (21-period SMA) for an index over a date range.
+    Returns dict mapping date -> atr_pct (Python float).
+    """
+    try:
+        # Fetch extra days for the 21-period lookback
+        fetch_start = pd.Timestamp(start_date) - pd.Timedelta(days=45)
+        fetch_end = pd.Timestamp(end_date) + pd.Timedelta(days=1)
+        df_t = yf.Ticker(ticker).history(start=fetch_start, end=fetch_end)
+        if df_t.empty or len(df_t) < 21:
+            return {}
+        df_t.index = df_t.index.date
+
+        # Compute TR
+        df_t['H-L'] = df_t['High'] - df_t['Low']
+        df_t['H-PC'] = (df_t['High'] - df_t['Close'].shift(1)).abs()
+        df_t['L-PC'] = (df_t['Low'] - df_t['Close'].shift(1)).abs()
+        df_t['TR'] = df_t[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+
+        # Rolling 21-period SMA of TR and Low
+        df_t['SMA_TR'] = df_t['TR'].rolling(21).mean()
+        df_t['SMA_Low'] = df_t['Low'].rolling(21).mean()
+        df_t['ATR_Pct'] = (df_t['SMA_TR'] / df_t['SMA_Low']) * 100
+
+        # Filter to requested date range
+        start_d = pd.Timestamp(start_date).date()
+        end_d = pd.Timestamp(end_date).date()
+        result = {}
+        for d, row in df_t.iterrows():
+            if start_d <= d <= end_d and pd.notna(row['ATR_Pct']):
+                result[d] = float(row['ATR_Pct'])
+        return result
+    except:
+        return {}
 
 def compute_historical_market_windows(dates):
     """Compute M Factor market window for a list of historical dates.
@@ -2233,11 +2270,12 @@ elif page == "Daily Journal":
                 df_calc.loc[_mask, '_daily_dec'] = (df_calc.loc[_mask, 'End NLV'] - df_calc.loc[_mask, 'Adjusted_Beg']) / df_calc.loc[_mask, 'Adjusted_Beg']
                 df_calc['LTD_Pct'] = ((1 + df_calc['_daily_dec']).cumprod() - 1) * 100
 
-                # Ensure Portfolio_Heat is numeric
-                if 'Portfolio_Heat' in df_calc.columns:
-                    df_calc['Portfolio_Heat'] = pd.to_numeric(df_calc['Portfolio_Heat'], errors='coerce').fillna(0.0)
-                else:
-                    df_calc['Portfolio_Heat'] = 0.0
+                # Ensure ATR/Heat columns are numeric
+                for _atr_col in ['Portfolio_Heat', 'SPY_ATR', 'Nasdaq_ATR']:
+                    if _atr_col in df_calc.columns:
+                        df_calc[_atr_col] = pd.to_numeric(df_calc[_atr_col], errors='coerce').fillna(0.0)
+                    else:
+                        df_calc[_atr_col] = 0.0
 
                 df_calc['SPY_Pct'] = df_calc['SPY'].pct_change() * 100
                 df_calc['Nasdaq_Pct'] = df_calc['Nasdaq'].pct_change() * 100
@@ -2263,7 +2301,9 @@ elif page == "Daily Journal":
                     'LTD_Pct',
                     'Portfolio_Heat',
                     'SPY_Pct',
+                    'SPY_ATR',
                     'Nasdaq_Pct',
+                    'Nasdaq_ATR',
                     'Market_Notes',
                     'Market_Action',
                     'Mistakes',
@@ -2301,7 +2341,9 @@ elif page == "Daily Journal":
                         'LTD_Pct': '{:+.2f}%',
                         'Portfolio_Heat': '{:.2f}%',
                         'SPY_Pct': '{:+.2f}%',
+                        'SPY_ATR': '{:.2f}%',
                         'Nasdaq_Pct': '{:+.2f}%',
+                        'Nasdaq_ATR': '{:.2f}%',
                         'Score': '{:.0f}'
                     })
                     .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'LTD_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
@@ -2561,6 +2603,45 @@ elif page == "Daily Journal":
                             df_j.loc[day_row.index[0], 'Portfolio_Heat'] = heat
                             secure_save(df_j, TARGET_FILE)
                             st.success(f"✅ Portfolio Heat saved for {heat_date_str}: {heat:.4f}%")
+
+            st.markdown("---")
+            st.subheader("Backfill SPY & Nasdaq ATR")
+            atr_col1, atr_col2 = st.columns(2)
+            with atr_col1:
+                atr_start = st.date_input("Start date", value=date(2026, 3, 3), key="atr_bf_start")
+            with atr_col2:
+                atr_end = st.date_input("End date", value=date(2026, 3, 14), key="atr_bf_end")
+            if st.button("📊 COMPUTE & SAVE SPY/NASDAQ ATR"):
+                with st.spinner("Computing ATR% for SPY and Nasdaq..."):
+                    spy_atr_map = compute_index_atr('SPY', atr_start.strftime('%Y-%m-%d'), atr_end.strftime('%Y-%m-%d'))
+                    ndx_atr_map = compute_index_atr('^IXIC', atr_start.strftime('%Y-%m-%d'), atr_end.strftime('%Y-%m-%d'))
+                    st.write(f"SPY ATR computed for {len(spy_atr_map)} days, Nasdaq ATR for {len(ndx_atr_map)} days")
+
+                    if USE_DATABASE and (spy_atr_map or ndx_atr_map):
+                        saved = 0
+                        try:
+                            with db.get_db_connection() as conn:
+                                with conn.cursor() as cur:
+                                    # Get all journal dates in range
+                                    all_dates = set(list(spy_atr_map.keys()) + list(ndx_atr_map.keys()))
+                                    for d in sorted(all_dates):
+                                        s_val = float(spy_atr_map.get(d, 0))
+                                        n_val = float(ndx_atr_map.get(d, 0))
+                                        cur.execute("""
+                                            UPDATE trading_journal
+                                            SET spy_atr = %s, nasdaq_atr = %s
+                                            WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s)
+                                            AND day = %s
+                                        """, (s_val, n_val, CURR_PORT_NAME, d.strftime('%Y-%m-%d')))
+                                        if cur.rowcount > 0:
+                                            saved += 1
+                                conn.commit()
+                            st.success(f"✅ Updated {saved} journal entries with SPY/Nasdaq ATR")
+                            load_data.clear()
+                        except Exception as e:
+                            st.error(f"DB Error: {e}")
+                    elif not USE_DATABASE:
+                        st.warning("CSV mode — backfill not supported for ATR columns")
 
 # ==============================================================================
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
@@ -3245,7 +3326,7 @@ if page == "Daily Routine":
     'Day', 'Status', 'Market Window', '> 21e', 'Cash -/+',
     'Beg NLV', 'End NLV', 'Daily $ Change', 'Daily % Change',
     '% Invested', 'SPY', 'Nasdaq', 'Market_Notes', 'Market_Action',
-    'Portfolio_Heat',
+    'Portfolio_Heat', 'SPY_ATR', 'Nasdaq_ATR',
     'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson'
     ]
 
@@ -3430,6 +3511,19 @@ if page == "Daily Routine":
                     # Compute portfolio heat (ATR-weighted)
                     heat_val = compute_portfolio_heat(p_name, equity=end_nlv)
 
+                    # Compute SPY and Nasdaq daily ATR%
+                    spy_atr_val = 0.0
+                    nasdaq_atr_val = 0.0
+                    try:
+                        spy_atr_dict = compute_index_atr('SPY', entry_date_str, entry_date_str)
+                        if spy_atr_dict:
+                            spy_atr_val = list(spy_atr_dict.values())[0]
+                        nasdaq_atr_dict = compute_index_atr('^IXIC', entry_date_str, entry_date_str)
+                        if nasdaq_atr_dict:
+                            nasdaq_atr_val = list(nasdaq_atr_dict.values())[0]
+                    except:
+                        pass
+
                     # 4. CREATE ROW (Updated with Review Data)
                     new_row = {
                         'Day': entry_date_str, 'Status': 'U', 'Market Window': live_market_window, '> 21e': 0.0,
@@ -3439,6 +3533,8 @@ if page == "Daily Routine":
                         'Market_Notes': market_notes,
                         'Market_Action': inputs['note'],
                         'Portfolio_Heat': heat_val,
+                        'SPY_ATR': spy_atr_val,
+                        'Nasdaq_ATR': nasdaq_atr_val,
                         'Score': daily_score,
                         'Highlights': highlights,
                         'Lowlights': lowlights,
@@ -3467,6 +3563,8 @@ if page == "Daily Routine":
                                 'market_notes': market_notes,
                                 'market_action': inputs['note'],
                                 'portfolio_heat': heat_val,
+                                'spy_atr': spy_atr_val,
+                                'nasdaq_atr': nasdaq_atr_val,
                                 'score': daily_score,
                                 'highlights': highlights,
                                 'lowlights': lowlights,
