@@ -10152,9 +10152,9 @@ elif page == "Daily Report Card":
                 spy_hist = yf.Ticker("SPY").history(start=ytd_start, end=end_fetch)
                 ndx_hist = yf.Ticker("^IXIC").history(start=ytd_start, end=end_fetch)
                 if not spy_hist.empty:
-                    spy_hist.index = spy_hist.index.tz_localize(None).date if hasattr(spy_hist.index, 'tz_localize') else spy_hist.index.date
+                    spy_hist.index = spy_hist.index.date
                 if not ndx_hist.empty:
-                    ndx_hist.index = ndx_hist.index.tz_localize(None).date if hasattr(ndx_hist.index, 'tz_localize') else ndx_hist.index.date
+                    ndx_hist.index = ndx_hist.index.date
 
                 # Remove duplicate dates (keep last)
                 spy_hist = spy_hist[~pd.Index(spy_hist.index).duplicated(keep='last')]
