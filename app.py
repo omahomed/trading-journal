@@ -10144,8 +10144,8 @@ elif page == "Daily Report Card":
             ndx_ytd_str = "N/A"
 
             sel_year = selected_date.year
-            ytd_start = pd.Timestamp(f"{sel_year}-01-01") - pd.Timedelta(days=5)
-            start_fetch = pd.Timestamp(selected_date) - pd.Timedelta(days=7)
+            # Fetch from mid-December prior year to ensure we get last trading day of prior year
+            ytd_start = pd.Timestamp(f"{sel_year - 1}-12-15")
             end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
 
             try:
