@@ -354,7 +354,6 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.nasdaq AS "Nasdaq",
                         j.market_notes AS "Market_Notes",
                         j.market_action AS "Market_Action",
-                        j.portfolio_heat AS "Portfolio_Heat",
                         j.score AS "Score",
                         j.highlights AS "Highlights",
                         j.lowlights AS "Lowlights",
@@ -416,6 +415,34 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         # Continue anyway - column might be usable as-is
 
                     df['Day'] = pd.to_datetime(df['Day'], errors='coerce')
+
+                    # Add Portfolio_Heat if column exists in DB
+                    if 'Portfolio_Heat' not in df.columns:
+                        try:
+                            cur.execute("""
+                                SELECT column_name FROM information_schema.columns
+                                WHERE table_name = 'trading_journal' AND column_name = 'portfolio_heat'
+                            """)
+                            if cur.fetchone():
+                                heat_query = f"""
+                                    SELECT j.day, j.portfolio_heat
+                                    FROM trading_journal j
+                                    JOIN portfolios p ON j.portfolio_id = p.id
+                                    WHERE p.name = '{portfolio_name}'
+                                """
+                                cur.execute(heat_query)
+                                heat_rows = cur.fetchall()
+                                if heat_rows:
+                                    heat_df = pd.DataFrame(heat_rows, columns=['Day', 'Portfolio_Heat'])
+                                    heat_df['Day'] = pd.to_datetime(heat_df['Day'], errors='coerce')
+                                    from decimal import Decimal
+                                    heat_df['Portfolio_Heat'] = pd.to_numeric(heat_df['Portfolio_Heat'], errors='coerce').fillna(0)
+                                    df = df.merge(heat_df, on='Day', how='left')
+                                    df['Portfolio_Heat'] = df['Portfolio_Heat'].fillna(0)
+                            else:
+                                df['Portfolio_Heat'] = 0.0
+                        except:
+                            df['Portfolio_Heat'] = 0.0
 
                 return df
     except Exception as e:
@@ -1008,6 +1035,14 @@ def save_journal_entry(journal_entry):
             market_notes = journal_entry.get('market_notes', '')
             market_action = journal_entry.get('market_action', '')
             portfolio_heat = journal_entry.get('portfolio_heat', 0.0)
+
+            # Check if portfolio_heat column exists
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'trading_journal' AND column_name = 'portfolio_heat'
+            """)
+            has_heat_col = cur.fetchone() is not None
+
             score = journal_entry.get('score', 0)
             highlights = journal_entry.get('highlights', '')
             lowlights = journal_entry.get('lowlights', '')
@@ -1023,52 +1058,98 @@ def save_journal_entry(journal_entry):
 
             if existing:
                 # UPDATE existing entry
-                update_query = """
-                    UPDATE trading_journal
-                    SET status = %s, market_window = %s, above_21ema = %s,
-                        cash_change = %s, beg_nlv = %s, end_nlv = %s,
-                        daily_dollar_change = %s, daily_pct_change = %s,
-                        pct_invested = %s, spy = %s, nasdaq = %s,
-                        market_notes = %s, market_action = %s,
-                        portfolio_heat = %s, score = %s,
-                        highlights = %s, lowlights = %s, mistakes = %s,
-                        top_lesson = %s
-                    WHERE id = %s
-                    RETURNING id
-                """
-                cur.execute(update_query, (
-                    status, market_window, above_21ema,
-                    cash_change, beg_nlv, end_nlv,
-                    daily_dollar_change, daily_pct_change,
-                    pct_invested, spy, nasdaq,
-                    market_notes, market_action,
-                    portfolio_heat, score,
-                    highlights, lowlights, mistakes,
-                    top_lesson,
-                    existing[0]
-                ))
+                if has_heat_col:
+                    update_query = """
+                        UPDATE trading_journal
+                        SET status = %s, market_window = %s, above_21ema = %s,
+                            cash_change = %s, beg_nlv = %s, end_nlv = %s,
+                            daily_dollar_change = %s, daily_pct_change = %s,
+                            pct_invested = %s, spy = %s, nasdaq = %s,
+                            market_notes = %s, market_action = %s,
+                            portfolio_heat = %s, score = %s,
+                            highlights = %s, lowlights = %s, mistakes = %s,
+                            top_lesson = %s
+                        WHERE id = %s
+                        RETURNING id
+                    """
+                    cur.execute(update_query, (
+                        status, market_window, above_21ema,
+                        cash_change, beg_nlv, end_nlv,
+                        daily_dollar_change, daily_pct_change,
+                        pct_invested, spy, nasdaq,
+                        market_notes, market_action,
+                        portfolio_heat, score,
+                        highlights, lowlights, mistakes,
+                        top_lesson,
+                        existing[0]
+                    ))
+                else:
+                    update_query = """
+                        UPDATE trading_journal
+                        SET status = %s, market_window = %s, above_21ema = %s,
+                            cash_change = %s, beg_nlv = %s, end_nlv = %s,
+                            daily_dollar_change = %s, daily_pct_change = %s,
+                            pct_invested = %s, spy = %s, nasdaq = %s,
+                            market_notes = %s, market_action = %s, score = %s,
+                            highlights = %s, lowlights = %s, mistakes = %s,
+                            top_lesson = %s
+                        WHERE id = %s
+                        RETURNING id
+                    """
+                    cur.execute(update_query, (
+                        status, market_window, above_21ema,
+                        cash_change, beg_nlv, end_nlv,
+                        daily_dollar_change, daily_pct_change,
+                        pct_invested, spy, nasdaq,
+                        market_notes, market_action, score,
+                        highlights, lowlights, mistakes,
+                        top_lesson,
+                        existing[0]
+                    ))
             else:
                 # INSERT new entry
-                insert_query = """
-                    INSERT INTO trading_journal (
+                if has_heat_col:
+                    insert_query = """
+                        INSERT INTO trading_journal (
+                            portfolio_id, day, status, market_window, above_21ema,
+                            cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                            daily_pct_change, pct_invested, spy, nasdaq,
+                            market_notes, market_action, portfolio_heat, score,
+                            highlights, lowlights, mistakes, top_lesson
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        RETURNING id
+                    """
+                    cur.execute(insert_query, (
                         portfolio_id, day, status, market_window, above_21ema,
                         cash_change, beg_nlv, end_nlv, daily_dollar_change,
                         daily_pct_change, pct_invested, spy, nasdaq,
                         market_notes, market_action, portfolio_heat, score,
                         highlights, lowlights, mistakes, top_lesson
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    RETURNING id
-                """
-                cur.execute(insert_query, (
-                    portfolio_id, day, status, market_window, above_21ema,
-                    cash_change, beg_nlv, end_nlv, daily_dollar_change,
-                    daily_pct_change, pct_invested, spy, nasdaq,
-                    market_notes, market_action, portfolio_heat, score,
-                    highlights, lowlights, mistakes, top_lesson
-                ))
+                    ))
+                else:
+                    insert_query = """
+                        INSERT INTO trading_journal (
+                            portfolio_id, day, status, market_window, above_21ema,
+                            cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                            daily_pct_change, pct_invested, spy, nasdaq,
+                            market_notes, market_action, score,
+                            highlights, lowlights, mistakes, top_lesson
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        RETURNING id
+                    """
+                    cur.execute(insert_query, (
+                        portfolio_id, day, status, market_window, above_21ema,
+                        cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                        daily_pct_change, pct_invested, spy, nasdaq,
+                        market_notes, market_action, score,
+                        highlights, lowlights, mistakes, top_lesson
+                    ))
 
             row_id = cur.fetchone()[0]
             conn.commit()
