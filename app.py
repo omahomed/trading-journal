@@ -765,7 +765,7 @@ def compute_portfolio_heat(portfolio_name, equity=None):
             except:
                 continue
 
-        return round(total_heat, 4)
+        return float(round(total_heat, 4))
     except:
         return 0.0
 
@@ -2534,7 +2534,7 @@ elif page == "Daily Journal":
                                             SET portfolio_heat = %s
                                             WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s)
                                             AND day = %s
-                                        """, (heat, CURR_PORT_NAME, heat_date_str))
+                                        """, (float(heat), CURR_PORT_NAME, heat_date_str))
                                     conn.commit()
 
                                     # Verify
