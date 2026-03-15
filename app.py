@@ -10133,34 +10133,72 @@ elif page == "Daily Report Card":
             prev_adj = day_stats['Beg NLV'] + day_stats['Cash -/+']
             day_pct = (day_dol / prev_adj * 100) if prev_adj != 0 else 0.0
 
-            # SPY / Nasdaq from journal data
-            spy_val = day_stats.get('SPY', 0.0)
-            ndx_val = day_stats.get('Nasdaq', 0.0)
-            spy_chg_str = f"{spy_val:+.2f}%" if spy_val != 0 else "N/A"
-            ndx_chg_str = f"{ndx_val:+.2f}%" if ndx_val != 0 else "N/A"
+            # --- FETCH SPY / NASDAQ DATA (daily + YTD) ---
+            spy_daily_pct = 0.0
+            ndx_daily_pct = 0.0
+            spy_ytd_pct = 0.0
+            ndx_ytd_pct = 0.0
+            spy_chg_str = "N/A"
+            ndx_chg_str = "N/A"
+            spy_ytd_str = "N/A"
+            ndx_ytd_str = "N/A"
 
-            # If journal SPY/Nasdaq are zero, try live fetch
-            if spy_val == 0 or ndx_val == 0:
-                start_fetch = pd.Timestamp(selected_date) - pd.Timedelta(days=7)
-                end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
-                try:
-                    spy_hist = yf.Ticker("SPY").history(start=start_fetch, end=end_fetch)
-                    ndx_hist = yf.Ticker("^IXIC").history(start=start_fetch, end=end_fetch)
-                    spy_hist.index = spy_hist.index.date
-                    ndx_hist.index = ndx_hist.index.date
-                    if selected_date in spy_hist.index:
-                        curr_loc = spy_hist.index.get_loc(selected_date)
-                        if curr_loc > 0:
-                            spy_pct = ((spy_hist.iloc[curr_loc]['Close'] - spy_hist.iloc[curr_loc - 1]['Close']) / spy_hist.iloc[curr_loc - 1]['Close']) * 100
-                            spy_chg_str = f"{spy_pct:+.2f}%"
-                            if selected_date in ndx_hist.index:
-                                n_loc = ndx_hist.index.get_loc(selected_date)
-                                ndx_pct = ((ndx_hist.iloc[n_loc]['Close'] - ndx_hist.iloc[n_loc - 1]['Close']) / ndx_hist.iloc[n_loc - 1]['Close']) * 100
-                                ndx_chg_str = f"{ndx_pct:+.2f}%"
-                    else:
-                        spy_chg_str = "Market Closed"
-                except:
-                    pass
+            sel_year = selected_date.year
+            ytd_start = pd.Timestamp(f"{sel_year}-01-01") - pd.Timedelta(days=5)
+            start_fetch = pd.Timestamp(selected_date) - pd.Timedelta(days=7)
+            end_fetch = pd.Timestamp(selected_date) + pd.Timedelta(days=1)
+
+            try:
+                spy_hist = yf.Ticker("SPY").history(start=ytd_start, end=end_fetch)
+                ndx_hist = yf.Ticker("^IXIC").history(start=ytd_start, end=end_fetch)
+                spy_hist.index = spy_hist.index.date
+                ndx_hist.index = ndx_hist.index.date
+
+                # Daily change
+                if selected_date in spy_hist.index:
+                    curr_loc = list(spy_hist.index).index(selected_date)
+                    if curr_loc > 0:
+                        spy_daily_pct = ((spy_hist.iloc[curr_loc]['Close'] - spy_hist.iloc[curr_loc - 1]['Close']) / spy_hist.iloc[curr_loc - 1]['Close']) * 100
+                        spy_chg_str = f"{spy_daily_pct:+.2f}%"
+                else:
+                    spy_chg_str = "Market Closed"
+
+                if selected_date in ndx_hist.index:
+                    n_loc = list(ndx_hist.index).index(selected_date)
+                    if n_loc > 0:
+                        ndx_daily_pct = ((ndx_hist.iloc[n_loc]['Close'] - ndx_hist.iloc[n_loc - 1]['Close']) / ndx_hist.iloc[n_loc - 1]['Close']) * 100
+                        ndx_chg_str = f"{ndx_daily_pct:+.2f}%"
+
+                # YTD: find last trading day of prior year
+                jan1 = date(sel_year, 1, 1)
+                spy_prior = spy_hist[spy_hist.index < jan1]
+                ndx_prior = ndx_hist[ndx_hist.index < jan1]
+
+                if not spy_prior.empty and selected_date in spy_hist.index:
+                    spy_base = spy_prior.iloc[-1]['Close']
+                    spy_sel = spy_hist.loc[selected_date]['Close']
+                    spy_ytd_pct = ((spy_sel - spy_base) / spy_base) * 100
+                    spy_ytd_str = f"{spy_ytd_pct:+.2f}%"
+
+                if not ndx_prior.empty and selected_date in ndx_hist.index:
+                    ndx_base = ndx_prior.iloc[-1]['Close']
+                    ndx_sel = ndx_hist.loc[selected_date]['Close']
+                    ndx_ytd_pct = ((ndx_sel - ndx_base) / ndx_base) * 100
+                    ndx_ytd_str = f"{ndx_ytd_pct:+.2f}%"
+            except:
+                pass
+
+            # --- PORTFOLIO YTD ---
+            port_ytd_pct = 0.0
+            port_ytd_str = "N/A"
+            jan1_ts = pd.Timestamp(f"{sel_year}-01-01")
+            ytd_journal = df_j[(df_j['Day'] >= jan1_ts) & (df_j['Day'].dt.date <= selected_date)].sort_values('Day')
+            if not ytd_journal.empty:
+                first_nlv = ytd_journal.iloc[0]['Beg NLV']
+                if first_nlv > 0:
+                    total_cash = ytd_journal['Cash -/+'].sum()
+                    port_ytd_pct = ((nlv - first_nlv - total_cash) / first_nlv) * 100
+                    port_ytd_str = f"{port_ytd_pct:+.2f}%"
 
             # Market Window from journal
             market_window = str(day_stats.get('Market Window', '')).strip()
@@ -10181,18 +10219,19 @@ elif page == "Daily Report Card":
                 peak_nlv = hist_slice_post['End NLV'].max()
                 dd_pct = ((curr_nlv - peak_nlv) / peak_nlv) * 100 if peak_nlv > 0 else 0.0
 
-                if dd_pct >= -5:
+                # Hard decks aligned with Risk Manager: 7.5%, 12.5%, 15%
+                if dd_pct >= -7.5:
                     risk_msg = "GREEN LIGHT"
                     risk_color = "#2ca02c"
-                elif -5 > dd_pct >= -7:
-                    risk_msg = "YELLOW LIGHT"
-                    risk_color = "#ffcc00"
-                elif -7 > dd_pct >= -10:
-                    risk_msg = "ORANGE LIGHT"
+                elif -7.5 > dd_pct >= -12.5:
+                    risk_msg = "CAUTION - Remove Margin"
                     risk_color = "#ff8c00"
-                else:
-                    risk_msg = "RED LIGHT"
+                elif -12.5 > dd_pct >= -15:
+                    risk_msg = "MAX 30% INVESTED"
                     risk_color = "#ff4b4b"
+                else:
+                    risk_msg = "GO TO CASH"
+                    risk_color = "#8B0000"
 
             # --- PREP TRADE DATA ---
             bought_today = pd.DataFrame()
@@ -10255,12 +10294,13 @@ elif page == "Daily Report Card":
             col_left, col_right = st.columns(2)
 
             with col_left:
-                st.markdown("##### Market Performance")
-                mkt_data = {
-                    'Index': ['SPY', 'NASDAQ'],
-                    'Change': [spy_chg_str, ndx_chg_str],
-                }
-                st.dataframe(pd.DataFrame(mkt_data), hide_index=True, use_container_width=True)
+                st.markdown("##### Performance Comparison")
+                perf_data = pd.DataFrame({
+                    '': ['Portfolio', 'SPY', 'NASDAQ'],
+                    'Daily': [f"{day_pct:+.2f}%", spy_chg_str, ndx_chg_str],
+                    'YTD': [port_ytd_str, spy_ytd_str, ndx_ytd_str],
+                })
+                st.dataframe(perf_data, hide_index=True, use_container_width=True)
 
                 # Drawdown info
                 st.markdown(f"**Drawdown:** {dd_pct:.2f}% from peak")
@@ -10393,63 +10433,7 @@ elif page == "Daily Report Card":
                 st.divider()
 
             # =====================================================
-            # SECTION 5: ACTIVE CAMPAIGNS (current date only)
-            # =====================================================
-            if is_current_report:
-                open_pos_snapshot = []
-                if not df_s.empty:
-                    current_open = df_s[df_s['Status'] == 'OPEN'].copy()
-                    for _, row in current_open.iterrows():
-                        tkr = row['Ticker']
-                        try:
-                            live_p = yf.Ticker(tkr).history(period='1d')['Close'].iloc[-1]
-                        except:
-                            if row['Shares'] > 0:
-                                live_p = (row['Total_Cost'] + row['Unrealized_PL']) / row['Shares']
-                            else: live_p = row['Avg_Entry']
-
-                        mkt_val = row['Shares'] * live_p
-                        unreal = mkt_val - row['Total_Cost']
-                        ret = (unreal / row['Total_Cost']) * 100 if row['Total_Cost'] else 0
-
-                        open_pos_snapshot.append({
-                            'Ticker': tkr,
-                            'Price': live_p,
-                            'Mkt Value': mkt_val,
-                            'Open P&L': unreal,
-                            'Return %': ret
-                        })
-
-                snapshot_df = pd.DataFrame(open_pos_snapshot)
-                if not snapshot_df.empty:
-                    snapshot_df = snapshot_df.sort_values('Return %', ascending=False)
-                    st.markdown("##### Active Campaigns")
-
-                    # Interactive: make tickers clickable
-                    for ridx, (_, row) in enumerate(snapshot_df.iterrows()):
-                        ticker = str(row['Ticker'])
-                        ac1, ac2, ac3, ac4 = st.columns([1, 1, 1, 1])
-                        with ac1:
-                            if st.button(f"🔍 {ticker}", key=f"drc_active_{ridx}_{ticker}"):
-                                st.session_state['tj_ticker_search'] = [ticker]
-                                st.session_state['journal_searched'] = True
-                                st.session_state.page = "Trade Journal"
-                                st.rerun()
-                        ac2.metric("Price", f"${row['Price']:.2f}")
-                        pl_val = row['Open P&L']
-                        ac3.metric("Open P&L", f"${pl_val:+,.2f}")
-                        ac4.metric("Return", f"{row['Return %']:+.2f}%")
-
-                    total_exp = sum((r['Mkt Value'] / nlv) * 100 for _, r in snapshot_df.iterrows()) if nlv != 0 else 0
-                    st.markdown(f"**Total Exposure:** {total_exp:.1f}%")
-                else:
-                    st.markdown("##### Active Campaigns")
-                    st.caption("100% CASH (no open trades)")
-
-                st.divider()
-
-            # =====================================================
-            # SECTION 6: MARKDOWN EXPORT (collapsed)
+            # SECTION 5: MARKDOWN EXPORT (collapsed)
             # =====================================================
             with st.expander("📋 Export Report (Markdown)"):
                 # Generate markdown for copy
@@ -10461,17 +10445,19 @@ elif page == "Daily Report Card":
 
 ---
 
-### Market
-* **SPY:** {spy_chg_str}
-* **NASDAQ:** {ndx_chg_str}
-* **Notes:** {day_stats.get('Market_Notes', '')}
-
 ### Performance
+| | Daily | YTD |
+| :--- | :--- | :--- |
+| **Portfolio** | {day_pct:+.2f}% | {port_ytd_str} |
+| **SPY** | {spy_chg_str} | {spy_ytd_str} |
+| **NASDAQ** | {ndx_chg_str} | {ndx_ytd_str} |
+
 | Metric | Value |
 | :--- | :--- |
-| **Daily P&L** | ${day_dol:+,.2f} ({day_pct:+.2f}%) |
+| **Daily P&L** | ${day_dol:+,.2f} |
 | **Drawdown** | {dd_pct:.2f}% |
 | **Risk** | {risk_msg} |
+| **Notes** | {day_stats.get('Market_Notes', '')} |
 
 ### Trades Opened
 """
