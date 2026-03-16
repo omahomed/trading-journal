@@ -7264,7 +7264,7 @@ elif page == "Active Campaign Summary":
                  if r['Return_Pct'] >= 10.0:
                      avg_entry = float(r.get('Avg_Entry', 0))
                      avg_stop = float(r.get('Avg Stop', 0))
-                     if avg_entry > 0 and avg_stop > 0 and avg_stop < avg_entry:
+                     if avg_entry > 0 and avg_stop > 0 and avg_stop < (avg_entry - 0.01):
                          st.info(f"📈 **{r['Ticker']}**: Up {r['Return_Pct']:.2f}%. Consider moving stop to BE (${avg_entry:.2f}). Current stop: ${avg_stop:.2f}.")
                          all_clear = False
 
