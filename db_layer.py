@@ -1018,6 +1018,10 @@ def save_journal_entry(journal_entry):
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
+            # Ensure market_action column can hold longer strings
+            cur.execute("ALTER TABLE trading_journal ALTER COLUMN market_action TYPE TEXT")
+            conn.commit()
+
             # Get portfolio_id from name
             portfolio_name = journal_entry.get('portfolio_id')
             cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))

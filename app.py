@@ -3401,14 +3401,20 @@ if page == "Daily Routine":
             day_trades = df_details[df_details['Date'] == date_str]
             if day_trades.empty:
                 return ""
-            actions = []
+            grouped = {}
             for _, row in day_trades.iterrows():
                 action = str(row.get('Action', '')).upper()
                 ticker = str(row.get('Ticker', ''))
-                shares = row.get('Shares', 0)
-                label = "BUY" if action == "BUY" else "SELL" if action == "SELL" else "ADD" if action == "ADD" else action
-                actions.append(f"{label}: {ticker} ({int(shares)})")
-            return ", ".join(actions)
+                label = "BUY" if action == "BUY" else "SELL" if action == "SELL" else action
+                grouped.setdefault(label, []).append(ticker)
+            parts = []
+            for label in ["SELL", "BUY"]:
+                if label in grouped:
+                    parts.append(f"{label}: {', '.join(grouped[label])}")
+            for label in grouped:
+                if label not in ["SELL", "BUY"]:
+                    parts.append(f"{label}: {', '.join(grouped[label])}")
+            return " | ".join(parts)
         except:
             return ""
 

@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS trading_journal (
     spy NUMERIC(10, 2) DEFAULT 0,
     nasdaq NUMERIC(10, 2) DEFAULT 0,
     market_notes TEXT,
-    market_action VARCHAR(100),
+    market_action TEXT,
     portfolio_heat NUMERIC(10, 4) DEFAULT 0,
     spy_atr NUMERIC(10, 4) DEFAULT 0,
     nasdaq_atr NUMERIC(10, 4) DEFAULT 0,
