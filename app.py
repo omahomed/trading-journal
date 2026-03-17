@@ -9115,7 +9115,7 @@ elif page == "Trade Journal":
                             <div style="font-size: 16px; font-weight: 600;">{days_held}</div>
                         </div>
                     </div>
-                    {'<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 15px;">' +
+                    {('<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 15px;">' +
                     '<div>' +
                     '<div style="font-size: 11px; color: #666; text-transform: uppercase;">Core P&L</div>' +
                     f'<div style="font-size: 16px; font-weight: 600; color: {"#28a745" if core_pl >= 0 else "#dc3545"};">' +
@@ -9138,7 +9138,7 @@ elif page == "Trade Journal":
                     '<div style="font-size: 11px; color: #666; text-transform: uppercase;">B1 Price</div>' +
                     f'<div style="font-size: 16px; font-weight: 600;">${b1_price:,.2f}</div>' +
                     '</div>' +
-                    '</div>' if has_core_add else ''}
+                    '</div>') if has_core_add else ''}
                     <div style="font-size: 12px; color: #666;">
                         <strong>Trade ID:</strong> {trade_id} |
                         <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}
