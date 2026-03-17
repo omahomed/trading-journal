@@ -5471,7 +5471,9 @@ elif page == "Trade Manager":
     with tab6:
         st.warning("⚠️ **Danger Zone**: Deleting a trade will permanently remove ALL transactions for that campaign.")
 
-        del_id = st.selectbox("ID to Delete", df_s['Trade_ID'].tolist() if not df_s.empty else [])
+        del_opts = df_s.apply(lambda r: f"{r['Trade_ID']} — {r['Ticker']} ({r['Status']})", axis=1).tolist() if not df_s.empty else []
+        del_sel = st.selectbox("ID to Delete", del_opts, index=None, placeholder="Type to search trades...")
+        del_id = del_sel.split(" — ")[0] if del_sel else None
 
         if del_id:
             # Show what will be deleted
