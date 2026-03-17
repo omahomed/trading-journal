@@ -5439,6 +5439,34 @@ elif page == "Trade Manager":
                 st.success(f"✅ Rebuilt {len(all_ids)} campaigns. Backup saved.")
                 st.rerun()
 
+        # --- ORPHAN CLEANUP ---
+        st.markdown("---")
+        st.subheader("🧹 Orphan Cleanup")
+        if not df_d.empty and not df_s.empty:
+            det_ids = set(df_d['Trade_ID'].unique())
+            sum_ids = set(df_s['Trade_ID'].unique())
+            orphan_details = det_ids - sum_ids  # Details with no summary
+            if orphan_details:
+                st.warning(f"⚠️ Found **{len(orphan_details)} orphaned campaign(s)** in details with no matching summary:")
+                for oid in sorted(orphan_details):
+                    orphan_rows = df_d[df_d['Trade_ID'] == oid]
+                    ticker = orphan_rows['Ticker'].iloc[0] if not orphan_rows.empty else '?'
+                    st.write(f"  - **{ticker}** ({oid}) — {len(orphan_rows)} transaction(s)")
+                if st.button("DELETE ORPHANED DETAIL ROWS", type="secondary"):
+                    if USE_DATABASE:
+                        try:
+                            for oid in orphan_details:
+                                db.delete_trade(CURR_PORT_NAME, oid)
+                            db.load_details.clear()
+                        except Exception as e:
+                            st.error(f"❌ DB cleanup failed: {e}")
+                    df_d = df_d[~df_d['Trade_ID'].isin(orphan_details)]
+                    secure_save(df_d, DETAILS_FILE)
+                    st.success(f"✅ Removed {len(orphan_details)} orphaned campaign(s)")
+                    st.rerun()
+            else:
+                st.success("✅ No orphaned records found.")
+
     # --- TAB 6: DELETE TRADE ---
     with tab6:
         st.warning("⚠️ **Danger Zone**: Deleting a trade will permanently remove ALL transactions for that campaign.")

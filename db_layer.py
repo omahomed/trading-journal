@@ -835,7 +835,7 @@ def sync_trade_summary(portfolio_name, trade_id, update_data):
 def delete_trade(portfolio_name, trade_id):
     """
     Delete a trade and all its transactions.
-    CASCADE will handle details automatically.
+    Explicitly deletes from both details and summary tables.
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -845,6 +845,13 @@ def delete_trade(portfolio_name, trade_id):
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
+            # Delete details first (child rows)
+            cur.execute("""
+                DELETE FROM trades_details
+                WHERE portfolio_id = %s AND trade_id = %s
+            """, (portfolio_id, trade_id))
+
+            # Delete summary (parent row)
             cur.execute("""
                 DELETE FROM trades_summary
                 WHERE portfolio_id = %s AND trade_id = %s
