@@ -5484,8 +5484,8 @@ elif page == "Trade Manager":
                 # Delete from database first
                 if USE_DATABASE:
                     try:
-                        db.delete_trade(portfolio, del_id)
-                        st.info("🗑️ Deleted from database")
+                        db.delete_trade(CURR_PORT_NAME, del_id)
+                        st.success("🗑️ Deleted from database")
                     except Exception as e:
                         st.warning(f"⚠️ Database delete failed: {e}. CSV deleted successfully.")
 
@@ -5494,6 +5494,7 @@ elif page == "Trade Manager":
                 df_d = df_d[df_d['Trade_ID']!=del_id]
                 secure_save(df_s, SUMMARY_FILE)
                 secure_save(df_d, DETAILS_FILE)
+                st.rerun()
 
 # ==============================================================================
 # TAB 8: ACTIVE CAMPAIGN DETAILED (DYNAMIC FLIGHT DECK + ORIG COST)
