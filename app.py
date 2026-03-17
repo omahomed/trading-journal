@@ -5485,9 +5485,12 @@ elif page == "Trade Manager":
                 if USE_DATABASE:
                     try:
                         db.delete_trade(CURR_PORT_NAME, del_id)
-                        st.success("🗑️ Deleted from database")
+                        # Force clear all caches to ensure fresh data on reload
+                        db.load_summary.clear()
+                        db.load_details.clear()
+                        st.success(f"🗑️ Deleted {del_id} from database")
                     except Exception as e:
-                        st.warning(f"⚠️ Database delete failed: {e}. CSV deleted successfully.")
+                        st.warning(f"⚠️ Database delete failed: {e}. Trying CSV cleanup.")
 
                 # Perform deletion from DataFrames
                 df_s = df_s[df_s['Trade_ID']!=del_id]
