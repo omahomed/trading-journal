@@ -95,7 +95,7 @@ BUY_RULES = [
     # 2. Volume & Volatility
     "br2.1 HVE", "br2.2 HVSI", "br2.3 HV1",
     # 3. Moving Average Reclaims
-    "br3.1 Reclaim 21e", "br3.2 Reclaim 50s", "br3.3 Reclaim 200s", "br3.4 Reclaim 10W", 
+    "br3.1 Reclaim 21e", "br3.2 Reclaim 50s", "br3.3 Reclaim 200s", "br3.4 Reclaim 10W", "br3.5 Reclaim 8e",
     # 4. Pullbacks
     "br4.1 PB 21e", "br4.2 PB 50s", "br4.3 PB 10w", "br4.4 PB 200s", 
     "br4.5 PB 8e", "br4.6 VWAP",  # <--- UPDATED HERE
