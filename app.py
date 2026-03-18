@@ -811,277 +811,246 @@ def compute_index_atr(ticker, start_date, end_date):
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_cycle_state():
     """Compute NASDAQ market cycle state: HEALTHY / CORRECTION / RECOVERY.
-    Returns dict with cycle state, entry ladder, exit alerts, and supporting data.
+    Uses MarketSchoolRules for correction/reference_high/rally/FTD detection,
+    then layers entry/exit ladder on top.
     """
     try:
-        df = yf.Ticker("^IXIC").history(period="2y")
-        if df.empty or len(df) < 200:
-            return None
+        from market_school_rules import MarketSchoolRules
 
+        # --- Run IBD Market School analyzer (source of truth) ---
+        analyzer = MarketSchoolRules("^IXIC")
+        analyzer.fetch_data(start_date="2024-02-24", end_date=datetime.now().strftime('%Y-%m-%d'))
+        if analyzer.data is None or analyzer.data.empty:
+            return None
+        analyzer.analyze_market()
+
+        df = analyzer.data
+        reference_high = analyzer.reference_high
+        market_in_correction = analyzer.market_in_correction
+        rally_start_date = analyzer.rally_start_date
+        rally_low = analyzer.rally_low
+        rally_low_idx = analyzer.rally_low_idx
+        ibd_ftd_date = analyzer.ftd_date
+        buy_switch = analyzer.buy_switch
+
+        # Find reference high date
+        reference_high_date = None
+        if reference_high is not None:
+            for i in range(len(df) - 1, -1, -1):
+                if df.iloc[i]['High'] >= reference_high - 0.01:
+                    reference_high_date = df.index[i]
+                    break
+
+        # --- Compute MAs for entry ladder (analyzer.data already has some) ---
         df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
         df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
         df['50SMA'] = df['Close'].rolling(window=50).mean()
         df['200SMA'] = df['Close'].rolling(window=200).mean()
-        df['high_52w'] = df['High'].rolling(window=252, min_periods=50).max()
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Prev_Low'] = df['Low'].shift(1)
-        df['Prev_High'] = df['High'].shift(1)
-        df['Pct_Change'] = (df['Close'] - df['Prev_Close']) / df['Prev_Close'] * 100
 
-        # Use 260+ days for proper reference high initialization (same as IBD Market School)
-        subset = df.iloc[-300:].copy()
-        dates_list = subset.index.tolist()
+        curr = df.iloc[-1]
+        price = float(curr['Close'])
+        ema8 = float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0
+        ema21 = float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0
+        sma50 = float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0
+        sma200 = float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0
 
-        # --- STATE MACHINE (IBD-style reference high tracking) ---
-        cycle_state = "HEALTHY"
-        rally_day_idx = None  # index into dates_list
-        rally_day_date = None
-        rally_day_type = None  # 'strong' or 'weak'
-        rally_attempt_day = 0  # count from rally day
-        ftd_date = None
-        entry_step = 7  # Start at max (HEALTHY)
-        correction_start = None
+        # --- Drawdown from reference high ---
+        drawdown_pct = 0.0
+        if reference_high and reference_high > 0:
+            drawdown_pct = (price - reference_high) / reference_high * 100
 
-        # Reference high: same logic as IBD Market School
-        # - Initialized from 52-week high
-        # - Updated when NOT in correction and price makes new high
-        # - Reset to current high after recovery completes
-        reference_high = None
-        reference_high_date = None
-
-        # Track streaks
+        # --- Streak tracking (over recent data) ---
         low_above_21_streak = 0
         low_above_50_streak = 0
+        consecutive_closes_below_21 = 0
 
-        # Exit tracking
-        exit_alerts = []
+        for i in range(len(df) - 1, -1, -1):
+            row = df.iloc[i]
+            if pd.notna(row.get('21EMA')):
+                if row['Low'] > row['21EMA']:
+                    low_above_21_streak += 1
+                else:
+                    break
+            else:
+                break
+        for i in range(len(df) - 1, -1, -1):
+            row = df.iloc[i]
+            if pd.notna(row.get('50SMA')):
+                if row['Low'] > row['50SMA']:
+                    low_above_50_streak += 1
+                else:
+                    break
+            else:
+                break
+        for i in range(len(df) - 1, -1, -1):
+            row = df.iloc[i]
+            if pd.notna(row.get('21EMA')):
+                if row['Close'] < row['21EMA']:
+                    consecutive_closes_below_21 += 1
+                else:
+                    break
+            else:
+                break
+
+        # --- Determine cycle state from IBD analyzer state ---
+        # Rally day count (days since rally start)
+        days_since_rally = None
+        if rally_low_idx is not None:
+            days_since_rally = len(df) - 1 - rally_low_idx
+
+        if market_in_correction and not buy_switch:
+            if rally_start_date is not None:
+                cycle_state = "RECOVERY"
+            else:
+                cycle_state = "CORRECTION"
+        else:
+            cycle_state = "HEALTHY"
+
+        # Correction start: when did the correction begin?
+        correction_start = None
+        if market_in_correction:
+            # Find the date when correction was detected (close dropped 7%+ from ref high)
+            for i in range(len(df) - 1, -1, -1):
+                row = df.iloc[i]
+                if reference_high and reference_high > 0:
+                    decline = (row['Close'] - reference_high) / reference_high * 100
+                    if decline > -7:
+                        # The day after this is when correction started
+                        if i + 1 < len(df):
+                            correction_start = df.index[i + 1]
+                        break
+
+        # Rally day type: check if the rally start had an upside reversal
+        rally_day_type = None
+        if rally_start_date is not None and rally_low_idx is not None:
+            rd_row = df.iloc[rally_low_idx]
+            if rally_low_idx > 0:
+                prev_row = df.iloc[rally_low_idx - 1]
+                if rd_row['Close'] > prev_row['Close']:
+                    rally_day_type = "strong"
+                else:
+                    rally_day_type = "weak"
+
+        # --- Entry step calculation ---
+        entry_step = -1  # Default: no step
+
+        if cycle_state == "HEALTHY":
+            # Already healthy — determine which step we're at
+            if ema8 > ema21 > sma50 > sma200:
+                entry_step = 7
+            elif ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
+                entry_step = 6
+            elif low_above_50_streak >= 3:
+                entry_step = 5
+            elif low_above_21_streak >= 3:
+                entry_step = 4
+            elif curr['Low'] > ema21:
+                entry_step = 3
+            elif price > ema21:
+                entry_step = 2
+            else:
+                entry_step = 1  # Has FTD (buy_switch is on)
+
+        elif cycle_state == "RECOVERY":
+            # In recovery — climb the ladder
+            if rally_start_date is not None:
+                entry_step = 0  # Rally day achieved
+
+            if ibd_ftd_date is not None:
+                entry_step = 1  # FTD achieved
+
+                if price > ema21:
+                    entry_step = 2
+                if curr['Low'] > ema21:
+                    entry_step = 3
+                if low_above_21_streak >= 3:
+                    entry_step = 4
+                if low_above_50_streak >= 3 and entry_step >= 4:
+                    entry_step = 5
+                if ema21 > sma50 and ema21 > sma200 and sma50 > sma200 and entry_step >= 5:
+                    entry_step = 6
+                if ema8 > ema21 > sma50 > sma200 and entry_step >= 6:
+                    entry_step = 7
+                    cycle_state = "HEALTHY"
+
+        # --- EXIT LADDER ---
+        # Scan recent data for violations
+        violation_log = []
         ema21_violation_close = None
         ema21_violation_date = None
         sma50_violation_close = None
         sma50_violation_date = None
-        consecutive_closes_below_21 = 0
 
-        # Historical violations log
-        violation_log = []
+        lookback = min(120, len(df))
+        for i in range(len(df) - lookback, len(df)):
+            row = df.iloc[i]
+            dt = df.index[i]
+            close_val = row['Close']
+            low_val = row['Low']
+            e21 = row.get('21EMA')
+            s50 = row.get('50SMA')
 
-        for i, dt in enumerate(dates_list):
-            row = subset.loc[dt]
-            close = row['Close']
-            low = row['Low']
-            high = row['High']
-            ema21 = row['21EMA']
-            sma50 = row['50SMA']
-            sma200 = row['200SMA']
-            ema8 = row['8EMA']
-            prev_close = row['Prev_Close'] if pd.notna(row['Prev_Close']) else close
-            prev_low = row['Prev_Low'] if pd.notna(row['Prev_Low']) else low
-            pct_chg = row['Pct_Change'] if pd.notna(row['Pct_Change']) else 0
-
-            # --- Reference high tracking (IBD Market School logic) ---
-            if reference_high is None and pd.notna(row.get('high_52w')):
-                reference_high = row['high_52w']
-                reference_high_date = dt
-            elif reference_high is not None and cycle_state != "CORRECTION" and high > reference_high:
-                reference_high = high
-                reference_high_date = dt
-
-            # Drawdown from reference high
-            if reference_high and reference_high > 0:
-                drawdown = (close - reference_high) / reference_high * 100
-            else:
-                drawdown = 0
-
-            # --- Streak tracking ---
-            if pd.notna(ema21):
-                if low > ema21:
-                    low_above_21_streak += 1
-                else:
-                    low_above_21_streak = 0
-
-            if pd.notna(sma50):
-                if low > sma50:
-                    low_above_50_streak += 1
-                else:
-                    low_above_50_streak = 0
-
-            # --- Consecutive closes below 21 EMA ---
-            if pd.notna(ema21):
-                if close < ema21:
-                    consecutive_closes_below_21 += 1
-                else:
-                    consecutive_closes_below_21 = 0
-
-            # --- EXIT LADDER DETECTION ---
-            # 21 EMA violation: close below 21 EMA, track that close
-            if pd.notna(ema21):
-                if close < ema21 and ema21_violation_close is None:
-                    ema21_violation_close = close
+            if pd.notna(e21):
+                if close_val < e21 and ema21_violation_close is None:
+                    ema21_violation_close = close_val
                     ema21_violation_date = dt
-                elif ema21_violation_close is not None and close >= ema21:
-                    # Recovered above 21 EMA, reset
+                elif ema21_violation_close is not None and close_val >= e21:
                     ema21_violation_close = None
                     ema21_violation_date = None
-                elif ema21_violation_close is not None and low < (ema21_violation_close * 0.998):
-                    # Confirmed violation
+                elif ema21_violation_close is not None and low_val < (ema21_violation_close * 0.998):
                     violation_log.append({
                         'date': dt, 'signal': '21 EMA Violation',
-                        'price': close, 'target': '50%', 'severity': 'WARNING'
+                        'price': close_val, 'target': '50%', 'severity': 'WARNING'
                     })
-                    ema21_violation_close = None  # Reset after logging
+                    ema21_violation_close = None
 
-            # 50 SMA violation
-            if pd.notna(sma50):
-                if close < sma50 and sma50_violation_close is None:
-                    sma50_violation_close = close
+            if pd.notna(s50):
+                if close_val < s50 and sma50_violation_close is None:
+                    sma50_violation_close = close_val
                     sma50_violation_date = dt
-                elif sma50_violation_close is not None and close >= sma50:
+                elif sma50_violation_close is not None and close_val >= s50:
                     sma50_violation_close = None
                     sma50_violation_date = None
-                elif sma50_violation_close is not None and low < (sma50_violation_close * 0.998):
+                elif sma50_violation_close is not None and low_val < (sma50_violation_close * 0.998):
                     violation_log.append({
                         'date': dt, 'signal': '50 SMA Violation',
-                        'price': close, 'target': '0%', 'severity': 'CRITICAL'
+                        'price': close_val, 'target': '0%', 'severity': 'CRITICAL'
                     })
                     sma50_violation_close = None
 
-            # --- CYCLE STATE TRANSITIONS ---
-            if drawdown <= -7.0 and cycle_state == "HEALTHY":
-                cycle_state = "CORRECTION"
-                correction_start = dt
-                rally_day_idx = None
-                rally_day_date = None
-                ftd_date = None
-                rally_attempt_day = 0
-                entry_step = -1  # No step yet
-
-            if cycle_state == "CORRECTION":
-                # Check for Rally Day: fresh low (undercuts prior day low) while down 7%+
-                if low < prev_low and drawdown <= -7.0:
-                    # Upside reversal? Undercuts prior low AND closes above prior close
-                    if close > prev_close:
-                        rally_day_type = "strong"
-                        rally_day_date = dt
-                        rally_attempt_day = 1
-                        entry_step = 0  # Step 0a
-                        cycle_state = "RECOVERY"
-                    else:
-                        rally_day_type = "weak"
-                        rally_day_date = dt
-                        rally_attempt_day = 1
-                        entry_step = -1  # Wait for Day 2
-                        cycle_state = "RECOVERY"
-
-            elif cycle_state == "RECOVERY":
-                rally_attempt_day += 1
-
-                # Weak rally day: unlock step 0 on Day 2
-                if rally_day_type == "weak" and rally_attempt_day >= 2 and entry_step < 0:
-                    entry_step = 0
-
-                # Step 1: Follow-Through Day (Day 4+, up 1%+)
-                if rally_attempt_day >= 4 and pct_chg >= 1.0 and entry_step < 1:
-                    ftd_date = dt
-                    entry_step = 1
-                    # Reset reference high on FTD (same as IBD Market School)
-                    reference_high = high
-                    reference_high_date = dt
-
-                # Step 2: Close above 21 EMA
-                if pd.notna(ema21) and close > ema21 and entry_step >= 1 and entry_step < 2:
-                    entry_step = 2
-
-                # Step 3: Low above 21 EMA
-                if pd.notna(ema21) and low > ema21 and entry_step >= 2 and entry_step < 3:
-                    entry_step = 3
-
-                # Step 4: 3 consecutive days low above 21 EMA
-                if low_above_21_streak >= 3 and entry_step >= 3 and entry_step < 4:
-                    entry_step = 4
-
-                # Step 5: 3 consecutive days low above 50 SMA
-                if low_above_50_streak >= 3 and entry_step >= 4 and entry_step < 5:
-                    entry_step = 5
-
-                # Step 6: MA Crossovers (21 EMA > 50 SMA, 21 EMA > 200 SMA, 50 SMA > 200 SMA)
-                if pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
-                    if ema21 > sma50 and ema21 > sma200 and sma50 > sma200 and entry_step >= 5 and entry_step < 6:
-                        entry_step = 6
-
-                # Step 7: PowerTrend (8 EMA > 21 EMA > 50 SMA > 200 SMA)
-                if pd.notna(ema8) and pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
-                    if ema8 > ema21 > sma50 > sma200 and entry_step >= 6:
-                        entry_step = 7
-                        cycle_state = "HEALTHY"
-
-                # Failed recovery: new low below correction start low resets to CORRECTION
-                if drawdown <= -7.0 and low < prev_low and rally_attempt_day > 1:
-                    # Check if this is a new leg down
-                    if entry_step < 1:  # Before FTD, reset
-                        cycle_state = "CORRECTION"
-                        rally_day_idx = None
-                        rally_day_date = None
-                        ftd_date = None
-                        rally_attempt_day = 0
-                        entry_step = -1
-
-            elif cycle_state == "HEALTHY":
-                # Check if HEALTHY conditions still hold
-                if low_above_21_streak >= 3:
-                    # Check PowerTrend
-                    if pd.notna(ema8) and pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
-                        if ema8 > ema21 > sma50 > sma200:
-                            entry_step = 7
-                        elif ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
-                            entry_step = max(entry_step, 6)
-                        elif low_above_50_streak >= 3:
-                            entry_step = max(entry_step, 5)
-                        else:
-                            entry_step = max(entry_step, 4)
-                else:
-                    # Lost HEALTHY status — check what step we're at
-                    if pd.notna(ema21) and low > ema21:
-                        entry_step = max(3, entry_step) if entry_step <= 7 else 3
-                    elif pd.notna(ema21) and close > ema21:
-                        entry_step = min(entry_step, 2)
-
         # --- BUILD CURRENT EXIT ALERTS ---
-        curr = subset.iloc[-1]
         active_exits = []
-
-        # Check current 21 EMA status
-        if pd.notna(curr['21EMA']):
-            if consecutive_closes_below_21 >= 2:
-                active_exits.append({
-                    'signal': '21 EMA Confirmed Break',
-                    'icon': '📉', 'target': '30%', 'severity': 'SERIOUS',
-                    'detail': f"Two consecutive closes below 21 EMA. Reduce to 30% exposure."
-                })
-            elif ema21_violation_close is not None:
-                active_exits.append({
-                    'signal': '21 EMA Violation',
-                    'icon': '⚠️', 'target': '50%', 'severity': 'WARNING',
-                    'detail': f"Close below 21 EMA on {ema21_violation_date.strftime('%b %d') if hasattr(ema21_violation_date, 'strftime') else ema21_violation_date}. Monitoring for undercut."
-                })
-
-        if pd.notna(curr['50SMA']):
-            if sma50_violation_close is not None:
-                active_exits.append({
-                    'signal': '50 SMA Violation',
-                    'icon': '🔴', 'target': '0%', 'severity': 'CRITICAL',
-                    'detail': f"Close below 50 SMA. Monitoring for confirmed break."
-                })
+        if consecutive_closes_below_21 >= 2:
+            active_exits.append({
+                'signal': '21 EMA Confirmed Break',
+                'icon': '📉', 'target': '30%', 'severity': 'SERIOUS',
+                'detail': f"Two consecutive closes below 21 EMA. Reduce to 30% exposure."
+            })
+        elif ema21_violation_close is not None:
+            active_exits.append({
+                'signal': '21 EMA Violation',
+                'icon': '⚠️', 'target': '50%', 'severity': 'WARNING',
+                'detail': f"Close below 21 EMA on {ema21_violation_date.strftime('%b %d') if hasattr(ema21_violation_date, 'strftime') else ema21_violation_date}. Monitoring for undercut."
+            })
+        if sma50_violation_close is not None:
+            active_exits.append({
+                'signal': '50 SMA Violation',
+                'icon': '🔴', 'target': '0%', 'severity': 'CRITICAL',
+                'detail': f"Close below 50 SMA. Monitoring for confirmed break."
+            })
 
         # --- ENTRY LADDER STATUS ---
+        ftd_date = ibd_ftd_date
         entry_ladder = [
             {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
              'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
-             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_day_date.strftime('%b %d, %Y') if rally_day_date and hasattr(rally_day_date, 'strftime') else 'N/A'}" if rally_day_date else "Waiting for fresh low + reversal after 7%+ correction"},
+             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
             {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
              'achieved': entry_step >= 1,
              'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
             {'step': 2, 'label': 'Close above 21 EMA', 'exposure': '35%',
              'achieved': entry_step >= 2,
-             'detail': f"21 EMA at {curr['21EMA']:,.2f}" if pd.notna(curr['21EMA']) else ""},
+             'detail': f"21 EMA at {ema21:,.2f}"},
             {'step': 3, 'label': 'Low above 21 EMA', 'exposure': '40%',
              'achieved': entry_step >= 3,
              'detail': "Daily low held above 21 EMA"},
@@ -1109,29 +1078,26 @@ def compute_cycle_state():
             if worst < suggested_exposure:
                 suggested_exposure = worst
 
-        # Days since rally day
-        days_since_rally = rally_attempt_day if cycle_state == "RECOVERY" else None
-
         return {
             'cycle_state': cycle_state,
             'entry_step': entry_step,
             'suggested_exposure': suggested_exposure,
             'entry_ladder': entry_ladder,
             'active_exits': active_exits,
-            'violation_log': violation_log[-10:],  # Last 10
-            'rally_day_date': rally_day_date,
+            'violation_log': violation_log[-10:],
+            'rally_day_date': rally_start_date,
             'rally_day_type': rally_day_type,
             'ftd_date': ftd_date,
             'days_since_rally': days_since_rally,
             'correction_start': correction_start,
-            'drawdown_pct': float(drawdown) if drawdown else 0,
+            'drawdown_pct': float(drawdown_pct),
             'reference_high': float(reference_high) if reference_high else 0,
             'reference_high_date': reference_high_date,
-            'price': float(curr['Close']),
-            'ema8': float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0,
-            'ema21': float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0,
-            'sma50': float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0,
-            'sma200': float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0,
+            'price': price,
+            'ema8': ema8,
+            'ema21': ema21,
+            'sma50': sma50,
+            'sma200': sma200,
             'low_above_21_streak': low_above_21_streak,
             'low_above_50_streak': low_above_50_streak,
             'consecutive_closes_below_21': consecutive_closes_below_21,
