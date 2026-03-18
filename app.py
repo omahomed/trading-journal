@@ -945,7 +945,7 @@ def compute_cycle_state():
                     sma50_violation_close = None
 
             # --- CYCLE STATE TRANSITIONS ---
-            if drawdown <= -5.0 and cycle_state == "HEALTHY":
+            if drawdown <= -7.0 and cycle_state == "HEALTHY":
                 cycle_state = "CORRECTION"
                 correction_start = dt
                 rally_day_idx = None
@@ -955,8 +955,8 @@ def compute_cycle_state():
                 entry_step = -1  # No step yet
 
             if cycle_state == "CORRECTION":
-                # Check for Rally Day: fresh low (undercuts prior day low) while down 5%+
-                if low < prev_low and drawdown <= -5.0:
+                # Check for Rally Day: fresh low (undercuts prior day low) while down 7%+
+                if low < prev_low and drawdown <= -7.0:
                     # Upside reversal? Undercuts prior low AND closes above prior close
                     if close > prev_close:
                         rally_day_type = "strong"
@@ -1014,7 +1014,7 @@ def compute_cycle_state():
                         cycle_state = "HEALTHY"
 
                 # Failed recovery: new low below correction start low resets to CORRECTION
-                if drawdown <= -5.0 and low < prev_low and rally_attempt_day > 1:
+                if drawdown <= -7.0 and low < prev_low and rally_attempt_day > 1:
                     # Check if this is a new leg down
                     if entry_step < 1:  # Before FTD, reset
                         cycle_state = "CORRECTION"
@@ -1075,7 +1075,7 @@ def compute_cycle_state():
         entry_ladder = [
             {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
              'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
-             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_day_date.strftime('%b %d, %Y') if rally_day_date and hasattr(rally_day_date, 'strftime') else 'N/A'}" if rally_day_date else "Waiting for fresh low + reversal after 5%+ correction"},
+             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_day_date.strftime('%b %d, %Y') if rally_day_date and hasattr(rally_day_date, 'strftime') else 'N/A'}" if rally_day_date else "Waiting for fresh low + reversal after 7%+ correction"},
             {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
              'achieved': entry_step >= 1,
              'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
@@ -3357,7 +3357,7 @@ elif page == "Market Cycle Tracker":
 | State | Definition |
 |---|---|
 | **HEALTHY** | 3 consecutive days where daily low > 21 EMA |
-| **CORRECTION** | NASDAQ down 5%+ from recent high |
+| **CORRECTION** | NASDAQ down 7%+ from recent high |
 | **RECOVERY** | Correction acknowledged + rally day identified + climbing entry ladder |
 
 ### Entry Ladder
