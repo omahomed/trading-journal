@@ -833,6 +833,59 @@ def compute_cycle_state():
         ibd_ftd_date = analyzer.ftd_date
         buy_switch = analyzer.buy_switch
 
+        # --- Reconcile reference high with price-only FTD history ---
+        # The IBD analyzer may miss FTDs due to volume filter, which prevents
+        # reference_high from resetting between cycles. Re-scan for price-only
+        # FTDs and update reference_high to reflect the most recent bull cycle.
+        # Walk through correction/recovery cycles looking for price-only FTDs
+        # that the volume filter missed.
+        in_corr = False
+        corr_rally_low = None
+        corr_rally_low_idx = None
+        last_price_ftd_idx = None
+        for i in range(260, len(df)):
+            row = df.iloc[i]
+            close_val = row['Close']
+            high_val = row['High']
+            low_val = row['Low']
+
+            if not in_corr:
+                # Track reference high
+                if high_val > reference_high:
+                    reference_high = high_val
+                # Check for correction entry
+                decline = (close_val - reference_high) / reference_high * 100
+                if decline <= -7:
+                    in_corr = True
+                    # Find rally low (lookback 10 days)
+                    lookback = min(i, 10)
+                    recent_slice = df.iloc[i-lookback:i+1]
+                    low_date = recent_slice['Low'].idxmin()
+                    low_pos = df.index.get_loc(low_date)
+                    corr_rally_low = df.iloc[low_pos]['Low']
+                    corr_rally_low_idx = low_pos
+            else:
+                # In correction — look for price-only FTD
+                if corr_rally_low_idx is not None and i >= corr_rally_low_idx + 3:
+                    gain = row.get('daily_gain_pct', 0)
+                    if pd.notna(gain) and gain >= 1.0:
+                        lows = df.iloc[corr_rally_low_idx:i+1]['Low']
+                        if lows.min() >= corr_rally_low:
+                            # Price-only FTD — reset reference high
+                            reference_high = high_val
+                            last_price_ftd_idx = i
+                            in_corr = False
+                            corr_rally_low = None
+                            corr_rally_low_idx = None
+                # Update rally low if new low made
+                if corr_rally_low is not None and low_val < corr_rally_low:
+                    corr_rally_low = low_val
+                    corr_rally_low_idx = i
+
+            # Continue tracking reference high when not in correction
+            if not in_corr and high_val > reference_high:
+                reference_high = high_val
+
         # Find reference high date
         reference_high_date = None
         if reference_high is not None:
@@ -892,30 +945,42 @@ def compute_cycle_state():
             else:
                 break
 
-        # --- Determine cycle state from IBD analyzer state ---
+        # --- Price-only FTD detection (no volume requirement) ---
+        price_ftd_date = ibd_ftd_date
+        if price_ftd_date is None and rally_low_idx is not None:
+            for i in range(rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed: +3)
+                row = df.iloc[i]
+                if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
+                    # Check rally low hasn't been undercut
+                    lows = df.iloc[rally_low_idx:i+1]['Low']
+                    if lows.min() >= rally_low:
+                        price_ftd_date = df.index[i]
+                        break
+
+        # --- Determine cycle state ---
         # Rally day count (days since rally start)
         days_since_rally = None
         if rally_low_idx is not None:
             days_since_rally = len(df) - 1 - rally_low_idx
 
-        if market_in_correction and not buy_switch:
-            if rally_start_date is not None:
-                cycle_state = "RECOVERY"
-            else:
-                cycle_state = "CORRECTION"
-        else:
+        if not market_in_correction or buy_switch:
             cycle_state = "HEALTHY"
+        elif price_ftd_date is not None:
+            # Price-only FTD found — we're in recovery even if IBD buy_switch is off
+            cycle_state = "RECOVERY"
+        elif rally_start_date is not None:
+            cycle_state = "RECOVERY"
+        else:
+            cycle_state = "CORRECTION"
 
         # Correction start: when did the correction begin?
         correction_start = None
         if market_in_correction:
-            # Find the date when correction was detected (close dropped 7%+ from ref high)
             for i in range(len(df) - 1, -1, -1):
                 row = df.iloc[i]
                 if reference_high and reference_high > 0:
                     decline = (row['Close'] - reference_high) / reference_high * 100
                     if decline > -7:
-                        # The day after this is when correction started
                         if i + 1 < len(df):
                             correction_start = df.index[i + 1]
                         break
@@ -931,24 +996,10 @@ def compute_cycle_state():
                 else:
                     rally_day_type = "weak"
 
-        # --- Price-only FTD detection (no volume requirement) ---
-        # If IBD didn't find FTD (due to volume), check price-action only
-        price_ftd_date = ibd_ftd_date
-        if price_ftd_date is None and rally_low_idx is not None:
-            for i in range(rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed: +3)
-                row = df.iloc[i]
-                if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
-                    # Check rally low hasn't been undercut
-                    lows = df.iloc[rally_low_idx:i+1]['Low']
-                    if lows.min() >= rally_low:
-                        price_ftd_date = df.index[i]
-                        break
-
         # --- Entry step calculation ---
         entry_step = -1  # Default: no step
 
         if cycle_state == "HEALTHY":
-            # Already healthy — determine which step we're at
             if ema8 > ema21 > sma50 > sma200:
                 entry_step = 7
             elif ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
@@ -962,15 +1013,14 @@ def compute_cycle_state():
             elif price > ema21:
                 entry_step = 2
             else:
-                entry_step = 1  # Has FTD (buy_switch is on)
+                entry_step = 1
 
         elif cycle_state == "RECOVERY":
-            # In recovery — climb the ladder
             if rally_start_date is not None:
                 entry_step = 0  # Rally day achieved
 
             if price_ftd_date is not None:
-                entry_step = 1  # FTD achieved (price-action only)
+                entry_step = 1  # FTD achieved
 
                 if price > ema21:
                     entry_step = 2
