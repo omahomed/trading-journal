@@ -1133,18 +1133,23 @@ def compute_cycle_state():
 
         # Exposure mapping
         exposure_map = {-1: 0, 0: 15, 1: 30, 2: 35, 3: 40, 4: 50, 5: 75, 6: 100, 7: 200}
-        suggested_exposure = exposure_map.get(entry_step, 0)
+        entry_exposure = exposure_map.get(entry_step, 0)
+        suggested_exposure = entry_exposure
 
         # Override exposure if exit alert is active
+        exit_override = None
         if active_exits:
             worst = min(int(e['target'].replace('%', '')) for e in active_exits)
             if worst < suggested_exposure:
+                exit_override = worst
                 suggested_exposure = worst
 
         return {
             'cycle_state': cycle_state,
             'entry_step': entry_step,
             'suggested_exposure': suggested_exposure,
+            'entry_exposure': entry_exposure,
+            'exit_override': exit_override,
             'entry_ladder': entry_ladder,
             'active_exits': active_exits,
             'violation_log': violation_log[-10:],
@@ -3187,7 +3192,8 @@ elif page == "Market Cycle Tracker":
         # SECTION 1: STATE BANNER
         # ==========================================
         cs = cycle['cycle_state']
-        exp = cycle['suggested_exposure']
+        entry_exp = cycle.get('entry_exposure', cycle['suggested_exposure'])
+        exit_ovr = cycle.get('exit_override')
 
         if cs == "HEALTHY":
             bg = "#2ca02c"
@@ -3211,11 +3217,17 @@ elif page == "Market Cycle Tracker":
             cs_str = cs_dt.strftime('%b %d, %Y') if hasattr(cs_dt, 'strftime') else str(cs_dt)
             banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Correction began: {cs_str}</div>"
 
+        # Build exposure display line
+        if exit_ovr is not None:
+            exposure_line = f"ENTRY LADDER: {entry_exp}% · EXIT OVERRIDE: {exit_ovr}%"
+        else:
+            exposure_line = f"SUGGESTED EXPOSURE: {entry_exp}%"
+
         st.markdown(f"""<div class="cycle-banner" style="background-color: {bg}; color: {text_color};">
             <div style="font-size: 14px; opacity: 0.85;">NASDAQ MARKET CYCLE</div>
             <div style="font-size: 52px; font-weight: 800; margin: 4px 0;">{cs}</div>
             <div style="font-size: 16px;">{subtitle}</div>
-            <div style="font-size: 20px; font-weight: 700; margin-top: 10px;">SUGGESTED EXPOSURE: {exp}%</div>
+            <div style="font-size: 20px; font-weight: 700; margin-top: 10px;">{exposure_line}</div>
             {banner_extra}
         </div>""", unsafe_allow_html=True)
 
@@ -3309,9 +3321,13 @@ elif page == "Market Cycle Tracker":
 
         # Progress bar
         max_exp = 200
-        progress_val = min(cycle['suggested_exposure'] / max_exp, 1.0)
+        entry_exp_val = cycle.get('entry_exposure', cycle['suggested_exposure'])
+        progress_val = min(entry_exp_val / max_exp, 1.0)
         st.progress(progress_val)
-        st.markdown(f"**Current Step: {cycle['entry_step']}** — Suggested Exposure: **{cycle['suggested_exposure']}%**")
+        ladder_label = f"**Current Step: {cycle['entry_step']}** — Entry Ladder Exposure: **{entry_exp_val}%**"
+        if cycle.get('exit_override') is not None:
+            ladder_label += f"  ⚠️ Exit override active → **{cycle['exit_override']}%**"
+        st.markdown(ladder_label)
 
         # Ladder steps
         for item in cycle['entry_ladder']:
