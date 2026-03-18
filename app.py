@@ -982,6 +982,9 @@ def compute_cycle_state():
                 if rally_attempt_day >= 4 and pct_chg >= 1.0 and entry_step < 1:
                     ftd_date = dt
                     entry_step = 1
+                    # Reset reference high on FTD (same as IBD Market School)
+                    reference_high = high
+                    reference_high_date = dt
 
                 # Step 2: Close above 21 EMA
                 if pd.notna(ema21) and close > ema21 and entry_step >= 1 and entry_step < 2:
