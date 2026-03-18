@@ -806,6 +806,320 @@ def compute_index_atr(ticker, start_date, end_date):
     except:
         return {}
 
+
+# --- MARKET CYCLE TRACKER ENGINE (Layer 2 on top of M Factor) ---
+@st.cache_data(ttl=300, show_spinner=False)
+def compute_cycle_state():
+    """Compute NASDAQ market cycle state: HEALTHY / CORRECTION / RECOVERY.
+    Returns dict with cycle state, entry ladder, exit alerts, and supporting data.
+    """
+    try:
+        df = yf.Ticker("^IXIC").history(period="2y")
+        if df.empty or len(df) < 200:
+            return None
+
+        df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
+        df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
+        df['50SMA'] = df['Close'].rolling(window=50).mean()
+        df['200SMA'] = df['Close'].rolling(window=200).mean()
+        df['Prev_Close'] = df['Close'].shift(1)
+        df['Prev_Low'] = df['Low'].shift(1)
+        df['Prev_High'] = df['High'].shift(1)
+        df['Pct_Change'] = (df['Close'] - df['Prev_Close']) / df['Prev_Close'] * 100
+
+        # Rolling high for correction detection (52-week)
+        df['Rolling_High'] = df['High'].rolling(window=252, min_periods=50).max()
+        df['Drawdown_Pct'] = (df['Close'] - df['Rolling_High']) / df['Rolling_High'] * 100
+
+        # Work on recent subset (120 days for enough context)
+        subset = df.iloc[-120:].copy()
+        dates_list = subset.index.tolist()
+
+        # --- STATE MACHINE ---
+        cycle_state = "HEALTHY"
+        rally_day_idx = None  # index into dates_list
+        rally_day_date = None
+        rally_day_type = None  # 'strong' or 'weak'
+        rally_attempt_day = 0  # count from rally day
+        ftd_date = None
+        entry_step = 7  # Start at max (HEALTHY)
+        correction_start = None
+
+        # Track streaks
+        low_above_21_streak = 0
+        low_above_50_streak = 0
+
+        # Exit tracking
+        exit_alerts = []
+        ema21_violation_close = None
+        ema21_violation_date = None
+        sma50_violation_close = None
+        sma50_violation_date = None
+        consecutive_closes_below_21 = 0
+
+        # Historical violations log
+        violation_log = []
+
+        for i, dt in enumerate(dates_list):
+            row = subset.loc[dt]
+            close = row['Close']
+            low = row['Low']
+            high = row['High']
+            ema21 = row['21EMA']
+            sma50 = row['50SMA']
+            sma200 = row['200SMA']
+            ema8 = row['8EMA']
+            prev_close = row['Prev_Close'] if pd.notna(row['Prev_Close']) else close
+            prev_low = row['Prev_Low'] if pd.notna(row['Prev_Low']) else low
+            drawdown = row['Drawdown_Pct']
+            pct_chg = row['Pct_Change'] if pd.notna(row['Pct_Change']) else 0
+
+            # --- Streak tracking ---
+            if pd.notna(ema21):
+                if low > ema21:
+                    low_above_21_streak += 1
+                else:
+                    low_above_21_streak = 0
+
+            if pd.notna(sma50):
+                if low > sma50:
+                    low_above_50_streak += 1
+                else:
+                    low_above_50_streak = 0
+
+            # --- Consecutive closes below 21 EMA ---
+            if pd.notna(ema21):
+                if close < ema21:
+                    consecutive_closes_below_21 += 1
+                else:
+                    consecutive_closes_below_21 = 0
+
+            # --- EXIT LADDER DETECTION ---
+            # 21 EMA violation: close below 21 EMA, track that close
+            if pd.notna(ema21):
+                if close < ema21 and ema21_violation_close is None:
+                    ema21_violation_close = close
+                    ema21_violation_date = dt
+                elif ema21_violation_close is not None and close >= ema21:
+                    # Recovered above 21 EMA, reset
+                    ema21_violation_close = None
+                    ema21_violation_date = None
+                elif ema21_violation_close is not None and low < (ema21_violation_close * 0.998):
+                    # Confirmed violation
+                    violation_log.append({
+                        'date': dt, 'signal': '21 EMA Violation',
+                        'price': close, 'target': '50%', 'severity': 'WARNING'
+                    })
+                    ema21_violation_close = None  # Reset after logging
+
+            # 50 SMA violation
+            if pd.notna(sma50):
+                if close < sma50 and sma50_violation_close is None:
+                    sma50_violation_close = close
+                    sma50_violation_date = dt
+                elif sma50_violation_close is not None and close >= sma50:
+                    sma50_violation_close = None
+                    sma50_violation_date = None
+                elif sma50_violation_close is not None and low < (sma50_violation_close * 0.998):
+                    violation_log.append({
+                        'date': dt, 'signal': '50 SMA Violation',
+                        'price': close, 'target': '0%', 'severity': 'CRITICAL'
+                    })
+                    sma50_violation_close = None
+
+            # --- CYCLE STATE TRANSITIONS ---
+            if drawdown <= -5.0 and cycle_state == "HEALTHY":
+                cycle_state = "CORRECTION"
+                correction_start = dt
+                rally_day_idx = None
+                rally_day_date = None
+                ftd_date = None
+                rally_attempt_day = 0
+                entry_step = -1  # No step yet
+
+            if cycle_state == "CORRECTION":
+                # Check for Rally Day: fresh low (undercuts prior day low) while down 5%+
+                if low < prev_low and drawdown <= -5.0:
+                    # Upside reversal? Undercuts prior low AND closes above prior close
+                    if close > prev_close:
+                        rally_day_type = "strong"
+                        rally_day_date = dt
+                        rally_attempt_day = 1
+                        entry_step = 0  # Step 0a
+                        cycle_state = "RECOVERY"
+                    else:
+                        rally_day_type = "weak"
+                        rally_day_date = dt
+                        rally_attempt_day = 1
+                        entry_step = -1  # Wait for Day 2
+                        cycle_state = "RECOVERY"
+
+            elif cycle_state == "RECOVERY":
+                rally_attempt_day += 1
+
+                # Weak rally day: unlock step 0 on Day 2
+                if rally_day_type == "weak" and rally_attempt_day >= 2 and entry_step < 0:
+                    entry_step = 0
+
+                # Step 1: Follow-Through Day (Day 4+, up 1%+)
+                if rally_attempt_day >= 4 and pct_chg >= 1.0 and entry_step < 1:
+                    ftd_date = dt
+                    entry_step = 1
+
+                # Step 2: Close above 21 EMA
+                if pd.notna(ema21) and close > ema21 and entry_step >= 1 and entry_step < 2:
+                    entry_step = 2
+
+                # Step 3: Low above 21 EMA
+                if pd.notna(ema21) and low > ema21 and entry_step >= 2 and entry_step < 3:
+                    entry_step = 3
+
+                # Step 4: 3 consecutive days low above 21 EMA
+                if low_above_21_streak >= 3 and entry_step >= 3 and entry_step < 4:
+                    entry_step = 4
+
+                # Step 5: 3 consecutive days low above 50 SMA
+                if low_above_50_streak >= 3 and entry_step >= 4 and entry_step < 5:
+                    entry_step = 5
+
+                # Step 6: MA Crossovers (21 EMA > 50 SMA, 21 EMA > 200 SMA, 50 SMA > 200 SMA)
+                if pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
+                    if ema21 > sma50 and ema21 > sma200 and sma50 > sma200 and entry_step >= 5 and entry_step < 6:
+                        entry_step = 6
+
+                # Step 7: PowerTrend (8 EMA > 21 EMA > 50 SMA > 200 SMA)
+                if pd.notna(ema8) and pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
+                    if ema8 > ema21 > sma50 > sma200 and entry_step >= 6:
+                        entry_step = 7
+                        cycle_state = "HEALTHY"
+
+                # Failed recovery: new low below correction start low resets to CORRECTION
+                if drawdown <= -5.0 and low < prev_low and rally_attempt_day > 1:
+                    # Check if this is a new leg down
+                    if entry_step < 1:  # Before FTD, reset
+                        cycle_state = "CORRECTION"
+                        rally_day_idx = None
+                        rally_day_date = None
+                        ftd_date = None
+                        rally_attempt_day = 0
+                        entry_step = -1
+
+            elif cycle_state == "HEALTHY":
+                # Check if HEALTHY conditions still hold
+                if low_above_21_streak >= 3:
+                    # Check PowerTrend
+                    if pd.notna(ema8) and pd.notna(ema21) and pd.notna(sma50) and pd.notna(sma200):
+                        if ema8 > ema21 > sma50 > sma200:
+                            entry_step = 7
+                        elif ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
+                            entry_step = max(entry_step, 6)
+                        elif low_above_50_streak >= 3:
+                            entry_step = max(entry_step, 5)
+                        else:
+                            entry_step = max(entry_step, 4)
+                else:
+                    # Lost HEALTHY status — check what step we're at
+                    if pd.notna(ema21) and low > ema21:
+                        entry_step = max(3, entry_step) if entry_step <= 7 else 3
+                    elif pd.notna(ema21) and close > ema21:
+                        entry_step = min(entry_step, 2)
+
+        # --- BUILD CURRENT EXIT ALERTS ---
+        curr = subset.iloc[-1]
+        active_exits = []
+
+        # Check current 21 EMA status
+        if pd.notna(curr['21EMA']):
+            if consecutive_closes_below_21 >= 2:
+                active_exits.append({
+                    'signal': '21 EMA Confirmed Break',
+                    'icon': '📉', 'target': '30%', 'severity': 'SERIOUS',
+                    'detail': f"Two consecutive closes below 21 EMA. Reduce to 30% exposure."
+                })
+            elif ema21_violation_close is not None:
+                active_exits.append({
+                    'signal': '21 EMA Violation',
+                    'icon': '⚠️', 'target': '50%', 'severity': 'WARNING',
+                    'detail': f"Close below 21 EMA on {ema21_violation_date.strftime('%b %d') if hasattr(ema21_violation_date, 'strftime') else ema21_violation_date}. Monitoring for undercut."
+                })
+
+        if pd.notna(curr['50SMA']):
+            if sma50_violation_close is not None:
+                active_exits.append({
+                    'signal': '50 SMA Violation',
+                    'icon': '🔴', 'target': '0%', 'severity': 'CRITICAL',
+                    'detail': f"Close below 50 SMA. Monitoring for confirmed break."
+                })
+
+        # --- ENTRY LADDER STATUS ---
+        entry_ladder = [
+            {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
+             'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
+             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_day_date.strftime('%b %d, %Y') if rally_day_date and hasattr(rally_day_date, 'strftime') else 'N/A'}" if rally_day_date else "Waiting for fresh low + reversal after 5%+ correction"},
+            {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
+             'achieved': entry_step >= 1,
+             'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
+            {'step': 2, 'label': 'Close above 21 EMA', 'exposure': '35%',
+             'achieved': entry_step >= 2,
+             'detail': f"21 EMA at {curr['21EMA']:,.2f}" if pd.notna(curr['21EMA']) else ""},
+            {'step': 3, 'label': 'Low above 21 EMA', 'exposure': '40%',
+             'achieved': entry_step >= 3,
+             'detail': "Daily low held above 21 EMA"},
+            {'step': 4, 'label': 'Holds 21 EMA — 3 Days', 'exposure': '50%',
+             'achieved': entry_step >= 4,
+             'detail': f"Streak: {low_above_21_streak} days" if low_above_21_streak > 0 else "Need 3 consecutive days"},
+            {'step': 5, 'label': 'Holds 50 SMA — 3 Days', 'exposure': '75%',
+             'achieved': entry_step >= 5,
+             'detail': f"Streak: {low_above_50_streak} days" if low_above_50_streak > 0 else "Need 3 consecutive days"},
+            {'step': 6, 'label': 'MA Crossovers', 'exposure': '100%',
+             'achieved': entry_step >= 6,
+             'detail': "21 EMA > 50 SMA > 200 SMA"},
+            {'step': 7, 'label': 'PowerTrend', 'exposure': '200%',
+             'achieved': entry_step >= 7,
+             'detail': "8 EMA > 21 EMA > 50 SMA > 200 SMA"},
+        ]
+
+        # Exposure mapping
+        exposure_map = {-1: 0, 0: 15, 1: 30, 2: 35, 3: 40, 4: 50, 5: 75, 6: 100, 7: 200}
+        suggested_exposure = exposure_map.get(entry_step, 0)
+
+        # Override exposure if exit alert is active
+        if active_exits:
+            worst = min(int(e['target'].replace('%', '')) for e in active_exits)
+            if worst < suggested_exposure:
+                suggested_exposure = worst
+
+        # Days since rally day
+        days_since_rally = rally_attempt_day if cycle_state == "RECOVERY" else None
+
+        return {
+            'cycle_state': cycle_state,
+            'entry_step': entry_step,
+            'suggested_exposure': suggested_exposure,
+            'entry_ladder': entry_ladder,
+            'active_exits': active_exits,
+            'violation_log': violation_log[-10:],  # Last 10
+            'rally_day_date': rally_day_date,
+            'rally_day_type': rally_day_type,
+            'ftd_date': ftd_date,
+            'days_since_rally': days_since_rally,
+            'correction_start': correction_start,
+            'drawdown_pct': float(curr['Drawdown_Pct']) if pd.notna(curr['Drawdown_Pct']) else 0,
+            'price': float(curr['Close']),
+            'ema8': float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0,
+            'ema21': float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0,
+            'sma50': float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0,
+            'sma200': float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0,
+            'low_above_21_streak': low_above_21_streak,
+            'low_above_50_streak': low_above_50_streak,
+            'consecutive_closes_below_21': consecutive_closes_below_21,
+        }
+    except Exception as e:
+        import traceback
+        print(f"Cycle tracker error: {traceback.format_exc()}")
+        return None
+
+
 def compute_historical_market_windows(dates):
     """Compute M Factor market window for a list of historical dates.
     Returns dict mapping date_str -> status string.
@@ -1054,6 +1368,7 @@ with st.sidebar:
     with st.expander("📈 Market Intel", expanded=False):
         nav_button("IBD Market School", "🏫")
         nav_button("M Factor", "📊")
+        nav_button("Market Cycle Tracker", "🔄")
 
     # 🔍 DEEP DIVE
     with st.expander("🔍 Deep Dive", expanded=False):
@@ -2788,6 +3103,252 @@ elif page == "M Factor":
 **IBD cross-reference** - use distribution day count as a "paranoia check" but don't let it override strong individual stock performance
             """)
     else: st.error("Market Data Unavailable")
+
+# ==============================================================================
+# MARKET CYCLE TRACKER (Layer 2 on top of M Factor)
+# ==============================================================================
+elif page == "Market Cycle Tracker":
+    st.header("MARKET CYCLE TRACKER")
+
+    # CSS
+    st.markdown("""<style>
+    .cycle-banner {padding: 24px; border-radius: 12px; text-align: center; color: white; margin-bottom: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.15);}
+    .exit-card {padding: 20px; border-radius: 10px; margin-bottom: 12px; border-left: 6px solid; box-shadow: 0 2px 6px rgba(0,0,0,0.1);}
+    .exit-warning {background-color: #fff8e1; border-color: #ffcc00; color: #333;}
+    .exit-serious {background-color: #fce4ec; border-color: #e53935; color: #333;}
+    .exit-critical {background-color: #ffebee; border-color: #b71c1c; color: #333;}
+    .exit-clear {background-color: #e8f5e9; border-color: #2ca02c; color: #333; padding: 20px; border-radius: 10px; border-left: 6px solid; margin-bottom: 12px;}
+    .ladder-step {padding: 12px 16px; border-radius: 8px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 15px;}
+    .step-achieved {background-color: #e8f5e9; border: 1px solid #a5d6a7;}
+    .step-pending {background-color: #fff8e1; border: 1px solid #ffe082;}
+    .step-locked {background-color: #f5f5f5; border: 1px solid #e0e0e0; color: #999;}
+    </style>""", unsafe_allow_html=True)
+
+    if st.button("Refresh Data", key="cycle_refresh"):
+        st.cache_data.clear()
+
+    cycle = compute_cycle_state()
+
+    if cycle is None:
+        st.error("Unable to compute cycle state. Market data unavailable.")
+    else:
+        # ==========================================
+        # SECTION 1: STATE BANNER
+        # ==========================================
+        cs = cycle['cycle_state']
+        exp = cycle['suggested_exposure']
+
+        if cs == "HEALTHY":
+            bg = "#2ca02c"
+            subtitle = "Market structure intact — all systems go"
+        elif cs == "CORRECTION":
+            bg = "#ff4b4b"
+            subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high — waiting for rally day"
+        else:  # RECOVERY
+            bg = "#ffcc00"
+            subtitle = f"Day {cycle['days_since_rally']} of rally attempt" if cycle['days_since_rally'] else "Recovery in progress"
+
+        text_color = "black" if cs == "RECOVERY" else "white"
+
+        banner_extra = ""
+        if cs == "RECOVERY" and cycle['rally_day_date']:
+            rd = cycle['rally_day_date']
+            rd_str = rd.strftime('%b %d, %Y') if hasattr(rd, 'strftime') else str(rd)
+            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Rally Day ({cycle['rally_day_type'].title()}): {rd_str}</div>"
+        if cs == "CORRECTION" and cycle['correction_start']:
+            cs_dt = cycle['correction_start']
+            cs_str = cs_dt.strftime('%b %d, %Y') if hasattr(cs_dt, 'strftime') else str(cs_dt)
+            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Correction began: {cs_str}</div>"
+
+        st.markdown(f"""<div class="cycle-banner" style="background-color: {bg}; color: {text_color};">
+            <div style="font-size: 14px; opacity: 0.85;">NASDAQ MARKET CYCLE</div>
+            <div style="font-size: 52px; font-weight: 800; margin: 4px 0;">{cs}</div>
+            <div style="font-size: 16px;">{subtitle}</div>
+            <div style="font-size: 20px; font-weight: 700; margin-top: 10px;">SUGGESTED EXPOSURE: {exp}%</div>
+            {banner_extra}
+        </div>""", unsafe_allow_html=True)
+
+        # Key metrics row
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("NASDAQ", f"{cycle['price']:,.2f}")
+        m2.metric("21 EMA", f"{cycle['ema21']:,.2f}",
+                  delta=f"{((cycle['price'] - cycle['ema21']) / cycle['ema21'] * 100):+.2f}%")
+        m3.metric("50 SMA", f"{cycle['sma50']:,.2f}",
+                  delta=f"{((cycle['price'] - cycle['sma50']) / cycle['sma50'] * 100):+.2f}%")
+        m4.metric("200 SMA", f"{cycle['sma200']:,.2f}",
+                  delta=f"{((cycle['price'] - cycle['sma200']) / cycle['sma200'] * 100):+.2f}%")
+
+        st.markdown("---")
+
+        # ==========================================
+        # SECTION 2: EXIT ALERTS (most prominent)
+        # ==========================================
+        st.subheader("EXIT ALERTS")
+        st.caption("Non-negotiable action rules — when a violation fires, act immediately.")
+
+        if not cycle['active_exits']:
+            st.markdown("""<div class="exit-clear">
+                <div style="font-size: 18px; font-weight: 700; color: #2ca02c;">No Active Violations</div>
+                <div style="font-size: 14px; margin-top: 6px; color: #555;">Market structure intact — all exit signals clear.</div>
+            </div>""", unsafe_allow_html=True)
+
+            # Show monitoring status
+            mon_cols = st.columns(3)
+            with mon_cols[0]:
+                if cycle['consecutive_closes_below_21'] == 0:
+                    st.success("21 EMA — Holding")
+                else:
+                    st.warning(f"21 EMA — {cycle['consecutive_closes_below_21']} close(s) below")
+            with mon_cols[1]:
+                if cycle['price'] > cycle['sma50']:
+                    st.success("50 SMA — Above")
+                else:
+                    st.error("50 SMA — Below")
+            with mon_cols[2]:
+                if cycle['price'] > cycle['sma200']:
+                    st.success("200 SMA — Above")
+                else:
+                    st.error("200 SMA — Below")
+        else:
+            for alert in cycle['active_exits']:
+                sev_class = {'WARNING': 'exit-warning', 'SERIOUS': 'exit-serious', 'CRITICAL': 'exit-critical'}.get(alert['severity'], 'exit-warning')
+                st.markdown(f"""<div class="exit-card {sev_class}">
+                    <div style="font-size: 22px; font-weight: 800;">{alert['icon']} {alert['signal']}</div>
+                    <div style="font-size: 15px; margin-top: 8px;">{alert['detail']}</div>
+                    <div style="font-size: 18px; font-weight: 700; margin-top: 10px;">TARGET EXPOSURE: {alert['target']}</div>
+                    <div style="font-size: 12px; margin-top: 6px; opacity: 0.7;">Take profits on extended positions. Tighten all stops immediately.</div>
+                </div>""", unsafe_allow_html=True)
+
+        # Exit rules reference
+        with st.expander("Exit Ladder Rules"):
+            st.markdown("""
+| Signal | Condition | Target | Severity |
+|---|---|---|---|
+| **21 EMA Violation** | Close below 21 EMA + next day low undercuts by >0.2% | **50%** | WARNING |
+| **21 EMA Confirmed Break** | Two consecutive closes below 21 EMA | **30%** | SERIOUS |
+| **50 SMA Violation** | Close below 50 SMA + next day low undercuts by >0.2% | **0%** | CRITICAL |
+""")
+
+        # Historical violations
+        if cycle['violation_log']:
+            with st.expander(f"Violation History ({len(cycle['violation_log'])} events)"):
+                vlog_data = []
+                for v in reversed(cycle['violation_log']):
+                    vd = v['date']
+                    vlog_data.append({
+                        'Date': vd.strftime('%Y-%m-%d') if hasattr(vd, 'strftime') else str(vd),
+                        'Signal': v['signal'],
+                        'Price': f"{v['price']:,.2f}",
+                        'Target': v['target'],
+                        'Severity': v['severity']
+                    })
+                st.dataframe(pd.DataFrame(vlog_data), hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+
+        # ==========================================
+        # SECTION 3: ENTRY LADDER
+        # ==========================================
+        st.subheader("ENTRY LADDER")
+        st.caption("Suggested maximum exposure — actual sizing driven by individual trade performance.")
+
+        # Progress bar
+        max_exp = 200
+        progress_val = min(cycle['suggested_exposure'] / max_exp, 1.0)
+        st.progress(progress_val)
+        st.markdown(f"**Current Step: {cycle['entry_step']}** — Suggested Exposure: **{cycle['suggested_exposure']}%**")
+
+        # Ladder steps
+        for item in cycle['entry_ladder']:
+            step = item['step']
+            achieved = item['achieved']
+            is_next = not achieved and (step == 0 or cycle['entry_ladder'][step - 1]['achieved'] if step > 0 else True)
+
+            if achieved:
+                icon = "✅"
+                css_class = "step-achieved"
+            elif is_next:
+                icon = "⏳"
+                css_class = "step-pending"
+            else:
+                icon = "🔒"
+                css_class = "step-locked"
+
+            st.markdown(f"""<div class="ladder-step {css_class}">
+                <div>
+                    <span style="font-weight: 700;">{icon} Step {step}: {item['label']}</span>
+                    <span style="font-size: 12px; margin-left: 10px; opacity: 0.7;">{item['detail']}</span>
+                </div>
+                <div style="font-weight: 700; font-size: 16px;">{item['exposure']}</div>
+            </div>""", unsafe_allow_html=True)
+
+        # Streak info
+        st.markdown("---")
+        sk1, sk2 = st.columns(2)
+        with sk1:
+            st.metric("Low > 21 EMA Streak", f"{cycle['low_above_21_streak']} days",
+                      delta="HEALTHY" if cycle['low_above_21_streak'] >= 3 else f"{3 - cycle['low_above_21_streak']} more needed")
+        with sk2:
+            st.metric("Low > 50 SMA Streak", f"{cycle['low_above_50_streak']} days",
+                      delta="Strong" if cycle['low_above_50_streak'] >= 3 else f"{3 - cycle['low_above_50_streak']} more needed")
+
+        # MA Stack
+        st.markdown("---")
+        st.subheader("Moving Average Stack")
+        ma_data = [
+            {'MA': '8 EMA', 'Value': f"{cycle['ema8']:,.2f}", 'vs Price': f"{((cycle['price'] - cycle['ema8']) / cycle['ema8'] * 100):+.2f}%"},
+            {'MA': '21 EMA', 'Value': f"{cycle['ema21']:,.2f}", 'vs Price': f"{((cycle['price'] - cycle['ema21']) / cycle['ema21'] * 100):+.2f}%"},
+            {'MA': '50 SMA', 'Value': f"{cycle['sma50']:,.2f}", 'vs Price': f"{((cycle['price'] - cycle['sma50']) / cycle['sma50'] * 100):+.2f}%"},
+            {'MA': '200 SMA', 'Value': f"{cycle['sma200']:,.2f}", 'vs Price': f"{((cycle['price'] - cycle['sma200']) / cycle['sma200'] * 100):+.2f}%"},
+        ]
+        st.dataframe(pd.DataFrame(ma_data), hide_index=True, use_container_width=True)
+
+        # Check MA stacking order
+        stack_order = []
+        if cycle['ema8'] > cycle['ema21']: stack_order.append("8 EMA > 21 EMA ✅")
+        else: stack_order.append("8 EMA < 21 EMA ❌")
+        if cycle['ema21'] > cycle['sma50']: stack_order.append("21 EMA > 50 SMA ✅")
+        else: stack_order.append("21 EMA < 50 SMA ❌")
+        if cycle['sma50'] > cycle['sma200']: stack_order.append("50 SMA > 200 SMA ✅")
+        else: stack_order.append("50 SMA < 200 SMA ❌")
+        st.markdown(" | ".join(stack_order))
+
+        # Methodology
+        with st.expander("Cycle Tracker Methodology"):
+            st.markdown("""
+### Two-Layer Architecture
+
+**Layer 1 — M Factor** (existing, unchanged)
+- Drives market window: OPEN / NEUTRAL / CLOSED / POWERTREND
+- Used for daily trading decisions and rule triggers
+
+**Layer 2 — Cycle Tracker** (this page)
+- Tracks the correction/recovery arc that M Factor doesn't model
+- Provides portfolio-level exposure guidance through entry and exit ladders
+
+### Market States
+
+| State | Definition |
+|---|---|
+| **HEALTHY** | 3 consecutive days where daily low > 21 EMA |
+| **CORRECTION** | NASDAQ down 5%+ from recent high |
+| **RECOVERY** | Correction acknowledged + rally day identified + climbing entry ladder |
+
+### Entry Ladder
+Exposure levels are **suggested maximums**. The ladder progresses from Rally Day (15%) through Follow-Through Day (30%), MA holds, crossovers, up to PowerTrend (200%).
+
+### Exit Ladder
+Exit signals are **non-negotiable action rules**:
+- **21 EMA Violation** → 50% (close below + 0.2% undercut)
+- **21 EMA Confirmed Break** → 30% (two consecutive closes below)
+- **50 SMA Violation** → 0% (close below + 0.2% undercut)
+
+### Key Rules
+1. Entry ladder = suggestions — actual exposure follows trade performance
+2. Exit ladder = rules — must be acted on when triggered
+3. All signals are NASDAQ only
+4. This page does not replace M Factor — it sits on top of it
+""")
 
 # ==============================================================================
 # Performance Heat Map
