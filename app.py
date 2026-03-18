@@ -931,6 +931,19 @@ def compute_cycle_state():
                 else:
                     rally_day_type = "weak"
 
+        # --- Price-only FTD detection (no volume requirement) ---
+        # If IBD didn't find FTD (due to volume), check price-action only
+        price_ftd_date = ibd_ftd_date
+        if price_ftd_date is None and rally_low_idx is not None:
+            for i in range(rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed: +3)
+                row = df.iloc[i]
+                if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
+                    # Check rally low hasn't been undercut
+                    lows = df.iloc[rally_low_idx:i+1]['Low']
+                    if lows.min() >= rally_low:
+                        price_ftd_date = df.index[i]
+                        break
+
         # --- Entry step calculation ---
         entry_step = -1  # Default: no step
 
@@ -956,8 +969,8 @@ def compute_cycle_state():
             if rally_start_date is not None:
                 entry_step = 0  # Rally day achieved
 
-            if ibd_ftd_date is not None:
-                entry_step = 1  # FTD achieved
+            if price_ftd_date is not None:
+                entry_step = 1  # FTD achieved (price-action only)
 
                 if price > ema21:
                     entry_step = 2
@@ -1040,7 +1053,7 @@ def compute_cycle_state():
             })
 
         # --- ENTRY LADDER STATUS ---
-        ftd_date = ibd_ftd_date
+        ftd_date = price_ftd_date
         entry_ladder = [
             {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
              'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
