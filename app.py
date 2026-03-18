@@ -1136,9 +1136,9 @@ def compute_cycle_state():
         entry_exposure = exposure_map.get(entry_step, 0)
         suggested_exposure = entry_exposure
 
-        # Override exposure if exit alert is active
+        # Override exposure if exit alert is active (HEALTHY only — not during RECOVERY)
         exit_override = None
-        if active_exits:
+        if active_exits and cycle_state == "HEALTHY":
             worst = min(int(e['target'].replace('%', '')) for e in active_exits)
             if worst < suggested_exposure:
                 exit_override = worst
