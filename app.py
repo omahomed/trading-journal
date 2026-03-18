@@ -822,20 +822,17 @@ def compute_cycle_state():
         df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
         df['50SMA'] = df['Close'].rolling(window=50).mean()
         df['200SMA'] = df['Close'].rolling(window=200).mean()
+        df['high_52w'] = df['High'].rolling(window=252, min_periods=50).max()
         df['Prev_Close'] = df['Close'].shift(1)
         df['Prev_Low'] = df['Low'].shift(1)
         df['Prev_High'] = df['High'].shift(1)
         df['Pct_Change'] = (df['Close'] - df['Prev_Close']) / df['Prev_Close'] * 100
 
-        # Rolling high for correction detection (52-week)
-        df['Rolling_High'] = df['High'].rolling(window=252, min_periods=50).max()
-        df['Drawdown_Pct'] = (df['Close'] - df['Rolling_High']) / df['Rolling_High'] * 100
-
-        # Work on recent subset (120 days for enough context)
-        subset = df.iloc[-120:].copy()
+        # Use 260+ days for proper reference high initialization (same as IBD Market School)
+        subset = df.iloc[-300:].copy()
         dates_list = subset.index.tolist()
 
-        # --- STATE MACHINE ---
+        # --- STATE MACHINE (IBD-style reference high tracking) ---
         cycle_state = "HEALTHY"
         rally_day_idx = None  # index into dates_list
         rally_day_date = None
@@ -844,6 +841,13 @@ def compute_cycle_state():
         ftd_date = None
         entry_step = 7  # Start at max (HEALTHY)
         correction_start = None
+
+        # Reference high: same logic as IBD Market School
+        # - Initialized from 52-week high
+        # - Updated when NOT in correction and price makes new high
+        # - Reset to current high after recovery completes
+        reference_high = None
+        reference_high_date = None
 
         # Track streaks
         low_above_21_streak = 0
@@ -871,8 +875,21 @@ def compute_cycle_state():
             ema8 = row['8EMA']
             prev_close = row['Prev_Close'] if pd.notna(row['Prev_Close']) else close
             prev_low = row['Prev_Low'] if pd.notna(row['Prev_Low']) else low
-            drawdown = row['Drawdown_Pct']
             pct_chg = row['Pct_Change'] if pd.notna(row['Pct_Change']) else 0
+
+            # --- Reference high tracking (IBD Market School logic) ---
+            if reference_high is None and pd.notna(row.get('high_52w')):
+                reference_high = row['high_52w']
+                reference_high_date = dt
+            elif reference_high is not None and cycle_state != "CORRECTION" and high > reference_high:
+                reference_high = high
+                reference_high_date = dt
+
+            # Drawdown from reference high
+            if reference_high and reference_high > 0:
+                drawdown = (close - reference_high) / reference_high * 100
+            else:
+                drawdown = 0
 
             # --- Streak tracking ---
             if pd.notna(ema21):
@@ -1104,7 +1121,9 @@ def compute_cycle_state():
             'ftd_date': ftd_date,
             'days_since_rally': days_since_rally,
             'correction_start': correction_start,
-            'drawdown_pct': float(curr['Drawdown_Pct']) if pd.notna(curr['Drawdown_Pct']) else 0,
+            'drawdown_pct': float(drawdown) if drawdown else 0,
+            'reference_high': float(reference_high) if reference_high else 0,
+            'reference_high_date': reference_high_date,
             'price': float(curr['Close']),
             'ema8': float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0,
             'ema21': float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0,
@@ -3143,7 +3162,7 @@ elif page == "Market Cycle Tracker":
             subtitle = "Market structure intact — all systems go"
         elif cs == "CORRECTION":
             bg = "#ff4b4b"
-            subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high — waiting for rally day"
+            subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — waiting for rally day"
         else:  # RECOVERY
             bg = "#ffcc00"
             subtitle = f"Day {cycle['days_since_rally']} of rally attempt" if cycle['days_since_rally'] else "Recovery in progress"
@@ -3169,13 +3188,17 @@ elif page == "Market Cycle Tracker":
         </div>""", unsafe_allow_html=True)
 
         # Key metrics row
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("NASDAQ", f"{cycle['price']:,.2f}")
-        m2.metric("21 EMA", f"{cycle['ema21']:,.2f}",
+        ref_date = cycle['reference_high_date']
+        ref_date_str = ref_date.strftime('%m/%d/%y') if hasattr(ref_date, 'strftime') else str(ref_date) if ref_date else ''
+        m2.metric("Reference High", f"{cycle['reference_high']:,.2f}",
+                  delta=f"{ref_date_str}")
+        m3.metric("21 EMA", f"{cycle['ema21']:,.2f}",
                   delta=f"{((cycle['price'] - cycle['ema21']) / cycle['ema21'] * 100):+.2f}%")
-        m3.metric("50 SMA", f"{cycle['sma50']:,.2f}",
+        m4.metric("50 SMA", f"{cycle['sma50']:,.2f}",
                   delta=f"{((cycle['price'] - cycle['sma50']) / cycle['sma50'] * 100):+.2f}%")
-        m4.metric("200 SMA", f"{cycle['sma200']:,.2f}",
+        m5.metric("200 SMA", f"{cycle['sma200']:,.2f}",
                   delta=f"{((cycle['price'] - cycle['sma200']) / cycle['sma200'] * 100):+.2f}%")
 
         st.markdown("---")
