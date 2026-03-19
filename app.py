@@ -1391,6 +1391,9 @@ with st.sidebar:
             # Clear Trade Journal search state when navigating away
             if label != "Trade Journal" and '_tj_prev_page' in st.session_state:
                 del st.session_state['_tj_prev_page']
+            # Reset cycle tracker auto-refresh flag
+            if label != "Market Cycle Tracker":
+                st.session_state.pop('_cycle_loaded', None)
             st.rerun()
 
     # 📊 DASHBOARDS (expanded by default)
@@ -3180,8 +3183,14 @@ elif page == "Market Cycle Tracker":
     .step-locked {background-color: #f5f5f5; border: 1px solid #e0e0e0; color: #999;}
     </style>""", unsafe_allow_html=True)
 
-    if st.button("Refresh Data", key="cycle_refresh"):
-        st.cache_data.clear()
+    # Auto-refresh on page visit: clear stale cycle data
+    if '_cycle_loaded' not in st.session_state:
+        compute_cycle_state.clear()
+        st.session_state['_cycle_loaded'] = True
+
+    if st.button("🔄 Refresh Market Data", key="cycle_refresh"):
+        compute_cycle_state.clear()
+        st.rerun()
 
     cycle = compute_cycle_state()
 
