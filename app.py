@@ -4407,6 +4407,17 @@ elif page == "Position Sizer":
                                     f"⚠️ **RISK LIMIT:** Full target ({target_add} shares) would risk ${target_risk:,.0f} (over ${max_risk_dollars:,.0f} budget). "
                                     f"**Safe add: {recommended_add} shares** ({new_weight:.1f}% weight). Scale up on next pullback to MA."
                                 )
+
+                            # --- SEND TO LOG BUY (Scale In) ---
+                            if st.button("📝 Send to Log Buy", key="add_send_logbuy", type="secondary"):
+                                st.session_state['ps_ticker'] = sel_pos
+                                st.session_state['ps_trade_id'] = row['Trade_ID']
+                                st.session_state['ps_shares'] = recommended_add
+                                st.session_state['ps_price'] = curr_price
+                                st.session_state['ps_stop'] = calc_stop
+                                st.session_state['ps_action'] = 'scale_in'
+                                st.session_state.page = "Log Buy"
+                                st.rerun()
         else:
             st.info("No Open Positions found in Summary file.")
 
@@ -4818,6 +4829,17 @@ elif page == "Position Sizer":
                     st.success(f"✅ **RECOMMENDED SIZE:** Buy **{final_max_shares}** shares ({target_weight:.1f}% of NLV).")
                     if limit_reason.startswith("MA"):
                         st.info(f"ℹ️ **Note:** Sized for technicals. Your stop (${effective_stop:.2f}) is {tech_dist_pct:.1f}% away (including buffer).")
+
+                    # --- SEND TO LOG BUY ---
+                    if st.button("📝 Send to Log Buy", key="vs_send_logbuy", type="secondary"):
+                        st.session_state['ps_ticker'] = vs_ticker
+                        st.session_state['ps_shares'] = final_max_shares
+                        st.session_state['ps_price'] = vs_price
+                        st.session_state['ps_stop'] = effective_stop if effective_stop > 0 else vs_price * 0.92
+                        st.session_state['ps_risk_budget'] = daily_risk_budget
+                        st.session_state['ps_action'] = 'new'
+                        st.session_state.page = "Log Buy"
+                        st.rerun()
                 else:
                     diff_shares = vs_shares - final_max_shares
                     v1, v2, v3 = st.columns(3)
@@ -5031,6 +5053,17 @@ elif page == "Position Sizer":
                             v2.metric("New Total", f"{new_total} shs", f"{new_weight:.1f}% Weight")
                             new_avg = (pyr_avg_cost * pyr_shares + pyr_price * pyramid_allowed) / new_total
                             v3.metric("New Avg Cost", f"${new_avg:,.2f}", f"From ${pyr_avg_cost:,.2f}")
+
+                            # --- SEND TO LOG BUY (Pyramid) ---
+                            if st.button("📝 Send to Log Buy", key="pyr_send_logbuy", type="secondary"):
+                                st.session_state['ps_ticker'] = pyr_ticker
+                                st.session_state['ps_trade_id'] = pyr_trade_id
+                                st.session_state['ps_shares'] = pyramid_allowed
+                                st.session_state['ps_price'] = pyr_price
+                                st.session_state['ps_stop'] = 0.0
+                                st.session_state['ps_action'] = 'scale_in'
+                                st.session_state.page = "Log Buy"
+                                st.rerun()
                         else:
                             st.info("ℹ️ Scale factor resulted in 0 shares. Last buy needs more profit before adding.")
 
@@ -5052,6 +5085,25 @@ elif page == "Log Buy":
 
     st.caption("Live Entry Calculator")
 
+    # --- Pre-fill from Position Sizer ---
+    ps_prefill = st.session_state.pop('ps_action', None)
+    ps_ticker = st.session_state.pop('ps_ticker', '')
+    ps_shares = st.session_state.pop('ps_shares', 0)
+    ps_price = st.session_state.pop('ps_price', 0.0)
+    ps_stop = st.session_state.pop('ps_stop', 0.0)
+    ps_trade_id = st.session_state.pop('ps_trade_id', '')
+    ps_risk_budget = st.session_state.pop('ps_risk_budget', 0.0)
+
+    if ps_prefill:
+        st.session_state['b_tick'] = ps_ticker
+        st.session_state['b_shs'] = int(ps_shares)
+        st.session_state['b_px'] = float(ps_price)
+        st.session_state['b_stop_val'] = float(ps_stop) if ps_stop > 0 else 0.0
+        if ps_prefill == 'scale_in' and ps_trade_id:
+            st.session_state['b_id'] = ps_trade_id
+        st.success(f"Pre-filled from Position Sizer: **{ps_ticker}** — {int(ps_shares)} shares @ ${ps_price:.2f}" +
+                   (f" | Stop: ${ps_stop:.2f}" if ps_stop > 0 else ""))
+
     # Session State Init
     if 'b_tick' not in st.session_state: st.session_state['b_tick'] = ""
     if 'b_id' not in st.session_state: st.session_state['b_id'] = ""
@@ -5063,7 +5115,8 @@ elif page == "Log Buy":
     if 'b_stop_val' not in st.session_state: st.session_state['b_stop_val'] = 0.0
 
     c_top1, c_top2 = st.columns(2)
-    trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], horizontal=True)
+    default_action_idx = 1 if ps_prefill == 'scale_in' else 0
+    trade_type = c_top1.radio("Action Type", ["Start New Campaign", "Scale In (Add to Existing)"], index=default_action_idx, horizontal=True)
 
     b_date = c_top2.date_input("Date", get_current_date_ct(), key="b_date_input")
     b_time = c_top2.time_input("Time", get_current_time_ct(), step=60, key="b_time_input")
