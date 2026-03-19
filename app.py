@@ -901,6 +901,7 @@ def compute_cycle_state():
         df['200SMA'] = df['Close'].rolling(window=200).mean()
 
         curr = df.iloc[-1]
+        last_data_date = df.index[-1]
         price = float(curr['Close'])
         ema8 = float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0
         ema21 = float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0
@@ -1169,6 +1170,7 @@ def compute_cycle_state():
             'low_above_21_streak': low_above_21_streak,
             'low_above_50_streak': low_above_50_streak,
             'consecutive_closes_below_21': consecutive_closes_below_21,
+            'last_data_date': last_data_date,
         }
     except Exception as e:
         import traceback
@@ -3197,6 +3199,11 @@ elif page == "Market Cycle Tracker":
     if cycle is None:
         st.error("Unable to compute cycle state. Market data unavailable.")
     else:
+        # Show data freshness
+        ldd = cycle.get('last_data_date')
+        if ldd is not None:
+            ldd_str = ldd.strftime('%b %d, %Y') if hasattr(ldd, 'strftime') else str(ldd)
+            st.caption(f"Data as of: **{ldd_str}** — Close: {cycle['price']:,.2f}")
         # ==========================================
         # SECTION 1: STATE BANNER
         # ==========================================
