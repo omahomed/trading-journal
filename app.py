@@ -7851,6 +7851,53 @@ elif page == "Active Campaign Summary":
 
              df_open['Risk Status'] = df_open.apply(get_risk_status, axis=1)
 
+             # --- PYRAMID READY INDICATOR ---
+             def get_pyramid_flag(row):
+                 tid = str(row['Trade_ID']).strip()
+                 curr_price = row['Current Price']
+                 if curr_price <= 0:
+                     return ""
+                 df_d['Trade_ID_Str'] = df_d['Trade_ID'].astype(str).str.strip()
+                 subset = df_d[df_d['Trade_ID_Str'] == tid].copy()
+                 if subset.empty:
+                     return ""
+                 # Build LIFO inventory to find last remaining lot
+                 def force_float(x):
+                     try: return float(str(x).replace('$','').replace(',',''))
+                     except: return 0.0
+                 subset['Type_Rank'] = subset['Action'].apply(lambda x: 0 if str(x).upper() == 'BUY' else 1)
+                 if 'Date' in subset.columns:
+                     subset['Date'] = pd.to_datetime(subset['Date'], errors='coerce')
+                     subset = subset.sort_values(['Date', 'Type_Rank'])
+                 inventory = []
+                 for _, tx in subset.iterrows():
+                     action = str(tx.get('Action', '')).upper()
+                     tx_shares = abs(force_float(tx.get('Shares', 0)))
+                     if action == 'BUY':
+                         price = force_float(tx.get('Amount', tx.get('Price', 0.0)))
+                         if price == 0: price = force_float(row.get('Avg_Entry', 0))
+                         inventory.append({'qty': tx_shares, 'price': price})
+                     elif action == 'SELL':
+                         to_sell = tx_shares
+                         while to_sell > 0 and inventory:
+                             last = inventory[-1]
+                             take = min(to_sell, last['qty'])
+                             last['qty'] -= take
+                             to_sell -= take
+                             if last['qty'] < 0.00001: inventory.pop()
+                 if not inventory:
+                     return ""
+                 last_lot_price = inventory[-1]['price']
+                 if last_lot_price <= 0:
+                     return ""
+                 last_lot_return = ((curr_price - last_lot_price) / last_lot_price) * 100
+                 if last_lot_return >= 5.0:
+                     return f"🔺 +{last_lot_return:.1f}%"
+                 else:
+                     return f"{last_lot_return:+.1f}%"
+
+             df_open['Pyramid'] = df_open.apply(get_pyramid_flag, axis=1)
+
 
 
              # Load equity from journal (database-aware)
@@ -7951,7 +7998,7 @@ elif page == "Active Campaign Summary":
 
              # UPDATED COLUMNS: Removed Trend Status, Added Risk Status
 
-             cols = ['Trade_ID', 'Ticker', 'Days Held', 'Risk Status', 'Return_Pct', 'Pos Size %',
+             cols = ['Trade_ID', 'Ticker', 'Days Held', 'Risk Status', 'Pyramid', 'Return_Pct', 'Pos Size %',
 
                      'Shares', 'Avg_Entry', 'Current Price', 'Avg Stop', 'Risk_Budget',
 
