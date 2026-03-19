@@ -7856,11 +7856,11 @@ elif page == "Active Campaign Summary":
                  tid = str(row['Trade_ID']).strip()
                  curr_price = row['Current Price']
                  if curr_price <= 0:
-                     return ""
+                     return float('nan')
                  df_d['Trade_ID_Str'] = df_d['Trade_ID'].astype(str).str.strip()
                  subset = df_d[df_d['Trade_ID_Str'] == tid].copy()
                  if subset.empty:
-                     return ""
+                     return float('nan')
                  # Build LIFO inventory to find last remaining lot
                  def force_float(x):
                      try: return float(str(x).replace('$','').replace(',',''))
@@ -7886,15 +7886,12 @@ elif page == "Active Campaign Summary":
                              to_sell -= take
                              if last['qty'] < 0.00001: inventory.pop()
                  if not inventory:
-                     return ""
+                     return float('nan')
                  last_lot_price = inventory[-1]['price']
                  if last_lot_price <= 0:
-                     return ""
+                     return float('nan')
                  last_lot_return = ((curr_price - last_lot_price) / last_lot_price) * 100
-                 if last_lot_return >= 5.0:
-                     return f"🔺 +{last_lot_return:.1f}%"
-                 else:
-                     return f"{last_lot_return:+.1f}%"
+                 return last_lot_return
 
              df_open['Pyramid'] = df_open.apply(get_pyramid_flag, axis=1)
 
@@ -8010,6 +8007,32 @@ elif page == "Active Campaign Summary":
 
              
 
+             def color_pyramid(val):
+                 try:
+                     v = float(val)
+                 except (ValueError, TypeError):
+                     return ''
+                 if v >= 5.0:
+                     return 'background-color: #2ca02c; color: white; font-weight: bold;'
+                 elif v > 0:
+                     return 'background-color: #ffcc00; color: black;'
+                 else:
+                     return 'background-color: #ff4b4b; color: white;'
+
+             def format_pyramid(val):
+                 try:
+                     v = float(val)
+                 except (ValueError, TypeError):
+                     return ''
+                 if v >= 5.0:
+                     return f'🔺 +{v:.1f}%'
+                 elif v > 0:
+                     return f'△ +{v:.1f}%'
+                 else:
+                     return f'▽ {v:.1f}%'
+
+             pyramid_cols = [c for c in ['Pyramid'] if c in df_open.columns]
+
              st.dataframe(
 
                  df_open[final_cols].style.format({
@@ -8020,9 +8043,10 @@ elif page == "Active Campaign Summary":
 
                      'Avg Stop': '${:,.2f}', 'Risk $': '${:,.2f}', 'Risk %': '{:.2f}%', 'Risk_Budget': '${:,.2f}', 'Days Held': '{:.0f}',
 
-                     'Projected P&L': '${:,.2f}'
+                     'Projected P&L': '${:,.2f}', 'Pyramid': format_pyramid
 
-                 }).applymap(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']),
+                 }).applymap(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']
+                 ).applymap(color_pyramid, subset=pyramid_cols),
 
                  height=(len(df_open) + 1) * 35 + 3,
 
