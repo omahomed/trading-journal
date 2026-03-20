@@ -38,6 +38,24 @@ except (ImportError, KeyError, Exception) as e:
     R2_AVAILABLE = False
     print(f"⚠️  r2_storage import failed: {type(e).__name__}: {e}")
 
+# Vision API (MarketSurge screenshot extraction)
+try:
+    import vision_extract
+    _VISION_IMPORT = True
+except (ImportError, Exception) as e:
+    _VISION_IMPORT = False
+    print(f"⚠️  vision_extract import failed: {type(e).__name__}: {e}")
+
+def check_vision_available():
+    """Lazy check — runs after st.secrets is fully loaded."""
+    if not _VISION_IMPORT:
+        return False
+    try:
+        api_key = st.secrets.get("anthropic", {}).get("api_key", "")
+        return bool(api_key)
+    except Exception:
+        return False
+
 # Feature flag: Use database instead of CSV
 # Auto-enable if running on Streamlit Cloud with database secrets
 if DB_AVAILABLE and hasattr(st, 'secrets') and 'database' in st.secrets:
@@ -5336,6 +5354,60 @@ elif page == "Log Buy":
             if daily_charts:
                 st.caption(f"✅ {len(daily_charts)} file(s) selected")
 
+    # --- MARKETSURGE SCREENSHOT (Fundamental Extraction) ---
+    ms_screenshot = None
+    _vision_ok = check_vision_available()
+    st.caption(f"🔬 Vision API: {'✅' if _vision_ok else '❌'} | Import: {'✅' if _VISION_IMPORT else '❌'} | Key: {'✅' if st.secrets.get('anthropic', {}).get('api_key') else '❌'}")
+    if _vision_ok:
+        st.markdown("#### 🔬 MarketSurge Fundamentals (Optional)")
+        st.caption("Upload a MarketSurge screenshot to auto-extract ratings and fundamentals via AI.")
+        ms_screenshot = st.file_uploader(
+            "MarketSurge Screenshot",
+            type=['png', 'jpg', 'jpeg'],
+            key='b_ms_screenshot',
+            help="Upload a MarketSurge stock detail screenshot — AI will extract EPS Rating, Composite Rating, RS Rating, and more."
+        )
+        if ms_screenshot:
+            st.caption("✅ Screenshot selected")
+            if st.button("🔬 Extract & Preview Fundamentals", key="btn_extract_preview"):
+                with st.spinner("Analyzing screenshot with AI..."):
+                    ms_screenshot.seek(0)
+                    img_bytes = ms_screenshot.read()
+                    extracted = vision_extract.extract_fundamentals(img_bytes, ms_screenshot.name)
+                    if extracted:
+                        st.session_state['_ms_extracted'] = extracted
+                    else:
+                        st.error("Could not extract data from this screenshot. Make sure it's a MarketSurge stock detail page.")
+
+            # Show extracted preview (persists through reruns)
+            if '_ms_extracted' in st.session_state:
+                extracted = st.session_state['_ms_extracted']
+                st.success(f"**Extracted: {extracted.get('ticker', 'Unknown')}**")
+                rc1, rc2, rc3, rc4 = st.columns(4)
+                rc1.metric("Composite", extracted.get('composite_rating', 'N/A'))
+                rc2.metric("EPS Rating", extracted.get('eps_rating', 'N/A'))
+                rc3.metric("RS Rating", extracted.get('rs_rating', 'N/A'))
+                rc4.metric("Acc/Dis", extracted.get('acc_dis_rating', 'N/A'))
+
+                rc5, rc6, rc7, rc8 = st.columns(4)
+                rc5.metric("SMR", extracted.get('smr_rating', 'N/A'))
+                rc6.metric("Group RS", extracted.get('group_rs_rating', 'N/A'))
+                rc7.metric("EPS Growth", f"{extracted['eps_growth_rate']}%" if extracted.get('eps_growth_rate') else "N/A")
+                rc8.metric("U/D Vol", extracted.get('ud_vol_ratio', 'N/A'))
+
+                if extracted.get('industry_group'):
+                    st.caption(f"Industry: {extracted['industry_group']} (Rank #{extracted.get('industry_group_rank', '?')})")
+                if extracted.get('funds_own_pct') is not None:
+                    st.caption(f"Ownership — Funds: {extracted['funds_own_pct']}% | Banks: {extracted.get('banks_own_pct', '?')}% | Mgmt: {extracted.get('mgmt_own_pct', '?')}%")
+
+                # Show annual EPS if available
+                if extracted.get('annual_eps'):
+                    eps_str = " | ".join([f"{e['year']}: ${e['eps']}" for e in extracted['annual_eps'] if e.get('year') and e.get('eps')])
+                    if eps_str:
+                        st.caption(f"Annual EPS: {eps_str}")
+
+                st.caption("Data will be saved to DB when you click LOG BUY ORDER")
+
     # Backward compat: map lists to old single-file vars for save logic
     weekly_chart = weekly_charts[0] if weekly_charts else None
     daily_chart = daily_charts[0] if daily_charts else None
@@ -5467,8 +5539,35 @@ elif page == "Log Buy":
                 if not USE_DATABASE:
                     st.warning("⚠️ Database mode disabled - charts not uploaded")
 
+            # --- SAVE FUNDAMENTALS FROM MARKETSURGE (if extracted or screenshot provided) ---
+            if USE_DATABASE and (ms_screenshot or '_ms_extracted' in st.session_state):
+                try:
+                    # Use already-extracted data if available, otherwise extract now
+                    extracted = st.session_state.pop('_ms_extracted', None)
+
+                    ms_image_id = None
+                    if ms_screenshot and R2_AVAILABLE:
+                        ms_screenshot.seek(0)
+                        ms_url = r2.upload_image(ms_screenshot, portfolio, b_id, b_tick, 'marketsurge')
+                        if ms_url:
+                            ms_image_id = db.save_trade_image(portfolio, b_id, b_tick, 'marketsurge', ms_url, ms_screenshot.name)
+
+                    if not extracted and ms_screenshot and check_vision_available():
+                        with st.spinner("🔬 Extracting fundamentals..."):
+                            ms_screenshot.seek(0)
+                            img_bytes = ms_screenshot.read()
+                            extracted = vision_extract.extract_fundamentals(img_bytes, ms_screenshot.name)
+
+                    if extracted:
+                        db.save_trade_fundamentals(portfolio, b_id, b_tick, extracted, ms_image_id)
+                        st.success("🔬 Fundamentals saved to database!")
+                    elif ms_screenshot:
+                        st.warning("⚠️ Could not extract data. Screenshot saved for manual review.")
+                except Exception as e:
+                    st.warning(f"⚠️ Fundamental extraction failed: {e}. Trade was logged successfully.")
+
             st.success(f"✅ EXECUTED: Bought {b_shs} {b_tick} @ ${b_px}")
-            for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart']:
+            for k in ['b_tick','b_id','b_shs','b_px','b_note','b_trx','b_stop_val','b_weekly_chart','b_daily_chart','b_ms_screenshot']:
                 if k in st.session_state: del st.session_state[k]
             st.rerun()
         else:
@@ -7253,6 +7352,31 @@ elif page == "Trade Manager":
                                     st.info(f"No {img_type} chart")
                     else:
                         st.info("No charts uploaded for this trade")
+
+                    # --- FUNDAMENTALS VIEWER ---
+                    if USE_DATABASE and selected_trade != "Select...":
+                        fundas = db.get_trade_fundamentals(CURR_PORT_NAME, selected_trade)
+                        if fundas:
+                            st.markdown("---")
+                            st.markdown("#### 🔬 Extracted Fundamentals")
+                            f = fundas[0]  # Most recent extraction
+                            fc1, fc2, fc3, fc4 = st.columns(4)
+                            fc1.metric("Composite", f.get('composite_rating', 'N/A'))
+                            fc2.metric("EPS Rating", f.get('eps_rating', 'N/A'))
+                            fc3.metric("RS Rating", f.get('rs_rating', 'N/A'))
+                            fc4.metric("Acc/Dis", f.get('acc_dis_rating', 'N/A'))
+
+                            fc5, fc6, fc7, fc8 = st.columns(4)
+                            fc5.metric("SMR", f.get('smr_rating', 'N/A'))
+                            fc6.metric("Group RS", f.get('group_rs_rating', 'N/A'))
+                            fc7.metric("EPS Growth", f"{f['eps_growth_rate']}%" if f.get('eps_growth_rate') else "N/A")
+                            fc8.metric("U/D Vol", f.get('ud_vol_ratio', 'N/A'))
+
+                            if f.get('industry_group'):
+                                st.caption(f"Industry: {f['industry_group']} (Rank #{f.get('industry_group_rank', '?')})")
+                            if f.get('funds_own_pct') is not None:
+                                st.caption(f"Ownership — Funds: {f['funds_own_pct']}% | Banks: {f.get('banks_own_pct', '?')}% | Mgmt: {f.get('mgmt_own_pct', '?')}%")
+                            st.caption(f"Extracted: {f['extracted_at']}")
 
         # 1. Prepare Data
         df_s_view = df_s.reset_index().rename(columns={'index': 'Seq_ID'})

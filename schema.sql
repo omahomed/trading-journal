@@ -249,6 +249,54 @@ CREATE INDEX IF NOT EXISTS idx_trade_images_type ON trade_images (image_type);
 
 
 -- ============================================
+-- TABLE: trade_fundamentals
+-- PURPOSE: Extracted fundamental data from MarketSurge screenshots (via Claude Vision API)
+-- ============================================
+CREATE TABLE IF NOT EXISTS trade_fundamentals (
+    id SERIAL PRIMARY KEY,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    trade_id VARCHAR(50) NOT NULL,
+    ticker VARCHAR(20) NOT NULL,
+    image_id INTEGER REFERENCES trade_images(id) ON DELETE SET NULL,
+    extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- IBD Ratings
+    composite_rating INTEGER,
+    eps_rating INTEGER,
+    rs_rating INTEGER,
+    group_rs_rating VARCHAR(10),
+    smr_rating VARCHAR(10),
+    acc_dis_rating VARCHAR(10),
+    timeliness_rating VARCHAR(10),
+    sponsorship_rating VARCHAR(10),
+
+    -- Growth & Volume
+    eps_growth_rate NUMERIC(10, 2),
+    ud_vol_ratio NUMERIC(10, 2),
+
+    -- Ownership
+    mgmt_own_pct NUMERIC(10, 2),
+    banks_own_pct NUMERIC(10, 2),
+    funds_own_pct NUMERIC(10, 2),
+    num_funds INTEGER,
+
+    -- Market Data (at time of screenshot)
+    price NUMERIC(12, 4),
+    market_cap VARCHAR(50),
+    industry_group VARCHAR(100),
+    industry_group_rank INTEGER,
+
+    -- Raw JSON (full extraction for future use)
+    raw_json JSONB,
+
+    CONSTRAINT unique_fundamental_per_image UNIQUE (image_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fundamentals_trade ON trade_fundamentals (portfolio_id, trade_id);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_ticker ON trade_fundamentals (ticker);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 

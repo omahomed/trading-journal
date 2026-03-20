@@ -1548,6 +1548,149 @@ def delete_all_trade_images_db(portfolio_name: str, trade_id: str):
 
 
 # ============================================
+# TRADE FUNDAMENTALS (Vision API Extraction)
+# ============================================
+def save_trade_fundamentals(portfolio_name: str, trade_id: str, ticker: str,
+                            data: dict, image_id: int = None):
+    """
+    Save extracted fundamental data from a MarketSurge screenshot.
+
+    Args:
+        portfolio_name: Portfolio name
+        trade_id: Trade ID
+        ticker: Stock ticker
+        data: Dictionary of extracted fundamentals
+        image_id: Optional trade_images.id this was extracted from
+
+    Returns:
+        Row ID if successful, None if failed
+    """
+    try:
+        import json
+
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    raise ValueError(f"Portfolio '{db_portfolio_name}' not found")
+
+                portfolio_id = result[0]
+
+                query = """
+                    INSERT INTO trade_fundamentals
+                        (portfolio_id, trade_id, ticker, image_id,
+                         composite_rating, eps_rating, rs_rating, group_rs_rating,
+                         smr_rating, acc_dis_rating, timeliness_rating, sponsorship_rating,
+                         eps_growth_rate, ud_vol_ratio,
+                         mgmt_own_pct, banks_own_pct, funds_own_pct, num_funds,
+                         price, market_cap, industry_group, industry_group_rank,
+                         raw_json)
+                    VALUES (%s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s)
+                    RETURNING id
+                """
+
+                cur.execute(query, (
+                    portfolio_id, trade_id, ticker, image_id,
+                    data.get('composite_rating'), data.get('eps_rating'),
+                    data.get('rs_rating'), data.get('group_rs_rating'),
+                    data.get('smr_rating'), data.get('acc_dis_rating'),
+                    data.get('timeliness_rating'), data.get('sponsorship_rating'),
+                    data.get('eps_growth_rate'), data.get('ud_vol_ratio'),
+                    data.get('mgmt_own_pct'), data.get('banks_own_pct'),
+                    data.get('funds_own_pct'), data.get('num_funds'),
+                    data.get('price'), data.get('market_cap'),
+                    data.get('industry_group'), data.get('industry_group_rank'),
+                    json.dumps(data)
+                ))
+
+                row_id = cur.fetchone()[0]
+                conn.commit()
+                return row_id
+
+    except Exception as e:
+        print(f"Failed to save trade fundamentals: {e}")
+        return None
+
+
+def get_trade_fundamentals(portfolio_name: str, trade_id: str):
+    """
+    Get all extracted fundamentals for a trade.
+
+    Returns:
+        List of dictionaries with fundamental data
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan'
+        }
+        db_portfolio_name = port_map.get(portfolio_name, portfolio_name)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_portfolio_name,))
+                result = cur.fetchone()
+                if not result:
+                    return []
+
+                portfolio_id = result[0]
+
+                query = """
+                    SELECT id, ticker, image_id, extracted_at,
+                           composite_rating, eps_rating, rs_rating, group_rs_rating,
+                           smr_rating, acc_dis_rating, timeliness_rating, sponsorship_rating,
+                           eps_growth_rate, ud_vol_ratio,
+                           mgmt_own_pct, banks_own_pct, funds_own_pct, num_funds,
+                           price, market_cap, industry_group, industry_group_rank,
+                           raw_json
+                    FROM trade_fundamentals
+                    WHERE portfolio_id = %s AND trade_id = %s
+                    ORDER BY extracted_at DESC
+                """
+
+                cur.execute(query, (portfolio_id, trade_id))
+                rows = cur.fetchall()
+
+                fundamentals = []
+                for row in rows:
+                    fundamentals.append({
+                        'id': row[0], 'ticker': row[1], 'image_id': row[2],
+                        'extracted_at': row[3],
+                        'composite_rating': row[4], 'eps_rating': row[5],
+                        'rs_rating': row[6], 'group_rs_rating': row[7],
+                        'smr_rating': row[8], 'acc_dis_rating': row[9],
+                        'timeliness_rating': row[10], 'sponsorship_rating': row[11],
+                        'eps_growth_rate': row[12], 'ud_vol_ratio': row[13],
+                        'mgmt_own_pct': row[14], 'banks_own_pct': row[15],
+                        'funds_own_pct': row[16], 'num_funds': row[17],
+                        'price': row[18], 'market_cap': row[19],
+                        'industry_group': row[20], 'industry_group_rank': row[21],
+                        'raw_json': row[22]
+                    })
+
+                return fundamentals
+
+    except Exception as e:
+        print(f"Failed to get trade fundamentals: {e}")
+        return []
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():
