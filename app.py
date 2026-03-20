@@ -10397,7 +10397,7 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_perf, tab_live, tab_dd, tab_stats = st.tabs(["📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "📈 Career Stats"])
+        tab_perf, tab_live, tab_dd, tab_stats, tab_review = st.tabs(["📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "📈 Career Stats", "🔬 Trade Review"])
 
         # --- TAB 1: PERFORMANCE AUDIT (EXACT ORIGINAL) ---
         with tab_perf:
@@ -11201,6 +11201,324 @@ elif page == "Analytics":
                     """)
             else:
                 st.info("No closed trades yet. Start trading to see your career stats!")
+
+        # --- TAB 5: TRADE REVIEW ---
+        with tab_review:
+            st.subheader("🔬 Trade Review")
+            st.caption("Deep-dive into individual campaigns — P&L curve, insights, and key takeaways.")
+
+            df_d_review = load_data(DETAILS_FILE)
+
+            # Build trade selector from all trades (closed + open)
+            all_trades = df_s_raw.copy()
+            if all_trades.empty:
+                st.info("No trades to review.")
+            else:
+                # Sort: closed first (most recent), then open
+                all_trades['_sort'] = all_trades['Status'].apply(lambda x: 0 if x == 'CLOSED' else 1)
+                all_trades = all_trades.sort_values(['_sort', 'Closed_Date'], ascending=[True, False])
+
+                trade_opts = []
+                for _, r in all_trades.iterrows():
+                    status_icon = "🔴" if r['Status'] == 'CLOSED' else "🟢"
+                    rpl = r.get('Realized_PL', 0)
+                    try: rpl = float(str(rpl).replace('$','').replace(',',''))
+                    except: rpl = 0.0
+                    pnl_str = f"+${rpl:,.0f}" if rpl >= 0 else f"-${abs(rpl):,.0f}"
+                    trade_opts.append(f"{status_icon} {r['Ticker']} | {r['Trade_ID']} | {pnl_str}")
+
+                sel_trade = st.selectbox("Select Campaign", trade_opts, key="review_sel")
+
+                if sel_trade:
+                    parts = sel_trade.split(" | ")
+                    sel_ticker = parts[0].split(" ")[-1]
+                    sel_tid = parts[1].strip()
+
+                    # Get summary row
+                    s_row = all_trades[all_trades['Trade_ID'] == sel_tid].iloc[0]
+
+                    # Get all transactions for this trade
+                    df_d_review['Trade_ID_Str'] = df_d_review['Trade_ID'].astype(str).str.strip()
+                    txns = df_d_review[df_d_review['Trade_ID_Str'] == sel_tid.strip()].copy()
+
+                    if txns.empty:
+                        st.warning("No transaction details found for this trade.")
+                    else:
+                        txns['Date'] = pd.to_datetime(txns['Date'], errors='coerce')
+                        txns = txns.sort_values('Date')
+
+                        def force_float(x):
+                            try: return float(str(x).replace('$','').replace(',',''))
+                            except: return 0.0
+
+                        # === BUILD DAILY P&L CURVE ===
+                        # Reconstruct position over time using transactions
+                        first_date = txns['Date'].min()
+                        is_closed = str(s_row.get('Status', '')).upper() == 'CLOSED'
+
+                        if is_closed:
+                            last_date = txns['Date'].max()
+                        else:
+                            last_date = pd.Timestamp.now()
+
+                        # Fetch price history for the ticker
+                        try:
+                            hist = yf.Ticker(sel_ticker).history(
+                                start=(first_date - pd.Timedelta(days=5)).strftime('%Y-%m-%d'),
+                                end=(last_date + pd.Timedelta(days=2)).strftime('%Y-%m-%d')
+                            )
+                            hist.index = hist.index.tz_localize(None)
+                        except:
+                            hist = pd.DataFrame()
+
+                        if not hist.empty:
+                            # Build inventory timeline
+                            inventory = []  # list of {qty, price}
+                            trade_dates = pd.date_range(first_date.normalize(), last_date.normalize(), freq='B')
+
+                            daily_pnl = []
+                            total_realized = 0.0
+
+                            for day in trade_dates:
+                                # Apply transactions up to this day
+                                day_txns = txns[txns['Date'].dt.normalize() == day]
+                                for _, tx in day_txns.iterrows():
+                                    action = str(tx.get('Action', '')).upper()
+                                    tx_shares = abs(force_float(tx.get('Shares', 0)))
+                                    tx_price = force_float(tx.get('Amount', 0))
+
+                                    if action == 'BUY':
+                                        if tx_price == 0: tx_price = force_float(s_row.get('Avg_Entry', 0))
+                                        inventory.append({'qty': tx_shares, 'price': tx_price})
+                                    elif action == 'SELL':
+                                        sell_price = tx_price
+                                        to_sell = tx_shares
+                                        while to_sell > 0 and inventory:
+                                            last = inventory[-1]
+                                            take = min(to_sell, last['qty'])
+                                            total_realized += take * (sell_price - last['price'])
+                                            last['qty'] -= take
+                                            to_sell -= take
+                                            if last['qty'] < 0.00001: inventory.pop()
+
+                                # Get closing price for this day
+                                close_price = None
+                                if day in hist.index:
+                                    close_price = float(hist.loc[day, 'Close'])
+                                else:
+                                    prior = hist[hist.index <= day]
+                                    if not prior.empty:
+                                        close_price = float(prior['Close'].iloc[-1])
+
+                                if close_price is not None:
+                                    unrealized = sum(item['qty'] * (close_price - item['price']) for item in inventory)
+                                    running_pnl = total_realized + unrealized
+                                    total_shares = sum(item['qty'] for item in inventory)
+                                    total_cost = sum(item['qty'] * item['price'] for item in inventory)
+                                    avg_cost = total_cost / total_shares if total_shares > 0 else 0
+
+                                    daily_pnl.append({
+                                        'Date': day,
+                                        'Running_PnL': running_pnl,
+                                        'Shares': total_shares,
+                                        'Avg_Cost': avg_cost,
+                                        'Close': close_price,
+                                        'Unrealized': unrealized,
+                                        'Realized': total_realized,
+                                    })
+
+                            if daily_pnl:
+                                df_pnl = pd.DataFrame(daily_pnl)
+
+                                # === COMPUTE TRADE METRICS ===
+                                max_pnl = df_pnl['Running_PnL'].max()  # MFE
+                                min_pnl = df_pnl['Running_PnL'].min()  # MAE
+                                final_pnl = df_pnl['Running_PnL'].iloc[-1]
+                                days_held = len(df_pnl)
+                                days_negative = (df_pnl['Running_PnL'] < 0).sum()
+                                pct_time_negative = (days_negative / days_held * 100) if days_held > 0 else 0
+
+                                entry_price = force_float(s_row.get('Avg_Entry', 0))
+                                exit_price = force_float(s_row.get('Avg_Exit', 0))
+                                total_cost = force_float(s_row.get('Total_Cost', 0))
+                                net_roi = (final_pnl / total_cost * 100) if total_cost > 0 else 0
+
+                                # Risk budget / R-multiple
+                                risk_budget = force_float(s_row.get('Risk_Budget', 0))
+                                r_multiple = (final_pnl / risk_budget) if risk_budget > 0 else 0
+
+                                # === LAYOUT: LEFT (Chart + Stats) | RIGHT (Insights) ===
+                                col_left, col_right = st.columns([1.2, 1])
+
+                                with col_left:
+                                    # --- Running P&L Chart ---
+                                    import plotly.graph_objects as go
+
+                                    fig = go.Figure()
+
+                                    # Split into positive and negative for color fill
+                                    fig.add_trace(go.Scatter(
+                                        x=df_pnl['Date'], y=df_pnl['Running_PnL'],
+                                        fill='tozeroy',
+                                        fillcolor='rgba(255, 75, 75, 0.3)',
+                                        line=dict(color='rgba(255, 75, 75, 0.8)', width=1),
+                                        name='Loss',
+                                        showlegend=False,
+                                    ))
+
+                                    # Overlay positive area
+                                    df_pos = df_pnl.copy()
+                                    df_pos['Positive_PnL'] = df_pos['Running_PnL'].clip(lower=0)
+                                    fig.add_trace(go.Scatter(
+                                        x=df_pos['Date'], y=df_pos['Positive_PnL'],
+                                        fill='tozeroy',
+                                        fillcolor='rgba(44, 160, 44, 0.4)',
+                                        line=dict(color='rgba(44, 160, 44, 0.9)', width=2),
+                                        name='Profit',
+                                        showlegend=False,
+                                    ))
+
+                                    # Zero line
+                                    fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+
+                                    fig.update_layout(
+                                        title=dict(text="Running P&L", font=dict(size=16, color='white')),
+                                        template='plotly_dark',
+                                        paper_bgcolor='rgba(30,30,30,1)',
+                                        plot_bgcolor='rgba(30,30,30,1)',
+                                        height=320,
+                                        margin=dict(l=10, r=10, t=40, b=10),
+                                        yaxis=dict(tickformat='$,.0f', gridcolor='rgba(80,80,80,0.3)'),
+                                        xaxis=dict(gridcolor='rgba(80,80,80,0.3)'),
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+
+                                    # --- Trade Stats Grid ---
+                                    st.markdown(f"""
+                                    <div style="background: #1e1e1e; border-radius: 8px; padding: 16px; margin-top: -10px;">
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: #ccc;">
+                                            <div><span style="font-size: 11px; opacity: 0.7;">SIDE</span><br><b>Long</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">QUANTITY</span><br><b>{force_float(s_row.get('Shares', 0)):.0f}</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">ENTRY PRICE</span><br><b>${entry_price:,.2f}</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">EXIT PRICE</span><br><b>{'${:,.2f}'.format(exit_price) if exit_price > 0 else 'Open'}</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">HOLD TIME</span><br><b>{days_held}d</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">NET ROI</span><br><b style="color: {'#2ca02c' if net_roi >= 0 else '#ff4b4b'};">{net_roi:.2f}%</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">MAE (Max Loss)</span><br><b style="color: #ff4b4b;">${min_pnl:,.2f}</b></div>
+                                            <div><span style="font-size: 11px; opacity: 0.7;">MFE (Max Gain)</span><br><b style="color: #2ca02c;">${max_pnl:,.2f}</b></div>
+                                        </div>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+
+                                with col_right:
+                                    st.markdown("#### 🧠 Insights")
+
+                                    # --- INSIGHT ENGINE ---
+                                    insights = []
+
+                                    # 1. R-Multiple check
+                                    if risk_budget > 0:
+                                        if r_multiple >= 2.0:
+                                            insights.append(('green', 'Strong R-Multiple',
+                                                f"This trade returned {r_multiple:.1f}R — you made {r_multiple:.1f}x your risk budget of ${risk_budget:,.0f}. Excellent risk-reward."))
+                                        elif r_multiple >= 1.0:
+                                            insights.append(('yellow', 'Acceptable R-Multiple',
+                                                f"This trade returned {r_multiple:.1f}R. Profitable, but aim for 1.5-2R+ to build a durable edge."))
+                                        elif r_multiple >= 0:
+                                            insights.append(('yellow', 'Weak R-Multiple',
+                                                f"This trade returned only {r_multiple:.1f}R. The profit (${final_pnl:,.0f}) barely justified the risk budget (${risk_budget:,.0f})."))
+                                        else:
+                                            insights.append(('red', 'Negative R-Multiple',
+                                                f"This trade lost {r_multiple:.1f}R — you lost ${abs(final_pnl):,.0f} against a risk budget of ${risk_budget:,.0f}."))
+
+                                    # 2. Drawdown vs Profit
+                                    if final_pnl > 0 and abs(min_pnl) > final_pnl:
+                                        insights.append(('red', 'Drawdown Exceeds Profits',
+                                            f"You closed with ${final_pnl:,.0f} profit, but the drawdown reached ${min_pnl:,.0f} — larger than your gain. Your pain exceeded your reward."))
+
+                                    # 3. Time in drawdown
+                                    if pct_time_negative >= 75:
+                                        insights.append(('red', 'Most Time in Drawdown',
+                                            f"This trade spent {pct_time_negative:.0f}% of its duration in negative P&L — entries or exits may need review."))
+                                    elif pct_time_negative >= 50:
+                                        insights.append(('yellow', 'Significant Time Underwater',
+                                            f"This trade was underwater {pct_time_negative:.0f}% of the time. Consider tighter entry timing."))
+
+                                    # 4. Red to Green
+                                    if final_pnl > 0 and min_pnl < 0:
+                                        insights.append(('gray', 'Red to Green Trade',
+                                            f"You turned this trade around. After a max drawdown of ${abs(min_pnl):,.0f}, you closed with ${final_pnl:,.0f} profit."))
+
+                                    # 5. MFE capture efficiency
+                                    if max_pnl > 0 and final_pnl > 0:
+                                        capture_pct = (final_pnl / max_pnl) * 100
+                                        if capture_pct >= 80:
+                                            insights.append(('green', 'Excellent Exit',
+                                                f"You captured {capture_pct:.0f}% of the max gain (${max_pnl:,.0f}). Strong exit discipline."))
+                                        elif capture_pct >= 50:
+                                            insights.append(('yellow', 'Left Gains on the Table',
+                                                f"You captured only {capture_pct:.0f}% of the max gain (${max_pnl:,.0f}). Consider trailing stops to lock in more."))
+                                        else:
+                                            insights.append(('red', 'Poor Exit Timing',
+                                                f"You captured only {capture_pct:.0f}% of the ${max_pnl:,.0f} max gain. The trade worked but the exit gave most of it back."))
+
+                                    # 6. Quick winner or slow grind
+                                    if days_held <= 10 and final_pnl > 0:
+                                        insights.append(('green', 'Quick Winner',
+                                            f"Closed in {days_held} days with ${final_pnl:,.0f} profit. Fast execution, low opportunity cost."))
+                                    elif days_held > 60 and final_pnl > 0 and net_roi < 10:
+                                        insights.append(('yellow', 'Slow Grind',
+                                            f"Held for {days_held} days but only {net_roi:.1f}% return. Capital was tied up for a modest gain."))
+
+                                    # 7. Loss analysis
+                                    if final_pnl < 0:
+                                        if risk_budget > 0 and abs(final_pnl) <= risk_budget * 1.1:
+                                            insights.append(('green', 'Controlled Loss',
+                                                f"Lost ${abs(final_pnl):,.0f} — within your ${risk_budget:,.0f} risk budget. Good discipline."))
+                                        elif risk_budget > 0 and abs(final_pnl) > risk_budget * 1.5:
+                                            insights.append(('red', 'Risk Budget Blown',
+                                                f"Lost ${abs(final_pnl):,.0f} — {abs(final_pnl)/risk_budget:.1f}x your ${risk_budget:,.0f} budget. Stop wasn't honored."))
+
+                                    # If no insights generated
+                                    if not insights:
+                                        insights.append(('gray', 'Standard Trade', 'No notable patterns detected for this campaign.'))
+
+                                    # --- RENDER INSIGHT CARDS ---
+                                    color_map = {
+                                        'red': ('border-left: 4px solid #ff4b4b; background: #2a1a1a;', '🔴'),
+                                        'yellow': ('border-left: 4px solid #ffcc00; background: #2a2a1a;', '🟡'),
+                                        'green': ('border-left: 4px solid #2ca02c; background: #1a2a1a;', '🟢'),
+                                        'gray': ('border-left: 4px solid #888; background: #1e1e1e;', '⚪'),
+                                    }
+
+                                    for color, title, desc in insights:
+                                        style, icon = color_map.get(color, color_map['gray'])
+                                        st.markdown(f"""
+                                        <div style="{style} border-radius: 6px; padding: 12px 14px; margin-bottom: 8px;">
+                                            <div style="font-weight: 700; color: white; font-size: 14px;">{icon} {title}</div>
+                                            <div style="color: #ccc; font-size: 13px; margin-top: 4px;">{desc}</div>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+
+                                    # --- KEY TAKEAWAY ---
+                                    st.markdown("#### 📋 Key Takeaway")
+                                    takeaway_parts = []
+                                    if final_pnl >= 0:
+                                        takeaway_parts.append(f"**{sel_ticker}** ({sel_tid}): held {days_held} days for a {net_roi:.1f}% return (${final_pnl:,.0f}).")
+                                    else:
+                                        takeaway_parts.append(f"**{sel_ticker}** ({sel_tid}): held {days_held} days for a {net_roi:.1f}% loss (${final_pnl:,.0f}).")
+                                    if pct_time_negative > 50:
+                                        takeaway_parts.append(f"Spent {pct_time_negative:.0f}% of the trade underwater.")
+                                    if risk_budget > 0:
+                                        takeaway_parts.append(f"R-Multiple: {r_multiple:.1f}R (budget: ${risk_budget:,.0f}).")
+                                    if max_pnl > 0 and final_pnl > 0:
+                                        takeaway_parts.append(f"Captured {final_pnl/max_pnl*100:.0f}% of max gain (${max_pnl:,.0f}).")
+
+                                    st.info(" ".join(takeaway_parts))
+
+                            else:
+                                st.warning("Could not build P&L timeline — no trading days found.")
+                        else:
+                            st.warning(f"Could not fetch price history for {sel_ticker}.")
 
 # ==============================================================================
 # PAGE 12: DAILY REPORT CARD (FIXED MARKET DATA)
