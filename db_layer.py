@@ -1356,16 +1356,11 @@ def save_trade_image(portfolio_name: str, trade_id: str, ticker: str,
 
                 portfolio_id = result[0]
 
-                # Insert or update image record
+                # Insert image record (multiple images per type allowed)
                 query = """
                     INSERT INTO trade_images
                         (portfolio_id, trade_id, ticker, image_type, image_url, file_name)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (portfolio_id, trade_id, image_type)
-                    DO UPDATE SET
-                        image_url = EXCLUDED.image_url,
-                        file_name = EXCLUDED.file_name,
-                        uploaded_at = CURRENT_TIMESTAMP
                     RETURNING id
                 """
 

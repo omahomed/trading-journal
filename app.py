@@ -5299,11 +5299,11 @@ elif page == "Log Buy":
     b_trx = c_note2.text_input("Manual Trx ID (Optional)", key="b_trx")
 
     # --- IMAGE UPLOADS (Optional) ---
-    weekly_chart = None
-    daily_chart = None
+    weekly_charts = []
+    daily_charts = []
     if R2_AVAILABLE:
         st.markdown("#### 📸 Chart Documentation (Optional)")
-        st.caption("Upload weekly and daily charts to document your entry setup")
+        st.caption("Upload weekly and daily charts to document your entry setup. Multiple files allowed.")
 
         status_cols = st.columns([1, 1, 3])
         with status_cols[0]:
@@ -5316,30 +5316,32 @@ elif page == "Log Buy":
 
         img_col1, img_col2 = st.columns(2)
         with img_col1:
-            weekly_chart = st.file_uploader(
-                "Weekly Chart",
+            weekly_charts = st.file_uploader(
+                "Weekly Charts",
                 type=['png', 'jpg', 'jpeg'],
                 key='b_weekly_chart',
-                help="Upload a screenshot of the weekly chart"
+                accept_multiple_files=True,
+                help="Upload screenshots of weekly charts"
             )
-            if weekly_chart:
-                st.caption(f"✅ Selected: {weekly_chart.name}")
+            if weekly_charts:
+                st.caption(f"✅ {len(weekly_charts)} file(s) selected")
         with img_col2:
-            daily_chart = st.file_uploader(
-                "Daily Chart",
+            daily_charts = st.file_uploader(
+                "Daily Charts",
                 type=['png', 'jpg', 'jpeg'],
                 key='b_daily_chart',
-                help="Upload a screenshot of the daily chart"
+                accept_multiple_files=True,
+                help="Upload screenshots of daily charts"
             )
-            if daily_chart:
-                st.caption(f"✅ Selected: {daily_chart.name}")
+            if daily_charts:
+                st.caption(f"✅ {len(daily_charts)} file(s) selected")
+
+    # Backward compat: map lists to old single-file vars for save logic
+    weekly_chart = weekly_charts[0] if weekly_charts else None
+    daily_chart = daily_charts[0] if daily_charts else None
 
     if st.button("LOG BUY ORDER", type="primary", use_container_width=True):
-        st.info(f"🔍 DEBUG - weekly_chart: {weekly_chart is not None}, daily_chart: {daily_chart is not None}")
-        if weekly_chart:
-            st.info(f"📁 Weekly: {weekly_chart.name}, {weekly_chart.size} bytes")
-        if daily_chart:
-            st.info(f"📁 Daily: {daily_chart.name}, {daily_chart.size} bytes")
+        st.info(f"🔍 DEBUG - weekly: {len(weekly_charts)} files, daily: {len(daily_charts)} files")
 
         if b_tick and b_id:
             is_valid, errors = validate_trade_entry(
@@ -5432,45 +5434,34 @@ elif page == "Log Buy":
             }
 
             if R2_AVAILABLE and USE_DATABASE:
-                print("[UPLOAD] Entering upload block")
-                st.session_state['last_upload_attempt']['entered_block'] = True
                 images_uploaded = []
 
                 try:
-                    if weekly_chart is not None:
-                        print(f"[UPLOAD] About to call r2.upload_image for weekly chart")
-                        st.session_state['last_upload_attempt']['upload_results'].append('Attempting weekly upload...')
-                        st.info(f"Uploading weekly chart: {weekly_chart.name}")
-                        weekly_url = r2.upload_image(weekly_chart, portfolio, b_id, b_tick, 'weekly')
-                        print(f"[UPLOAD] r2.upload_image returned: {weekly_url}")
-                        st.session_state['last_upload_attempt']['upload_results'].append(f'Weekly result: {weekly_url}')
-                        if weekly_url:
-                            print(f"[UPLOAD] Saving to database: {weekly_url}")
-                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', weekly_url, weekly_chart.name)
-                            images_uploaded.append('Weekly')
-                            st.session_state['last_upload_attempt']['upload_results'].append('Weekly: SUCCESS')
-                            print(f"[UPLOAD] Successfully saved weekly chart")
+                    for wf in weekly_charts:
+                        st.info(f"Uploading weekly chart: {wf.name}")
+                        url = r2.upload_image(wf, portfolio, b_id, b_tick, 'weekly')
+                        if url:
+                            db.save_trade_image(portfolio, b_id, b_tick, 'weekly', url, wf.name)
+                            images_uploaded.append(f'Weekly: {wf.name}')
                         else:
-                            print(f"[UPLOAD] weekly_url is None - upload failed")
-                            st.session_state['last_upload_attempt']['upload_results'].append('Weekly: FAILED (None returned)')
-                            st.error("Failed to upload weekly chart to R2")
+                            st.error(f"Failed to upload {wf.name}")
 
-                    if daily_chart is not None:
-                        st.info(f"Uploading daily chart: {daily_chart.name}")
-                        daily_url = r2.upload_image(daily_chart, portfolio, b_id, b_tick, 'daily')
-                        if daily_url:
-                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', daily_url, daily_chart.name)
-                            images_uploaded.append('Daily')
+                    for df in daily_charts:
+                        st.info(f"Uploading daily chart: {df.name}")
+                        url = r2.upload_image(df, portfolio, b_id, b_tick, 'daily')
+                        if url:
+                            db.save_trade_image(portfolio, b_id, b_tick, 'daily', url, df.name)
+                            images_uploaded.append(f'Daily: {df.name}')
                         else:
-                            st.error("Failed to upload daily chart to R2")
+                            st.error(f"Failed to upload {df.name}")
 
                     if images_uploaded:
-                        st.success(f"📸 Uploaded charts: {', '.join(images_uploaded)}")
-                    elif weekly_chart is not None or daily_chart is not None:
+                        st.success(f"📸 Uploaded {len(images_uploaded)} chart(s)")
+                    elif weekly_charts or daily_charts:
                         st.warning("Charts were selected but upload failed")
                 except Exception as e:
                     st.error(f"Image upload error: {str(e)}")
-            elif weekly_chart is not None or daily_chart is not None:
+            elif weekly_charts or daily_charts:
                 if not R2_AVAILABLE:
                     st.warning("⚠️ R2 storage not available - charts not uploaded")
                 if not USE_DATABASE:
@@ -7448,65 +7439,33 @@ elif page == "Active Campaign Summary":
 
 
 
-                        image_types = {img['image_type']: img for img in images}
-
-
-
-                        # Show weekly and daily (no exit for active trades)
+                        weekly_imgs = [img for img in images if img['image_type'] == 'weekly']
+                        daily_imgs = [img for img in images if img['image_type'] == 'daily']
 
                         col1, col2 = st.columns(2)
 
-
-
                         with col1:
-
-                            if 'weekly' in image_types:
-
-                                img_data = image_types['weekly']
-
-                                st.markdown("**Weekly Chart**")
-
-                                image_bytes = r2.download_image(img_data['image_url'])
-
-                                if image_bytes:
-
-                                    st.image(image_bytes, use_container_width=True)
-
-                                    st.caption(f"Uploaded: {img_data['uploaded_at']}")
-
-                                else:
-
-                                    st.warning("Failed to load weekly chart")
+                            st.markdown("**Weekly Charts**")
+                            if weekly_imgs:
+                                for img_data in weekly_imgs:
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
 
                             else:
-
-                                st.info("No weekly chart")
-
-
+                                st.info("No weekly charts")
 
                         with col2:
-
-                            if 'daily' in image_types:
-
-                                img_data = image_types['daily']
-
-                                st.markdown("**Daily Chart**")
-
-                                image_bytes = r2.download_image(img_data['image_url'])
-
-                                if image_bytes:
-
-                                    st.image(image_bytes, use_container_width=True)
-
-                                    st.caption(f"Uploaded: {img_data['uploaded_at']}")
-
-                                else:
-
-                                    st.warning("Failed to load daily chart")
-
+                            st.markdown("**Daily Charts**")
+                            if daily_imgs:
+                                for img_data in daily_imgs:
+                                    image_bytes = r2.download_image(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True)
+                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                             else:
-
-                                st.info("No daily chart")
+                                st.info("No daily charts")
 
                     else:
 
@@ -10061,52 +10020,55 @@ elif page == "Trade Journal":
                             upload_col1, upload_col2 = st.columns(2)
 
                         with upload_col1:
-                            weekly_upload = st.file_uploader(
-                                "📊 Weekly Chart",
+                            weekly_uploads = st.file_uploader(
+                                "📊 Weekly Charts",
                                 type=['png', 'jpg', 'jpeg'],
-                                key=f'weekly_upload_{trade_id}'
+                                key=f'weekly_upload_{trade_id}',
+                                accept_multiple_files=True
                             )
 
                         with upload_col2:
-                            daily_upload = st.file_uploader(
-                                "📈 Daily Chart",
+                            daily_uploads = st.file_uploader(
+                                "📈 Daily Charts",
                                 type=['png', 'jpg', 'jpeg'],
-                                key=f'daily_upload_{trade_id}'
+                                key=f'daily_upload_{trade_id}',
+                                accept_multiple_files=True
                             )
 
                         # Exit chart only for closed trades
+                        exit_uploads = []
                         if not is_open:
                             with upload_col3:
-                                exit_upload = st.file_uploader(
-                                    "🎯 Exit Chart",
+                                exit_uploads = st.file_uploader(
+                                    "🎯 Exit Charts",
                                     type=['png', 'jpg', 'jpeg'],
-                                    key=f'exit_upload_{trade_id}'
+                                    key=f'exit_upload_{trade_id}',
+                                    accept_multiple_files=True
                                 )
-                        else:
-                            exit_upload = None
 
                         # Upload button
                         if st.button("💾 Save Charts", key=f'save_charts_{trade_id}', type="primary"):
-                            if weekly_upload or daily_upload or exit_upload:
+                            all_uploads = weekly_uploads + daily_uploads + exit_uploads
+                            if all_uploads:
                                 try:
                                     upload_count = 0
 
-                                    if weekly_upload:
-                                        url = r2.upload_image(weekly_upload, CURR_PORT_NAME, trade_id, ticker, 'weekly')
+                                    for f in weekly_uploads:
+                                        url = r2.upload_image(f, CURR_PORT_NAME, trade_id, ticker, 'weekly')
                                         if url:
-                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'weekly', url, weekly_upload.name)
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'weekly', url, f.name)
                                             upload_count += 1
 
-                                    if daily_upload:
-                                        url = r2.upload_image(daily_upload, CURR_PORT_NAME, trade_id, ticker, 'daily')
+                                    for f in daily_uploads:
+                                        url = r2.upload_image(f, CURR_PORT_NAME, trade_id, ticker, 'daily')
                                         if url:
-                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'daily', url, daily_upload.name)
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'daily', url, f.name)
                                             upload_count += 1
 
-                                    if exit_upload:
-                                        url = r2.upload_image(exit_upload, CURR_PORT_NAME, trade_id, ticker, 'exit')
+                                    for f in exit_uploads:
+                                        url = r2.upload_image(f, CURR_PORT_NAME, trade_id, ticker, 'exit')
                                         if url:
-                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'exit', url, exit_upload.name)
+                                            db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'exit', url, f.name)
                                             upload_count += 1
 
                                     st.success(f"✅ Successfully uploaded {upload_count} chart(s)! Refresh to see changes.")

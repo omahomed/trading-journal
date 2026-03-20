@@ -241,9 +241,7 @@ CREATE TABLE IF NOT EXISTS trade_images (
     image_type VARCHAR(20) NOT NULL,  -- 'weekly', 'daily', 'exit'
     image_url TEXT NOT NULL,  -- R2 object key or full URL
     file_name VARCHAR(255),
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT unique_trade_image UNIQUE (portfolio_id, trade_id, image_type)
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_trade_images_trade ON trade_images (portfolio_id, trade_id);
