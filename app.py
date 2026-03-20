@@ -7237,25 +7237,18 @@ elif page == "Trade Manager":
 
                         st.markdown(f"### {ticker} - {selected_trade}")
 
-                        # Display images in columns
-                        image_types = {img['image_type']: img for img in images}
-
-                        # Create columns for weekly, daily, exit
+                        # Group images by type
                         cols = st.columns(3)
-
-                        for idx, (img_type, col) in enumerate(zip(['weekly', 'daily', 'exit'], cols)):
+                        for img_type, col in zip(['weekly', 'daily', 'exit'], cols):
                             with col:
-                                if img_type in image_types:
-                                    img_data = image_types[img_type]
-                                    st.markdown(f"**{img_type.title()} Chart**")
-
-                                    # Download and display image
-                                    image_bytes = r2.download_image(img_data['image_url'])
-                                    if image_bytes:
-                                        st.image(image_bytes, use_container_width=True)
-                                        st.caption(f"Uploaded: {img_data['uploaded_at']}")
-                                    else:
-                                        st.warning(f"Failed to load {img_type} chart")
+                                type_imgs = [img for img in images if img['image_type'] == img_type]
+                                st.markdown(f"**{img_type.title()} Chart{'s' if len(type_imgs) > 1 else ''}**")
+                                if type_imgs:
+                                    for img_data in type_imgs:
+                                        image_bytes = r2.download_image(img_data['image_url'])
+                                        if image_bytes:
+                                            st.image(image_bytes, use_container_width=True)
+                                            st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                                 else:
                                     st.info(f"No {img_type} chart")
                     else:
@@ -9965,47 +9958,22 @@ elif page == "Trade Journal":
                         images = db.get_trade_images(CURR_PORT_NAME, trade_id)
 
                         if images:
-                            image_types = {img['image_type']: img for img in images}
+                            chart_types = ['weekly', 'daily', 'exit'] if not is_open else ['weekly', 'daily']
+                            cols = st.columns(len(chart_types))
 
-                            # Display images in columns
-                            cols = st.columns(3 if not is_open else 2)
-
-                            with cols[0]:
-                                if 'weekly' in image_types:
-                                    img_data = image_types['weekly']
-                                    st.markdown("**📊 Weekly Chart**")
-                                    image_bytes = r2.download_image(img_data['image_url'])
-                                    if image_bytes:
-                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
+                            for img_type, col in zip(chart_types, cols):
+                                with col:
+                                    type_imgs = [img for img in images if img['image_type'] == img_type]
+                                    icons = {'weekly': '📊', 'daily': '📈', 'exit': '🎯'}
+                                    st.markdown(f"**{icons.get(img_type, '')} {img_type.title()} Chart{'s' if len(type_imgs) > 1 else ''}**")
+                                    if type_imgs:
+                                        for img_data in type_imgs:
+                                            image_bytes = r2.download_image(img_data['image_url'])
+                                            if image_bytes:
+                                                st.image(image_bytes, use_container_width=True, output_format="PNG")
+                                                st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                                     else:
-                                        st.info("Chart not available")
-                                else:
-                                    st.info("No weekly chart")
-
-                            with cols[1]:
-                                if 'daily' in image_types:
-                                    img_data = image_types['daily']
-                                    st.markdown("**📈 Daily Chart**")
-                                    image_bytes = r2.download_image(img_data['image_url'])
-                                    if image_bytes:
-                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                    else:
-                                        st.info("Chart not available")
-                                else:
-                                    st.info("No daily chart")
-
-                            if not is_open and len(cols) > 2:
-                                with cols[2]:
-                                    if 'exit' in image_types:
-                                        img_data = image_types['exit']
-                                        st.markdown("**🎯 Exit Chart**")
-                                        image_bytes = r2.download_image(img_data['image_url'])
-                                        if image_bytes:
-                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                        else:
-                                            st.info("Chart not available")
-                                    else:
-                                        st.info("No exit chart")
+                                        st.info(f"No {img_type} chart")
                         else:
                             st.info("No charts available for this trade")
 
