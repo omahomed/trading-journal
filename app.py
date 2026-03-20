@@ -10168,10 +10168,23 @@ elif page == "Trade Journal":
                                     accept_multiple_files=True
                                 )
 
+                        # MarketSurge screenshot extraction
+                        ms_upload = None
+                        if check_vision_available():
+                            st.markdown("---")
+                            st.markdown("**🔬 MarketSurge Fundamentals**")
+                            ms_upload = st.file_uploader(
+                                "MarketSurge Screenshot",
+                                type=['png', 'jpg', 'jpeg'],
+                                key=f'ms_upload_{trade_id}',
+                                help="Upload a MarketSurge screenshot to auto-extract ratings"
+                            )
+
                         # Upload button
                         if st.button("💾 Save Charts", key=f'save_charts_{trade_id}', type="primary"):
                             all_uploads = weekly_uploads + daily_uploads + exit_uploads
-                            if all_uploads:
+                            has_ms = ms_upload is not None
+                            if all_uploads or has_ms:
                                 try:
                                     upload_count = 0
 
@@ -10193,11 +10206,31 @@ elif page == "Trade Journal":
                                             db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'exit', url, f.name)
                                             upload_count += 1
 
-                                    st.success(f"✅ Successfully uploaded {upload_count} chart(s)! Refresh to see changes.")
+                                    # Extract MarketSurge fundamentals
+                                    if ms_upload and check_vision_available():
+                                        with st.spinner("🔬 Extracting fundamentals..."):
+                                            ms_image_id = None
+                                            if R2_AVAILABLE:
+                                                ms_upload.seek(0)
+                                                ms_url = r2.upload_image(ms_upload, CURR_PORT_NAME, trade_id, ticker, 'marketsurge')
+                                                if ms_url:
+                                                    ms_image_id = db.save_trade_image(CURR_PORT_NAME, trade_id, ticker, 'marketsurge', ms_url, ms_upload.name)
+
+                                            ms_upload.seek(0)
+                                            img_bytes = ms_upload.read()
+                                            extracted = vision_extract.extract_fundamentals(img_bytes, ms_upload.name)
+                                            if extracted:
+                                                db.save_trade_fundamentals(CURR_PORT_NAME, trade_id, ticker, extracted, ms_image_id)
+                                                st.success("🔬 Fundamentals extracted and saved!")
+                                            else:
+                                                st.warning("⚠️ Could not extract data from screenshot")
+
+                                    if upload_count > 0:
+                                        st.success(f"✅ Successfully uploaded {upload_count} chart(s)! Refresh to see changes.")
                                 except Exception as e:
-                                    st.error(f"❌ Error uploading charts: {e}")
+                                    st.error(f"❌ Error uploading: {e}")
                             else:
-                                st.warning("⚠️ Please select at least one chart to upload")
+                                st.warning("⚠️ Please select at least one file to upload")
 
                     else:
                         st.info("Chart display requires R2 storage and database connection")
