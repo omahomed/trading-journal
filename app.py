@@ -5356,9 +5356,7 @@ elif page == "Log Buy":
 
     # --- MARKETSURGE SCREENSHOT (Fundamental Extraction) ---
     ms_screenshot = None
-    _vision_ok = check_vision_available()
-    st.caption(f"🔬 Vision API: {'✅' if _vision_ok else '❌'} | Import: {'✅' if _VISION_IMPORT else '❌'} | Key: {'✅' if st.secrets.get('anthropic', {}).get('api_key') else '❌'}")
-    if _vision_ok:
+    if check_vision_available():
         st.markdown("#### 🔬 MarketSurge Fundamentals (Optional)")
         st.caption("Upload a MarketSurge screenshot to auto-extract ratings and fundamentals via AI.")
         ms_screenshot = st.file_uploader(
@@ -10108,6 +10106,30 @@ elif page == "Trade Journal":
                                         st.info(f"No {img_type} chart")
                         else:
                             st.info("No charts available for this trade")
+
+                        # === FUNDAMENTALS (if extracted) ===
+                        fundas = db.get_trade_fundamentals(CURR_PORT_NAME, trade_id)
+                        if fundas:
+                            st.markdown("---")
+                            st.markdown("**🔬 MarketSurge Fundamentals**")
+                            f = fundas[0]
+                            fc1, fc2, fc3, fc4 = st.columns(4)
+                            fc1.metric("Composite", f.get('composite_rating', 'N/A'))
+                            fc2.metric("EPS Rating", f.get('eps_rating', 'N/A'))
+                            fc3.metric("RS Rating", f.get('rs_rating', 'N/A'))
+                            fc4.metric("Acc/Dis", f.get('acc_dis_rating', 'N/A'))
+
+                            fc5, fc6, fc7, fc8 = st.columns(4)
+                            fc5.metric("SMR", f.get('smr_rating', 'N/A'))
+                            fc6.metric("Group RS", f.get('group_rs_rating', 'N/A'))
+                            fc7.metric("EPS Growth", f"{f['eps_growth_rate']}%" if f.get('eps_growth_rate') else "N/A")
+                            fc8.metric("U/D Vol", f.get('ud_vol_ratio', 'N/A'))
+
+                            if f.get('industry_group'):
+                                st.caption(f"Industry: {f['industry_group']} (Rank #{f.get('industry_group_rank', '?')})")
+                            if f.get('funds_own_pct') is not None:
+                                st.caption(f"Ownership — Funds: {f['funds_own_pct']}% | Banks: {f.get('banks_own_pct', '?')}% | Mgmt: {f.get('mgmt_own_pct', '?')}%")
+                            st.caption(f"Extracted: {f['extracted_at']}")
 
                         # === UPLOAD/UPDATE CHARTS ===
                         st.markdown("---")
