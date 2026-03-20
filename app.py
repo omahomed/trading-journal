@@ -9971,7 +9971,15 @@ elif page == "Trade Journal":
                                             image_bytes = r2.download_image(img_data['image_url'])
                                             if image_bytes:
                                                 st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                                st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
+                                                cap_col, del_col = st.columns([4, 1])
+                                                cap_col.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
+                                                if del_col.button("🗑️", key=f"del_img_{img_data['id']}"):
+                                                    url = db.delete_trade_image_by_id(img_data['id'])
+                                                    if url:
+                                                        try: r2.delete_image(url)
+                                                        except: pass
+                                                    st.success("Image deleted")
+                                                    st.rerun()
                                     else:
                                         st.info(f"No {img_type} chart")
                         else:

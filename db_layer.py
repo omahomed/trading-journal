@@ -1483,6 +1483,24 @@ def delete_trade_image(portfolio_name: str, trade_id: str, image_type: str):
         return False
 
 
+def delete_trade_image_by_id(image_id: int):
+    """Delete a single trade image by its database ID."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Get image_url before deleting (for R2 cleanup)
+                cur.execute("SELECT image_url FROM trade_images WHERE id = %s", (image_id,))
+                row = cur.fetchone()
+                image_url = row[0] if row else None
+
+                cur.execute("DELETE FROM trade_images WHERE id = %s", (image_id,))
+                conn.commit()
+                return image_url
+    except Exception as e:
+        print(f"Failed to delete trade image by id: {e}")
+        return None
+
+
 def delete_all_trade_images_db(portfolio_name: str, trade_id: str):
     """
     Delete all image records for a specific trade.
