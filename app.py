@@ -7984,9 +7984,9 @@ elif page == "Active Campaign Summary":
 
              m1.metric("Open Positions", len(df_open))
 
-             m2.metric("Total Market Value", mask(total_mkt))
+             m2.metric("Total Market Value", f"${total_mkt:,.2f}")
 
-             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of {mask(equity, ',.0f')}")
+             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of ${equity:,.0f}")
 
 
 
@@ -7994,9 +7994,9 @@ elif page == "Active Campaign Summary":
 
                  "Overall P&L",
 
-                 mask(total_overall),
+                 f"${total_overall:,.2f}",
 
-                 f"Unreal: {mask(total_unreal)} | Real: {mask(total_realized_bank)}" if not PRIVACY else "****",
+                 f"Unreal: ${total_unreal:,.2f} | Real: ${total_realized_bank:,.2f}",
 
                  delta_color="off"
 
@@ -8006,13 +8006,13 @@ elif page == "Active Campaign Summary":
 
              ir_pct = (total_initial_risk / equity) * 100
 
-             m5.metric("Initial Risk", mask(total_initial_risk), f"{ir_pct:.2f}% of NLV", delta_color="off")
+             m5.metric("Initial Risk", f"${total_initial_risk:,.2f}", f"{ir_pct:.2f}% of NLV", delta_color="off")
 
 
 
              or_pct = (total_open_risk_equity / equity) * 100
 
-             m6.metric("Open Risk (Heat)", mask(total_open_risk_equity), f"{or_pct:.2f}% of NLV", delta_color="inverse")
+             m6.metric("Open Risk (Heat)", f"${total_open_risk_equity:,.2f}", f"{or_pct:.2f}% of NLV", delta_color="inverse")
 
              
 
@@ -8064,18 +8064,17 @@ elif page == "Active Campaign Summary":
 
              pyramid_cols = [c for c in ['Pyramid'] if c in df_open.columns]
 
-             _m = '$****' if PRIVACY else '${:,.2f}'
              st.dataframe(
 
                  df_open[final_cols].style.format({
 
-                     'Shares':'{:.0f}', 'Total_Cost':_m, 'Overall_PL':_m, 'Avg_Entry':'${:,.2f}',
+                     'Shares':'{:.0f}', 'Total_Cost':'${:,.2f}', 'Overall_PL':'${:,.2f}', 'Avg_Entry':'${:,.2f}',
 
-                     'Current Price':'${:,.2f}', 'Return_Pct':'{:.2f}%', 'Current Value': _m, 'Pos Size %': '{:.1f}%',
+                     'Current Price':'${:,.2f}', 'Return_Pct':'{:.2f}%', 'Current Value': '${:,.2f}', 'Pos Size %': '{:.1f}%',
 
-                     'Avg Stop': '${:,.2f}', 'Risk $': _m, 'Risk %': '{:.2f}%', 'Risk_Budget': _m, 'Days Held': '{:.0f}',
+                     'Avg Stop': '${:,.2f}', 'Risk $': '${:,.2f}', 'Risk %': '{:.2f}%', 'Risk_Budget': '${:,.2f}', 'Days Held': '{:.0f}',
 
-                     'Projected P&L': _m, 'Pyramid': format_pyramid
+                     'Projected P&L': '${:,.2f}', 'Pyramid': format_pyramid
 
                  }).applymap(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']
                  ).applymap(color_pyramid, subset=pyramid_cols),
