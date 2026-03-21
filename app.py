@@ -856,13 +856,11 @@ def compute_cycle_state():
         # reference_high from resetting between cycles. Re-scan for price-only
         # FTDs and update reference_high to reflect the most recent bull cycle.
         # IMPORTANT: Only process PAST corrections, not the current one.
-        # If market_in_correction is True, the current correction's reference_high
-        # must be preserved (it's the peak that triggered the correction).
         in_corr = False
         corr_rally_low = None
         corr_rally_low_idx = None
         last_price_ftd_idx = None
-        pre_correction_high = reference_high  # Save in case we need to restore
+        last_corr_entry_high = reference_high  # Tracks the high that triggered each correction
         for i in range(260, len(df)):
             row = df.iloc[i]
             close_val = row['Close']
@@ -877,7 +875,7 @@ def compute_cycle_state():
                 decline = (close_val - reference_high) / reference_high * 100
                 if decline <= -7:
                     in_corr = True
-                    pre_correction_high = reference_high  # Lock the high that triggered this correction
+                    last_corr_entry_high = reference_high  # Lock the high that triggered this correction
                     # Find rally low (lookback 10 days)
                     lookback = min(i, 10)
                     recent_slice = df.iloc[i-lookback:i+1]
@@ -907,10 +905,11 @@ def compute_cycle_state():
             if not in_corr and high_val > reference_high:
                 reference_high = high_val
 
-        # If we're still in a correction at the end, restore the pre-correction high
-        # (don't let a false FTD during the current correction reset it)
-        if market_in_correction and in_corr:
-            reference_high = pre_correction_high
+        # If market is currently in correction, restore the reference high to
+        # the peak that triggered it — regardless of whether the loop found
+        # false FTDs during the current correction
+        if market_in_correction:
+            reference_high = last_corr_entry_high
 
         # Find reference high date
         reference_high_date = None
