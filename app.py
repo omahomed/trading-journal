@@ -85,18 +85,33 @@ APP_VERSION = "17.1 (Auth + UI Refresh)"
 # =============================================================================
 # GOOGLE AUTH — Login gate (must be before all other content)
 # =============================================================================
+import json, tempfile
+
+_AUTH_ACTIVE = False
 try:
     from streamlit_google_auth import Authenticate
 
     _auth_config = st.secrets.get("google_auth", {})
     if _auth_config.get("client_id"):
+        # Build the Google credentials JSON that the library expects
+        _creds = {
+            "web": {
+                "client_id": _auth_config["client_id"],
+                "client_secret": _auth_config["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [_auth_config.get("redirect_uri", "http://localhost:8501")],
+            }
+        }
+        _creds_path = os.path.join(tempfile.gettempdir(), "google_creds.json")
+        with open(_creds_path, "w") as f:
+            json.dump(_creds, f)
+
         authenticator = Authenticate(
-            secret_credentials_file=None,
+            secret_credentials_path=_creds_path,
             cookie_name='mo_money_auth',
             cookie_key='mo_money_secret_key_2026',
             redirect_uri=_auth_config.get("redirect_uri", "http://localhost:8501"),
-            client_id=_auth_config["client_id"],
-            client_secret=_auth_config["client_secret"],
         )
 
         authenticator.check_authentification()
@@ -114,17 +129,15 @@ try:
             authenticator.login()
             st.stop()
 
-        # User is authenticated — show logout in sidebar later
+        # User is authenticated
+        _AUTH_ACTIVE = True
         st.session_state['user_name'] = st.session_state.get('user_info', {}).get('name', 'Trader')
         st.session_state['user_email'] = st.session_state.get('user_info', {}).get('email', '')
     else:
-        # No auth config — skip auth (local dev without secrets)
         st.session_state['user_name'] = 'MO'
 except ImportError:
-    # streamlit-google-auth not installed — skip auth
     st.session_state['user_name'] = 'MO'
 except Exception as e:
-    # Auth failed for some reason — don't block the app
     st.session_state['user_name'] = 'MO'
     print(f"⚠️  Auth error (non-blocking): {e}")
 
@@ -1872,7 +1885,7 @@ st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_stat
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
 # Logout button (only if authenticated via Google)
-if st.session_state.get('connected', False):
+if _AUTH_ACTIVE and st.session_state.get('connected', False):
     st.sidebar.markdown("---")
     _user_display = st.session_state.get('user_name', 'User')
     st.sidebar.caption(f"👤 {_user_display}")
