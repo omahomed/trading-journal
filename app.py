@@ -12357,12 +12357,30 @@ elif page == "IBD Market School":
             if analyzer.rally_low_idx is not None:
                 rally_day = last_idx - analyzer.rally_low_idx
 
+            # Rally day type classification (same logic as Market Cycle Tracker)
+            # - "rally": Close > previous day's close
+            # - "pink": Close < previous day's close but in upper half of range
+            # - None: neither condition met — not a valid rally day
+            rally_day_type = None
+            df = analyzer.data
+            if analyzer.rally_start_date is not None and analyzer.rally_low_idx is not None:
+                rd_row = df.iloc[analyzer.rally_low_idx]
+                if analyzer.rally_low_idx > 0:
+                    prev_row = df.iloc[analyzer.rally_low_idx - 1]
+                    if rd_row['Close'] > prev_row['Close']:
+                        rally_day_type = "rally"
+                    else:
+                        day_midpoint = (rd_row['High'] + rd_row['Low']) / 2
+                        if rd_row['Close'] >= day_midpoint:
+                            rally_day_type = "pink"
+
             return {
                 'market_in_correction': analyzer.market_in_correction,
                 'buy_switch': analyzer.buy_switch,
                 'rally_start_date': analyzer.rally_start_date.strftime('%Y-%m-%d') if analyzer.rally_start_date else None,
                 'rally_low': analyzer.rally_low,
                 'rally_day': rally_day,
+                'rally_day_type': rally_day_type,
                 'ftd_date': analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
                 'reference_high': analyzer.reference_high,
                 'as_of': last_date.strftime('%Y-%m-%d'),
@@ -12606,14 +12624,16 @@ elif page == "IBD Market School":
         if corr_state:
             if corr_state['market_in_correction']:
                 decline_pct = ((close - corr_state['reference_high']) / corr_state['reference_high']) * 100 if corr_state['reference_high'] else 0
-                if corr_state['rally_start_date'] and corr_state['rally_day'] is not None:
+                rd_type = corr_state.get('rally_day_type')
+                if corr_state['rally_start_date'] and corr_state['rally_day'] is not None and rd_type is not None:
                     day_num = corr_state['rally_day'] + 1  # Day 1 = rally low day
+                    rd_label = "Rally Day" if rd_type == "rally" else "Pink Rally Day"
                     ftd_window = "— in FTD window (days 4-25)" if 4 <= day_num <= 25 else ""
                     if day_num < 4:
                         ftd_window = f"— FTD eligible from Day 4 ({4 - day_num} more days)"
                     st.warning(
                         f"**MARKET IN CORRECTION** ({decline_pct:.1f}% from ref high ${corr_state['reference_high']:,.2f})  \n"
-                        f"Rally Day {day_num} from {corr_state['rally_start_date']} (low ${corr_state['rally_low']:,.2f}) "
+                        f"{rd_label} — Day {day_num} from {corr_state['rally_start_date']} (low ${corr_state['rally_low']:,.2f}) "
                         f"{ftd_window}  \n"
                         f"**Status: Looking for Follow-Through Day**"
                     )
