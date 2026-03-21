@@ -273,56 +273,11 @@ h3 {
     font-size: 1.5rem !important;
 }
 
-/* ── Sidebar Styling ── */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a1d29 0%, #252836 100%) !important;
-}
-
-[data-testid="stSidebar"] [data-testid="stMarkdown"] {
-    color: #e0e0e0 !important;
-}
-
-[data-testid="stSidebar"] h1,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 {
-    color: #ffffff !important;
-}
-
-[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.1) !important;
-}
-
+/* ── Sidebar Styling (follows Streamlit theme) ── */
 [data-testid="stSidebar"] .stButton > button {
-    background: rgba(255,255,255,0.05) !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    color: #e0e0e0 !important;
     text-align: left !important;
     font-size: 0.85rem !important;
     padding: 0.5rem 0.75rem !important;
-}
-
-[data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(99, 102, 241, 0.2) !important;
-    border-color: var(--accent-blue) !important;
-    color: white !important;
-    transform: none;
-}
-
-[data-testid="stSidebar"] [data-testid="stExpander"] {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-}
-
-[data-testid="stSidebar"] [data-testid="stExpander"] summary {
-    color: rgba(255,255,255,0.6) !important;
-    font-size: 0.75rem !important;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-}
-
-[data-testid="stSidebar"] [data-testid="stSelectbox"] label {
-    color: rgba(255,255,255,0.7) !important;
 }
 
 /* ── Alerts → Rounded & Soft ── */
@@ -1788,10 +1743,10 @@ def analyze_market_trend(ticker_symbol):
 # ==============================================================================
 st.sidebar.markdown("""
 <div style="padding: 1.25rem 0.5rem 0.75rem; text-align: left;">
-    <span style="font-size: 1.5rem; font-weight: 800; color: white; letter-spacing: -0.02em;">
+    <span style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
         MO Money
     </span>
-    <span style="font-size: 0.65rem; background: rgba(99,102,241,0.3); color: #a5b4fc; padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-weight: 600;">
+    <span style="font-size: 0.65rem; background: rgba(99,102,241,0.15); color: var(--accent-blue); padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-weight: 600;">
         v17
     </span>
 </div>
@@ -1857,7 +1812,7 @@ with st.sidebar:
     def nav_section(label):
         st.markdown(f"""
         <div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-                    letter-spacing: 0.1em; color: rgba(255,255,255,0.4);
+                    letter-spacing: 0.1em; color: var(--text-muted);
                     padding: 0.75rem 0 0.25rem 0.25rem; margin-top: 0.25rem;">
             {label}
         </div>
@@ -1906,11 +1861,7 @@ page = st.session_state.page
 
 st.sidebar.markdown("---")
 st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_state.get('privacy_mode', False))
-st.sidebar.markdown(f"""
-<div style="font-size: 0.75rem; color: rgba(255,255,255,0.5); padding: 0.25rem 0;">
-    📂 <strong style="color: rgba(255,255,255,0.7);">{CURR_PORT_NAME}</strong>
-</div>
-""", unsafe_allow_html=True)
+st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
 # --- Privacy mode helper ---
 PRIVACY = st.session_state.get('privacy_mode', False)
@@ -2204,42 +2155,6 @@ if page == "Dashboard":
                 f"<span style='color:{dd_color}'>{dd_level}</span>",
                 GRADIENTS['navy']
             ), unsafe_allow_html=True)
-
-        # === QUICK ACTIONS + RECENT TRADES ROW ===
-        qa_col, rt_col = st.columns([1, 2])
-
-        with qa_col:
-            st.markdown("""
-            <div class="mo-card" style="padding: 1rem;">
-                <div class="mo-card-label" style="margin-bottom: 0.75rem;">QUICK ACTIONS</div>
-            </div>
-            """, unsafe_allow_html=True)
-            qa1, qa2 = st.columns(2)
-            with qa1:
-                if st.button("🟢 Log Buy", key="qa_buy", use_container_width=True):
-                    st.session_state.page = "Log Buy"
-                    st.rerun()
-                if st.button("📔 Journal", key="qa_journal", use_container_width=True):
-                    st.session_state.page = "Trade Journal"
-                    st.rerun()
-            with qa2:
-                if st.button("🔴 Log Sell", key="qa_sell", use_container_width=True):
-                    st.session_state.page = "Log Sell"
-                    st.rerun()
-                if st.button("🛡️ Risk", key="qa_risk", use_container_width=True):
-                    st.session_state.page = "Risk Manager"
-                    st.rerun()
-
-        with rt_col:
-            st.markdown("""
-            <div class="mo-card-label" style="margin-bottom: 0.5rem;">RECENT TRADES</div>
-            """, unsafe_allow_html=True)
-            if not df_d.empty:
-                _recent = df_d.sort_values('Date', ascending=False).head(5)
-                _display_cols = [c for c in ['Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Value'] if c in _recent.columns]
-                st.dataframe(_recent[_display_cols], use_container_width=True, hide_index=True)
-            else:
-                st.caption("No trades yet. Log your first trade!")
 
         st.markdown("---")
 
