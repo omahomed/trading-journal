@@ -80,7 +80,400 @@ if USE_DATABASE:
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
-APP_VERSION = "16.0 (Clean Workflow)"
+APP_VERSION = "17.0 (UI Refresh)"
+
+# =============================================================================
+# GLOBAL CSS THEME — Injected once, applies to every page
+# =============================================================================
+st.markdown("""
+<style>
+/* ── Import Google Font ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ── Root Variables (Light Mode) ── */
+:root {
+    --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --bg-primary: #f8f9fc;
+    --bg-card: #ffffff;
+    --bg-sidebar: #1a1d29;
+    --text-primary: #1a1d29;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --border-color: #e5e7eb;
+    --border-radius: 12px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+    --accent-blue: #6366f1;
+    --accent-green: #10b981;
+    --accent-red: #ef4444;
+    --accent-amber: #f59e0b;
+    --accent-purple: #8b5cf6;
+    --transition: all 0.2s ease;
+}
+
+/* ── Global Typography ── */
+html, body, [class*="css"] {
+    font-family: var(--font-main) !important;
+}
+
+/* ── Main Content Area ── */
+.main .block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 1400px;
+}
+
+/* ── Page Titles & Headers ── */
+h1 {
+    font-weight: 800 !important;
+    font-size: 1.75rem !important;
+    letter-spacing: -0.02em !important;
+    color: var(--text-primary) !important;
+    margin-bottom: 1.5rem !important;
+}
+
+h2 {
+    font-weight: 700 !important;
+    font-size: 1.35rem !important;
+    letter-spacing: -0.01em !important;
+    color: var(--text-primary) !important;
+}
+
+h3 {
+    font-weight: 600 !important;
+    font-size: 1.1rem !important;
+    color: var(--text-primary) !important;
+}
+
+/* ── Streamlit Containers → Card Style ── */
+[data-testid="stExpander"] {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--border-radius) !important;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+}
+
+[data-testid="stExpander"] summary {
+    font-weight: 600 !important;
+    font-size: 0.95rem !important;
+}
+
+/* ── Tabs → Clean Underline Style ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    background: transparent;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-family: var(--font-main) !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+    padding: 0.75rem 1.25rem !important;
+    border-radius: 0 !important;
+    color: var(--text-secondary) !important;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: var(--transition);
+}
+
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    color: var(--accent-blue) !important;
+    border-bottom-color: var(--accent-blue) !important;
+    background: transparent !important;
+    font-weight: 600 !important;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    color: var(--accent-blue) !important;
+    background: rgba(99, 102, 241, 0.05) !important;
+}
+
+/* ── Buttons → Modern Rounded ── */
+.stButton > button {
+    font-family: var(--font-main) !important;
+    font-weight: 500 !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.25rem !important;
+    border: 1px solid var(--border-color) !important;
+    background: var(--bg-card) !important;
+    color: var(--text-primary) !important;
+    transition: var(--transition) !important;
+    box-shadow: var(--shadow-sm) !important;
+    font-size: 0.875rem !important;
+}
+
+.stButton > button:hover {
+    border-color: var(--accent-blue) !important;
+    color: var(--accent-blue) !important;
+    box-shadow: var(--shadow-md) !important;
+    transform: translateY(-1px);
+}
+
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)) !important;
+    color: white !important;
+    border: none !important;
+}
+
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="baseButton-primary"]:hover {
+    color: white !important;
+    opacity: 0.9;
+}
+
+/* ── Selectbox, Text Input, Number Input → Rounded ── */
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div,
+.stTextInput > div > div,
+.stNumberInput > div > div > div {
+    border-radius: 8px !important;
+    border-color: var(--border-color) !important;
+    font-family: var(--font-main) !important;
+}
+
+[data-baseweb="select"] > div:focus-within,
+.stTextInput > div > div:focus-within {
+    border-color: var(--accent-blue) !important;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+}
+
+/* ── DataFrames / Tables → Clean Cards ── */
+[data-testid="stDataFrame"],
+.stDataFrame {
+    border-radius: var(--border-radius) !important;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+}
+
+/* ── Metrics → Subtle Card ── */
+[data-testid="stMetric"] {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1rem 1.25rem;
+    box-shadow: var(--shadow-sm);
+}
+
+[data-testid="stMetric"] label {
+    font-weight: 500 !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.8rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    font-weight: 700 !important;
+    font-size: 1.5rem !important;
+}
+
+/* ── Sidebar Styling ── */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1d29 0%, #252836 100%) !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stMarkdown"] {
+    color: #e0e0e0 !important;
+}
+
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #ffffff !important;
+}
+
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.1) !important;
+}
+
+[data-testid="stSidebar"] .stButton > button {
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    color: #e0e0e0 !important;
+    text-align: left !important;
+    font-size: 0.85rem !important;
+    padding: 0.5rem 0.75rem !important;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(99, 102, 241, 0.2) !important;
+    border-color: var(--accent-blue) !important;
+    color: white !important;
+    transform: none;
+}
+
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    color: rgba(255,255,255,0.6) !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+[data-testid="stSidebar"] [data-testid="stSelectbox"] label {
+    color: rgba(255,255,255,0.7) !important;
+}
+
+/* ── Alerts → Rounded & Soft ── */
+.stAlert {
+    border-radius: var(--border-radius) !important;
+    border: none !important;
+    font-size: 0.9rem !important;
+}
+
+[data-testid="stAlert"] {
+    border-radius: var(--border-radius) !important;
+}
+
+/* ── Dividers → Subtle ── */
+hr {
+    border: none !important;
+    border-top: 1px solid var(--border-color) !important;
+    margin: 1.5rem 0 !important;
+}
+
+/* ── Plotly Charts → Remove Border ── */
+.js-plotly-plot {
+    border-radius: var(--border-radius) !important;
+    overflow: hidden;
+}
+
+/* ── Form Containers ── */
+[data-testid="stForm"] {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color) !important;
+    border-radius: var(--border-radius) !important;
+    padding: 1.5rem !important;
+    box-shadow: var(--shadow-sm);
+}
+
+/* ── Multiselect Tags ── */
+[data-baseweb="tag"] {
+    border-radius: 6px !important;
+    font-family: var(--font-main) !important;
+}
+
+/* ── Toggle → Accent Color ── */
+[data-testid="stCheckbox"] span[role="checkbox"][aria-checked="true"] {
+    background-color: var(--accent-blue) !important;
+}
+
+/* ── Smooth Scrollbar ── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #a1a1a1;
+}
+
+/* ── Custom Card Class (for HTML cards) ── */
+.mo-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 1.25rem;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 0.75rem;
+    transition: var(--transition);
+}
+
+.mo-card:hover {
+    box-shadow: var(--shadow-md);
+}
+
+.mo-card-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+.mo-card-value {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.mo-card-sub {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-top: 0.35rem;
+}
+
+/* ── Gradient Card (for hero metrics) ── */
+.mo-gradient-card {
+    padding: 1.25rem;
+    border-radius: var(--border-radius);
+    color: white;
+    box-shadow: var(--shadow-md);
+    transition: var(--transition);
+}
+
+.mo-gradient-card:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+}
+
+.mo-gradient-card .label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+}
+
+.mo-gradient-card .value {
+    font-size: 2rem;
+    font-weight: 800;
+    margin: 0.4rem 0;
+    line-height: 1.2;
+}
+
+.mo-gradient-card .sub {
+    font-size: 0.85rem;
+    opacity: 0.9;
+}
+
+/* ── Status Badges ── */
+.mo-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.mo-badge-green { background: #d1fae5; color: #065f46; }
+.mo-badge-red { background: #fee2e2; color: #991b1b; }
+.mo-badge-amber { background: #fef3c7; color: #92400e; }
+.mo-badge-blue { background: #dbeafe; color: #1e40af; }
+.mo-badge-purple { background: #ede9fe; color: #5b21b6; }
+
+</style>
+""", unsafe_allow_html=True)
 
 # --- CONSTANTS & PATHS ---
 DATA_ROOT = "portfolios"
@@ -1375,13 +1768,21 @@ def analyze_market_trend(ticker_symbol):
 # ==============================================================================
 # 2. SIDEBAR NAVIGATION (THE ONE SOURCE OF TRUTH)
 # ==============================================================================
-st.sidebar.title("🚀 MO Money")
-st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style="padding: 1.25rem 0.5rem 0.75rem; text-align: left;">
+    <span style="font-size: 1.5rem; font-weight: 800; color: white; letter-spacing: -0.02em;">
+        MO Money
+    </span>
+    <span style="font-size: 0.65rem; background: rgba(99,102,241,0.3); color: #a5b4fc; padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-weight: 600;">
+        v17
+    </span>
+</div>
+""", unsafe_allow_html=True)
 
 # A. SINGLE STRATEGY SELECTOR
 # This variable 'portfolio' controls the entire app context.
 portfolio = st.sidebar.selectbox(
-    "🔥 Active Strategy",
+    "Active Strategy",
     [PORT_CANSLIM, PORT_TQQQ, PORT_457B],
     index=0,
     help="Select the account you want to manage."
@@ -1408,7 +1809,6 @@ DETAILS_FILE = os.path.join(ACTIVE_DIR, 'Trade_Log_Details.csv')
 st.sidebar.markdown("---")
 
 # C. PAGE NAVIGATION
-# Collapsible navigation with expanders (matches Streamlit theme)
 
 # Initialize session state for page selection
 if 'page' not in st.session_state:
@@ -1416,12 +1816,16 @@ if 'page' not in st.session_state:
 
 # Navigation UI
 with st.sidebar:
-    st.markdown("### 🧭 Navigation")
-
-    # Helper function to create nav button
+    # Helper function to create nav button with active state
     def nav_button(label, icon=""):
+        is_active = st.session_state.get('page', '') == label
         icon_text = f"{icon} " if icon else ""
-        if st.button(f"{icon_text}{label}", key=f"nav_{label}", use_container_width=True):
+        if st.button(
+            f"{icon_text}{label}",
+            key=f"nav_{label}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary"
+        ):
             st.session_state.page = label
             # Clear Trade Journal search state when navigating away
             if label != "Trade Journal" and '_tj_prev_page' in st.session_state:
@@ -1431,77 +1835,64 @@ with st.sidebar:
                 st.session_state.pop('_cycle_loaded', None)
             st.rerun()
 
-    # 📊 DASHBOARDS (expanded by default)
-    with st.expander("📊 Dashboards", expanded=True):
-        nav_button("Dashboard", "📊")
-        nav_button("Trading Overview", "📈")
+    # Section header helper
+    def nav_section(label):
+        st.markdown(f"""
+        <div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: 0.1em; color: rgba(255,255,255,0.4);
+                    padding: 0.75rem 0 0.25rem 0.25rem; margin-top: 0.25rem;">
+            {label}
+        </div>
+        """, unsafe_allow_html=True)
 
-    # 💼 TRADING OPERATIONS
-    with st.expander("💼 Trading Ops", expanded=True):
-        nav_button("Active Campaign Summary", "📋")
-        nav_button("Log Buy", "🟢")
-        nav_button("Log Sell", "🔴")
-        nav_button("Position Sizer", "🔢")
-        nav_button("Trade Journal", "📔")
-        nav_button("Trade Manager", "📝")
+    nav_section("DASHBOARDS")
+    nav_button("Dashboard", "📊")
+    nav_button("Trading Overview", "📈")
 
-    # 🛡️ RISK MANAGEMENT
-    with st.expander("🛡️ Risk Management", expanded=False):
-        nav_button("Earnings Planner", "💣")
-        nav_button("Portfolio Heat", "🔥")
-        nav_button("Risk Manager", "🛡️")
+    nav_section("TRADING OPS")
+    nav_button("Active Campaign Summary", "📋")
+    nav_button("Log Buy", "🟢")
+    nav_button("Log Sell", "🔴")
+    nav_button("Position Sizer", "🔢")
+    nav_button("Trade Journal", "📔")
+    nav_button("Trade Manager", "📝")
 
-    # 📅 DAILY WORKFLOW
-    with st.expander("📅 Daily Workflow", expanded=False):
-        nav_button("Daily Journal", "📔")
-        nav_button("Daily Report Card", "📊")
-        nav_button("Daily Routine", "🌅")
-        nav_button("Weekly Retro", "🔄")
+    nav_section("RISK MANAGEMENT")
+    nav_button("Earnings Planner", "💣")
+    nav_button("Portfolio Heat", "🔥")
+    nav_button("Risk Manager", "🛡️")
 
-    # 📈 MARKET INTELLIGENCE
-    with st.expander("📈 Market Intel", expanded=False):
-        nav_button("IBD Market School", "🏫")
-        nav_button("M Factor", "📊")
-        nav_button("Market Cycle Tracker", "🔄")
+    nav_section("DAILY WORKFLOW")
+    nav_button("Daily Journal", "📔")
+    nav_button("Daily Report Card", "📊")
+    nav_button("Daily Routine", "🌅")
+    nav_button("Weekly Retro", "🔄")
 
-    # 🔍 DEEP DIVE
-    with st.expander("🔍 Deep Dive", expanded=False):
-        nav_button("Analytics", "📈")
-        nav_button("Performance Audit", "📊")
-        nav_button("Performance Heat Map", "🔥")
-        nav_button("Period Review", "⏱️")
-        nav_button("Ticker Forensics", "🔬")
+    nav_section("MARKET INTEL")
+    nav_button("IBD Market School", "🏫")
+    nav_button("M Factor", "📊")
+    nav_button("Market Cycle Tracker", "🔄")
 
-    # ⚙️ LEGACY
-    with st.expander("⚙️ Legacy", expanded=False):
-        nav_button("Dashboard (Legacy)", "⚙️")
+    nav_section("DEEP DIVE")
+    nav_button("Analytics", "📈")
+    nav_button("Performance Audit", "📊")
+    nav_button("Performance Heat Map", "🔥")
+    nav_button("Period Review", "⏱️")
+    nav_button("Ticker Forensics", "🔬")
+
+    nav_section("LEGACY")
+    nav_button("Dashboard (Legacy)", "⚙️")
 
 # Get page from session state
 page = st.session_state.page
 
-# ====== OLD NAVIGATIONS (COMMENTED FOR EASY REVERT) ======
-# Option 1: Original radio button
-# page = st.sidebar.radio("Go to Module", [
-#     "Dashboard", "Trading Overview", "Command Center", "Dashboard (Legacy)",
-#     "Daily Routine", "Daily Journal", "Daily Report Card", "IBD Market School",
-#     "M Factor", "Performance Heat Map", "Ticker Forensics", "Period Review",
-#     "Position Sizer", "Trade Manager", "Analytics", "Weekly Retro"
-# ])
-
-# Option 2: option_menu (icon-based but not collapsible)
-# from streamlit_option_menu import option_menu
-# with st.sidebar:
-#     page = option_menu(
-#         menu_title="Navigation",
-#         options=["Dashboard", "Trading Overview", ...],
-#         icons=["speedometer2", "graph-up", ...],
-#         default_index=0
-#     )
-# ====== END OLD NAVIGATIONS ======
-
 st.sidebar.markdown("---")
 st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_state.get('privacy_mode', False))
-st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
+st.sidebar.markdown(f"""
+<div style="font-size: 0.75rem; color: rgba(255,255,255,0.5); padding: 0.25rem 0;">
+    📂 <strong style="color: rgba(255,255,255,0.7);">{CURR_PORT_NAME}</strong>
+</div>
+""", unsafe_allow_html=True)
 
 # --- Privacy mode helper ---
 PRIVACY = st.session_state.get('privacy_mode', False)
