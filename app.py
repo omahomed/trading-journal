@@ -83,63 +83,41 @@ st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_ico
 APP_VERSION = "17.1 (Auth + UI Refresh)"
 
 # =============================================================================
-# GOOGLE AUTH — Login gate (must be before all other content)
+# AUTH — Simple password login gate
 # =============================================================================
-import json, tempfile
-
 _AUTH_ACTIVE = False
+_app_password = ""
 try:
-    from streamlit_google_auth import Authenticate
+    _app_password = st.secrets.get("app", {}).get("password", "")
+except Exception:
+    pass
 
-    _auth_config = st.secrets.get("google_auth", {})
-    if _auth_config.get("client_id"):
-        # Build the Google credentials JSON that the library expects
-        _creds = {
-            "web": {
-                "client_id": _auth_config["client_id"],
-                "client_secret": _auth_config["client_secret"],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [_auth_config.get("redirect_uri", "http://localhost:8501")],
-            }
-        }
-        _creds_path = os.path.join(tempfile.gettempdir(), "google_creds.json")
-        with open(_creds_path, "w") as f:
-            json.dump(_creds, f)
-
-        authenticator = Authenticate(
-            secret_credentials_path=_creds_path,
-            cookie_name='mo_money_auth',
-            cookie_key='mo_money_secret_key_2026',
-            redirect_uri=_auth_config.get("redirect_uri", "http://localhost:8501"),
-        )
-
-        authenticator.check_authentification()
-
-        if not st.session_state.get('connected', False):
-            # Show login page
+if _app_password:
+    # Password is configured — require login
+    if not st.session_state.get('authenticated', False):
+        # Center the login form
+        _spacer1, _login_col, _spacer2 = st.columns([1, 1, 1])
+        with _login_col:
             st.markdown("""
-            <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh;">
-                <div style="text-align: center; max-width: 400px;">
-                    <div style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem;">MO Money</div>
-                    <div style="font-size: 1rem; opacity: 0.6; margin-bottom: 2rem;">Trading Journal & Analytics</div>
-                </div>
+            <div style="text-align: center; margin-top: 15vh; margin-bottom: 2rem;">
+                <div style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.25rem;">MO Money</div>
+                <div style="font-size: 0.95rem; opacity: 0.5;">Trading Journal & Analytics</div>
             </div>
             """, unsafe_allow_html=True)
-            authenticator.login()
-            st.stop()
+            with st.form("login_form"):
+                _pwd = st.text_input("Password", type="password", placeholder="Enter password")
+                _submitted = st.form_submit_button("Sign In", use_container_width=True, type="primary")
+                if _submitted:
+                    if _pwd == _app_password:
+                        st.session_state['authenticated'] = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password")
+        st.stop()
 
-        # User is authenticated
-        _AUTH_ACTIVE = True
-        st.session_state['user_name'] = st.session_state.get('user_info', {}).get('name', 'Trader')
-        st.session_state['user_email'] = st.session_state.get('user_info', {}).get('email', '')
-    else:
-        st.session_state['user_name'] = 'MO'
-except ImportError:
-    st.session_state['user_name'] = 'MO'
-except Exception as e:
-    st.session_state['user_name'] = 'MO'
-    print(f"⚠️  Auth error (non-blocking): {e}")
+    _AUTH_ACTIVE = True
+
+st.session_state['user_name'] = 'MO'
 
 # =============================================================================
 # GLOBAL CSS THEME — Injected once, applies to every page
@@ -1884,16 +1862,10 @@ st.sidebar.markdown("---")
 st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_state.get('privacy_mode', False))
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
-# Logout button (only if authenticated via Google)
-if _AUTH_ACTIVE and st.session_state.get('connected', False):
+# Logout button (only if password auth is active)
+if _AUTH_ACTIVE:
     st.sidebar.markdown("---")
-    _user_display = st.session_state.get('user_name', 'User')
-    st.sidebar.caption(f"👤 {_user_display}")
     if st.sidebar.button("🚪 Logout", key="logout_btn", use_container_width=True):
-        try:
-            authenticator.logout()
-        except Exception:
-            pass
         st.session_state.clear()
         st.rerun()
 
