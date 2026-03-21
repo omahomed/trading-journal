@@ -982,16 +982,6 @@ def compute_cycle_state():
         if rally_low_idx is not None:
             days_since_rally = len(df) - 1 - rally_low_idx
 
-        if not market_in_correction or buy_switch:
-            cycle_state = "HEALTHY"
-        elif price_ftd_date is not None:
-            # Price-only FTD found — we're in recovery even if IBD buy_switch is off
-            cycle_state = "RECOVERY"
-        elif rally_start_date is not None:
-            cycle_state = "RECOVERY"
-        else:
-            cycle_state = "CORRECTION"
-
         # Correction start: when did the correction begin?
         correction_start = None
         if market_in_correction:
@@ -1004,16 +994,34 @@ def compute_cycle_state():
                             correction_start = df.index[i + 1]
                         break
 
-        # Rally day type: check if the rally start had an upside reversal
+        # Rally day type classification:
+        # - "rally": Close > previous day's close (proper rally day)
+        # - "pink": Close < previous day's close BUT closed in upper half of day's range
+        # - None: Neither condition met (no rally day)
         rally_day_type = None
         if rally_start_date is not None and rally_low_idx is not None:
             rd_row = df.iloc[rally_low_idx]
             if rally_low_idx > 0:
                 prev_row = df.iloc[rally_low_idx - 1]
                 if rd_row['Close'] > prev_row['Close']:
-                    rally_day_type = "strong"
+                    rally_day_type = "rally"
                 else:
-                    rally_day_type = "weak"
+                    # Check if close is in upper half of the day's range
+                    day_midpoint = (rd_row['High'] + rd_row['Low']) / 2
+                    if rd_row['Close'] >= day_midpoint:
+                        rally_day_type = "pink"
+                    # else: remains None — not a rally day
+
+        # --- Cycle state determination (after rally day classification) ---
+        if not market_in_correction or buy_switch:
+            cycle_state = "HEALTHY"
+        elif price_ftd_date is not None:
+            cycle_state = "RECOVERY"
+        elif rally_start_date is not None and rally_day_type is not None:
+            # Only enter RECOVERY if we have a valid rally day (rally or pink)
+            cycle_state = "RECOVERY"
+        else:
+            cycle_state = "CORRECTION"
 
         # --- Entry step calculation ---
         entry_step = -1  # Default: no step
@@ -1126,7 +1134,7 @@ def compute_cycle_state():
         entry_ladder = [
             {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
              'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
-             'detail': f"{'Strong' if rally_day_type == 'strong' else 'Weak'} rally — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
+             'detail': f"{'Rally Day' if rally_day_type == 'rally' else 'Pink Rally Day'} — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
             {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
              'achieved': entry_step >= 1,
              'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
@@ -3260,7 +3268,8 @@ elif page == "Market Cycle Tracker":
         if cs == "RECOVERY" and cycle['rally_day_date']:
             rd = cycle['rally_day_date']
             rd_str = rd.strftime('%b %d, %Y') if hasattr(rd, 'strftime') else str(rd)
-            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Rally Day ({cycle['rally_day_type'].title()}): {rd_str}</div>"
+            rd_label = "Rally Day" if cycle['rally_day_type'] == 'rally' else "Pink Rally Day" if cycle['rally_day_type'] == 'pink' else "Rally Day"
+            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>{rd_label}: {rd_str}</div>"
         if cs == "CORRECTION" and cycle['correction_start']:
             cs_dt = cycle['correction_start']
             cs_str = cs_dt.strftime('%b %d, %Y') if hasattr(cs_dt, 'strftime') else str(cs_dt)
