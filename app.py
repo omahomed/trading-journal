@@ -129,7 +129,6 @@ h1 {
     font-weight: 800 !important;
     font-size: 1.75rem !important;
     letter-spacing: -0.02em !important;
-    color: var(--text-primary) !important;
     margin-bottom: 1.5rem !important;
 }
 
@@ -137,21 +136,16 @@ h2 {
     font-weight: 700 !important;
     font-size: 1.35rem !important;
     letter-spacing: -0.01em !important;
-    color: var(--text-primary) !important;
 }
 
 h3 {
     font-weight: 600 !important;
     font-size: 1.1rem !important;
-    color: var(--text-primary) !important;
 }
 
 /* ── Streamlit Containers → Card Style ── */
 [data-testid="stExpander"] {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color) !important;
     border-radius: var(--border-radius) !important;
-    box-shadow: var(--shadow-sm);
     margin-bottom: 0.75rem;
     overflow: hidden;
 }
@@ -165,7 +159,6 @@ h3 {
 .stTabs [data-baseweb="tab-list"] {
     gap: 0;
     background: transparent;
-    border-bottom: 2px solid var(--border-color);
 }
 
 .stTabs [data-baseweb="tab"] {
@@ -174,21 +167,20 @@ h3 {
     font-size: 0.9rem !important;
     padding: 0.75rem 1.25rem !important;
     border-radius: 0 !important;
-    color: var(--text-secondary) !important;
     border-bottom: 2px solid transparent;
     margin-bottom: -2px;
-    transition: var(--transition);
+    transition: all 0.2s ease;
 }
 
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
-    color: var(--accent-blue) !important;
-    border-bottom-color: var(--accent-blue) !important;
+    color: #6366f1 !important;
+    border-bottom-color: #6366f1 !important;
     background: transparent !important;
     font-weight: 600 !important;
 }
 
 .stTabs [data-baseweb="tab"]:hover {
-    color: var(--accent-blue) !important;
+    color: #6366f1 !important;
     background: rgba(99, 102, 241, 0.05) !important;
 }
 
@@ -198,24 +190,17 @@ h3 {
     font-weight: 500 !important;
     border-radius: 8px !important;
     padding: 0.5rem 1.25rem !important;
-    border: 1px solid var(--border-color) !important;
-    background: var(--bg-card) !important;
-    color: var(--text-primary) !important;
-    transition: var(--transition) !important;
-    box-shadow: var(--shadow-sm) !important;
+    transition: all 0.2s ease !important;
     font-size: 0.875rem !important;
 }
 
 .stButton > button:hover {
-    border-color: var(--accent-blue) !important;
-    color: var(--accent-blue) !important;
-    box-shadow: var(--shadow-md) !important;
     transform: translateY(-1px);
 }
 
 .stButton > button[kind="primary"],
 .stButton > button[data-testid="baseButton-primary"] {
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)) !important;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
     color: white !important;
     border: none !important;
 }
@@ -232,13 +217,12 @@ h3 {
 .stTextInput > div > div,
 .stNumberInput > div > div > div {
     border-radius: 8px !important;
-    border-color: var(--border-color) !important;
     font-family: var(--font-main) !important;
 }
 
 [data-baseweb="select"] > div:focus-within,
 .stTextInput > div > div:focus-within {
-    border-color: var(--accent-blue) !important;
+    border-color: #6366f1 !important;
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
 }
 
@@ -247,22 +231,16 @@ h3 {
 .stDataFrame {
     border-radius: var(--border-radius) !important;
     overflow: hidden;
-    box-shadow: var(--shadow-sm);
-    border: 1px solid var(--border-color);
 }
 
 /* ── Metrics → Subtle Card ── */
 [data-testid="stMetric"] {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
     padding: 1rem 1.25rem;
-    box-shadow: var(--shadow-sm);
 }
 
 [data-testid="stMetric"] label {
     font-weight: 500 !important;
-    color: var(--text-secondary) !important;
     font-size: 0.8rem !important;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -294,7 +272,7 @@ h3 {
 /* ── Dividers → Subtle ── */
 hr {
     border: none !important;
-    border-top: 1px solid var(--border-color) !important;
+    border-top: 1px solid rgba(128,128,128,0.2) !important;
     margin: 1.5rem 0 !important;
 }
 
@@ -306,11 +284,8 @@ hr {
 
 /* ── Form Containers ── */
 [data-testid="stForm"] {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color) !important;
     border-radius: var(--border-radius) !important;
     padding: 1.5rem !important;
-    box-shadow: var(--shadow-sm);
 }
 
 /* ── Multiselect Tags ── */
@@ -342,17 +317,14 @@ hr {
 
 /* ── Custom Card Class (for HTML cards) ── */
 .mo-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
     border-radius: var(--border-radius);
     padding: 1.25rem;
-    box-shadow: var(--shadow-sm);
     margin-bottom: 0.75rem;
     transition: var(--transition);
 }
 
 .mo-card:hover {
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
 }
 
 .mo-card-label {
@@ -360,34 +332,33 @@ hr {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-secondary);
+    opacity: 0.6;
     margin-bottom: 0.5rem;
 }
 
 .mo-card-value {
     font-size: 1.75rem;
     font-weight: 800;
-    color: var(--text-primary);
     line-height: 1.2;
 }
 
 .mo-card-sub {
     font-size: 0.85rem;
-    color: var(--text-secondary);
+    opacity: 0.6;
     margin-top: 0.35rem;
 }
 
 /* ── Gradient Card (for hero metrics) ── */
 .mo-gradient-card {
     padding: 1.25rem;
-    border-radius: var(--border-radius);
+    border-radius: 12px;
     color: white;
-    box-shadow: var(--shadow-md);
-    transition: var(--transition);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    transition: all 0.2s ease;
 }
 
 .mo-gradient-card:hover {
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
     transform: translateY(-2px);
 }
 
@@ -434,16 +405,7 @@ hr {
 .section-market { border-left: 4px solid var(--accent-green); padding-left: 1rem; }
 .section-analytics { border-left: 4px solid var(--accent-purple); padding-left: 1rem; }
 
-/* ── Dark Mode (opt-in via Streamlit Settings → Theme → Dark) ── */
-/* Streamlit applies [data-testid="stAppViewContainer"] with dark bg
-   when user selects dark theme in settings. These rules adapt. */
-[data-theme="dark"] .mo-card,
-.stApp[data-testid="stAppViewContainer"][style*="background-color: rgb(14"] .mo-card {
-    background: #1a1d29;
-    border-color: #2d3748;
-}
-
-[data-theme="dark"] .mo-card-value { color: #e0e0e0; }
+/* ── Dark Mode: no overrides needed — Streamlit theme handles it ── */
 
 </style>
 """, unsafe_allow_html=True)
@@ -1904,10 +1866,10 @@ def flat_card(label, value, sub="", accent_color=None):
 def page_header(title, subtitle="", icon=""):
     """Render a clean page header with optional subtitle."""
     icon_html = f'<span style="margin-right: 0.5rem;">{icon}</span>' if icon else ""
-    sub_html = f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="font-size: 0.85rem; opacity: 0.6; margin-top: 0.25rem;">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
-    <div style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
-        <div style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+    <div style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid rgba(128,128,128,0.2);">
+        <div style="font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em;">
             {icon_html}{title}
         </div>
         {sub_html}
@@ -1939,10 +1901,10 @@ if page == "Dashboard":
     _greeting = "Good morning" if _hour < 12 else ("Good afternoon" if _hour < 17 else "Good evening")
     st.markdown(f"""
     <div style="margin-bottom: 1.5rem;">
-        <div style="font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+        <div style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">
             {_greeting}, MO
         </div>
-        <div style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.25rem;">
+        <div style="font-size: 0.9rem; opacity: 0.6; margin-top: 0.25rem;">
             {_today_str} • {CURR_PORT_NAME}
         </div>
     </div>
