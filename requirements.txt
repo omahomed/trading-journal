@@ -8,3 +8,4 @@ psycopg2-binary
 numpy
 boto3
 anthropic
+streamlit-google-auth

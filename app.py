@@ -80,7 +80,53 @@ if USE_DATABASE:
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
-APP_VERSION = "17.0 (UI Refresh)"
+APP_VERSION = "17.1 (Auth + UI Refresh)"
+
+# =============================================================================
+# GOOGLE AUTH — Login gate (must be before all other content)
+# =============================================================================
+try:
+    from streamlit_google_auth import Authenticate
+
+    _auth_config = st.secrets.get("google_auth", {})
+    if _auth_config.get("client_id"):
+        authenticator = Authenticate(
+            secret_credentials_file=None,
+            cookie_name='mo_money_auth',
+            cookie_key='mo_money_secret_key_2026',
+            redirect_uri=_auth_config.get("redirect_uri", "http://localhost:8501"),
+            client_id=_auth_config["client_id"],
+            client_secret=_auth_config["client_secret"],
+        )
+
+        authenticator.check_authentification()
+
+        if not st.session_state.get('connected', False):
+            # Show login page
+            st.markdown("""
+            <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh;">
+                <div style="text-align: center; max-width: 400px;">
+                    <div style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem;">MO Money</div>
+                    <div style="font-size: 1rem; opacity: 0.6; margin-bottom: 2rem;">Trading Journal & Analytics</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            authenticator.login()
+            st.stop()
+
+        # User is authenticated — show logout in sidebar later
+        st.session_state['user_name'] = st.session_state.get('user_info', {}).get('name', 'Trader')
+        st.session_state['user_email'] = st.session_state.get('user_info', {}).get('email', '')
+    else:
+        # No auth config — skip auth (local dev without secrets)
+        st.session_state['user_name'] = 'MO'
+except ImportError:
+    # streamlit-google-auth not installed — skip auth
+    st.session_state['user_name'] = 'MO'
+except Exception as e:
+    # Auth failed for some reason — don't block the app
+    st.session_state['user_name'] = 'MO'
+    print(f"⚠️  Auth error (non-blocking): {e}")
 
 # =============================================================================
 # GLOBAL CSS THEME — Injected once, applies to every page
@@ -1825,6 +1871,19 @@ st.sidebar.markdown("---")
 st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_state.get('privacy_mode', False))
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
+# Logout button (only if authenticated via Google)
+if st.session_state.get('connected', False):
+    st.sidebar.markdown("---")
+    _user_display = st.session_state.get('user_name', 'User')
+    st.sidebar.caption(f"👤 {_user_display}")
+    if st.sidebar.button("🚪 Logout", key="logout_btn", use_container_width=True):
+        try:
+            authenticator.logout()
+        except Exception:
+            pass
+        st.session_state.clear()
+        st.rerun()
+
 # --- Privacy mode helper ---
 PRIVACY = st.session_state.get('privacy_mode', False)
 
@@ -1902,7 +1961,7 @@ if page == "Dashboard":
     st.markdown(f"""
     <div style="margin-bottom: 1.5rem;">
         <div style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">
-            {_greeting}, MO
+            {_greeting}, {st.session_state.get('user_name', 'MO').split()[0]}
         </div>
         <div style="font-size: 0.9rem; opacity: 0.6; margin-top: 0.25rem;">
             {_today_str} • {CURR_PORT_NAME}
