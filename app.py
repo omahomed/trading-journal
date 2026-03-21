@@ -472,6 +472,24 @@ hr {
 .mo-badge-blue { background: #dbeafe; color: #1e40af; }
 .mo-badge-purple { background: #ede9fe; color: #5b21b6; }
 
+/* ── Section Accent Borders (color-coded by page category) ── */
+.section-trading { border-left: 4px solid var(--accent-blue); padding-left: 1rem; }
+.section-risk { border-left: 4px solid var(--accent-red); padding-left: 1rem; }
+.section-daily { border-left: 4px solid var(--accent-amber); padding-left: 1rem; }
+.section-market { border-left: 4px solid var(--accent-green); padding-left: 1rem; }
+.section-analytics { border-left: 4px solid var(--accent-purple); padding-left: 1rem; }
+
+/* ── Dark Mode (opt-in via Streamlit Settings → Theme → Dark) ── */
+/* Streamlit applies [data-testid="stAppViewContainer"] with dark bg
+   when user selects dark theme in settings. These rules adapt. */
+[data-theme="dark"] .mo-card,
+.stApp[data-testid="stAppViewContainer"][style*="background-color: rgb(14"] .mo-card {
+    background: #1a1d29;
+    border-color: #2d3748;
+}
+
+[data-theme="dark"] .mo-card-value { color: #e0e0e0; }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1908,11 +1926,76 @@ def mask(val, fmt=",.2f", prefix="$", suffix=""):
 
 
 # ==============================================================================
+# UI HELPER FUNCTIONS — Reusable card components
+# ==============================================================================
+
+def metric_card(label, value, sub="", gradient="linear-gradient(135deg, #667eea 0%, #764ba2 100%)"):
+    """Render a gradient metric card with consistent styling."""
+    return f"""
+    <div class="mo-gradient-card" style="background: {gradient};">
+        <div class="label">{label}</div>
+        <div class="value">{value}</div>
+        <div class="sub">{sub}</div>
+    </div>
+    """
+
+def flat_card(label, value, sub="", accent_color=None):
+    """Render a flat (white) metric card with optional accent border."""
+    border_style = f"border-left: 4px solid {accent_color};" if accent_color else ""
+    return f"""
+    <div class="mo-card" style="{border_style}">
+        <div class="mo-card-label">{label}</div>
+        <div class="mo-card-value">{value}</div>
+        <div class="mo-card-sub">{sub}</div>
+    </div>
+    """
+
+def page_header(title, subtitle="", icon=""):
+    """Render a clean page header with optional subtitle."""
+    icon_html = f'<span style="margin-right: 0.5rem;">{icon}</span>' if icon else ""
+    sub_html = f'<div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">{subtitle}</div>' if subtitle else ""
+    st.markdown(f"""
+    <div style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
+        <div style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+            {icon_html}{title}
+        </div>
+        {sub_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+# Gradient presets for consistent color usage
+GRADIENTS = {
+    'blue':   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'green':  'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+    'pink':   'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'orange': 'linear-gradient(135deg, #ee0979 0%, #ff6a00 100%)',
+    'cyan':   'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'sunset': 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'navy':   'linear-gradient(135deg, #4b6cb7 0%, #182848 100%)',
+    'indigo': 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+    'red':    'linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%)',
+    'teal':   'linear-gradient(135deg, #0d9488 0%, #14b8a6 100%)',
+}
+
+
+# ==============================================================================
 # PAGE 2: DASHBOARD (NEW MODERN VERSION)
 # ==============================================================================
 if page == "Dashboard":
-    st.title("📊 DASHBOARD")
-    st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
+    # Welcome header
+    _today_str = datetime.now().strftime('%A, %B %d, %Y')
+    _hour = datetime.now().hour
+    _greeting = "Good morning" if _hour < 12 else ("Good afternoon" if _hour < 17 else "Good evening")
+    st.markdown(f"""
+    <div style="margin-bottom: 1.5rem;">
+        <div style="font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+            {_greeting}, MO
+        </div>
+        <div style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.25rem;">
+            {_today_str} • {CURR_PORT_NAME}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # === HELPER FUNCTIONS ===
     def fmt_money(val):
@@ -2074,55 +2157,38 @@ if page == "Dashboard":
             dd_level = "Clear"
 
         # === MODERN METRICS CARDS ===
-        st.markdown("### 📊 Performance Snapshot")
-
         col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             nlv_display = "$****" if PRIVACY else f"${curr_nlv:,.0f}"
             dol_display = "****" if PRIVACY else f"{'+' if daily_dol >= 0 else ''}{daily_dol:,.0f}"
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Net Liq Value</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{nlv_display}</div>
-                <div style="font-size: 16px; color: {'#90EE90' if daily_dol >= 0 else '#ffcccb'};">
-                    {dol_display} ({'+' if daily_pct_display >= 0 else ''}{daily_pct_display:.2f}%)
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            change_color = '#90EE90' if daily_dol >= 0 else '#ffcccb'
+            st.markdown(metric_card(
+                "NET LIQ VALUE", nlv_display,
+                f"<span style='color:{change_color}'>{dol_display} ({'+' if daily_pct_display >= 0 else ''}{daily_pct_display:.2f}%)</span>",
+                GRADIENTS['blue']
+            ), unsafe_allow_html=True)
 
         with col2:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">LTD Return</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{ltd_return:.2f}%</div>
-                <div style="font-size: 16px;">Life to Date</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "LTD RETURN", f"{ltd_return:.2f}%", "Life to Date",
+                GRADIENTS['pink']
+            ), unsafe_allow_html=True)
 
         with col3:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">YTD Return</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{ytd_val:.2f}%</div>
-                <div style="font-size: 16px; color: #f0f0f0;">
-                    SPY: {'+' if ytd_spy >= 0 else ''}{ytd_spy:.2f}% | NDX: {'+' if ytd_nasdaq >= 0 else ''}{ytd_nasdaq:.2f}%
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "YTD RETURN", f"{ytd_val:.2f}%",
+                f"SPY: {'+' if ytd_spy >= 0 else ''}{ytd_spy:.2f}% | NDX: {'+' if ytd_nasdaq >= 0 else ''}{ytd_nasdaq:.2f}%",
+                GRADIENTS['green']
+            ), unsafe_allow_html=True)
 
         with col4:
             limit = 12
-            mode_color = "#2ca02c" if num_open_pos <= limit else "#ff4b4b"
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Live Exposure</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{calc_exposure_pct:.1f}%</div>
-                <div style="font-size: 16px;">
-                    {num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "LIVE EXPOSURE", f"{calc_exposure_pct:.1f}%",
+                f"{num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%",
+                GRADIENTS['orange']
+            ), unsafe_allow_html=True)
 
         with col5:
             if dd_level == "Clear":
@@ -2133,13 +2199,47 @@ if page == "Dashboard":
                 dd_color = "#FFA500"
             else:
                 dd_color = "#ff6b6b"
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #4b6cb7 0%, #182848 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Drawdown</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0; color: {dd_color};">{curr_dd:.2f}%</div>
-                <div style="font-size: 16px; color: {dd_color};">{dd_level}</div>
+            st.markdown(metric_card(
+                "DRAWDOWN", f"<span style='color:{dd_color}'>{curr_dd:.2f}%</span>",
+                f"<span style='color:{dd_color}'>{dd_level}</span>",
+                GRADIENTS['navy']
+            ), unsafe_allow_html=True)
+
+        # === QUICK ACTIONS + RECENT TRADES ROW ===
+        qa_col, rt_col = st.columns([1, 2])
+
+        with qa_col:
+            st.markdown("""
+            <div class="mo-card" style="padding: 1rem;">
+                <div class="mo-card-label" style="margin-bottom: 0.75rem;">QUICK ACTIONS</div>
             </div>
             """, unsafe_allow_html=True)
+            qa1, qa2 = st.columns(2)
+            with qa1:
+                if st.button("🟢 Log Buy", key="qa_buy", use_container_width=True):
+                    st.session_state.page = "Log Buy"
+                    st.rerun()
+                if st.button("📔 Journal", key="qa_journal", use_container_width=True):
+                    st.session_state.page = "Trade Journal"
+                    st.rerun()
+            with qa2:
+                if st.button("🔴 Log Sell", key="qa_sell", use_container_width=True):
+                    st.session_state.page = "Log Sell"
+                    st.rerun()
+                if st.button("🛡️ Risk", key="qa_risk", use_container_width=True):
+                    st.session_state.page = "Risk Manager"
+                    st.rerun()
+
+        with rt_col:
+            st.markdown("""
+            <div class="mo-card-label" style="margin-bottom: 0.5rem;">RECENT TRADES</div>
+            """, unsafe_allow_html=True)
+            if not df_d.empty:
+                _recent = df_d.sort_values('Date', ascending=False).head(5)
+                _display_cols = [c for c in ['Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Value'] if c in _recent.columns]
+                st.dataframe(_recent[_display_cols], use_container_width=True, hide_index=True)
+            else:
+                st.caption("No trades yet. Log your first trade!")
 
         st.markdown("---")
 
@@ -2327,7 +2427,7 @@ elif page == "Dashboard (Legacy)":
     # Fix Sidebar Variable Name
     CURR_PORT_NAME = portfolio
 
-    st.header(f"MARKET DASHBOARD: {CURR_PORT_NAME}")
+    page_header("Market Dashboard", CURR_PORT_NAME, "📊")
     
     # --- HELPER: ROBUST FORMATTER ---
     def fmt_money(val):
@@ -2608,8 +2708,7 @@ elif page == "Dashboard (Legacy)":
 # PAGE 2: TRADING OVERVIEW
 # ==============================================================================
 elif page == "Trading Overview":
-    st.title("📊 TRADING OVERVIEW")
-    st.caption(f"Portfolio: {CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}")
+    page_header("Trading Overview", f"{CURR_PORT_NAME} • {datetime.now().strftime('%B %d, %Y')}", "📈")
 
     # === DATE FILTER ===
     st.markdown("### 📅 Date Range Filter")
@@ -2878,103 +2977,70 @@ elif page == "Trading Overview":
         col_ytd, col_live = st.columns(2)
 
         with col_ytd:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); padding: 25px; border-radius: 12px; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">YTD Return</div>
-                <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{ytd_return:.2f}%</div>
-                <div style="font-size: 18px; opacity: 0.95;">
-                    SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "YTD RETURN", f"{ytd_return:.2f}%",
+                f"SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%",
+                GRADIENTS['green']
+            ), unsafe_allow_html=True)
 
         with col_live:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #ee0979 0%, #ff6a00 100%); padding: 25px; border-radius: 12px; color: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                <div style="font-size: 16px; opacity: 0.9; font-weight: 600;">Live Exposure</div>
-                <div style="font-size: 48px; font-weight: 800; margin: 10px 0;">{live_exposure_pct:.1f}%</div>
-                <div style="font-size: 18px; opacity: 0.95;">
-                    ↑ {num_positions}/12 Pos | Risk: {risk_pct:.2f}%
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("<div style='margin: 15px 0;'></div>", unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "LIVE EXPOSURE", f"{live_exposure_pct:.1f}%",
+                f"{num_positions}/12 Pos | Risk: {risk_pct:.2f}%",
+                GRADIENTS['orange']
+            ), unsafe_allow_html=True)
 
         # Row 1: Primary metrics
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Account Balance & P&L</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">${current_nlv:,.0f}</div>
-                <div style="font-size: 16px; color: {'#90EE90' if daily_change >= 0 else '#ffcccb'};">
-                    {'+' if daily_change >= 0 else ''}{daily_change:,.0f} • {ltd_return:+.1f}% LTD
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            change_color = '#90EE90' if daily_change >= 0 else '#ffcccb'
+            st.markdown(metric_card(
+                "ACCOUNT BALANCE", f"${current_nlv:,.0f}",
+                f"<span style='color:{change_color}'>{'+' if daily_change >= 0 else ''}{daily_change:,.0f} • {ltd_return:+.1f}% LTD</span>",
+                GRADIENTS['blue']
+            ), unsafe_allow_html=True)
 
         with col2:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Trade Win %</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{win_rate:.1f}%</div>
-                <div style="font-size: 16px;">{wins} W / {losses} L</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "WIN RATE", f"{win_rate:.1f}%", f"{wins} W / {losses} L",
+                GRADIENTS['pink']
+            ), unsafe_allow_html=True)
 
         with col3:
             avg_win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Avg Win/Loss Trade</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{avg_win_loss_ratio:.2f}</div>
-                <div style="font-size: 16px;">${avg_win:,.0f} / ${avg_loss:,.0f}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "AVG WIN/LOSS", f"{avg_win_loss_ratio:.2f}", f"${avg_win:,.0f} / ${avg_loss:,.0f}",
+                GRADIENTS['cyan']
+            ), unsafe_allow_html=True)
 
         with col4:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Profit Factor</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{profit_factor:.2f}</div>
-                <div style="font-size: 16px;">{'Profitable' if profit_factor > 1 else 'Losing'}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("<div style='margin: 10px 0;'></div>", unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "PROFIT FACTOR", f"{profit_factor:.2f}", f"{'Profitable' if profit_factor > 1 else 'Losing'}",
+                GRADIENTS['sunset']
+            ), unsafe_allow_html=True)
 
         # Row 2: Secondary metrics
         col5, col6, col7 = st.columns(3)
 
         with col5:
-            streak_color = "#2ca02c" if streak_type == "Win" else "#ff4b4b"
-            st.markdown(f"""
-            <div style="background: {streak_color}; padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Current Streak</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{current_streak}</div>
-                <div style="font-size: 16px;">{streak_type} Streak</div>
-            </div>
-            """, unsafe_allow_html=True)
+            streak_grad = GRADIENTS['green'] if streak_type == "Win" else GRADIENTS['red']
+            st.markdown(metric_card(
+                "CURRENT STREAK", f"{current_streak}", f"{streak_type} Streak",
+                streak_grad
+            ), unsafe_allow_html=True)
 
         with col6:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Total Trades</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{total_trades}</div>
-                <div style="font-size: 16px;">{active_trades} Active</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "TOTAL TRADES", f"{total_trades}", f"{active_trades} Active",
+                GRADIENTS['indigo']
+            ), unsafe_allow_html=True)
 
         with col7:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%); padding: 20px; border-radius: 10px; color: white;">
-                <div style="font-size: 14px; opacity: 0.9;">Max Drawdown</div>
-                <div style="font-size: 32px; font-weight: 700; margin: 8px 0;">{max_drawdown:.1f}%</div>
-                <div style="font-size: 16px;">Peak to Trough</div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(metric_card(
+                "MAX DRAWDOWN", f"{max_drawdown:.1f}%", "Peak to Trough",
+                GRADIENTS['red']
+            ), unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -3029,7 +3095,7 @@ elif page == "Trading Overview":
 # PAGE 3: DAILY JOURNAL (CLEAN & FINAL)
 # ==============================================================================
 elif page == "Daily Journal":
-    st.header(f"DAILY TRADING JOURNAL ({CURR_PORT_NAME})")
+    page_header("Daily Trading Journal", CURR_PORT_NAME, "📔")
     
     TARGET_FILE = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
 
@@ -3473,7 +3539,7 @@ elif page == "Daily Journal":
 # PAGE 4: M FACTOR (MARKET HEALTH) - VISUAL FIX
 # ==============================================================================
 elif page == "M Factor":
-    st.header(f"MARKET HEALTH (M FACTOR)")
+    page_header("Market Health (M Factor)", "", "📊")
     # CSS Styles
     st.markdown("""<style>.market-banner {padding: 20px; border-radius: 12px; text-align: center; color: white; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);} .ticker-box {background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 10px; color: black;} .metric-row {display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 15px; color: #333; border-bottom: 1px dashed #eee; padding-bottom: 8px;} .metric-row:last-child {border-bottom: none; margin-bottom: 0; padding-bottom: 0;} .sub-text {font-size: 12px; color: #999; font-weight: 400; margin-left: 5px;}</style>""", unsafe_allow_html=True)
     
@@ -3608,7 +3674,7 @@ elif page == "M Factor":
 # MARKET CYCLE TRACKER (Layer 2 on top of M Factor)
 # ==============================================================================
 elif page == "Market Cycle Tracker":
-    st.header("MARKET CYCLE TRACKER")
+    page_header("Market Cycle Tracker", "", "🔄")
 
     # CSS
     st.markdown("""<style>
@@ -3884,7 +3950,7 @@ Exit signals are **non-negotiable action rules**:
 # Performance Heat Map
 # ==============================================================================
 elif page == "Performance Heat Map":
-    st.header(f"🔥 PERFORMANCE HEAT MAP ({CURR_PORT_NAME})")
+    page_header("Performance Heat Map", CURR_PORT_NAME, "🔥")
     
     # --- 1. DATA LOADING ---
     df_s = load_data(SUMMARY_FILE)
@@ -4006,7 +4072,7 @@ elif page == "Performance Heat Map":
         else: st.warning("Trade Log (df_s) is empty.")
 
 elif page == "Ticker Forensics":
-    st.header("🔍 TICKER FORENSICS")
+    page_header("Ticker Forensics", "", "🔬")
     
     if os.path.exists(SUMMARY_FILE):
         df_s = load_data(SUMMARY_FILE)
@@ -4248,7 +4314,7 @@ elif page == "Ticker Forensics":
 # PAGE 7: PERIOD REVIEW (MATH FIXED TO MATCH DASHBOARD)
 # ==============================================================================
 elif page == "Period Review":
-    st.header("PERIODIC REVIEW")
+    page_header("Period Review", "", "⏱️")
     
     # --- DATA ENGINE ---
     def clean_num_local(x):
@@ -4414,7 +4480,7 @@ elif page == "Period Review":
 # PAGE 3: DAILY ROUTINE (SEPARATE COLUMNS FOR GLOBAL VS LOCAL NOTES)
 # ==============================================================================
 if page == "Daily Routine":
-    st.header("🌅 DAILY ROUTINE (MASTER BLOTTER)")
+    page_header("Daily Routine", "Master Blotter", "🌅")
     st.caption("Enter End-of-Day numbers. 'Cash Added/Removed' is for deposits/withdrawals only.")
 
     # 1. DEFINE PATHS
@@ -4712,7 +4778,7 @@ if page == "Daily Routine":
 # PAGE 9: POSITION SIZER (CRASH FIX + LIFO LOGIC + VOLATILITY SIZER)
 # ==============================================================================
 elif page == "Position Sizer":
-    st.header(f"POSITION SIZING CALCULATOR ({CURR_PORT_NAME})")
+    page_header("Position Sizer", CURR_PORT_NAME, "🔢")
     
     # --- GLOBAL DATA ---
     # Load latest NLV from journal (database-aware)
@@ -5570,7 +5636,7 @@ elif page == "Position Sizer":
 # PAGE: LOG BUY (Standalone)
 # ==============================================================================
 elif page == "Log Buy":
-    st.header(f"LOG BUY ({CURR_PORT_NAME})")
+    page_header("Log Buy", CURR_PORT_NAME, "🟢")
     df_d, df_s = load_trade_data()
 
     st.caption("Live Entry Calculator")
@@ -5985,7 +6051,7 @@ elif page == "Log Buy":
 # PAGE: LOG SELL (Standalone)
 # ==============================================================================
 elif page == "Log Sell":
-    st.header(f"LOG SELL ({CURR_PORT_NAME})")
+    page_header("Log Sell", CURR_PORT_NAME, "🔴")
     df_d, df_s = load_trade_data()
 
     # Display success message from previous sell if exists
@@ -6142,7 +6208,7 @@ elif page == "Log Sell":
 # PAGE 10: TRADE MANAGER (FULL CONTEXT: BUY/SELL NOTES & RULES)
 # ==============================================================================
 elif page == "Trade Manager":
-    st.header(f"TRADE MANAGER ({CURR_PORT_NAME})")
+    page_header("Trade Manager", CURR_PORT_NAME, "📝")
 
     df_d, df_s = load_trade_data()
 
@@ -10072,7 +10138,7 @@ elif page == "Performance Audit":
 # TRADE JOURNAL - Unified view of all trades with card layout
 # ==============================================================================
 elif page == "Trade Journal":
-    st.header("📔 Trade Journal")
+    page_header("Trade Journal", "", "📔")
     st.caption("Visual review of all your trades with embedded charts")
 
     # Quick action buttons
@@ -10824,7 +10890,7 @@ elif page == "Trade Journal":
 # PAGE 11: ANALYTICS (REVERTED TAB 1 + DRILL-DOWN LIVE TAB)
 # ==============================================================================
 elif page == "Analytics":
-    st.header(f"ANALYTICS & AUDIT ({CURR_PORT_NAME})")
+    page_header("Analytics & Audit", CURR_PORT_NAME, "📈")
     
     # 1. LOAD DATA
     if os.path.exists(SUMMARY_FILE):
@@ -12051,7 +12117,7 @@ elif page == "Analytics":
 # PAGE 12: DAILY REPORT CARD (FIXED MARKET DATA)
 # ==============================================================================
 elif page == "Daily Report Card":
-    st.header(f"📠 DAILY REPORT CARD ({CURR_PORT_NAME})")
+    page_header("Daily Report Card", CURR_PORT_NAME, "📊")
 
     # 1. LOAD ALL DATA (database-aware)
     path_j = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
@@ -12446,7 +12512,7 @@ elif page == "Daily Report Card":
 # PAGE 12: WEEKLY RETRO (OPTIMIZED WORKFLOW)
 # ==============================================================================
 elif page == "Weekly Retro":
-    st.header(f"WEEKLY PROCESS REVIEW ({CURR_PORT_NAME})")
+    page_header("Weekly Retro", CURR_PORT_NAME, "🔄")
     
     # 1. LOAD DETAILS DATA
     if os.path.exists(DETAILS_FILE):
