@@ -3281,13 +3281,16 @@ elif page == "Market Cycle Tracker":
         else:
             exposure_line = f"SUGGESTED EXPOSURE: {entry_exp}%"
 
-        st.markdown(f"""<div class="cycle-banner" style="background-color: {bg}; color: {text_color};">
-            <div style="font-size: 14px; opacity: 0.85;">NASDAQ MARKET CYCLE</div>
-            <div style="font-size: 52px; font-weight: 800; margin: 4px 0;">{cs}</div>
-            <div style="font-size: 16px;">{subtitle}</div>
-            <div style="font-size: 20px; font-weight: 700; margin-top: 10px;">{exposure_line}</div>
-            {banner_extra}
-        </div>""", unsafe_allow_html=True)
+        banner_html = (
+            f'<div class="cycle-banner" style="background-color: {bg}; color: {text_color};">'
+            f'<div style="font-size: 14px; opacity: 0.85;">NASDAQ MARKET CYCLE</div>'
+            f'<div style="font-size: 52px; font-weight: 800; margin: 4px 0;">{cs}</div>'
+            f'<div style="font-size: 16px;">{subtitle}</div>'
+            f'<div style="font-size: 20px; font-weight: 700; margin-top: 10px;">{exposure_line}</div>'
+            f'{banner_extra}'
+            f'</div>'
+        )
+        st.markdown(banner_html, unsafe_allow_html=True)
 
         # Key metrics row
         m1, m2, m3, m4, m5 = st.columns(5)
