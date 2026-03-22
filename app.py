@@ -13231,6 +13231,7 @@ TRADING SYSTEM CONTEXT:
 - Position sizing: Risk-based with stop losses and risk budgets
 - Transaction IDs: B1/B2 = initial buys, A1/A2 = add-on buys, S1/S2 = sells
 - Trade IDs format: YYYYMM-NNN (e.g., 202602-001)
+- Journal columns: Beg NLV = starting equity for the day, End NLV = ending equity. A week's P&L = End NLV of last day minus Beg NLV of first day (which equals prior week's End NLV)
 
 ANALYSIS GUIDELINES:
 - Be specific — reference actual tickers, dates, and numbers from the data
@@ -13436,6 +13437,9 @@ Also look at my 'Lowlights' entries for additional patterns."""
         _week_start = _today - timedelta(days=_weekday)  # Monday of this week
         _week_end = _week_start + timedelta(days=4)  # Friday of this week
 
+        # Include prior week's last trading day so AI has the starting baseline
+        _context_start = _week_start - timedelta(days=3)  # Include from prior Thursday/Friday
+
         _preset_prompt = f"""Give me a coaching summary for the trading week of {_week_start.strftime('%b %d')} – {_week_end.strftime('%b %d, %Y')}. Cover:
 1. P&L performance and equity trend
 2. What I did well (from Highlights)
@@ -13443,9 +13447,8 @@ Also look at my 'Lowlights' entries for additional patterns."""
 4. Market conditions and how I adapted
 5. One key lesson or focus for next week
 
-IMPORTANT: Only include data from {_week_start.strftime('%b %d')} onwards. Do NOT include prior week data.
 Keep it concise and actionable — like a halftime talk from a coach."""
-        _preset_context = build_journal_context_by_date(_week_start)
+        _preset_context = build_journal_context_by_date(_context_start)
 
     elif btn_behavior:
         _preset_prompt = """Analyze my trading behavior patterns across all my data. Look at:
