@@ -13240,6 +13240,7 @@ ANALYSIS GUIDELINES:
 - When discussing sell discipline, compare actual exit vs. stop loss and optimal exit
 - Keep responses concise and actionable — use bullet points
 - Use dollar amounts and percentages to quantify insights
+- IMPORTANT: Never use $ for dollar amounts — Streamlit renders $ as LaTeX math. Instead write "USD" or just the number with commas (e.g., "346,619" not "$346,619"). Same for inline math — avoid single $ delimiters entirely.
 - If the data is insufficient to answer, say so honestly
 
 Current portfolio: {CURR_PORT_NAME}
@@ -13349,6 +13350,10 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
         """Send prompt to Claude and stream response."""
         messages = [{"role": "user", "content": f"{data_context}\n\n{user_prompt}"}]
         full_response = ""
+        def _escape_dollars(text):
+            """Escape $ signs so Streamlit doesn't render them as LaTeX."""
+            return text.replace("$", "\\$")
+
         with ai_client.messages.stream(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -13357,8 +13362,8 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
         ) as stream:
             for text in stream.text_stream:
                 full_response += text
-                placeholder.markdown(full_response + "▌")
-        placeholder.markdown(full_response)
+                placeholder.markdown(_escape_dollars(full_response) + "▌")
+        placeholder.markdown(_escape_dollars(full_response))
         return full_response
 
     # --- Initialize chat history ---
@@ -13429,10 +13434,15 @@ Give me a behavioral profile and 3 specific things to work on."""
         _preset_context = build_trade_context("all") + "\n\n" + build_journal_context(30) + "\n\n" + build_stats_context()
 
     # --- Display existing chat history FIRST ---
+    def _escape_dollars_display(text):
+        """Escape $ signs so Streamlit doesn't render them as LaTeX."""
+        return text.replace("$", "\\$")
+
     for msg in st.session_state.coach_history:
         _avatar = "🤖" if msg["role"] == "assistant" else None
         with st.chat_message(msg["role"], avatar=_avatar):
-            st.markdown(msg["content"])
+            _content = _escape_dollars_display(msg["content"]) if msg["role"] == "assistant" else msg["content"]
+            st.markdown(_content)
 
     # --- Handle pre-built analysis (new messages only) ---
     if _preset_prompt:
