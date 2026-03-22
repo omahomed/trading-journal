@@ -6162,7 +6162,7 @@ elif page == "Trade Manager":
         "Active Campaign Detailed",
         "Detailed Trade Log",
         "CY Campaigns (2026)",
-        "2026 Detail Log",
+        "Export",
         "All Campaigns"
     ])
 
@@ -7450,8 +7450,8 @@ elif page == "Trade Manager":
 
 # --- TAB CY DETAIL: 2026 DETAILED TRADE LOG ---
     with tab_cy_detail:
-        st.subheader("📋 2026 Detailed Trade Log")
-        st.caption("All 2026 campaigns (opened in 2026 + rollovers from 2025). Per-lot LIFO attribution with Core/Add classification.")
+        st.subheader("📥 Export 2026 Trades")
+        st.caption("Export 2026 campaigns (opened in 2026 + rollovers from 2025). Per-lot LIFO attribution with Core/Add classification.")
 
         if not df_s.empty:
             # --- 1. CY 2026 FILTER ---
@@ -7464,12 +7464,57 @@ elif page == "Trade Manager":
                 (df_s['Status'] == 'OPEN') |
                 (df_s['Close_DT'] >= cutoff_2026)
             )
-            cy_ids = df_s[cy_mask_detail]['Trade_ID'].unique().tolist()
+            _cy_all = df_s[cy_mask_detail].copy()
+
+            # --- STATUS FILTER ---
+            _open_count = len(_cy_all[_cy_all['Status'].str.upper() == 'OPEN'])
+            _closed_count = len(_cy_all[_cy_all['Status'].str.upper() == 'CLOSED'])
+            st.caption(f"**{len(_cy_all)}** total campaigns  •  **{_open_count}** open  •  **{_closed_count}** closed")
+
+            _export_filter = st.radio("Filter:", ["All 2026 Trades", "Open Only", "Closed Only"], horizontal=True, key="export_filter_2026")
+
+            if _export_filter == "Open Only":
+                _cy_filtered = _cy_all[_cy_all['Status'].str.upper() == 'OPEN']
+            elif _export_filter == "Closed Only":
+                _cy_filtered = _cy_all[_cy_all['Status'].str.upper() == 'CLOSED']
+            else:
+                _cy_filtered = _cy_all
+
+            cy_ids = _cy_filtered['Trade_ID'].unique().tolist()
             cy_detail_df = df_d[df_d['Trade_ID'].isin(cy_ids)].copy()
 
             if not cy_detail_df.empty:
-                # --- EXPORT ALL: Comprehensive CSV with LIFO + Core/Add for all 2026 trades ---
-                if st.button("📥 Export All 2026 Trades to CSV", key="cy_export_btn"):
+                # --- SUMMARY DOWNLOAD (quick) ---
+                _summary_cols = [c for c in ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Closed_Date',
+                                 'Total_Shares', 'Avg_Entry', 'Avg_Exit', 'Total_Cost', 'Realized_PL',
+                                 'Return_Pct', 'Rule', 'Sell_Rule', 'Stop_Loss'] if c in _cy_filtered.columns]
+                _summary_csv = _cy_filtered[_summary_cols].to_csv(index=False)
+
+                _s1, _s2 = st.columns(2)
+                with _s1:
+                    st.download_button(
+                        f"📥 Download Trade Summary ({len(_cy_filtered)} campaigns)",
+                        data=_summary_csv,
+                        file_name=f"2026_trade_summary_{_export_filter.lower().replace(' ', '_')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="export_summary_btn"
+                    )
+                with _s2:
+                    _txn_csv = cy_detail_df.to_csv(index=False)
+                    st.download_button(
+                        f"📥 Download Transaction Details ({len(cy_detail_df)} rows)",
+                        data=_txn_csv,
+                        file_name=f"2026_transactions_{_export_filter.lower().replace(' ', '_')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="export_txn_btn"
+                    )
+
+                st.markdown("---")
+
+                # --- DETAILED EXPORT: LIFO + Core/Add for filtered trades ---
+                if st.button(f"📥 Export Detailed LIFO Log ({len(cy_ids)} campaigns)", key="cy_export_btn"):
                     all_rows = []
                     for tid in cy_ids:
                         t_df = cy_detail_df[cy_detail_df['Trade_ID'] == tid].copy()
@@ -13521,83 +13566,3 @@ Give me a behavioral profile and 3 specific things to work on."""
             st.session_state.coach_history = []
             st.rerun()
 
-    # =============================================
-    # 2026 DETAIL LOG — Trade Data Downloads
-    # =============================================
-    st.markdown("---")
-    st.markdown("#### 2026 Detail Log")
-
-    # Filter trades to 2026
-    _dl_summary = df_s.copy()
-    _dl_details = df_d.copy()
-
-    if not _dl_summary.empty and 'Open_Date' in _dl_summary.columns:
-        _dl_summary['Open_Date'] = pd.to_datetime(_dl_summary['Open_Date'], errors='coerce')
-        # 2026 trades: opened in 2026, OR opened before 2026 but still open on 1/1/2026
-        _is_2026_open = _dl_summary['Open_Date'].dt.year == 2026
-        _opened_before = _dl_summary['Open_Date'].dt.year < 2026
-        _still_open_2026 = _opened_before & (_dl_summary['Status'].str.upper() != 'CLOSED')
-        if 'Closed_Date' in _dl_summary.columns:
-            _dl_summary['Closed_Date'] = pd.to_datetime(_dl_summary['Closed_Date'], errors='coerce')
-            _closed_in_2026 = _opened_before & (_dl_summary['Closed_Date'].dt.year == 2026)
-            _still_open_2026 = _still_open_2026 | _closed_in_2026
-        _dl_2026 = _dl_summary[_is_2026_open | _still_open_2026].copy()
-    else:
-        _dl_2026 = pd.DataFrame()
-
-    if _dl_2026.empty:
-        st.info("No 2026 trade data available.")
-    else:
-        _open_2026 = _dl_2026[_dl_2026['Status'].str.upper() == 'OPEN']
-        _closed_2026 = _dl_2026[_dl_2026['Status'].str.upper() == 'CLOSED']
-
-        st.caption(f"**{len(_dl_2026)}** total trades in 2026  •  **{len(_open_2026)}** open  •  **{len(_closed_2026)}** closed")
-
-        # Filter selector
-        _dl_filter = st.radio("Select trades to download:", ["All 2026 Trades", "Open Only", "Closed Only"], horizontal=True, key="dl_trade_filter")
-
-        if _dl_filter == "Open Only":
-            _dl_filtered = _open_2026
-        elif _dl_filter == "Closed Only":
-            _dl_filtered = _closed_2026
-        else:
-            _dl_filtered = _dl_2026
-
-        if _dl_filtered.empty:
-            st.warning(f"No {_dl_filter.lower().replace(' only', '')} trades found for 2026.")
-        else:
-            # Show preview
-            _preview_cols = [c for c in ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Closed_Date',
-                             'Avg_Entry', 'Avg_Exit', 'Realized_PL', 'Return_Pct', 'Rule', 'Sell_Rule'] if c in _dl_filtered.columns]
-            with st.expander(f"Preview — {len(_dl_filtered)} trades", expanded=False):
-                st.dataframe(_dl_filtered[_preview_cols], use_container_width=True, hide_index=True)
-
-            # Download buttons
-            d1, d2 = st.columns(2)
-            with d1:
-                _csv_summary = _dl_filtered.to_csv(index=False)
-                st.download_button(
-                    f"📥 Download Trade Summary ({len(_dl_filtered)} trades)",
-                    data=_csv_summary,
-                    file_name=f"2026_trades_{_dl_filter.lower().replace(' ', '_')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            with d2:
-                # Transaction details for the filtered trades
-                if not _dl_details.empty and 'Trade_ID' in _dl_details.columns:
-                    _trade_ids = _dl_filtered['Trade_ID'].tolist()
-                    _dl_txns = _dl_details[_dl_details['Trade_ID'].isin(_trade_ids)]
-                    if not _dl_txns.empty:
-                        _csv_details = _dl_txns.to_csv(index=False)
-                        st.download_button(
-                            f"📥 Download Transaction Details ({len(_dl_txns)} rows)",
-                            data=_csv_details,
-                            file_name=f"2026_transactions_{_dl_filter.lower().replace(' ', '_')}.csv",
-                            mime="text/csv",
-                            use_container_width=True
-                        )
-                    else:
-                        st.caption("No transaction details available.")
-                else:
-                    st.caption("No transaction details available.")
