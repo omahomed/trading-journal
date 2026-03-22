@@ -13253,7 +13253,6 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
         """Build a data summary string to include in prompts."""
         parts = []
 
-        # Recent closed trades
         if not df_s.empty:
             closed = df_s[df_s['Status'].str.upper() == 'CLOSED'].copy()
             if 'Closed_Date' in closed.columns:
@@ -13266,33 +13265,31 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
             else:
                 show_closed = closed
 
+            # Use compact CSV format to fit more trades in context
             if not show_closed.empty:
-                cols = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Closed_Date', 'Total_Shares',
-                        'Avg_Entry', 'Avg_Exit', 'Total_Cost', 'Realized_PL', 'Return_Pct',
-                        'Rule', 'Sell_Rule', 'Buy_Notes', 'Sell_Notes', 'Stop_Loss']
+                cols = ['Trade_ID', 'Ticker', 'Open_Date', 'Closed_Date', 'Total_Shares',
+                        'Avg_Entry', 'Avg_Exit', 'Realized_PL', 'Return_Pct',
+                        'Rule', 'Sell_Rule', 'Stop_Loss']
                 use_cols = [c for c in cols if c in show_closed.columns]
                 parts.append(f"=== CLOSED TRADES ({len(show_closed)}) ===")
-                parts.append(show_closed[use_cols].to_string(index=False))
+                parts.append(show_closed[use_cols].to_csv(index=False))
 
             if not open_trades.empty:
-                cols = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Total_Shares',
-                        'Avg_Entry', 'Total_Cost', 'Unrealized_PL', 'Rule', 'Buy_Notes', 'Stop_Loss']
+                cols = ['Trade_ID', 'Ticker', 'Open_Date', 'Total_Shares',
+                        'Avg_Entry', 'Total_Cost', 'Unrealized_PL', 'Rule', 'Stop_Loss']
                 use_cols = [c for c in cols if c in open_trades.columns]
                 parts.append(f"\n=== OPEN TRADES ({len(open_trades)}) ===")
-                parts.append(open_trades[use_cols].to_string(index=False))
+                parts.append(open_trades[use_cols].to_csv(index=False))
 
-        # Transaction details for recent trades
-        if not df_d.empty and not df_s.empty:
-            if scope == "recent":
-                recent_ids = df_s.sort_values('Open_Date', ascending=False).head(n)['Trade_ID'].tolist() if 'Open_Date' in df_s.columns else df_s.head(n)['Trade_ID'].tolist()
-            else:
-                recent_ids = df_s['Trade_ID'].tolist()
+        # Only include transaction details for recent/small scopes (not "all")
+        if scope == "recent" and not df_d.empty and not df_s.empty:
+            recent_ids = df_s.sort_values('Open_Date', ascending=False).head(n)['Trade_ID'].tolist() if 'Open_Date' in df_s.columns else df_s.head(n)['Trade_ID'].tolist()
             txns = df_d[df_d['Trade_ID'].isin(recent_ids)]
             if not txns.empty:
-                cols = ['Trade_ID', 'Trx_ID', 'Ticker', 'Action', 'Date', 'Shares', 'Amount', 'Value', 'Rule', 'Notes', 'Exec_Grade', 'Behavior_Tag']
+                cols = ['Trade_ID', 'Trx_ID', 'Ticker', 'Action', 'Date', 'Shares', 'Amount', 'Value', 'Rule']
                 use_cols = [c for c in cols if c in txns.columns]
                 parts.append(f"\n=== TRANSACTIONS ({len(txns)}) ===")
-                parts.append(txns[use_cols].to_string(index=False))
+                parts.append(txns[use_cols].to_csv(index=False))
 
         return "\n".join(parts)
 
@@ -13374,16 +13371,23 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
             """Escape $ signs so Streamlit doesn't render them as LaTeX."""
             return text.replace("$", "\\$")
 
-        with ai_client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-        ) as stream:
-            for text in stream.text_stream:
-                full_response += text
-                placeholder.markdown(_escape_dollars(full_response) + "▌")
-        placeholder.markdown(_escape_dollars(full_response))
+        try:
+            with ai_client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=2048,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    full_response += text
+                    placeholder.markdown(_escape_dollars(full_response) + "▌")
+            placeholder.markdown(_escape_dollars(full_response))
+        except anthropic.RateLimitError:
+            full_response = "⚠️ API rate limit reached. Please wait a moment and try again."
+            placeholder.warning(full_response)
+        except anthropic.APIStatusError as e:
+            full_response = f"⚠️ API error: {e.status_code}. Please try again."
+            placeholder.warning(full_response)
         return full_response
 
     # --- Initialize chat history ---
