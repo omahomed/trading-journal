@@ -13410,13 +13410,13 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
     _preset_context = None
 
     if btn_recent:
-        _preset_prompt = """Review my last 10 closed trades. For each trade, analyze:
+        _preset_prompt = """Review my recent closed trades. For each trade, analyze:
 1. Entry quality — was the buy rule appropriate? Was timing good?
 2. Exit execution — did I follow my sell rules? Did I sell too early or too late?
 3. Position sizing — was the risk budget reasonable?
 
 Then give me an overall grade (A-F) and your top 3 actionable recommendations."""
-        _preset_context = build_trade_context("recent", 10)
+        _preset_context = build_trade_context("all")
 
     elif btn_mistakes:
         _preset_prompt = """Analyze my journal entries looking for recurring mistake patterns.
@@ -13491,15 +13491,16 @@ Give me a behavioral profile and 3 specific things to work on."""
         with st.chat_message("user"):
             st.markdown(user_input)
 
-        # Build context based on what seems relevant
-        context_parts = [build_stats_context()]
+        # Always send all trade data + stats — let Claude decide what's relevant
+        context_parts = [build_stats_context(), build_trade_context("all")]
+
+        # Add journal context — more days for broader queries
         _lower = user_input.lower()
-        if any(w in _lower for w in ['trade', 'position', 'buy', 'sell', 'entry', 'exit', 'campaign', 'ticker']):
-            context_parts.append(build_trade_context("recent", 15))
-        if any(w in _lower for w in ['journal', 'mistake', 'lesson', 'highlight', 'lowlight', 'day', 'week', 'market']):
+        if any(w in _lower for w in ['all', 'history', 'overall', 'pattern', 'behavior', 'trend', 'year', '2026', '2025', '2024']):
+            context_parts.append(build_journal_context(90))
+        elif any(w in _lower for w in ['week', 'recent', 'last', 'today', 'yesterday']):
             context_parts.append(build_journal_context(14))
-        if any(w in _lower for w in ['all', 'history', 'overall', 'pattern', 'behavior', 'trend']):
-            context_parts.append(build_trade_context("all"))
+        else:
             context_parts.append(build_journal_context(30))
 
         full_context = "\n\n".join(context_parts)
