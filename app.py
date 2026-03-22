@@ -2891,67 +2891,82 @@ elif page == "Trading Overview":
                 except:
                     pass
 
-        # === WIDGET HELPER ===
-        def widget(title, icon=""):
-            """Render a widget card header. Use with st.container() below it."""
+        # === WIDGET HEADER HELPER ===
+        def widget_header(title, icon=""):
+            """Render a widget card header label."""
             st.markdown(f"""
-            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.25rem;
-                        margin-bottom: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-                            opacity: 0.5; margin-bottom: 0.75rem;">
-                    {icon + ' ' if icon else ''}{title}
-                </div>
+            <div style="font-size: 0.85rem; font-weight: 700; letter-spacing: 0.02em;
+                        margin-bottom: 0.5rem; padding-bottom: 0.4rem;
+                        border-bottom: 2px solid rgba(99, 102, 241, 0.3);">
+                {icon + '  ' if icon else ''}{title}
             </div>
             """, unsafe_allow_html=True)
 
+        # === PERIOD-SPECIFIC METRICS (filter-aware) ===
+        # Calculate period return from filtered journal data
+        period_return = 0.0
+        period_pl = 0.0
+        period_days = 0
+        if not df_journal.empty:
+            period_days = len(df_journal)
+            period_return = ((1 + df_journal['Daily_Pct']).prod() - 1) * 100
+            period_pl = df_journal['Daily $ Change'].sum() if 'Daily $ Change' in df_journal.columns else 0
+
+        # Period realized P&L from closed trades in range
+        period_realized = 0.0
+        if not df_summary.empty:
+            closed_in_period = df_summary[df_summary['Status'].str.lower() == 'closed']
+            if not closed_in_period.empty and 'Realized_PL' in closed_in_period.columns:
+                period_realized = closed_in_period['Realized_PL'].apply(clean_num_local).sum()
+
+        # Period label
+        _period_label = date_preset if date_preset != "All Time" else "All Time"
+
         # === 2. WIDGET-BASED LAYOUT ===
 
-        # --- Row 1: Hero metrics (gradient cards) ---
+        # --- Row 1: Period stats (gradient cards, filter-aware) ---
         h1, h2, h3, h4 = st.columns(4)
         with h1:
-            change_color = '#90EE90' if daily_change >= 0 else '#ffcccb'
+            pl_color = '#90EE90' if period_return >= 0 else '#ffcccb'
             st.markdown(metric_card(
-                "ACCOUNT BALANCE", f"${current_nlv:,.0f}",
-                f"<span style='color:{change_color}'>{'+' if daily_change >= 0 else ''}{daily_change:,.0f} • {ltd_return:+.1f}% LTD</span>",
+                f"RETURN ({_period_label.upper()})", f"{period_return:+.2f}%",
+                f"<span style='color:{pl_color}'>{period_days} trading days</span>",
                 GRADIENTS['blue']
             ), unsafe_allow_html=True)
         with h2:
+            pl_color2 = '#90EE90' if period_pl >= 0 else '#ffcccb'
             st.markdown(metric_card(
-                "YTD RETURN", f"{ytd_return:.2f}%",
-                f"SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%",
+                f"P&L ({_period_label.upper()})", f"${period_pl:+,.0f}",
+                f"<span style='color:{pl_color2}'>Realized: ${period_realized:+,.0f}</span>",
                 GRADIENTS['green']
             ), unsafe_allow_html=True)
         with h3:
-            st.markdown(metric_card(
-                "LIVE EXPOSURE", f"{live_exposure_pct:.1f}%",
-                f"{num_positions}/12 Pos | Risk: {risk_pct:.2f}%",
-                GRADIENTS['orange']
-            ), unsafe_allow_html=True)
-        with h4:
             avg_win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
             st.markdown(metric_card(
                 "WIN RATE", f"{win_rate:.1f}%",
                 f"{wins}W / {losses}L | PF: {profit_factor:.2f}",
                 GRADIENTS['pink']
             ), unsafe_allow_html=True)
+        with h4:
+            st.markdown(metric_card(
+                "MAX DRAWDOWN", f"{max_drawdown:.1f}%",
+                f"Avg W/L: {avg_win_loss_ratio:.2f}",
+                GRADIENTS['navy']
+            ), unsafe_allow_html=True)
 
         # --- Row 2: Widget grid (2 columns) ---
-        w_left, w_right = st.columns(2)
+        w_left, w_right = st.columns([3, 2])
 
         # LEFT COLUMN: Equity Curve widget
         with w_left:
-            st.markdown("""
-            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
-                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-                            opacity: 0.5; margin-bottom: 0.5rem;">📈 EQUITY CURVE</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if not df_journal.empty and 'LTD_Pct' in df_journal.columns and PLOTLY_AVAILABLE:
+            widget_header("Equity Curve", "📈")
+            if not df_journal.empty and 'Daily_Pct' in df_journal.columns and PLOTLY_AVAILABLE:
                 import plotly.graph_objects as go
+                # Recalculate return curve within the filtered period
+                _filtered_curve = ((1 + df_journal['Daily_Pct']).cumprod() - 1) * 100
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=df_journal['Day'], y=df_journal['LTD_Pct'],
+                    x=df_journal['Day'], y=_filtered_curve,
                     mode='lines', fill='tozeroy',
                     line=dict(color='#6366f1', width=2),
                     fillcolor='rgba(99, 102, 241, 0.15)',
@@ -2959,7 +2974,7 @@ elif page == "Trading Overview":
                 ))
                 fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3)
                 fig.update_layout(
-                    height=280, margin=dict(l=0, r=0, t=10, b=0),
+                    height=320, margin=dict(l=0, r=0, t=10, b=0),
                     xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.1)'),
                     hovermode='x unified', showlegend=False,
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -2971,45 +2986,37 @@ elif page == "Trading Overview":
         # RIGHT COLUMN: Stats widgets stacked
         with w_right:
             # Trade Stats widget
-            st.markdown("""
-            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
-                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-                            opacity: 0.5; margin-bottom: 0.5rem;">📊 TRADE STATS</div>
-            </div>
-            """, unsafe_allow_html=True)
-            ts1, ts2, ts3, ts4 = st.columns(4)
-            ts1.metric("Total", total_trades)
+            widget_header("Trade Stats", "📊")
+            ts1, ts2 = st.columns(2)
+            ts1.metric("Total Trades", total_trades)
             ts2.metric("Active", active_trades)
-            ts3.metric("Avg W/L", f"{avg_win_loss_ratio:.2f}")
-            ts4.metric("Streak", f"{current_streak} {'W' if streak_type == 'Win' else 'L'}" if streak_type else "—")
+            ts3, ts4 = st.columns(2)
+            ts3.metric("Avg W/L Ratio", f"{avg_win_loss_ratio:.2f}")
+            streak_display = f"{current_streak} {'W' if streak_type == 'Win' else 'L'}" if streak_type else "—"
+            ts4.metric("Streak", streak_display)
 
-            # Max Drawdown widget
-            st.markdown("""
-            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
-                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-                            opacity: 0.5; margin-bottom: 0.5rem;">📉 DRAWDOWN</div>
-            </div>
-            """, unsafe_allow_html=True)
-            dd1, dd2 = st.columns(2)
-            dd1.metric("Max Drawdown", f"{max_drawdown:.1f}%")
-            dd2.metric("Profit Factor", f"{profit_factor:.2f}")
+            st.markdown("")  # spacer
+
+            # Profit breakdown widget
+            widget_header("Profit Breakdown", "💰")
+            pb1, pb2 = st.columns(2)
+            pb1.metric("Avg Win", f"${avg_win:,.0f}" if avg_win else "—")
+            pb2.metric("Avg Loss", f"${avg_loss:,.0f}" if avg_loss else "—")
+            pb3, pb4 = st.columns(2)
+            pb3.metric("Profit Factor", f"{profit_factor:.2f}")
+            pb4.metric("Closed Trades", f"{wins + losses}")
 
         # --- Row 3: Recent Trades widget (full width) ---
-        st.markdown("""
-        <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
-                    margin-bottom: 0.75rem; margin-top: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-            <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
-                        opacity: 0.5; margin-bottom: 0.5rem;">🔄 RECENT TRADES</div>
-        </div>
-        """, unsafe_allow_html=True)
+        widget_header("Recent Trades", "🔄")
         if not df_details.empty:
             _recent = df_details.copy()
             if 'Date' in _recent.columns:
                 _recent['Date'] = pd.to_datetime(_recent['Date'], errors='coerce')
+                # Filter to date range if set
+                if start_date is not None and end_date is not None:
+                    _recent = _recent[(_recent['Date'].dt.date >= start_date) & (_recent['Date'].dt.date <= end_date)]
                 _recent = _recent.sort_values('Date', ascending=False)
-            _recent = _recent.head(8)
+            _recent = _recent.head(10)
             _show_cols = [c for c in ['Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Value', 'Rule'] if c in _recent.columns]
             if 'Date' in _show_cols:
                 _recent['Date'] = _recent['Date'].dt.strftime('%m/%d %H:%M')
