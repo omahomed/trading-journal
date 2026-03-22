@@ -13312,6 +13312,25 @@ Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
             parts.append(entry)
         return "\n".join(parts)
 
+    def build_journal_context_by_date(start_date):
+        """Build journal data summary from a specific start date onwards."""
+        if df_j.empty:
+            return "No journal data available."
+        filtered = df_j[df_j['Day'].dt.date >= start_date].sort_values('Day', ascending=True)
+        if filtered.empty:
+            return f"No journal entries found from {start_date.strftime('%Y-%m-%d')} onwards."
+        parts = [f"=== JOURNAL ENTRIES ({start_date.strftime('%b %d')} onwards, {len(filtered)} days) ==="]
+        for _, row in filtered.iterrows():
+            day = row['Day'].strftime('%Y-%m-%d') if pd.notna(row.get('Day')) else '?'
+            entry = f"\n--- {day} ---"
+            for field in ['Status', 'Market_Window', 'Market_Action', 'Market_Notes',
+                          'Daily $ Change', 'Daily % Change', 'End NLV', 'Pct_Invested',
+                          'Portfolio_Heat', 'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson']:
+                if field in row.index and pd.notna(row[field]) and str(row[field]).strip():
+                    entry += f"\n  {field}: {row[field]}"
+            parts.append(entry)
+        return "\n".join(parts)
+
     def build_stats_context():
         """Build aggregate stats summary."""
         parts = ["=== PORTFOLIO STATS ==="]
@@ -13411,15 +13430,22 @@ Also look at my 'Lowlights' entries for additional patterns."""
         _preset_context = build_journal_context(30)
 
     elif btn_weekly:
-        _preset_prompt = """Give me a coaching summary of my last 7 trading days. Cover:
+        # Calculate current trading week (Monday to Friday)
+        _today = get_current_date_ct()
+        _weekday = _today.weekday()  # 0=Mon, 4=Fri
+        _week_start = _today - timedelta(days=_weekday)  # Monday of this week
+        _week_end = _week_start + timedelta(days=4)  # Friday of this week
+
+        _preset_prompt = f"""Give me a coaching summary for the trading week of {_week_start.strftime('%b %d')} – {_week_end.strftime('%b %d, %Y')}. Cover:
 1. P&L performance and equity trend
 2. What I did well (from Highlights)
 3. What needs work (from Lowlights/Mistakes)
 4. Market conditions and how I adapted
 5. One key lesson or focus for next week
 
+IMPORTANT: Only include data from {_week_start.strftime('%b %d')} onwards. Do NOT include prior week data.
 Keep it concise and actionable — like a halftime talk from a coach."""
-        _preset_context = build_journal_context(7)
+        _preset_context = build_journal_context_by_date(_week_start)
 
     elif btn_behavior:
         _preset_prompt = """Analyze my trading behavior patterns across all my data. Look at:
