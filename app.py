@@ -1845,6 +1845,9 @@ with st.sidebar:
     nav_button("M Factor", "📊")
     nav_button("Market Cycle Tracker", "🔄")
 
+    nav_section("AI")
+    nav_button("AI Coach", "🤖")
+
     nav_section("DEEP DIVE")
     nav_button("Analytics", "📈")
     nav_button("Performance Audit", "📊")
@@ -13177,3 +13180,296 @@ elif page == "IBD Market School":
             - **S12**: Lower Low
             - **S13**: Distribution Cluster
             """)
+
+# ==============================================================================
+# PAGE: AI COACH
+# ==============================================================================
+elif page == "AI Coach":
+    page_header("AI Trading Coach", CURR_PORT_NAME, "🤖")
+
+    # --- Check API key ---
+    _ai_api_key = ""
+    try:
+        _ai_api_key = st.secrets.get("anthropic", {}).get("api_key", "")
+    except Exception:
+        pass
+
+    if not _ai_api_key:
+        st.error("Anthropic API key not configured. Add `[anthropic] api_key = 'sk-...'` to your Streamlit secrets.")
+        st.stop()
+
+    import anthropic
+
+    @st.cache_resource
+    def get_anthropic_client():
+        return anthropic.Anthropic(api_key=st.secrets["anthropic"]["api_key"])
+
+    ai_client = get_anthropic_client()
+
+    # --- Load all data ---
+    df_d, df_s = load_trade_data()
+    JOURNAL_FILE = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
+    df_j = load_data(JOURNAL_FILE) if os.path.exists(JOURNAL_FILE) else pd.DataFrame()
+
+    # Sanitize journal
+    if not df_j.empty:
+        df_j['Day'] = pd.to_datetime(df_j['Day'], errors='coerce')
+        for _c in ['End NLV', 'Beg NLV', 'Cash -/+', 'Daily $ Change']:
+            if _c in df_j.columns:
+                df_j[_c] = pd.to_numeric(df_j[_c].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce').fillna(0.0)
+
+    # --- System prompt ---
+    SYSTEM_PROMPT = f"""You are MO's personal AI trading coach. You analyze his CANSLIM trading journal data and provide actionable insights.
+
+TRADING SYSTEM CONTEXT:
+- MO trades the CANSLIM / IBD growth stock strategy
+- Buy rules: Base breakouts, volume events (HVE/HVSI), moving average reclaims, pullbacks, gap-ups, trendline breaks
+- Sell rules: Capital protection (stop loss), selling into strength, portfolio management, change of character, breakout failure
+- Position sizing: Risk-based with stop losses and risk budgets
+- Transaction IDs: B1/B2 = initial buys, A1/A2 = add-on buys, S1/S2 = sells
+- Trade IDs format: YYYYMM-NNN (e.g., 202602-001)
+
+ANALYSIS GUIDELINES:
+- Be specific — reference actual tickers, dates, and numbers from the data
+- Focus on patterns, not individual trades (unless asked)
+- Highlight both strengths and areas for improvement
+- Frame feedback constructively — you're a coach, not a critic
+- When discussing sell discipline, compare actual exit vs. stop loss and optimal exit
+- Keep responses concise and actionable — use bullet points
+- Use dollar amounts and percentages to quantify insights
+- If the data is insufficient to answer, say so honestly
+
+Current portfolio: {CURR_PORT_NAME}
+Today's date: {get_current_date_ct().strftime('%Y-%m-%d')}
+"""
+
+    # --- Helper: Build data context for prompts ---
+    def build_trade_context(scope="recent", n=10):
+        """Build a data summary string to include in prompts."""
+        parts = []
+
+        # Recent closed trades
+        if not df_s.empty:
+            closed = df_s[df_s['Status'].str.upper() == 'CLOSED'].copy()
+            if 'Closed_Date' in closed.columns:
+                closed['Closed_Date'] = pd.to_datetime(closed['Closed_Date'], errors='coerce')
+                closed = closed.sort_values('Closed_Date', ascending=False)
+            open_trades = df_s[df_s['Status'].str.upper() == 'OPEN'].copy()
+
+            if scope == "recent":
+                show_closed = closed.head(n)
+            else:
+                show_closed = closed
+
+            if not show_closed.empty:
+                cols = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Closed_Date', 'Total_Shares',
+                        'Avg_Entry', 'Avg_Exit', 'Total_Cost', 'Realized_PL', 'Return_Pct',
+                        'Rule', 'Sell_Rule', 'Buy_Notes', 'Sell_Notes', 'Stop_Loss']
+                use_cols = [c for c in cols if c in show_closed.columns]
+                parts.append(f"=== CLOSED TRADES ({len(show_closed)}) ===")
+                parts.append(show_closed[use_cols].to_string(index=False))
+
+            if not open_trades.empty:
+                cols = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Total_Shares',
+                        'Avg_Entry', 'Total_Cost', 'Unrealized_PL', 'Rule', 'Buy_Notes', 'Stop_Loss']
+                use_cols = [c for c in cols if c in open_trades.columns]
+                parts.append(f"\n=== OPEN TRADES ({len(open_trades)}) ===")
+                parts.append(open_trades[use_cols].to_string(index=False))
+
+        # Transaction details for recent trades
+        if not df_d.empty and not df_s.empty:
+            if scope == "recent":
+                recent_ids = df_s.sort_values('Open_Date', ascending=False).head(n)['Trade_ID'].tolist() if 'Open_Date' in df_s.columns else df_s.head(n)['Trade_ID'].tolist()
+            else:
+                recent_ids = df_s['Trade_ID'].tolist()
+            txns = df_d[df_d['Trade_ID'].isin(recent_ids)]
+            if not txns.empty:
+                cols = ['Trade_ID', 'Trx_ID', 'Ticker', 'Action', 'Date', 'Shares', 'Amount', 'Value', 'Rule', 'Notes', 'Exec_Grade', 'Behavior_Tag']
+                use_cols = [c for c in cols if c in txns.columns]
+                parts.append(f"\n=== TRANSACTIONS ({len(txns)}) ===")
+                parts.append(txns[use_cols].to_string(index=False))
+
+        return "\n".join(parts)
+
+    def build_journal_context(n=14):
+        """Build journal data summary for prompts."""
+        if df_j.empty:
+            return "No journal data available."
+        recent = df_j.sort_values('Day', ascending=False).head(n)
+        parts = [f"=== JOURNAL ENTRIES (last {len(recent)} days) ==="]
+        for _, row in recent.iterrows():
+            day = row['Day'].strftime('%Y-%m-%d') if pd.notna(row.get('Day')) else '?'
+            entry = f"\n--- {day} ---"
+            for field in ['Status', 'Market_Window', 'Market_Action', 'Market_Notes',
+                          'Daily $ Change', 'Daily % Change', 'End NLV', 'Pct_Invested',
+                          'Portfolio_Heat', 'Score', 'Highlights', 'Lowlights', 'Mistakes', 'Top_Lesson']:
+                if field in row.index and pd.notna(row[field]) and str(row[field]).strip():
+                    entry += f"\n  {field}: {row[field]}"
+            parts.append(entry)
+        return "\n".join(parts)
+
+    def build_stats_context():
+        """Build aggregate stats summary."""
+        parts = ["=== PORTFOLIO STATS ==="]
+        if not df_s.empty:
+            closed = df_s[df_s['Status'].str.upper() == 'CLOSED']
+            open_t = df_s[df_s['Status'].str.upper() == 'OPEN']
+            if not closed.empty and 'Realized_PL' in closed.columns:
+                pl = closed['Realized_PL'].apply(clean_num)
+                wins = pl[pl > 0]
+                losses = pl[pl < 0]
+                parts.append(f"Total closed trades: {len(closed)}")
+                parts.append(f"Open positions: {len(open_t)}")
+                parts.append(f"Win rate: {len(wins)}/{len(closed)} ({len(wins)/len(closed)*100:.1f}%)")
+                parts.append(f"Total realized P&L: ${pl.sum():,.2f}")
+                parts.append(f"Avg win: ${wins.mean():,.2f}" if len(wins) > 0 else "Avg win: N/A")
+                parts.append(f"Avg loss: ${losses.mean():,.2f}" if len(losses) > 0 else "Avg loss: N/A")
+                parts.append(f"Best trade: ${pl.max():,.2f}")
+                parts.append(f"Worst trade: ${pl.min():,.2f}")
+                if len(wins) > 0 and len(losses) > 0 and losses.mean() != 0:
+                    parts.append(f"Avg W/L ratio: {abs(wins.mean()/losses.mean()):.2f}")
+                if 'Rule' in closed.columns:
+                    buy_rules = closed['Rule'].dropna()
+                    if not buy_rules.empty:
+                        parts.append(f"\nBuy rules used: {buy_rules.value_counts().head(5).to_string()}")
+                if 'Sell_Rule' in closed.columns:
+                    sell_rules = closed['Sell_Rule'].dropna()
+                    if not sell_rules.empty:
+                        parts.append(f"\nSell rules used: {sell_rules.value_counts().head(5).to_string()}")
+        if not df_j.empty and 'End NLV' in df_j.columns:
+            latest = df_j.sort_values('Day', ascending=False).iloc[0]
+            parts.append(f"\nLatest NLV: ${clean_num(latest.get('End NLV', 0)):,.0f}")
+        return "\n".join(parts)
+
+    # --- AI Call helper ---
+    def call_coach(user_prompt, data_context, placeholder):
+        """Send prompt to Claude and stream response."""
+        messages = [{"role": "user", "content": f"{data_context}\n\n{user_prompt}"}]
+        full_response = ""
+        with ai_client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                full_response += text
+                placeholder.markdown(full_response + "▌")
+        placeholder.markdown(full_response)
+        return full_response
+
+    # --- Initialize chat history ---
+    if 'coach_history' not in st.session_state:
+        st.session_state.coach_history = []
+
+    # --- Pre-built Analysis Buttons ---
+    st.markdown("#### Quick Analysis")
+    b1, b2, b3, b4 = st.columns(4)
+
+    with b1:
+        btn_recent = st.button("📋 Review Recent Trades", use_container_width=True)
+    with b2:
+        btn_mistakes = st.button("⚠️ Mistake Patterns", use_container_width=True)
+    with b3:
+        btn_weekly = st.button("📅 Weekly Summary", use_container_width=True)
+    with b4:
+        btn_behavior = st.button("🧠 Behavioral Trends", use_container_width=True)
+
+    st.markdown("---")
+
+    # Handle pre-built analysis buttons
+    _preset_prompt = None
+    _preset_context = None
+
+    if btn_recent:
+        _preset_prompt = """Review my last 10 closed trades. For each trade, analyze:
+1. Entry quality — was the buy rule appropriate? Was timing good?
+2. Exit execution — did I follow my sell rules? Did I sell too early or too late?
+3. Position sizing — was the risk budget reasonable?
+
+Then give me an overall grade (A-F) and your top 3 actionable recommendations."""
+        _preset_context = build_trade_context("recent", 10)
+
+    elif btn_mistakes:
+        _preset_prompt = """Analyze my journal entries looking for recurring mistake patterns.
+Group the mistakes into categories and rank them by frequency and cost.
+For each pattern:
+1. What the mistake is
+2. How often it occurs
+3. What it's costing me (dollars or opportunity)
+4. A specific, actionable fix
+
+Also look at my 'Lowlights' entries for additional patterns."""
+        _preset_context = build_journal_context(30)
+
+    elif btn_weekly:
+        _preset_prompt = """Give me a coaching summary of my last 7 trading days. Cover:
+1. P&L performance and equity trend
+2. What I did well (from Highlights)
+3. What needs work (from Lowlights/Mistakes)
+4. Market conditions and how I adapted
+5. One key lesson or focus for next week
+
+Keep it concise and actionable — like a halftime talk from a coach."""
+        _preset_context = build_journal_context(7)
+
+    elif btn_behavior:
+        _preset_prompt = """Analyze my trading behavior patterns across all my data. Look at:
+1. Do I add to winners or average down on losers?
+2. Am I cutting losses quickly or holding too long? (compare exit price vs stop loss)
+3. Am I selling winners too early? (compare exit price vs highs after entry)
+4. Position sizing patterns — am I sizing up on high-conviction trades?
+5. Time patterns — am I more profitable on certain setups or market conditions?
+6. How is my execution grading trending?
+
+Give me a behavioral profile and 3 specific things to work on."""
+        _preset_context = build_trade_context("all") + "\n\n" + build_journal_context(30) + "\n\n" + build_stats_context()
+
+    # Display pre-built analysis results
+    if _preset_prompt:
+        st.session_state.coach_history.append({"role": "user", "content": _preset_prompt})
+        with st.chat_message("user"):
+            st.markdown(_preset_prompt)
+        with st.chat_message("assistant", avatar="🤖"):
+            _ph = st.empty()
+            response = call_coach(_preset_prompt, _preset_context, _ph)
+        st.session_state.coach_history.append({"role": "assistant", "content": response})
+
+    # --- Display chat history ---
+    for msg in st.session_state.coach_history:
+        avatar = "🤖" if msg["role"] == "assistant" else None
+        with st.chat_message(msg["role"], avatar=avatar if msg["role"] == "assistant" else None):
+            st.markdown(msg["content"])
+
+    # --- Free-form chat input ---
+    user_input = st.chat_input("Ask your AI coach anything about your trading...")
+
+    if user_input:
+        st.session_state.coach_history.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # Build context based on what seems relevant
+        context_parts = [build_stats_context()]
+        _lower = user_input.lower()
+        if any(w in _lower for w in ['trade', 'position', 'buy', 'sell', 'entry', 'exit', 'campaign', 'ticker']):
+            context_parts.append(build_trade_context("recent", 15))
+        if any(w in _lower for w in ['journal', 'mistake', 'lesson', 'highlight', 'lowlight', 'day', 'week', 'market']):
+            context_parts.append(build_journal_context(14))
+        if any(w in _lower for w in ['all', 'history', 'overall', 'pattern', 'behavior', 'trend']):
+            context_parts.append(build_trade_context("all"))
+            context_parts.append(build_journal_context(30))
+
+        full_context = "\n\n".join(context_parts)
+
+        with st.chat_message("assistant", avatar="🤖"):
+            _ph = st.empty()
+            response = call_coach(user_input, full_context, _ph)
+        st.session_state.coach_history.append({"role": "assistant", "content": response})
+
+    # --- Clear chat button ---
+    if st.session_state.coach_history:
+        st.markdown("---")
+        if st.button("🗑️ Clear Chat", type="secondary"):
+            st.session_state.coach_history = []
+            st.rerun()
