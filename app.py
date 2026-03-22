@@ -2891,126 +2891,131 @@ elif page == "Trading Overview":
                 except:
                     pass
 
-        # === 2. DISPLAY METRICS CARDS ===
-        st.markdown("### 📊 Performance Snapshot")
+        # === WIDGET HELPER ===
+        def widget(title, icon=""):
+            """Render a widget card header. Use with st.container() below it."""
+            st.markdown(f"""
+            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.25rem;
+                        margin-bottom: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+                            opacity: 0.5; margin-bottom: 0.75rem;">
+                    {icon + ' ' if icon else ''}{title}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-        # Row 0: Featured metrics (YTD & Live Exposure)
-        col_ytd, col_live = st.columns(2)
+        # === 2. WIDGET-BASED LAYOUT ===
 
-        with col_ytd:
-            st.markdown(metric_card(
-                "YTD RETURN", f"{ytd_return:.2f}%",
-                f"SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%",
-                GRADIENTS['green']
-            ), unsafe_allow_html=True)
-
-        with col_live:
-            st.markdown(metric_card(
-                "LIVE EXPOSURE", f"{live_exposure_pct:.1f}%",
-                f"{num_positions}/12 Pos | Risk: {risk_pct:.2f}%",
-                GRADIENTS['orange']
-            ), unsafe_allow_html=True)
-
-        # Row 1: Primary metrics
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
+        # --- Row 1: Hero metrics (gradient cards) ---
+        h1, h2, h3, h4 = st.columns(4)
+        with h1:
             change_color = '#90EE90' if daily_change >= 0 else '#ffcccb'
             st.markdown(metric_card(
                 "ACCOUNT BALANCE", f"${current_nlv:,.0f}",
                 f"<span style='color:{change_color}'>{'+' if daily_change >= 0 else ''}{daily_change:,.0f} • {ltd_return:+.1f}% LTD</span>",
                 GRADIENTS['blue']
             ), unsafe_allow_html=True)
-
-        with col2:
+        with h2:
             st.markdown(metric_card(
-                "WIN RATE", f"{win_rate:.1f}%", f"{wins} W / {losses} L",
+                "YTD RETURN", f"{ytd_return:.2f}%",
+                f"SPY: {'+' if spy_ytd >= 0 else ''}{spy_ytd:.2f}% | NDX: {'+' if nasdaq_ytd >= 0 else ''}{nasdaq_ytd:.2f}%",
+                GRADIENTS['green']
+            ), unsafe_allow_html=True)
+        with h3:
+            st.markdown(metric_card(
+                "LIVE EXPOSURE", f"{live_exposure_pct:.1f}%",
+                f"{num_positions}/12 Pos | Risk: {risk_pct:.2f}%",
+                GRADIENTS['orange']
+            ), unsafe_allow_html=True)
+        with h4:
+            avg_win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
+            st.markdown(metric_card(
+                "WIN RATE", f"{win_rate:.1f}%",
+                f"{wins}W / {losses}L | PF: {profit_factor:.2f}",
                 GRADIENTS['pink']
             ), unsafe_allow_html=True)
 
-        with col3:
-            avg_win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else 0
-            st.markdown(metric_card(
-                "AVG WIN/LOSS", f"{avg_win_loss_ratio:.2f}", f"${avg_win:,.0f} / ${avg_loss:,.0f}",
-                GRADIENTS['cyan']
-            ), unsafe_allow_html=True)
+        # --- Row 2: Widget grid (2 columns) ---
+        w_left, w_right = st.columns(2)
 
-        with col4:
-            st.markdown(metric_card(
-                "PROFIT FACTOR", f"{profit_factor:.2f}", f"{'Profitable' if profit_factor > 1 else 'Losing'}",
-                GRADIENTS['sunset']
-            ), unsafe_allow_html=True)
-
-        # Row 2: Secondary metrics
-        col5, col6, col7 = st.columns(3)
-
-        with col5:
-            streak_grad = GRADIENTS['green'] if streak_type == "Win" else GRADIENTS['red']
-            st.markdown(metric_card(
-                "CURRENT STREAK", f"{current_streak}", f"{streak_type} Streak",
-                streak_grad
-            ), unsafe_allow_html=True)
-
-        with col6:
-            st.markdown(metric_card(
-                "TOTAL TRADES", f"{total_trades}", f"{active_trades} Active",
-                GRADIENTS['indigo']
-            ), unsafe_allow_html=True)
-
-        with col7:
-            st.markdown(metric_card(
-                "MAX DRAWDOWN", f"{max_drawdown:.1f}%", "Peak to Trough",
-                GRADIENTS['red']
-            ), unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # === 3. EQUITY CURVE (CASH-FLOW ADJUSTED) ===
-        st.markdown("### 📈 Equity Curve (Life-to-Date % Return)")
-
-        if not df_journal.empty and 'LTD_Pct' in df_journal.columns:
-            if PLOTLY_AVAILABLE:
+        # LEFT COLUMN: Equity Curve widget
+        with w_left:
+            st.markdown("""
+            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
+                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+                            opacity: 0.5; margin-bottom: 0.5rem;">📈 EQUITY CURVE</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if not df_journal.empty and 'LTD_Pct' in df_journal.columns and PLOTLY_AVAILABLE:
                 import plotly.graph_objects as go
                 fig = go.Figure()
-
-                # Main equity curve
                 fig.add_trace(go.Scatter(
-                    x=df_journal['Day'],
-                    y=df_journal['LTD_Pct'],
-                    mode='lines',
-                    fill='tozeroy',
-                    line=dict(color='#667eea', width=3),
-                    fillcolor='rgba(102, 126, 234, 0.2)',
-                    name='Portfolio Return %'
+                    x=df_journal['Day'], y=df_journal['LTD_Pct'],
+                    mode='lines', fill='tozeroy',
+                    line=dict(color='#6366f1', width=2),
+                    fillcolor='rgba(99, 102, 241, 0.15)',
+                    name='Return %'
                 ))
-
-                # Zero line
-                fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-
+                fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3)
                 fig.update_layout(
-                    title='Portfolio Returns (Adjusted for Cash Flows)',
-                    xaxis_title='Date',
-                    yaxis_title='Return %',
-                    hovermode='x unified',
-                    height=450,
-                    showlegend=True
+                    height=280, margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.1)'),
+                    hovermode='x unified', showlegend=False,
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                fig, ax = plt.subplots(figsize=(12, 5))
-                ax.plot(df_journal['Day'], df_journal['LTD_Pct'], linewidth=2.5, color='#667eea', label='Portfolio Return %')
-                ax.fill_between(df_journal['Day'], df_journal['LTD_Pct'], alpha=0.3, color='#667eea')
-                ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-                ax.set_title('Portfolio Returns (Adjusted for Cash Flows)', fontsize=14, fontweight='bold')
-                ax.set_xlabel('Date')
-                ax.set_ylabel('Return %')
-                ax.yaxis.set_major_formatter(mtick.PercentFormatter())
-                ax.legend()
-                plt.xticks(rotation=45)
-                plt.tight_layout()
-                st.pyplot(fig)
+                st.info("No equity curve data")
+
+        # RIGHT COLUMN: Stats widgets stacked
+        with w_right:
+            # Trade Stats widget
+            st.markdown("""
+            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
+                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+                            opacity: 0.5; margin-bottom: 0.5rem;">📊 TRADE STATS</div>
+            </div>
+            """, unsafe_allow_html=True)
+            ts1, ts2, ts3, ts4 = st.columns(4)
+            ts1.metric("Total", total_trades)
+            ts2.metric("Active", active_trades)
+            ts3.metric("Avg W/L", f"{avg_win_loss_ratio:.2f}")
+            ts4.metric("Streak", f"{current_streak} {'W' if streak_type == 'Win' else 'L'}" if streak_type else "—")
+
+            # Max Drawdown widget
+            st.markdown("""
+            <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
+                        margin-bottom: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+                <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+                            opacity: 0.5; margin-bottom: 0.5rem;">📉 DRAWDOWN</div>
+            </div>
+            """, unsafe_allow_html=True)
+            dd1, dd2 = st.columns(2)
+            dd1.metric("Max Drawdown", f"{max_drawdown:.1f}%")
+            dd2.metric("Profit Factor", f"{profit_factor:.2f}")
+
+        # --- Row 3: Recent Trades widget (full width) ---
+        st.markdown("""
+        <div style="border: 1px solid rgba(128,128,128,0.2); border-radius: 12px; padding: 1rem 1.25rem 0.5rem;
+                    margin-bottom: 0.75rem; margin-top: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+                        opacity: 0.5; margin-bottom: 0.5rem;">🔄 RECENT TRADES</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if not df_details.empty:
+            _recent = df_details.copy()
+            if 'Date' in _recent.columns:
+                _recent['Date'] = pd.to_datetime(_recent['Date'], errors='coerce')
+                _recent = _recent.sort_values('Date', ascending=False)
+            _recent = _recent.head(8)
+            _show_cols = [c for c in ['Date', 'Ticker', 'Action', 'Shares', 'Amount', 'Value', 'Rule'] if c in _recent.columns]
+            if 'Date' in _show_cols:
+                _recent['Date'] = _recent['Date'].dt.strftime('%m/%d %H:%M')
+            st.dataframe(_recent[_show_cols], use_container_width=True, hide_index=True)
         else:
-            st.info("No equity curve data available")
+            st.caption("No trades logged yet.")
 
 # ==============================================================================
 # PAGE 3: DAILY JOURNAL (CLEAN & FINAL)
