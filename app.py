@@ -13209,7 +13209,10 @@ elif page == "AI Coach":
     # --- Load all data ---
     df_d, df_s = load_trade_data()
     JOURNAL_FILE = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
-    df_j = load_data(JOURNAL_FILE) if os.path.exists(JOURNAL_FILE) else pd.DataFrame()
+    try:
+        df_j = load_data(JOURNAL_FILE)
+    except Exception:
+        df_j = pd.DataFrame()
 
     # Sanitize journal
     if not df_j.empty:
@@ -13425,7 +13428,13 @@ Keep it concise and actionable — like a halftime talk from a coach."""
 Give me a behavioral profile and 3 specific things to work on."""
         _preset_context = build_trade_context("all") + "\n\n" + build_journal_context(30) + "\n\n" + build_stats_context()
 
-    # Display pre-built analysis results
+    # --- Display existing chat history FIRST ---
+    for msg in st.session_state.coach_history:
+        _avatar = "🤖" if msg["role"] == "assistant" else None
+        with st.chat_message(msg["role"], avatar=_avatar):
+            st.markdown(msg["content"])
+
+    # --- Handle pre-built analysis (new messages only) ---
     if _preset_prompt:
         st.session_state.coach_history.append({"role": "user", "content": _preset_prompt})
         with st.chat_message("user"):
@@ -13434,12 +13443,6 @@ Give me a behavioral profile and 3 specific things to work on."""
             _ph = st.empty()
             response = call_coach(_preset_prompt, _preset_context, _ph)
         st.session_state.coach_history.append({"role": "assistant", "content": response})
-
-    # --- Display chat history ---
-    for msg in st.session_state.coach_history:
-        avatar = "🤖" if msg["role"] == "assistant" else None
-        with st.chat_message(msg["role"], avatar=avatar if msg["role"] == "assistant" else None):
-            st.markdown(msg["content"])
 
     # --- Free-form chat input ---
     user_input = st.chat_input("Ask your AI coach anything about your trading...")
