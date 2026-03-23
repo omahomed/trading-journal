@@ -8524,7 +8524,7 @@ elif page == "Active Campaign Summary":
              m4.metric(
                  "Overall P&L",
                  f"${total_overall:,.2f}",
-                 f"Projected P&L (at stops): ${total_projected:,.2f}",
+                 f"Projected: ${total_projected:,.2f}",
                  delta_color="off"
              )
 
