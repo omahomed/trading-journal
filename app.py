@@ -7792,11 +7792,16 @@ elif page == "Trade Manager":
                         st.markdown(f"### {ticker} - {selected_trade}")
 
                         # Group images by type
-                        cols = st.columns(3)
-                        for img_type, col in zip(['weekly', 'daily', 'exit'], cols):
+                        _img_types = ['weekly', 'daily', 'exit']
+                        _has_ms = any(img['image_type'] == 'marketsurge' for img in images)
+                        if _has_ms:
+                            _img_types.append('marketsurge')
+                        cols = st.columns(len(_img_types))
+                        _type_labels = {'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart', 'marketsurge': 'MarketSurge'}
+                        for img_type, col in zip(_img_types, cols):
                             with col:
                                 type_imgs = [img for img in images if img['image_type'] == img_type]
-                                st.markdown(f"**{img_type.title()} Chart{'s' if len(type_imgs) > 1 else ''}**")
+                                st.markdown(f"**{_type_labels.get(img_type, img_type.title())}**")
                                 if type_imgs:
                                     for img_data in type_imgs:
                                         image_bytes = r2.download_image(img_data['image_url'])
@@ -7804,7 +7809,7 @@ elif page == "Trade Manager":
                                             st.image(image_bytes, use_container_width=True)
                                             st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                                 else:
-                                    st.info(f"No {img_type} chart")
+                                    st.info(f"No {_type_labels.get(img_type, img_type)} uploaded")
                     else:
                         st.info("No charts uploaded for this trade")
 
