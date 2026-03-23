@@ -4734,7 +4734,7 @@ elif page == "Position Sizer":
     df_s = load_data(SUMMARY_FILE)
     df_d = load_data(DETAILS_FILE)
     
-    size_map = {"Shotgun (2.5%)": 2.5, "Half (5%)": 5.0, "Full (10%)": 10.0, "Core (15%)": 15.0, "Core+1 (20%)": 20.0, "Max (25%)": 25.0, "30%": 30.0, "35%": 35.0, "40%": 40.0, "45%": 45.0, "50%": 50.0}
+    size_map = {"Shotgun (2.5%)": 2.5, "Half (5%)": 5.0, "7.5%": 7.5, "Full (10%)": 10.0, "12.5%": 12.5, "Core (15%)": 15.0, "Core+1 (20%)": 20.0, "Max (25%)": 25.0, "30%": 30.0, "35%": 35.0, "40%": 40.0, "45%": 45.0, "50%": 50.0}
 
     @st.cache_data(ttl=300)
     def fetch_price_and_atr(ticker):
