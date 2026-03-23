@@ -8016,33 +8016,25 @@ elif page == "Active Campaign Summary":
 
 
 
-                        weekly_imgs = [img for img in images if img['image_type'] == 'weekly']
-                        daily_imgs = [img for img in images if img['image_type'] == 'daily']
+                        _img_types2 = ['weekly', 'daily']
+                        _has_ms2 = any(img['image_type'] == 'marketsurge' for img in images)
+                        if _has_ms2:
+                            _img_types2.append('marketsurge')
+                        _labels2 = {'weekly': 'Weekly Charts', 'daily': 'Daily Charts', 'marketsurge': 'MarketSurge'}
+                        cols = st.columns(len(_img_types2))
 
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.markdown("**Weekly Charts**")
-                            if weekly_imgs:
-                                for img_data in weekly_imgs:
-                                    image_bytes = r2.download_image(img_data['image_url'])
-                                    if image_bytes:
-                                        st.image(image_bytes, use_container_width=True)
-                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
-
-                            else:
-                                st.info("No weekly charts")
-
-                        with col2:
-                            st.markdown("**Daily Charts**")
-                            if daily_imgs:
-                                for img_data in daily_imgs:
-                                    image_bytes = r2.download_image(img_data['image_url'])
-                                    if image_bytes:
-                                        st.image(image_bytes, use_container_width=True)
-                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
-                            else:
-                                st.info("No daily charts")
+                        for img_type, col in zip(_img_types2, cols):
+                            with col:
+                                type_imgs = [img for img in images if img['image_type'] == img_type]
+                                st.markdown(f"**{_labels2.get(img_type, img_type.title())}**")
+                                if type_imgs:
+                                    for img_data in type_imgs:
+                                        image_bytes = r2.download_image(img_data['image_url'])
+                                        if image_bytes:
+                                            st.image(image_bytes, use_container_width=True)
+                                            st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
+                                else:
+                                    st.info(f"No {_labels2.get(img_type, img_type)} uploaded")
 
                     else:
 
@@ -10543,13 +10535,17 @@ elif page == "Trade Journal":
 
                         if images:
                             chart_types = ['weekly', 'daily', 'exit'] if not is_open else ['weekly', 'daily']
+                            _has_ms3 = any(img['image_type'] == 'marketsurge' for img in images)
+                            if _has_ms3:
+                                chart_types.append('marketsurge')
                             cols = st.columns(len(chart_types))
 
+                            icons = {'weekly': '📊', 'daily': '📈', 'exit': '🎯', 'marketsurge': '🔬'}
                             for img_type, col in zip(chart_types, cols):
                                 with col:
                                     type_imgs = [img for img in images if img['image_type'] == img_type]
-                                    icons = {'weekly': '📊', 'daily': '📈', 'exit': '🎯'}
-                                    st.markdown(f"**{icons.get(img_type, '')} {img_type.title()} Chart{'s' if len(type_imgs) > 1 else ''}**")
+                                    _label = 'MarketSurge' if img_type == 'marketsurge' else f"{img_type.title()} Chart{'s' if len(type_imgs) > 1 else ''}"
+                                    st.markdown(f"**{icons.get(img_type, '')} {_label}**")
                                     if type_imgs:
                                         for img_data in type_imgs:
                                             image_bytes = r2.download_image(img_data['image_url'])
