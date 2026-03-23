@@ -8525,7 +8525,7 @@ elif page == "Active Campaign Summary":
                  "Overall P&L",
                  f"${total_overall:,.2f}",
                  f"Projected: ${total_projected:,.2f}",
-                 delta_color="off"
+                 delta_color="normal"
              )
 
 
