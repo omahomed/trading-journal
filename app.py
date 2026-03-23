@@ -492,6 +492,8 @@ BUY_RULES = [
     "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break", 
     # 9. Moving Average Strategies
     "br9.1 21e Strategy",
+    # 10. Hedging
+    "br10.1 Hedging with leverage product",
 ]
 
 # Note: ADD_RULES list is deprecated/merged into BUY_RULES
