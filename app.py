@@ -8520,16 +8520,12 @@ elif page == "Active Campaign Summary":
 
 
 
+             total_projected = df_open['Projected P&L'].sum()
              m4.metric(
-
                  "Overall P&L",
-
                  f"${total_overall:,.2f}",
-
-                 f"Unreal: ${total_unreal:,.2f} | Real: ${total_realized_bank:,.2f}",
-
+                 f"Projected P&L (at stops): ${total_projected:,.2f}",
                  delta_color="off"
-
              )
 
 
