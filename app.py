@@ -10521,7 +10521,7 @@ elif page == "Trade Journal":
                     '</div>') if has_core_add else ''}
                     <div style="font-size: 12px; color: #666;">
                         <strong>Trade ID:</strong> {trade_id} |
-                        <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}
+                        <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}{f" | <strong>Closed:</strong> {trade.get('Closed_Date')}" if not is_open and pd.notna(trade.get('Closed_Date')) else ''}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
