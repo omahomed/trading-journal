@@ -12812,16 +12812,13 @@ elif page == "IBD Market School":
             last_idx = len(analyzer.data) - 1
             last_date = analyzer.data.index[-1]
 
-            # Calculate days since rally start
-            rally_day = None
-            if analyzer.rally_low_idx is not None:
-                rally_day = last_idx - analyzer.rally_low_idx
-
             # Rally day type classification (same logic as Market Cycle Tracker)
             # - "rally": Close > previous day's close
             # - "pink": Close < previous day's close but in upper half of range
             # - None on low day: check subsequent days for close > prior close
             rally_day_type = None
+            rally_day_idx = analyzer.rally_low_idx
+            actual_rally_date = analyzer.rally_start_date
             df = analyzer.data
             if analyzer.rally_start_date is not None and analyzer.rally_low_idx is not None:
                 rd_row = df.iloc[analyzer.rally_low_idx]
@@ -12840,16 +12837,25 @@ elif page == "IBD Market School":
                                 next_prev = df.iloc[next_i - 1]
                                 if next_row['Close'] > next_prev['Close']:
                                     rally_day_type = "rally"
+                                    rally_day_idx = next_i
+                                    actual_rally_date = df.index[next_i]
                                     break
                                 next_mid = (next_row['High'] + next_row['Low']) / 2
                                 if next_row['Close'] >= next_mid:
                                     rally_day_type = "pink"
+                                    rally_day_idx = next_i
+                                    actual_rally_date = df.index[next_i]
                                     break
+
+            # Days since actual rally day (not just the low)
+            rally_day = None
+            if rally_day_idx is not None:
+                rally_day = last_idx - rally_day_idx
 
             return {
                 'market_in_correction': analyzer.market_in_correction,
                 'buy_switch': analyzer.buy_switch,
-                'rally_start_date': analyzer.rally_start_date.strftime('%Y-%m-%d') if analyzer.rally_start_date else None,
+                'rally_start_date': actual_rally_date.strftime('%Y-%m-%d') if actual_rally_date else None,
                 'rally_low': analyzer.rally_low,
                 'rally_day': rally_day,
                 'rally_day_type': rally_day_type,
