@@ -1352,6 +1352,7 @@ def compute_cycle_state():
 
         # --- Determine cycle state ---
         # Rally day count (days since rally start)
+        rally_day_idx = rally_low_idx  # Will be updated if rally day is a subsequent day
         days_since_rally = None
         if rally_low_idx is not None:
             days_since_rally = len(df) - 1 - rally_low_idx
@@ -1371,7 +1372,9 @@ def compute_cycle_state():
         # Rally day type classification:
         # - "rally": Close > previous day's close (proper rally day)
         # - "pink": Close < previous day's close BUT closed in upper half of day's range
-        # - None: Neither condition met (no rally day)
+        # - None: Neither condition met on low day — check next day
+        # If the low day doesn't qualify, the next day that closes above
+        # the prior day's close becomes the rally day.
         rally_day_type = None
         if rally_start_date is not None and rally_low_idx is not None:
             rd_row = df.iloc[rally_low_idx]
@@ -1384,7 +1387,27 @@ def compute_cycle_state():
                     day_midpoint = (rd_row['High'] + rd_row['Low']) / 2
                     if rd_row['Close'] >= day_midpoint:
                         rally_day_type = "pink"
-                    # else: remains None — not a rally day
+                    else:
+                        # Low day didn't qualify — check subsequent days
+                        for next_i in range(rally_low_idx + 1, len(df)):
+                            next_row = df.iloc[next_i]
+                            next_prev = df.iloc[next_i - 1]
+                            if next_row['Close'] > next_prev['Close']:
+                                rally_day_type = "rally"
+                                rally_day_idx = next_i
+                                rally_start_date = df.index[next_i]
+                                break
+                            # Also check if subsequent day is pink
+                            next_mid = (next_row['High'] + next_row['Low']) / 2
+                            if next_row['Close'] >= next_mid:
+                                rally_day_type = "pink"
+                                rally_day_idx = next_i
+                                rally_start_date = df.index[next_i]
+                                break
+
+        # Update days_since_rally based on actual rally day (may differ from low day)
+        if rally_day_idx is not None:
+            days_since_rally = len(df) - 1 - rally_day_idx
 
         # --- Cycle state determination (after rally day classification) ---
         if not market_in_correction or buy_switch:
@@ -12797,7 +12820,7 @@ elif page == "IBD Market School":
             # Rally day type classification (same logic as Market Cycle Tracker)
             # - "rally": Close > previous day's close
             # - "pink": Close < previous day's close but in upper half of range
-            # - None: neither condition met — not a valid rally day
+            # - None on low day: check subsequent days for close > prior close
             rally_day_type = None
             df = analyzer.data
             if analyzer.rally_start_date is not None and analyzer.rally_low_idx is not None:
@@ -12810,6 +12833,18 @@ elif page == "IBD Market School":
                         day_midpoint = (rd_row['High'] + rd_row['Low']) / 2
                         if rd_row['Close'] >= day_midpoint:
                             rally_day_type = "pink"
+                        else:
+                            # Check subsequent days
+                            for next_i in range(analyzer.rally_low_idx + 1, len(df)):
+                                next_row = df.iloc[next_i]
+                                next_prev = df.iloc[next_i - 1]
+                                if next_row['Close'] > next_prev['Close']:
+                                    rally_day_type = "rally"
+                                    break
+                                next_mid = (next_row['High'] + next_row['Low']) / 2
+                                if next_row['Close'] >= next_mid:
+                                    rally_day_type = "pink"
+                                    break
 
             return {
                 'market_in_correction': analyzer.market_in_correction,
