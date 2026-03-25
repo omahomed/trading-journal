@@ -6207,18 +6207,21 @@ elif page == "Trade Manager":
         if not open_pos.empty:
             def get_current_stop_display(tid):
                 try:
-                    stops = df_d[df_d['Trade_ID'] == tid]['Stop_Loss']
-                    val = stops.iloc[-1] if not stops.empty else 0.0
+                    stops = df_d[df_d['Trade_ID'] == tid]['Stop_Loss'].dropna()
+                    val = float(stops.iloc[-1]) if not stops.empty else 0.0
+                    if pd.isna(val):
+                        return 0.0
                     return val
                 except: return 0.0
 
             opts_dict = {f"{r['Ticker']} (Current: ${get_current_stop_display(r['Trade_ID']):.2f})": r['Trade_ID'] for _, r in open_pos.iterrows()}
-            sel_label = st.selectbox("Select Position to Protect", list(opts_dict.keys()))
+            sel_label = st.selectbox("Select Position to Protect", list(opts_dict.keys()), key="rapid_stop_select")
             sel_id = opts_dict[sel_label]
             curr_stop_val = get_current_stop_display(sel_id)
-            
+
             c_up1, c_up2, c_up3 = st.columns(3)
-            new_stop_price = c_up1.number_input("New Hard Stop Price ($)", value=float(curr_stop_val), min_value=0.0, step=0.01, format="%.2f")
+            # Use dynamic key tied to trade_id so value resets when selection changes
+            new_stop_price = c_up1.number_input("New Hard Stop Price ($)", value=float(curr_stop_val), min_value=0.0, step=0.01, format="%.2f", key=f"rapid_stop_val_{sel_id}")
             
             if c_up3.button("UPDATE STOP LOSS"):
                 mask = (df_d['Trade_ID'] == sel_id) & (df_d['Action'] == 'BUY')
