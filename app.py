@@ -5287,12 +5287,13 @@ elif page == "Position Sizer":
                 st.markdown("---")
 
                 m1, m2, m3 = st.columns(3)
-                atr_delta = f"{atr_multiplier:.1f}x Confidence" if atr_multiplier > 1.0 else "Based on Noise"
-                m1.metric("ATR Limit", f"{max_shares_vol} shs", atr_delta, delta_color="off")
-                
+                atr_cost = f"${max_shares_vol * vs_price:,.0f} ({max_shares_vol * vs_price / vs_equity * 100:.1f}% NLV)"
+                m1.metric("ATR Limit", f"{max_shares_vol} shs", atr_cost, delta_color="off")
+
                 if vol_mode.startswith("🆕") and effective_stop > 0:
                     delta_color = "normal" if max_shares_tech < max_shares_vol else "off"
-                    m2.metric("Tech Stop Limit", f"{max_shares_tech} shs", "Based on Support", delta_color=delta_color)
+                    tech_cost = f"${max_shares_tech * vs_price:,.0f} ({max_shares_tech * vs_price / vs_equity * 100:.1f}% NLV)"
+                    m2.metric("Tech Stop Limit", f"{max_shares_tech} shs", tech_cost, delta_color=delta_color)
                 else:
                     m2.metric("Hard Cap Limit", f"{max_shares_cap} shs", "20% Max Alloc", delta_color="off")
                     
