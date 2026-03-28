@@ -3171,8 +3171,20 @@ elif page == "Daily Journal":
                     .applymap(color_score, subset=['Score'])
                     .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns])
                     .applymap(color_atr, subset=[c for c in ['SPY_ATR', 'Nasdaq_ATR'] if c in df_view.columns]),
-                    hide_index=True, 
+                    hide_index=True,
                     use_container_width=True
+                )
+
+                # Export button
+                export_df = df_view.sort_values('Day', ascending=False)[valid_cols].copy()
+                export_df['Day'] = export_df['Day'].dt.strftime('%Y-%m-%d')
+                csv_data = export_df.to_csv(index=False)
+                filter_label = view_opt.lower().replace(" ", "_")
+                st.download_button(
+                    "📥 Export to CSV",
+                    csv_data,
+                    file_name=f"daily_journal_{filter_label}.csv",
+                    mime="text/csv",
                 )
 
             else: st.info("No journal entries found.")
