@@ -1218,73 +1218,39 @@ def compute_cycle_state():
         ibd_ftd_date = analyzer.ftd_date
         buy_switch = analyzer.buy_switch
 
-        # --- Reconcile reference high with price-only FTD history ---
-        # The IBD analyzer may miss FTDs due to volume filter, which prevents
-        # reference_high from resetting between cycles. Re-scan for price-only
-        # FTDs and update reference_high to reflect the most recent bull cycle.
-        # IMPORTANT: Only process PAST corrections, not the current one.
-        in_corr = False
-        corr_rally_low = None
-        corr_rally_low_idx = None
-        last_price_ftd_idx = None
-        last_corr_entry_high = reference_high  # Tracks the high that triggered each correction
-        for i in range(260, len(df)):
-            row = df.iloc[i]
-            close_val = row['Close']
-            high_val = row['High']
-            low_val = row['Low']
-
-            if not in_corr:
-                # Track reference high
-                if high_val > reference_high:
-                    reference_high = high_val
-                # Check for correction entry
-                decline = (close_val - reference_high) / reference_high * 100
-                if decline <= -7:
-                    in_corr = True
-                    last_corr_entry_high = reference_high  # Lock the high that triggered this correction
-                    # Find rally low (lookback 10 days)
-                    lookback = min(i, 10)
-                    recent_slice = df.iloc[i-lookback:i+1]
-                    low_date = recent_slice['Low'].idxmin()
-                    low_pos = df.index.get_loc(low_date)
-                    corr_rally_low = df.iloc[low_pos]['Low']
-                    corr_rally_low_idx = low_pos
-            else:
-                # In correction — look for price-only FTD
-                if corr_rally_low_idx is not None and i >= corr_rally_low_idx + 3:
-                    gain = row.get('daily_gain_pct', 0)
-                    if pd.notna(gain) and gain >= 1.0:
-                        lows = df.iloc[corr_rally_low_idx:i+1]['Low']
-                        if lows.min() >= corr_rally_low:
-                            # Price-only FTD — reset reference high
-                            reference_high = high_val
-                            last_price_ftd_idx = i
-                            in_corr = False
-                            corr_rally_low = None
-                            corr_rally_low_idx = None
-                # Update rally low if new low made
-                if corr_rally_low is not None and low_val < corr_rally_low:
-                    corr_rally_low = low_val
-                    corr_rally_low_idx = i
-
-            # Continue tracking reference high when not in correction
-            if not in_corr and high_val > reference_high:
-                reference_high = high_val
-
-        # If market is currently in correction, restore the reference high to
-        # the peak that triggered it — regardless of whether the loop found
-        # false FTDs during the current correction
-        if market_in_correction:
-            reference_high = last_corr_entry_high
-
-        # Find reference high date
+        # --- Reference high: MarketSmith "marked high" logic ---
+        # A marked high is the highest high with N bars of lower highs on
+        # each side (default period = 9). Scan backwards to find the most
+        # recent marked high. This gives a stable, confirmed market peak.
+        marked_high_period = 9
         reference_high_date = None
-        if reference_high is not None:
-            for i in range(len(df) - 1, -1, -1):
-                if df.iloc[i]['High'] >= reference_high - 0.01:
-                    reference_high_date = df.index[i]
-                    break
+        reference_high = None
+        for i in range(len(df) - 1, marked_high_period - 1, -1):
+            candidate = df.iloc[i]['High']
+            # Need at least marked_high_period bars on each side
+            left_start = max(0, i - marked_high_period)
+            right_end = min(len(df), i + marked_high_period + 1)
+            # Check left side: all bars must have lower highs
+            left_ok = all(df.iloc[j]['High'] < candidate for j in range(left_start, i))
+            if not left_ok:
+                continue
+            # Check right side: need enough bars, and all must have lower highs
+            if right_end - (i + 1) < marked_high_period:
+                continue  # Not enough bars on right side yet (too recent)
+            right_ok = all(df.iloc[j]['High'] < candidate for j in range(i + 1, right_end))
+            if right_ok:
+                reference_high = candidate
+                reference_high_date = df.index[i]
+                break
+
+        # Fallback to analyzer's reference high if no marked high found
+        if reference_high is None:
+            reference_high = analyzer.reference_high
+            if reference_high is not None:
+                for i in range(len(df) - 1, -1, -1):
+                    if df.iloc[i]['High'] >= reference_high - 0.01:
+                        reference_high_date = df.index[i]
+                        break
 
         # --- Compute MAs for entry ladder (analyzer.data already has some) ---
         df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
@@ -1581,6 +1547,9 @@ def compute_cycle_state():
             'rally_day_type': rally_day_type,
             'ftd_date': ftd_date,
             'days_since_rally': days_since_rally,
+            'rally_low': rally_low,
+            'rally_low_date': df.index[rally_low_idx] if rally_low_idx is not None else None,
+            'days_since_low': (len(df) - 1 - rally_low_idx) if rally_low_idx is not None else None,
             'correction_start': correction_start,
             'drawdown_pct': float(drawdown_pct),
             'reference_high': float(reference_high) if reference_high else 0,
@@ -3682,7 +3651,10 @@ elif page == "Market Cycle Tracker":
             subtitle = "Market structure intact — all systems go"
         elif cs == "CORRECTION":
             bg = "#ff4b4b"
-            subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — waiting for rally day"
+            if cycle.get('days_since_low') is not None:
+                subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — Day 0 (waiting for rally day)"
+            else:
+                subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — waiting for rally day"
         else:  # RECOVERY
             bg = "#ffcc00"
             subtitle = f"Day {cycle['days_since_rally']} of rally attempt" if cycle['days_since_rally'] else "Recovery in progress"
@@ -3698,7 +3670,12 @@ elif page == "Market Cycle Tracker":
         if cs == "CORRECTION" and cycle['correction_start']:
             cs_dt = cycle['correction_start']
             cs_str = cs_dt.strftime('%b %d, %Y') if hasattr(cs_dt, 'strftime') else str(cs_dt)
-            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Correction began: {cs_str}</div>"
+            low_info = ""
+            if cycle.get('rally_low_date') is not None:
+                low_dt = cycle['rally_low_date']
+                low_str = low_dt.strftime('%b %d, %Y') if hasattr(low_dt, 'strftime') else str(low_dt)
+                low_info = f" · Low: {low_str} (${cycle['rally_low']:,.2f})"
+            banner_extra = f"<div style='font-size: 13px; opacity: 0.8; margin-top: 6px;'>Correction began: {cs_str}{low_info}</div>"
 
         # Build exposure display line
         if exit_ovr is not None:
