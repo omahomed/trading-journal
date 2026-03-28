@@ -5235,13 +5235,17 @@ elif page == "Position Sizer":
                 if vs_ma_level > 0:
                     # Logic: Stop = MA * (1 - Buffer%)
                     effective_stop = vs_ma_level * (1 - (vs_buffer_pct/100))
-                    
+
                     if effective_stop < vs_price:
                         risk_per_share = vs_price - effective_stop
                         tech_dist_pct = (risk_per_share / vs_price) * 100
-                        
+
                         if risk_per_share > 0:
                              max_shares_tech = int(daily_risk_budget / risk_per_share)
+                             # Cap tech stop limit by target position size
+                             if vol_mode.startswith("🆕") and vs_target_pct > 0:
+                                 target_cap = int((vs_equity * vs_target_pct / 100) / vs_price)
+                                 max_shares_tech = min(max_shares_tech, target_cap)
                 
                 # 4. Hard Cap (20% NLV)
                 max_shares_cap = int((vs_equity * 0.20) / vs_price)
