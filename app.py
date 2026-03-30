@@ -2124,8 +2124,11 @@ if page == "Dashboard":
             ), unsafe_allow_html=True)
 
         with col2:
+            ltd_profit = df_j['Daily $ Change'].sum()
+            ltd_profit_color = "#2ca02c" if ltd_profit >= 0 else "#ff4b4b"
+            ltd_profit_str = f"<span style='color:{ltd_profit_color}'>${ltd_profit:+,.0f}</span>"
             st.markdown(metric_card(
-                "LTD RETURN", f"{ltd_return:.2f}%", "Life to Date",
+                "LTD RETURN", f"{ltd_return:.2f}%", ltd_profit_str,
                 GRADIENTS['pink']
             ), unsafe_allow_html=True)
 
