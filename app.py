@@ -7909,10 +7909,7 @@ elif page == "Trade Manager":
                         # Backward compat: also show legacy weekly/daily/exit
                         _legacy = [t for t in ['weekly', 'daily', 'exit'] if any(img['image_type'] == t for img in images)]
                         _img_types = _legacy + _img_types
-                        _has_ms = any(img['image_type'] == 'marketsurge' for img in images)
-                        if _has_ms:
-                            _img_types.append('marketsurge')
-                        # Only show types that have images
+                        # Only show types that have images (exclude marketsurge — now saved as entry)
                         _img_types = [t for t in _img_types if any(img['image_type'] == t for img in images)]
                         if not _img_types:
                             _img_types = ['entry', 'position']
@@ -8137,10 +8134,7 @@ elif page == "Active Campaign Summary":
 
 
                         _img_types2 = ['weekly', 'daily']
-                        _has_ms2 = any(img['image_type'] == 'marketsurge' for img in images)
-                        if _has_ms2:
-                            _img_types2.append('marketsurge')
-                        _labels2 = {'weekly': 'Weekly Charts', 'daily': 'Daily Charts', 'marketsurge': 'MarketSurge'}
+                        _labels2 = {'weekly': 'Weekly Charts', 'daily': 'Daily Charts'}
                         cols = st.columns(len(_img_types2))
 
                         for img_type, col in zip(_img_types2, cols):
@@ -10651,14 +10645,14 @@ elif page == "Trade Journal":
 
                         if images:
                             # Build type list: new types + legacy types that have images
-                            _all_types = ['entry', 'position', 'weekly', 'daily', 'exit', 'marketsurge']
+                            _all_types = ['entry', 'position', 'weekly', 'daily', 'exit']
                             chart_types = [t for t in _all_types if any(img['image_type'] == t for img in images)]
                             if not chart_types:
                                 chart_types = ['entry', 'position']
                             cols = st.columns(len(chart_types))
 
-                            _type_labels = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart', 'marketsurge': 'MarketSurge'}
-                            icons = {'entry': '📊', 'position': '🔄', 'weekly': '📊', 'daily': '📈', 'exit': '🎯', 'marketsurge': '🔬'}
+                            _type_labels = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart'}
+                            icons = {'entry': '📊', 'position': '🔄', 'weekly': '📊', 'daily': '📈', 'exit': '🎯'}
                             for img_type, col in zip(chart_types, cols):
                                 with col:
                                     type_imgs = [img for img in images if img['image_type'] == img_type]
