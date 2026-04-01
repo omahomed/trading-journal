@@ -1195,7 +1195,7 @@ def compute_index_atr(ticker, start_date, end_date):
 # --- MARKET CYCLE TRACKER ENGINE (Layer 2 on top of M Factor) ---
 @st.cache_data(ttl=300, show_spinner=False)
 def compute_cycle_state():
-    """Compute NASDAQ market cycle state: HEALTHY / CORRECTION / RECOVERY.
+    """Compute NASDAQ market cycle state: CORRECTION / RALLY MODE / UPTREND / POWERTREND.
     Uses MarketSchoolRules for correction/reference_high/rally/FTD detection,
     then layers entry/exit ladder on top.
     """
@@ -1375,43 +1375,18 @@ def compute_cycle_state():
         if rally_day_idx is not None:
             days_since_rally = len(df) - 1 - rally_day_idx
 
-        # --- Cycle state determination (after rally day classification) ---
-        if not market_in_correction or buy_switch:
-            cycle_state = "HEALTHY"
-        elif price_ftd_date is not None:
-            cycle_state = "RECOVERY"
-        elif rally_start_date is not None and rally_day_type is not None:
-            # Only enter RECOVERY if we have a valid rally day (rally or pink)
-            cycle_state = "RECOVERY"
-        else:
-            cycle_state = "CORRECTION"
-
         # --- Entry step calculation ---
         entry_step = -1  # Default: no step
+        has_rally = not market_in_correction or buy_switch or \
+                    (rally_start_date is not None and rally_day_type is not None) or \
+                    price_ftd_date is not None
 
-        if cycle_state == "HEALTHY":
-            if ema8 > ema21 > sma50 > sma200:
-                entry_step = 7
-            elif ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
-                entry_step = 6
-            elif low_above_50_streak >= 3:
-                entry_step = 5
-            elif low_above_21_streak >= 3:
-                entry_step = 4
-            elif curr['Low'] > ema21:
-                entry_step = 3
-            elif price > ema21:
-                entry_step = 2
-            else:
-                entry_step = 1
-
-        elif cycle_state == "RECOVERY":
+        if has_rally:
             if rally_start_date is not None:
                 entry_step = 0  # Rally day achieved
-
-            if price_ftd_date is not None:
-                entry_step = 1  # FTD achieved
-
+            if price_ftd_date is not None or (not market_in_correction or buy_switch):
+                entry_step = max(entry_step, 1)  # FTD achieved (or already healthy)
+            if entry_step >= 1:
                 if price > ema21:
                     entry_step = 2
                 if curr['Low'] > ema21:
@@ -1424,7 +1399,16 @@ def compute_cycle_state():
                     entry_step = 6
                 if ema8 > ema21 > sma50 > sma200 and entry_step >= 6:
                     entry_step = 7
-                    cycle_state = "HEALTHY"
+
+        # --- Cycle state determination (based on entry step) ---
+        if entry_step >= 7:
+            cycle_state = "POWERTREND"
+        elif entry_step >= 4:
+            cycle_state = "UPTREND"
+        elif entry_step >= 0:
+            cycle_state = "RALLY MODE"
+        else:
+            cycle_state = "CORRECTION"
 
         # --- EXIT LADDER ---
         # Scan recent data for violations
@@ -1496,7 +1480,7 @@ def compute_cycle_state():
         ftd_date = price_ftd_date
         entry_ladder = [
             {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
-             'achieved': entry_step >= 0 and cycle_state in ['RECOVERY', 'HEALTHY'],
+             'achieved': entry_step >= 0 and cycle_state != 'CORRECTION',
              'detail': f"{'Rally Day' if rally_day_type == 'rally' else 'Pink Rally Day'} — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
             {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
              'achieved': entry_step >= 1,
@@ -1526,9 +1510,9 @@ def compute_cycle_state():
         entry_exposure = exposure_map.get(entry_step, 0)
         suggested_exposure = entry_exposure
 
-        # Override exposure if exit alert is active (HEALTHY only — not during RECOVERY)
+        # Override exposure if exit alert is active (UPTREND/POWERTREND only — not during RALLY MODE)
         exit_override = None
-        if active_exits and cycle_state == "HEALTHY":
+        if active_exits and cycle_state in ("UPTREND", "POWERTREND"):
             worst = min(int(e['target'].replace('%', '')) for e in active_exits)
             if worst < suggested_exposure:
                 exit_override = worst
@@ -3661,23 +3645,28 @@ elif page == "Market Cycle Tracker":
         entry_exp = cycle.get('entry_exposure', cycle['suggested_exposure'])
         exit_ovr = cycle.get('exit_override')
 
-        if cs == "HEALTHY":
+        if cs == "POWERTREND":
+            bg = "#8A2BE2"
+            subtitle = "8 EMA > 21 EMA > 50 SMA > 200 SMA — all systems go"
+            text_color = "white"
+        elif cs == "UPTREND":
             bg = "#2ca02c"
-            subtitle = "Market structure intact — all systems go"
-        elif cs == "CORRECTION":
+            subtitle = "Market structure intact — confirmed uptrend"
+            text_color = "white"
+        elif cs == "RALLY MODE":
+            bg = "#ffcc00"
+            subtitle = f"Day {cycle['days_since_rally']} of rally attempt" if cycle['days_since_rally'] else "Rally in progress"
+            text_color = "black"
+        else:  # CORRECTION
             bg = "#ff4b4b"
             if cycle.get('days_since_low') is not None:
                 subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — Day 0 (waiting for rally day)"
             else:
                 subtitle = f"NASDAQ down {cycle['drawdown_pct']:.1f}% from high ({cycle['reference_high']:,.2f}) — waiting for rally day"
-        else:  # RECOVERY
-            bg = "#ffcc00"
-            subtitle = f"Day {cycle['days_since_rally']} of rally attempt" if cycle['days_since_rally'] else "Recovery in progress"
-
-        text_color = "black" if cs == "RECOVERY" else "white"
+            text_color = "white"
 
         banner_extra = ""
-        if cs == "RECOVERY" and cycle['rally_day_date']:
+        if cs == "RALLY MODE" and cycle['rally_day_date']:
             rd = cycle['rally_day_date']
             rd_str = rd.strftime('%b %d, %Y') if hasattr(rd, 'strftime') else str(rd)
             rd_label = "Rally Day" if cycle['rally_day_type'] == 'rally' else "Pink Rally Day" if cycle['rally_day_type'] == 'pink' else "Rally Day"
@@ -3836,7 +3825,7 @@ elif page == "Market Cycle Tracker":
         sk1, sk2 = st.columns(2)
         with sk1:
             st.metric("Low > 21 EMA Streak", f"{cycle['low_above_21_streak']} days",
-                      delta="HEALTHY" if cycle['low_above_21_streak'] >= 3 else f"{3 - cycle['low_above_21_streak']} more needed")
+                      delta="UPTREND" if cycle['low_above_21_streak'] >= 3 else f"{3 - cycle['low_above_21_streak']} more needed")
         with sk2:
             st.metric("Low > 50 SMA Streak", f"{cycle['low_above_50_streak']} days",
                       delta="Strong" if cycle['low_above_50_streak'] >= 3 else f"{3 - cycle['low_above_50_streak']} more needed")
@@ -3879,12 +3868,13 @@ elif page == "Market Cycle Tracker":
 
 | State | Definition |
 |---|---|
-| **HEALTHY** | 3 consecutive days where daily low > 21 EMA |
-| **CORRECTION** | NASDAQ down 7%+ from recent high |
-| **RECOVERY** | Correction acknowledged + rally day identified + climbing entry ladder |
+| **CORRECTION** | NASDAQ down 7%+ from recent high — Day 0, waiting for rally |
+| **RALLY MODE** | Rally day identified, steps 0-3 (rally day → low above 21 EMA) |
+| **UPTREND** | Steps 4-6 (holds 21 EMA 3 days → MA crossovers at 100%) |
+| **POWERTREND** | Step 7 — 8 EMA > 21 EMA > 50 SMA > 200 SMA (200%) |
 
 ### Entry Ladder
-Exposure levels are **suggested maximums**. The ladder progresses from Rally Day (15%) through Follow-Through Day (30%), MA holds, crossovers, up to PowerTrend (200%).
+Exposure levels are **suggested maximums**. Rally Mode (15-40%), Uptrend (50-100%), PowerTrend (200%).
 
 ### Exit Ladder
 Exit signals are **non-negotiable action rules**:
