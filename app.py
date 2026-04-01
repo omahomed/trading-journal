@@ -7923,7 +7923,7 @@ elif page == "Trade Manager":
                                     for img_data in type_imgs:
                                         image_bytes = r2.download_image(img_data['image_url'])
                                         if image_bytes:
-                                            st.image(image_bytes, use_container_width=True)
+                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
                                             st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                                 else:
                                     st.info(f"No {_type_labels.get(img_type, img_type)} uploaded")
@@ -8145,7 +8145,7 @@ elif page == "Active Campaign Summary":
                                     for img_data in type_imgs:
                                         image_bytes = r2.download_image(img_data['image_url'])
                                         if image_bytes:
-                                            st.image(image_bytes, use_container_width=True)
+                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
                                             st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                                 else:
                                     st.info(f"No {_labels2.get(img_type, img_type)} uploaded")
