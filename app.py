@@ -4775,7 +4775,8 @@ elif page == "Position Sizer":
         except:
             return 0.0, 5.0
 
-    tab_vol, tab_add, tab_pyr, tab_trim = st.tabs([
+    tab_normal, tab_vol, tab_add, tab_pyr, tab_trim = st.tabs([
+        "📏 Normal Sizer",
         "⚖️ Volatility Sizer",
         "📐 Scale In Sizer",
         "🔺 Pyramid Sizer",
@@ -5047,6 +5048,117 @@ elif page == "Position Sizer":
         else: st.info("No active positions.")
 
    # --- TAB 5: VOLATILITY SIZER (THE GEM STANDARD) ---
+    # --- TAB: NORMAL SIZER ---
+    with tab_normal:
+        st.subheader("📏 Normal Sizer")
+        st.caption("Size positions based on a key support level with buffer. No ATR involved.")
+
+        ns_ticker = st.text_input("Ticker Symbol", placeholder="XYZ", key="ns_ticker").upper()
+        ns_price = 0.0
+        if ns_ticker:
+            ns_auto_price, _ = fetch_price_and_atr(ns_ticker)
+            ns_price = ns_auto_price if ns_auto_price > 0 else 0.0
+
+        c1, c2 = st.columns(2)
+        ns_price = c1.number_input("Entry Price ($)", value=ns_price, step=0.1, key=f"ns_px_{ns_ticker}")
+        ns_equity = c2.number_input("Account Equity (NLV)", value=equity, step=1000.0, key="ns_eq")
+
+        st.markdown("---")
+
+        c3, c4 = st.columns(2)
+        ns_ma_level = c3.number_input("Key MA Level ($)", value=0.0, step=0.1, help="Price of the Moving Average (e.g. 21e/50s).", key="ns_ma_level")
+        ns_buffer_pct = c4.number_input("Buffer (%)", value=1.0, step=0.1, help="Wiggle room below the MA.", key="ns_buffer")
+
+        if ns_ma_level > 0 and ns_price > 0:
+            ns_stop = ns_ma_level * (1 - ns_buffer_pct / 100)
+            ns_stop_dist = ((ns_price - ns_stop) / ns_price * 100)
+            st.info(f"📍 **Calculated Stop:** `{ns_stop:.2f}` (MA {ns_ma_level:.2f} − {ns_buffer_pct:.1f}% buffer) — {ns_stop_dist:.1f}% below entry")
+
+        ns_sizing_mode = st.radio("Sizing Mode",
+            ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+            horizontal=True, key="ns_sizing_mode")
+
+        ns_target_mode = st.select_slider("Target Position Size", options=list(size_map.keys()), value="Full (10%)", key="ns_target_slider")
+        ns_target_pct = size_map[ns_target_mode]
+
+        st.markdown("---")
+
+        if st.button("Calculate Size", type="primary", key="ns_btn"):
+            if ns_ticker and ns_price > 0 and ns_ma_level > 0:
+                ns_stop = ns_ma_level * (1 - ns_buffer_pct / 100)
+                ns_risk_per_share = ns_price - ns_stop
+
+                if ns_risk_per_share <= 0:
+                    st.error(f"Stop (${ns_stop:.2f}) is at or above entry price (${ns_price:.2f}).")
+                else:
+                    # Risk budget from sizing mode
+                    if ns_sizing_mode.startswith("⚔️"):
+                        ns_tol_pct, ns_tier = 1.00, "Offense Mode"
+                    elif ns_sizing_mode.startswith("⚖️"):
+                        ns_tol_pct, ns_tier = 0.75, "Normal Mode"
+                    else:
+                        ns_tol_pct, ns_tier = 0.50, "Defense Mode"
+
+                    ns_risk_budget = ns_equity * (ns_tol_pct / 100)
+
+                    # Shares from risk budget / risk per share
+                    ns_risk_shares = int(ns_risk_budget / ns_risk_per_share)
+
+                    # Cap by target position size
+                    ns_target_shares = int((ns_equity * ns_target_pct / 100) / ns_price)
+                    ns_final_shares = min(ns_risk_shares, ns_target_shares)
+                    ns_final_val = ns_final_shares * ns_price
+                    ns_final_pct = (ns_final_val / ns_equity * 100) if ns_equity > 0 else 0
+
+                    # Limiting factor
+                    if ns_final_shares == ns_target_shares and ns_target_shares < ns_risk_shares:
+                        ns_limit = f"Target Size ({ns_target_pct}%)"
+                    else:
+                        ns_limit = f"MA Support (${ns_ma_level})"
+
+                    # Display
+                    st.markdown(f"### 📊 Sizing Profile: {ns_ticker}")
+                    k1, k2, k3 = st.columns(3)
+                    k1.metric("Risk Budget", f"${ns_risk_budget:,.0f}", f"{ns_tol_pct}% Risk ({ns_tier})")
+                    ns_stop_dist = ((ns_price - ns_stop) / ns_price * 100)
+                    k2.metric("Stop Distance", f"{ns_stop_dist:.1f}%", f"${ns_risk_per_share:.2f}/share")
+                    k3.metric("Target Size", f"{ns_target_pct}%", f"${ns_equity * ns_target_pct / 100:,.0f}")
+
+                    st.markdown("---")
+
+                    m1, m2, m3 = st.columns(3)
+                    risk_cost = f"${ns_risk_shares * ns_price:,.0f} ({ns_risk_shares * ns_price / ns_equity * 100:.1f}% NLV)"
+                    m1.metric("Risk-Based Limit", f"{ns_risk_shares} shs", risk_cost, delta_color="off")
+                    target_cost = f"${ns_target_shares * ns_price:,.0f} ({ns_target_pct:.0f}% NLV)"
+                    m2.metric("Target Limit", f"{ns_target_shares} shs", target_cost, delta_color="off")
+                    m3.metric("Limiting Factor", ns_limit, "Determines Final Size", delta_color="off")
+
+                    st.markdown("### 🏛️ The Verdict")
+                    st.success(f"✅ **RECOMMENDED SIZE:** Buy **{ns_final_shares}** shares ({ns_final_pct:.1f}% of NLV).")
+
+                    # Store for Send to Log Buy
+                    st.session_state['_ns_result'] = {
+                        'ticker': ns_ticker, 'shares': ns_final_shares, 'price': ns_price,
+                        'stop': ns_stop, 'risk_budget': ns_risk_budget,
+                    }
+            else:
+                st.error("Please enter Ticker, Entry Price, and Key MA Level.")
+
+        # Send to Log Buy (outside button block)
+        if '_ns_result' in st.session_state:
+            r = st.session_state['_ns_result']
+            st.markdown("---")
+            if st.button(f"📝 Send to Log Buy — {r['ticker']} ({r['shares']} shs @ ${r['price']:.2f})", key="ns_send_logbuy", type="secondary", use_container_width=True):
+                st.session_state['ps_ticker'] = r['ticker']
+                st.session_state['ps_shares'] = r['shares']
+                st.session_state['ps_price'] = r['price']
+                st.session_state['ps_stop'] = r['stop']
+                st.session_state['ps_risk_budget'] = r['risk_budget']
+                st.session_state['ps_action'] = 'new'
+                del st.session_state['_ns_result']
+                st.session_state.page = "Log Buy"
+                st.rerun()
+
     with tab_vol:
         st.subheader("⚖️ Volatility-Adjusted Sizing (The Gem Standard)")
         st.caption("Normalize risk by sizing positions based on Asset Volatility (ATR) AND Technical Stop.")
