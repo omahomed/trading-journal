@@ -5800,11 +5800,19 @@ elif page == "Log Buy":
     if trade_type == "Start New Campaign":
         st.markdown("#### 💰 Risk Budgeting")
         rb1, rb2, rb3 = st.columns(3)
-        risk_pct_input = rb1.number_input("Risk % of Equity", value=0.50, step=0.05, format="%.2f")
+        sizing_mode_buy = rb1.radio("Sizing Mode",
+            ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+            index=1, key="b_sizing_mode")
+        if sizing_mode_buy.startswith("⚔️"):
+            risk_pct_input = 1.00
+        elif sizing_mode_buy.startswith("⚖️"):
+            risk_pct_input = 0.75
+        else:
+            risk_pct_input = 0.50
         risk_budget_dol = def_equity * (risk_pct_input / 100)
 
         rb2.metric("Account Equity (Prev)", f"${def_equity:,.2f}")
-        rb3.metric("Hard Risk Budget ($)", f"${risk_budget_dol:.2f}")
+        rb3.metric("Risk Budget", f"${risk_budget_dol:.2f}", f"{risk_pct_input}% of equity")
     else:
         if b_id:
             orig_budget = df_s[df_s['Trade_ID'] == b_id]['Risk_Budget'].iloc[0]
