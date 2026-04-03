@@ -1371,9 +1371,9 @@ def compute_cycle_state():
                                 rally_start_date = df.index[next_i]
                                 break
 
-        # Update days_since_rally based on actual rally day (may differ from low day)
+        # Update days_since_rally: Day 1 = rally day itself (IBD numbering)
         if rally_day_idx is not None:
-            days_since_rally = len(df) - 1 - rally_day_idx
+            days_since_rally = len(df) - rally_day_idx
 
         # --- Entry step calculation ---
         entry_step = -1  # Default: no step
@@ -12905,10 +12905,10 @@ elif page == "IBD Market School":
                                     actual_rally_date = df.index[next_i]
                                     break
 
-            # Days since actual rally day (not just the low)
+            # Rally day number: Day 1 = rally day itself (IBD numbering)
             rally_day = None
             if rally_day_idx is not None:
-                rally_day = last_idx - rally_day_idx
+                rally_day = last_idx - rally_day_idx + 1
 
             return {
                 'market_in_correction': analyzer.market_in_correction,
@@ -13162,7 +13162,7 @@ elif page == "IBD Market School":
                 decline_pct = ((close - corr_state['reference_high']) / corr_state['reference_high']) * 100 if corr_state['reference_high'] else 0
                 rd_type = corr_state.get('rally_day_type')
                 if corr_state['rally_start_date'] and corr_state['rally_day'] is not None and rd_type is not None:
-                    day_num = corr_state['rally_day'] + 1  # Day 1 = rally low day
+                    day_num = corr_state['rally_day']  # Already 1-indexed: Day 1 = rally day
                     rd_label = "Rally Day" if rd_type == "rally" else "Pink Rally Day"
                     ftd_window = "— in FTD window (days 4-25)" if 4 <= day_num <= 25 else ""
                     if day_num < 4:
