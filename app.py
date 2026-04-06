@@ -1376,29 +1376,38 @@ def compute_cycle_state():
             days_since_rally = len(df) - rally_day_idx
 
         # --- Entry step calculation ---
-        entry_step = -1  # Default: no step
+        # Steps achieved as a set; each step adds an increment to exposure.
+        # Pre-FTD: only steps 0 and 2 can be reached, exposure capped at 40%.
+        # FTD unlocks accumulated steps (Step 0 + Step 2 + Step 1 = 60%).
+        achieved_steps = set()
         has_rally = not market_in_correction or buy_switch or \
                     (rally_start_date is not None and rally_day_type is not None) or \
                     price_ftd_date is not None
 
+        ftd_achieved = price_ftd_date is not None or (not market_in_correction or buy_switch)
+
         if has_rally:
             if rally_start_date is not None:
-                entry_step = 0  # Rally day achieved
-            if price_ftd_date is not None or (not market_in_correction or buy_switch):
-                entry_step = max(entry_step, 1)  # FTD achieved (or already healthy)
-            if entry_step >= 1:
-                if price > ema21:
-                    entry_step = 2
+                achieved_steps.add(0)  # Rally day
+            if ftd_achieved:
+                achieved_steps.add(1)  # FTD
+            # Step 2 can be achieved pre-FTD
+            if price > ema21:
+                achieved_steps.add(2)
+            # Steps 3+ require FTD
+            if ftd_achieved:
                 if curr['Low'] > ema21:
-                    entry_step = 3
-                if low_above_21_streak >= 3:
-                    entry_step = 4
-                if low_above_50_streak >= 3 and entry_step >= 4:
-                    entry_step = 5
-                if ema21 > sma50 and ema21 > sma200 and sma50 > sma200 and entry_step >= 5:
-                    entry_step = 6
-                if ema8 > ema21 > sma50 > sma200 and entry_step >= 6:
-                    entry_step = 7
+                    achieved_steps.add(3)
+                if 3 in achieved_steps and low_above_21_streak >= 3:
+                    achieved_steps.add(4)
+                if 4 in achieved_steps and low_above_50_streak >= 3:
+                    achieved_steps.add(5)
+                if 5 in achieved_steps and ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
+                    achieved_steps.add(6)
+                if 6 in achieved_steps and ema8 > ema21 > sma50 > sma200:
+                    achieved_steps.add(7)
+
+        entry_step = max(achieved_steps) if achieved_steps else -1
 
         # --- Cycle state determination (based on entry step) ---
         if entry_step >= 7:
@@ -1479,35 +1488,37 @@ def compute_cycle_state():
         # --- ENTRY LADDER STATUS ---
         ftd_date = price_ftd_date
         entry_ladder = [
-            {'step': 0, 'label': 'Rally Day', 'exposure': '15%',
-             'achieved': entry_step >= 0 and cycle_state != 'CORRECTION',
+            {'step': 0, 'label': 'Rally Day', 'exposure': '20%',
+             'achieved': 0 in achieved_steps and cycle_state != 'CORRECTION',
              'detail': f"{'Rally Day' if rally_day_type == 'rally' else 'Pink Rally Day'} — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
-            {'step': 1, 'label': 'Follow-Through Day', 'exposure': '30%',
-             'achieved': entry_step >= 1,
+            {'step': 1, 'label': 'Follow-Through Day', 'exposure': '60%',
+             'achieved': 1 in achieved_steps,
              'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
-            {'step': 2, 'label': 'Close above 21 EMA', 'exposure': '35%',
-             'achieved': entry_step >= 2,
+            {'step': 2, 'label': 'Close above 21 EMA', 'exposure': '40%',
+             'achieved': 2 in achieved_steps,
              'detail': f"21 EMA at {ema21:,.2f}"},
-            {'step': 3, 'label': 'Low above 21 EMA', 'exposure': '40%',
-             'achieved': entry_step >= 3,
+            {'step': 3, 'label': 'Low above 21 EMA', 'exposure': '80%',
+             'achieved': 3 in achieved_steps,
              'detail': "Daily low held above 21 EMA"},
-            {'step': 4, 'label': 'Holds 21 EMA — 3 Days', 'exposure': '50%',
-             'achieved': entry_step >= 4,
+            {'step': 4, 'label': 'Holds 21 EMA — 3 Days', 'exposure': '100%',
+             'achieved': 4 in achieved_steps,
              'detail': f"Streak: {low_above_21_streak} days" if low_above_21_streak > 0 else "Need 3 consecutive days"},
-            {'step': 5, 'label': 'Holds 50 SMA — 3 Days', 'exposure': '75%',
-             'achieved': entry_step >= 5,
+            {'step': 5, 'label': 'Holds 50 SMA — 3 Days', 'exposure': '120%',
+             'achieved': 5 in achieved_steps,
              'detail': f"Streak: {low_above_50_streak} days" if low_above_50_streak > 0 else "Need 3 consecutive days"},
-            {'step': 6, 'label': 'MA Crossovers', 'exposure': '100%',
-             'achieved': entry_step >= 6,
+            {'step': 6, 'label': 'MA Crossovers', 'exposure': '150%',
+             'achieved': 6 in achieved_steps,
              'detail': "21 EMA > 50 SMA > 200 SMA"},
             {'step': 7, 'label': 'PowerTrend', 'exposure': '200%',
-             'achieved': entry_step >= 7,
+             'achieved': 7 in achieved_steps,
              'detail': "8 EMA > 21 EMA > 50 SMA > 200 SMA"},
         ]
 
-        # Exposure mapping
-        exposure_map = {-1: 0, 0: 15, 1: 30, 2: 35, 3: 40, 4: 50, 5: 75, 6: 100, 7: 200}
-        entry_exposure = exposure_map.get(entry_step, 0)
+        # Exposure: sum of increments per achieved step, with pre-FTD cap at 40%
+        step_increments = {0: 20, 1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 30, 7: 50}
+        entry_exposure = sum(step_increments[s] for s in achieved_steps)
+        if 1 not in achieved_steps:
+            entry_exposure = min(entry_exposure, 40)  # Pre-FTD cap
         suggested_exposure = entry_exposure
 
         # Override exposure if exit alert is active (UPTREND/POWERTREND only — not during RALLY MODE)
@@ -3874,7 +3885,7 @@ elif page == "Market Cycle Tracker":
 | **POWERTREND** | Step 7 — 8 EMA > 21 EMA > 50 SMA > 200 SMA (200%) |
 
 ### Entry Ladder
-Exposure levels are **suggested maximums**. Rally Mode (15-40%), Uptrend (50-100%), PowerTrend (200%).
+Exposure levels are **suggested maximums**. Rally Mode (20-40% pre-FTD, 60% on FTD), Uptrend (80-150%), PowerTrend (200%).
 
 ### Exit Ladder
 Exit signals are **non-negotiable action rules**:
