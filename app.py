@@ -2583,8 +2583,8 @@ elif page == "Dashboard (Legacy)":
                             'Avg_Entry': fmt_money, 'Cur_Px': fmt_money, 'Stop_Loss': fmt_money, 
                             'Return_Pct': '{:+.2f}%', 'R_Dol': fmt_money
                         })
-                        .applymap(lambda x: 'color: #2ca02c' if x > 0 else 'color: #ff4b4b', subset=['Return_Pct'])
-                        .applymap(color_risk, subset=['R_Dol'])
+                        .map(lambda x: 'color: #2ca02c' if x > 0 else 'color: #ff4b4b', subset=['Return_Pct'])
+                        .map(color_risk, subset=['R_Dol'])
                         , use_container_width=True
                     )
                 else: st.info("No open positions.")
@@ -3165,10 +3165,10 @@ elif page == "Daily Journal":
                         'Nasdaq_ATR': '{:.2f}%',
                         'Score': '{:.0f}'
                     })
-                    .applymap(color_pnl, subset=[c for c in ['Daily_Pct', 'LTD_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
-                    .applymap(color_score, subset=['Score'])
-                    .applymap(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns])
-                    .applymap(color_atr, subset=[c for c in ['SPY_ATR', 'Nasdaq_ATR'] if c in df_view.columns]),
+                    .map(color_pnl, subset=[c for c in ['Daily_Pct', 'LTD_Pct', 'SPY_Pct', 'Nasdaq_Pct'] if c in df_view.columns])
+                    .map(color_score, subset=['Score'])
+                    .map(color_market_window, subset=[c for c in ['Market Window'] if c in df_view.columns])
+                    .map(color_atr, subset=[c for c in ['SPY_ATR', 'Nasdaq_ATR'] if c in df_view.columns]),
                     hide_index=True,
                     use_container_width=True
                 )
@@ -4091,7 +4091,7 @@ elif page == "Ticker Forensics":
                     st.dataframe(
                         t_df[['Closed_Date', 'Realized_PL', 'Avg_Entry', 'Avg_Exit', 'Sell_Rule', 'Notes']]
                         .style.format({'Realized_PL': '${:,.2f}', 'Avg_Entry': '{:.2f}', 'Avg_Exit': '{:.2f}'})
-                        .applymap(color_pnl, subset=['Realized_PL']),
+                        .map(color_pnl, subset=['Realized_PL']),
                         use_container_width=True
                     )
             else: st.info("No closed trades found.")
@@ -4156,7 +4156,7 @@ elif page == "Ticker Forensics":
                         st.dataframe(
                             tr_df[['Closed_Date', 'R_Multiple', 'Realized_PL', 'Risk_Budget', 'Notes']]
                             .style.format({'R_Multiple': '{:+.2f}R', 'Realized_PL': '${:,.2f}', 'Risk_Budget': '${:,.2f}'})
-                            .applymap(color_pnl, subset=['Realized_PL', 'R_Multiple']),
+                            .map(color_pnl, subset=['Realized_PL', 'R_Multiple']),
                             use_container_width=True
                         )
                 else: st.warning("No outlier trades found (all within -1R to +1R).")
@@ -4249,8 +4249,8 @@ elif page == "Ticker Forensics":
                             'Unrealized_PL': '${:,.0f}',
                             'Risk_Budget': '${:,.0f}'
                         })
-                        .applymap(lambda x: 'background-color: #e6fffa; color: #004d40' if x == 'OPEN' else '', subset=['Status'])
-                        .applymap(color_pnl, subset=['Total_R']),
+                        .map(lambda x: 'background-color: #e6fffa; color: #004d40' if x == 'OPEN' else '', subset=['Status'])
+                        .map(color_pnl, subset=['Total_R']),
                         use_container_width=True,
                         height=500
                     )
@@ -4408,7 +4408,7 @@ elif page == "Period Review":
                 financials.style.format({
                     'Start Equity': '${:,.2f}', 'Cash Flow': '${:,.2f}', 'End Equity': '${:,.2f}', 
                     'Net P&L ($)': '${:,.2f}', 'Return % (TWR)': '{:.2f}%', 'LTD Return %': '{:.2f}%'
-                }).applymap(color_pnl, subset=['Net P&L ($)', 'Return % (TWR)', 'LTD Return %']),
+                }).map(color_pnl, subset=['Net P&L ($)', 'Return % (TWR)', 'LTD Return %']),
                 use_container_width=True
             )
 
@@ -7109,8 +7109,8 @@ elif page == "Trade Manager":
                         'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}', 
                         'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
                     })
-                    .applymap(color_pnl, subset=['Value','Realized_PL','Unrealized_PL', 'Return_Pct'])
-                    .applymap(color_neg_value, subset=['Shares']), 
+                    .map(color_pnl, subset=['Value','Realized_PL','Unrealized_PL', 'Return_Pct'])
+                    .map(color_neg_value, subset=['Shares']), 
                     height=(len(display_df) + 1) * 35 + 3, 
                     use_container_width=True
                 )
@@ -7341,8 +7341,8 @@ elif page == "Trade Manager":
                         'Shares':'{:.0f}', 'Amount':'${:,.2f}', 'Exit_Price':'${:,.2f}', 'Value':'${:,.2f}',
                         'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
                     })
-                    .applymap(color_pnl, subset=['Lot P&L', 'Return %'])
-                    .applymap(color_neg_value, subset=['Shares']),
+                    .map(color_pnl, subset=['Lot P&L', 'Return %'])
+                    .map(color_neg_value, subset=['Shares']),
                     use_container_width=True
                 )
         else:
@@ -7551,10 +7551,10 @@ elif page == "Trade Manager":
                             'Total_Cost':'${:,.2f}', 'Avg_Entry':'${:,.2f}', 'Avg_Exit':'${:,.2f}',
                             'Risk_Budget':'${:,.0f}', 'Active_PL':'${:+,.2f}', 'R_Multiple':'{:+.2f}R'
                         })
-                        .applymap(style_status, subset=['Status'])
-                        .applymap(style_pl, subset=['Active_PL'])
-                        .applymap(style_compliance, subset=['Compliance'])
-                        .applymap(style_r, subset=['R_Multiple']),
+                        .map(style_status, subset=['Status'])
+                        .map(style_pl, subset=['Active_PL'])
+                        .map(style_compliance, subset=['Compliance'])
+                        .map(style_r, subset=['R_Multiple']),
                         hide_index=True,
                         use_container_width=True
                     )
@@ -7870,8 +7870,8 @@ elif page == "Trade Manager":
                                 'Value':'${:,.2f}',
                                 'Lot P&L':'${:,.2f}', 'Return %':'{:.2f}%'
                             })
-                            .applymap(color_pnl, subset=['Lot P&L', 'Return %'])
-                            .applymap(color_neg_value, subset=['Shares']),
+                            .map(color_pnl, subset=['Lot P&L', 'Return %'])
+                            .map(color_neg_value, subset=['Shares']),
                             use_container_width=True
                         )
                 else:
@@ -8070,7 +8070,7 @@ elif page == "Trade Manager":
                     'Total_Cost': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
                     'Realized_PL': lambda x: f'${x:,.2f}' if pd.notnull(x) else '-',
                     'Return_Pct': lambda x: f'{x:.2f}%' if pd.notnull(x) else '-'
-                }).applymap(highlight_status, subset=['Status']),
+                }).map(highlight_status, subset=['Status']),
                 use_container_width=True
             )
         else:
@@ -8715,8 +8715,8 @@ elif page == "Active Campaign Summary":
 
                      'Projected P&L': '${:,.2f}', 'Pyramid': format_pyramid
 
-                 }).applymap(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']
-                 ).applymap(color_pyramid, subset=pyramid_cols),
+                 }).map(color_pnl, subset=['Overall_PL', 'Return_Pct', 'Projected P&L']
+                 ).map(color_pyramid, subset=pyramid_cols),
 
                  height=(len(df_open) + 1) * 35 + 3,
 
@@ -10156,7 +10156,7 @@ elif page == "Performance Audit":
 
                     })
 
-                    .applymap(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
+                    .map(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
 
                     use_container_width=True,
 
@@ -10192,7 +10192,7 @@ elif page == "Performance Audit":
 
                     })
 
-                    .applymap(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
+                    .map(lambda x: 'color: #4CAF50' if x > 0 else 'color: #FF5252', subset=['Net P&L', 'R-Multiple', 'Return %']),
 
                     use_container_width=True,
 
@@ -10926,8 +10926,8 @@ elif page == "Trade Journal":
                                 'Realized_PL':'${:,.2f}', 'Unrealized_PL':'${:,.2f}',
                                 'Return_Pct':'{:.2f}%', 'Remaining_Shares':'{:.0f}'
                             })
-                            .applymap(color_pnl, subset=['Value','Realized_PL','Unrealized_PL', 'Return_Pct'])
-                            .applymap(color_neg_value, subset=['Shares']),
+                            .map(color_pnl, subset=['Value','Realized_PL','Unrealized_PL', 'Return_Pct'])
+                            .map(color_neg_value, subset=['Shares']),
                             height=min(len(display_df) * 35 + 38, 500),
                             use_container_width=True
                         )
@@ -11325,7 +11325,7 @@ elif page == "Analytics":
                     st.subheader("3. Strategy Breakdown")
                     st.dataframe(
                         strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'})
-                        .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['PL'])
+                        .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['PL'])
                     )
 
                     st.markdown("---")
@@ -11353,8 +11353,8 @@ elif page == "Analytics":
                         st.dataframe(
                             rule_trades[valid_cols].sort_values('Closed_Date', ascending=False)
                             .style.format({'Realized_PL': '${:,.2f}', 'Return_Pct': '{:.2f}%'})
-                            .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Realized_PL'])
-                            .applymap(color_m_trend, subset=['M_Trend'])
+                            .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Realized_PL'])
+                            .map(color_m_trend, subset=['M_Trend'])
                         )
             else:
                 st.info("No closed trades yet in this view.")
@@ -11437,7 +11437,7 @@ elif page == "Analytics":
                             'Net_Equity': '${:,.2f}',
                             'Live_WinRate': '{:.1%}'
                         })
-                        .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Net_Equity'])
+                        .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Net_Equity'])
                     )
 
                     # 5. Rule Forensics (Drill Down)
@@ -11466,7 +11466,7 @@ elif page == "Analytics":
                         st.dataframe(
                             rule_trades_mtm[valid_cols].sort_values('Contribution', ascending=False)
                             .style.format({'Contribution': '${:,.2f}', 'Return_Pct': '{:.2f}%'})
-                            .applymap(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Contribution'])
+                            .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Contribution'])
                         )
 
             else:
