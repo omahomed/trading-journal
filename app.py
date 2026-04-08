@@ -506,8 +506,11 @@ SELL_RULES = [
     "sr5 Equator Line Break", 
     "sr6 Webby RS Rule",
     "sr7 Selling before Earnings", 
-    "sr8 TQQQ Strategy Exit", 
-    "sr9 Breakout Failure"
+    "sr8 TQQQ Strategy Exit",
+    "sr9 Breakout Failure",
+    "sr10 Scale-Out T1 (-3%)",
+    "sr11 Scale-Out T2 (-5%)",
+    "sr12 Scale-Out T3 (-7%)"
 ]
 
 # Combined for Dropdowns
@@ -10558,6 +10561,30 @@ elif page == "Trade Journal":
                 # Status badge color
                 status_color = "#28a745" if is_open else "#6c757d"
 
+                # === SCALE-OUT PLAN (open trades only) ===
+                scale_out_html = ""
+                try:
+                    _so_shs = int(float(trade.get('Shares', 0) or 0))
+                    _so_entry = float(avg_entry_val or 0)
+                except (ValueError, TypeError):
+                    _so_shs, _so_entry = 0, 0.0
+                if is_open and _so_shs > 0 and _so_entry > 0:
+                    _t1 = round(_so_shs * 0.25)
+                    _t2 = round(_so_shs * 0.25)
+                    _t3 = _so_shs - _t1 - _t2
+                    scale_out_html = (
+                        '<div style="background: #fff8e1; border-left: 3px solid #f59e0b; '
+                        'padding: 10px 12px; margin-bottom: 12px; border-radius: 4px;">'
+                        '<div style="font-size: 11px; color: #92400e; text-transform: uppercase; '
+                        'font-weight: 600; margin-bottom: 6px;">Scale-Out Plan</div>'
+                        '<div style="display: grid; grid-template-columns: repeat(3, 1fr); '
+                        'gap: 8px; font-size: 13px; color: #333;">'
+                        f'<div><strong>T1 (-3%):</strong> {_t1} shs @ ${_so_entry * 0.97:,.2f}</div>'
+                        f'<div><strong>T2 (-5%):</strong> {_t2} shs @ ${_so_entry * 0.95:,.2f}</div>'
+                        f'<div><strong>T3 (-7%):</strong> {_t3} shs @ ${_so_entry * 0.93:,.2f}</div>'
+                        '</div></div>'
+                    )
+
                 # === CARD HTML ===
                 st.markdown(f"""
                 <div style="
@@ -10632,6 +10659,7 @@ elif page == "Trade Journal":
                     f'<div style="font-size: 16px; font-weight: 600;">${b1_price:,.2f}</div>' +
                     '</div>' +
                     '</div>') if has_core_add else ''}
+                    {scale_out_html}
                     <div style="font-size: 12px; color: #666;">
                         <strong>Trade ID:</strong> {trade_id} |
                         <strong>Opened:</strong> {open_date if pd.notna(open_date) else 'N/A'}{f" | <strong>Closed:</strong> {trade.get('Closed_Date')}" if not is_open and pd.notna(trade.get('Closed_Date')) else ''}
