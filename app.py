@@ -474,7 +474,7 @@ except ImportError:
 BUY_RULES = [
     # 1. Base Breakouts
     "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
-    "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot",
+    "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot", "br1.8 High Tight Flag",
     # 2. Volume & Volatility
     "br2.1 HVE", "br2.2 HVSI", "br2.3 HV1",
     # 3. Moving Average Reclaims
@@ -10572,6 +10572,59 @@ elif page == "Trade Journal":
                     _t1 = round(_so_shs * 0.25)
                     _t2 = round(_so_shs * 0.25)
                     _t3 = _so_shs - _t1 - _t2
+
+                    # Worst-case scale-out loss (all 3 targets fire)
+                    _scale_loss_dol = (
+                        _t1 * _so_entry * 0.03 +
+                        _t2 * _so_entry * 0.05 +
+                        _t3 * _so_entry * 0.07
+                    )
+                    _pos_cost = _so_shs * _so_entry
+                    _scale_loss_pct = (_scale_loss_dol / _pos_cost * 100) if _pos_cost else 0
+
+                    # Hard-stop loss (single stop on full position)
+                    _stop_px = 0.0
+                    try:
+                        if not target_df.empty and 'Stop_Loss' in target_df.columns:
+                            _stops = pd.to_numeric(target_df['Stop_Loss'], errors='coerce').dropna()
+                            _stops = _stops[_stops > 0]
+                            if not _stops.empty:
+                                _stop_px = float(_stops.iloc[-1])
+                    except Exception:
+                        _stop_px = 0.0
+
+                    if _stop_px > 0 and _stop_px < _so_entry:
+                        _stop_loss_dol = (_so_entry - _stop_px) * _so_shs
+                        _stop_loss_pct = (_stop_loss_dol / _pos_cost * 100)
+                        _diff = _stop_loss_dol - _scale_loss_dol
+                        if _diff > 0:
+                            _verdict_color = "#16a34a"
+                            _verdict = f"✅ Scale-out saves ${_diff:,.0f}"
+                        elif _diff < 0:
+                            _verdict_color = "#dc2626"
+                            _verdict = f"⚠️ Hard stop is ${-_diff:,.0f} better"
+                        else:
+                            _verdict_color = "#6b7280"
+                            _verdict = "= Equivalent"
+                        _compare_html = (
+                            '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; '
+                            'font-size: 12px; color: #374151;">'
+                            f'<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">'
+                            f'<div><strong>Scale-Out worst case:</strong> -${_scale_loss_dol:,.0f} ({_scale_loss_pct:.2f}%)</div>'
+                            f'<div><strong>Hard Stop @ ${_stop_px:,.2f}:</strong> -${_stop_loss_dol:,.0f} ({_stop_loss_pct:.2f}%)</div>'
+                            f'</div>'
+                            f'<div style="margin-top: 4px; font-weight: 600; color: {_verdict_color};">{_verdict}</div>'
+                            '</div>'
+                        )
+                    else:
+                        _compare_html = (
+                            '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; '
+                            'font-size: 12px; color: #6b7280;">'
+                            f'Scale-Out worst case: <strong>-${_scale_loss_dol:,.0f} ({_scale_loss_pct:.2f}%)</strong> '
+                            '· no hard stop on file'
+                            '</div>'
+                        )
+
                     scale_out_html = (
                         '<div style="background: #fff8e1; border-left: 3px solid #f59e0b; '
                         'padding: 10px 12px; margin-bottom: 12px; border-radius: 4px;">'
@@ -10582,7 +10635,9 @@ elif page == "Trade Journal":
                         f'<div><strong>T1 (-3%):</strong> {_t1} shs @ ${_so_entry * 0.97:,.2f}</div>'
                         f'<div><strong>T2 (-5%):</strong> {_t2} shs @ ${_so_entry * 0.95:,.2f}</div>'
                         f'<div><strong>T3 (-7%):</strong> {_t3} shs @ ${_so_entry * 0.93:,.2f}</div>'
-                        '</div></div>'
+                        '</div>'
+                        f'{_compare_html}'
+                        '</div>'
                     )
 
                 # === CARD HTML ===
