@@ -10593,37 +10593,46 @@ elif page == "Trade Journal":
                     except Exception:
                         _stop_px = 0.0
 
+                    # Hard stop loss
+                    _stop_loss_dol = None
                     if _stop_px > 0 and _stop_px < _so_entry:
                         _stop_loss_dol = (_so_entry - _stop_px) * _so_shs
+
+                    # Risk budget on trade
+                    _risk_budget = 0.0
+                    try:
+                        _risk_budget = float(trade.get('Risk_Budget', 0) or 0)
+                    except (ValueError, TypeError):
+                        _risk_budget = 0.0
+
+                    # Build comparison rows
+                    _rows = [f'<div><strong>Scale-Out worst case:</strong> -${_scale_loss_dol:,.0f} ({_scale_loss_pct:.2f}%)</div>']
+                    if _stop_loss_dol is not None:
                         _stop_loss_pct = (_stop_loss_dol / _pos_cost * 100)
-                        _diff = _stop_loss_dol - _scale_loss_dol
-                        if _diff > 0:
+                        _rows.append(f'<div><strong>Hard Stop @ ${_stop_px:,.2f}:</strong> -${_stop_loss_dol:,.0f} ({_stop_loss_pct:.2f}%)</div>')
+
+                    # Verdict: scale-out vs risk budget
+                    if _risk_budget > 0:
+                        _diff = _risk_budget - _scale_loss_dol
+                        if _diff >= 0:
                             _verdict_color = "#16a34a"
-                            _verdict = f"✅ Scale-out saves ${_diff:,.0f}"
-                        elif _diff < 0:
-                            _verdict_color = "#dc2626"
-                            _verdict = f"⚠️ Hard stop is ${-_diff:,.0f} better"
+                            _verdict = f"✅ Scale-out within risk budget (${_risk_budget:,.0f}) — buffer ${_diff:,.0f}"
                         else:
-                            _verdict_color = "#6b7280"
-                            _verdict = "= Equivalent"
-                        _compare_html = (
-                            '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; '
-                            'font-size: 12px; color: #374151;">'
-                            f'<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">'
-                            f'<div><strong>Scale-Out worst case:</strong> -${_scale_loss_dol:,.0f} ({_scale_loss_pct:.2f}%)</div>'
-                            f'<div><strong>Hard Stop @ ${_stop_px:,.2f}:</strong> -${_stop_loss_dol:,.0f} ({_stop_loss_pct:.2f}%)</div>'
-                            f'</div>'
-                            f'<div style="margin-top: 4px; font-weight: 600; color: {_verdict_color};">{_verdict}</div>'
-                            '</div>'
-                        )
+                            _verdict_color = "#dc2626"
+                            _verdict = f"⚠️ Scale-out EXCEEDS risk budget (${_risk_budget:,.0f}) by ${-_diff:,.0f}"
                     else:
-                        _compare_html = (
-                            '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; '
-                            'font-size: 12px; color: #6b7280;">'
-                            f'Scale-Out worst case: <strong>-${_scale_loss_dol:,.0f} ({_scale_loss_pct:.2f}%)</strong> '
-                            '· no hard stop on file'
-                            '</div>'
-                        )
+                        _verdict_color = "#6b7280"
+                        _verdict = "No risk budget on file"
+
+                    _compare_html = (
+                        '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #fde68a; '
+                        'font-size: 12px; color: #374151;">'
+                        f'<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">'
+                        + ''.join(_rows) +
+                        '</div>'
+                        f'<div style="margin-top: 4px; font-weight: 600; color: {_verdict_color};">{_verdict}</div>'
+                        '</div>'
+                    )
 
                     scale_out_html = (
                         '<div style="background: #fff8e1; border-left: 3px solid #f59e0b; '
