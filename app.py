@@ -5428,9 +5428,16 @@ elif page == "Position Sizer":
                 else:
                     m2.metric("Hard Cap Limit", f"{max_shares_cap} shs", "20% Max Alloc", delta_color="off")
                     
-                # Risk Dollars based on ATR for the final selected size
-                final_atr_risk_dol = final_max_shares * vs_price * atr_decimal
-                m3.metric("ATR Risk $", f"${final_atr_risk_dol:,.0f}", limit_reason, delta_color="off")
+                # Actual dollar risk at recommended size, using the calculated stop
+                # Falls back to a 1-ATR move if no stop is set
+                if effective_stop > 0 and effective_stop < vs_price:
+                    risk_per_share = vs_price - effective_stop
+                    risk_label = f"Stop ${effective_stop:.2f} ({risk_per_share/vs_price*100:.1f}%)"
+                else:
+                    risk_per_share = vs_price * atr_decimal
+                    risk_label = f"1 ATR ({vs_atr_pct:.1f}%)"
+                final_risk_dol = final_max_shares * risk_per_share
+                m3.metric("Trade Risk $", f"${final_risk_dol:,.0f}", risk_label, delta_color="off")
 
                 st.markdown("### 🏛️ The Verdict")
                 
