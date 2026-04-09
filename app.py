@@ -5428,8 +5428,10 @@ elif page == "Position Sizer":
                 else:
                     m2.metric("Hard Cap Limit", f"{max_shares_cap} shs", "20% Max Alloc", delta_color="off")
                     
-                m3.metric("Limiting Factor", limit_reason, "Determines Final Size", delta_color="off")
-                
+                # Risk Dollars based on ATR for the final selected size
+                final_atr_risk_dol = final_max_shares * vs_price * atr_decimal
+                m3.metric("ATR Risk $", f"${final_atr_risk_dol:,.0f}", limit_reason, delta_color="off")
+
                 st.markdown("### 🏛️ The Verdict")
                 
                 target_weight = (final_max_val / vs_equity) * 100
