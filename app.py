@@ -5418,13 +5418,18 @@ elif page == "Position Sizer":
                 st.markdown("---")
 
                 m1, m2, m3 = st.columns(3)
-                atr_cost = f"${max_shares_vol * vs_price:,.0f} ({max_shares_vol * vs_price / vs_equity * 100:.1f}% NLV)"
-                m1.metric("ATR Limit", f"{max_shares_vol} shs", atr_cost, delta_color="off")
+                # ATR Limit: dollar risk = shares × (price × ATR%)
+                atr_risk_at_vol = max_shares_vol * vs_price * atr_decimal
+                atr_cost_pct = max_shares_vol * vs_price / vs_equity * 100
+                m1.metric("ATR Limit", f"{max_shares_vol} shs", f"Risk ${atr_risk_at_vol:,.0f} · {atr_cost_pct:.1f}% NLV", delta_color="off")
 
                 if vol_mode.startswith("🆕") and effective_stop > 0:
                     delta_color = "normal" if max_shares_tech < max_shares_vol else "off"
-                    tech_cost = f"${max_shares_tech * vs_price:,.0f} ({max_shares_tech * vs_price / vs_equity * 100:.1f}% NLV)"
-                    m2.metric("Tech Stop Limit", f"{max_shares_tech} shs", tech_cost, delta_color=delta_color)
+                    # Tech Stop Limit: dollar risk = shares × (price - stop)
+                    tech_risk_at_max = max_shares_tech * (vs_price - effective_stop)
+                    tech_cost_pct = max_shares_tech * vs_price / vs_equity * 100
+                    m2.metric("Tech Stop Limit", f"{max_shares_tech} shs",
+                              f"Risk ${tech_risk_at_max:,.0f} · {tech_cost_pct:.1f}% NLV", delta_color=delta_color)
                 else:
                     m2.metric("Hard Cap Limit", f"{max_shares_cap} shs", "20% Max Alloc", delta_color="off")
                     
