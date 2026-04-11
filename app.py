@@ -11936,6 +11936,120 @@ elif page == "Analytics":
                 st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
                 # ==============================================================================
+                # LOSS DISCIPLINE — enforce the 1% rule
+                # Impact % = Realized P&L / NLV at trade open date (from journal)
+                # ==============================================================================
+                st.markdown("### 🛡️ Loss Discipline")
+
+                loss_trades = all_closed[all_closed['Realized_PL'] < 0].copy()
+                impact_df = pd.DataFrame()
+
+                if not loss_trades.empty and not df_j.empty and 'End NLV' in df_j.columns:
+                    _jdf = df_j[['Day', 'End NLV']].copy()
+                    _jdf['Day_DT'] = pd.to_datetime(_jdf['Day'], errors='coerce')
+                    _jdf = _jdf.dropna(subset=['Day_DT']).sort_values('Day_DT')
+
+                    def _nlv_at_open(open_dt):
+                        if pd.isna(open_dt) or _jdf.empty:
+                            return None
+                        mask = _jdf['Day_DT'] <= open_dt
+                        hist = _jdf.loc[mask]
+                        if hist.empty:
+                            return None
+                        v = hist['End NLV'].iloc[-1]
+                        return float(v) if v and v > 0 else None
+
+                    loss_trades['NLV_at_Open'] = loss_trades['Open_Date_DT'].apply(_nlv_at_open)
+                    loss_trades['Impact_Pct'] = loss_trades.apply(
+                        lambda r: (r['Realized_PL'] / r['NLV_at_Open'] * 100)
+                        if r['NLV_at_Open'] and r['NLV_at_Open'] > 0 else None,
+                        axis=1
+                    )
+                    impact_df = loss_trades.dropna(subset=['Impact_Pct']).copy()
+
+                if impact_df.empty:
+                    st.info("💡 Loss discipline requires both closed losses and journal NLV data. Log a few trades with Risk_Budget and journal entries to unlock this view.")
+                else:
+                    total_losses = len(impact_df)
+                    within_rule = (impact_df['Impact_Pct'] >= -1.0).sum()
+                    breaches = total_losses - within_rule
+                    pass_rate = (within_rule / total_losses * 100) if total_losses > 0 else 100.0
+
+                    # Score card — big number
+                    _score_bg = "#dcfce7" if pass_rate >= 95 else ("#fef3c7" if pass_rate >= 85 else "#fee2e2")
+                    _score_txt = "#15803d" if pass_rate >= 95 else ("#b45309" if pass_rate >= 85 else "#b91c1c")
+                    _score_icon = "✅" if pass_rate >= 95 else ("⚠️" if pass_rate >= 85 else "🚨")
+
+                    st.markdown(
+                        f'<div style="background:{_score_bg};border-radius:14px;'
+                        f'padding:18px 22px;margin-bottom:12px;'
+                        f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+                        f'<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;">'
+                        f'<div>'
+                        f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                        f'letter-spacing:0.08em;color:#64748b;">1% Rule Compliance</div>'
+                        f'<div style="font-size:30px;font-weight:800;color:{_score_txt};'
+                        f'margin-top:4px;line-height:1.1;">'
+                        f'{_score_icon} {pass_rate:.1f}% within rule</div>'
+                        f'<div style="font-size:12px;color:#64748b;margin-top:3px;">'
+                        f'{within_rule} of {total_losses} closed losses held under −1% account impact'
+                        f'</div>'
+                        f'</div>'
+                        f'<div style="text-align:right;">'
+                        f'<div style="font-size:11px;color:#64748b;text-transform:uppercase;'
+                        f'font-weight:700;">Breaches</div>'
+                        f'<div style="font-size:36px;font-weight:800;color:{("#b91c1c" if breaches > 0 else "#16a34a")};'
+                        f'line-height:1;">{breaches}</div>'
+                        f'</div>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+                    # Bucket definitions — (label, lower_bound_exclusive, upper_bound_inclusive, color, bg, subtitle)
+                    buckets = [
+                        ("0 to −0.25%", -0.25, 0.0, "#16a34a", "#f0fdf4", "Minor nicks"),
+                        ("−0.25 to −0.50%", -0.50, -0.25, "#65a30d", "#f7fee7", "Small"),
+                        ("−0.50 to −1.00%", -1.00, -0.50, "#d97706", "#fffbeb", "Borderline"),
+                        ("Over −1.00%", -9999.0, -1.00, "#dc2626", "#fef2f2", "🚨 BREACH"),
+                    ]
+
+                    b_cols = st.columns(4)
+                    for (label, lo, hi, color, bg, sub), col in zip(buckets, b_cols):
+                        # (lo, hi] — bucket contains trades where lo < impact <= hi
+                        mask = (impact_df['Impact_Pct'] > lo) & (impact_df['Impact_Pct'] <= hi)
+                        bucket_trades = impact_df[mask]
+                        count = len(bucket_trades)
+                        dollar_sum = bucket_trades['Realized_PL'].sum() if count > 0 else 0.0
+                        col.markdown(
+                            f'<div style="background:{bg};border-left:4px solid {color};'
+                            f'border-radius:10px;padding:14px 16px;height:100%;">'
+                            f'<div style="font-size:11px;font-weight:600;text-transform:uppercase;'
+                            f'letter-spacing:0.06em;color:#64748b;">{label}</div>'
+                            f'<div style="font-size:26px;font-weight:800;color:#111;'
+                            f'margin-top:4px;">{count}</div>'
+                            f'<div style="font-size:12px;color:{color};font-weight:600;margin-top:2px;">{sub}</div>'
+                            f'<div style="font-size:11px;color:#64748b;margin-top:4px;">'
+                            f'${dollar_sum:,.0f} total</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
+
+                    # Worst offenders — expandable table
+                    worst = impact_df.nsmallest(5, 'Impact_Pct')[
+                        ['Trade_ID', 'Ticker', 'Closed_Date', 'Realized_PL', 'Impact_Pct']
+                    ].copy()
+                    worst['Closed_Date'] = pd.to_datetime(worst['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                    worst['Realized_PL'] = worst['Realized_PL'].apply(lambda x: f"${x:,.2f}")
+                    worst['Impact_Pct'] = worst['Impact_Pct'].apply(lambda x: f"{x:.2f}%")
+                    worst.columns = ['Trade ID', 'Ticker', 'Closed', 'P&L', 'Impact %']
+
+                    with st.expander(f"⚠️ Worst {len(worst)} Offenders" + (f" — {breaches} breach(es)" if breaches > 0 else "")):
+                        st.dataframe(worst, hide_index=True, use_container_width=True)
+
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                # ==============================================================================
                 # STREAKS & ACTIVITY — compact row
                 # ==============================================================================
                 s1, s2, s3, s4, s5 = st.columns(5)
