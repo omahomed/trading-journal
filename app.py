@@ -12775,21 +12775,30 @@ elif page == "Analytics":
                                 'Value': (trade_txs['Shares'].astype(float) * trade_txs['Amount'].astype(float)),
                                 'Rule': trade_txs.get('Rule', ''),
                             })
-                            st.dataframe(
-                                disp,
-                                hide_index=True,
-                                use_container_width=True,
-                                column_config={
-                                    'Date': st.column_config.TextColumn('Date', width='small'),
-                                    'Trx': st.column_config.TextColumn('Trx', width='small'),
-                                    'Action': st.column_config.TextColumn('Action', width='small'),
-                                    'Shares': st.column_config.NumberColumn('Shares', format='%.0f'),
-                                    'Price': st.column_config.NumberColumn('Price', format='$%.4f'),
-                                    'Return %': st.column_config.NumberColumn('Return %', format='%+.2f%%', help='LIFO-attributed return for each BUY lot (SELL rows show 0%)'),
-                                    'Value': st.column_config.NumberColumn('Value', format='$%.2f'),
-                                    'Rule': st.column_config.TextColumn('Rule'),
-                                },
+
+                            # Color-code Return %: green if positive, red if negative
+                            def _color_return(v):
+                                try:
+                                    f = float(v)
+                                except (TypeError, ValueError):
+                                    return ''
+                                if f > 0:
+                                    return 'color:#16a34a;font-weight:700'
+                                if f < 0:
+                                    return 'color:#dc2626;font-weight:700'
+                                return 'color:#64748b'
+
+                            styled = (
+                                disp.style
+                                .format({
+                                    'Shares': '{:,.0f}',
+                                    'Price': '${:,.4f}',
+                                    'Return %': '{:+.2f}%',
+                                    'Value': '${:,.2f}',
+                                })
+                                .map(_color_return, subset=['Return %'])
                             )
+                            st.dataframe(styled, hide_index=True, use_container_width=True)
 
                     # Editable lesson note
                     existing_note, existing_cat = lessons_map.get(trade_id, ('', ''))
