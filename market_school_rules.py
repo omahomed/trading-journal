@@ -118,6 +118,7 @@ class MarketSchoolRules:
         self.rally_low_idx = None
         self.ftd_date = None
         self.ftd_close = None
+        self.ftd_low = None  # Low of the initial follow-through day (for S1 undercut check)
         
         # Distribution tracking
         self.distribution_days: List[DistributionDay] = []
@@ -363,8 +364,14 @@ class MarketSchoolRules:
             
         # Check for 1.0% gain
         if current['daily_gain_pct'] >= 1.0:
-            signal_type = SignalType.B1 if not self.ftd_date else SignalType.B2
-            
+            # B2 requires: close above the low of the initial follow-through day
+            if self.ftd_date is not None:
+                if self.ftd_low is None or current['Close'] <= self.ftd_low:
+                    return None
+                signal_type = SignalType.B2
+            else:
+                signal_type = SignalType.B1
+
             signal = Signal(
                 date=current.name,
                 signal_type=signal_type,
@@ -373,10 +380,11 @@ class MarketSchoolRules:
                 affects_exposure=True,
                 exposure_change=1 if signal_type == SignalType.B1 else 0
             )
-            
+
             if signal_type == SignalType.B1:
                 self.ftd_date = current.name
                 self.ftd_close = current['Close']
+                self.ftd_low = current['Low']  # Store FTD day's low for S1 undercut check
                 self.buy_switch = True
                 # Reset reference high for new bull cycle
                 self.reference_high = current['High']
@@ -384,13 +392,15 @@ class MarketSchoolRules:
                 # Reset distribution day count — new uptrend starts fresh
                 self.distribution_days = []
                 self.active_distribution_count = 0
-                # Reset B/S lockout state — new bull cycle, old sell signals
-                # from the prior correction should not block new B3/B4/B5 signals
+                # Reset B/S lockout state — new bull cycle, prior cycle's
+                # sell signals should not block new B3/B4/B5 signals
                 self.last_s5_s6_s7_s8_date = None
                 self.last_b3_b4_b5_date = None
-                
+                self.last_s9_date = None
+                self.last_b6_date = None
+
             return signal
-            
+
         return None
         
     def check_moving_average_signals(self, idx: int) -> List[Signal]:
@@ -405,16 +415,17 @@ class MarketSchoolRules:
             
         # 21-day EMA Buy Signals (B3, B4, B5)
         if self.buy_switch:
-            # B3: Low Above 21-day EMA
-            if current['Low'] >= current['ema21']:
-                # Check if we need S5 reset
+            # B3: Low Above 21-day EMA on an up or flat day
+            # Rule: "Once you have a B3 or B4, you can't have another until reset by S5"
+            close_up_or_flat = prev is not None and current['Close'] >= prev['Close']
+            if current['Low'] >= current['ema21'] and close_up_or_flat:
+                # Lockout: block B3 if a prior B3/B4/B5 fired AND no S5 reset since
                 can_trigger_b3 = True
-                if self.last_s5_s6_s7_s8_date and self.last_b3_b4_b5_date:
-                    if self.last_s5_s6_s7_s8_date > self.last_b3_b4_b5_date:
+                if self.last_b3_b4_b5_date is not None:
+                    if (self.last_s5_s6_s7_s8_date is None or
+                        self.last_s5_s6_s7_s8_date < self.last_b3_b4_b5_date):
                         can_trigger_b3 = False
-                elif self.last_s5_s6_s7_s8_date and not self.last_b3_b4_b5_date:
-                    can_trigger_b3 = False
-                    
+
                 if can_trigger_b3:
                     signals.append(Signal(
                         date=current.name,
@@ -471,29 +482,40 @@ class MarketSchoolRules:
                         self.last_b3_b4_b5_date = current.name
                     
         # 21-day EMA Sell Signals
-        # S5: Break Below 21-day EMA
+        # S5: Break Below 21-day EMA (close >= 0.2% below)
+        # Rule: "Once you have an S5, S6 or S7, you can't have another until reset by B3"
         if prev is not None and prev['Close'] >= prev['ema21'] and current['Close'] < current['ema21'] * 0.998:
-            signals.append(Signal(
-                date=current.name,
-                signal_type=SignalType.S5,
-                price=current['Close'],
-                description="Break Below 21-day EMA",
-                affects_exposure=True,
-                exposure_change=-1
-            ))
-            self.last_s5_s6_s7_s8_date = current.name
+            # Lockout: block S5 if a prior S5/S6/S7/S8 fired AND no B3 reset since
+            can_trigger_s5 = True
+            if self.last_s5_s6_s7_s8_date is not None:
+                if (self.last_b3_b4_b5_date is None or
+                    self.last_b3_b4_b5_date < self.last_s5_s6_s7_s8_date):
+                    can_trigger_s5 = False
+
+            if can_trigger_s5:
+                signals.append(Signal(
+                    date=current.name,
+                    signal_type=SignalType.S5,
+                    price=current['Close'],
+                    description="Break Below 21-day EMA",
+                    affects_exposure=True,
+                    exposure_change=-1
+                ))
+                self.last_s5_s6_s7_s8_date = current.name
             
         # 50-day MA Signals
-        # B6: Low Above 50-day MA
-        if self.buy_switch and current['Low'] >= current['sma50']:
-            # Check if we need S9 reset
+        # B6: Low Above 50-day MA (reclaim signal)
+        # Rule: "Only triggers if a corresponding sell signal (S9) triggered previously.
+        #        B6 is reset by S9."
+        if self.buy_switch and current['Low'] >= current['sma50'] and close_up_or_flat:
             can_trigger_b6 = True
-            if self.last_s9_date and self.last_b6_date:
-                if self.last_s9_date > self.last_b6_date:
-                    can_trigger_b6 = False
-            elif self.last_s9_date and not self.last_b6_date:
+            # Requires a prior S9 in this bull cycle
+            if self.last_s9_date is None:
                 can_trigger_b6 = False
-                
+            # And no B6 since the last S9
+            elif self.last_b6_date is not None and self.last_b6_date >= self.last_s9_date:
+                can_trigger_b6 = False
+
             if can_trigger_b6:
                 signals.append(Signal(
                     date=current.name,
@@ -504,23 +526,30 @@ class MarketSchoolRules:
                     exposure_change=1
                 ))
                 self.last_b6_date = current.name
-                
-        # S9: Break Below 50-day MA
+
+        # S9: Break Below 50-day MA (reset by B6)
         if prev is not None and prev['Close'] >= prev['sma50'] and current['Close'] < current['sma50']:
             # Check shakeout exception
-            is_shakeout = (current['close_position'] > 0.5 and 
+            is_shakeout = (current['close_position'] > 0.5 and
                          current['Close'] > current['sma50'] * 0.99)
-            
+
             if not is_shakeout:
-                signals.append(Signal(
-                    date=current.name,
-                    signal_type=SignalType.S9,
-                    price=current['Close'],
-                    description="Break Below 50-day MA",
-                    affects_exposure=True,
-                    exposure_change=-1
-                ))
-                self.last_s9_date = current.name
+                # Lockout: block S9 if prior S9 fired AND no B6 reset since
+                can_trigger_s9 = True
+                if self.last_s9_date is not None:
+                    if self.last_b6_date is None or self.last_b6_date < self.last_s9_date:
+                        can_trigger_s9 = False
+
+                if can_trigger_s9:
+                    signals.append(Signal(
+                        date=current.name,
+                        signal_type=SignalType.S9,
+                        price=current['Close'],
+                        description="Break Below 50-day MA",
+                        affects_exposure=True,
+                        exposure_change=-1
+                    ))
+                    self.last_s9_date = current.name
                 
         return signals
         
@@ -790,8 +819,11 @@ class MarketSchoolRules:
 
         current = self.data.iloc[idx]
 
-        # S1: Follow-Through Day Undercut (close below rally low)
-        if current['Close'] < self.rally_low:
+        # S1: Close below the low of the INITIAL follow-through day.
+        # Per spec: "Sell if index closes below the low of the initial follow-through day.
+        #            Does not apply to Additional Follow-Through Days."
+        # ftd_low is set on B1 and never updated by B2, so this naturally holds.
+        if self.ftd_low is not None and current['Close'] < self.ftd_low:
             signal = Signal(
                 date=current.name,
                 signal_type=SignalType.S1,
@@ -805,6 +837,7 @@ class MarketSchoolRules:
             self.market_exposure = 0
             self.ftd_date = None
             self.ftd_close = None
+            self.ftd_low = None
             self.rally_start_date = None
             self.market_in_correction = True
             # Clear distribution days — correction resets the count
@@ -814,21 +847,24 @@ class MarketSchoolRules:
                     dd.removal_reason = 'FTD undercut - back to correction'
             return signal
 
-        # S2: Failed Rally Attempt (intraday low breaches rally low)
+        # S2: Failed Rally Attempt — intraday low breaches the rally low (major low).
+        # "Major low" per spec = low that occurred when buy_switch was OFF (pre-FTD).
+        # Minor-low handling (post-FTD lows, -2 exposure only) is Commit 2.
         if current['Low'] < self.rally_low:
             signal = Signal(
                 date=current.name,
                 signal_type=SignalType.S2,
                 price=current['Close'],
-                description="Failed Rally - FTD Voided",
+                description="Failed Rally - Major Low Undercut",
                 affects_exposure=True,
                 exposure_change=-self.market_exposure
             )
-            # FTD voided — back to correction
+            # Major low undercut — back to correction, buy switch OFF
             self.buy_switch = False
             self.market_exposure = 0
             self.ftd_date = None
             self.ftd_close = None
+            self.ftd_low = None
             self.rally_start_date = None
             self.market_in_correction = True
             # Clear distribution days — correction resets the count
