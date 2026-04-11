@@ -1941,7 +1941,12 @@ with st.sidebar:
 page = st.session_state.page
 
 st.sidebar.markdown("---")
-st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode", value=st.session_state.get('privacy_mode', False))
+# Initialize privacy_mode state once so the toggle survives page navigation.
+# Passing both `key` and `value` to a widget is a known Streamlit anti-pattern
+# that causes the widget to reset on reruns — use key-only here.
+if 'privacy_mode' not in st.session_state:
+    st.session_state.privacy_mode = False
+st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode")
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
 # Logout button (only if password auth is active)
