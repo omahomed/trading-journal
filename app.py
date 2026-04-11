@@ -11170,7 +11170,7 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_perf, tab_live, tab_dd, tab_stats, tab_review = st.tabs(["📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "📈 Career Stats", "🔬 Trade Review"])
+        tab_stats, tab_perf, tab_live, tab_dd, tab_review = st.tabs(["🎯 Overview", "📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "🔬 Trade Review"])
 
         # --- TAB 1: PERFORMANCE AUDIT (EXACT ORIGINAL) ---
         with tab_perf:
@@ -11707,8 +11707,8 @@ elif page == "Analytics":
 
         # --- TAB 4: CAREER STATS (ALL-TIME OVERVIEW) ---
         with tab_stats:
-            st.subheader("📈 Career Stats (All-Time Overview)")
-            st.caption("Comprehensive statistics across all closed trades in your trading career")
+            st.subheader("🎯 All-Time Overview")
+            st.caption("The headline numbers across every closed trade — start here for a quick health check.")
 
             # Use df_s_raw for all-time data (not filtered by year)
             all_trades = df_s_raw.copy()
@@ -11805,172 +11805,186 @@ elif page == "Analytics":
                 open_trades = all_trades[all_trades['Status'] == 'OPEN']
                 num_open = len(open_trades)
 
-                # ==============================================================================
-                # DISPLAY LAYOUT
-                # ==============================================================================
-
-                # --- MONTHLY PERFORMANCE ---
-                st.markdown("### 📅 Monthly Performance")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Best Month", f"${best_month:,.2f}",
-                             delta=f"in {best_month_date}")
-                with col2:
-                    st.metric("Worst Month", f"${worst_month:,.2f}",
-                             delta=f"in {worst_month_date}",
-                             delta_color="inverse")
-                with col3:
-                    st.metric("Average Month", f"${avg_month:,.2f}")
-
-                st.markdown("---")
-
-                # --- TRADE PERFORMANCE ---
-                st.markdown("### 💰 Trade Performance")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    pl_color = "normal" if total_pl > 0 else "inverse"
-                    st.metric("Total P&L", f"${total_pl:,.2f}", delta_color=pl_color)
-                with col2:
-                    st.metric("Total Trades", f"{total_trades:,}")
-                with col3:
-                    st.metric("Average Trade", f"${avg_trade:,.2f}")
-                with col4:
-                    st.metric("Profit Factor", f"{profit_factor:.2f}",
-                             delta="✅ Good" if profit_factor > 1.5 else "⚠️ Improve")
-
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Winning Trades", f"{num_winners:,}",
-                             delta=f"{win_rate:.1f}% win rate")
-                with col2:
-                    st.metric("Losing Trades", f"{num_losers:,}")
-                with col3:
-                    st.metric("Break-Even Trades", f"{num_break_even:,}")
-                with col4:
-                    st.metric("Open Positions", f"{num_open:,}")
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Average Winner", f"${avg_win:,.2f}",
-                             delta=f"Largest: ${largest_win:,.2f}")
-                with col2:
-                    st.metric("Average Loser", f"${avg_loss:,.2f}",
-                             delta=f"Largest: ${largest_loss:,.2f}",
-                             delta_color="inverse")
-                with col3:
-                    st.metric("Win/Loss Ratio", f"{wl_ratio:.2f}x",
-                             delta="✅ Good" if wl_ratio > 2.0 else "⚠️ Improve")
-
-                st.markdown("---")
-
-                # --- CONSISTENCY METRICS ---
-                st.markdown("### 🎯 Consistency Metrics")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Max Consecutive Wins", f"{max_consecutive_wins:,}")
-                with col2:
-                    st.metric("Max Consecutive Losses", f"{max_consecutive_losses:,}")
-                with col3:
-                    st.metric("Win Rate", f"{win_rate:.1f}%",
-                             delta="✅ Good" if win_rate >= 40 else "⚠️ Improve")
-                with col4:
-                    st.metric("Expectancy", f"${expectancy:,.2f}",
-                             delta="Per trade average")
-
-                st.markdown("---")
-
-                # --- HOLDING TIME ANALYSIS ---
-                st.markdown("### ⏱️ Holding Time Analysis")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Avg Hold Time (All)", f"{avg_hold_all:.1f} days")
-                with col2:
-                    st.metric("Winners Hold Time", f"{winners_hold:.1f} days")
-                with col3:
-                    st.metric("Losers Hold Time", f"{losers_hold:.1f} days")
-                with col4:
-                    hold_status = "✅ Cut losses faster" if hold_ratio > 1.0 else "⚠️ Hold losers too long"
-                    st.metric("Win/Loss Hold Ratio", f"{hold_ratio:.2f}x",
-                             delta=hold_status)
-
-                if num_break_even > 0:
-                    st.caption(f"ℹ️ Scratch trades held on average: {scratch_hold:.1f} days")
-
-                st.markdown("---")
-
-                # --- RISK METRICS ---
-                st.markdown("### 📊 Risk Metrics")
-                if has_risk_data:
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        r_color = "normal" if avg_r_multiple > 0 else "inverse"
-                        st.metric("Avg R-Multiple", f"{avg_r_multiple:.2f}R",
-                                 delta=f"Max: {max_r_multiple:.1f}R",
-                                 delta_color=r_color)
-                    with col2:
-                        st.metric("Trade Expectancy", f"${expectancy:,.2f}",
-                                 help="Average expected P&L per trade")
-                    with col3:
-                        # Calculate realized R-Multiple (for trades with risk budget)
-                        if not closed_with_r.empty:
-                            avg_realized_r = closed_with_r['R_Multiple'].mean()
-                            st.metric("Avg Realized R", f"{avg_realized_r:.2f}R",
-                                     help="Average R achieved on closed trades")
-                        else:
-                            st.metric("Avg Realized R", "N/A")
+                # Top-3-winner concentration (for later)
+                if not winners.empty and gross_profit > 0:
+                    top_3_profit = winners.nlargest(3, 'Realized_PL')['Realized_PL'].sum()
+                    top_3_pct = (top_3_profit / gross_profit * 100)
                 else:
-                    st.info("💡 Risk metrics not available. Log trades with Risk_Budget to track R-multiples and risk-adjusted performance.")
+                    top_3_pct = 0.0
 
-                st.markdown("---")
+                # Status flags for the quality tiles
+                pf_ok = profit_factor >= 1.5
+                wl_ok = wl_ratio >= 2.0
+                win_rate_ok = win_rate >= 40
+                hold_ok = hold_ratio >= 1.0
 
-                # --- POSITION MANAGEMENT ---
-                st.markdown("### 📈 Position Management")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Largest Profit", f"${largest_win:,.2f}",
-                             delta="Single trade")
-                with col2:
-                    st.metric("Largest Loss", f"${largest_loss:,.2f}",
-                             delta="Single trade",
-                             delta_color="inverse")
-                with col3:
-                    # Calculate % of total profit from top winners
-                    if not winners.empty and gross_profit > 0:
-                        top_3_profit = winners.nlargest(3, 'Realized_PL')['Realized_PL'].sum()
-                        top_3_pct = (top_3_profit / gross_profit * 100)
-                        st.metric("Top 3 Winners", f"{top_3_pct:.1f}%",
-                                 delta="of total profit")
-                    else:
-                        st.metric("Top 3 Winners", "N/A")
+                # ==============================================================================
+                # HERO ROW — THE BIG 4 (the health check a glance)
+                # ==============================================================================
+                _hero_bg_pl = "#dcfce7" if total_pl >= 0 else "#fee2e2"
+                _hero_txt_pl = "#15803d" if total_pl >= 0 else "#b91c1c"
+                _hero_bg_pf = "#dcfce7" if pf_ok else "#fef3c7"
+                _hero_txt_pf = "#15803d" if pf_ok else "#b45309"
+                _hero_bg_wr = "#dcfce7" if win_rate_ok else "#fef3c7"
+                _hero_txt_wr = "#15803d" if win_rate_ok else "#b45309"
+                _hero_bg_ex = "#dcfce7" if expectancy >= 0 else "#fee2e2"
+                _hero_txt_ex = "#15803d" if expectancy >= 0 else "#b91c1c"
 
-                # Optional: Add a summary insight
-                st.markdown("---")
-                with st.expander("📖 How to Read These Stats"):
+                def _hero_card(label, value, sub, bg, txt):
+                    return (
+                        f'<div style="background:{bg};border-radius:14px;padding:20px 22px;'
+                        f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+                        f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                        f'letter-spacing:0.08em;color:#64748b;">{label}</div>'
+                        f'<div style="font-size:32px;font-weight:800;color:{txt};'
+                        f'margin-top:6px;line-height:1.1;">{value}</div>'
+                        f'<div style="font-size:12px;color:#64748b;margin-top:4px;">{sub}</div>'
+                        f'</div>'
+                    )
+
+                h1, h2, h3, h4 = st.columns(4)
+                h1.markdown(_hero_card("Total P&L", f"${total_pl:,.0f}",
+                    f"{total_trades:,} closed trades", _hero_bg_pl, _hero_txt_pl),
+                    unsafe_allow_html=True)
+                h2.markdown(_hero_card("Win Rate", f"{win_rate:.1f}%",
+                    f"{num_winners}W · {num_losers}L",
+                    _hero_bg_wr, _hero_txt_wr), unsafe_allow_html=True)
+                h3.markdown(_hero_card("Profit Factor", f"{profit_factor:.2f}",
+                    "≥1.5 healthy" if pf_ok else "target ≥1.5",
+                    _hero_bg_pf, _hero_txt_pf), unsafe_allow_html=True)
+                h4.markdown(_hero_card("Expectancy / Trade", f"${expectancy:,.0f}",
+                    "avg $ per trade",
+                    _hero_bg_ex, _hero_txt_ex), unsafe_allow_html=True)
+
+                st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+
+                # ==============================================================================
+                # WINNERS vs LOSERS — side-by-side breakdown
+                # ==============================================================================
+                def _side_block(title, color, bg, shares, avg, largest, hold):
+                    return (
+                        f'<div style="background:{bg};border-left:4px solid {color};'
+                        f'border-radius:10px;padding:16px 18px;height:100%;">'
+                        f'<div style="font-size:13px;font-weight:700;color:{color};'
+                        f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px;">{title}</div>'
+                        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+                        f'<div><div style="font-size:11px;color:#64748b;">Count</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#111;">{shares}</div></div>'
+                        f'<div><div style="font-size:11px;color:#64748b;">Avg</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#111;">{avg}</div></div>'
+                        f'<div><div style="font-size:11px;color:#64748b;">Largest</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#111;">{largest}</div></div>'
+                        f'<div><div style="font-size:11px;color:#64748b;">Avg Hold</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#111;">{hold}</div></div>'
+                        f'</div></div>'
+                    )
+
+                w_col, l_col = st.columns(2)
+                w_col.markdown(_side_block(
+                    "✅ Winners", "#16a34a", "#f0fdf4",
+                    f"{num_winners:,}",
+                    f"${avg_win:,.0f}",
+                    f"${largest_win:,.0f}",
+                    f"{winners_hold:.0f}d",
+                ), unsafe_allow_html=True)
+                l_col.markdown(_side_block(
+                    "❌ Losers", "#dc2626", "#fef2f2",
+                    f"{num_losers:,}",
+                    f"${avg_loss:,.0f}",
+                    f"${largest_loss:,.0f}",
+                    f"{losers_hold:.0f}d",
+                ), unsafe_allow_html=True)
+
+                st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+
+                # ==============================================================================
+                # QUALITY INDICATORS — 4 compact tiles with status
+                # ==============================================================================
+                def _quality_tile(label, value, status_text, ok):
+                    color = "#16a34a" if ok else "#d97706"
+                    bg = "#f0fdf4" if ok else "#fffbeb"
+                    icon = "✅" if ok else "⚠️"
+                    return (
+                        f'<div style="background:{bg};border-radius:10px;padding:14px 16px;'
+                        f'border-left:3px solid {color};">'
+                        f'<div style="font-size:11px;font-weight:600;text-transform:uppercase;'
+                        f'letter-spacing:0.06em;color:#64748b;">{label}</div>'
+                        f'<div style="font-size:22px;font-weight:800;color:#111;margin-top:4px;">{value}</div>'
+                        f'<div style="font-size:11px;color:{color};margin-top:2px;font-weight:600;">'
+                        f'{icon} {status_text}</div>'
+                        f'</div>'
+                    )
+
+                st.markdown("**Quality Indicators**")
+                q1, q2, q3, q4 = st.columns(4)
+                q1.markdown(_quality_tile("Win/Loss Ratio", f"{wl_ratio:.2f}x",
+                    "≥2.0 target", wl_ok), unsafe_allow_html=True)
+                q2.markdown(_quality_tile("Hold Ratio (W/L)", f"{hold_ratio:.2f}x",
+                    "letting winners run" if hold_ok else "holding losers too long",
+                    hold_ok), unsafe_allow_html=True)
+                q3.markdown(_quality_tile("Avg Trade", f"${avg_trade:,.0f}",
+                    "positive" if avg_trade >= 0 else "negative", avg_trade >= 0),
+                    unsafe_allow_html=True)
+                if has_risk_data:
+                    r_ok = avg_r_multiple >= 1.0
+                    q4.markdown(_quality_tile("Avg R-Multiple", f"{avg_r_multiple:.2f}R",
+                        f"max {max_r_multiple:.1f}R", r_ok), unsafe_allow_html=True)
+                else:
+                    q4.markdown(_quality_tile("Top 3 Winners", f"{top_3_pct:.1f}%",
+                        "of gross profit", top_3_pct < 50), unsafe_allow_html=True)
+
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                # ==============================================================================
+                # STREAKS & ACTIVITY — compact row
+                # ==============================================================================
+                s1, s2, s3, s4, s5 = st.columns(5)
+                s1.metric("Max Win Streak", f"{max_consecutive_wins}")
+                s2.metric("Max Loss Streak", f"{max_consecutive_losses}")
+                s3.metric("Avg Hold (all)", f"{avg_hold_all:.0f}d")
+                s4.metric("Open Positions", f"{num_open}")
+                s5.metric("Break-Even", f"{num_break_even}")
+
+                st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                # ==============================================================================
+                # MONTHLY PERFORMANCE — bottom strip
+                # ==============================================================================
+                st.markdown("**📅 Monthly Performance**")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Best Month", f"${best_month:,.0f}",
+                         delta=best_month_date, delta_color="off")
+                m2.metric("Worst Month", f"${worst_month:,.0f}",
+                         delta=worst_month_date, delta_color="off")
+                m3.metric("Average Month", f"${avg_month:,.0f}")
+
+                if not has_risk_data:
+                    st.caption("💡 Log trades with Risk_Budget to unlock R-multiple metrics.")
+
+                # ==============================================================================
+                # HOW TO READ — moved to the bottom
+                # ==============================================================================
+                with st.expander("📖 How to read these stats"):
                     st.markdown("""
-                    **Monthly Performance:**
-                    - Shows your best, worst, and average monthly P&L
-                    - Helps identify seasonal patterns and consistency
+                    **Hero row** — your 4 most important numbers. Green = healthy.
 
-                    **Trade Performance:**
-                    - Total P&L and trade count give the big picture
-                    - Profit Factor > 1.5 = healthy (making $1.50+ for every $1 lost)
-                    - Win Rate 40%+ = good for trend following systems
+                    - **Total P&L**: closed-trade realized profit
+                    - **Win Rate**: ≥40% is good for a trend-following system
+                    - **Profit Factor**: gross profit ÷ gross loss. ≥1.5 = healthy, ≥2.0 = excellent
+                    - **Expectancy**: average P&L per trade. Must be positive long-term
 
-                    **Consistency:**
-                    - Max consecutive wins/losses show your streak patterns
-                    - Expectancy = what you make per trade on average (should be positive!)
+                    **Winners vs Losers** — symmetric breakdown. Look for:
+                    - Avg win **bigger** than avg loss (confirms W/L ratio)
+                    - Avg hold on winners **longer** than on losers (confirms you cut losses fast)
 
-                    **Holding Time:**
-                    - Win/Loss Hold Ratio > 1.0 = you let winners run and cut losers (good!)
-                    - < 1.0 = holding losers too long (emotional trading)
+                    **Quality Indicators**
+                    - **W/L Ratio ≥2.0x**: you make $2+ for every $1 lost per trade on average
+                    - **Hold Ratio ≥1.0x**: you hold winners longer than losers (discipline)
+                    - **Avg R-Multiple**: actual reward for each unit of risk taken
 
-                    **Risk Metrics:**
-                    - Avg R-Multiple shows reward-to-risk ratio
-                    - 2R+ means making 2x your risk per trade on average (excellent!)
+                    **Streaks**: max consecutive wins/losses show variance — use to gut-check position sizing.
 
-                    **Position Management:**
-                    - Top 3 Winners % shows concentration risk
-                    - If >50%, you rely heavily on a few big winners
+                    **Monthly Performance**: gives context on seasonality and consistency.
                     """)
             else:
                 st.info("No closed trades yet. Start trading to see your career stats!")
