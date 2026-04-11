@@ -2204,7 +2204,10 @@ if page == "Dashboard":
         with col2:
             ltd_profit = df_j['Daily $ Change'].sum()
             ltd_profit_color = "#2ca02c" if ltd_profit >= 0 else "#ff4b4b"
-            ltd_profit_str = f"<span style='color:{ltd_profit_color}'>${ltd_profit:+,.0f}</span>"
+            if PRIVACY:
+                ltd_profit_str = f"<span style='color:{ltd_profit_color}'>$****</span>"
+            else:
+                ltd_profit_str = f"<span style='color:{ltd_profit_color}'>${ltd_profit:+,.0f}</span>"
             st.markdown(metric_card(
                 "LTD RETURN", f"{ltd_return:.2f}%", ltd_profit_str,
                 GRADIENTS['pink']
@@ -2564,8 +2567,10 @@ elif page == "Dashboard (Legacy)":
             c1, c2, c3, c4 = st.columns(4)
             daily_dol = df_j['Daily $ Change'].iloc[-1]
             daily_pct_display = df_j['Daily_Pct'].iloc[-1] * 100
-            
-            c1.metric("Net Liq Value", fmt_money(curr_nlv), f"{daily_dol:+,.2f} ({daily_pct_display:+.2f}%)")
+
+            nlv_val = "$****" if PRIVACY else fmt_money(curr_nlv)
+            nlv_delta = f"$**** ({daily_pct_display:+.2f}%)" if PRIVACY else f"{daily_dol:+,.2f} ({daily_pct_display:+.2f}%)"
+            c1.metric("Net Liq Value", nlv_val, nlv_delta)
             c2.metric("LTD Return", f"{df_j['LTD_Pct'].iloc[-1]:.2f}%")
             c3.metric("YTD Return", f"{ytd_val:.2f}%", delta=f"{ytd_spy:+.2f}% SPY")
             
@@ -2989,9 +2994,15 @@ elif page == "Trading Overview":
             ), unsafe_allow_html=True)
         with h2:
             pl_color2 = '#90EE90' if period_pl >= 0 else '#ffcccb'
+            if PRIVACY:
+                pl_big = "$****"
+                pl_sub = f"<span style='color:{pl_color2}'>Realized: $****</span>"
+            else:
+                pl_big = f"${period_pl:+,.0f}"
+                pl_sub = f"<span style='color:{pl_color2}'>Realized: ${period_realized:+,.0f}</span>"
             st.markdown(metric_card(
-                f"P&L ({_period_label.upper()})", f"${period_pl:+,.0f}",
-                f"<span style='color:{pl_color2}'>Realized: ${period_realized:+,.0f}</span>",
+                f"P&L ({_period_label.upper()})", pl_big,
+                pl_sub,
                 GRADIENTS['green']
             ), unsafe_allow_html=True)
         with h3:
@@ -8687,19 +8698,24 @@ elif page == "Active Campaign Summary":
 
              m1, m2, m3, m4, m5, m6 = st.columns(6)
 
+             # Privacy-aware formatting for the Flight Deck summary row.
+             # Dollar numbers are masked; percentages and counts stay visible.
+             def _mk(val):
+                 return "$****" if PRIVACY else f"${val:,.2f}"
+
              m1.metric("Open Positions", len(df_open))
 
-             m2.metric("Total Market Value", f"${total_mkt:,.2f}")
+             m2.metric("Total Market Value", _mk(total_mkt))
 
-             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of ${equity:,.0f}")
+             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of {_mk(equity)}")
 
 
 
              total_projected = df_open['Projected P&L'].sum()
              m4.metric(
                  "Overall P&L",
-                 f"${total_overall:,.2f}",
-                 f"Projected: ${total_projected:,.2f}",
+                 _mk(total_overall),
+                 f"Projected: {_mk(total_projected)}",
                  delta_color="normal"
              )
 
@@ -8707,13 +8723,13 @@ elif page == "Active Campaign Summary":
 
              ir_pct = (total_initial_risk / equity) * 100
 
-             m5.metric("Initial Risk", f"${total_initial_risk:,.2f}", f"{ir_pct:.2f}% of NLV", delta_color="off")
+             m5.metric("Initial Risk", _mk(total_initial_risk), f"{ir_pct:.2f}% of NLV", delta_color="off")
 
 
 
              or_pct = (total_open_risk_equity / equity) * 100
 
-             m6.metric("Open Risk (Heat)", f"${total_open_risk_equity:,.2f}", f"{or_pct:.2f}% of NLV", delta_color="inverse")
+             m6.metric("Open Risk (Heat)", _mk(total_open_risk_equity), f"{or_pct:.2f}% of NLV", delta_color="inverse")
 
              
 
