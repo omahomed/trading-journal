@@ -12632,24 +12632,31 @@ elif page == "Analytics":
                     pl_color = "#15803d" if is_winner else "#b91c1c"
                     pl_sign = "+" if pl >= 0 else ""
 
-                    # Review pills: show one colored badge per saved category
-                    # so reviewed trades are obvious at a glance. Supports
-                    # multi-select (pipe-separated storage).
+                    # Review pills: show one colored badge per saved category.
+                    # Placed on a dedicated row below the title so any number
+                    # of pills can wrap cleanly without cramping the $P&L.
                     card_existing_note, card_existing_cat = lessons_map.get(trade_id, ('', ''))
                     card_cat_list = [
                         c.strip() for c in (card_existing_cat or '').split(_CAT_SEP) if c.strip()
                     ]
-                    cat_pill_html = ""
+                    pill_fragments = []
                     for _cat in card_cat_list:
                         if _cat in LESSON_CAT_COLORS:
                             _pbg, _pfg = LESSON_CAT_COLORS[_cat]
-                            cat_pill_html += (
-                                f'<span style="display:inline-block;margin-left:6px;'
+                            pill_fragments.append(
+                                f'<span style="display:inline-block;'
                                 f'padding:3px 10px;background:{_pbg};color:{_pfg};'
                                 f'font-size:11px;font-weight:700;border-radius:12px;'
-                                f'vertical-align:middle;letter-spacing:0.02em;">'
+                                f'letter-spacing:0.02em;">'
                                 f'✓ {_cat}</span>'
                             )
+                    pills_row_html = ""
+                    if pill_fragments:
+                        pills_row_html = (
+                            '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">'
+                            + "".join(pill_fragments)
+                            + '</div>'
+                        )
 
                     st.markdown(
                         f'<div style="background:#fff;border-left:4px solid {border_color};'
@@ -12658,10 +12665,10 @@ elif page == "Analytics":
                         f'<div style="font-size:16px;font-weight:800;color:#111;">'
                         f'#{rank} · {ticker} '
                         f'<span style="color:#64748b;font-weight:500;font-size:12px;">({trade_id})</span>'
-                        f'{cat_pill_html}'
                         f'</div>'
                         f'<div style="font-size:20px;font-weight:800;color:{pl_color};">{pl_sign}${pl:,.0f}</div>'
                         f'</div>'
+                        f'{pills_row_html}'
                         f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">'
                         f'<div><div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Return</div>'
                         f'<div style="font-size:14px;font-weight:700;color:{pl_color};">{pl_sign}{ret_pct:.1f}%</div></div>'
