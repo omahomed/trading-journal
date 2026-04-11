@@ -11076,9 +11076,11 @@ elif page == "Analytics":
     if os.path.exists(SUMMARY_FILE):
         df_s_raw = load_data(SUMMARY_FILE) # Load raw data first
         
-        df_j = pd.DataFrame()
-        if os.path.exists(JOURNAL_FILE):
-            df_j = load_data(JOURNAL_FILE)
+        # Load journal via load_data() so DB mode works on Streamlit Cloud
+        # (local CSV check would fail in cloud where data lives only in the DB).
+        df_j = load_data(JOURNAL_FILE)
+        if df_j is None:
+            df_j = pd.DataFrame()
 
         # --- DATA PREP ---
         df_s_raw['Closed_Date'] = pd.to_datetime(df_s_raw['Closed_Date'], errors='coerce')
