@@ -128,10 +128,18 @@ class MarketSchoolRules:
         self.active_distribution_count = 0
         
         # Signal state tracking
-        self.last_b3_b4_b5_date = None
-        self.last_s5_s6_s7_s8_date = None
+        self.last_b3_b4_b5_date = None  # Any recent B3/B4/B5 — drives S5 reset check
+        self.last_s5_s6_s7_s8_date = None  # Any recent S sell signal — drives B3/B4 lockout
+        self.last_b3_date = None  # For B3 once-per-cycle check
+        self.last_b4_date = None  # For B4 once-per-cycle check
         self.last_b6_date = None
         self.last_s9_date = None
+        self.last_s5_date = None  # For S5 once-per-cycle check
+        self.last_s6_date = None  # For S6 once-per-cycle check
+        self.last_s7_date = None  # For S7 once-per-cycle check
+        self.last_b1_b2_date = None  # Most recent FTD (B1 or B2) — for B7 coincidence check
+        # S13 Distribution Cluster tracking
+        self.last_cluster_count = 0  # Last S13 cluster count fired at
         
         # Restraint rule
         self.restraint_active = False
@@ -384,6 +392,9 @@ class MarketSchoolRules:
                 exposure_change=1 if signal_type == SignalType.B1 else 0
             )
 
+            # Track most recent FTD (B1 or B2) for B7 coincidence check
+            self.last_b1_b2_date = current.name
+
             if signal_type == SignalType.B1:
                 self.ftd_date = current.name
                 self.ftd_close = current['Close']
@@ -399,8 +410,14 @@ class MarketSchoolRules:
                 # sell signals should not block new B3/B4/B5 signals
                 self.last_s5_s6_s7_s8_date = None
                 self.last_b3_b4_b5_date = None
+                self.last_b3_date = None
+                self.last_b4_date = None
+                self.last_s5_date = None
+                self.last_s6_date = None
+                self.last_s7_date = None
                 self.last_s9_date = None
                 self.last_b6_date = None
+                self.last_cluster_count = 0
                 # Reset minor low tracking — starts fresh in new bull cycle
                 self.current_minor_low = None
 
@@ -418,20 +435,22 @@ class MarketSchoolRules:
         if pd.isna(current['ema21']) or pd.isna(current['sma50']):
             return signals
             
-        # 21-day EMA Buy Signals (B3, B4, B5)
-        if self.buy_switch:
-            # B3: Low Above 21-day EMA on an up or flat day
-            # Rule: "Once you have a B3 or B4, you can't have another until reset by S5"
-            close_up_or_flat = prev is not None and current['Close'] >= prev['Close']
-            if current['Low'] >= current['ema21'] and close_up_or_flat:
-                # Lockout: block B3 if a prior B3/B4/B5 fired AND no S5 reset since
-                can_trigger_b3 = True
-                if self.last_b3_b4_b5_date is not None:
-                    if (self.last_s5_s6_s7_s8_date is None or
-                        self.last_s5_s6_s7_s8_date < self.last_b3_b4_b5_date):
-                        can_trigger_b3 = False
+        close_up_or_flat = prev is not None and current['Close'] >= prev['Close']
+        close_down = prev is not None and current['Close'] < prev['Close']
 
-                if can_trigger_b3:
+        # Helper: can B3/B4 fire this cycle? (reset by S5)
+        def _can_fire_b(last_fire_date):
+            if last_fire_date is None:
+                return True
+            if self.last_s5_s6_s7_s8_date is None:
+                return False
+            return self.last_s5_s6_s7_s8_date > last_fire_date
+
+        # 21-day EMA Buy Signals (B3, B4, B5) — only when buy switch is ON
+        if self.buy_switch:
+            # B3: Low >= 21EMA on an up or flat day. Fires once per cycle.
+            if current['Low'] >= current['ema21'] and close_up_or_flat:
+                if _can_fire_b(self.last_b3_date):
                     signals.append(Signal(
                         date=current.name,
                         signal_type=SignalType.B3,
@@ -440,18 +459,19 @@ class MarketSchoolRules:
                         affects_exposure=True,
                         exposure_change=1
                     ))
+                    self.last_b3_date = current.name
                     self.last_b3_b4_b5_date = current.name
-                    
-            # B4: Trending Above 21-day EMA (3 consecutive days)
-            if idx >= 2:
+
+            # B4: 3 consecutive days with low >= 21EMA AND close up/flat.
+            # Fires once per cycle. Requires a prior B3 in this cycle.
+            if idx >= 2 and self.last_b3_date is not None:
                 days_above = 0
                 for i in range(3):
-                    if self.data.iloc[idx-i]['Low'] > self.data.iloc[idx-i]['ema21']:
+                    row = self.data.iloc[idx - i]
+                    if row['Low'] >= row['ema21']:
                         days_above += 1
-                        
-                if days_above >= 3 and self.last_b3_b4_b5_date:
-                    # Check if index closes up/flat on 3rd day
-                    if idx > 0 and current['Close'] >= prev['Close']:
+                if days_above >= 3 and close_up_or_flat:
+                    if _can_fire_b(self.last_b4_date):
                         signals.append(Signal(
                             date=current.name,
                             signal_type=SignalType.B4,
@@ -460,49 +480,118 @@ class MarketSchoolRules:
                             affects_exposure=True,
                             exposure_change=1
                         ))
+                        self.last_b4_date = current.name
                         self.last_b3_b4_b5_date = current.name
-                        
-            # B5: Living Above 21-day EMA (10 days and every 5th day after)
-            if idx >= 9:
+
+            # B5: 10th day + every 5th day after (15, 20, 25...) of low >= 21EMA.
+            # Fires repeatedly within a streak. Requires a prior B3. Close up/flat.
+            if idx >= 9 and self.last_b3_date is not None and close_up_or_flat:
+                # Count consecutive days of low >= 21EMA ending on current bar
                 days_above = 0
-                start_idx = max(0, idx - 60)  # Look back up to 60 days
-                
-                # Count consecutive days from most recent break
-                for i in range(start_idx, idx + 1):
-                    if self.data.iloc[i]['Low'] > self.data.iloc[i]['ema21']:
+                for i in range(idx, max(-1, idx - 60), -1):
+                    row = self.data.iloc[i]
+                    if row['Low'] >= row['ema21']:
                         days_above += 1
                     else:
-                        days_above = 0  # Reset count
-                        
+                        break
                 if days_above == 10 or (days_above > 10 and (days_above - 10) % 5 == 0):
-                    if self.last_b3_b4_b5_date:
-                        signals.append(Signal(
-                            date=current.name,
-                            signal_type=SignalType.B5,
-                            price=current['Close'],
-                            description=f"Living Above 21-day EMA ({days_above} days)",
-                            affects_exposure=True,
-                            exposure_change=1
-                        ))
-                        self.last_b3_b4_b5_date = current.name
-                    
-        # 21-day EMA Sell Signals
-        # S5: Break Below 21-day EMA (close >= 0.2% below)
-        # Rule: "Once you have an S5, S6 or S7, you can't have another until reset by B3"
-        if prev is not None and prev['Close'] >= prev['ema21'] and current['Close'] < current['ema21'] * 0.998:
-            # Lockout: block S5 if a prior S5/S6/S7/S8 fired AND no B3 reset since
-            can_trigger_s5 = True
-            if self.last_s5_s6_s7_s8_date is not None:
-                if (self.last_b3_b4_b5_date is None or
-                    self.last_b3_b4_b5_date < self.last_s5_s6_s7_s8_date):
-                    can_trigger_s5 = False
+                    signals.append(Signal(
+                        date=current.name,
+                        signal_type=SignalType.B5,
+                        price=current['Close'],
+                        description=f"Living Above 21-day EMA ({days_above} days)",
+                        affects_exposure=True,
+                        exposure_change=1
+                    ))
+                    self.last_b3_b4_b5_date = current.name
 
-            if can_trigger_s5:
+        # 21-day EMA Sell Signals (S5, S6, S7, S8)
+        # All are "reset by B3" — can fire only once per cycle (except S8 which
+        # fires repeatedly every 5 days after day 10 within a below-21EMA streak).
+
+        # Helper: can an S5/S6/S7 fire this cycle?
+        def _can_fire_s(last_fire_date):
+            if last_fire_date is None:
+                return True
+            if self.last_b3_b4_b5_date is None:
+                return False
+            return self.last_b3_b4_b5_date > last_fire_date
+
+        # S5: Break Below 21-day EMA (close >= 0.2% below 21EMA after being above)
+        if prev is not None and prev['Close'] >= prev['ema21'] and current['Close'] < current['ema21'] * 0.998:
+            if _can_fire_s(self.last_s5_date):
                 signals.append(Signal(
                     date=current.name,
                     signal_type=SignalType.S5,
                     price=current['Close'],
                     description="Break Below 21-day EMA",
+                    affects_exposure=True,
+                    exposure_change=-1
+                ))
+                self.last_s5_date = current.name
+                self.last_s5_s6_s7_s8_date = current.name
+
+        # S6: Overdue Break Below 21-day MA
+        # Sell if close >0.2% below 21EMA AND 30 trading days have passed since
+        # the last B3 AND no S5 has fired since that B3.
+        # Prevents the S5 lockout from blocking legitimate sell signals forever.
+        if (prev is not None and current['Close'] < current['ema21'] * 0.998 and
+                self.last_b3_date is not None and _can_fire_s(self.last_s6_date)):
+            # Only fire if no S5/S6 already fired since the last B3 (lockout check above handles it)
+            # Must have been at least 30 trading days since last B3
+            days_since_b3 = self._count_trading_days(self.last_b3_date, current.name)
+            if days_since_b3 >= 30:
+                signals.append(Signal(
+                    date=current.name,
+                    signal_type=SignalType.S6,
+                    price=current['Close'],
+                    description=f"Overdue Break Below 21-day EMA ({days_since_b3}d since B3)",
+                    affects_exposure=True,
+                    exposure_change=-1
+                ))
+                self.last_s6_date = current.name
+                self.last_s5_s6_s7_s8_date = current.name
+
+        # S7: Trending Below 21-day EMA
+        # After S5 fires: 5 consecutive days with high < 21EMA AND close down
+        # on the 5th day. If close up on 5th, wait for next down day.
+        # Fires once per streak (once per cycle basically — reset by B3).
+        if (idx >= 4 and self.last_s5_date is not None and close_down and
+                _can_fire_s(self.last_s7_date)):
+            days_below = 0
+            for i in range(5):
+                row = self.data.iloc[idx - i]
+                if not pd.isna(row.get('ema21')) and row['High'] < row['ema21']:
+                    days_below += 1
+            if days_below >= 5:
+                signals.append(Signal(
+                    date=current.name,
+                    signal_type=SignalType.S7,
+                    price=current['Close'],
+                    description="Trending Below 21-day EMA (5 days)",
+                    affects_exposure=True,
+                    exposure_change=-1
+                ))
+                self.last_s7_date = current.name
+                self.last_s5_s6_s7_s8_date = current.name
+
+        # S8: Living Below 21-day EMA
+        # After S5: 10th day + every 5th day after (15, 20, 25...) of high < 21EMA.
+        # Fires repeatedly within a streak. Close must be down.
+        if idx >= 9 and self.last_s5_date is not None and close_down:
+            days_below = 0
+            for i in range(idx, max(-1, idx - 60), -1):
+                row = self.data.iloc[i]
+                if not pd.isna(row.get('ema21')) and row['High'] < row['ema21']:
+                    days_below += 1
+                else:
+                    break
+            if days_below == 10 or (days_below > 10 and (days_below - 10) % 5 == 0):
+                signals.append(Signal(
+                    date=current.name,
+                    signal_type=SignalType.S8,
+                    price=current['Close'],
+                    description=f"Living Below 21-day EMA ({days_below} days)",
                     affects_exposure=True,
                     exposure_change=-1
                 ))
@@ -564,14 +653,18 @@ class MarketSchoolRules:
         current = self.data.iloc[idx]
         
         # B7: Accumulation Day
+        # Rule: gain >= FTD% (1.0%), close in upper 25% of range, close > 21EMA,
+        # heavier volume, and CANNOT coincide with B1/B2 (follow-through day).
         if self.buy_switch and idx > 0:
-            # 1.2% threshold for accumulation day
-            if (current['daily_gain_pct'] >= 1.2 and
+            is_ftd_today = (self.last_b1_b2_date is not None and
+                            self.last_b1_b2_date == current.name)
+            if (not is_ftd_today and
+                current['daily_gain_pct'] >= 1.0 and
                 current['close_position'] > 0.75 and
                 not pd.isna(current['ema21']) and
                 current['Close'] > current['ema21'] and
                 current['volume_up']):
-                
+
                 signals.append(Signal(
                     date=current.name,
                     signal_type=SignalType.B7,
@@ -580,14 +673,17 @@ class MarketSchoolRules:
                     affects_exposure=True,
                     exposure_change=1
                 ))
-                
+
         # S10: Bad Break
-        if (current['daily_gain_pct'] <= -2.25 or 
-            (current['close_position'] < 0.25 and 
-             not pd.isna(current['sma50']) and
-             (current['Close'] < current['sma50'] or 
-              current['High'] < current.get('ema21', float('inf'))))):
-            
+        # Per spec: close down >=2.25% AND in bottom 25% of range
+        # AND (close below 50SMA OR intraday high below 21EMA).
+        if (current['daily_gain_pct'] <= -2.25 and
+            current['close_position'] < 0.25 and
+            not pd.isna(current.get('sma50')) and
+            not pd.isna(current.get('ema21')) and
+            (current['Close'] < current['sma50'] or
+             current['High'] < current['ema21'])):
+
             signals.append(Signal(
                 date=current.name,
                 signal_type=SignalType.S10,
@@ -609,8 +705,28 @@ class MarketSchoolRules:
             ))
             self.marked_highs.append({
                 'date': current.name,
-                'high': current['High']
+                'high': current['High'],
+                'b8_triggered': True,  # Flags this high as a B8 trigger for S14
+                'broken': False,
             })
+
+        # S14: Break Below Higher High
+        # Rule: Sell after closing below the last marked high that triggered a B8.
+        # Each B8-marked high can only be broken once — we flag it as broken.
+        if self.marked_highs:
+            for marked in self.marked_highs:
+                if marked.get('b8_triggered') and not marked.get('broken'):
+                    if current['Close'] < marked['high']:
+                        marked['broken'] = True
+                        signals.append(Signal(
+                            date=current.name,
+                            signal_type=SignalType.S14,
+                            price=current['Close'],
+                            description=f"Break Below Higher High ({marked['date'].strftime('%m/%d')} @ {marked['high']:.2f})",
+                            affects_exposure=True,
+                            exposure_change=-1
+                        ))
+                        break  # Only fire one S14 per bar
             
         # S12: Lower Low
         if current['is_new_low']:
@@ -719,22 +835,46 @@ class MarketSchoolRules:
             self.buy_switch = False
             
         # B10: Distribution Day Fall Off
-        # This happens automatically when distribution days are removed
-        
+        # Rule: Buy on the day the distribution count falls back to 4
+        # (full count - 2) as long as close > 21EMA and buy switch is on.
+        if (self.buy_switch and not pd.isna(current.get('ema21')) and
+                current['Close'] > current['ema21']):
+            # Detect a fall-off: any distribution day removed on this exact bar
+            fell_off_today = any(
+                d.removed_date == current.name for d in self.distribution_days
+            )
+            if fell_off_today and self.active_distribution_count == 4:
+                signals.append(Signal(
+                    date=current.name,
+                    signal_type=SignalType.B10,
+                    price=current['Close'],
+                    description="Distribution Day Fall Off (count back to 4)",
+                    affects_exposure=True,
+                    exposure_change=1
+                ))
+
         # S13: Distribution Cluster
-        recent_window = current.name - pd.Timedelta(days=11)
-        recent_dist = [d for d in active_dist if d.date > recent_window]
-        
-        if len(recent_dist) >= 4:
+        # Rule: Fires when the count of dist+stall days in a rolling 8 trading-day
+        # window reaches 4. Fires again on each successive increase (5,6,7,8).
+        # Resets when the count falls to <= 3 within the rolling window.
+        lookback_start = max(0, idx - 7)  # 8-bar rolling window (inclusive)
+        window_dates = set(self.data.index[lookback_start:idx + 1])
+        cluster_count = sum(1 for d in active_dist if d.date in window_dates)
+
+        if cluster_count >= 4 and cluster_count > self.last_cluster_count:
             signals.append(Signal(
                 date=current.name,
                 signal_type=SignalType.S13,
                 price=current['Close'],
-                description=f"Distribution Cluster ({len(recent_dist)} in 8 days)",
+                description=f"Distribution Cluster ({cluster_count} in 8 days)",
                 affects_exposure=True,
                 exposure_change=-1
             ))
-                
+            self.last_cluster_count = cluster_count
+        elif cluster_count <= 3:
+            # Reset when the cluster count drops back to 3 or lower
+            self.last_cluster_count = 0
+
         return signals
         
     def _count_trading_days(self, start_date, end_date):
