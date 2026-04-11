@@ -297,6 +297,26 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_ticker ON trade_fundamentals (ticker
 
 
 -- ============================================
+-- TABLE: drawdown_notes
+-- PURPOSE: User notes on historical deck crossings (Drawdown Discipline tab)
+-- KEY: (portfolio_id, deck_level, crossing_date) — one note per crossing
+-- ============================================
+CREATE TABLE IF NOT EXISTS drawdown_notes (
+    id SERIAL PRIMARY KEY,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    deck_level VARCHAR(10) NOT NULL,  -- 'L1', 'L2', 'L3'
+    crossing_date DATE NOT NULL,
+    note TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_drawdown_note UNIQUE (portfolio_id, deck_level, crossing_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drawdown_notes ON drawdown_notes (portfolio_id, crossing_date DESC);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 

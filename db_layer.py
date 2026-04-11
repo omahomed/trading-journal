@@ -1708,6 +1708,85 @@ def get_trade_fundamentals(portfolio_name: str, trade_id: str):
 
 
 # ============================================
+# DRAWDOWN NOTES (Drawdown Discipline tab)
+# ============================================
+@st.cache_data(ttl=60, show_spinner=False)
+def get_drawdown_notes(portfolio_name: str):
+    """
+    Return {(deck_level, crossing_date_str): note} for a portfolio.
+    crossing_date_str is 'YYYY-MM-DD'.
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return {}
+                pid = r[0]
+                cur.execute(
+                    "SELECT deck_level, crossing_date, note FROM drawdown_notes WHERE portfolio_id = %s",
+                    (pid,),
+                )
+                return {
+                    (lvl, dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)): (note or '')
+                    for lvl, dt, note in cur.fetchall()
+                }
+    except Exception as e:
+        print(f"Failed to load drawdown notes: {e}")
+        return {}
+
+
+def save_drawdown_note(portfolio_name: str, deck_level: str, crossing_date, note: str):
+    """
+    Upsert a drawdown note. crossing_date can be a date, datetime, or YYYY-MM-DD string.
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        # Normalize date to string
+        if hasattr(crossing_date, 'strftime'):
+            date_str = crossing_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(crossing_date)[:10]
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return False
+                pid = r[0]
+                cur.execute(
+                    """
+                    INSERT INTO drawdown_notes (portfolio_id, deck_level, crossing_date, note, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (portfolio_id, deck_level, crossing_date)
+                    DO UPDATE SET note = EXCLUDED.note, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pid, deck_level, date_str, note or ''),
+                )
+                conn.commit()
+        try:
+            get_drawdown_notes.clear()
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"Failed to save drawdown note: {e}")
+        return False
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():

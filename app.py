@@ -11172,7 +11172,7 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🟢 Buy Rules", "🔴 Sell Rules", "📉 Drawdown Detective", "🔬 Trade Review"])
+        tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🟢 Buy Rules", "🔴 Sell Rules", "🛡️ Drawdown Discipline", "🔬 Trade Review"])
 
         # --- TAB 2: BUY RULES (Rule Studio — 2026 only) ---
         with tab_buy_rules:
@@ -11564,129 +11564,360 @@ elif page == "Analytics":
                         )
 
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
+        # --- TAB 4: DRAWDOWN DISCIPLINE (deck compliance tracker) ---
         with tab_dd:
-            st.subheader("📉 Drawdown Forensics (Since Dec 16, 2025)")
-            
-            # 0. "HOW TO READ" GUIDE
-            with st.expander("📚 How to read this chart"):
-                st.markdown("""
-                **1. The Red Chart (Underwater Plot):**
-                * This shows how far your equity is below its **All-Time High**.
-                * **0% Line:** You are at a new account high.
-                * **Red Depth:** The percentage distance from your peak. (e.g. -5% means you are 5% off highs).
-                
-                **2. The Metrics:**
-                * **Total Dollar Drop:** The actual cash value lost from Peak to Trough.
-                * **Realized P&L:** Losses locked in by selling during the drop.
-                * **The Bleed:** The drop in value of your *Open Positions*. High 'Bleed' means you held through pain rather than stopping out.
-                """)
+            st.subheader("🛡️ Drawdown Discipline")
+            st.caption("Did you follow your own deck rules? Each historical crossing of L1 (−7.5%), L2 (−12.5%), or L3 (−15%) is logged with a pass/fail verdict.")
 
-            # 1. FILTER DATA (START DATE)
-            start_cutoff = pd.to_datetime("2025-12-16")
-            
-            if not df_j.empty:
-                # Filter Journal for date range
-                df_dd = df_j[df_j['Day'] >= start_cutoff].copy()
-                
-                if len(df_dd) > 2:
-                    # 2. TWR CURVE CALCULATION
-                    df_dd['Adjusted_Beg'] = df_dd['Beg NLV'] + df_dd['Cash -/+']
-                    df_dd['Day_Ret'] = 0.0
-                    mask = df_dd['Adjusted_Beg'] != 0
-                    df_dd.loc[mask, 'Day_Ret'] = (df_dd.loc[mask, 'End NLV'] - df_dd.loc[mask, 'Adjusted_Beg']) / df_dd.loc[mask, 'Adjusted_Beg']
-                    
-                    # Cumulative Returns (Time-Weighted)
-                    df_dd['TWR_Curve'] = (1 + df_dd['Day_Ret']).cumprod()
-                    
-                    # 3. DRAWDOWN CALCULATION
-                    df_dd['HWM_TWR'] = df_dd['TWR_Curve'].cummax()
-                    df_dd['DD_Pct'] = (df_dd['TWR_Curve'] - df_dd['HWM_TWR']) / df_dd['HWM_TWR']
-                    
-                    # 4. IDENTIFY PERIODS (CLUSTERING)
-                    # We consider a drawdown "active" if it's deeper than -0.5% (noise filter)
-                    df_dd['Is_DD'] = df_dd['DD_Pct'] < -0.005 
-                    df_dd['DD_Group'] = (df_dd['Is_DD'] != df_dd['Is_DD'].shift()).cumsum()
-                    
-                    dd_periods = []
-                    # Group contiguous drawdown days
-                    for grp_id, data in df_dd[df_dd['Is_DD']].groupby('DD_Group'):
-                        start_d = data['Day'].min()
-                        end_d = data['Day'].max()
-                        depth_pct = data['DD_Pct'].min()
-                        duration = (end_d - start_d).days + 1
-                        
-                        # Total Pain = Sum of Daily $ Changes during the drop
-                        # Note: This is a simplified approx of NLV drop
-                        peak_val = df_dd.loc[df_dd['Day'] == start_d, 'Beg NLV'].iloc[0]
-                        trough_val = df_dd.loc[df_dd['Day'] == end_d, 'End NLV'].iloc[0]
-                        total_pain = trough_val - peak_val
-                        
-                        dd_periods.append({
-                            'Start': start_d, 'End': end_d, 
-                            'Depth': depth_pct * 100, 
-                            'Total_Pain': total_pain,
-                            'Days': duration
-                        })
-                    
-                    # Sort by Depth (Worst First)
-                    worst_dds = sorted(dd_periods, key=lambda x: x['Depth'])[:3]
-                    
-                    # 5. VISUALIZATION
-                    if worst_dds:
-                        fig_dd, ax_dd = plt.subplots(figsize=(10, 4))
-                        
-                        # Fill area red
-                        ax_dd.fill_between(df_dd['Day'], df_dd['DD_Pct']*100, 0, color='red', alpha=0.3)
-                        # Plot line
-                        ax_dd.plot(df_dd['Day'], df_dd['DD_Pct']*100, color='red', linewidth=1)
-                        
-                        # Formatting
-                        ax_dd.set_title("Drawdown Depth % (from High Water Mark)")
-                        ax_dd.set_ylabel("Percentage Below Peak")
-                        ax_dd.grid(True, linestyle='--', alpha=0.3)
-                        # Format x-axis dates
-                        ax_dd.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%m-%d'))
-                        
-                        st.pyplot(fig_dd)
+            RESET_DATE = pd.Timestamp("2026-02-24")
 
-                        # 6. SEQUENCE ANALYSIS
-                        st.markdown("### 🚑 The Top Drawdown Sequences")
-                        cols = st.columns(3)
-                        
-                        for i, dd in enumerate(worst_dds):
-                            with cols[i]:
-                                st.error(f"Sequence #{i+1}")
-                                st.caption(f"{dd['Start'].strftime('%Y-%m-%d')} ⮕ {dd['End'].strftime('%Y-%m-%d')}")
-                                
-                                st.metric("Max Depth", f"{dd['Depth']:.2f}%", f"{dd['Days']} Days Duration")
-                                st.metric("Account Value Drop", f"${dd['Total_Pain']:,.0f}", delta_color="inverse")
-                                
-                                # Analyze Culprits (Closed Trades during this window)
-                                mask_loss = ((closed['Closed_Date'] >= dd['Start']) & (closed['Closed_Date'] <= dd['End']))
-                                trades_in_window = closed[mask_loss]
-                                
-                                realized_pain = trades_in_window['Realized_PL'].sum()
-                                # Bleed = Total Drop - Realized. (If you dropped $5k but only realized -$1k, $4k was open bleed)
-                                bleed_pain = dd['Total_Pain'] - realized_pain
-                                
-                                st.markdown("---")
-                                st.caption("Pain Breakdown:")
-                                st.markdown(f"**Realized Losses:** :red[${realized_pain:,.0f}]")
-                                st.markdown(f"**Open Position Bleed:** :red[${bleed_pain:,.0f}]")
-                                
-                                st.caption("Top Realized Losers:")
-                                culprits = trades_in_window[trades_in_window['Realized_PL'] < 0].sort_values('Realized_PL', ascending=True).head(3)
-                                if not culprits.empty:
-                                    for _, trade in culprits.iterrows():
-                                        st.write(f"• **{trade['Ticker']}**: :red[${trade['Realized_PL']:,.0f}]")
-                                else:
-                                    st.info("No realized losses. All pain was unrealized (Bleed).")
-                    else:
-                        st.success("✅ No significant drawdowns (>0.5%) detected since Dec 16.")
-                else:
-                    st.info("Not enough data points since Dec 16 to plot curve.")
+            if df_j.empty:
+                st.info("💡 No journal data found. Drawdown Discipline requires End NLV history.")
             else:
-                st.error("No Journal Data found.")
+                dd_j = df_j[df_j['Day'] >= RESET_DATE].copy()
+                if dd_j.empty or 'End NLV' not in dd_j.columns:
+                    st.info("💡 No journal entries since the 2026-02-24 reset date. This tab populates as new entries are logged.")
+                else:
+                    dd_j = dd_j.sort_values('Day').reset_index(drop=True)
+                    dd_j['End NLV'] = pd.to_numeric(dd_j['End NLV'], errors='coerce')
+                    dd_j = dd_j.dropna(subset=['End NLV'])
+
+                    # Rolling peak NLV from reset date
+                    dd_j['Peak_NLV'] = dd_j['End NLV'].cummax()
+                    dd_j['DD_Pct'] = (dd_j['End NLV'] - dd_j['Peak_NLV']) / dd_j['Peak_NLV'] * 100
+                    dd_j['Pct_Invested'] = pd.to_numeric(dd_j.get('% Invested', 0), errors='coerce').fillna(0)
+
+                    # Current state
+                    current_dd = dd_j['DD_Pct'].iloc[-1]
+                    current_nlv = dd_j['End NLV'].iloc[-1]
+                    current_peak = dd_j['Peak_NLV'].iloc[-1]
+                    current_exposure = dd_j['Pct_Invested'].iloc[-1]
+
+                    deck_levels = {
+                        'L1': (-7.5, "Remove Margin", "#eab308"),
+                        'L2': (-12.5, "Max 30% Invested", "#f97316"),
+                        'L3': (-15.0, "Go to Cash", "#dc2626"),
+                    }
+
+                    # ============================================================
+                    # SECTION 1: LIVE STATUS
+                    # ============================================================
+                    st.markdown("**Live Status** — where you are right now vs each deck")
+                    ls_cols = st.columns(3)
+                    for (lvl, (thresh, rule_txt, color)), lc in zip(deck_levels.items(), ls_cols):
+                        distance = current_dd - thresh  # positive = safe, negative = breached
+                        if current_dd <= thresh:
+                            status_bg = "#fee2e2"
+                            status_txt = "#b91c1c"
+                            status_icon = "🚨 BREACHED"
+                            sub = f"{abs(distance):.2f}% into breach"
+                        elif distance < 2.0:
+                            status_bg = "#fef3c7"
+                            status_txt = "#b45309"
+                            status_icon = "⚠️ Close"
+                            sub = f"{distance:.2f}% from deck"
+                        else:
+                            status_bg = "#f0fdf4"
+                            status_txt = "#15803d"
+                            status_icon = "✅ Safe"
+                            sub = f"{distance:.2f}% from deck"
+                        lc.markdown(
+                            f'<div style="background:{status_bg};border-left:4px solid {color};'
+                            f'border-radius:10px;padding:14px 16px;height:100%;">'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                            f'letter-spacing:0.06em;color:#64748b;">{lvl} · {thresh:.1f}%</div>'
+                            f'<div style="font-size:13px;font-weight:600;color:#111;margin-top:2px;">{rule_txt}</div>'
+                            f'<div style="font-size:18px;font-weight:800;color:{status_txt};margin-top:6px;">{status_icon}</div>'
+                            f'<div style="font-size:11px;color:#64748b;margin-top:2px;">{sub}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    # Current snapshot line
+                    st.markdown(
+                        f'<div style="margin-top:12px;padding:10px 14px;background:#f8fafc;border-radius:8px;'
+                        f'font-size:13px;color:#334155;">'
+                        f'Current DD: <b>{current_dd:.2f}%</b> · '
+                        f'NLV: <b>${current_nlv:,.0f}</b> · '
+                        f'Peak: <b>${current_peak:,.0f}</b> · '
+                        f'Exposure: <b>{current_exposure:.1f}%</b>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # ============================================================
+                    # SECTION 2: DECK CROSSINGS LOG
+                    # ============================================================
+                    # Detect EOD crossings: a new crossing starts when End NLV first drops
+                    # below a deck threshold, and ends when it rises above it again.
+                    crossings = []
+                    for lvl, (thresh, rule_txt, color) in deck_levels.items():
+                        dd_j[f'_below_{lvl}'] = dd_j['DD_Pct'] <= thresh
+                        # Group contiguous periods of below
+                        dd_j[f'_grp_{lvl}'] = (dd_j[f'_below_{lvl}'] != dd_j[f'_below_{lvl}'].shift()).cumsum()
+                        for grp_id, grp in dd_j[dd_j[f'_below_{lvl}']].groupby(f'_grp_{lvl}'):
+                            start_idx = grp.index.min()
+                            end_idx = grp.index.max()
+                            max_depth_idx = grp['DD_Pct'].idxmin()
+                            # Exposure at the bar BEFORE the start (when you could still act)
+                            prior_idx = max(0, start_idx - 1)
+                            exposure_at_start = dd_j.at[prior_idx, 'Pct_Invested']
+                            exposure_at_trough = dd_j.at[max_depth_idx, 'Pct_Invested']
+                            max_depth = dd_j.at[max_depth_idx, 'DD_Pct']
+                            start_date = dd_j.at[start_idx, 'Day']
+                            end_date = dd_j.at[end_idx, 'Day']
+                            duration = (end_date - start_date).days + 1
+
+                            # Recovery: find next bar where End NLV >= peak at start
+                            peak_at_start = dd_j.at[start_idx, 'Peak_NLV']
+                            recovery_days = None
+                            recovered = False
+                            for k in range(end_idx + 1, len(dd_j)):
+                                if dd_j.at[k, 'End NLV'] >= peak_at_start:
+                                    recovery_days = (dd_j.at[k, 'Day'] - start_date).days
+                                    recovered = True
+                                    break
+                            if not recovered:
+                                # Check if currently recovered
+                                if dd_j['End NLV'].iloc[-1] >= peak_at_start:
+                                    recovery_days = (dd_j['Day'].iloc[-1] - start_date).days
+                                    recovered = True
+
+                            # Verdict (lenient thresholds)
+                            exposure_drop = exposure_at_start - exposure_at_trough
+                            if lvl == 'L1':
+                                if exposure_at_trough <= 100:
+                                    verdict = 'Respected'
+                                elif exposure_drop >= 10:
+                                    verdict = 'Partial'
+                                else:
+                                    verdict = 'Pushed'
+                            elif lvl == 'L2':
+                                if exposure_at_trough <= 45:
+                                    verdict = 'Respected'
+                                elif exposure_drop >= 25:
+                                    verdict = 'Partial'
+                                else:
+                                    verdict = 'Pushed'
+                            else:  # L3
+                                if exposure_at_trough <= 15:
+                                    verdict = 'Respected'
+                                elif exposure_at_trough <= 40:
+                                    verdict = 'Partial'
+                                else:
+                                    verdict = 'Pushed'
+
+                            # Damage in window
+                            closed_in_window = all_closed[
+                                (pd.to_datetime(all_closed['Closed_Date'], errors='coerce') >= start_date) &
+                                (pd.to_datetime(all_closed['Closed_Date'], errors='coerce') <= end_date)
+                            ]
+                            losses_in_window = closed_in_window[closed_in_window['Realized_PL'] < 0]['Realized_PL'].sum()
+
+                            crossings.append({
+                                'Deck': lvl,
+                                'Deck_Thresh': thresh,
+                                'Start': start_date,
+                                'End': end_date,
+                                'Duration': duration,
+                                'Max_Depth': max_depth,
+                                'Exposure_Start': exposure_at_start,
+                                'Exposure_Trough': exposure_at_trough,
+                                'Exposure_Drop': exposure_drop,
+                                'Verdict': verdict,
+                                'Recovery_Days': recovery_days,
+                                'Recovered': recovered,
+                                'Losses_In_Window': float(losses_in_window),
+                            })
+
+                    # Sort crossings newest first
+                    crossings_sorted = sorted(crossings, key=lambda c: c['Start'], reverse=True)
+
+                    st.markdown("**Deck Crossings Log**")
+                    if not crossings_sorted:
+                        st.success("✅ No deck crossings since the 2026-02-24 reset. Keep it up.")
+                    else:
+                        # Load notes for this portfolio
+                        notes_map = {}
+                        if USE_DATABASE:
+                            try:
+                                notes_map = db.get_drawdown_notes(CURR_PORT_NAME)
+                            except Exception:
+                                notes_map = {}
+
+                        verdict_style = {
+                            'Respected': ('#dcfce7', '#15803d', '✅ Respected'),
+                            'Partial':   ('#fef3c7', '#b45309', '⚠️ Partial'),
+                            'Pushed':    ('#fee2e2', '#b91c1c', '🚨 Pushed through'),
+                        }
+
+                        for c in crossings_sorted:
+                            v_bg, v_tx, v_lbl = verdict_style[c['Verdict']]
+                            start_str = c['Start'].strftime('%b %d, %Y') if hasattr(c['Start'], 'strftime') else str(c['Start'])
+                            end_str = c['End'].strftime('%b %d, %Y') if hasattr(c['End'], 'strftime') else str(c['End'])
+                            rec_str = f"{c['Recovery_Days']}d" if c['Recovery_Days'] is not None else "ongoing"
+                            exposure_delta = c['Exposure_Start'] - c['Exposure_Trough']
+
+                            st.markdown(
+                                f'<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;'
+                                f'padding:14px 16px;margin-bottom:10px;">'
+                                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;">'
+                                f'{c["Deck"]} · {c["Deck_Thresh"]:.1f}% '
+                                f'<span style="color:#64748b;font-weight:500;font-size:12px;">({start_str})</span>'
+                                f'</div>'
+                                f'<div style="background:{v_bg};color:{v_tx};padding:4px 10px;border-radius:6px;'
+                                f'font-size:12px;font-weight:700;">{v_lbl}</div>'
+                                f'</div>'
+                                f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;">'
+                                f'<div><div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Max Depth</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#b91c1c;">{c["Max_Depth"]:.2f}%</div></div>'
+                                f'<div><div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Exposure</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;">{c["Exposure_Start"]:.0f}% → {c["Exposure_Trough"]:.0f}%</div>'
+                                f'<div style="font-size:10px;color:#64748b;">Δ {exposure_delta:+.0f}pp</div></div>'
+                                f'<div><div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Recovery</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;">{rec_str}</div></div>'
+                                f'<div><div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Realized in Window</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#b91c1c;">${c["Losses_In_Window"]:,.0f}</div></div>'
+                                f'</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                            # Editable note for this crossing
+                            note_key = f"{c['Deck']}_{c['Start'].strftime('%Y-%m-%d') if hasattr(c['Start'], 'strftime') else str(c['Start'])[:10]}"
+                            existing_note = notes_map.get(note_key, '')
+                            with st.expander(f"📝 Lessons & notes — {c['Deck']} {start_str}", expanded=False):
+                                note_val = st.text_area(
+                                    "What happened? What would you do differently?",
+                                    value=existing_note,
+                                    key=f"note_{note_key}",
+                                    height=100,
+                                    placeholder="e.g. I held through L1 because I thought the market would bounce — instead it kept falling. Next time, take at least partial off at L1.",
+                                )
+                                save_col, _ = st.columns([1, 4])
+                                if save_col.button("Save note", key=f"savenote_{note_key}"):
+                                    if USE_DATABASE:
+                                        ok = db.save_drawdown_note(
+                                            CURR_PORT_NAME,
+                                            c['Deck'],
+                                            c['Start'],
+                                            note_val,
+                                        )
+                                        if ok:
+                                            st.toast("Note saved ✅")
+                                        else:
+                                            st.error("Save failed")
+                                    else:
+                                        st.warning("Database unavailable — notes require DB mode.")
+
+                        st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                        # ============================================================
+                        # SECTION 3: COST OF NON-COMPLIANCE
+                        # ============================================================
+                        pushed = [c for c in crossings_sorted if c['Verdict'] == 'Pushed']
+                        partial = [c for c in crossings_sorted if c['Verdict'] == 'Partial']
+                        respected = [c for c in crossings_sorted if c['Verdict'] == 'Respected']
+
+                        # Simple cost estimate: sum of realized losses inside pushed-through crossings
+                        pushed_cost = sum(abs(c['Losses_In_Window']) for c in pushed)
+                        partial_cost = sum(abs(c['Losses_In_Window']) for c in partial)
+
+                        st.markdown("**Cost of Non-Compliance**")
+                        cost_cols = st.columns(3)
+                        cost_cols[0].markdown(
+                            f'<div style="background:#fee2e2;border-radius:10px;padding:14px 16px;">'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;">🚨 Pushed-Through Losses</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#b91c1c;margin-top:4px;">${pushed_cost:,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(pushed)} deck crossing(s)</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        cost_cols[1].markdown(
+                            f'<div style="background:#fef3c7;border-radius:10px;padding:14px 16px;">'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b45309;">⚠️ Partial-Compliance Losses</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#b45309;margin-top:4px;">${partial_cost:,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(partial)} deck crossing(s)</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        cost_cols[2].markdown(
+                            f'<div style="background:#dcfce7;border-radius:10px;padding:14px 16px;">'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">✅ Rule-Respected Losses</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#15803d;margin-top:4px;">${sum(abs(c["Losses_In_Window"]) for c in respected):,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(respected)} deck crossing(s)</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption("Realized losses locked in during each crossing window. Pushed-through losses are the ones that would likely have been smaller if the deck rule had been followed.")
+
+                        st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                        # ============================================================
+                        # SECTION 4: DISCIPLINE REPORT CARD
+                        # ============================================================
+                        total_crossings = len(crossings_sorted)
+                        # Weighted compliance: Respected = 1, Partial = 0.5, Pushed = 0
+                        compliance_score = (len(respected) + len(partial) * 0.5) / total_crossings if total_crossings else 1.0
+                        compliance_pct = compliance_score * 100
+
+                        if compliance_pct >= 90:
+                            grade, g_color, g_bg = 'A', '#15803d', '#dcfce7'
+                        elif compliance_pct >= 75:
+                            grade, g_color, g_bg = 'B', '#16a34a', '#f0fdf4'
+                        elif compliance_pct >= 60:
+                            grade, g_color, g_bg = 'C', '#b45309', '#fef3c7'
+                        elif compliance_pct >= 40:
+                            grade, g_color, g_bg = 'D', '#d97706', '#fffbeb'
+                        else:
+                            grade, g_color, g_bg = 'F', '#b91c1c', '#fee2e2'
+
+                        recovered_crossings = [c for c in crossings_sorted if c['Recovered']]
+                        avg_recovery = (
+                            sum(c['Recovery_Days'] for c in recovered_crossings) / len(recovered_crossings)
+                            if recovered_crossings else None
+                        )
+                        avg_depth = sum(c['Max_Depth'] for c in crossings_sorted) / total_crossings if total_crossings else 0
+
+                        st.markdown("**Discipline Report Card**")
+                        rc_col1, rc_col2 = st.columns([1, 2])
+                        with rc_col1:
+                            st.markdown(
+                                f'<div style="background:{g_bg};border-radius:14px;padding:20px 24px;text-align:center;'
+                                f'box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+                                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;'
+                                f'letter-spacing:0.08em;color:#64748b;">Behavior Grade</div>'
+                                f'<div style="font-size:72px;font-weight:900;color:{g_color};line-height:1;margin:6px 0;">{grade}</div>'
+                                f'<div style="font-size:13px;font-weight:600;color:{g_color};">{compliance_pct:.0f}% compliance</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                        with rc_col2:
+                            recovery_txt = f"{avg_recovery:.0f}d" if avg_recovery is not None else "—"
+                            recovery_color = "#111" if avg_recovery is not None else "#64748b"
+                            breakdown_html = (
+                                f'<span style="color:#15803d;">{len(respected)} ✅</span> · '
+                                f'<span style="color:#b45309;">{len(partial)} ⚠️</span> · '
+                                f'<span style="color:#b91c1c;">{len(pushed)} 🚨</span>'
+                            )
+                            st.markdown(
+                                f'<div style="background:#f8fafc;border-radius:10px;padding:18px 20px;height:100%;">'
+                                f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
+                                f'<div><div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Crossings</div>'
+                                f'<div style="font-size:22px;font-weight:800;color:#111;">{total_crossings}</div></div>'
+                                f'<div><div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:600;">Avg Depth</div>'
+                                f'<div style="font-size:22px;font-weight:800;color:#b91c1c;">{avg_depth:.2f}%</div></div>'
+                                f'<div><div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:600;">Avg Recovery</div>'
+                                f'<div style="font-size:22px;font-weight:800;color:{recovery_color};">{recovery_txt}</div></div>'
+                                f'<div><div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:600;">Breakdown</div>'
+                                f'<div style="font-size:13px;font-weight:700;color:#111;">{breakdown_html}</div></div>'
+                                f'</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
 
         # --- TAB 4: CAREER STATS (ALL-TIME OVERVIEW) ---
         with tab_stats:
