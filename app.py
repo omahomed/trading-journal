@@ -5898,10 +5898,40 @@ elif page == "Log Buy":
 
     if trade_type == "Start New Campaign":
         st.markdown("#### 💰 Risk Budgeting")
+
+        # --- Auto-suggest sizing mode from the M Factor market state ---
+        # Rule:
+        #   Powertrend → ⚔️ Offense (1.00%)
+        #   Open (Grow/Confirmed Uptrend) → ⚖️ Normal (0.75%)
+        #   Anything else (Neutral / Closed) → 🛡️ Defense (0.50%)
+        try:
+            _mfactor_status, _mfactor_asof = get_combined_market_status()
+        except Exception:
+            _mfactor_status, _mfactor_asof = "Open", None
+
+        _suggested_idx = 1  # Normal default
+        if _mfactor_status == "Powertrend":
+            _suggested_idx = 2  # Offense
+        elif _mfactor_status == "Open":
+            _suggested_idx = 1  # Normal
+        else:
+            _suggested_idx = 0  # Defense
+
+        # Persistent note so the rule is visible every time the user logs a buy
+        st.info(
+            "**Sizing Mode auto-links to M Factor market state**  \n"
+            "🛡️ **Defense (0.50%)** — Neutral / Closed (anything not Open or Powertrend)  \n"
+            "⚖️ **Normal (0.75%)** — Open (Grow / Confirmed Uptrend)  \n"
+            "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
+            f"*Current M Factor status:* **{_mfactor_status}** "
+            f"→ suggesting **{['🛡️ Defense','⚖️ Normal','⚔️ Offense'][_suggested_idx]}**. "
+            f"You can still override below."
+        )
+
         rb1, rb2, rb3 = st.columns(3)
         sizing_mode_buy = rb1.radio("Sizing Mode",
             ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
-            index=1, key="b_sizing_mode")
+            index=_suggested_idx, key="b_sizing_mode")
         if sizing_mode_buy.startswith("⚔️"):
             risk_pct_input = 1.00
         elif sizing_mode_buy.startswith("⚖️"):
