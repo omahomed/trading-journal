@@ -13259,6 +13259,18 @@ elif page == "IBD Market School":
     st.markdown("### 🟦 NASDAQ (^IXIC)")
 
     if nasdaq_latest is not None:
+        def _clean_sigs(v):
+            """Normalize signal column — treat NaN/None/empty as no signal."""
+            if v is None:
+                return None
+            try:
+                if pd.isna(v):
+                    return None
+            except (TypeError, ValueError):
+                pass
+            s = str(v).strip()
+            return s if s and s.lower() != 'nan' else None
+
         if USE_DATABASE:
             close = nasdaq_latest['close_price']
             daily_chg = nasdaq_latest['daily_change_pct']
@@ -13266,8 +13278,8 @@ elif page == "IBD Market School":
             allocation = nasdaq_latest['position_allocation'] * 100
             dist_count = nasdaq_latest['distribution_count']
             buy_switch = nasdaq_latest['buy_switch']
-            buy_sigs = nasdaq_latest['buy_signals']
-            sell_sigs = nasdaq_latest['sell_signals']
+            buy_sigs = _clean_sigs(nasdaq_latest['buy_signals'])
+            sell_sigs = _clean_sigs(nasdaq_latest['sell_signals'])
         else:
             close = nasdaq_latest['close']
             daily_chg = float(nasdaq_latest['daily_change'].rstrip('%'))
@@ -13275,8 +13287,8 @@ elif page == "IBD Market School":
             allocation = float(nasdaq_latest['position_allocation'].rstrip('%'))
             dist_count = nasdaq_latest['distribution_count']
             buy_switch = nasdaq_latest['buy_switch'] == 'ON'
-            buy_sigs = nasdaq_latest.get('buy_signals')
-            sell_sigs = nasdaq_latest.get('sell_signals')
+            buy_sigs = _clean_sigs(nasdaq_latest.get('buy_signals'))
+            sell_sigs = _clean_sigs(nasdaq_latest.get('sell_signals'))
 
         m1, m2 = st.columns(2)
         m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
