@@ -12530,6 +12530,19 @@ elif page == "Analytics":
                 "Rule deviation",
                 "Other",
             ]
+            # Per-category (background, foreground) colors for the review pill
+            LESSON_CAT_COLORS = {
+                "Entry timing":        ("#fef3c7", "#b45309"),
+                "Stop placement":      ("#fed7aa", "#c2410c"),
+                "Undersized":          ("#dbeafe", "#1e40af"),
+                "Oversized":           ("#ede9fe", "#6d28d9"),
+                "Scaled in too fast":  ("#fecaca", "#b91c1c"),
+                "Exit too early":      ("#ccfbf1", "#0f766e"),
+                "Exit too late":       ("#e0e7ff", "#4338ca"),
+                "Market conditions":   ("#e5e7eb", "#374151"),
+                "Rule deviation":      ("#ffe4e6", "#be123c"),
+                "Other":               ("#f1f5f9", "#475569"),
+            }
 
             # Load notes for this portfolio
             lessons_map = {}
@@ -12618,6 +12631,20 @@ elif page == "Analytics":
                     pl_color = "#15803d" if is_winner else "#b91c1c"
                     pl_sign = "+" if pl >= 0 else ""
 
+                    # Review pill: show the saved lesson category as a colored badge
+                    # in the card header so reviewed trades are obvious at a glance.
+                    card_existing_note, card_existing_cat = lessons_map.get(trade_id, ('', ''))
+                    cat_pill_html = ""
+                    if card_existing_cat and card_existing_cat in LESSON_CAT_COLORS:
+                        _pbg, _pfg = LESSON_CAT_COLORS[card_existing_cat]
+                        cat_pill_html = (
+                            f'<span style="display:inline-block;margin-left:10px;'
+                            f'padding:3px 10px;background:{_pbg};color:{_pfg};'
+                            f'font-size:11px;font-weight:700;border-radius:12px;'
+                            f'vertical-align:middle;letter-spacing:0.02em;">'
+                            f'✓ {card_existing_cat}</span>'
+                        )
+
                     st.markdown(
                         f'<div style="background:#fff;border-left:4px solid {border_color};'
                         f'border:1px solid #e5e7eb;border-radius:10px;padding:14px 18px;margin-bottom:10px;">'
@@ -12625,6 +12652,7 @@ elif page == "Analytics":
                         f'<div style="font-size:16px;font-weight:800;color:#111;">'
                         f'#{rank} · {ticker} '
                         f'<span style="color:#64748b;font-weight:500;font-size:12px;">({trade_id})</span>'
+                        f'{cat_pill_html}'
                         f'</div>'
                         f'<div style="font-size:20px;font-weight:800;color:{pl_color};">{pl_sign}${pl:,.0f}</div>'
                         f'</div>'
