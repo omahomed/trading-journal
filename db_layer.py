@@ -1772,6 +1772,74 @@ def get_trade_lessons(portfolio_name: str):
         return {}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_rule_notes(portfolio_name: str, rule_side: str):
+    """
+    Return {rule_name: (note, status)} for a portfolio and side.
+    rule_side: 'buy' or 'sell'.
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return {}
+                pid = r[0]
+                cur.execute(
+                    "SELECT rule_name, note, status FROM rule_notes WHERE portfolio_id = %s AND rule_side = %s",
+                    (pid, rule_side),
+                )
+                return {row[0]: (row[1] or '', row[2] or '') for row in cur.fetchall()}
+    except Exception as e:
+        print(f"Failed to load rule notes: {e}")
+        return {}
+
+
+def save_rule_note(portfolio_name: str, rule_side: str, rule_name: str, note: str, status: str = ''):
+    """
+    Upsert a rule note. One entry per (portfolio, rule_side, rule_name).
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return False
+                pid = r[0]
+                cur.execute(
+                    """
+                    INSERT INTO rule_notes (portfolio_id, rule_side, rule_name, note, status, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (portfolio_id, rule_side, rule_name)
+                    DO UPDATE SET note = EXCLUDED.note, status = EXCLUDED.status, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pid, rule_side, rule_name, note or '', status or ''),
+                )
+                conn.commit()
+        try:
+            get_rule_notes.clear()
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"Failed to save rule note: {e}")
+        return False
+
+
 def save_trade_lesson(portfolio_name: str, trade_id: str, note: str, category: str = ''):
     """
     Upsert a trade lesson note. One entry per (portfolio, trade_id).

@@ -11244,6 +11244,14 @@ elif page == "Analytics":
                 if br_closed_2026.empty:
                     st.info("💡 No 2026 closed trades with buy rule data yet.")
                 else:
+                    # Load saved buy rule notes for this portfolio
+                    br_notes_map = {}
+                    if USE_DATABASE:
+                        try:
+                            br_notes_map = db.get_rule_notes(CURR_PORT_NAME, 'buy')
+                        except Exception:
+                            br_notes_map = {}
+
                     # Compute R-multiple where possible
                     br_closed_2026['_R'] = br_closed_2026.apply(
                         lambda r: (float(r['Realized_PL']) / float(r['Risk_Budget']))
@@ -11367,7 +11375,10 @@ elif page == "Analytics":
                         avg_r_txt = f"{row['Avg R']:.2f}R" if pd.notna(row['Avg R']) else "—"
 
                         rcols = st.columns([3, 1, 1, 1.2, 1.2, 1, 1.5])
-                        rcols[0].markdown(f"**{row['Rule']}**")
+                        # Show 📝 icon if a saved note exists for this rule
+                        has_note = row['Rule'] in br_notes_map and (br_notes_map[row['Rule']][0] or br_notes_map[row['Rule']][1])
+                        rule_label = f"**{row['Rule']}**" + (" 📝" if has_note else "")
+                        rcols[0].markdown(rule_label)
                         rcols[1].markdown(f"{int(row['Trades'])}")
                         rcols[2].markdown(f"{row['Win Rate %']:.0f}%")
                         rcols[3].markdown(f"<span style='color:{pl_color};font-weight:600;'>${row['Avg P&L']:,.0f}</span>", unsafe_allow_html=True)
@@ -11376,6 +11387,15 @@ elif page == "Analytics":
                         rcols[6].markdown(badge, unsafe_allow_html=True)
 
                     st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # Rule status options — shared by Buy Rules and Sell Rules tabs
+                    RULE_STATUS_OPTIONS = [
+                        "— no status —",
+                        "✅ Validated",
+                        "✏️ Modify",
+                        "⚠️ Review",
+                        "🛑 Avoid",
+                    ]
 
                     # --- DRILL-DOWN ---
                     st.markdown("**Drill-down: study an individual rule**")
@@ -11403,6 +11423,37 @@ elif page == "Analytics":
                             },
                         )
 
+                        # --- RULE OBSERVATIONS ---
+                        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+                        st.markdown(f"### 📝 Rule Observations — {sel_rule}")
+                        existing_note, existing_status = br_notes_map.get(sel_rule, ('', ''))
+                        status_index = 0
+                        if existing_status and existing_status in RULE_STATUS_OPTIONS:
+                            status_index = RULE_STATUS_OPTIONS.index(existing_status)
+                        note_status = st.selectbox(
+                            "Status",
+                            RULE_STATUS_OPTIONS,
+                            index=status_index,
+                            key=f"br_note_status_{sel_rule}",
+                        )
+                        note_text = st.text_area(
+                            "What did you observe? What's working or not working with this rule?",
+                            value=existing_note,
+                            key=f"br_note_text_{sel_rule}",
+                            height=120,
+                            placeholder="e.g. br3.1 Reclaim 21e — I'm using this on late-stage bases where the 21EMA has already been tested multiple times. Only take this setup on first pullbacks to a fresh 21EMA.",
+                        )
+                        if st.button("Save observation", key=f"br_note_save_{sel_rule}"):
+                            if USE_DATABASE:
+                                save_status = '' if note_status == RULE_STATUS_OPTIONS[0] else note_status
+                                ok = db.save_rule_note(CURR_PORT_NAME, 'buy', sel_rule, note_text, save_status)
+                                if ok:
+                                    st.toast(f"Note saved for {sel_rule} ✅")
+                                else:
+                                    st.error("Save failed")
+                            else:
+                                st.warning("Database unavailable — notes require DB mode.")
+
         # --- TAB 3: SELL RULES (Rule Studio — 2026 only) ---
         with tab_sell_rules:
             st.subheader("🔴 Sell Rules — Exit Quality in 2026")
@@ -11427,6 +11478,14 @@ elif page == "Analytics":
                 if sr_closed_2026.empty:
                     st.info("💡 No 2026 closed trades with sell rule data yet.")
                 else:
+                    # Load saved sell rule notes for this portfolio
+                    sr_notes_map = {}
+                    if USE_DATABASE:
+                        try:
+                            sr_notes_map = db.get_rule_notes(CURR_PORT_NAME, 'sell')
+                        except Exception:
+                            sr_notes_map = {}
+
                     # Compute R-multiple and hold days
                     sr_closed_2026['_R'] = sr_closed_2026.apply(
                         lambda r: (float(r['Realized_PL']) / float(r['Risk_Budget']))
@@ -11564,7 +11623,12 @@ elif page == "Analytics":
                         hold_txt = f"{row['Avg Hold']:.0f}d" if pd.notna(row['Avg Hold']) else "—"
 
                         srcols = st.columns([3, 1, 1.2, 1.2, 1, 1, 1, 1.5])
-                        srcols[0].markdown(f"**{row['Sell Rule']}**")
+                        # Show 📝 icon if a saved note exists for this rule
+                        sr_has_note = row['Sell Rule'] in sr_notes_map and (
+                            sr_notes_map[row['Sell Rule']][0] or sr_notes_map[row['Sell Rule']][1]
+                        )
+                        sr_label = f"**{row['Sell Rule']}**" + (" 📝" if sr_has_note else "")
+                        srcols[0].markdown(sr_label)
                         srcols[1].markdown(f"{int(row['Uses'])}")
                         srcols[2].markdown(f"<span style='color:{pl_color};font-weight:600;'>${row['Avg P&L']:,.0f}</span>", unsafe_allow_html=True)
                         srcols[3].markdown(f"<span style='color:{pl_color};font-weight:700;'>${row['Total P&L']:,.0f}</span>", unsafe_allow_html=True)
@@ -11601,6 +11665,45 @@ elif page == "Analytics":
                                 'Hold': st.column_config.NumberColumn('Hold', format='%.0fd'),
                             },
                         )
+
+                        # --- RULE OBSERVATIONS ---
+                        # Status list mirrored from Buy Rules tab
+                        SR_STATUS_OPTIONS = [
+                            "— no status —",
+                            "✅ Validated",
+                            "✏️ Modify",
+                            "⚠️ Review",
+                            "🛑 Avoid",
+                        ]
+                        st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
+                        st.markdown(f"### 📝 Rule Observations — {sel_sr}")
+                        sr_existing_note, sr_existing_status = sr_notes_map.get(sel_sr, ('', ''))
+                        sr_status_index = 0
+                        if sr_existing_status and sr_existing_status in SR_STATUS_OPTIONS:
+                            sr_status_index = SR_STATUS_OPTIONS.index(sr_existing_status)
+                        sr_note_status = st.selectbox(
+                            "Status",
+                            SR_STATUS_OPTIONS,
+                            index=sr_status_index,
+                            key=f"sr_note_status_{sel_sr}",
+                        )
+                        sr_note_text = st.text_area(
+                            "What did you observe? Is this exit protecting capital or cutting winners short?",
+                            value=sr_existing_note,
+                            key=f"sr_note_text_{sel_sr}",
+                            height=120,
+                            placeholder="e.g. sr3 Portfolio Management — I'm cutting too early on winners to rebalance. Next time, only trim trades that are failing, not ones near targets.",
+                        )
+                        if st.button("Save observation", key=f"sr_note_save_{sel_sr}"):
+                            if USE_DATABASE:
+                                sr_save_status = '' if sr_note_status == SR_STATUS_OPTIONS[0] else sr_note_status
+                                ok = db.save_rule_note(CURR_PORT_NAME, 'sell', sel_sr, sr_note_text, sr_save_status)
+                                if ok:
+                                    st.toast(f"Note saved for {sel_sr} ✅")
+                                else:
+                                    st.error("Save failed")
+                            else:
+                                st.warning("Database unavailable — notes require DB mode.")
 
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
         # --- TAB 4: DRAWDOWN DISCIPLINE (deck compliance tracker) ---

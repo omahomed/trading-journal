@@ -337,6 +337,27 @@ CREATE INDEX IF NOT EXISTS idx_trade_lessons ON trade_lessons (portfolio_id, tra
 
 
 -- ============================================
+-- TABLE: rule_notes
+-- PURPOSE: User observation notes per buy/sell rule (Rule Studio tabs)
+-- KEY: (portfolio_id, rule_side, rule_name) — one note per rule per side
+-- ============================================
+CREATE TABLE IF NOT EXISTS rule_notes (
+    id SERIAL PRIMARY KEY,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    rule_side VARCHAR(10) NOT NULL,   -- 'buy' or 'sell'
+    rule_name VARCHAR(200) NOT NULL,  -- e.g. 'br3.1 Reclaim 21e'
+    note TEXT DEFAULT '',
+    status VARCHAR(30) DEFAULT '',    -- 'Validated' / 'Modify' / 'Review' / 'Avoid' / ''
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_rule_note UNIQUE (portfolio_id, rule_side, rule_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_notes ON rule_notes (portfolio_id, rule_side);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 
