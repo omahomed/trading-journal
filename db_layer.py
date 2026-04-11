@@ -1743,6 +1743,73 @@ def get_drawdown_notes(portfolio_name: str):
         return {}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_trade_lessons(portfolio_name: str):
+    """
+    Return {trade_id: (note, category)} for a portfolio.
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return {}
+                pid = r[0]
+                cur.execute(
+                    "SELECT trade_id, note, category FROM trade_lessons WHERE portfolio_id = %s",
+                    (pid,),
+                )
+                return {row[0]: (row[1] or '', row[2] or '') for row in cur.fetchall()}
+    except Exception as e:
+        print(f"Failed to load trade lessons: {e}")
+        return {}
+
+
+def save_trade_lesson(portfolio_name: str, trade_id: str, note: str, category: str = ''):
+    """
+    Upsert a trade lesson note. One entry per (portfolio, trade_id).
+    """
+    try:
+        port_map = {
+            'CanSlim (Main)': 'CanSlim',
+            'TQQQ Strategy': 'TQQQ Strategy',
+            '457B Plan': '457B Plan',
+        }
+        db_name = port_map.get(portfolio_name, portfolio_name)
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (db_name,))
+                r = cur.fetchone()
+                if not r:
+                    return False
+                pid = r[0]
+                cur.execute(
+                    """
+                    INSERT INTO trade_lessons (portfolio_id, trade_id, note, category, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (portfolio_id, trade_id)
+                    DO UPDATE SET note = EXCLUDED.note, category = EXCLUDED.category, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pid, str(trade_id), note or '', category or ''),
+                )
+                conn.commit()
+        try:
+            get_trade_lessons.clear()
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"Failed to save trade lesson: {e}")
+        return False
+
+
 def save_drawdown_note(portfolio_name: str, deck_level: str, crossing_date, note: str):
     """
     Upsert a drawdown note. crossing_date can be a date, datetime, or YYYY-MM-DD string.

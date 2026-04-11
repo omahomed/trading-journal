@@ -317,6 +317,26 @@ CREATE INDEX IF NOT EXISTS idx_drawdown_notes ON drawdown_notes (portfolio_id, c
 
 
 -- ============================================
+-- TABLE: trade_lessons
+-- PURPOSE: User lesson-learned notes per trade (Trade Review tab)
+-- KEY: (portfolio_id, trade_id) — one lesson per campaign
+-- ============================================
+CREATE TABLE IF NOT EXISTS trade_lessons (
+    id SERIAL PRIMARY KEY,
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
+    trade_id VARCHAR(50) NOT NULL,
+    note TEXT DEFAULT '',
+    category VARCHAR(50) DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_trade_lesson UNIQUE (portfolio_id, trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_lessons ON trade_lessons (portfolio_id, trade_id);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 
