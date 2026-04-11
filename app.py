@@ -5917,16 +5917,20 @@ elif page == "Log Buy":
         else:
             _suggested_idx = 0  # Defense
 
-        # Persistent note so the rule is visible every time the user logs a buy
-        st.info(
-            "**Sizing Mode auto-links to M Factor market state**  \n"
-            "🛡️ **Defense (0.50%)** — Neutral / Closed (anything not Open or Powertrend)  \n"
-            "⚖️ **Normal (0.75%)** — Open (Grow / Confirmed Uptrend)  \n"
-            "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
-            f"*Current M Factor status:* **{_mfactor_status}** "
-            f"→ suggesting **{['🛡️ Defense','⚖️ Normal','⚔️ Offense'][_suggested_idx]}**. "
-            f"You can still override below."
-        )
+        # Collapsible rule reference — header shows current state so the
+        # actionable bit is visible without expanding
+        _suggested_label = ['🛡️ Defense','⚖️ Normal','⚔️ Offense'][_suggested_idx]
+        with st.expander(
+            f"ℹ️ M Factor: **{_mfactor_status}** → suggesting **{_suggested_label}** (click for rule)",
+            expanded=False,
+        ):
+            st.markdown(
+                "**Sizing Mode auto-links to M Factor market state**  \n"
+                "🛡️ **Defense (0.50%)** — Neutral / Closed (anything not Open or Powertrend)  \n"
+                "⚖️ **Normal (0.75%)** — Open (Grow / Confirmed Uptrend)  \n"
+                "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
+                "The radio below is pre-selected per this rule; you can still override before logging."
+            )
 
         rb1, rb2, rb3 = st.columns(3)
         sizing_mode_buy = rb1.radio("Sizing Mode",
