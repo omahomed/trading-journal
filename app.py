@@ -12716,7 +12716,15 @@ elif page == "Analytics":
                                 unsafe_allow_html=True,
                             )
 
-                            # Build a display frame with the columns you care about
+                            # Return % vs the initial B1 buy price — gives a
+                            # consistent "how far from initial entry was this
+                            # action?" view across every row.
+                            first_buy_price = float(_buys.iloc[0]['Amount']) if not _buys.empty else 0.0
+                            if first_buy_price > 0:
+                                ret_series = (trade_txs['Amount'].astype(float) / first_buy_price - 1) * 100
+                            else:
+                                ret_series = pd.Series([0.0] * len(trade_txs), index=trade_txs.index)
+
                             disp = pd.DataFrame({
                                 'Date': trade_txs['Date'].dt.strftime('%Y-%m-%d %H:%M')
                                         if 'Date' in trade_txs.columns else '',
@@ -12724,12 +12732,9 @@ elif page == "Analytics":
                                 'Action': trade_txs['Action'],
                                 'Shares': trade_txs['Shares'].astype(float),
                                 'Price': trade_txs['Amount'].astype(float),
+                                'Return %': ret_series.astype(float),
                                 'Value': (trade_txs['Shares'].astype(float) * trade_txs['Amount'].astype(float)),
                                 'Rule': trade_txs.get('Rule', ''),
-                                'Stop': trade_txs.get('Stop_Loss', 0).astype(float)
-                                        if 'Stop_Loss' in trade_txs.columns else 0.0,
-                                'Realized $': trade_txs.get('Realized_PL', 0).astype(float)
-                                              if 'Realized_PL' in trade_txs.columns else 0.0,
                             })
                             st.dataframe(
                                 disp,
@@ -12741,10 +12746,9 @@ elif page == "Analytics":
                                     'Action': st.column_config.TextColumn('Action', width='small'),
                                     'Shares': st.column_config.NumberColumn('Shares', format='%.0f'),
                                     'Price': st.column_config.NumberColumn('Price', format='$%.4f'),
+                                    'Return %': st.column_config.NumberColumn('Return %', format='%+.2f%%', help='% change vs the initial B1 buy price'),
                                     'Value': st.column_config.NumberColumn('Value', format='$%.2f'),
                                     'Rule': st.column_config.TextColumn('Rule'),
-                                    'Stop': st.column_config.NumberColumn('Stop', format='$%.2f'),
-                                    'Realized $': st.column_config.NumberColumn('Realized', format='$%.2f'),
                                 },
                             )
 
