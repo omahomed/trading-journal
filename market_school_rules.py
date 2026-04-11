@@ -384,6 +384,10 @@ class MarketSchoolRules:
                 # Reset distribution day count — new uptrend starts fresh
                 self.distribution_days = []
                 self.active_distribution_count = 0
+                # Reset B/S lockout state — new bull cycle, old sell signals
+                # from the prior correction should not block new B3/B4/B5 signals
+                self.last_s5_s6_s7_s8_date = None
+                self.last_b3_b4_b5_date = None
                 
             return signal
             
