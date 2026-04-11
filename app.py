@@ -11172,6 +11172,11 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
+        # Shared across tabs: all closed trades (all-time) from df_s_raw
+        all_closed = df_s_raw[df_s_raw['Status'] == 'CLOSED'].copy()
+        if not all_closed.empty and 'Closed_Date' in all_closed.columns:
+            all_closed['Closed_Date'] = pd.to_datetime(all_closed['Closed_Date'], errors='coerce')
+
         tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🟢 Buy Rules", "🔴 Sell Rules", "🛡️ Drawdown Discipline", "🔬 Trade Review"])
 
         # --- TAB 2: BUY RULES (Rule Studio — 2026 only) ---
