@@ -1039,6 +1039,21 @@ def cached_r2_download(url):
     except Exception:
         return None
 
+# --- CACHED SINGLE-TICKER LIVE PRICE ---
+# yfinance single-ticker fetches are slow (1-2s each). Cache for 60s so
+# repeated reruns during form edits hit the cache instead of the network.
+@st.cache_data(ttl=60, show_spinner=False, max_entries=500)
+def cached_live_price(ticker):
+    if not ticker:
+        return None
+    try:
+        hist = yf.Ticker(ticker).history(period="1d")
+        if hist.empty:
+            return None
+        return float(hist['Close'].iloc[-1])
+    except Exception:
+        return None
+
 # --- MARKET STATE HELPERS (used by M Factor + Daily Routine) ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_market_state(ticker):
@@ -4594,10 +4609,8 @@ if page == "Daily Routine":
         entry_date = c1.date_input("Date", get_current_date_ct())
         entry_date_str = entry_date.strftime("%Y-%m-%d")
 
-        try:
-            live_spy = yf.Ticker("SPY").history(period='1d')['Close'].iloc[-1]
-            live_ndx = yf.Ticker("^IXIC").history(period='1d')['Close'].iloc[-1]
-        except: live_spy = 0.0; live_ndx = 0.0
+        live_spy = cached_live_price("SPY") or 0.0
+        live_ndx = cached_live_price("^IXIC") or 0.0
 
         spy_val = c3.number_input("SPY Close", value=float(live_spy), format="%.2f")
         ndx_val = c4.number_input("Nasdaq Close", value=float(live_ndx), format="%.2f")
@@ -4850,9 +4863,8 @@ elif page == "Position Sizer":
             sel_pos = st.selectbox("Select Holding", options=open_positions['Ticker'].unique().tolist(), key="add_sel")
             row = open_positions[open_positions['Ticker'] == sel_pos].iloc[0]
 
-            # Fetch Price safely
-            try: live_price = yf.Ticker(row['Ticker']).history(period="1d")['Close'].iloc[-1]
-            except: live_price = row.get('Avg_Entry', 100)
+            # Fetch Price safely (cached 60s)
+            live_price = cached_live_price(row['Ticker']) or row.get('Avg_Entry', 100)
 
             c1, c2 = st.columns(2)
             curr_price = c1.number_input("Current Price ($)", min_value=0.01, value=float(live_price), step=0.1, key=f"add_cp_{row['Ticker']}")
@@ -4981,8 +4993,7 @@ elif page == "Position Sizer":
             row_t = open_positions[open_positions['Ticker'] == sel_trim].iloc[0]
             tid_trim = row_t['Trade_ID']
             
-            try: live_price_t = yf.Ticker(row_t['Ticker']).history(period="1d")['Close'].iloc[-1]
-            except: live_price_t = row_t.get('Avg_Entry', 100)
+            live_price_t = cached_live_price(row_t['Ticker']) or row_t.get('Avg_Entry', 100)
             
             t1, t2, t3, t4 = st.columns(4)
             curr_price_t = t1.number_input("Current Price ($)", value=float(live_price_t), step=0.1, key=f"trim_cp_{row_t['Ticker']}")
@@ -7004,14 +7015,14 @@ elif page == "Trade Manager":
                 fd_remaining_shares = 0.0
                 fd_cost_basis_sum = 0.0
 
-                # Fetch live prices for accurate unrealized P&L
+                # Fetch live prices for accurate unrealized P&L (cached per-ticker 60s)
                 curr_prices = {}
                 open_tickers = df_s[df_s['Status']=='OPEN'][['Trade_ID','Ticker']].drop_duplicates()
                 for _, r in open_tickers.iterrows():
-                    try:
-                        px = yf.Ticker(r['Ticker']).history(period='1d')['Close'].iloc[-1]
-                        curr_prices[r['Trade_ID']] = float(px)
-                    except:
+                    px = cached_live_price(r['Ticker'])
+                    if px is not None:
+                        curr_prices[r['Trade_ID']] = px
+                    else:
                         # Fallback to summary-derived price
                         s_row = df_s[df_s['Trade_ID'] == r['Trade_ID']]
                         if not s_row.empty and s_row.iloc[0]['Shares'] > 0:
@@ -7083,12 +7094,9 @@ elif page == "Trade Manager":
                 
                 # --- 3. THE FLIGHT DECK (DYNAMIC) ---
                 if tick_filter != "All":
-                    try:
-                        live_px = yf.Ticker(tick_filter).history(period="1d")['Close'].iloc[-1]
-                    except:
-                        live_px = 0.0
-                        if fd_remaining_shares > 0:
-                            live_px = fd_cost_basis_sum / fd_remaining_shares
+                    live_px = cached_live_price(tick_filter)
+                    if live_px is None:
+                        live_px = (fd_cost_basis_sum / fd_remaining_shares) if fd_remaining_shares > 0 else 0.0
                     
                     shares = fd_remaining_shares
                     avg_cost = (fd_cost_basis_sum / shares) if shares > 0 else 0.0
@@ -9665,13 +9673,11 @@ elif page == "Earnings Planner":
 
         
 
-        # Price Default Logic: yfinance -> Session Cache -> Row Current Price -> 0.0
+        # Price Default Logic: yfinance (cached) -> Session Cache -> Row Current Price -> 0.0
         def_price = 0.0
-        try:
-            live_fetch = yf.Ticker(sel_ticker).history(period="1d")['Close'].iloc[-1]
-            if live_fetch > 0: def_price = float(live_fetch)
-        except:
-            pass
+        live_fetch = cached_live_price(sel_ticker)
+        if live_fetch and live_fetch > 0:
+            def_price = float(live_fetch)
         if def_price == 0 and 'live_prices' in st.session_state and sel_ticker in st.session_state['live_prices']:
             def_price = st.session_state['live_prices'][sel_ticker]
         if def_price == 0 and 'Current_Price' in row and float(row['Current_Price']) > 0:
@@ -10516,11 +10522,8 @@ elif page == "Trade Journal":
                         fd_cost_basis_sum += (item['qty'] * item['price'])
 
                     if is_open:
-                        # Get live price for open trades
-                        try:
-                            live_px = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
-                        except:
-                            live_px = avg_entry_val
+                        # Get live price for open trades (cached 60s)
+                        live_px = cached_live_price(ticker) or avg_entry_val
 
                         mkt_val = fd_remaining_shares * live_px
                         unrealized_pl = mkt_val - fd_cost_basis_sum
@@ -10943,11 +10946,8 @@ elif page == "Trade Journal":
                         display_df['Exit_Price'] = display_df.index.map(buy_exit_price)
                         display_df['Status'] = display_df['Remaining_Shares'].apply(lambda x: 'Open' if x > 0 else 'Closed')
 
-                        # === FLIGHT DECK ===
-                        try:
-                            live_px = yf.Ticker(ticker).history(period="1d")['Close'].iloc[-1]
-                        except:
-                            live_px = avg_entry_val
+                        # === FLIGHT DECK (cached 60s) ===
+                        live_px = cached_live_price(ticker) or avg_entry_val
 
                         shares = fd_remaining_shares if is_open else 0
                         avg_cost = (fd_cost_basis_sum / shares) if shares > 0 else avg_entry_val
