@@ -11172,11 +11172,11 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🎯 Buy Rules", "🚪 Sell Rules", "📉 Drawdown Detective", "🔬 Trade Review"])
+        tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🟢 Buy Rules", "🔴 Sell Rules", "📉 Drawdown Detective", "🔬 Trade Review"])
 
         # --- TAB 2: BUY RULES (Rule Studio — 2026 only) ---
         with tab_buy_rules:
-            st.subheader("🎯 Buy Rules — What's Working in 2026")
+            st.subheader("🟢 Buy Rules — What's Working in 2026")
             st.caption("Study your entry rules. Sort by the metric you care about, click any rule to drill into individual trades.")
 
             br_source = df_s_raw.copy()
@@ -11344,17 +11344,18 @@ elif page == "Analytics":
                     sel_rule = st.selectbox("Select a rule to see its trades", all_rules, key="br_drill")
                     if sel_rule:
                         rule_trades = br_closed_2026[br_closed_2026['_Rule'] == sel_rule].copy()
+                        rule_trades['Open_Date_str'] = pd.to_datetime(rule_trades['Open_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
                         rule_trades['Closed_Date_str'] = pd.to_datetime(rule_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-                        display_df = rule_trades[['Trade_ID', 'Ticker', 'Closed_Date_str', 'Realized_PL', '_R']].copy()
+                        display_df = rule_trades[['Trade_ID', 'Ticker', 'Open_Date_str', 'Closed_Date_str', 'Realized_PL', '_R']].copy()
                         display_df['Realized_PL'] = display_df['Realized_PL'].apply(lambda x: f"${x:,.2f}")
                         display_df['_R'] = display_df['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
-                        display_df.columns = ['Trade ID', 'Ticker', 'Closed', 'P&L', 'R']
+                        display_df.columns = ['Trade ID', 'Ticker', 'Opened', 'Closed', 'P&L', 'R']
                         display_df = display_df.sort_values('P&L', ascending=False)
                         st.dataframe(display_df, hide_index=True, use_container_width=True)
 
         # --- TAB 3: SELL RULES (Rule Studio — 2026 only) ---
         with tab_sell_rules:
-            st.subheader("🚪 Sell Rules — Exit Quality in 2026")
+            st.subheader("🔴 Sell Rules — Exit Quality in 2026")
             st.caption("Study your exit rules. Which are protecting capital, which are capturing profits, which are hurting you.")
 
             sr_source = df_s_raw.copy()
@@ -11530,12 +11531,13 @@ elif page == "Analytics":
                     sel_sr = st.selectbox("Select a sell rule to see its exits", all_sell_rules, key="sr_drill")
                     if sel_sr:
                         sr_trades = sr_closed_2026[sr_closed_2026['_SellRule'] == sel_sr].copy()
+                        sr_trades['Open_Date_str'] = pd.to_datetime(sr_trades['Open_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
                         sr_trades['Closed_Date_str'] = pd.to_datetime(sr_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-                        sr_display = sr_trades[['Trade_ID', 'Ticker', 'Closed_Date_str', 'Realized_PL', '_R', '_Hold']].copy()
+                        sr_display = sr_trades[['Trade_ID', 'Ticker', 'Open_Date_str', 'Closed_Date_str', 'Realized_PL', '_R', '_Hold']].copy()
                         sr_display['Realized_PL'] = sr_display['Realized_PL'].apply(lambda x: f"${x:,.2f}")
                         sr_display['_R'] = sr_display['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
                         sr_display['_Hold'] = sr_display['_Hold'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else "—")
-                        sr_display.columns = ['Trade ID', 'Ticker', 'Closed', 'P&L', 'R', 'Hold']
+                        sr_display.columns = ['Trade ID', 'Ticker', 'Opened', 'Closed', 'P&L', 'R', 'Hold']
                         sr_display = sr_display.sort_values('P&L', ascending=False)
                         st.dataframe(sr_display, hide_index=True, use_container_width=True)
 
