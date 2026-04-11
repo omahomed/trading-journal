@@ -1941,12 +1941,23 @@ with st.sidebar:
 page = st.session_state.page
 
 st.sidebar.markdown("---")
-# Initialize privacy_mode state once so the toggle survives page navigation.
-# Passing both `key` and `value` to a widget is a known Streamlit anti-pattern
-# that causes the widget to reset on reruns — use key-only here.
-if 'privacy_mode' not in st.session_state:
-    st.session_state.privacy_mode = False
-st.sidebar.toggle("🔒 Privacy Mode", key="privacy_mode")
+# Privacy mode — use two-key pattern so the toggle survives navigation.
+# `_privacy_enabled` is a plain session state key that's NEVER tied to a
+# widget, so Streamlit won't garbage-collect it between page reruns.
+# The widget itself has its own transient key and seeds from the persistent
+# one; on change, we write back via the on_change callback.
+if '_privacy_enabled' not in st.session_state:
+    st.session_state['_privacy_enabled'] = False
+
+def _sync_privacy():
+    st.session_state['_privacy_enabled'] = st.session_state.get('privacy_mode_widget', False)
+
+st.sidebar.toggle(
+    "🔒 Privacy Mode",
+    value=st.session_state['_privacy_enabled'],
+    key='privacy_mode_widget',
+    on_change=_sync_privacy,
+)
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
 # Logout button (only if password auth is active)
@@ -1957,7 +1968,9 @@ if _AUTH_ACTIVE:
         st.rerun()
 
 # --- Privacy mode helper ---
-PRIVACY = st.session_state.get('privacy_mode', False)
+# Read from the persistent key (see two-key pattern above). Fall back to the
+# widget key in case the page loads before the toggle has been touched once.
+PRIVACY = st.session_state.get('_privacy_enabled', False)
 
 def mask(val, fmt=",.2f", prefix="$", suffix=""):
     """Return formatted string or masked value if privacy mode is on."""
