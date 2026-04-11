@@ -12716,21 +12716,60 @@ elif page == "Analytics":
                                 unsafe_allow_html=True,
                             )
 
-                            # Return % vs the initial B1 buy price — gives a
-                            # consistent "how far from initial entry was this
-                            # action?" view across every row.
-                            first_buy_price = float(_buys.iloc[0]['Amount']) if not _buys.empty else 0.0
-                            if first_buy_price > 0:
-                                ret_series = (trade_txs['Amount'].astype(float) / first_buy_price - 1) * 100
-                            else:
-                                ret_series = pd.Series([0.0] * len(trade_txs), index=trade_txs.index)
+                            # LIFO back-attribution — same logic as Trade Journal.
+                            # Each BUY row ends up with the realized P&L of the shares
+                            # sold against it; the Return % is the LIFO-attributed
+                            # return on that specific lot. SELL rows show 0% since
+                            # the return is credited to the BUY lot it consumed.
+                            inventory = []  # list of [row_idx, remaining_shares, entry_price, original_shares]
+                            buy_realized = {}  # row_idx -> realized $
+                            for idx, trow in trade_txs.iterrows():
+                                action = trow['Action']
+                                shs = float(trow['Shares'])
+                                px = float(trow['Amount'])
+                                if action == 'BUY':
+                                    inventory.append([idx, shs, px, shs])
+                                    buy_realized.setdefault(idx, 0.0)
+                                elif action == 'SELL':
+                                    to_sell = shs
+                                    while to_sell > 0 and inventory:
+                                        lot = inventory[-1]
+                                        take = min(to_sell, lot[1])
+                                        pl = take * (px - lot[2])
+                                        buy_realized[lot[0]] = buy_realized.get(lot[0], 0.0) + pl
+                                        to_sell -= take
+                                        lot[1] -= take
+                                        if lot[1] < 0.0001:
+                                            inventory.pop()
+
+                            # Per-row return %
+                            def _row_return_pct(idx, trow):
+                                if trow['Action'] != 'BUY':
+                                    return 0.0
+                                entry = float(trow['Amount'])
+                                orig_shs = float(trow['Shares'])
+                                cost_basis = entry * orig_shs
+                                if cost_basis <= 0:
+                                    return 0.0
+                                return (buy_realized.get(idx, 0.0) / cost_basis) * 100
+
+                            ret_series = pd.Series(
+                                [_row_return_pct(i, r) for i, r in trade_txs.iterrows()],
+                                index=trade_txs.index,
+                            )
+
+                            # Sells display as negative shares to match the Trade Journal style
+                            sign_shares = trade_txs.apply(
+                                lambda r: -float(r['Shares']) if r['Action'] == 'SELL' else float(r['Shares']),
+                                axis=1,
+                            )
 
                             disp = pd.DataFrame({
                                 'Date': trade_txs['Date'].dt.strftime('%Y-%m-%d %H:%M')
                                         if 'Date' in trade_txs.columns else '',
                                 'Trx': trade_txs.get('Trx_ID', ''),
                                 'Action': trade_txs['Action'],
-                                'Shares': trade_txs['Shares'].astype(float),
+                                'Shares': sign_shares.astype(float),
                                 'Price': trade_txs['Amount'].astype(float),
                                 'Return %': ret_series.astype(float),
                                 'Value': (trade_txs['Shares'].astype(float) * trade_txs['Amount'].astype(float)),
@@ -12746,7 +12785,7 @@ elif page == "Analytics":
                                     'Action': st.column_config.TextColumn('Action', width='small'),
                                     'Shares': st.column_config.NumberColumn('Shares', format='%.0f'),
                                     'Price': st.column_config.NumberColumn('Price', format='$%.4f'),
-                                    'Return %': st.column_config.NumberColumn('Return %', format='%+.2f%%', help='% change vs the initial B1 buy price'),
+                                    'Return %': st.column_config.NumberColumn('Return %', format='%+.2f%%', help='LIFO-attributed return for each BUY lot (SELL rows show 0%)'),
                                     'Value': st.column_config.NumberColumn('Value', format='$%.2f'),
                                     'Rule': st.column_config.TextColumn('Rule'),
                                 },
