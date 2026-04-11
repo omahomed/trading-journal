@@ -12539,6 +12539,15 @@ elif page == "Analytics":
                 except Exception:
                     lessons_map = {}
 
+            # Load trade details once so every trade card can render its
+            # transaction trail (buys + sells) without extra DB calls.
+            tr_details = load_data(DETAILS_FILE)
+            if not tr_details.empty:
+                if 'Date' in tr_details.columns:
+                    tr_details['Date'] = pd.to_datetime(tr_details['Date'], errors='coerce')
+                if 'Trade_ID' in tr_details.columns:
+                    tr_details['Trade_ID'] = tr_details['Trade_ID'].astype(str).str.strip()
+
             # --- Filter bar ---
             filt_col1, filt_col2, filt_col3 = st.columns([1.2, 1, 1])
             time_range = filt_col1.selectbox(
@@ -12635,6 +12644,75 @@ elif page == "Analytics":
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+
+                    # --- Transaction Trail (buys + sells inline) ---
+                    trade_txs = pd.DataFrame()
+                    if not tr_details.empty and 'Trade_ID' in tr_details.columns:
+                        trade_txs = tr_details[tr_details['Trade_ID'] == trade_id].copy()
+
+                    if not trade_txs.empty:
+                        # Sort chronologically; preserve buy-before-sell on same day
+                        trade_txs['_rank'] = trade_txs['Action'].map({'BUY': 0, 'SELL': 1}).fillna(2)
+                        trade_txs = trade_txs.sort_values(['Date', '_rank'])
+
+                        # Quick summary line above the table
+                        _buys = trade_txs[trade_txs['Action'] == 'BUY']
+                        _sells = trade_txs[trade_txs['Action'] == 'SELL']
+                        total_bought_shs = float(_buys['Shares'].sum()) if not _buys.empty else 0.0
+                        total_sold_shs = float(_sells['Shares'].sum()) if not _sells.empty else 0.0
+                        avg_entry = (
+                            float((_buys['Shares'] * _buys['Amount']).sum() / total_bought_shs)
+                            if total_bought_shs > 0 else 0.0
+                        )
+                        avg_exit = (
+                            float((_sells['Shares'] * _sells['Amount']).sum() / total_sold_shs)
+                            if total_sold_shs > 0 else 0.0
+                        )
+                        n_buys = len(_buys)
+                        n_sells = len(_sells)
+
+                        with st.expander(f"📋 Transaction Trail — {n_buys} buy(s) · {n_sells} sell(s)", expanded=False):
+                            st.markdown(
+                                f'<div style="font-size:12px;color:#64748b;margin-bottom:8px;">'
+                                f'Bought <b style="color:#15803d;">{total_bought_shs:,.0f} shs</b> '
+                                f'@ avg <b>${avg_entry:,.2f}</b> · '
+                                f'Sold <b style="color:#b91c1c;">{total_sold_shs:,.0f} shs</b> '
+                                f'@ avg <b>${avg_exit:,.2f}</b>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                            # Build a display frame with the columns you care about
+                            disp = pd.DataFrame({
+                                'Date': trade_txs['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                                        if 'Date' in trade_txs.columns else '',
+                                'Trx': trade_txs.get('Trx_ID', ''),
+                                'Action': trade_txs['Action'],
+                                'Shares': trade_txs['Shares'].astype(float),
+                                'Price': trade_txs['Amount'].astype(float),
+                                'Value': (trade_txs['Shares'].astype(float) * trade_txs['Amount'].astype(float)),
+                                'Rule': trade_txs.get('Rule', ''),
+                                'Stop': trade_txs.get('Stop_Loss', 0).astype(float)
+                                        if 'Stop_Loss' in trade_txs.columns else 0.0,
+                                'Realized $': trade_txs.get('Realized_PL', 0).astype(float)
+                                              if 'Realized_PL' in trade_txs.columns else 0.0,
+                            })
+                            st.dataframe(
+                                disp,
+                                hide_index=True,
+                                use_container_width=True,
+                                column_config={
+                                    'Date': st.column_config.TextColumn('Date', width='small'),
+                                    'Trx': st.column_config.TextColumn('Trx', width='small'),
+                                    'Action': st.column_config.TextColumn('Action', width='small'),
+                                    'Shares': st.column_config.NumberColumn('Shares', format='%.0f'),
+                                    'Price': st.column_config.NumberColumn('Price', format='$%.4f'),
+                                    'Value': st.column_config.NumberColumn('Value', format='$%.2f'),
+                                    'Rule': st.column_config.TextColumn('Rule'),
+                                    'Stop': st.column_config.NumberColumn('Stop', format='$%.2f'),
+                                    'Realized $': st.column_config.NumberColumn('Realized', format='$%.2f'),
+                                },
+                            )
 
                     # Editable lesson note
                     existing_note, existing_cat = lessons_map.get(trade_id, ('', ''))
