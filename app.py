@@ -11346,12 +11346,23 @@ elif page == "Analytics":
                         rule_trades = br_closed_2026[br_closed_2026['_Rule'] == sel_rule].copy()
                         rule_trades['Open_Date_str'] = pd.to_datetime(rule_trades['Open_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
                         rule_trades['Closed_Date_str'] = pd.to_datetime(rule_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                        # Keep P&L and R numeric so column-header sorting works correctly
                         display_df = rule_trades[['Trade_ID', 'Ticker', 'Open_Date_str', 'Closed_Date_str', 'Realized_PL', '_R']].copy()
-                        display_df['Realized_PL'] = display_df['Realized_PL'].apply(lambda x: f"${x:,.2f}")
-                        display_df['_R'] = display_df['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
                         display_df.columns = ['Trade ID', 'Ticker', 'Opened', 'Closed', 'P&L', 'R']
-                        display_df = display_df.sort_values('P&L', ascending=False)
-                        st.dataframe(display_df, hide_index=True, use_container_width=True)
+                        display_df = display_df.sort_values('P&L', ascending=False).reset_index(drop=True)
+                        st.dataframe(
+                            display_df,
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                'Trade ID': st.column_config.TextColumn('Trade ID', width='small'),
+                                'Ticker': st.column_config.TextColumn('Ticker', width='small'),
+                                'Opened': st.column_config.TextColumn('Opened', width='small'),
+                                'Closed': st.column_config.TextColumn('Closed', width='small'),
+                                'P&L': st.column_config.NumberColumn('P&L', format='$%.2f'),
+                                'R': st.column_config.NumberColumn('R', format='%.2fR'),
+                            },
+                        )
 
         # --- TAB 3: SELL RULES (Rule Studio — 2026 only) ---
         with tab_sell_rules:
@@ -11533,13 +11544,24 @@ elif page == "Analytics":
                         sr_trades = sr_closed_2026[sr_closed_2026['_SellRule'] == sel_sr].copy()
                         sr_trades['Open_Date_str'] = pd.to_datetime(sr_trades['Open_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
                         sr_trades['Closed_Date_str'] = pd.to_datetime(sr_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                        # Keep numeric columns so column-header sorting works correctly
                         sr_display = sr_trades[['Trade_ID', 'Ticker', 'Open_Date_str', 'Closed_Date_str', 'Realized_PL', '_R', '_Hold']].copy()
-                        sr_display['Realized_PL'] = sr_display['Realized_PL'].apply(lambda x: f"${x:,.2f}")
-                        sr_display['_R'] = sr_display['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
-                        sr_display['_Hold'] = sr_display['_Hold'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else "—")
                         sr_display.columns = ['Trade ID', 'Ticker', 'Opened', 'Closed', 'P&L', 'R', 'Hold']
-                        sr_display = sr_display.sort_values('P&L', ascending=False)
-                        st.dataframe(sr_display, hide_index=True, use_container_width=True)
+                        sr_display = sr_display.sort_values('P&L', ascending=False).reset_index(drop=True)
+                        st.dataframe(
+                            sr_display,
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                'Trade ID': st.column_config.TextColumn('Trade ID', width='small'),
+                                'Ticker': st.column_config.TextColumn('Ticker', width='small'),
+                                'Opened': st.column_config.TextColumn('Opened', width='small'),
+                                'Closed': st.column_config.TextColumn('Closed', width='small'),
+                                'P&L': st.column_config.NumberColumn('P&L', format='$%.2f'),
+                                'R': st.column_config.NumberColumn('R', format='%.2fR'),
+                                'Hold': st.column_config.NumberColumn('Hold', format='%.0fd'),
+                            },
+                        )
 
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
         with tab_dd:
