@@ -444,6 +444,45 @@ hr {
 
 /* ── Dark Mode: no overrides needed — Streamlit theme handles it ── */
 
+/* ── Mobile Breakpoints ── */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding-top: 1rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        padding-bottom: 1rem !important;
+    }
+    h1 { font-size: 1.4rem !important; margin-bottom: 1rem !important; }
+    h2 { font-size: 1.15rem !important; }
+    h3 { font-size: 1rem !important; }
+    /* Stack metric cards 2-wide instead of overflowing on narrow screens */
+    [data-testid="stMetric"] {
+        padding: 0.5rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.1rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.7rem !important;
+    }
+    /* Make buttons easier to tap */
+    .stButton > button {
+        min-height: 44px;
+    }
+    /* Compact dataframe rows on mobile */
+    [data-testid="stDataFrame"] {
+        font-size: 0.8rem !important;
+    }
+}
+
+@media (max-width: 480px) {
+    [data-testid="stMetricValue"] {
+        font-size: 0.95rem !important;
+    }
+    /* Hide sidebar section labels on very narrow screens — icons still visible */
+    h1 { font-size: 1.2rem !important; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -8113,7 +8152,7 @@ elif page == "Trade Manager":
 # ACTIVE CAMPAIGN SUMMARY
 # ====================================================================
 elif page == "Active Campaign Summary":
-    st.subheader("Active Campaign Summary")
+    page_header("Active Campaign Summary", CURR_PORT_NAME, "📋")
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
@@ -8815,7 +8854,7 @@ elif page == "Risk Manager":
 
     RESET_DATE = pd.Timestamp("2026-02-24")
 
-    st.subheader(f"Risk Manager ({CURR_PORT_NAME})")
+    page_header("Risk Manager", CURR_PORT_NAME, "🛡️")
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
@@ -9296,7 +9335,7 @@ elif page == "Risk Manager":
 # PORTFOLIO HEAT
 # ====================================================================
 elif page == "Portfolio Heat":
-    st.subheader("🔥 Portfolio Volatility (Heat Check)")
+    page_header("Portfolio Heat", f"Volatility Check · {CURR_PORT_NAME}", "🔥")
 
     # Load data
     if not os.path.exists(DETAILS_FILE):
@@ -9560,9 +9599,7 @@ elif page == "Portfolio Heat":
 # EARNINGS PLANNER
 # ====================================================================
 elif page == "Earnings Planner":
-    st.subheader("💣 Earnings Risk Planner")
-
-    st.caption("Binary Event Logic: Principal Protection (House Money Buffer).")
+    page_header("Earnings Planner", "Binary Event Logic · Principal Protection", "💣")
 
     # Load Data
     if not os.path.exists(DETAILS_FILE):
@@ -9859,9 +9896,7 @@ elif page == "Earnings Planner":
 # PERFORMANCE AUDIT
 # ====================================================================
 elif page == "Performance Audit":
-    st.subheader("🏆 Performance Audit: The Best & The Worst")
-
-    st.markdown("Analysis of outlier trades to determine 'R' efficiency and P&L concentration.")
+    page_header("Performance Audit", "Outlier trades · R efficiency · P&L concentration", "🏆")
 
     # Load necessary data
     if not os.path.exists(DETAILS_FILE):
@@ -12894,8 +12929,7 @@ elif page == "Weekly Retro":
 # PAGE 13: IBD MARKET SCHOOL
 # ==============================================================================
 elif page == "IBD Market School":
-    st.title("📚 IBD MARKET SCHOOL - Market Timing Signals")
-    st.caption("Track buy/sell signals and recommended exposure for Nasdaq")
+    page_header("IBD Market School", "Market timing signals · NASDAQ buy/sell · recommended exposure", "🏫")
 
     # Import market_school_rules
     try:
