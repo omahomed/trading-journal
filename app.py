@@ -11690,29 +11690,35 @@ elif page == "Analytics":
                                     recovery_days = (dd_j['Day'].iloc[-1] - start_date).days
                                     recovered = True
 
-                            # Verdict (lenient thresholds)
+                            # Per-deck verdict framing — different semantics per level
+                            # L1 = informational (guide to slow down), natural portfolio heat
+                            # L2 = confirmation to start backing off, should be reducing
+                            # L3 = mandatory exit, must be out
                             exposure_drop = exposure_at_start - exposure_at_trough
                             if lvl == 'L1':
-                                if exposure_at_trough <= 100:
-                                    verdict = 'Respected'
-                                elif exposure_drop >= 10:
-                                    verdict = 'Partial'
+                                # L1: Aware (no adding) / Drifted (small add) / Leveraged Up (meaningful add)
+                                if exposure_at_trough <= exposure_at_start:
+                                    verdict = 'L1_Aware'
+                                elif (exposure_at_trough - exposure_at_start) < 10:
+                                    verdict = 'L1_Drifted'
                                 else:
-                                    verdict = 'Pushed'
+                                    verdict = 'L1_Leveraged'
                             elif lvl == 'L2':
-                                if exposure_at_trough <= 45:
-                                    verdict = 'Respected'
-                                elif exposure_drop >= 25:
-                                    verdict = 'Partial'
+                                # L2: Reducing (meaningful cut) / Partial / Not Reducing
+                                if exposure_drop >= 20 or exposure_at_trough <= 50:
+                                    verdict = 'L2_Reducing'
+                                elif exposure_drop >= 5:
+                                    verdict = 'L2_Partial'
                                 else:
-                                    verdict = 'Pushed'
+                                    verdict = 'L2_NotReducing'
                             else:  # L3
-                                if exposure_at_trough <= 15:
-                                    verdict = 'Respected'
-                                elif exposure_at_trough <= 40:
-                                    verdict = 'Partial'
+                                # L3: Exited (≤20%) / Partial Exit (20-50%) / Still In (>50%)
+                                if exposure_at_trough <= 20:
+                                    verdict = 'L3_Exited'
+                                elif exposure_at_trough <= 50:
+                                    verdict = 'L3_PartialExit'
                                 else:
-                                    verdict = 'Pushed'
+                                    verdict = 'L3_StillIn'
 
                             # Damage in window
                             closed_in_window = all_closed[
@@ -11737,12 +11743,15 @@ elif page == "Analytics":
                                 'Losses_In_Window': float(losses_in_window),
                             })
 
-                    # Sort crossings newest first
-                    crossings_sorted = sorted(crossings, key=lambda c: c['Start'], reverse=True)
+                    # Sort crossings newest first — ALL crossings kept for later calcs
+                    crossings_sorted_all = sorted(crossings, key=lambda c: c['Start'], reverse=True)
+                    # The log itself only shows L2 and L3 (L1 is for Live Status awareness only)
+                    crossings_for_log = [c for c in crossings_sorted_all if c['Deck'] in ('L2', 'L3')]
 
-                    st.markdown("**Deck Crossings Log**")
-                    if not crossings_sorted:
-                        st.success("✅ No deck crossings since the 2026-02-24 reset. Keep it up.")
+                    st.markdown("**Deck Crossings Log** <span style='font-size:12px;color:#64748b;font-weight:400;'>— L2 & L3 only (L1 is informational, see Live Status above)</span>",
+                                unsafe_allow_html=True)
+                    if not crossings_for_log:
+                        st.success("✅ No L2 or L3 crossings since the 2026-02-24 reset. Keep it up.")
                     else:
                         # Load notes for this portfolio
                         notes_map = {}
@@ -11753,12 +11762,18 @@ elif page == "Analytics":
                                 notes_map = {}
 
                         verdict_style = {
-                            'Respected': ('#dcfce7', '#15803d', '✅ Respected'),
-                            'Partial':   ('#fef3c7', '#b45309', '⚠️ Partial'),
-                            'Pushed':    ('#fee2e2', '#b91c1c', '🚨 Pushed through'),
+                            'L1_Aware':       ('#dcfce7', '#15803d', '✅ Aware'),
+                            'L1_Drifted':     ('#fef3c7', '#b45309', '⚠️ Drifted'),
+                            'L1_Leveraged':   ('#fee2e2', '#b91c1c', '🚨 Leveraged Up'),
+                            'L2_Reducing':    ('#dcfce7', '#15803d', '✅ Reducing'),
+                            'L2_Partial':     ('#fef3c7', '#b45309', '⚠️ Partial'),
+                            'L2_NotReducing': ('#fee2e2', '#b91c1c', '🚨 Not Reducing'),
+                            'L3_Exited':      ('#dcfce7', '#15803d', '✅ Exited'),
+                            'L3_PartialExit': ('#fef3c7', '#b45309', '⚠️ Partial Exit'),
+                            'L3_StillIn':     ('#fee2e2', '#b91c1c', '🚨 Still In'),
                         }
 
-                        for c in crossings_sorted:
+                        for c in crossings_for_log:
                             v_bg, v_tx, v_lbl = verdict_style[c['Verdict']]
                             start_str = c['Start'].strftime('%b %d, %Y') if hasattr(c['Start'], 'strftime') else str(c['Start'])
                             end_str = c['End'].strftime('%b %d, %Y') if hasattr(c['End'], 'strftime') else str(c['End'])
@@ -11821,52 +11836,68 @@ elif page == "Analytics":
                         st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
                         # ============================================================
-                        # SECTION 3: COST OF NON-COMPLIANCE
+                        # SECTION 3: COST OF NON-COMPLIANCE (L2 + L3 only)
                         # ============================================================
-                        pushed = [c for c in crossings_sorted if c['Verdict'] == 'Pushed']
-                        partial = [c for c in crossings_sorted if c['Verdict'] == 'Partial']
-                        respected = [c for c in crossings_sorted if c['Verdict'] == 'Respected']
+                        # Group verdicts into tiers — only L2/L3 count as "compliance"
+                        l2_l3 = [c for c in crossings_sorted_all if c['Deck'] in ('L2', 'L3')]
+                        best_set = [c for c in l2_l3 if c['Verdict'] in ('L2_Reducing', 'L3_Exited')]
+                        middle_set = [c for c in l2_l3 if c['Verdict'] in ('L2_Partial', 'L3_PartialExit')]
+                        worst_set = [c for c in l2_l3 if c['Verdict'] in ('L2_NotReducing', 'L3_StillIn')]
 
-                        # Simple cost estimate: sum of realized losses inside pushed-through crossings
-                        pushed_cost = sum(abs(c['Losses_In_Window']) for c in pushed)
-                        partial_cost = sum(abs(c['Losses_In_Window']) for c in partial)
+                        worst_cost = sum(abs(c['Losses_In_Window']) for c in worst_set)
+                        middle_cost = sum(abs(c['Losses_In_Window']) for c in middle_set)
+                        best_cost = sum(abs(c['Losses_In_Window']) for c in best_set)
 
                         st.markdown("**Cost of Non-Compliance**")
                         cost_cols = st.columns(3)
                         cost_cols[0].markdown(
                             f'<div style="background:#fee2e2;border-radius:10px;padding:14px 16px;">'
-                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;">🚨 Pushed-Through Losses</div>'
-                            f'<div style="font-size:24px;font-weight:800;color:#b91c1c;margin-top:4px;">${pushed_cost:,.0f}</div>'
-                            f'<div style="font-size:11px;color:#64748b;">{len(pushed)} deck crossing(s)</div>'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;">🚨 Non-Compliance Losses</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#b91c1c;margin-top:4px;">${worst_cost:,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(worst_set)} L2/L3 crossing(s) ignored</div>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
                         cost_cols[1].markdown(
                             f'<div style="background:#fef3c7;border-radius:10px;padding:14px 16px;">'
                             f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b45309;">⚠️ Partial-Compliance Losses</div>'
-                            f'<div style="font-size:24px;font-weight:800;color:#b45309;margin-top:4px;">${partial_cost:,.0f}</div>'
-                            f'<div style="font-size:11px;color:#64748b;">{len(partial)} deck crossing(s)</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#b45309;margin-top:4px;">${middle_cost:,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(middle_set)} L2/L3 crossing(s) partially cut</div>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
                         cost_cols[2].markdown(
                             f'<div style="background:#dcfce7;border-radius:10px;padding:14px 16px;">'
                             f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">✅ Rule-Respected Losses</div>'
-                            f'<div style="font-size:24px;font-weight:800;color:#15803d;margin-top:4px;">${sum(abs(c["Losses_In_Window"]) for c in respected):,.0f}</div>'
-                            f'<div style="font-size:11px;color:#64748b;">{len(respected)} deck crossing(s)</div>'
+                            f'<div style="font-size:24px;font-weight:800;color:#15803d;margin-top:4px;">${best_cost:,.0f}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{len(best_set)} L2/L3 crossing(s) honored</div>'
                             f'</div>',
                             unsafe_allow_html=True,
                         )
-                        st.caption("Realized losses locked in during each crossing window. Pushed-through losses are the ones that would likely have been smaller if the deck rule had been followed.")
+                        st.caption("Only L2 (start backing off) and L3 (get out) crossings count toward compliance — L1 is informational only.")
 
                         st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
                         # ============================================================
-                        # SECTION 4: DISCIPLINE REPORT CARD
+                        # SECTION 4: DISCIPLINE REPORT CARD (weighted: L1=0, L2=1, L3=3)
                         # ============================================================
-                        total_crossings = len(crossings_sorted)
-                        # Weighted compliance: Respected = 1, Partial = 0.5, Pushed = 0
-                        compliance_score = (len(respected) + len(partial) * 0.5) / total_crossings if total_crossings else 1.0
+                        # Weight each crossing by deck level. L1 doesn't count.
+                        deck_weight = {'L1': 0, 'L2': 1, 'L3': 3}
+                        verdict_score_map = {
+                            'L1_Aware': 1.0, 'L1_Drifted': 0.5, 'L1_Leveraged': 0.0,
+                            'L2_Reducing': 1.0, 'L2_Partial': 0.5, 'L2_NotReducing': 0.0,
+                            'L3_Exited': 1.0, 'L3_PartialExit': 0.5, 'L3_StillIn': 0.0,
+                        }
+                        total_weight = sum(deck_weight[c['Deck']] for c in crossings_sorted_all)
+                        weighted_score = sum(
+                            deck_weight[c['Deck']] * verdict_score_map[c['Verdict']]
+                            for c in crossings_sorted_all
+                        )
+                        if total_weight > 0:
+                            compliance_score = weighted_score / total_weight
+                        else:
+                            # No L2/L3 crossings — full marks by default
+                            compliance_score = 1.0
                         compliance_pct = compliance_score * 100
 
                         if compliance_pct >= 90:
@@ -11880,12 +11911,23 @@ elif page == "Analytics":
                         else:
                             grade, g_color, g_bg = 'F', '#b91c1c', '#fee2e2'
 
-                        recovered_crossings = [c for c in crossings_sorted if c['Recovered']]
+                        # Report card stats — scoped to L2/L3 for discipline metrics
+                        total_crossings = len(crossings_sorted_all)
+                        graded_crossings = [c for c in crossings_sorted_all if c['Deck'] in ('L2', 'L3')]
+                        recovered_crossings = [c for c in graded_crossings if c['Recovered']]
                         avg_recovery = (
                             sum(c['Recovery_Days'] for c in recovered_crossings) / len(recovered_crossings)
                             if recovered_crossings else None
                         )
-                        avg_depth = sum(c['Max_Depth'] for c in crossings_sorted) / total_crossings if total_crossings else 0
+                        avg_depth = (
+                            sum(c['Max_Depth'] for c in graded_crossings) / len(graded_crossings)
+                            if graded_crossings else 0
+                        )
+
+                        # Recompute counts by group for the breakdown line
+                        respected = best_set
+                        partial = middle_set
+                        pushed = worst_set
 
                         st.markdown("**Discipline Report Card**")
                         rc_col1, rc_col2 = st.columns([1, 2])
