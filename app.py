@@ -12902,12 +12902,36 @@ elif page == "IBD Market School":
 
     # === HELPER FUNCTIONS ===
 
+    def _fetch_with_qqq_volume(analyzer, start_date, end_date):
+        """
+        Fetch price data for analyzer.symbol, but replace Volume with QQQ volume
+        (for ^IXIC / ^NDX only). yfinance misreports NASDAQ composite volume —
+        QQQ ETF volume is the accurate proxy. Falls back to normal fetch if
+        symbol is not a NASDAQ index or if the QQQ fetch fails.
+        """
+        analyzer.fetch_data(start_date=start_date, end_date=end_date)
+        if analyzer.data is None or analyzer.data.empty:
+            return
+        if analyzer.symbol not in ('^IXIC', '^NDX'):
+            return
+        try:
+            qqq = yf.Ticker('QQQ').history(start=start_date, end=end_date)
+            if qqq is None or qqq.empty:
+                return
+            # Align QQQ volume to analyzer.data by date index
+            analyzer.data['Volume'] = qqq['Volume'].reindex(analyzer.data.index).ffill()
+            # Recompute volume-derived columns
+            analyzer.data['volume_vs_prev'] = analyzer.data['Volume'] / analyzer.data['Volume'].shift(1)
+            analyzer.data['volume_up'] = analyzer.data['Volume'] > analyzer.data['Volume'].shift(1)
+        except Exception as e:
+            print(f"QQQ volume proxy fetch failed: {e}")
+
     @st.cache_data(ttl=3600, show_spinner=False)
     def analyze_symbol(symbol, start_date, end_date):
         """Analyze market signals for a symbol. Returns list of daily summaries."""
         try:
             analyzer = MarketSchoolRules(symbol)
-            analyzer.fetch_data(start_date=start_date, end_date=end_date)
+            _fetch_with_qqq_volume(analyzer, start_date, end_date)
 
             # Debug: Check data was fetched
             if analyzer.data is None or analyzer.data.empty:
@@ -12953,7 +12977,7 @@ elif page == "IBD Market School":
             fetch_start = "2024-02-24"
 
             analyzer = MarketSchoolRules(symbol)
-            analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
+            _fetch_with_qqq_volume(analyzer, fetch_start, end_date)
 
             if analyzer.data is None or analyzer.data.empty:
                 return []
@@ -12978,7 +13002,7 @@ elif page == "IBD Market School":
             fetch_start = "2024-02-24"
 
             analyzer = MarketSchoolRules(symbol)
-            analyzer.fetch_data(start_date=fetch_start, end_date=end_date)
+            _fetch_with_qqq_volume(analyzer, fetch_start, end_date)
 
             if analyzer.data is None or analyzer.data.empty:
                 return None
@@ -13028,27 +13052,14 @@ elif page == "IBD Market School":
             if rally_day_idx is not None:
                 rally_day = last_idx - rally_day_idx + 1
 
-            # --- Price-only FTD detection (no volume requirement) ---
-            # Mirrors Market Cycle Tracker logic: any Day 4+ with >= 1.0% gain
-            # and rally low not undercut counts as an FTD.
-            price_ftd_date = analyzer.ftd_date
-            if price_ftd_date is None and analyzer.rally_low_idx is not None:
-                for i in range(analyzer.rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed +3)
-                    row = df.iloc[i]
-                    if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
-                        lows = df.iloc[analyzer.rally_low_idx:i+1]['Low']
-                        if lows.min() >= analyzer.rally_low:
-                            price_ftd_date = df.index[i]
-                            break
-
             return {
-                'market_in_correction': analyzer.market_in_correction and price_ftd_date is None,
-                'buy_switch': analyzer.buy_switch or price_ftd_date is not None,
+                'market_in_correction': analyzer.market_in_correction,
+                'buy_switch': analyzer.buy_switch,
                 'rally_start_date': actual_rally_date.strftime('%Y-%m-%d') if actual_rally_date else None,
                 'rally_low': analyzer.rally_low,
                 'rally_day': rally_day,
                 'rally_day_type': rally_day_type,
-                'ftd_date': price_ftd_date.strftime('%Y-%m-%d') if price_ftd_date is not None else None,
+                'ftd_date': analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
                 'reference_high': analyzer.reference_high,
                 'as_of': last_date.strftime('%Y-%m-%d'),
             }
@@ -13059,7 +13070,7 @@ elif page == "IBD Market School":
         """Calculate daily distribution day additions, removals, and notes."""
         try:
             analyzer = MarketSchoolRules(symbol)
-            analyzer.fetch_data(start_date="2024-02-24", end_date=end_date)
+            _fetch_with_qqq_volume(analyzer, "2024-02-24", end_date)
 
             if analyzer.data is None or analyzer.data.empty:
                 return {}
