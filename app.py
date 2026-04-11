@@ -11936,12 +11936,17 @@ elif page == "Analytics":
                 st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
 
                 # ==============================================================================
-                # LOSS DISCIPLINE — enforce the 1% rule
+                # LOSS DISCIPLINE — enforce the 1% rule (2026 only)
+                # Risk budget tracking began in 2026, so earlier trades lack the
+                # reference data needed for meaningful impact calculations.
                 # Impact % = Realized P&L / NLV at trade open date (from journal)
                 # ==============================================================================
-                st.markdown("### 🛡️ Loss Discipline")
+                st.markdown("### 🛡️ Loss Discipline <span style='font-size:13px;font-weight:500;color:#64748b;'>— 2026 only</span>",
+                            unsafe_allow_html=True)
 
-                loss_trades = all_closed[all_closed['Realized_PL'] < 0].copy()
+                # Scope to trades CLOSED in 2026 — that's when risk budget tracking began
+                _closed_2026 = all_closed[all_closed['Closed_Date'].dt.year == 2026]
+                loss_trades = _closed_2026[_closed_2026['Realized_PL'] < 0].copy()
                 impact_df = pd.DataFrame()
 
                 if not loss_trades.empty and not df_j.empty and 'End NLV' in df_j.columns:
@@ -11968,7 +11973,7 @@ elif page == "Analytics":
                     impact_df = loss_trades.dropna(subset=['Impact_Pct']).copy()
 
                 if impact_df.empty:
-                    st.info("💡 Loss discipline requires both closed losses and journal NLV data. Log a few trades with Risk_Budget and journal entries to unlock this view.")
+                    st.info("💡 No 2026 closed losses with journal NLV data yet. Risk budget tracking began in 2026 — this view will populate as losses accumulate.")
                 else:
                     total_losses = len(impact_df)
                     within_rule = (impact_df['Impact_Pct'] >= -1.0).sum()
