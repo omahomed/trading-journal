@@ -13028,14 +13028,27 @@ elif page == "IBD Market School":
             if rally_day_idx is not None:
                 rally_day = last_idx - rally_day_idx + 1
 
+            # --- Price-only FTD detection (no volume requirement) ---
+            # Mirrors Market Cycle Tracker logic: any Day 4+ with >= 1.0% gain
+            # and rally low not undercut counts as an FTD.
+            price_ftd_date = analyzer.ftd_date
+            if price_ftd_date is None and analyzer.rally_low_idx is not None:
+                for i in range(analyzer.rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed +3)
+                    row = df.iloc[i]
+                    if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
+                        lows = df.iloc[analyzer.rally_low_idx:i+1]['Low']
+                        if lows.min() >= analyzer.rally_low:
+                            price_ftd_date = df.index[i]
+                            break
+
             return {
-                'market_in_correction': analyzer.market_in_correction,
-                'buy_switch': analyzer.buy_switch,
+                'market_in_correction': analyzer.market_in_correction and price_ftd_date is None,
+                'buy_switch': analyzer.buy_switch or price_ftd_date is not None,
                 'rally_start_date': actual_rally_date.strftime('%Y-%m-%d') if actual_rally_date else None,
                 'rally_low': analyzer.rally_low,
                 'rally_day': rally_day,
                 'rally_day_type': rally_day_type,
-                'ftd_date': analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
+                'ftd_date': price_ftd_date.strftime('%Y-%m-%d') if price_ftd_date is not None else None,
                 'reference_high': analyzer.reference_high,
                 'as_of': last_date.strftime('%Y-%m-%d'),
             }
