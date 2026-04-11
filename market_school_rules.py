@@ -114,11 +114,14 @@ class MarketSchoolRules:
         
         # Rally tracking
         self.rally_start_date = None
-        self.rally_low = None
+        self.rally_low = None  # "Major low" — pre-FTD low, set while buy_switch OFF
         self.rally_low_idx = None
         self.ftd_date = None
         self.ftd_close = None
         self.ftd_low = None  # Low of the initial follow-through day (for S1 undercut check)
+        # "Minor low" — most recent confirmed 5-bar swing low while buy_switch is ON.
+        # Undercutting the minor low triggers S2 minor (-2 exposure, switch stays on).
+        self.current_minor_low = None  # {'date': Timestamp, 'low': float}
         
         # Distribution tracking
         self.distribution_days: List[DistributionDay] = []
@@ -398,6 +401,8 @@ class MarketSchoolRules:
                 self.last_b3_b4_b5_date = None
                 self.last_s9_date = None
                 self.last_b6_date = None
+                # Reset minor low tracking — starts fresh in new bull cycle
+                self.current_minor_low = None
 
             return signal
 
@@ -813,7 +818,13 @@ class MarketSchoolRules:
         return signals
         
     def check_failed_rally(self, idx: int) -> Optional[Signal]:
-        """Check for failed rally attempt (S1, S2)."""
+        """Check for failed rally attempt (S1, S2).
+
+        Order of checks (most severe first):
+          1. S1  — close below FTD low → full exit, back to correction
+          2. S2 major — intraday low below pre-FTD rally low → full exit, back to correction
+          3. S2 minor — intraday low below the most recent post-FTD swing low → −2 exposure only
+        """
         if not self.rally_start_date or not self.ftd_date:
             return None
 
@@ -838,6 +849,7 @@ class MarketSchoolRules:
             self.ftd_date = None
             self.ftd_close = None
             self.ftd_low = None
+            self.current_minor_low = None
             self.rally_start_date = None
             self.market_in_correction = True
             # Clear distribution days — correction resets the count
@@ -847,9 +859,8 @@ class MarketSchoolRules:
                     dd.removal_reason = 'FTD undercut - back to correction'
             return signal
 
-        # S2: Failed Rally Attempt — intraday low breaches the rally low (major low).
-        # "Major low" per spec = low that occurred when buy_switch was OFF (pre-FTD).
-        # Minor-low handling (post-FTD lows, -2 exposure only) is Commit 2.
+        # S2 MAJOR: intraday low breaches the pre-FTD rally low.
+        # "Major low" per spec = low that occurred when buy_switch was OFF.
         if current['Low'] < self.rally_low:
             signal = Signal(
                 date=current.name,
@@ -865,6 +876,7 @@ class MarketSchoolRules:
             self.ftd_date = None
             self.ftd_close = None
             self.ftd_low = None
+            self.current_minor_low = None
             self.rally_start_date = None
             self.market_in_correction = True
             # Clear distribution days — correction resets the count
@@ -874,7 +886,63 @@ class MarketSchoolRules:
                     dd.removal_reason = 'Failed rally - back to correction'
             return signal
 
+        # S2 MINOR: intraday low breaches the most recent post-FTD swing low.
+        # Per spec: "Minor low = a low that occurs when the buy switch is already on."
+        # Exposure is reduced by 2 (floor 0) but buy switch stays ON.
+        if (self.buy_switch and self.current_minor_low is not None and
+            current['Low'] < self.current_minor_low['low']):
+            prev_exposure = self.market_exposure
+            new_exposure = max(0, self.market_exposure - 2)
+            actual_change = new_exposure - prev_exposure  # negative
+            minor_date_str = self.current_minor_low['date'].strftime('%m/%d')
+            signal = Signal(
+                date=current.name,
+                signal_type=SignalType.S2,
+                price=current['Close'],
+                description=f"Minor Low Undercut ({minor_date_str})",
+                affects_exposure=True,
+                exposure_change=actual_change
+            )
+            self.market_exposure = new_exposure
+            # Minor low is "used up" — wait for a new swing low to form
+            self.current_minor_low = None
+            return signal
+
         return None
+
+    def _detect_minor_low(self, idx: int):
+        """
+        Detect confirmed 5-bar swing lows during the uptrend (post-FTD).
+        A swing low is confirmed 2 bars after the fact: bar[idx-2] must be
+        strictly lower than the 2 bars before and the 2 bars after it.
+        Updates self.current_minor_low to the most recently confirmed swing low.
+        Only runs while buy_switch is ON and at least 2 bars past FTD.
+        """
+        if not self.buy_switch or self.ftd_date is None or idx < 4:
+            return
+        pivot_idx = idx - 2
+        if pivot_idx < 2:
+            return
+        pivot_row = self.data.iloc[pivot_idx]
+        # Pivot must be AFTER the FTD (not before or on FTD day itself)
+        if pivot_row.name <= self.ftd_date:
+            return
+        pivot_low = pivot_row['Low']
+        before = [
+            self.data.iloc[pivot_idx - 2]['Low'],
+            self.data.iloc[pivot_idx - 1]['Low'],
+        ]
+        after = [
+            self.data.iloc[pivot_idx + 1]['Low'],
+            self.data.iloc[pivot_idx + 2]['Low'],
+        ]
+        if pivot_low < min(before) and pivot_low < min(after):
+            # Confirmed pivot low — becomes the new current minor low.
+            # We track only the most recent one (the "level to watch").
+            self.current_minor_low = {
+                'date': pivot_row.name,
+                'low': float(pivot_low),
+            }
         
     def apply_restraint_rule(self, signals: List[Signal]) -> List[Signal]:
         """Apply restraint rule to limit exposure early in rally."""
@@ -1001,11 +1069,15 @@ class MarketSchoolRules:
                 if not self.rally_start_date:
                     self.detect_rally_start(idx)
                         
-            # Check for failed rally
+            # Check for failed rally (uses current_minor_low, so check before updating it)
             failed_rally = self.check_failed_rally(idx)
             if failed_rally:
                 daily_signals.append(failed_rally)
-                
+
+            # Update the current minor low with any newly confirmed swing low
+            # (confirmation lags 2 bars — we register the pivot 2 bars later)
+            self._detect_minor_low(idx)
+
             # Only check other signals if we have valid data
             if not pd.isna(self.data.iloc[idx]['ema21']):
                 # Check moving average signals
