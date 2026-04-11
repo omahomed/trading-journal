@@ -13469,31 +13469,82 @@ elif page == "IBD Market School":
         with col_buy:
             st.markdown("**🟢 BUY SIGNALS**")
             st.markdown("""
-            - **B1**: Follow-Through Day (FTD)
-            - **B2**: Additional FTD
-            - **B3**: Low Above 21-day MA
-            - **B4**: Trending Above 21-day MA
-            - **B5**: Living Above 21-day MA
-            - **B6**: Low Above 50-day MA
-            - **B7**: Accumulation Day
-            - **B8**: Higher High
-            - **B9**: Downside Reversal Buyback
-            - **B10**: Distribution Day Fall Off
+**B1 — Follow-Through Day (FTD)**
+Initial confirmation of a new rally. Day 4+ of a rally attempt that closes up ≥1% on volume higher than the prior day. Turns the Buy Switch ON and resets distribution count.
+
+**B2 — Additional Follow-Through Day**
+Any day within 25 days of the initial FTD that closes up ≥1% on higher volume **and** closes above the low of the initial FTD. Does *not* reset distribution.
+
+**B3 — Low Above 21-day MA**
+Buy on an up or flat day when the intraday low is at or above the 21-day EMA. Fires once per cycle; reset by S5.
+
+**B4 — Trending Above 21-day MA**
+After B3, fires on the 3rd consecutive day with low ≥ 21EMA, provided the index closes up or flat. If the 3rd day closes down, waits for the next up day.
+
+**B5 — Living Above 21-day MA**
+After B3, fires on the 10th consecutive day with low ≥ 21EMA and every 5th day after that (day 15, 20, 25…). Close must be up or flat.
+
+**B6 — Low Above 50-day MA**
+Reclaim signal: intraday low ≥ 50SMA on an up/flat day. Only fires if S9 fired previously in this cycle (reset by S9).
+
+**B7 — Accumulation Day**
+Strength signal: close up ≥1% on heavier volume, close in upper 25% of day's range, close > 21EMA. Cannot coincide with a B1 or B2.
+
+**B8 — Higher High**
+Close above the last marked 13-week high during an uptrend.
+
+**B9 — Downside Reversal Buyback**
+After selling on a downside reversal day (S11), buy back if the index closes above the intraday high of that reversal within 2 trading days.
+
+**B10 — Distribution Day Fall Off**
+Distribution count falls back to 4 (from 5 or 6) while the close is above the 21EMA and Buy Switch is ON.
             """)
 
         with col_sell:
             st.markdown("**🔴 SELL SIGNALS**")
             st.markdown("""
-            - **S1**: FTD Undercut
-            - **S2**: Failed Rally
-            - **S3**: Full Distribution -1
-            - **S4**: Full Distribution
-            - **S5**: Break Below 21-day MA
-            - **S9**: Break Below 50-day MA
-            - **S10**: Bad Break
-            - **S11**: Downside Reversal Day
-            - **S12**: Lower Low
-            - **S13**: Distribution Cluster
+**S1 — Follow-Through Day Undercut**
+Close below the low of the **initial** FTD. Voids the rally: Buy Switch OFF, full exit, back to correction. Does not apply to Additional FTDs.
+
+**S2 — Failed Rally Attempt**
+*Major low*: intraday low breaks the pre-FTD rally low → full exit, Buy Switch OFF, back to correction.
+*Minor low*: intraday low breaks a post-FTD 5-bar swing low → exposure −2, Buy Switch stays ON.
+
+**S3 — Full Distribution minus one**
+Active distribution day count hits 5 (full distribution is 6).
+
+**S4 — Full Distribution**
+Active distribution day count hits 6 (applies up to 8). Turns Buy Switch OFF.
+
+**S5 — Break Below 21-day MA**
+Close ≥0.2% below the 21-day EMA after being above it. Once per cycle; reset by B3.
+
+**S6 — Overdue Break Below 21-day MA**
+Same ≥0.2% break, but fires after 30+ trading days since the last B3 without any intervening S5. Prevents the lockout from suppressing legitimate sells.
+
+**S7 — Trending Below 21-day MA**
+After S5, fires on the 5th consecutive day where the intraday high is below the 21EMA, provided the close is down. If close is up, waits for the next down day.
+
+**S8 — Living Below 21-day MA**
+After S5, fires on the 10th consecutive day of high below 21EMA and every 5th day after that. Close must be down.
+
+**S9 — Break Below 50-day MA**
+Close below the 50-day SMA. Shakeout exception: closes in upper half of range **and** within 1% of the 50SMA. Reset by B6.
+
+**S10 — Bad Break**
+Close down ≥2.25% **and** in bottom 25% of day's range **and** (below 50SMA or intraday high below 21EMA).
+
+**S11 — Downside Reversal Day**
+New 13-week intraday high, close in bottom quartile, close down, spread ≥1.75% (lowered to 1% in low-vol regimes).
+
+**S12 — Lower Low**
+Close below the last marked 13-week low.
+
+**S13 — Distribution Cluster**
+4+ distribution/stall days in a rolling 8-day trading window. Fires again on each successive increase (5, 6, 7, 8). Resets when the count drops to ≤3.
+
+**S14 — Break Below Higher High**
+Close below a marked 13-week high that previously triggered a B8. Each marked high can only be broken once.
             """)
 
 # ==============================================================================
