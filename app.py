@@ -11172,415 +11172,372 @@ elif page == "Analytics":
         # ==============================================================================
         # TAB ARCHITECTURE
         # ==============================================================================
-        tab_stats, tab_perf, tab_live, tab_dd, tab_review = st.tabs(["🎯 Overview", "📊 Performance Audit", "🔥 Live Performance (MtM)", "📉 Drawdown Detective", "🔬 Trade Review"])
+        tab_stats, tab_buy_rules, tab_sell_rules, tab_dd, tab_review = st.tabs(["🎯 Overview", "🎯 Buy Rules", "🚪 Sell Rules", "📉 Drawdown Detective", "🔬 Trade Review"])
 
-        # --- TAB 1: PERFORMANCE AUDIT (EXACT ORIGINAL) ---
-        with tab_perf:
-            st.subheader(f"1. Scoreboard ({view_scope})")
-            
-            if PLOTLY_AVAILABLE:
-                # Enhanced Profit Factor Gauge
-                pf_color = "#2ca02c" if pf_val > 1.5 else ("#ffcc00" if pf_val > 1.0 else "#ff4b4b")
-                fig_pf = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta",
-                    value = pf_val,
-                    title = {'text': "Profit Factor", 'font': {'size': 20}},
-                    delta = {'reference': 1.5, 'increasing': {'color': '#2ca02c'}, 'decreasing': {'color': '#ff4b4b'}},
-                    number = {'font': {'size': 40}},
-                    gauge = {
-                        'axis': {'range': [0, 5], 'tickwidth': 1},
-                        'bar': {'color': pf_color, 'thickness': 0.75},
-                        'bgcolor': "white",
-                        'borderwidth': 2,
-                        'bordercolor': "gray",
-                        'steps': [
-                            {'range': [0, 1], 'color': '#ffe6e6'},
-                            {'range': [1, 1.5], 'color': '#fff4e6'},
-                            {'range': [1.5, 5], 'color': '#e6ffe6'}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': 1.5
-                        }
-                    }
-                ))
-                fig_pf.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20), paper_bgcolor="white")
+        # --- TAB 2: BUY RULES (Rule Studio — 2026 only) ---
+        with tab_buy_rules:
+            st.subheader("🎯 Buy Rules — What's Working in 2026")
+            st.caption("Study your entry rules. Sort by the metric you care about, click any rule to drill into individual trades.")
 
-                # Enhanced Win Rate Gauge
-                wr_color = "#2ca02c" if bat_avg >= 50 else ("#1f77b4" if bat_avg >= 40 else "#ff4b4b")
-                fig_wr = go.Figure(go.Indicator(
-                    mode = "gauge+number+delta",
-                    value = bat_avg,
-                    title = {'text': "Win Rate", 'font': {'size': 20}},
-                    delta = {'reference': 50, 'increasing': {'color': '#2ca02c'}, 'decreasing': {'color': '#ff4b4b'}},
-                    number = {'suffix': "%", 'font': {'size': 40}},
-                    gauge = {
-                        'axis': {'range': [0, 100], 'tickwidth': 1},
-                        'bar': {'color': wr_color, 'thickness': 0.75},
-                        'bgcolor': "white",
-                        'borderwidth': 2,
-                        'bordercolor': "gray",
-                        'steps': [
-                            {'range': [0, 40], 'color': '#ffe6e6'},
-                            {'range': [40, 50], 'color': '#fff4e6'},
-                            {'range': [50, 100], 'color': '#e6ffe6'}
-                        ],
-                        'threshold': {
-                            'line': {'color': "black", 'width': 4},
-                            'thickness': 0.75,
-                            'value': 50
-                        }
-                    }
-                ))
-                fig_wr.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20), paper_bgcolor="white")
+            br_source = df_s_raw.copy()
+            br_source['Closed_Date'] = pd.to_datetime(br_source['Closed_Date'], errors='coerce')
+            br_closed_2026 = br_source[
+                (br_source['Status'] == 'CLOSED') &
+                (br_source['Closed_Date'].dt.year == 2026)
+            ].copy()
 
-                # Enhanced Win/Loss Comparison (Butterfly Chart)
-                fig_wl = go.Figure()
-                fig_wl.add_trace(go.Bar(
-                    y=['Average'],
-                    x=[avg_win],
-                    name='Win',
-                    orientation='h',
-                    marker=dict(color='#2ca02c', line=dict(color='#1f7a1f', width=2)),
-                    text=f"${avg_win:,.0f}",
-                    textposition='outside',
-                    textfont=dict(size=14, color='#2ca02c', family='Arial Black')
-                ))
-                fig_wl.add_trace(go.Bar(
-                    y=['Average'],
-                    x=[avg_loss],
-                    name='Loss',
-                    orientation='h',
-                    marker=dict(color='#ff4b4b', line=dict(color='#cc0000', width=2)),
-                    text=f"${avg_loss:,.0f}",
-                    textposition='outside',
-                    textfont=dict(size=14, color='#ff4b4b', family='Arial Black')
-                ))
-                fig_wl.update_layout(
-                    title={
-                        'text': f"<b>Win/Loss Ratio: {wl_ratio:.2f}x</b><br><sub>Target: 2.0x+ for asymmetric edge</sub>",
-                        'font': {'size': 18}
-                    },
-                    barmode='relative',
-                    height=280,
-                    margin=dict(l=20, r=20, t=80, b=40),
-                    xaxis=dict(
-                        showgrid=True,
-                        gridcolor='lightgray',
-                        zeroline=True,
-                        zerolinecolor='black',
-                        zerolinewidth=2,
-                        title="Dollar Amount"
-                    ),
-                    yaxis=dict(showticklabels=True),
-                    paper_bgcolor="white",
-                    plot_bgcolor="white",
-                    showlegend=True,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
+            # Determine the buy rule column — prefer 'Buy_Rule' if populated, else 'Rule'
+            rule_col = None
+            if 'Buy_Rule' in br_closed_2026.columns and br_closed_2026['Buy_Rule'].astype(str).str.strip().replace('', pd.NA).notna().any():
+                rule_col = 'Buy_Rule'
+            elif 'Rule' in br_closed_2026.columns:
+                rule_col = 'Rule'
 
-                c1, c2, c3 = st.columns(3)
-                c1.plotly_chart(fig_pf, use_container_width=True)
-                c2.plotly_chart(fig_wr, use_container_width=True)
-                c3.plotly_chart(fig_wl, use_container_width=True)
+            if rule_col is None or br_closed_2026.empty:
+                st.info("💡 No 2026 closed trades with buy rule data yet.")
             else:
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Batting Avg", f"{bat_avg:.1f}%")
-                m2.metric("Profit Factor", f"{pf_val:.2f}")
-                m3.metric("Avg Win", f"${avg_win:,.2f}", delta_color="normal")
-                m4.metric("Avg Loss", f"${avg_loss:,.2f}", delta_color="inverse")
+                br_closed_2026['_Rule'] = br_closed_2026[rule_col].astype(str).str.strip()
+                br_closed_2026 = br_closed_2026[
+                    (br_closed_2026['_Rule'] != '') &
+                    (br_closed_2026['_Rule'].str.lower() != 'nan')
+                ]
 
-            # --- ADVANCED PERFORMANCE METRICS (NEW) ---
-            if not closed.empty:
-                st.markdown("---")
-                st.subheader("📊 Advanced Performance Metrics")
-
-                # Calculate Expectancy
-                win_prob = bat_avg / 100
-                loss_prob = 1 - win_prob
-                expectancy = (win_prob * avg_win) + (loss_prob * avg_loss)
-
-                # Calculate R-Multiple stats (if Risk_Budget exists)
-                has_risk_data = 'Risk_Budget' in closed.columns and closed['Risk_Budget'].sum() > 0
-                if has_risk_data:
-                    closed_with_r = closed[closed['Risk_Budget'] > 0].copy()
-                    closed_with_r['R_Multiple'] = closed_with_r['Realized_PL'] / closed_with_r['Risk_Budget']
-                    avg_r_multiple = closed_with_r['R_Multiple'].mean()
-                    max_r_multiple = closed_with_r['R_Multiple'].max()
-                    min_r_multiple = closed_with_r['R_Multiple'].min()
+                if br_closed_2026.empty:
+                    st.info("💡 No 2026 closed trades with buy rule data yet.")
                 else:
-                    avg_r_multiple = 0
-                    max_r_multiple = 0
-                    min_r_multiple = 0
-
-                # Calculate Time in Trade
-                closed_with_dates = closed.dropna(subset=['Open_Date_DT', 'Closed_Date'])
-                if not closed_with_dates.empty:
-                    closed_with_dates['Days_Held'] = (closed_with_dates['Closed_Date'] - closed_with_dates['Open_Date_DT']).dt.days
-                    avg_hold_time = closed_with_dates['Days_Held'].mean()
-
-                    winners_time = closed_with_dates[closed_with_dates['Realized_PL'] > 0]['Days_Held'].mean() if not wins.empty else 0
-                    losers_time = closed_with_dates[closed_with_dates['Realized_PL'] <= 0]['Days_Held'].mean() if not losses.empty else 0
-                else:
-                    avg_hold_time = 0
-                    winners_time = 0
-                    losers_time = 0
-
-                # Display Advanced Metrics
-                adv1, adv2, adv3, adv4 = st.columns(4)
-
-                # Expectancy
-                exp_color = "normal" if expectancy > 0 else "inverse"
-                adv1.metric(
-                    "Expectancy",
-                    f"${expectancy:,.2f}",
-                    help="Expected $ per trade = (Win% × Avg Win) + (Loss% × Avg Loss). Positive = profitable system.",
-                    delta_color=exp_color
-                )
-
-                # R-Multiple
-                if has_risk_data:
-                    r_color = "normal" if avg_r_multiple > 0 else "inverse"
-                    adv2.metric(
-                        "Avg R-Multiple",
-                        f"{avg_r_multiple:.2f}R",
-                        help="Average reward-to-risk ratio. 2R+ means you're making 2x your risk per trade on average.",
-                        delta=f"Max: {max_r_multiple:.1f}R",
-                        delta_color=r_color
-                    )
-                else:
-                    adv2.metric(
-                        "Avg R-Multiple",
-                        "N/A",
-                        help="Risk data not available. Log trades with Risk_Budget to track R-multiples."
+                    # Compute R-multiple where possible
+                    br_closed_2026['_R'] = br_closed_2026.apply(
+                        lambda r: (float(r['Realized_PL']) / float(r['Risk_Budget']))
+                        if r.get('Risk_Budget') and float(r['Risk_Budget']) > 0 else None,
+                        axis=1
                     )
 
-                # Time in Trade - Winners vs Losers
-                if avg_hold_time > 0:
-                    time_ratio = winners_time / losers_time if losers_time > 0 else 0
-                    adv3.metric(
-                        "Avg Hold Time",
-                        f"{avg_hold_time:.1f} days",
-                        help="Average days held across all closed positions."
-                    )
-
-                    time_delta = "✅ Cut losses faster" if winners_time > losers_time else "⚠️ Hold losers too long"
-                    adv4.metric(
-                        "Win/Loss Hold Ratio",
-                        f"{time_ratio:.2f}x",
-                        help="Winners held / Losers held. >1.0 = Let winners run, cut losers quick.",
-                        delta=time_delta
-                    )
-                else:
-                    adv3.metric("Avg Hold Time", "N/A")
-                    adv4.metric("Win/Loss Hold Ratio", "N/A")
-
-                # Optional: Add a visual breakdown if data available
-                if has_risk_data and PLOTLY_AVAILABLE:
-                    st.markdown("#### R-Multiple Distribution")
-                    fig_r = go.Figure()
-                    fig_r.add_trace(go.Histogram(
-                        x=closed_with_r['R_Multiple'],
-                        nbinsx=20,
-                        marker=dict(color='#1f77b4', line=dict(color='black', width=1)),
-                        name='R-Multiple Distribution'
-                    ))
-                    fig_r.update_layout(
-                        xaxis_title="R-Multiple",
-                        yaxis_title="Number of Trades",
-                        height=300,
-                        margin=dict(l=40, r=40, t=40, b=40),
-                        showlegend=False
-                    )
-                    fig_r.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Breakeven")
-                    st.plotly_chart(fig_r, use_container_width=True)
-
-            # --- MARKET ENVIRONMENT (RESTORED) ---
-            if len(all_sorted) >= 3:
-                st.markdown("---")
-                st.subheader("2. Market Environment (Last 10 Initiated)")
-                st.caption("Includes both Open and Closed trades to show current real-time form.")
-                
-                def calc_form(n):
-                    slice_df = all_sorted.head(n)
-                    w = slice_df[slice_df['Slump_PL'] > 0]
-                    l = slice_df[slice_df['Slump_PL'] <= 0]
-                    win_rate = len(w) / len(slice_df) if len(slice_df) > 0 else 0.0
-                    p_fac = w['Slump_PL'].sum() / abs(l['Slump_PL'].sum()) if abs(l['Slump_PL'].sum()) > 0 else 999
-                    net_env = slice_df['Slump_PL'].sum()
-                    return win_rate, p_fac, net_env
-                
-                wr_10, pf_10, net_10 = calc_form(10)
-                wr_20, pf_20, net_20 = calc_form(20)
-                
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Env Win Rate (10)", f"{wr_10:.1%}", delta="- COLD" if wr_10 < 0.4 else "+ OK", delta_color="normal")
-                c2.metric("Env P&L (10)", f"${net_10:,.0f}")
-                c3.metric("Env Win Rate (20)", f"{wr_20:.1%}")
-                c4.metric("Env P&L (20)", f"${net_20:,.0f}")
-            
-            if not closed.empty:
-                # Filter out "Add:" rules (these are adds to existing positions, not initial entries)
-                closed_initial = closed[~closed['Strat_Rule'].astype(str).str.contains('Add:', case=False, na=False)].copy()
-
-                if not closed_initial.empty:
-                    strat = closed_initial.groupby('Strat_Rule').agg(
-                        Trades=('Trade_ID','count'),
-                        PL=('Realized_PL','sum'),
-                        WinRate=('Realized_PL', lambda x: (x>0).mean())
-                    ).sort_values('PL', ascending=False)
-
-                    st.markdown("---")
-                    st.subheader("3. Strategy Breakdown")
-                    st.dataframe(
-                        strat.style.format({'PL':'${:,.2f}', 'WinRate':'{:.1%}'})
-                        .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['PL'])
-                    )
-
-                    st.markdown("---")
-                    st.subheader("4. Rule Forensics (Drill Down)")
-                    avail_rules = sorted(closed_initial['Strat_Rule'].astype(str).unique().tolist())
-                else:
-                    st.info("No initial buy rules found (all rules contain 'Add:')")
-                sel_rule = st.selectbox("Select Strategy Rule", ["None"] + avail_rules)
-                
-                if sel_rule != "None":
-                    rule_trades = closed[closed['Strat_Rule'] == sel_rule].copy()
-                    if not rule_trades.empty:
-                        r_pl = rule_trades['Realized_PL'].sum()
-                        r_cnt = len(rule_trades)
-                        r_wr = len(rule_trades[rule_trades['Realized_PL']>0])/r_cnt
-                        
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Rule P&L", f"${r_pl:,.2f}", delta_color="normal")
-                        c2.metric("Count", r_cnt)
-                        c3.metric("Win Rate", f"{r_wr:.1%}")
-                        
-                        cols_show = ['Trade_ID', 'Ticker', 'M_Trend', 'Open_Date', 'Closed_Date', 'Realized_PL', 'Return_Pct', 'Sell_Rule']
-                        valid_cols = [c for c in cols_show if c in rule_trades.columns]
-                        
-                        st.dataframe(
-                            rule_trades[valid_cols].sort_values('Closed_Date', ascending=False)
-                            .style.format({'Realized_PL': '${:,.2f}', 'Return_Pct': '{:.2f}%'})
-                            .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Realized_PL'])
-                            .map(color_m_trend, subset=['M_Trend'])
-                        )
-            else:
-                st.info("No closed trades yet in this view.")
-
-        # --- TAB 2: LIVE PERFORMANCE (CORRECTED MTM LOGIC + DRILL DOWN) ---
-        with tab_live:
-            st.subheader(f"🔥 Live Year-to-Date Performance (2026)")
-            st.caption("Consolidates trades Open in 2026 OR Closed in 2026 (including carry-over from 2025).")
-
-            # Price Refresh Control
-            col_refresh1, col_refresh2 = st.columns([1, 3])
-            with col_refresh1:
-                if st.button("🔄 Refresh Prices", help="Update unrealized P/L with current market prices"):
-                    if USE_DATABASE:
-                        with st.spinner("Fetching current prices..."):
-                            try:
-                                result = db.refresh_open_position_prices(CURR_PORT_NAME)
-                                st.success(f"✅ {result['message']}")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Refresh failed: {str(e)}")
-                    else:
-                        st.warning("Database mode required for price refresh")
-
-            st.markdown("---")
-
-            # --- LOGIC UPDATE: INCLUDE CARRY-OVER TRADES ---
-            mask_open_2026 = df_s_raw['Open_Date_DT'].dt.year == 2026
-            mask_active = df_s_raw['Status'] == 'OPEN'
-            mask_closed_2026 = df_s_raw['Closed_Date'].dt.year == 2026
-            
-            df_mtm = df_s_raw[mask_open_2026 | mask_active | mask_closed_2026].copy()
-            
-            if not df_mtm.empty:
-                # 2. Calculate "Contribution"
-                def get_contribution(row):
-                    if row['Status'] == 'CLOSED':
-                        return float(row['Realized_PL'])
-                    else:
-                        return float(row.get('Unrealized_PL', 0.0))
-                
-                df_mtm['Contribution'] = df_mtm.apply(get_contribution, axis=1)
-                df_mtm['Is_Winner'] = df_mtm['Contribution'] > 0
-                
-                # 3. High Level Metrics
-                total_contrib = df_mtm['Contribution'].sum()
-                live_batting_avg = df_mtm['Is_Winner'].mean() * 100
-                total_trades = len(df_mtm)
-                open_cnt = len(df_mtm[df_mtm['Status']=='OPEN'])
-                closed_cnt = len(df_mtm[df_mtm['Status']=='CLOSED'])
-                
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Total 2026 Equity Added", f"${total_contrib:,.2f}", f"{total_trades} Active/Closed")
-                k2.metric("Live Batting Avg", f"{live_batting_avg:.1f}%", "Includes Open Pos")
-                k3.metric("Closed P&L", f"${df_mtm[df_mtm['Status']=='CLOSED']['Contribution'].sum():,.2f}", f"{closed_cnt} Trades")
-                k4.metric("Open Paper P&L", f"${df_mtm[df_mtm['Status']=='OPEN']['Contribution'].sum():,.2f}", f"{open_cnt} Active")
-                
-                st.markdown("---")
-                
-                # 4. Strategy Leaderboard
-                # Prioritize Buy_Rule (initial buy) over Rule (can be overwritten by adds)
-                if 'Buy_Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Buy_Rule'].fillna("Unknown")
-                elif 'Rule' in df_mtm.columns: df_mtm['Strat_Rule'] = df_mtm['Rule'].fillna("Unknown")
-                else: df_mtm['Strat_Rule'] = "Unknown"
-
-                # Filter out "Add:" rules (these are adds to existing positions, not initial entries)
-                df_mtm_initial = df_mtm[~df_mtm['Strat_Rule'].astype(str).str.contains('Add:', case=False, na=False)].copy()
-
-                if not df_mtm_initial.empty:
-                    mtm_strat = df_mtm_initial.groupby('Strat_Rule').agg(
-                        Total_Trades=('Trade_ID', 'count'),
-                        Active_Count=('Status', lambda x: (x=='OPEN').sum()),
-                        Net_Equity=('Contribution', 'sum'),
-                        Live_WinRate=('Contribution', lambda x: (x>0).mean())
-                    ).sort_values('Net_Equity', ascending=False)
-
-                    st.subheader("🏆 Strategy Leaderboard (Mark-to-Market)")
-                    st.dataframe(
-                        mtm_strat.style.format({
-                            'Net_Equity': '${:,.2f}',
-                            'Live_WinRate': '{:.1%}'
+                    # Aggregate per rule
+                    rule_stats = []
+                    for rule_name, group in br_closed_2026.groupby('_Rule'):
+                        trades_count = len(group)
+                        total_pl = float(group['Realized_PL'].sum())
+                        avg_pl = float(group['Realized_PL'].mean())
+                        wins = group[group['Realized_PL'] > 0]
+                        losses = group[group['Realized_PL'] < 0]
+                        win_rate = (len(wins) / trades_count * 100) if trades_count > 0 else 0.0
+                        r_vals = group['_R'].dropna()
+                        avg_r = float(r_vals.mean()) if not r_vals.empty else None
+                        rule_stats.append({
+                            'Rule': rule_name,
+                            'Trades': trades_count,
+                            'Win Rate %': win_rate,
+                            'Avg P&L': avg_pl,
+                            'Total P&L': total_pl,
+                            'Avg R': avg_r,
                         })
-                        .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Net_Equity'])
-                    )
 
-                    # 5. Rule Forensics (Drill Down)
-                    st.markdown("---")
-                    st.subheader("4. Rule Forensics (Drill Down)")
-                    avail_mtm_rules = sorted(df_mtm_initial['Strat_Rule'].astype(str).unique().tolist())
-                else:
-                    st.info("No initial buy rules found (all rules contain 'Add:')")
-                sel_mtm_rule = st.selectbox("Select Strategy to Inspect", ["None"] + avail_mtm_rules, key="mtm_drill")
-                
-                if sel_mtm_rule != "None":
-                    rule_trades_mtm = df_mtm[df_mtm['Strat_Rule'] == sel_mtm_rule].copy()
-                    if not rule_trades_mtm.empty:
-                        r_eq = rule_trades_mtm['Contribution'].sum()
-                        r_count = len(rule_trades_mtm)
-                        r_wr_mtm = rule_trades_mtm['Is_Winner'].mean()
-                        
-                        m1, m2, m3 = st.columns(3)
-                        m1.metric("Net Equity Contribution", f"${r_eq:,.2f}", delta_color="normal")
-                        m2.metric("Total Trades", r_count)
-                        m3.metric("Live Win Rate", f"{r_wr_mtm:.1%}")
-                        
-                        cols_show = ['Trade_ID', 'Ticker', 'Status', 'Open_Date', 'Closed_Date', 'Contribution', 'Return_Pct']
-                        valid_cols = [c for c in cols_show if c in rule_trades_mtm.columns]
-                        
-                        st.dataframe(
-                            rule_trades_mtm[valid_cols].sort_values('Contribution', ascending=False)
-                            .style.format({'Contribution': '${:,.2f}', 'Return_Pct': '{:.2f}%'})
-                            .map(lambda x: 'color: #2ca02c' if x>0 else 'color: #ff4b4b', subset=['Contribution'])
+                    rule_df = pd.DataFrame(rule_stats)
+
+                    # --- HEADER INSIGHTS ---
+                    profitable = rule_df[rule_df['Total P&L'] > 0].sort_values('Total P&L', ascending=False)
+                    unprofitable = rule_df[rule_df['Total P&L'] < 0].sort_values('Total P&L', ascending=True)
+
+                    ih1, ih2, ih3 = st.columns(3)
+                    with ih1:
+                        if not profitable.empty:
+                            best = profitable.iloc[0]
+                            st.markdown(
+                                f'<div style="background:#dcfce7;border-radius:12px;padding:16px 18px;">'
+                                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">💰 Best Rule</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">{best["Rule"]}</div>'
+                                f'<div style="font-size:20px;font-weight:800;color:#15803d;">${best["Total P&L"]:,.0f}</div>'
+                                f'<div style="font-size:11px;color:#64748b;">{int(best["Trades"])} trades · {best["Win Rate %"]:.0f}% win rate</div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.info("No profitable rules yet")
+                    with ih2:
+                        if not unprofitable.empty:
+                            worst = unprofitable.iloc[0]
+                            st.markdown(
+                                f'<div style="background:#fee2e2;border-radius:12px;padding:16px 18px;">'
+                                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b91c1c;">🚨 Worst Rule</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">{worst["Rule"]}</div>'
+                                f'<div style="font-size:20px;font-weight:800;color:#b91c1c;">${worst["Total P&L"]:,.0f}</div>'
+                                f'<div style="font-size:11px;color:#64748b;">{int(worst["Trades"])} trades · {worst["Win Rate %"]:.0f}% win rate</div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.markdown(
+                                f'<div style="background:#f0fdf4;border-radius:12px;padding:16px 18px;">'
+                                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">✅ Clean Sheet</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">No losing rules</div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+                    with ih3:
+                        total_rules = len(rule_df)
+                        profitable_count = len(profitable)
+                        st.markdown(
+                            f'<div style="background:#eff6ff;border-radius:12px;padding:16px 18px;">'
+                            f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;">📊 Rules Used</div>'
+                            f'<div style="font-size:28px;font-weight:800;color:#111;margin-top:6px;">{total_rules}</div>'
+                            f'<div style="font-size:11px;color:#64748b;">{profitable_count} profitable · {len(unprofitable)} losing</div>'
+                            f'</div>',
+                            unsafe_allow_html=True
                         )
 
+                    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # --- SORT CONTROL ---
+                    sort_by = st.selectbox(
+                        "Sort by",
+                        ["Total P&L", "Win Rate %", "Avg P&L", "Trades"],
+                        index=0,
+                        key="br_sort"
+                    )
+                    ascending = False
+                    rule_df_sorted = rule_df.sort_values(sort_by, ascending=ascending).reset_index(drop=True)
+
+                    # --- LEADERBOARD ---
+                    st.markdown("**Leaderboard**")
+                    # Header row
+                    hcols = st.columns([3, 1, 1, 1.2, 1.2, 1, 1.5])
+                    hcols[0].markdown("**Rule**")
+                    hcols[1].markdown("**Trades**")
+                    hcols[2].markdown("**Win %**")
+                    hcols[3].markdown("**Avg P&L**")
+                    hcols[4].markdown("**Total P&L**")
+                    hcols[5].markdown("**Avg R**")
+                    hcols[6].markdown("**Status**")
+
+                    for _, row in rule_df_sorted.iterrows():
+                        # Status badge logic
+                        small_sample = row['Trades'] < 5
+                        if row['Total P&L'] >= 5000 and row['Trades'] >= 5 and row['Win Rate %'] >= 50:
+                            badge = '<span style="background:#dcfce7;color:#15803d;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">⭐ Winner</span>'
+                        elif row['Total P&L'] > 0:
+                            badge = '<span style="background:#f0fdf4;color:#15803d;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">✅ Working</span>'
+                        elif row['Total P&L'] < 0:
+                            badge = '<span style="background:#fee2e2;color:#b91c1c;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">🚨 Losing</span>'
+                        else:
+                            badge = '<span style="background:#f1f5f9;color:#64748b;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">— Flat</span>'
+
+                        if small_sample:
+                            badge += ' <span style="background:#fef3c7;color:#b45309;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;" title="Small sample (<5 trades)">🧪</span>'
+
+                        pl_color = "#15803d" if row['Total P&L'] > 0 else ("#b91c1c" if row['Total P&L'] < 0 else "#64748b")
+                        avg_r_txt = f"{row['Avg R']:.2f}R" if pd.notna(row['Avg R']) else "—"
+
+                        rcols = st.columns([3, 1, 1, 1.2, 1.2, 1, 1.5])
+                        rcols[0].markdown(f"**{row['Rule']}**")
+                        rcols[1].markdown(f"{int(row['Trades'])}")
+                        rcols[2].markdown(f"{row['Win Rate %']:.0f}%")
+                        rcols[3].markdown(f"<span style='color:{pl_color};font-weight:600;'>${row['Avg P&L']:,.0f}</span>", unsafe_allow_html=True)
+                        rcols[4].markdown(f"<span style='color:{pl_color};font-weight:700;'>${row['Total P&L']:,.0f}</span>", unsafe_allow_html=True)
+                        rcols[5].markdown(avg_r_txt)
+                        rcols[6].markdown(badge, unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # --- DRILL-DOWN ---
+                    st.markdown("**Drill-down: study an individual rule**")
+                    all_rules = rule_df_sorted['Rule'].tolist()
+                    sel_rule = st.selectbox("Select a rule to see its trades", all_rules, key="br_drill")
+                    if sel_rule:
+                        rule_trades = br_closed_2026[br_closed_2026['_Rule'] == sel_rule].copy()
+                        rule_trades['Closed_Date_str'] = pd.to_datetime(rule_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                        display_df = rule_trades[['Trade_ID', 'Ticker', 'Closed_Date_str', 'Realized_PL', '_R']].copy()
+                        display_df['Realized_PL'] = display_df['Realized_PL'].apply(lambda x: f"${x:,.2f}")
+                        display_df['_R'] = display_df['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
+                        display_df.columns = ['Trade ID', 'Ticker', 'Closed', 'P&L', 'R']
+                        display_df = display_df.sort_values('P&L', ascending=False)
+                        st.dataframe(display_df, hide_index=True, use_container_width=True)
+
+        # --- TAB 3: SELL RULES (Rule Studio — 2026 only) ---
+        with tab_sell_rules:
+            st.subheader("🚪 Sell Rules — Exit Quality in 2026")
+            st.caption("Study your exit rules. Which are protecting capital, which are capturing profits, which are hurting you.")
+
+            sr_source = df_s_raw.copy()
+            sr_source['Closed_Date'] = pd.to_datetime(sr_source['Closed_Date'], errors='coerce')
+            sr_closed_2026 = sr_source[
+                (sr_source['Status'] == 'CLOSED') &
+                (sr_source['Closed_Date'].dt.year == 2026)
+            ].copy()
+
+            if 'Sell_Rule' not in sr_closed_2026.columns or sr_closed_2026.empty:
+                st.info("💡 No 2026 closed trades with sell rule data yet.")
             else:
-                st.info("No active or closed trades found relevant to 2026.")
+                sr_closed_2026['_SellRule'] = sr_closed_2026['Sell_Rule'].astype(str).str.strip()
+                sr_closed_2026 = sr_closed_2026[
+                    (sr_closed_2026['_SellRule'] != '') &
+                    (sr_closed_2026['_SellRule'].str.lower() != 'nan')
+                ]
+
+                if sr_closed_2026.empty:
+                    st.info("💡 No 2026 closed trades with sell rule data yet.")
+                else:
+                    # Compute R-multiple and hold days
+                    sr_closed_2026['_R'] = sr_closed_2026.apply(
+                        lambda r: (float(r['Realized_PL']) / float(r['Risk_Budget']))
+                        if r.get('Risk_Budget') and float(r['Risk_Budget']) > 0 else None,
+                        axis=1
+                    )
+                    sr_closed_2026['Open_Date_DT'] = pd.to_datetime(sr_closed_2026['Open_Date'], errors='coerce')
+                    sr_closed_2026['_Hold'] = (sr_closed_2026['Closed_Date'] - sr_closed_2026['Open_Date_DT']).dt.total_seconds() / 86400
+
+                    # Aggregate per sell rule
+                    sell_stats = []
+                    for rule_name, group in sr_closed_2026.groupby('_SellRule'):
+                        uses = len(group)
+                        total_pl = float(group['Realized_PL'].sum())
+                        avg_pl = float(group['Realized_PL'].mean())
+                        r_vals = group['_R'].dropna()
+                        avg_r = float(r_vals.mean()) if not r_vals.empty else None
+                        avg_hold = float(group['_Hold'].mean()) if group['_Hold'].notna().any() else None
+                        winners_pct = (len(group[group['Realized_PL'] > 0]) / uses * 100) if uses > 0 else 0.0
+                        sell_stats.append({
+                            'Sell Rule': rule_name,
+                            'Uses': uses,
+                            'Avg P&L': avg_pl,
+                            'Total P&L': total_pl,
+                            'Avg R': avg_r,
+                            'Avg Hold': avg_hold,
+                            'Winners %': winners_pct,
+                        })
+
+                    sell_df = pd.DataFrame(sell_stats)
+
+                    # --- HEADER INSIGHTS ---
+                    if not sell_df.empty:
+                        # Best capital protector = smallest negative avg loss among negative rules
+                        negatives = sell_df[sell_df['Avg P&L'] < 0]
+                        positives = sell_df[sell_df['Avg P&L'] > 0]
+                        # Most used
+                        most_used = sell_df.sort_values('Uses', ascending=False).iloc[0]
+
+                        ih1, ih2, ih3 = st.columns(3)
+                        with ih1:
+                            if not negatives.empty:
+                                best_protect = negatives.sort_values('Avg P&L', ascending=False).iloc[0]
+                                st.markdown(
+                                    f'<div style="background:#dcfce7;border-radius:12px;padding:16px 18px;">'
+                                    f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">🛡️ Best Protector</div>'
+                                    f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">{best_protect["Sell Rule"]}</div>'
+                                    f'<div style="font-size:20px;font-weight:800;color:#15803d;">${best_protect["Avg P&L"]:,.0f}</div>'
+                                    f'<div style="font-size:11px;color:#64748b;">smallest avg loss · {int(best_protect["Uses"])} uses</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                st.markdown(
+                                    f'<div style="background:#f0fdf4;border-radius:12px;padding:16px 18px;">'
+                                    f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#15803d;">🛡️ Best Protector</div>'
+                                    f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">No losing exits yet</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+                        with ih2:
+                            if not positives.empty:
+                                best_capture = positives.sort_values('Total P&L', ascending=False).iloc[0]
+                                st.markdown(
+                                    f'<div style="background:#dbeafe;border-radius:12px;padding:16px 18px;">'
+                                    f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#1d4ed8;">💰 Top Profit Capture</div>'
+                                    f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">{best_capture["Sell Rule"]}</div>'
+                                    f'<div style="font-size:20px;font-weight:800;color:#1d4ed8;">${best_capture["Total P&L"]:,.0f}</div>'
+                                    f'<div style="font-size:11px;color:#64748b;">avg ${best_capture["Avg P&L"]:,.0f} · {int(best_capture["Uses"])} uses</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+                            else:
+                                st.markdown(
+                                    f'<div style="background:#fef3c7;border-radius:12px;padding:16px 18px;">'
+                                    f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#b45309;">💰 Top Profit Capture</div>'
+                                    f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">No winning exits yet</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+                        with ih3:
+                            st.markdown(
+                                f'<div style="background:#f1f5f9;border-radius:12px;padding:16px 18px;">'
+                                f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#475569;">📊 Most Used Exit</div>'
+                                f'<div style="font-size:15px;font-weight:700;color:#111;margin-top:6px;">{most_used["Sell Rule"]}</div>'
+                                f'<div style="font-size:20px;font-weight:800;color:#111;">{int(most_used["Uses"])} uses</div>'
+                                f'<div style="font-size:11px;color:#64748b;">avg ${most_used["Avg P&L"]:,.0f}</div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+                    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # --- SORT CONTROL ---
+                    sr_sort = st.selectbox(
+                        "Sort by",
+                        ["Total P&L", "Uses", "Avg P&L", "Winners %"],
+                        index=0,
+                        key="sr_sort"
+                    )
+                    sell_df_sorted = sell_df.sort_values(sr_sort, ascending=False).reset_index(drop=True)
+
+                    # --- LEADERBOARD ---
+                    st.markdown("**Leaderboard**")
+                    shcols = st.columns([3, 1, 1.2, 1.2, 1, 1, 1, 1.5])
+                    shcols[0].markdown("**Sell Rule**")
+                    shcols[1].markdown("**Uses**")
+                    shcols[2].markdown("**Avg P&L**")
+                    shcols[3].markdown("**Total P&L**")
+                    shcols[4].markdown("**Avg R**")
+                    shcols[5].markdown("**Hold**")
+                    shcols[6].markdown("**Win %**")
+                    shcols[7].markdown("**Status**")
+
+                    for _, row in sell_df_sorted.iterrows():
+                        small_sample = row['Uses'] < 5
+                        avg_r_val = row['Avg R']
+                        avg_pl_val = row['Avg P&L']
+
+                        # Sell-side status framing
+                        if avg_pl_val > 0:
+                            badge = '<span style="background:#dcfce7;color:#15803d;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">💰 Capturing</span>'
+                        elif pd.notna(avg_r_val) and avg_r_val < -1.0:
+                            badge = '<span style="background:#fee2e2;color:#b91c1c;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">🚨 Hurting</span>'
+                        elif avg_pl_val < 0:
+                            badge = '<span style="background:#f0fdf4;color:#15803d;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">🛡️ Protecting</span>'
+                        else:
+                            badge = '<span style="background:#f1f5f9;color:#64748b;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">— Flat</span>'
+
+                        if small_sample:
+                            badge += ' <span style="background:#fef3c7;color:#b45309;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">🧪</span>'
+
+                        pl_color = "#15803d" if row['Total P&L'] > 0 else ("#b91c1c" if row['Total P&L'] < 0 else "#64748b")
+                        avg_r_txt = f"{avg_r_val:.2f}R" if pd.notna(avg_r_val) else "—"
+                        hold_txt = f"{row['Avg Hold']:.0f}d" if pd.notna(row['Avg Hold']) else "—"
+
+                        srcols = st.columns([3, 1, 1.2, 1.2, 1, 1, 1, 1.5])
+                        srcols[0].markdown(f"**{row['Sell Rule']}**")
+                        srcols[1].markdown(f"{int(row['Uses'])}")
+                        srcols[2].markdown(f"<span style='color:{pl_color};font-weight:600;'>${row['Avg P&L']:,.0f}</span>", unsafe_allow_html=True)
+                        srcols[3].markdown(f"<span style='color:{pl_color};font-weight:700;'>${row['Total P&L']:,.0f}</span>", unsafe_allow_html=True)
+                        srcols[4].markdown(avg_r_txt)
+                        srcols[5].markdown(hold_txt)
+                        srcols[6].markdown(f"{row['Winners %']:.0f}%")
+                        srcols[7].markdown(badge, unsafe_allow_html=True)
+
+                    st.markdown("<div style='height:16px;'></div>", unsafe_allow_html=True)
+
+                    # --- DRILL-DOWN ---
+                    st.markdown("**Drill-down: study an individual sell rule**")
+                    all_sell_rules = sell_df_sorted['Sell Rule'].tolist()
+                    sel_sr = st.selectbox("Select a sell rule to see its exits", all_sell_rules, key="sr_drill")
+                    if sel_sr:
+                        sr_trades = sr_closed_2026[sr_closed_2026['_SellRule'] == sel_sr].copy()
+                        sr_trades['Closed_Date_str'] = pd.to_datetime(sr_trades['Closed_Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                        sr_display = sr_trades[['Trade_ID', 'Ticker', 'Closed_Date_str', 'Realized_PL', '_R', '_Hold']].copy()
+                        sr_display['Realized_PL'] = sr_display['Realized_PL'].apply(lambda x: f"${x:,.2f}")
+                        sr_display['_R'] = sr_display['_R'].apply(lambda x: f"{x:.2f}R" if pd.notna(x) else "—")
+                        sr_display['_Hold'] = sr_display['_Hold'].apply(lambda x: f"{x:.0f}d" if pd.notna(x) else "—")
+                        sr_display.columns = ['Trade ID', 'Ticker', 'Closed', 'P&L', 'R', 'Hold']
+                        sr_display = sr_display.sort_values('P&L', ascending=False)
+                        st.dataframe(sr_display, hide_index=True, use_container_width=True)
 
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
         with tab_dd:
