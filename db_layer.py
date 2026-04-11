@@ -1365,7 +1365,10 @@ def save_trade_image(portfolio_name: str, trade_id: str, ticker: str,
 
                 row_id = cur.fetchone()[0]
                 conn.commit()
-
+                try:
+                    get_trade_images.clear()
+                except Exception:
+                    pass
                 return row_id
 
     except Exception as e:
@@ -1373,9 +1376,11 @@ def save_trade_image(portfolio_name: str, trade_id: str, ticker: str,
         return None
 
 
+@st.cache_data(ttl=120, show_spinner=False)
 def get_trade_images(portfolio_name: str, trade_id: str):
     """
-    Get all images for a specific trade.
+    Get all images for a specific trade. Cached 2 min; invalidated by
+    save/delete_trade_image calls below.
 
     Args:
         portfolio_name: Portfolio name
@@ -1471,7 +1476,10 @@ def delete_trade_image(portfolio_name: str, trade_id: str, image_type: str):
 
                 cur.execute(query, (portfolio_id, trade_id, image_type))
                 conn.commit()
-
+                try:
+                    get_trade_images.clear()
+                except Exception:
+                    pass
                 return True
 
     except Exception as e:
@@ -1491,6 +1499,10 @@ def delete_trade_image_by_id(image_id: int):
 
                 cur.execute("DELETE FROM trade_images WHERE id = %s", (image_id,))
                 conn.commit()
+                try:
+                    get_trade_images.clear()
+                except Exception:
+                    pass
                 return image_url
     except Exception as e:
         print(f"Failed to delete trade image by id: {e}")
@@ -1535,7 +1547,10 @@ def delete_all_trade_images_db(portfolio_name: str, trade_id: str):
 
                 cur.execute(query, (portfolio_id, trade_id))
                 conn.commit()
-
+                try:
+                    get_trade_images.clear()
+                except Exception:
+                    pass
                 return True
 
     except Exception as e:
@@ -1615,6 +1630,10 @@ def save_trade_fundamentals(portfolio_name: str, trade_id: str, ticker: str,
 
                 row_id = cur.fetchone()[0]
                 conn.commit()
+                try:
+                    get_trade_fundamentals.clear()
+                except Exception:
+                    pass
                 return row_id
 
     except Exception as e:
@@ -1622,9 +1641,11 @@ def save_trade_fundamentals(portfolio_name: str, trade_id: str, ticker: str,
         return None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_trade_fundamentals(portfolio_name: str, trade_id: str):
     """
-    Get all extracted fundamentals for a trade.
+    Get all extracted fundamentals for a trade. Cached 5 min; invalidated
+    by save_trade_fundamentals.
 
     Returns:
         List of dictionaries with fundamental data
