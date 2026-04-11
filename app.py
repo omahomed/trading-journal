@@ -13155,7 +13155,7 @@ elif page == "IBD Market School":
 
     # === DATA REFRESH CONTROLS ===
 
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 3])
+    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns([1, 1, 1, 2])
 
     with col_btn1:
         if st.button("🔄 Refresh Market Data"):
@@ -13192,6 +13192,24 @@ elif page == "IBD Market School":
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Sync failed: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    with col_btn3:
+        if st.button("♻️ Force Resync (14d)", help="Re-analyze and overwrite the last 14 days in the DB — use after logic changes") and USE_DATABASE:
+            try:
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                nasdaq_fetch_start = "2024-02-24"
+                force_from = pd.Timestamp.now().normalize() - timedelta(days=14)
+                st.info(f"♻️ Force resyncing Nasdaq from {force_from.date()}")
+                st.cache_data.clear()
+                with st.spinner("📊 Re-analyzing Nasdaq..."):
+                    nasdaq_summaries = analyze_symbol("^IXIC", nasdaq_fetch_start, end_date)
+                nasdaq_saved = sync_signals_to_db("^IXIC", nasdaq_summaries, filter_from_date=force_from)
+                st.success(f"🎉 Force resync complete! Overwrote {nasdaq_saved} Nasdaq records")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Force resync failed: {str(e)}")
                 import traceback
                 st.code(traceback.format_exc())
 
