@@ -11246,7 +11246,7 @@ elif page == "Analytics":
                 else:
                     # Load saved buy rule notes for this portfolio
                     br_notes_map = {}
-                    if USE_DATABASE:
+                    if USE_DATABASE and hasattr(db, 'get_rule_notes'):
                         try:
                             br_notes_map = db.get_rule_notes(CURR_PORT_NAME, 'buy')
                         except Exception:
@@ -11444,15 +11444,17 @@ elif page == "Analytics":
                             placeholder="e.g. br3.1 Reclaim 21e — I'm using this on late-stage bases where the 21EMA has already been tested multiple times. Only take this setup on first pullbacks to a fresh 21EMA.",
                         )
                         if st.button("Save observation", key=f"br_note_save_{sel_rule}"):
-                            if USE_DATABASE:
+                            if not USE_DATABASE:
+                                st.warning("Database unavailable — notes require DB mode.")
+                            elif not hasattr(db, 'save_rule_note'):
+                                st.error("Rule notes feature not yet loaded — please reboot the app from Streamlit Cloud (Manage app → Reboot) to pick up the latest db_layer.py.")
+                            else:
                                 save_status = '' if note_status == RULE_STATUS_OPTIONS[0] else note_status
                                 ok = db.save_rule_note(CURR_PORT_NAME, 'buy', sel_rule, note_text, save_status)
                                 if ok:
                                     st.toast(f"Note saved for {sel_rule} ✅")
                                 else:
                                     st.error("Save failed")
-                            else:
-                                st.warning("Database unavailable — notes require DB mode.")
 
         # --- TAB 3: SELL RULES (Rule Studio — 2026 only) ---
         with tab_sell_rules:
@@ -11480,7 +11482,7 @@ elif page == "Analytics":
                 else:
                     # Load saved sell rule notes for this portfolio
                     sr_notes_map = {}
-                    if USE_DATABASE:
+                    if USE_DATABASE and hasattr(db, 'get_rule_notes'):
                         try:
                             sr_notes_map = db.get_rule_notes(CURR_PORT_NAME, 'sell')
                         except Exception:
@@ -11695,15 +11697,17 @@ elif page == "Analytics":
                             placeholder="e.g. sr3 Portfolio Management — I'm cutting too early on winners to rebalance. Next time, only trim trades that are failing, not ones near targets.",
                         )
                         if st.button("Save observation", key=f"sr_note_save_{sel_sr}"):
-                            if USE_DATABASE:
+                            if not USE_DATABASE:
+                                st.warning("Database unavailable — notes require DB mode.")
+                            elif not hasattr(db, 'save_rule_note'):
+                                st.error("Rule notes feature not yet loaded — please reboot the app from Streamlit Cloud (Manage app → Reboot) to pick up the latest db_layer.py.")
+                            else:
                                 sr_save_status = '' if sr_note_status == SR_STATUS_OPTIONS[0] else sr_note_status
                                 ok = db.save_rule_note(CURR_PORT_NAME, 'sell', sel_sr, sr_note_text, sr_save_status)
                                 if ok:
                                     st.toast(f"Note saved for {sel_sr} ✅")
                                 else:
                                     st.error("Save failed")
-                            else:
-                                st.warning("Database unavailable — notes require DB mode.")
 
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
         # --- TAB 4: DRAWDOWN DISCIPLINE (deck compliance tracker) ---
