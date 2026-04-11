@@ -1054,6 +1054,25 @@ def cached_live_price(ticker):
     except Exception:
         return None
 
+# --- CACHED BATCH LIVE PRICES ---
+# For dashboards that need live prices for all open positions. Cache key is
+# a sorted tuple so the order of tickers doesn't matter. 60s TTL.
+@st.cache_data(ttl=60, show_spinner=False)
+def cached_batch_live_prices(tickers_tuple):
+    """Returns dict[ticker -> price]. Pass a tuple (hashable) of tickers."""
+    if not tickers_tuple:
+        return {}
+    tickers = list(tickers_tuple)
+    try:
+        data = yf.download(tickers, period="1d", progress=False)['Close']
+        if len(tickers) == 1:
+            val = float(data.iloc[-1]) if not data.empty else None
+            return {tickers[0]: val} if val is not None else {}
+        last = data.iloc[-1]
+        return {t: float(last[t]) for t in tickers if t in last.index and not pd.isna(last[t])}
+    except Exception:
+        return {}
+
 # --- MARKET STATE HELPERS (used by M Factor + Daily Routine) ---
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_market_state(ticker):
@@ -2117,20 +2136,13 @@ if page == "Dashboard":
             if not df_open.empty:
                 num_open_pos = len(df_open)
 
-                # Get live prices
+                # Get live prices (cached 60s)
                 tickers = df_open['Ticker'].unique().tolist()
                 try:
-                    live_batch = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
+                    price_map = cached_batch_live_prices(tuple(sorted(tickers)))
 
                     def get_live_price(r):
-                        try:
-                            if len(tickers) == 1:
-                                val = float(live_batch) if not pd.isna(live_batch) else float(r['Avg_Entry'])
-                                return val
-                            else:
-                                val = live_batch.get(r['Ticker'])
-                                return float(val) if not pd.isna(val) else float(r['Avg_Entry'])
-                        except: return float(r['Avg_Entry'])
+                        return price_map.get(r['Ticker'], float(r['Avg_Entry']))
 
                     df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
                     df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open['Shares']
@@ -2479,23 +2491,10 @@ elif page == "Dashboard (Legacy)":
             if not df_open.empty:
                 num_open_pos = len(df_open)
                 
-                # A. LIVE PRICE
+                # A. LIVE PRICE (cached 60s)
                 tickers = df_open['Ticker'].unique().tolist()
-                try:
-                    live_batch = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
-                except: live_batch = pd.Series()
-
-                def get_live_price(r):
-                    try: 
-                        if len(tickers) == 1:
-                            val = float(live_batch) if not pd.isna(live_batch) else float(r['Avg_Entry'])
-                            return val
-                        else:
-                            val = live_batch.get(r['Ticker'])
-                            return float(val) if not pd.isna(val) else float(r['Avg_Entry'])
-                    except: return float(r['Avg_Entry'])
-
-                df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
+                price_map = cached_batch_live_prices(tuple(sorted(tickers)))
+                df_open['Cur_Px'] = df_open['Ticker'].map(price_map).fillna(df_open['Avg_Entry']).astype(float)
 
                 # B. TRUE STOP & SECTOR
                 def get_true_stop(trade_id):
@@ -2918,23 +2917,11 @@ elif page == "Trading Overview":
             if not df_open.empty:
                 num_positions = len(df_open)
 
-                # Get live prices
+                # Get live prices (cached 60s)
                 try:
                     tickers = df_open['Ticker'].unique().tolist()
-                    live_batch = yf.download(tickers, period="1d", progress=False)['Close'].iloc[-1]
-
-                    def get_live_price(r):
-                        try:
-                            if len(tickers) == 1:
-                                val = float(live_batch) if not pd.isna(live_batch) else float(r.get('Avg_Entry', 0))
-                                return val
-                            else:
-                                val = live_batch.get(r['Ticker'])
-                                return float(val) if not pd.isna(val) else float(r.get('Avg_Entry', 0))
-                        except:
-                            return float(r.get('Avg_Entry', 0))
-
-                    df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
+                    price_map = cached_batch_live_prices(tuple(sorted(tickers)))
+                    df_open['Cur_Px'] = df_open['Ticker'].map(price_map).fillna(df_open.get('Avg_Entry', 0)).astype(float)
                     df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open.get('Shares', 0)
                     live_exposure_pct = (df_open['Mkt_Val'].sum() / current_nlv) * 100
 
@@ -8978,37 +8965,9 @@ elif page == "Risk Manager":
 
                     if not df_open.empty:
 
-                        # B. Get Live Prices
-
+                        # B. Get Live Prices (cached 60s)
                         tickers = df_open['Ticker'].unique().tolist()
-
-                        live_prices = {}
-
-                        if tickers:
-
-                            try:
-
-                                data = yf.download(tickers, period="1d", progress=False)['Close']
-
-                                if len(tickers) == 1:
-
-                                    val = data.iloc[-1]
-
-                                    if isinstance(val, pd.Series): val = val.iloc[0]
-
-                                    live_prices[tickers[0]] = float(val)
-
-                                else:
-
-                                    last_row = data.iloc[-1]
-
-                                    for t in tickers:
-
-                                        if t in last_row.index:
-
-                                            live_prices[t] = float(last_row[t])
-
-                            except: pass
+                        live_prices = cached_batch_live_prices(tuple(sorted(tickers))) if tickers else {}
 
 
 
