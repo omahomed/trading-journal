@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS trade_lessons (
     portfolio_id INTEGER NOT NULL REFERENCES portfolios(id) ON DELETE CASCADE,
     trade_id VARCHAR(50) NOT NULL,
     note TEXT DEFAULT '',
-    category VARCHAR(50) DEFAULT '',
+    category VARCHAR(500) DEFAULT '',  -- pipe-separated list of category tags
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 

@@ -12518,7 +12518,6 @@ elif page == "Analytics":
 
             # Master list of lesson categories — edit this list to tweak options
             LESSON_CATEGORIES = [
-                "— select —",
                 "Entry timing",
                 "Stop placement",
                 "Undersized",
@@ -12530,6 +12529,8 @@ elif page == "Analytics":
                 "Rule deviation",
                 "Other",
             ]
+            # Pipe delimiter for storing multiple categories in one column
+            _CAT_SEP = "|"
             # Per-category (background, foreground) colors for the review pill
             LESSON_CAT_COLORS = {
                 "Entry timing":        ("#fef3c7", "#b45309"),
@@ -12631,19 +12632,24 @@ elif page == "Analytics":
                     pl_color = "#15803d" if is_winner else "#b91c1c"
                     pl_sign = "+" if pl >= 0 else ""
 
-                    # Review pill: show the saved lesson category as a colored badge
-                    # in the card header so reviewed trades are obvious at a glance.
+                    # Review pills: show one colored badge per saved category
+                    # so reviewed trades are obvious at a glance. Supports
+                    # multi-select (pipe-separated storage).
                     card_existing_note, card_existing_cat = lessons_map.get(trade_id, ('', ''))
+                    card_cat_list = [
+                        c.strip() for c in (card_existing_cat or '').split(_CAT_SEP) if c.strip()
+                    ]
                     cat_pill_html = ""
-                    if card_existing_cat and card_existing_cat in LESSON_CAT_COLORS:
-                        _pbg, _pfg = LESSON_CAT_COLORS[card_existing_cat]
-                        cat_pill_html = (
-                            f'<span style="display:inline-block;margin-left:10px;'
-                            f'padding:3px 10px;background:{_pbg};color:{_pfg};'
-                            f'font-size:11px;font-weight:700;border-radius:12px;'
-                            f'vertical-align:middle;letter-spacing:0.02em;">'
-                            f'✓ {card_existing_cat}</span>'
-                        )
+                    for _cat in card_cat_list:
+                        if _cat in LESSON_CAT_COLORS:
+                            _pbg, _pfg = LESSON_CAT_COLORS[_cat]
+                            cat_pill_html += (
+                                f'<span style="display:inline-block;margin-left:6px;'
+                                f'padding:3px 10px;background:{_pbg};color:{_pfg};'
+                                f'font-size:11px;font-weight:700;border-radius:12px;'
+                                f'vertical-align:middle;letter-spacing:0.02em;">'
+                                f'✓ {_cat}</span>'
+                            )
 
                     st.markdown(
                         f'<div style="background:#fff;border-left:4px solid {border_color};'
@@ -12744,14 +12750,16 @@ elif page == "Analytics":
 
                     # Editable lesson note
                     existing_note, existing_cat = lessons_map.get(trade_id, ('', ''))
+                    existing_cat_list = [
+                        c.strip() for c in (existing_cat or '').split(_CAT_SEP) if c.strip()
+                    ]
+                    # Filter to valid categories (drops any stale tags)
+                    default_cats = [c for c in existing_cat_list if c in LESSON_CATEGORIES]
                     with st.expander(f"📝 Lesson — {ticker} {trade_id}", expanded=False):
-                        cat_index = 0
-                        if existing_cat and existing_cat in LESSON_CATEGORIES:
-                            cat_index = LESSON_CATEGORIES.index(existing_cat)
-                        cat_val = st.selectbox(
-                            "Category",
+                        cat_vals = st.multiselect(
+                            "Category (pick one or more)",
                             LESSON_CATEGORIES,
-                            index=cat_index,
+                            default=default_cats,
                             key=f"cat_{trade_id}",
                         )
                         note_val = st.text_area(
@@ -12763,7 +12771,7 @@ elif page == "Analytics":
                         )
                         if st.button("Save lesson", key=f"savelsn_{trade_id}"):
                             if USE_DATABASE:
-                                save_cat = '' if cat_val == LESSON_CATEGORIES[0] else cat_val
+                                save_cat = _CAT_SEP.join(cat_vals) if cat_vals else ''
                                 ok = db.save_trade_lesson(CURR_PORT_NAME, trade_id, note_val, save_cat)
                                 if ok:
                                     st.toast(f"Lesson saved for {ticker} ✅")
