@@ -6379,8 +6379,13 @@ elif page == "Trade Manager":
                             if not summary_matches.empty:
                                 db.save_summary_row(CURR_PORT_NAME, summary_matches.iloc[0].to_dict())
 
-                            st.success(f"✅ Stop Updated to ${new_stop_price:.2f} for {len(buy_rows)} lot(s) (saved to database)")
-                            st.rerun()
+                            # Invalidate cached loaders so the next render picks up new stops
+                            try:
+                                db.load_details.clear()
+                                db.load_summary.clear()
+                            except Exception:
+                                pass
+                            st.toast(f"✅ {sel_label.split(' (')[0]} stop → ${new_stop_price:.2f} ({len(buy_rows)} lot(s))", icon="🛡️")
                         except Exception as e:
                             st.error(f"❌ Database update failed: {str(e)}")
                     else:
@@ -6390,8 +6395,7 @@ elif page == "Trade Manager":
                         secure_save(df_d, DETAILS_FILE)
                         df_d, df_s = update_campaign_summary(sel_id, df_d, df_s)
                         secure_save(df_s, SUMMARY_FILE)
-                        st.success(f"✅ Stop Updated to ${new_stop_price:.2f}")
-                        st.rerun()
+                        st.toast(f"✅ {sel_label.split(' (')[0]} stop → ${new_stop_price:.2f}", icon="🛡️")
                 else: st.error("Could not find a BUY transaction.")
         else: st.info("No active positions.")
 
