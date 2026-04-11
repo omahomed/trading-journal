@@ -988,8 +988,20 @@ def log_audit_trail(action, trade_id, ticker, details, username="User"):
         print(f"Audit log error: {e}")
         return False
 
+# --- CACHED R2 IMAGE DOWNLOAD ---
+# Images rarely change once uploaded, so cache aggressively (1 hour TTL).
+# This prevents re-downloading every time the Trade Journal re-renders.
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=200)
+def cached_r2_download(url):
+    if not url:
+        return None
+    try:
+        return r2.download_image(url)
+    except Exception:
+        return None
+
 # --- MARKET STATE HELPERS (used by M Factor + Daily Routine) ---
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_market_state(ticker):
     """Compute M Factor market state for a given index ticker."""
     try:
@@ -1196,7 +1208,9 @@ def compute_index_atr(ticker, start_date, end_date):
 
 
 # --- MARKET CYCLE TRACKER ENGINE (Layer 2 on top of M Factor) ---
-@st.cache_data(ttl=300, show_spinner=False)
+# 30-min TTL — NASDAQ daily bars only update at EOD, so intraday recomputation
+# is wasted work. The analyzer processes 2y of data which is expensive.
+@st.cache_data(ttl=1800, show_spinner=False)
 def compute_cycle_state():
     """Compute NASDAQ market cycle state: CORRECTION / RALLY MODE / UPTREND / POWERTREND.
     Uses MarketSchoolRules for correction/reference_high/rally/FTD detection,
@@ -2366,18 +2380,19 @@ elif page == "Dashboard (Legacy)":
             return float(x)
         except: return 0.0
 
-    # --- HELPER: SECTOR CACHE ---
-    @st.cache_data(ttl=3600*24)
+    # --- HELPER: SECTOR CACHE (per-ticker, 7-day TTL — sectors rarely change) ---
+    @st.cache_data(ttl=3600*24*7)
+    def _get_ticker_sector(t):
+        if t == 'CASH':
+            return 'Unknown'
+        try:
+            inf = yf.Ticker(t).info
+            return inf.get('sector', 'Unknown')
+        except Exception:
+            return 'Unknown'
+
     def get_sector_map(ticker_list):
-        s_map = {}
-        for t in ticker_list:
-            if t == 'CASH': continue
-            try:
-                inf = yf.Ticker(t).info
-                s_map[t] = inf.get('sector', 'Unknown')
-            except:
-                s_map[t] = 'Unknown'
-        return s_map
+        return {t: _get_ticker_sector(t) for t in ticker_list}
 
     # Load journal data (database-aware via load_data)
     p_clean = os.path.join(DATA_ROOT, portfolio, 'Trading_Journal_Clean.csv')
@@ -7922,29 +7937,23 @@ elif page == "Trade Manager":
 
                         st.markdown(f"### {ticker} - {selected_trade}")
 
-                        # Group images by type
-                        _img_types = ['entry', 'position']
-                        # Backward compat: also show legacy weekly/daily/exit
-                        _legacy = [t for t in ['weekly', 'daily', 'exit'] if any(img['image_type'] == t for img in images)]
-                        _img_types = _legacy + _img_types
-                        # Only show types that have images (exclude marketsurge — now saved as entry)
-                        _img_types = [t for t in _img_types if any(img['image_type'] == t for img in images)]
-                        if not _img_types:
-                            _img_types = ['entry', 'position']
+                        # Only show types that actually have images, in canonical order
+                        _canonical_order = ['entry', 'position', 'weekly', 'daily', 'exit', 'marketsurge']
+                        _present = set(img['image_type'] for img in images)
+                        _img_types = [t for t in _canonical_order if t in _present]
+                        # Append any exotic types not in canonical order
+                        _img_types += sorted(_present - set(_canonical_order))
                         cols = st.columns(len(_img_types))
                         _type_labels = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart', 'marketsurge': 'MarketSurge'}
                         for img_type, col in zip(_img_types, cols):
                             with col:
                                 type_imgs = [img for img in images if img['image_type'] == img_type]
                                 st.markdown(f"**{_type_labels.get(img_type, img_type.title())}**")
-                                if type_imgs:
-                                    for img_data in type_imgs:
-                                        image_bytes = r2.download_image(img_data['image_url'])
-                                        if image_bytes:
-                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                            st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
-                                else:
-                                    st.info(f"No {_type_labels.get(img_type, img_type)} uploaded")
+                                for img_data in type_imgs:
+                                    image_bytes = cached_r2_download(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
+                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
                     else:
                         st.info("No charts uploaded for this trade")
 
@@ -8149,24 +8158,22 @@ elif page == "Active Campaign Summary":
 
                         st.markdown(f"### {ticker} - {trade_id}")
 
-
-
-                        _img_types2 = ['weekly', 'daily']
-                        _labels2 = {'weekly': 'Weekly Charts', 'daily': 'Daily Charts'}
+                        _canonical_order2 = ['entry', 'position', 'weekly', 'daily', 'exit', 'marketsurge']
+                        _present2 = set(img['image_type'] for img in images)
+                        _img_types2 = [t for t in _canonical_order2 if t in _present2]
+                        _img_types2 += sorted(_present2 - set(_canonical_order2))
+                        _labels2 = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Charts', 'daily': 'Daily Charts', 'exit': 'Exit Chart', 'marketsurge': 'MarketSurge'}
                         cols = st.columns(len(_img_types2))
 
                         for img_type, col in zip(_img_types2, cols):
                             with col:
                                 type_imgs = [img for img in images if img['image_type'] == img_type]
                                 st.markdown(f"**{_labels2.get(img_type, img_type.title())}**")
-                                if type_imgs:
-                                    for img_data in type_imgs:
-                                        image_bytes = r2.download_image(img_data['image_url'])
-                                        if image_bytes:
-                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                            st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
-                                else:
-                                    st.info(f"No {_labels2.get(img_type, img_type)} uploaded")
+                                for img_data in type_imgs:
+                                    image_bytes = cached_r2_download(img_data['image_url'])
+                                    if image_bytes:
+                                        st.image(image_bytes, use_container_width=True, output_format="PNG")
+                                        st.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
 
                     else:
 
@@ -10751,36 +10758,33 @@ elif page == "Trade Journal":
                         images = db.get_trade_images(CURR_PORT_NAME, trade_id)
 
                         if images:
-                            # Build type list: new types + legacy types that have images
-                            _all_types = ['entry', 'position', 'weekly', 'daily', 'exit']
-                            chart_types = [t for t in _all_types if any(img['image_type'] == t for img in images)]
-                            if not chart_types:
-                                chart_types = ['entry', 'position']
+                            # Only show types that actually have images, in canonical order
+                            _canonical_order = ['entry', 'position', 'weekly', 'daily', 'exit', 'marketsurge']
+                            _present = set(img['image_type'] for img in images)
+                            chart_types = [t for t in _canonical_order if t in _present]
+                            chart_types += sorted(_present - set(_canonical_order))
                             cols = st.columns(len(chart_types))
 
-                            _type_labels = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart'}
-                            icons = {'entry': '📊', 'position': '🔄', 'weekly': '📊', 'daily': '📈', 'exit': '🎯'}
+                            _type_labels = {'entry': 'Entry Charts', 'position': 'Position Changes', 'weekly': 'Weekly Chart', 'daily': 'Daily Chart', 'exit': 'Exit Chart', 'marketsurge': 'MarketSurge'}
+                            icons = {'entry': '📊', 'position': '🔄', 'weekly': '📊', 'daily': '📈', 'exit': '🎯', 'marketsurge': '🔬'}
                             for img_type, col in zip(chart_types, cols):
                                 with col:
                                     type_imgs = [img for img in images if img['image_type'] == img_type]
                                     _label = _type_labels.get(img_type, img_type.title())
                                     st.markdown(f"**{icons.get(img_type, '')} {_label}**")
-                                    if type_imgs:
-                                        for img_data in type_imgs:
-                                            image_bytes = r2.download_image(img_data['image_url'])
-                                            if image_bytes:
-                                                st.image(image_bytes, use_container_width=True, output_format="PNG")
-                                                cap_col, del_col = st.columns([4, 1])
-                                                cap_col.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
-                                                if del_col.button("🗑️", key=f"del_img_{img_data['id']}"):
-                                                    url = db.delete_trade_image_by_id(img_data['id'])
-                                                    if url:
-                                                        try: r2.delete_image(url)
-                                                        except: pass
-                                                    st.success("Image deleted")
-                                                    st.rerun()
-                                    else:
-                                        st.info(f"No {img_type} chart")
+                                    for img_data in type_imgs:
+                                        image_bytes = cached_r2_download(img_data['image_url'])
+                                        if image_bytes:
+                                            st.image(image_bytes, use_container_width=True, output_format="PNG")
+                                            cap_col, del_col = st.columns([4, 1])
+                                            cap_col.caption(f"{img_data.get('file_name', '')} — {img_data['uploaded_at']}")
+                                            if del_col.button("🗑️", key=f"del_img_{img_data['id']}"):
+                                                url = db.delete_trade_image_by_id(img_data['id'])
+                                                if url:
+                                                    try: r2.delete_image(url)
+                                                    except: pass
+                                                st.success("Image deleted")
+                                                st.rerun()
                         else:
                             st.info("No charts available for this trade")
 
