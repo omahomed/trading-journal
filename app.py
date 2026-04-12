@@ -13555,27 +13555,12 @@ elif page == "IBD Market School":
 
     def _fetch_with_qqq_volume(analyzer, start_date, end_date):
         """
-        Fetch price data for analyzer.symbol, but replace Volume with QQQ volume
-        (for ^IXIC / ^NDX only). yfinance misreports NASDAQ composite volume —
-        QQQ ETF volume is the accurate proxy. Falls back to normal fetch if
-        symbol is not a NASDAQ index or if the QQQ fetch fails.
+        Now a passthrough — IBD Market School uses the raw ^IXIC composite
+        volume from yfinance for distribution day detection. FTD (B1/B2) and
+        Accumulation Day (B7) no longer require volume in market_school_rules,
+        so the unreliable composite volume only affects distribution counts.
         """
         analyzer.fetch_data(start_date=start_date, end_date=end_date)
-        if analyzer.data is None or analyzer.data.empty:
-            return
-        if analyzer.symbol not in ('^IXIC', '^NDX'):
-            return
-        try:
-            qqq = yf.Ticker('QQQ').history(start=start_date, end=end_date)
-            if qqq is None or qqq.empty:
-                return
-            # Align QQQ volume to analyzer.data by date index
-            analyzer.data['Volume'] = qqq['Volume'].reindex(analyzer.data.index).ffill()
-            # Recompute volume-derived columns
-            analyzer.data['volume_vs_prev'] = analyzer.data['Volume'] / analyzer.data['Volume'].shift(1)
-            analyzer.data['volume_up'] = analyzer.data['Volume'] > analyzer.data['Volume'].shift(1)
-        except Exception as e:
-            print(f"QQQ volume proxy fetch failed: {e}")
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def analyze_symbol(symbol, start_date, end_date):

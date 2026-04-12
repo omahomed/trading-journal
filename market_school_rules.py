@@ -369,10 +369,11 @@ class MarketSchoolRules:
         if days_since_rally < 3 or days_since_rally > 24:
             return None
 
-        # Volume requirement
-        if not current['volume_up']:
-            return None
-            
+        # NOTE: Volume requirement intentionally removed for FTD (B1/B2).
+        # Composite volume from yfinance ^IXIC is unreliable, so price-only
+        # FTD detection is used instead. Distribution day rules still use
+        # volume below.
+
         # Check for 1.0% gain
         if current['daily_gain_pct'] >= 1.0:
             # B2 requires: close above the low of the initial follow-through day
@@ -387,7 +388,7 @@ class MarketSchoolRules:
                 date=current.name,
                 signal_type=signal_type,
                 price=current['Close'],
-                description=f"{signal_type.value} (+{current['daily_gain_pct']:.2f}%, Vol: {current['volume_vs_prev']:.1f}x)",
+                description=f"{signal_type.value} (+{current['daily_gain_pct']:.2f}%)",
                 affects_exposure=True,
                 exposure_change=1 if signal_type == SignalType.B1 else 0
             )
@@ -654,7 +655,8 @@ class MarketSchoolRules:
         
         # B7: Accumulation Day
         # Rule: gain >= FTD% (1.0%), close in upper 25% of range, close > 21EMA,
-        # heavier volume, and CANNOT coincide with B1/B2 (follow-through day).
+        # and CANNOT coincide with B1/B2 (follow-through day).
+        # NOTE: Volume requirement removed (^IXIC composite volume unreliable).
         if self.buy_switch and idx > 0:
             is_ftd_today = (self.last_b1_b2_date is not None and
                             self.last_b1_b2_date == current.name)
@@ -662,8 +664,7 @@ class MarketSchoolRules:
                 current['daily_gain_pct'] >= 1.0 and
                 current['close_position'] > 0.75 and
                 not pd.isna(current['ema21']) and
-                current['Close'] > current['ema21'] and
-                current['volume_up']):
+                current['Close'] > current['ema21']):
 
                 signals.append(Signal(
                     date=current.name,
