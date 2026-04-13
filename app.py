@@ -4643,6 +4643,16 @@ if page == "Daily Routine":
             if cs == 'CORRECTION' or day_num is None:
                 return ""
 
+            # If today is a weekday and after the last data bar, count today
+            # as the next trading day (yfinance may not have today's bar yet).
+            from datetime import date as _date
+            _today = _date.today()
+            _last = cycle.get('last_data_date')
+            if _last and _today.weekday() < 5:
+                _last_d = _last.date() if hasattr(_last, 'date') else _last
+                if _today > _last_d:
+                    day_num += 1
+
             # Fetch NASDAQ bars to compute rally high and check FTD low
             hist = yf.Ticker("^IXIC").history(period="6mo")
             if hist.empty:
