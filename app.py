@@ -533,6 +533,8 @@ BUY_RULES = [
     "br9.1 21e Strategy",
     # 10. Hedging
     "br10.1 Hedging with leverage product",
+    # 11. Shorting
+    "br11.1 Shorting",
 ]
 
 # Note: ADD_RULES list is deprecated/merged into BUY_RULES
