@@ -3133,11 +3133,13 @@ elif page == "Daily Journal":
                 if c in df_j.columns:
                     df_j[c] = pd.to_numeric(df_j[c].astype(str).str.replace(r'[$,]', '', regex=True), errors='coerce').fillna(0.0)
 
-        # --- 1. MISSING ENTRY CHECK ---
+        # --- 1. MISSING ENTRY CHECK (skip weekends) ---
         if not df_d.empty:
             cutoff = datetime(2025, 11, 21).date()
             valid_dates = pd.to_datetime(df_d['Date'], errors='coerce').dropna().dt.date.unique()
-            trade_days = sorted([d for d in valid_dates if d >= cutoff], reverse=True)
+            # Filter to weekdays only (Mon=0 ... Fri=4) so Saturday/Sunday trades
+            # from data-entry errors don't trigger false "missing" warnings.
+            trade_days = sorted([d for d in valid_dates if d >= cutoff and d.weekday() < 5], reverse=True)
             journal_days = df_j['Day'].dropna().dt.date.unique() if not df_j.empty else []
             missing = [d for d in trade_days if d not in journal_days]
             if missing: 
@@ -4619,6 +4621,81 @@ if page == "Daily Routine":
         except:
             return ""
 
+    # --- RALLY DAY COUNTER ---
+    # Computes "Day N STATUS:" prefix for Market/Global Notes.
+    # Phase A (no new market high yet): rally over if close < FTD low
+    # Phase B (new high made): rally over if close < 50SMA or 5% pullback from rally high
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _get_rally_day_prefix():
+        try:
+            cycle = compute_cycle_state()
+            if cycle is None:
+                return ""
+
+            cs = cycle.get('cycle_state', '')
+            day_num = cycle.get('days_since_rally')
+            ftd_date = cycle.get('ftd_date')
+            ref_high = cycle.get('reference_high', 0)
+            price = cycle.get('price', 0)
+            sma50 = cycle.get('sma50', 0)
+
+            # No active rally → no prefix
+            if cs == 'CORRECTION' or day_num is None:
+                return ""
+
+            # Fetch NASDAQ bars to compute rally high and check FTD low
+            hist = yf.Ticker("^IXIC").history(period="6mo")
+            if hist.empty:
+                return f"Day {day_num} {cs}: "
+
+            hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
+
+            # Find FTD low from the data
+            ftd_low = None
+            if ftd_date is not None:
+                ftd_ts = pd.Timestamp(ftd_date)
+                ftd_mask = hist.index.date == ftd_ts.date()
+                if ftd_mask.any():
+                    ftd_low = float(hist.loc[ftd_mask, 'Low'].iloc[0])
+
+            # Find rally start index (approximate from days_since_rally)
+            rally_start_idx = max(0, len(hist) - day_num)
+
+            # Rally high = max High since rally start
+            rally_high = float(hist.iloc[rally_start_idx:]['High'].max())
+
+            # Has the market made a new high? (close > pre-correction reference high)
+            new_high_made = False
+            if ref_high > 0:
+                new_high_made = any(hist.iloc[rally_start_idx:]['Close'] > ref_high)
+
+            # Current close (last bar)
+            last_close = float(hist['Close'].iloc[-1])
+
+            # Check rally-over conditions
+            rally_over_reason = None
+
+            if new_high_made:
+                # Phase B: new market high established
+                # Rally over if: close < 50 SMA OR 5% pullback from rally high
+                if sma50 > 0 and last_close < sma50:
+                    rally_over_reason = "50 SMA violation"
+                elif rally_high > 0 and ((last_close - rally_high) / rally_high * 100) <= -5.0:
+                    rally_over_reason = f"5% pullback from high (${rally_high:,.0f})"
+            else:
+                # Phase A: no new high yet — rally over if close < FTD low
+                if ftd_low and last_close < ftd_low:
+                    rally_over_reason = f"close below FTD low (${ftd_low:,.0f})"
+
+            if rally_over_reason:
+                return f"Day {day_num} RALLY OVER ({rally_over_reason}): "
+            else:
+                return f"Day {day_num} {cs}: "
+        except Exception:
+            return ""
+
+    _rally_prefix = _get_rally_day_prefix()
+
     # 3. MASTER FORM
     with st.form("master_routine_form"):
         st.subheader("1. General Market Data")
@@ -4633,8 +4710,9 @@ if page == "Daily Routine":
         spy_val = c3.number_input("SPY Close", value=float(live_spy), format="%.2f")
         ndx_val = c4.number_input("Nasdaq Close", value=float(live_ndx), format="%.2f")
 
-        # GLOBAL NOTE INPUT
-        market_notes = st.text_input("Market/Global Notes", placeholder="e.g., FTD on Nasdaq? Volatility Spike? CPI Data?")
+        # GLOBAL NOTE INPUT — auto-prefilled with rally day counter
+        market_notes = st.text_input("Market/Global Notes", value=_rally_prefix,
+                                     placeholder="e.g., Day 14 UPTREND: FTD on Nasdaq? Volatility Spike? CPI Data?")
         st.markdown("---")
 
         st.subheader("2. Portfolio Updates")
