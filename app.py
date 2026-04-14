@@ -5526,8 +5526,40 @@ elif page == "Position Sizer":
             ns_stop_dist = ((ns_price - ns_stop) / ns_price * 100)
             st.info(f"📍 **Calculated Stop:** `{ns_stop:.2f}` (MA {ns_ma_level:.2f} − {ns_buffer_pct:.1f}% buffer) — {ns_stop_dist:.1f}% below entry")
 
+        # --- Auto-suggest sizing mode from the M Factor market state
+        #     (same rule as Log Buy & Volatility Sizer):
+        #       Powertrend → ⚔️ Offense (1.00%)
+        #       Open       → ⚖️ Normal (0.75%)
+        #       else       → 🛡️ Defense (0.50%)
+        try:
+            _ns_mfactor_status, _ = get_combined_market_status()
+        except Exception:
+            _ns_mfactor_status = "Open"
+
+        _ns_suggested_idx = 1  # Normal default
+        if _ns_mfactor_status == "Powertrend":
+            _ns_suggested_idx = 2
+        elif _ns_mfactor_status == "Open":
+            _ns_suggested_idx = 1
+        else:
+            _ns_suggested_idx = 0
+
+        _ns_suggested_label = ['🛡️ Defense', '⚖️ Normal', '⚔️ Offense'][_ns_suggested_idx]
+        with st.expander(
+            f"ℹ️ M Factor: **{_ns_mfactor_status}** → suggesting **{_ns_suggested_label}** (click for rule)",
+            expanded=False,
+        ):
+            st.markdown(
+                "**Sizing Mode auto-links to M Factor market state**  \n"
+                "🛡️ **Defense (0.50%)** — Neutral / Closed (anything not Open or Powertrend)  \n"
+                "⚖️ **Normal (0.75%)** — Open (Grow / Confirmed Uptrend)  \n"
+                "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
+                "The radio below is pre-selected per this rule; you can still override before sizing."
+            )
+
         ns_sizing_mode = st.radio("Sizing Mode",
             ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+            index=_ns_suggested_idx,
             horizontal=True, key="ns_sizing_mode")
 
         ns_target_mode = st.select_slider("Target Position Size", options=list(size_map.keys()), value="Full (10%)", key="ns_target_slider")
