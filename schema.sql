@@ -358,6 +358,51 @@ CREATE INDEX IF NOT EXISTS idx_rule_notes ON rule_notes (portfolio_id, rule_side
 
 
 -- ============================================
+-- TABLE: app_config
+-- PURPOSE: Runtime-editable configuration (replaces hardcoded constants).
+-- KEY: unique `key` (e.g. 'reset_date', 'hard_decks', 'heat_threshold')
+-- VALUE: JSONB so we can store numbers, strings, dates, lists, or objects.
+-- ============================================
+CREATE TABLE IF NOT EXISTS app_config (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(100) UNIQUE NOT NULL,
+    value JSONB NOT NULL,
+    value_type VARCHAR(20) NOT NULL,  -- 'number', 'string', 'date', 'json'
+    category VARCHAR(50) NOT NULL,    -- 'risk', 'sizing', 'heat', 'earnings', etc.
+    description TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(100) DEFAULT 'User'
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_config_category ON app_config (category);
+
+
+-- ============================================
+-- TABLE: dashboard_events
+-- PURPOSE: Event/milestone markers rendered on the Dashboard equity curve.
+-- SCOPE: CanSlim only (Phase 1). `portfolio_scope` is reserved for Phase 2.
+-- ============================================
+CREATE TABLE IF NOT EXISTS dashboard_events (
+    id SERIAL PRIMARY KEY,
+    event_date DATE NOT NULL,
+    label VARCHAR(200) NOT NULL,
+    category VARCHAR(20) NOT NULL,    -- 'market' or 'personal'
+    notes TEXT,
+    color_override VARCHAR(20),       -- optional hex color (overrides category default)
+    portfolio_scope VARCHAR(50) DEFAULT 'CanSlim',  -- 'CanSlim', 'All' (Phase 2)
+    auto_generated BOOLEAN DEFAULT FALSE,  -- true when synced from app_config (e.g. RESET_DATE)
+    source_key VARCHAR(100),          -- e.g. 'reset_date' for auto-gen events
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT unique_event_per_date_label UNIQUE (event_date, label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_events_date ON dashboard_events (event_date);
+CREATE INDEX IF NOT EXISTS idx_dashboard_events_scope ON dashboard_events (portfolio_scope);
+
+
+-- ============================================
 -- VERIFICATION QUERIES
 -- ============================================
 

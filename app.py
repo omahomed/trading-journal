@@ -74,9 +74,100 @@ if USE_DATABASE:
                 cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS portfolio_heat NUMERIC(10, 4) DEFAULT 0")
                 cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS spy_atr NUMERIC(10, 4) DEFAULT 0")
                 cur.execute("ALTER TABLE trading_journal ADD COLUMN IF NOT EXISTS nasdaq_atr NUMERIC(10, 4) DEFAULT 0")
+
+                # app_config: runtime-editable settings
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS app_config (
+                        id SERIAL PRIMARY KEY,
+                        key VARCHAR(100) UNIQUE NOT NULL,
+                        value JSONB NOT NULL,
+                        value_type VARCHAR(20) NOT NULL,
+                        category VARCHAR(50) NOT NULL,
+                        description TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_by VARCHAR(100) DEFAULT 'User'
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_app_config_category ON app_config (category)")
+
+                # dashboard_events: EC marker events
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS dashboard_events (
+                        id SERIAL PRIMARY KEY,
+                        event_date DATE NOT NULL,
+                        label VARCHAR(200) NOT NULL,
+                        category VARCHAR(20) NOT NULL,
+                        notes TEXT,
+                        color_override VARCHAR(20),
+                        portfolio_scope VARCHAR(50) DEFAULT 'CanSlim',
+                        auto_generated BOOLEAN DEFAULT FALSE,
+                        source_key VARCHAR(100),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT unique_event_per_date_label UNIQUE (event_date, label)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dashboard_events_date ON dashboard_events (event_date)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_dashboard_events_scope ON dashboard_events (portfolio_scope)")
+
             conn.commit()
+
+        # Seed default config values + auto-sync RESET_DATE event (idempotent)
+        try:
+            db.seed_default_configs()
+            db.sync_auto_events_from_config()
+        except Exception as seed_e:
+            print(f"⚠️  Config seed/sync warning: {seed_e}")
+
     except Exception as e:
         print(f"⚠️  DB migration note: {e}")
+
+
+# --- CONFIG ACCESSORS (cached, with hardcoded fallback) ---
+# These wrap db.get_config() so the rest of the app can keep using simple
+# Python values for RESET_DATE and hard decks without worrying about DB calls.
+# Cached for 60s so we don't hit the DB on every page render.
+@st.cache_data(ttl=60)
+def get_reset_date():
+    """Return RESET_DATE as a pd.Timestamp. Falls back to 2026-02-24 if DB unavailable."""
+    if USE_DATABASE:
+        try:
+            val = db.get_config('reset_date', '2026-02-24')
+            return pd.Timestamp(val)
+        except Exception:
+            pass
+    return pd.Timestamp('2026-02-24')
+
+
+@st.cache_data(ttl=60)
+def get_hard_decks():
+    """
+    Return hard deck config dict:
+      {'L1': {'pct': 7.5, 'action': 'Remove Margin', 'color': '#eab308'}, ...}
+    Falls back to defaults if DB unavailable.
+    """
+    defaults = {
+        'L1': {'pct': 7.5, 'action': 'Remove Margin', 'color': '#eab308'},
+        'L2': {'pct': 12.5, 'action': 'Max 30% Invested', 'color': '#f97316'},
+        'L3': {'pct': 15.0, 'action': 'Go to Cash', 'color': '#dc2626'},
+    }
+    if USE_DATABASE:
+        try:
+            val = db.get_config('hard_decks', defaults)
+            if isinstance(val, dict) and 'L1' in val and 'L2' in val and 'L3' in val:
+                return val
+        except Exception:
+            pass
+    return defaults
+
+
+def clear_config_cache():
+    """Call this after writing config so subsequent reads pick up the new value."""
+    try:
+        get_reset_date.clear()
+        get_hard_decks.clear()
+    except Exception:
+        pass
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
@@ -1939,6 +2030,9 @@ with st.sidebar:
     nav_section("LEGACY")
     nav_button("Dashboard (Legacy)", "⚙️")
 
+    nav_section("ADMIN")
+    nav_button("Admin", "⚙️")
+
 # Get page from session state
 page = st.session_state.page
 
@@ -2188,20 +2282,21 @@ if page == "Dashboard":
                     pass
 
         # === DRAWDOWN CALCULATION (matches Risk Manager) ===
-        RESET_DATE = pd.Timestamp("2026-02-24")
+        RESET_DATE = get_reset_date()
+        _decks = get_hard_decks()
         df_active = df_j[df_j['Day'] >= RESET_DATE].copy()
         if not df_active.empty:
             peak_nlv = df_active['End NLV'].max()
             dd_dol = peak_nlv - curr_nlv
             dd_pct_abs = (dd_dol / peak_nlv) * 100 if peak_nlv > 0 else 0.0
             curr_dd = -dd_pct_abs
-            # Determine level (matches Risk Manager hard decks)
-            if dd_pct_abs >= 15.0:
-                dd_level = "L3: Go to Cash"
-            elif dd_pct_abs >= 12.5:
-                dd_level = "L2: Max 30%"
-            elif dd_pct_abs >= 7.5:
-                dd_level = "L1: No Margin"
+            # Determine level (matches Risk Manager hard decks - sourced from app_config)
+            if dd_pct_abs >= _decks['L3']['pct']:
+                dd_level = f"L3: {_decks['L3']['action']}"
+            elif dd_pct_abs >= _decks['L2']['pct']:
+                dd_level = f"L2: {_decks['L2']['action']}"
+            elif dd_pct_abs >= _decks['L1']['pct']:
+                dd_level = f"L1: {_decks['L1']['action']}"
             else:
                 dd_level = "Clear"
         else:
@@ -2437,6 +2532,53 @@ if page == "Dashboard":
             # Add 100% exposure reference line
             fig.add_hline(y=100, line_dash='dash', line_color='black',
                          opacity=0.4, line_width=0.8, yref='y2')
+
+            # ============================================================
+            # EVENT MARKERS — only on CanSlim portfolio's EC
+            # Sourced from dashboard_events (managed via Admin page)
+            # ============================================================
+            if portfolio == PORT_CANSLIM and USE_DATABASE and hasattr(db, 'load_dashboard_events'):
+                # Persist toggle in session_state so it survives reruns
+                if '_show_ec_events' not in st.session_state:
+                    st.session_state['_show_ec_events'] = True
+                show_events = st.checkbox(
+                    "Show event markers",
+                    value=st.session_state['_show_ec_events'],
+                    key='_show_ec_events',
+                    help="Vertical lines for milestones (RESET_DATE, FTDs, deck breaches, etc.). Manage in Admin → Event Log.",
+                )
+
+                if show_events:
+                    try:
+                        events_df = db.load_dashboard_events(scope='CanSlim')
+                        if not events_df.empty and not df_j.empty:
+                            ec_min_date = pd.to_datetime(df_j['Day'].min())
+                            ec_max_date = pd.to_datetime(df_j['Day'].max())
+                            events_df['_dt'] = pd.to_datetime(events_df['event_date'])
+                            visible = events_df[
+                                (events_df['_dt'] >= ec_min_date) &
+                                (events_df['_dt'] <= ec_max_date)
+                            ]
+                            for _, ev in visible.iterrows():
+                                cat = ev['category']
+                                color = ev['color_override'] or ('#dc2626' if cat == 'market' else '#2563eb')
+                                dash = 'dash' if cat == 'market' else 'solid'
+                                # Annotation alternates top/bottom by category to reduce overlap
+                                anno_y = 1.02 if cat == 'market' else -0.05
+                                anno_pos = 'top' if cat == 'market' else 'bottom'
+                                fig.add_vline(
+                                    x=ev['_dt'],
+                                    line_width=1.2,
+                                    line_dash=dash,
+                                    line_color=color,
+                                    opacity=0.7,
+                                    annotation_text=ev['label'],
+                                    annotation_position=f"{anno_pos} right",
+                                    annotation_font_size=9,
+                                    annotation_font_color=color,
+                                )
+                    except Exception as evt_err:
+                        st.caption(f"⚠️ Event markers unavailable: {evt_err}")
 
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -9005,7 +9147,8 @@ elif page == "Risk Manager":
     import numpy as np
     import matplotlib.pyplot as plt
 
-    RESET_DATE = pd.Timestamp("2026-02-24")
+    RESET_DATE = get_reset_date()
+    _RM_DECKS = get_hard_decks()
 
     page_header("Risk Manager", CURR_PORT_NAME, "🛡️")
 
@@ -9085,13 +9228,13 @@ elif page == "Risk Manager":
 
                 
 
-                # Hard Decks (UPDATED TRIGGERS: 7.5%, 12.5%, 15%)
+                # Hard Decks (sourced from app_config — editable in Admin page)
 
-                deck_l1 = peak_nlv * 0.925  # -7.5%
+                deck_l1 = peak_nlv * (1 - _RM_DECKS['L1']['pct'] / 100.0)
 
-                deck_l2 = peak_nlv * 0.875  # -12.5%
+                deck_l2 = peak_nlv * (1 - _RM_DECKS['L2']['pct'] / 100.0)
 
-                deck_l3 = peak_nlv * 0.850  # -15.0%
+                deck_l3 = peak_nlv * (1 - _RM_DECKS['L3']['pct'] / 100.0)
 
                 dist_l1 = curr_nlv - deck_l1
 
@@ -9277,11 +9420,11 @@ elif page == "Risk Manager":
 
                 status_txt = "🟢 ALL CLEAR"
 
-                if dd_pct >= 15.0: status_txt = "☠️ GO TO CASH"
+                if dd_pct >= _RM_DECKS['L3']['pct']: status_txt = f"☠️ {_RM_DECKS['L3']['action'].upper()}"
 
-                elif dd_pct >= 12.5: status_txt = "🟠 MAX 30% INVESTED"
+                elif dd_pct >= _RM_DECKS['L2']['pct']: status_txt = f"🟠 {_RM_DECKS['L2']['action'].upper()}"
 
-                elif dd_pct >= 7.5: status_txt = "🟡 REMOVE MARGIN"
+                elif dd_pct >= _RM_DECKS['L1']['pct']: status_txt = f"🟡 {_RM_DECKS['L1']['action'].upper()}"
 
                 
 
@@ -9295,7 +9438,7 @@ elif page == "Risk Manager":
 
                 
 
-                if dd_pct < 7.5:
+                if dd_pct < _RM_DECKS['L1']['pct']:
 
                     col3.caption(f"Buffer: ${dist_l1:,.0f} to Level 1")
 
@@ -9339,11 +9482,14 @@ elif page == "Risk Manager":
 
                 # using axhline for full width lines
 
-                ax.axhline(y=deck_l1, color='#f1c40f', linewidth=1.5, alpha=0.8, label='L1: Remove Margin (-7.5%)')
+                ax.axhline(y=deck_l1, color=_RM_DECKS['L1']['color'], linewidth=1.5, alpha=0.8,
+                           label=f"L1: {_RM_DECKS['L1']['action']} (-{_RM_DECKS['L1']['pct']:.1f}%)")
 
-                ax.axhline(y=deck_l2, color='#e67e22', linewidth=1.5, alpha=0.8, label='L2: 30% Invested (-12.5%)')
+                ax.axhline(y=deck_l2, color=_RM_DECKS['L2']['color'], linewidth=1.5, alpha=0.8,
+                           label=f"L2: {_RM_DECKS['L2']['action']} (-{_RM_DECKS['L2']['pct']:.1f}%)")
 
-                ax.axhline(y=deck_l3, color='#c0392b', linewidth=2, alpha=0.8, label='L3: Cash (-15%)')
+                ax.axhline(y=deck_l3, color=_RM_DECKS['L3']['color'], linewidth=2, alpha=0.8,
+                           label=f"L3: {_RM_DECKS['L3']['action']} (-{_RM_DECKS['L3']['pct']:.1f}%)")
 
                 
 
@@ -9399,13 +9545,13 @@ elif page == "Risk Manager":
 
                 f1.markdown("#### 🟡 LEVEL 1")
 
-                f1.markdown(f"**Trigger:** -7.5% DD (**${deck_l1:,.0f}**)")
+                f1.markdown(f"**Trigger:** -{_RM_DECKS['L1']['pct']:.1f}% DD (**${deck_l1:,.0f}**)")
 
                 if curr_nlv <= deck_l1: f1.error("❌ FUSE BLOWN")
 
                 else: f1.success("✅ SECURE")
 
-                f1.info("**Action:** Remove Margin.\n\nLockout New Buys until steady.")
+                f1.info(f"**Action:** {_RM_DECKS['L1']['action']}.\n\nLockout New Buys until steady.")
 
 
 
@@ -9413,13 +9559,13 @@ elif page == "Risk Manager":
 
                 f2.markdown("#### 🟠 LEVEL 2")
 
-                f2.markdown(f"**Trigger:** -12.5% DD (**${deck_l2:,.0f}**)")
+                f2.markdown(f"**Trigger:** -{_RM_DECKS['L2']['pct']:.1f}% DD (**${deck_l2:,.0f}**)")
 
                 if curr_nlv <= deck_l2: f2.error("❌ FUSE BLOWN")
 
                 else: f2.success("✅ SECURE")
 
-                f2.warning("**Action:** Max 30% Invested.\n\nManage winners only. Cut loose ends.")
+                f2.warning(f"**Action:** {_RM_DECKS['L2']['action']}.\n\nManage winners only. Cut loose ends.")
 
 
 
@@ -9427,13 +9573,13 @@ elif page == "Risk Manager":
 
                 f3.markdown("#### ☠️ LEVEL 3")
 
-                f3.markdown(f"**Trigger:** -15% DD (**${deck_l3:,.0f}**)")
+                f3.markdown(f"**Trigger:** -{_RM_DECKS['L3']['pct']:.1f}% DD (**${deck_l3:,.0f}**)")
 
                 if curr_nlv <= deck_l3: f3.error("❌ FUSE BLOWN")
 
                 else: f3.success("✅ SECURE")
 
-                f3.error("**Action:** GO TO CASH.\n\nProtection Mode. No trading for 48hrs.")
+                f3.error(f"**Action:** {_RM_DECKS['L3']['action'].upper()}.\n\nProtection Mode. No trading for 48hrs.")
 
 
 
@@ -11836,17 +11982,23 @@ elif page == "Analytics":
         # --- TAB 3: DRAWDOWN DETECTIVE (START DEC 16, 2025) ---
         # --- TAB 4: DRAWDOWN DISCIPLINE (deck compliance tracker) ---
         with tab_dd:
+            _dd_decks_cfg = get_hard_decks()
             st.subheader("🛡️ Drawdown Discipline")
-            st.caption("Did you follow your own deck rules? Each historical crossing of L1 (−7.5%), L2 (−12.5%), or L3 (−15%) is logged with a pass/fail verdict.")
+            st.caption(
+                f"Did you follow your own deck rules? Each historical crossing of "
+                f"L1 (−{_dd_decks_cfg['L1']['pct']:.1f}%), "
+                f"L2 (−{_dd_decks_cfg['L2']['pct']:.1f}%), or "
+                f"L3 (−{_dd_decks_cfg['L3']['pct']:.1f}%) is logged with a pass/fail verdict."
+            )
 
-            RESET_DATE = pd.Timestamp("2026-02-24")
+            RESET_DATE = get_reset_date()
 
             if df_j.empty:
                 st.info("💡 No journal data found. Drawdown Discipline requires End NLV history.")
             else:
                 dd_j = df_j[df_j['Day'] >= RESET_DATE].copy()
                 if dd_j.empty or 'End NLV' not in dd_j.columns:
-                    st.info("💡 No journal entries since the 2026-02-24 reset date. This tab populates as new entries are logged.")
+                    st.info(f"💡 No journal entries since the {RESET_DATE.strftime('%Y-%m-%d')} reset date. This tab populates as new entries are logged.")
                 else:
                     dd_j = dd_j.sort_values('Day').reset_index(drop=True)
                     dd_j['End NLV'] = pd.to_numeric(dd_j['End NLV'], errors='coerce')
@@ -11864,9 +12016,9 @@ elif page == "Analytics":
                     current_exposure = dd_j['Pct_Invested'].iloc[-1]
 
                     deck_levels = {
-                        'L1': (-7.5, "Remove Margin", "#eab308"),
-                        'L2': (-12.5, "Max 30% Invested", "#f97316"),
-                        'L3': (-15.0, "Go to Cash", "#dc2626"),
+                        'L1': (-_dd_decks_cfg['L1']['pct'], _dd_decks_cfg['L1']['action'], _dd_decks_cfg['L1']['color']),
+                        'L2': (-_dd_decks_cfg['L2']['pct'], _dd_decks_cfg['L2']['action'], _dd_decks_cfg['L2']['color']),
+                        'L3': (-_dd_decks_cfg['L3']['pct'], _dd_decks_cfg['L3']['action'], _dd_decks_cfg['L3']['color']),
                     }
 
                     # ============================================================
@@ -13145,7 +13297,8 @@ elif page == "Daily Report Card":
                 market_window = "N/A"
 
             # Risk / Drawdown
-            RESET_DATE = pd.Timestamp("2026-02-24")
+            RESET_DATE = get_reset_date()
+            _drc_decks = get_hard_decks()
             hist_slice = df_j[df_j['Day'] <= pd.Timestamp(selected_date)].sort_values('Day')
             hist_slice_post = hist_slice[hist_slice['Day'] >= RESET_DATE]
 
@@ -13158,18 +13311,21 @@ elif page == "Daily Report Card":
                 peak_nlv = hist_slice_post['End NLV'].max()
                 dd_pct = ((curr_nlv - peak_nlv) / peak_nlv) * 100 if peak_nlv > 0 else 0.0
 
-                # Hard decks aligned with Risk Manager: 7.5%, 12.5%, 15%
-                if dd_pct >= -7.5:
+                # Hard decks aligned with Risk Manager (sourced from app_config)
+                _l1_neg = -_drc_decks['L1']['pct']
+                _l2_neg = -_drc_decks['L2']['pct']
+                _l3_neg = -_drc_decks['L3']['pct']
+                if dd_pct >= _l1_neg:
                     risk_msg = "GREEN LIGHT"
                     risk_color = "#2ca02c"
-                elif -7.5 > dd_pct >= -12.5:
-                    risk_msg = "CAUTION - Remove Margin"
+                elif _l1_neg > dd_pct >= _l2_neg:
+                    risk_msg = f"CAUTION - {_drc_decks['L1']['action']}"
                     risk_color = "#ff8c00"
-                elif -12.5 > dd_pct >= -15:
-                    risk_msg = "MAX 30% INVESTED"
+                elif _l2_neg > dd_pct >= _l3_neg:
+                    risk_msg = _drc_decks['L2']['action'].upper()
                     risk_color = "#ff4b4b"
                 else:
-                    risk_msg = "GO TO CASH"
+                    risk_msg = _drc_decks['L3']['action'].upper()
                     risk_color = "#8B0000"
 
             # --- PREP TRADE DATA ---
@@ -14612,4 +14768,225 @@ Give me a behavioral profile and 3 specific things to work on."""
         if st.button("🗑️ Clear Chat", type="secondary"):
             st.session_state.coach_history = []
             st.rerun()
+
+
+# ====================================================================
+# ADMIN PAGE
+# Runtime-editable settings + dashboard event log.
+# Settings are stored in app_config; events in dashboard_events.
+# All edits are written to audit_trail.
+# ====================================================================
+elif page == "Admin":
+    page_header("Admin", "App Configuration", "⚙️")
+
+    if not USE_DATABASE:
+        st.error("⚠️ Admin requires database mode. Local CSV mode does not support runtime config.")
+        st.stop()
+
+    if not hasattr(db, 'get_config'):
+        st.error("⚠️ Admin features not loaded — please reboot the app from Streamlit Cloud (Manage app → Reboot) to pick up the latest db_layer.py.")
+        st.stop()
+
+    st.caption("Settings here override hardcoded defaults app-wide. Changes are logged to the audit trail.")
+
+    # ============================================================
+    # SECTION 1: RISK MANAGEMENT
+    # ============================================================
+    with st.expander("🎯 Risk Management", expanded=True):
+        st.markdown("#### Reset Date")
+        st.caption("Drawdown peak is calculated from the highest End NLV on or after this date. Used by Risk Manager, Dashboard, Drawdown Discipline, and Daily Report Card.")
+
+        current_reset = get_reset_date()
+        new_reset = st.date_input(
+            "RESET_DATE",
+            value=current_reset.date(),
+            key="admin_reset_date",
+            help="Changing this will reset the drawdown peak calculation. The auto-event marker on the EC will sync automatically.",
+        )
+
+        if st.button("💾 Save Reset Date", key="save_reset_date", type="primary"):
+            if pd.Timestamp(new_reset) > pd.Timestamp.today():
+                st.error("❌ Reset date cannot be in the future.")
+            else:
+                ok = db.set_config(
+                    'reset_date',
+                    new_reset.strftime('%Y-%m-%d'),
+                    value_type='date',
+                    category='risk',
+                    description='Date from which drawdown peak is calculated.',
+                    user='admin',
+                )
+                if ok:
+                    db.sync_auto_events_from_config()
+                    clear_config_cache()
+                    st.success(f"✅ Reset date updated to {new_reset.strftime('%Y-%m-%d')}")
+                    st.rerun()
+                else:
+                    st.error("❌ Save failed. Check logs.")
+
+        st.markdown("---")
+        st.markdown("#### Hard Decks")
+        st.caption("Drawdown thresholds (% from peak NLV) and the action label shown across the app. L1 must be < L2 < L3.")
+
+        decks = get_hard_decks()
+        d1, d2, d3 = st.columns(3)
+
+        with d1:
+            st.markdown(f"**🟡 Level 1**")
+            new_l1_pct = st.number_input("L1 Drawdown %", min_value=0.5, max_value=50.0,
+                                         value=float(decks['L1']['pct']), step=0.5, key="admin_l1_pct")
+            new_l1_action = st.text_input("L1 Action", value=str(decks['L1']['action']), key="admin_l1_action")
+
+        with d2:
+            st.markdown(f"**🟠 Level 2**")
+            new_l2_pct = st.number_input("L2 Drawdown %", min_value=0.5, max_value=50.0,
+                                         value=float(decks['L2']['pct']), step=0.5, key="admin_l2_pct")
+            new_l2_action = st.text_input("L2 Action", value=str(decks['L2']['action']), key="admin_l2_action")
+
+        with d3:
+            st.markdown(f"**🔴 Level 3**")
+            new_l3_pct = st.number_input("L3 Drawdown %", min_value=0.5, max_value=50.0,
+                                         value=float(decks['L3']['pct']), step=0.5, key="admin_l3_pct")
+            new_l3_action = st.text_input("L3 Action", value=str(decks['L3']['action']), key="admin_l3_action")
+
+        if st.button("💾 Save Hard Decks", key="save_hard_decks", type="primary"):
+            # Validation: L1 < L2 < L3
+            if not (new_l1_pct < new_l2_pct < new_l3_pct):
+                st.error("❌ Hard decks must increase in order: L1 < L2 < L3.")
+            elif not (new_l1_action.strip() and new_l2_action.strip() and new_l3_action.strip()):
+                st.error("❌ Action labels cannot be empty.")
+            else:
+                new_decks = {
+                    'L1': {'pct': float(new_l1_pct), 'action': new_l1_action.strip(), 'color': decks['L1']['color']},
+                    'L2': {'pct': float(new_l2_pct), 'action': new_l2_action.strip(), 'color': decks['L2']['color']},
+                    'L3': {'pct': float(new_l3_pct), 'action': new_l3_action.strip(), 'color': decks['L3']['color']},
+                }
+                ok = db.set_config(
+                    'hard_decks',
+                    new_decks,
+                    value_type='json',
+                    category='risk',
+                    description='Hard deck drawdown thresholds and action labels.',
+                    user='admin',
+                )
+                if ok:
+                    clear_config_cache()
+                    st.success("✅ Hard decks updated.")
+                    st.rerun()
+                else:
+                    st.error("❌ Save failed.")
+
+        with st.expander("🔄 Reset to defaults"):
+            st.caption("Restores L1 = 7.5% (Remove Margin), L2 = 12.5% (Max 30% Invested), L3 = 15% (Go to Cash).")
+            if st.button("Reset Hard Decks", key="reset_decks_btn"):
+                default_decks = {
+                    'L1': {'pct': 7.5, 'action': 'Remove Margin', 'color': '#eab308'},
+                    'L2': {'pct': 12.5, 'action': 'Max 30% Invested', 'color': '#f97316'},
+                    'L3': {'pct': 15.0, 'action': 'Go to Cash', 'color': '#dc2626'},
+                }
+                if db.set_config('hard_decks', default_decks, value_type='json',
+                                 category='risk', user='admin'):
+                    clear_config_cache()
+                    st.success("✅ Reset to defaults.")
+                    st.rerun()
+
+    # ============================================================
+    # SECTION 2: EVENT LOG (CanSlim EC markers)
+    # ============================================================
+    with st.expander("📅 Event Log — Dashboard EC Markers", expanded=True):
+        st.caption(
+            "Events show as vertical lines on the CanSlim Dashboard equity curve. "
+            "**Market** events (red, dashed) for things like FTDs, Iran War, Liberation Day. "
+            "**Personal** events (blue, solid) for your milestones — RESET_DATE, deck breaches, strategy changes."
+        )
+
+        # --- Add new event form ---
+        st.markdown("#### ➕ Add Event")
+        with st.form("add_event_form", clear_on_submit=True):
+            ef1, ef2, ef3 = st.columns([1, 2, 1])
+            with ef1:
+                ev_date = st.date_input("Event Date", value=get_current_date_ct(), key="ev_date")
+            with ef2:
+                ev_label = st.text_input("Label", placeholder="e.g. FTD, Iran War, Liberation Day", key="ev_label")
+            with ef3:
+                ev_category = st.selectbox("Category", ["market", "personal"], key="ev_category")
+
+            ev_notes = st.text_area("Notes (optional)", key="ev_notes", height=70)
+
+            if st.form_submit_button("➕ Add Event", type="primary"):
+                if not ev_label.strip():
+                    st.error("❌ Label is required.")
+                else:
+                    ok = db.save_dashboard_event(
+                        event_date=ev_date,
+                        label=ev_label.strip(),
+                        category=ev_category,
+                        notes=ev_notes.strip(),
+                        scope='CanSlim',
+                        auto_generated=False,
+                        user='admin',
+                    )
+                    if ok:
+                        st.success(f"✅ Event added: {ev_label.strip()} ({ev_date})")
+                        st.rerun()
+                    else:
+                        st.error("❌ Add failed (possibly a duplicate date+label).")
+
+        st.markdown("---")
+        st.markdown("#### 📋 Existing Events")
+
+        events_df = db.load_dashboard_events(scope='CanSlim')
+        if events_df.empty:
+            st.info("No events logged yet. Add your first one above.")
+        else:
+            # Show summary
+            n_market = int((events_df['category'] == 'market').sum())
+            n_personal = int((events_df['category'] == 'personal').sum())
+            n_auto = int(events_df['auto_generated'].sum())
+            st.caption(f"**{len(events_df)}** total · {n_market} market · {n_personal} personal · {n_auto} auto-generated (read-only)")
+
+            # Render each row
+            for _, row in events_df.sort_values('event_date', ascending=False).iterrows():
+                evt_id = int(row['id'])
+                evt_date = row['event_date']
+                evt_label = row['label']
+                evt_cat = row['category']
+                evt_notes = row['notes'] or ''
+                evt_auto = bool(row['auto_generated'])
+
+                cat_emoji = "🌍" if evt_cat == 'market' else "🎯"
+                cat_color = "#dc2626" if evt_cat == 'market' else "#2563eb"
+                lock = " 🔒" if evt_auto else ""
+
+                with st.container():
+                    rc1, rc2, rc3 = st.columns([3, 4, 1])
+                    rc1.markdown(
+                        f"<div style='padding:6px;'><span style='color:{cat_color};font-weight:600;'>{cat_emoji} {evt_date}</span> · "
+                        f"<strong>{evt_label}</strong>{lock}</div>",
+                        unsafe_allow_html=True,
+                    )
+                    rc2.caption(evt_notes if evt_notes else "—")
+                    if evt_auto:
+                        rc3.caption("auto")
+                    else:
+                        if rc3.button("🗑️", key=f"del_evt_{evt_id}", help="Delete event"):
+                            if db.delete_dashboard_event(evt_id, user='admin'):
+                                st.success(f"Deleted: {evt_label}")
+                                st.rerun()
+                            else:
+                                st.error("Delete failed.")
+
+    # ============================================================
+    # SECTION 3: PLACEHOLDER FOR FUTURE SECTIONS
+    # ============================================================
+    with st.expander("🛠️ Coming Soon", expanded=False):
+        st.caption("Future admin sections will live here:")
+        st.markdown("""
+        - **Portfolio Heat thresholds** (currently hardcoded at 2.5%)
+        - **Position size tiers** (Shotgun, Half, Full, etc.)
+        - **Earnings Planner cushion thresholds** (currently 10% / 0%)
+        - **Pyramid pace rules** (currently 5% trigger, 20% allocation)
+        - **Buy/Sell rule editor** (add/rename/retire rules)
+        - **Audit trail viewer** (browse all config + event changes)
+        """)
 

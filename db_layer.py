@@ -1922,6 +1922,336 @@ def save_drawdown_note(portfolio_name: str, deck_level: str, crossing_date, note
 
 
 # ============================================
+# APP CONFIG (runtime-editable settings)
+# ============================================
+import json as _json
+
+
+def get_config(key, default=None):
+    """
+    Fetch a single config value by key. Returns `default` if missing or DB unavailable.
+    Values are JSONB-decoded automatically.
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_config WHERE key = %s", (key,))
+                row = cur.fetchone()
+                if not row:
+                    return default
+                val = row[0]
+                # psycopg2 may already decode JSONB to dict/list/etc, but if it's a string, decode it
+                if isinstance(val, str):
+                    try:
+                        return _json.loads(val)
+                    except Exception:
+                        return val
+                return val
+    except Exception as e:
+        print(f"get_config({key}) failed: {e}")
+        return default
+
+
+def get_config_by_category(category):
+    """
+    Return all config rows in a category as list of dicts.
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT key, value, value_type, category, description, updated_at, updated_by
+                    FROM app_config
+                    WHERE category = %s
+                    ORDER BY key
+                """, (category,))
+                rows = cur.fetchall()
+                # decode value if string
+                for r in rows:
+                    v = r['value']
+                    if isinstance(v, str):
+                        try:
+                            r['value'] = _json.loads(v)
+                        except Exception:
+                            pass
+                return rows
+    except Exception as e:
+        print(f"get_config_by_category({category}) failed: {e}")
+        return []
+
+
+def set_config(key, value, value_type=None, category=None, description=None, user='User'):
+    """
+    Upsert a config value. If row exists, value/updated_at/updated_by are updated;
+    value_type/category/description only update when explicitly passed (non-None).
+    Also writes an audit_trail entry.
+    """
+    try:
+        # Auto-detect type if not provided and row doesn't exist
+        if value_type is None:
+            if isinstance(value, bool):
+                value_type = 'json'  # store as bool in JSON
+            elif isinstance(value, (int, float)):
+                value_type = 'number'
+            elif isinstance(value, str):
+                # Try date format YYYY-MM-DD
+                if len(value) == 10 and value[4] == '-' and value[7] == '-':
+                    value_type = 'date'
+                else:
+                    value_type = 'string'
+            else:
+                value_type = 'json'
+
+        json_val = _json.dumps(value)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if exists
+                cur.execute("SELECT id, value FROM app_config WHERE key = %s", (key,))
+                existing = cur.fetchone()
+
+                if existing:
+                    old_val = existing[1]
+                    # Update only the changed fields
+                    set_parts = ["value = %s::jsonb", "updated_at = CURRENT_TIMESTAMP", "updated_by = %s"]
+                    params = [json_val, user]
+                    if category is not None:
+                        set_parts.append("category = %s")
+                        params.append(category)
+                    if description is not None:
+                        set_parts.append("description = %s")
+                        params.append(description)
+                    if value_type is not None:
+                        set_parts.append("value_type = %s")
+                        params.append(value_type)
+                    params.append(key)
+                    cur.execute(
+                        f"UPDATE app_config SET {', '.join(set_parts)} WHERE key = %s",
+                        params,
+                    )
+                    audit_action = 'CONFIG_UPDATE'
+                    audit_details = f"key={key} old={old_val} new={value}"
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO app_config (key, value, value_type, category, description, updated_by)
+                        VALUES (%s, %s::jsonb, %s, %s, %s, %s)
+                        """,
+                        (key, json_val, value_type, category or 'misc', description or '', user),
+                    )
+                    audit_action = 'CONFIG_CREATE'
+                    audit_details = f"key={key} value={value} category={category}"
+
+                # Audit log — uses the CanSlim portfolio as the home for global config changes
+                try:
+                    cur.execute("SELECT id FROM portfolios WHERE name = %s", ('CanSlim',))
+                    pid_row = cur.fetchone()
+                    if pid_row:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (pid_row[0], user, audit_action, key, '', audit_details),
+                        )
+                except Exception as audit_e:
+                    print(f"set_config audit log failed (non-fatal): {audit_e}")
+
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"set_config({key}) failed: {e}")
+        return False
+
+
+def seed_default_configs():
+    """
+    Idempotent seeding: insert default config rows if missing.
+    Called at app startup to make sure all required keys exist.
+    """
+    defaults = [
+        # key, default value, value_type, category, description
+        ('reset_date', '2026-02-24', 'date', 'risk',
+         'Date from which drawdown peak is calculated (Risk Manager + Dashboard).'),
+        ('hard_decks', {
+            'L1': {'pct': 7.5, 'action': 'Remove Margin', 'color': '#eab308'},
+            'L2': {'pct': 12.5, 'action': 'Max 30% Invested', 'color': '#f97316'},
+            'L3': {'pct': 15.0, 'action': 'Go to Cash', 'color': '#dc2626'},
+        }, 'json', 'risk',
+         'Hard deck drawdown thresholds (% from peak), action label, and color.'),
+    ]
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                for key, default_val, vtype, category, desc in defaults:
+                    cur.execute("SELECT 1 FROM app_config WHERE key = %s", (key,))
+                    if cur.fetchone():
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO app_config (key, value, value_type, category, description, updated_by)
+                        VALUES (%s, %s::jsonb, %s, %s, %s, %s)
+                        """,
+                        (key, _json.dumps(default_val), vtype, category, desc, 'system_seed'),
+                    )
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"seed_default_configs failed: {e}")
+        return False
+
+
+# ============================================
+# DASHBOARD EVENTS (EC markers)
+# ============================================
+def load_dashboard_events(scope='CanSlim'):
+    """
+    Return events for the given portfolio scope as a pandas DataFrame.
+    Columns: id, event_date, label, category, notes, color_override,
+             portfolio_scope, auto_generated, source_key, created_at, updated_at
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, event_date, label, category, notes, color_override,
+                           portfolio_scope, auto_generated, source_key,
+                           created_at, updated_at
+                    FROM dashboard_events
+                    WHERE portfolio_scope = %s OR portfolio_scope = 'All'
+                    ORDER BY event_date ASC
+                """, (scope,))
+                rows = cur.fetchall()
+                return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
+                    'id', 'event_date', 'label', 'category', 'notes',
+                    'color_override', 'portfolio_scope', 'auto_generated',
+                    'source_key', 'created_at', 'updated_at'
+                ])
+    except Exception as e:
+        print(f"load_dashboard_events failed: {e}")
+        return pd.DataFrame()
+
+
+def save_dashboard_event(event_date, label, category, notes='',
+                         color_override=None, scope='CanSlim',
+                         auto_generated=False, source_key=None, user='User'):
+    """
+    Insert or update a dashboard event. Uniqueness is (event_date, label).
+    """
+    try:
+        # Normalize date
+        if hasattr(event_date, 'strftime'):
+            date_str = event_date.strftime('%Y-%m-%d')
+        else:
+            date_str = str(event_date)[:10]
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO dashboard_events
+                        (event_date, label, category, notes, color_override,
+                         portfolio_scope, auto_generated, source_key, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (event_date, label) DO UPDATE SET
+                        category = EXCLUDED.category,
+                        notes = EXCLUDED.notes,
+                        color_override = EXCLUDED.color_override,
+                        portfolio_scope = EXCLUDED.portfolio_scope,
+                        auto_generated = EXCLUDED.auto_generated,
+                        source_key = EXCLUDED.source_key,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (date_str, label, category, notes or '', color_override,
+                     scope, auto_generated, source_key),
+                )
+
+                # Audit log
+                try:
+                    cur.execute("SELECT id FROM portfolios WHERE name = %s", ('CanSlim',))
+                    pid_row = cur.fetchone()
+                    if pid_row:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (pid_row[0], user, 'EVENT_UPSERT', '', '',
+                             f"date={date_str} label={label} cat={category}"),
+                        )
+                except Exception as audit_e:
+                    print(f"save_dashboard_event audit failed (non-fatal): {audit_e}")
+
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"save_dashboard_event failed: {e}")
+        return False
+
+
+def delete_dashboard_event(event_id, user='User'):
+    """Delete a dashboard event by ID."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Fetch label/date for audit
+                cur.execute("SELECT event_date, label, auto_generated FROM dashboard_events WHERE id = %s", (event_id,))
+                row = cur.fetchone()
+                if not row:
+                    return False
+                if row[2]:  # auto_generated — block manual delete
+                    print(f"Refusing to delete auto-generated event id={event_id}")
+                    return False
+
+                cur.execute("DELETE FROM dashboard_events WHERE id = %s", (event_id,))
+
+                # Audit log
+                try:
+                    cur.execute("SELECT id FROM portfolios WHERE name = %s", ('CanSlim',))
+                    pid_row = cur.fetchone()
+                    if pid_row:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (pid_row[0], user, 'EVENT_DELETE', '', '',
+                             f"id={event_id} date={row[0]} label={row[1]}"),
+                        )
+                except Exception:
+                    pass
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"delete_dashboard_event failed: {e}")
+        return False
+
+
+def sync_auto_events_from_config():
+    """
+    Keep auto-generated events in sync with their underlying config keys.
+    Currently syncs RESET_DATE -> a permanent personal milestone.
+    """
+    try:
+        reset_date = get_config('reset_date', '2026-02-24')
+        if reset_date:
+            save_dashboard_event(
+                event_date=reset_date,
+                label='RESET_DATE',
+                category='personal',
+                notes='Drawdown peak resets from this date.',
+                scope='CanSlim',
+                auto_generated=True,
+                source_key='reset_date',
+                user='system_sync',
+            )
+        return True
+    except Exception as e:
+        print(f"sync_auto_events_from_config failed: {e}")
+        return False
+
+
+# ============================================
 # TEST CONNECTION
 # ============================================
 def test_connection():
