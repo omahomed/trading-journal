@@ -5641,10 +5641,42 @@ elif page == "Position Sizer":
         sizing_mode = None
         vol_profile = None
         if vol_mode.startswith("🆕"):
+            # --- Auto-suggest sizing mode from the M Factor market state
+            #     (same rule as Log Buy so the two pages stay in sync):
+            #       Powertrend → ⚔️ Offense (1.00%)
+            #       Open       → ⚖️ Normal (0.75%)
+            #       else       → 🛡️ Defense (0.50%)
+            try:
+                _vs_mfactor_status, _ = get_combined_market_status()
+            except Exception:
+                _vs_mfactor_status = "Open"
+
+            _vs_suggested_idx = 1  # Normal default
+            if _vs_mfactor_status == "Powertrend":
+                _vs_suggested_idx = 2  # Offense
+            elif _vs_mfactor_status == "Open":
+                _vs_suggested_idx = 1  # Normal
+            else:
+                _vs_suggested_idx = 0  # Defense
+
+            _vs_suggested_label = ['🛡️ Defense', '⚖️ Normal', '⚔️ Offense'][_vs_suggested_idx]
+            with st.expander(
+                f"ℹ️ M Factor: **{_vs_mfactor_status}** → suggesting **{_vs_suggested_label}** (click for rule)",
+                expanded=False,
+            ):
+                st.markdown(
+                    "**Sizing Mode auto-links to M Factor market state**  \n"
+                    "🛡️ **Defense (0.50%)** — Neutral / Closed (anything not Open or Powertrend)  \n"
+                    "⚖️ **Normal (0.75%)** — Open (Grow / Confirmed Uptrend)  \n"
+                    "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
+                    "The radio below is pre-selected per this rule; you can still override before sizing."
+                )
+
             sm_col1, sm_col2 = st.columns(2)
             with sm_col1:
                 sizing_mode = st.radio("Sizing Mode",
                     ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+                    index=_vs_suggested_idx,
                     horizontal=True, key="vs_sizing_mode")
             with sm_col2:
                 vol_profile = st.radio("Stock Volatility Profile",
