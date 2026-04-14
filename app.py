@@ -161,11 +161,122 @@ def get_hard_decks():
     return defaults
 
 
+@st.cache_data(ttl=60)
+def get_heat_threshold():
+    """Portfolio Heat alert threshold (%). Default 2.5%."""
+    if USE_DATABASE:
+        try:
+            v = db.get_config('heat_threshold_pct', 2.5)
+            return float(v)
+        except Exception:
+            pass
+    return 2.5
+
+
+@st.cache_data(ttl=60)
+def get_earnings_cushion():
+    """
+    Earnings Planner cushion thresholds + default max risk %.
+    Returns dict: {'pass_pct': 10.0, 'fail_pct': 0.0, 'default_max_risk_pct': 0.5}
+    """
+    defaults = {'pass_pct': 10.0, 'fail_pct': 0.0, 'default_max_risk_pct': 0.5}
+    if USE_DATABASE:
+        try:
+            v = db.get_config('earnings_cushion', defaults)
+            if isinstance(v, dict):
+                return {**defaults, **v}
+        except Exception:
+            pass
+    return defaults
+
+
+@st.cache_data(ttl=60)
+def get_pyramid_rules():
+    """
+    Pyramid pace rules. Returns dict: {'trigger_pct': 5.0, 'alloc_pct': 20.0}
+    """
+    defaults = {'trigger_pct': 5.0, 'alloc_pct': 20.0}
+    if USE_DATABASE:
+        try:
+            v = db.get_config('pyramid_rules', defaults)
+            if isinstance(v, dict):
+                return {**defaults, **v}
+        except Exception:
+            pass
+    return defaults
+
+
+@st.cache_data(ttl=60)
+def get_size_tiers():
+    """
+    Position sizing tiers as a list of dicts: [{'label': ..., 'pct': ...}, ...].
+    """
+    defaults = [
+        {'label': 'Shotgun (2.5%)', 'pct': 2.5},
+        {'label': 'Half (5%)', 'pct': 5.0},
+        {'label': '7.5%', 'pct': 7.5},
+        {'label': 'Full (10%)', 'pct': 10.0},
+        {'label': '12.5%', 'pct': 12.5},
+        {'label': 'Core (15%)', 'pct': 15.0},
+        {'label': 'Core+1 (20%)', 'pct': 20.0},
+        {'label': 'Max (25%)', 'pct': 25.0},
+        {'label': '30%', 'pct': 30.0},
+        {'label': '35%', 'pct': 35.0},
+        {'label': '40%', 'pct': 40.0},
+        {'label': '45%', 'pct': 45.0},
+        {'label': '50%', 'pct': 50.0},
+    ]
+    if USE_DATABASE:
+        try:
+            v = db.get_config('size_tiers', defaults)
+            if isinstance(v, list) and len(v) > 0:
+                return v
+        except Exception:
+            pass
+    return defaults
+
+
+@st.cache_data(ttl=60)
+def _get_custom_rules(side):
+    """Internal: load custom rules for 'buy' or 'sell'."""
+    key = 'custom_buy_rules' if side == 'buy' else 'custom_sell_rules'
+    if USE_DATABASE:
+        try:
+            v = db.get_config(key, [])
+            if isinstance(v, list):
+                return [str(x).strip() for x in v if str(x).strip()]
+        except Exception:
+            pass
+    return []
+
+
+def get_buy_rules():
+    """Base BUY_RULES + user-added custom rules."""
+    custom = _get_custom_rules('buy')
+    return list(BUY_RULES) + custom
+
+
+def get_sell_rules():
+    """Base SELL_RULES + user-added custom rules."""
+    custom = _get_custom_rules('sell')
+    return list(SELL_RULES) + custom
+
+
+def get_all_rules():
+    """Combined buy + sell rules (de-duped, sorted)."""
+    return sorted(list(set(get_buy_rules() + get_sell_rules())))
+
+
 def clear_config_cache():
     """Call this after writing config so subsequent reads pick up the new value."""
     try:
         get_reset_date.clear()
         get_hard_decks.clear()
+        get_heat_threshold.clear()
+        get_earnings_cushion.clear()
+        get_pyramid_rules.clear()
+        get_size_tiers.clear()
+        _get_custom_rules.clear()
     except Exception:
         pass
 
@@ -5080,7 +5191,8 @@ elif page == "Position Sizer":
     df_s = load_data(SUMMARY_FILE)
     df_d = load_data(DETAILS_FILE)
     
-    size_map = {"Shotgun (2.5%)": 2.5, "Half (5%)": 5.0, "7.5%": 7.5, "Full (10%)": 10.0, "12.5%": 12.5, "Core (15%)": 15.0, "Core+1 (20%)": 20.0, "Max (25%)": 25.0, "30%": 30.0, "35%": 35.0, "40%": 40.0, "45%": 45.0, "50%": 50.0}
+    # Size tiers sourced from app_config (editable in Admin → Sizing)
+    size_map = {t['label']: float(t['pct']) for t in get_size_tiers()}
 
     @st.cache_data(ttl=300)
     def fetch_price_and_atr(ticker):
@@ -5824,17 +5936,20 @@ elif page == "Position Sizer":
     # TAB 6: PYRAMID SIZER
     # ==========================================================================
     with tab_pyr:
+        _pyr_cfg = get_pyramid_rules()
+        _pyr_alloc = float(_pyr_cfg['alloc_pct'])
+        _pyr_trig = float(_pyr_cfg['trigger_pct'])
         st.subheader("🔺 Pyramid Sizer")
-        st.caption("Size add-on purchases to winning positions. Enforces pace: max 20% of current shares per add, gated by last buy's profit.")
+        st.caption(f"Size add-on purchases to winning positions. Enforces pace: max {_pyr_alloc:.0f}% of current shares per add, gated by last buy's profit.")
 
         with st.expander("ℹ️ Pyramid Rules"):
-            st.markdown("""
+            st.markdown(f"""
             **How it works:**
-            1. Each add is capped at **20% of your current shares**
-            2. Your last buy must be up **at least 5%** for a full-size add
-            3. If last buy is up **less than 5%**, the add scales proportionally: `(profit% / 5%) × 20%`
+            1. Each add is capped at **{_pyr_alloc:.0f}% of your current shares**
+            2. Your last buy must be up **at least {_pyr_trig:.0f}%** for a full-size add
+            3. If last buy is up **less than {_pyr_trig:.0f}%**, the add scales proportionally: `(profit% / {_pyr_trig:.0f}%) × {_pyr_alloc:.0f}%`
             4. If last buy is **flat or down**, no add is allowed
-            5. The add is also capped by your ATR limit and 20% hard cap
+            5. The add is also capped by your ATR limit and {_pyr_alloc:.0f}% hard cap
             """)
 
         # --- Position Selection (Audit mode only) ---
@@ -5933,9 +6048,9 @@ elif page == "Position Sizer":
 
                         st.markdown("---")
 
-                        # === 2. PYRAMID PACING RULE ===
-                        base_add_pct = 0.20
-                        threshold_pct = 5.0
+                        # === 2. PYRAMID PACING RULE (sourced from app_config) ===
+                        base_add_pct = _pyr_alloc / 100.0
+                        threshold_pct = _pyr_trig
 
                         if last_buy_profit_pct >= threshold_pct:
                             scale_factor = 1.0
@@ -5977,9 +6092,9 @@ elif page == "Position Sizer":
 
                         p1, p2, p3 = st.columns(3)
                         base_add = int(pyr_shares * base_add_pct)
-                        p1.metric("Base Add (20%)", f"{base_add} shs", f"20% of {int(pyr_shares)} shares")
+                        p1.metric(f"Base Add ({_pyr_alloc:.0f}%)", f"{base_add} shs", f"{_pyr_alloc:.0f}% of {int(pyr_shares)} shares")
                         p2.metric("Scale Factor", f"{scale_factor:.0%}",
-                                  f"Last buy up {last_buy_profit_pct:.1f}% (need 5%)")
+                                  f"Last buy up {last_buy_profit_pct:.1f}% (need {_pyr_trig:.0f}%)")
                         p3.metric("Pyramid Max", f"{pyramid_max_shares} shs",
                                   f"After scaling")
 
@@ -6108,7 +6223,7 @@ elif page == "Log Buy":
                 except: pass
         if st.session_state['b_id'] == "": st.session_state['b_id'] = default_id
         b_id = c2.text_input("Trade ID", key="b_id")
-        b_rule = st.selectbox("Buy Rule", BUY_RULES, index=None, placeholder="Type to search rules...")
+        b_rule = st.selectbox("Buy Rule", get_buy_rules(), index=None, placeholder="Type to search rules...")
     else:
         # Scale In Logic
         open_opts = df_s[df_s['Status']=='OPEN'].copy()
@@ -6122,7 +6237,7 @@ elif page == "Log Buy":
                 curr_row = open_opts[open_opts['Trade_ID']==b_id].iloc[0]
                 c2.info(f"Holding: {int(curr_row['Shares'])} shs @ ${curr_row['Avg_Entry']:.2f}")
         else: c1.warning("No Open Campaigns.")
-        b_rule = st.selectbox("Add Rule", BUY_RULES, index=None, placeholder="Type to search rules...")
+        b_rule = st.selectbox("Add Rule", get_buy_rules(), index=None, placeholder="Type to search rules...")
 
     # --- 2. RISK BUDGET CALCULATOR ---
     risk_budget_dol = 0.0
@@ -6497,7 +6612,7 @@ elif page == "Log Sell":
 
             # --- EXPLICIT SELL RULE & NOTES ---
             c5, c6 = st.columns(2)
-            s_rule = c5.selectbox("Sell Rule / Reason", SELL_RULES)
+            s_rule = c5.selectbox("Sell Rule / Reason", get_sell_rules())
             s_note = c6.text_input("Sell Context / Notes", key='s_note', placeholder="Why did you sell?")
             s_trx = st.text_input("Manual Trx ID (Optional)", key='s_trx')
 
@@ -7004,8 +7119,9 @@ elif page == "Trade Manager":
                                     e_time = c1.time_input("Time", dt_obj.time(), step=60)
                                     
                                     curr_rule = current_row.get('Rule', '')
-                                    r_idx = ALL_RULES.index(curr_rule) if curr_rule in ALL_RULES else 0
-                                    e_rule = c2.selectbox("Strategy / Rule", ALL_RULES, index=r_idx)
+                                    _all_rules = get_all_rules()
+                                    r_idx = _all_rules.index(curr_rule) if curr_rule in _all_rules else 0
+                                    e_rule = c2.selectbox("Strategy / Rule", _all_rules, index=r_idx)
                                     
                                     e_trx = st.text_input("Trx ID", value=str(current_row.get('Trx_ID', '')))
                                     sl_val = float(current_row['Stop_Loss']) if pd.notna(current_row.get('Stop_Loss')) else 0.0
@@ -9833,13 +9949,14 @@ elif page == "Portfolio Heat":
 
             
 
-            # Check heat against MO Risk Rules (Target < 2.5%)
+            # Check heat against MO Risk Rules (threshold from app_config)
 
+            _heat_thresh = get_heat_threshold()
             m1, m2, m3 = st.columns(3)
 
-            heat_color = "normal" if total_heat < 2.5 else "inverse"
+            heat_color = "normal" if total_heat < _heat_thresh else "inverse"
 
-            m1.metric("Total Portfolio Heat", f"{total_heat:.2f}%", delta="Target < 2.5%", delta_color=heat_color)
+            m1.metric("Total Portfolio Heat", f"{total_heat:.2f}%", delta=f"Target < {_heat_thresh:.2f}%", delta_color=heat_color)
 
             m2.metric("Avg Stock Volatility", f"{df_vol['ATR (21S) %'].mean():.2f}%")
 
@@ -9996,13 +10113,14 @@ elif page == "Earnings Planner":
 
         
 
-        # VISUAL CUSHION CHECK
+        # VISUAL CUSHION CHECK (thresholds from app_config)
+        _ec = get_earnings_cushion()
 
-        if unrealized_pct >= 10.0:
+        if unrealized_pct >= _ec['pass_pct']:
 
             st.success(f"✅ **PASS:** Cushion is {unrealized_pct:.2f}% (${unrealized_dlr:,.0f}). You have earned the right to hold.")
 
-        elif unrealized_pct > 0:
+        elif unrealized_pct > _ec['fail_pct']:
 
             st.warning(f"⚠️ **THIN ICE:** Cushion is only {unrealized_pct:.2f}%. Any gap will likely eat principal.")
 
@@ -10020,7 +10138,7 @@ elif page == "Earnings Planner":
 
         r1, r2, r3 = st.columns(3)
 
-        risk_tol_pct = r1.slider("Max Capital Risk %", 0.1, 1.0, 0.5, 0.05, help="Max % of PRINCIPAL you are willing to lose.")
+        risk_tol_pct = r1.slider("Max Capital Risk %", 0.1, 1.0, float(_ec['default_max_risk_pct']), 0.05, help="Max % of PRINCIPAL you are willing to lose.")
 
         
 
@@ -14987,16 +15105,332 @@ elif page == "Admin":
                                 st.error("Delete failed.")
 
     # ============================================================
-    # SECTION 3: PLACEHOLDER FOR FUTURE SECTIONS
+    # SECTION 3: PORTFOLIO HEAT
     # ============================================================
-    with st.expander("🛠️ Coming Soon", expanded=False):
-        st.caption("Future admin sections will live here:")
-        st.markdown("""
-        - **Portfolio Heat thresholds** (currently hardcoded at 2.5%)
-        - **Position size tiers** (Shotgun, Half, Full, etc.)
-        - **Earnings Planner cushion thresholds** (currently 10% / 0%)
-        - **Pyramid pace rules** (currently 5% trigger, 20% allocation)
-        - **Buy/Sell rule editor** (add/rename/retire rules)
-        - **Audit trail viewer** (browse all config + event changes)
-        """)
+    with st.expander("🔥 Portfolio Heat", expanded=False):
+        st.caption("Total portfolio heat target. Values at or above this trigger an alert on the Portfolio Heat page.")
+        current_heat = get_heat_threshold()
+        new_heat = st.number_input(
+            "Heat alert threshold (%)",
+            min_value=0.5, max_value=20.0,
+            value=float(current_heat), step=0.1,
+            key="admin_heat_thresh",
+            help="Default 2.5%. Higher = more permissive (fewer alerts).",
+        )
+        if st.button("💾 Save Heat Threshold", key="save_heat", type="primary"):
+            ok = db.set_config('heat_threshold_pct', float(new_heat),
+                               value_type='number', category='heat',
+                               description='Total portfolio heat alert threshold (%).',
+                               user='admin')
+            if ok:
+                clear_config_cache()
+                st.success(f"✅ Heat threshold set to {new_heat:.2f}%")
+                st.rerun()
+            else:
+                st.error("❌ Save failed.")
+
+    # ============================================================
+    # SECTION 4: EARNINGS PLANNER
+    # ============================================================
+    with st.expander("💣 Earnings Planner", expanded=False):
+        st.caption("Cushion thresholds determine PASS / THIN ICE / FAIL verdicts before earnings.")
+        ec = get_earnings_cushion()
+        ec1, ec2, ec3 = st.columns(3)
+        with ec1:
+            new_pass = st.number_input("PASS threshold (%)", min_value=0.0, max_value=100.0,
+                                       value=float(ec['pass_pct']), step=0.5, key="adm_ec_pass",
+                                       help="Cushion >= this = earned the right to hold.")
+        with ec2:
+            new_fail = st.number_input("FAIL threshold (%)", min_value=-50.0, max_value=50.0,
+                                       value=float(ec['fail_pct']), step=0.5, key="adm_ec_fail",
+                                       help="Cushion <= this = sell all before earnings.")
+        with ec3:
+            new_max_risk = st.number_input("Default max capital risk (%)", min_value=0.05, max_value=10.0,
+                                           value=float(ec['default_max_risk_pct']), step=0.05,
+                                           key="adm_ec_risk",
+                                           help="Default value of the stress test slider.")
+
+        if st.button("💾 Save Earnings Settings", key="save_earnings", type="primary"):
+            if new_fail >= new_pass:
+                st.error("❌ FAIL threshold must be less than PASS threshold.")
+            else:
+                ok = db.set_config('earnings_cushion', {
+                    'pass_pct': float(new_pass),
+                    'fail_pct': float(new_fail),
+                    'default_max_risk_pct': float(new_max_risk),
+                }, value_type='json', category='earnings',
+                   description='Earnings Planner cushion thresholds + default max risk %.',
+                   user='admin')
+                if ok:
+                    clear_config_cache()
+                    st.success("✅ Earnings settings updated.")
+                    st.rerun()
+                else:
+                    st.error("❌ Save failed.")
+
+    # ============================================================
+    # SECTION 5: PYRAMID PACE
+    # ============================================================
+    with st.expander("🔺 Pyramid Pace", expanded=False):
+        st.caption("Pyramid Sizer rules. `trigger_pct` is the profit needed on your last buy for a full add. `alloc_pct` is the max share allocation per add.")
+        pr = get_pyramid_rules()
+        pp1, pp2 = st.columns(2)
+        with pp1:
+            new_trig = st.number_input("Trigger profit % (full add)",
+                                       min_value=0.5, max_value=50.0,
+                                       value=float(pr['trigger_pct']), step=0.5,
+                                       key="adm_pyr_trig",
+                                       help="If last buy is up >= this, you get a full-size add. Default 5%.")
+        with pp2:
+            new_alloc = st.number_input("Max allocation % per add",
+                                        min_value=1.0, max_value=100.0,
+                                        value=float(pr['alloc_pct']), step=1.0,
+                                        key="adm_pyr_alloc",
+                                        help="Cap on the add as a % of current shares. Default 20%.")
+
+        if st.button("💾 Save Pyramid Rules", key="save_pyr", type="primary"):
+            ok = db.set_config('pyramid_rules', {
+                'trigger_pct': float(new_trig),
+                'alloc_pct': float(new_alloc),
+            }, value_type='json', category='sizing',
+               description='Pyramid pace: trigger_pct = profit needed for full add, alloc_pct = max % of shares per add.',
+               user='admin')
+            if ok:
+                clear_config_cache()
+                st.success("✅ Pyramid rules updated.")
+                st.rerun()
+            else:
+                st.error("❌ Save failed.")
+
+    # ============================================================
+    # SECTION 6: POSITION SIZE TIERS
+    # ============================================================
+    with st.expander("📏 Position Size Tiers", expanded=False):
+        st.caption("Dropdown options shown in the Position Sizer. Each tier has a label and a target weight %. The first tier is the default selection.")
+
+        tiers = get_size_tiers()
+
+        # Render existing tiers as editable rows
+        st.markdown("#### Current Tiers")
+        edited_tiers = []
+        for i, tier in enumerate(tiers):
+            tc1, tc2, tc3 = st.columns([3, 2, 1])
+            new_label = tc1.text_input("Label", value=tier.get('label', ''), key=f"tier_lbl_{i}", label_visibility="collapsed")
+            new_pct = tc2.number_input("Weight %", min_value=0.1, max_value=200.0,
+                                        value=float(tier.get('pct', 0)), step=0.5, key=f"tier_pct_{i}",
+                                        label_visibility="collapsed")
+            if tc3.button("🗑️", key=f"tier_del_{i}", help="Delete this tier"):
+                # Persist deletion immediately
+                if len(tiers) <= 1:
+                    st.error("❌ Cannot delete the last remaining tier.")
+                else:
+                    remaining = [t for j, t in enumerate(tiers) if j != i]
+                    if db.set_config('size_tiers', remaining, value_type='json',
+                                     category='sizing', user='admin'):
+                        clear_config_cache()
+                        st.success(f"Deleted: {tier.get('label', '')}")
+                        st.rerun()
+            edited_tiers.append({'label': new_label.strip(), 'pct': float(new_pct)})
+
+        st.markdown("#### Add New Tier")
+        nt1, nt2, nt3 = st.columns([3, 2, 1])
+        new_tier_label = nt1.text_input("New label", key="new_tier_lbl", placeholder="e.g. Mini (1%)")
+        new_tier_pct = nt2.number_input("New %", min_value=0.1, max_value=200.0,
+                                        value=10.0, step=0.5, key="new_tier_pct")
+        if nt3.button("➕", key="add_tier_btn"):
+            if new_tier_label.strip():
+                edited_tiers.append({'label': new_tier_label.strip(), 'pct': float(new_tier_pct)})
+                ok = db.set_config('size_tiers', edited_tiers, value_type='json',
+                                   category='sizing',
+                                   description='Position size tier dropdown options.',
+                                   user='admin')
+                if ok:
+                    clear_config_cache()
+                    st.success(f"✅ Added: {new_tier_label.strip()}")
+                    st.rerun()
+                else:
+                    st.error("❌ Add failed.")
+            else:
+                st.error("Label is required.")
+
+        st.markdown("---")
+        sav_col, rst_col = st.columns(2)
+        if sav_col.button("💾 Save All Tier Edits", key="save_tiers", type="primary"):
+            # Validate: no empty labels, no duplicates
+            labels = [t['label'] for t in edited_tiers]
+            if any(not lbl for lbl in labels):
+                st.error("❌ Labels cannot be empty.")
+            elif len(set(labels)) != len(labels):
+                st.error("❌ Tier labels must be unique.")
+            elif len(edited_tiers) == 0:
+                st.error("❌ At least one tier is required.")
+            else:
+                ok = db.set_config('size_tiers', edited_tiers, value_type='json',
+                                   category='sizing',
+                                   description='Position size tier dropdown options.',
+                                   user='admin')
+                if ok:
+                    clear_config_cache()
+                    st.success(f"✅ Saved {len(edited_tiers)} tier(s).")
+                    st.rerun()
+                else:
+                    st.error("❌ Save failed.")
+
+        if rst_col.button("🔄 Reset to Defaults", key="reset_tiers"):
+            default_tiers = [
+                {'label': 'Shotgun (2.5%)', 'pct': 2.5},
+                {'label': 'Half (5%)', 'pct': 5.0},
+                {'label': '7.5%', 'pct': 7.5},
+                {'label': 'Full (10%)', 'pct': 10.0},
+                {'label': '12.5%', 'pct': 12.5},
+                {'label': 'Core (15%)', 'pct': 15.0},
+                {'label': 'Core+1 (20%)', 'pct': 20.0},
+                {'label': 'Max (25%)', 'pct': 25.0},
+                {'label': '30%', 'pct': 30.0},
+                {'label': '35%', 'pct': 35.0},
+                {'label': '40%', 'pct': 40.0},
+                {'label': '45%', 'pct': 45.0},
+                {'label': '50%', 'pct': 50.0},
+            ]
+            if db.set_config('size_tiers', default_tiers, value_type='json',
+                             category='sizing', user='admin'):
+                clear_config_cache()
+                st.success("✅ Reset to defaults.")
+                st.rerun()
+
+    # ============================================================
+    # SECTION 7: CUSTOM RULES (additive only — protects historical trades)
+    # ============================================================
+    with st.expander("📋 Custom Rules", expanded=False):
+        st.caption(
+            "Add custom buy/sell rules to the dropdowns app-wide. **Base rules cannot be edited or removed** — that would orphan historical trades tagged with them. Only your custom additions can be deleted."
+        )
+
+        custom_buy = _get_custom_rules('buy')
+        custom_sell = _get_custom_rules('sell')
+
+        cr1, cr2 = st.columns(2)
+
+        with cr1:
+            st.markdown(f"#### 🟢 Custom Buy Rules ({len(custom_buy)})")
+            new_buy = st.text_input("Add buy rule", key="adm_new_buy_rule",
+                                    placeholder="e.g. br12.1 Custom Setup")
+            if st.button("➕ Add Buy Rule", key="add_buy_rule_btn"):
+                lbl = new_buy.strip()
+                if not lbl:
+                    st.error("Label required.")
+                elif lbl in BUY_RULES or lbl in custom_buy:
+                    st.error(f"❌ Rule '{lbl}' already exists.")
+                else:
+                    updated = list(custom_buy) + [lbl]
+                    if db.set_config('custom_buy_rules', updated, value_type='json',
+                                     category='rules', user='admin'):
+                        clear_config_cache()
+                        st.success(f"✅ Added: {lbl}")
+                        st.rerun()
+
+            if custom_buy:
+                st.markdown("**Existing custom:**")
+                for rule in custom_buy:
+                    rc1, rc2 = st.columns([4, 1])
+                    rc1.markdown(f"- `{rule}`")
+                    if rc2.button("🗑️", key=f"del_buy_{rule}"):
+                        updated = [r for r in custom_buy if r != rule]
+                        if db.set_config('custom_buy_rules', updated, value_type='json',
+                                         category='rules', user='admin'):
+                            clear_config_cache()
+                            st.success(f"Deleted: {rule}")
+                            st.rerun()
+            else:
+                st.caption("_No custom buy rules yet._")
+
+        with cr2:
+            st.markdown(f"#### 🔴 Custom Sell Rules ({len(custom_sell)})")
+            new_sell = st.text_input("Add sell rule", key="adm_new_sell_rule",
+                                     placeholder="e.g. sr13 Custom Exit")
+            if st.button("➕ Add Sell Rule", key="add_sell_rule_btn"):
+                lbl = new_sell.strip()
+                if not lbl:
+                    st.error("Label required.")
+                elif lbl in SELL_RULES or lbl in custom_sell:
+                    st.error(f"❌ Rule '{lbl}' already exists.")
+                else:
+                    updated = list(custom_sell) + [lbl]
+                    if db.set_config('custom_sell_rules', updated, value_type='json',
+                                     category='rules', user='admin'):
+                        clear_config_cache()
+                        st.success(f"✅ Added: {lbl}")
+                        st.rerun()
+
+            if custom_sell:
+                st.markdown("**Existing custom:**")
+                for rule in custom_sell:
+                    rc1, rc2 = st.columns([4, 1])
+                    rc1.markdown(f"- `{rule}`")
+                    if rc2.button("🗑️", key=f"del_sell_{rule}"):
+                        updated = [r for r in custom_sell if r != rule]
+                        if db.set_config('custom_sell_rules', updated, value_type='json',
+                                         category='rules', user='admin'):
+                            clear_config_cache()
+                            st.success(f"Deleted: {rule}")
+                            st.rerun()
+            else:
+                st.caption("_No custom sell rules yet._")
+
+        st.markdown("---")
+        with st.expander(f"📚 Base Rules ({len(BUY_RULES)} buy / {len(SELL_RULES)} sell — read-only)"):
+            br_col, sr_col = st.columns(2)
+            br_col.markdown("**Buy:**")
+            for r in BUY_RULES:
+                br_col.caption(f"`{r}`")
+            sr_col.markdown("**Sell:**")
+            for r in SELL_RULES:
+                sr_col.caption(f"`{r}`")
+
+    # ============================================================
+    # SECTION 8: AUDIT TRAIL VIEWER
+    # ============================================================
+    with st.expander("📜 Audit Trail Viewer", expanded=False):
+        st.caption("Recent changes to config, events, and trades. Sourced from the `audit_trail` table.")
+
+        af_col1, af_col2 = st.columns([2, 1])
+        filter_choice = af_col1.selectbox(
+            "Filter by action",
+            ["All", "Config changes only", "Event changes only", "Trade actions only"],
+            key="audit_filter",
+        )
+        limit_choice = af_col2.number_input("Show last N rows", min_value=10, max_value=1000,
+                                            value=100, step=10, key="audit_limit")
+
+        filter_map = {
+            "All": None,
+            "Config changes only": "CONFIG",
+            "Event changes only": "EVENT",
+            "Trade actions only": "BUY",   # crude but covers BUY/SELL/etc; user can refine
+        }
+
+        if hasattr(db, 'load_recent_audit_entries'):
+            audit_df = db.load_recent_audit_entries(
+                limit=int(limit_choice),
+                action_filter=filter_map.get(filter_choice),
+            )
+            # If "Trade actions only" selected, broaden to BUY+SELL+DELETE
+            if filter_choice == "Trade actions only" and audit_df.empty:
+                audit_df_buy = db.load_recent_audit_entries(limit=int(limit_choice), action_filter='BUY')
+                audit_df_sell = db.load_recent_audit_entries(limit=int(limit_choice), action_filter='SELL')
+                audit_df = pd.concat([audit_df_buy, audit_df_sell], ignore_index=True).sort_values('timestamp', ascending=False).head(int(limit_choice))
+
+            if audit_df.empty:
+                st.info("No matching entries.")
+            else:
+                # Format timestamp
+                if 'timestamp' in audit_df.columns:
+                    audit_df['timestamp'] = pd.to_datetime(audit_df['timestamp']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                st.dataframe(
+                    audit_df[['timestamp', 'username', 'action', 'portfolio', 'trade_id', 'ticker', 'details']],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        else:
+            st.warning("Audit trail viewer not loaded — please reboot the app to pick up the latest db_layer.py.")
 

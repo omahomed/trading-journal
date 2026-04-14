@@ -2079,6 +2079,52 @@ def seed_default_configs():
             'L3': {'pct': 15.0, 'action': 'Go to Cash', 'color': '#dc2626'},
         }, 'json', 'risk',
          'Hard deck drawdown thresholds (% from peak), action label, and color.'),
+
+        # Portfolio Heat
+        ('heat_threshold_pct', 2.5, 'number', 'heat',
+         'Total portfolio heat target — values at or above trigger an alert.'),
+
+        # Earnings Planner
+        ('earnings_cushion', {
+            'pass_pct': 10.0,
+            'fail_pct': 0.0,
+            'default_max_risk_pct': 0.5,
+        }, 'json', 'earnings',
+         'Cushion thresholds: PASS at >= pass_pct, FAIL at <= fail_pct, '
+         'default max capital risk % for stress test.'),
+
+        # Pyramid Sizer pace rules
+        ('pyramid_rules', {
+            'trigger_pct': 5.0,    # Last buy must be up at least this much for full add
+            'alloc_pct': 20.0,     # Max % of current shares per add
+        }, 'json', 'sizing',
+         'Pyramid pace: full add at trigger_pct profit on last buy, '
+         'capped at alloc_pct of current shares.'),
+
+        # Position size tiers
+        ('size_tiers', [
+            {'label': 'Shotgun (2.5%)', 'pct': 2.5},
+            {'label': 'Half (5%)', 'pct': 5.0},
+            {'label': '7.5%', 'pct': 7.5},
+            {'label': 'Full (10%)', 'pct': 10.0},
+            {'label': '12.5%', 'pct': 12.5},
+            {'label': 'Core (15%)', 'pct': 15.0},
+            {'label': 'Core+1 (20%)', 'pct': 20.0},
+            {'label': 'Max (25%)', 'pct': 25.0},
+            {'label': '30%', 'pct': 30.0},
+            {'label': '35%', 'pct': 35.0},
+            {'label': '40%', 'pct': 40.0},
+            {'label': '45%', 'pct': 45.0},
+            {'label': '50%', 'pct': 50.0},
+        ], 'json', 'sizing',
+         'Position size tier dropdown options (label + weight %). '
+         'Used by Position Sizer.'),
+
+        # Custom rules (additive, never replace base rules)
+        ('custom_buy_rules', [], 'json', 'rules',
+         'User-added buy rules merged with the base BUY_RULES list.'),
+        ('custom_sell_rules', [], 'json', 'rules',
+         'User-added sell rules merged with the base SELL_RULES list.'),
     ]
     try:
         with get_db_connection() as conn:
@@ -2225,6 +2271,41 @@ def delete_dashboard_event(event_id, user='User'):
     except Exception as e:
         print(f"delete_dashboard_event failed: {e}")
         return False
+
+
+def load_recent_audit_entries(limit=200, action_filter=None):
+    """
+    Load recent audit_trail rows for the Admin viewer.
+    `action_filter` can be a substring (e.g. 'CONFIG' to show only config events).
+    Returns a pandas DataFrame.
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if action_filter:
+                    cur.execute("""
+                        SELECT a.timestamp, a.username, a.action, a.trade_id, a.ticker, a.details, p.name AS portfolio
+                        FROM audit_trail a
+                        LEFT JOIN portfolios p ON a.portfolio_id = p.id
+                        WHERE a.action ILIKE %s
+                        ORDER BY a.timestamp DESC
+                        LIMIT %s
+                    """, (f"%{action_filter}%", limit))
+                else:
+                    cur.execute("""
+                        SELECT a.timestamp, a.username, a.action, a.trade_id, a.ticker, a.details, p.name AS portfolio
+                        FROM audit_trail a
+                        LEFT JOIN portfolios p ON a.portfolio_id = p.id
+                        ORDER BY a.timestamp DESC
+                        LIMIT %s
+                    """, (limit,))
+                rows = cur.fetchall()
+                return pd.DataFrame(rows) if rows else pd.DataFrame(
+                    columns=['timestamp', 'username', 'action', 'trade_id', 'ticker', 'details', 'portfolio']
+                )
+    except Exception as e:
+        print(f"load_recent_audit_entries failed: {e}")
+        return pd.DataFrame()
 
 
 def sync_auto_events_from_config():
