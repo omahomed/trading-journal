@@ -2235,6 +2235,88 @@ def save_dashboard_event(event_date, label, category, notes='',
         return False
 
 
+def update_dashboard_event(event_id, event_date=None, label=None, category=None,
+                           notes=None, color_override=None, user='User'):
+    """
+    Edit an existing dashboard event in place. Only non-None fields are updated.
+    Auto-generated events (auto_generated=TRUE) cannot be edited via this path —
+    use sync_auto_events_from_config() to keep them in sync with their source key.
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Verify event exists and is not auto-generated
+                cur.execute(
+                    "SELECT event_date, label, category, auto_generated FROM dashboard_events WHERE id = %s",
+                    (event_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    print(f"update_dashboard_event: event id={event_id} not found")
+                    return False
+                if row[3]:  # auto_generated
+                    print(f"Refusing to edit auto-generated event id={event_id}")
+                    return False
+
+                old_date, old_label, old_cat = row[0], row[1], row[2]
+
+                # Build dynamic update
+                set_parts = ["updated_at = CURRENT_TIMESTAMP"]
+                params = []
+                if event_date is not None:
+                    if hasattr(event_date, 'strftime'):
+                        date_str = event_date.strftime('%Y-%m-%d')
+                    else:
+                        date_str = str(event_date)[:10]
+                    set_parts.append("event_date = %s")
+                    params.append(date_str)
+                if label is not None:
+                    set_parts.append("label = %s")
+                    params.append(str(label).strip())
+                if category is not None:
+                    set_parts.append("category = %s")
+                    params.append(category)
+                if notes is not None:
+                    set_parts.append("notes = %s")
+                    params.append(notes or '')
+                if color_override is not None:
+                    set_parts.append("color_override = %s")
+                    params.append(color_override or None)
+
+                if len(set_parts) == 1:
+                    # Nothing actually changed
+                    return True
+
+                params.append(event_id)
+                cur.execute(
+                    f"UPDATE dashboard_events SET {', '.join(set_parts)} WHERE id = %s",
+                    params,
+                )
+
+                # Audit
+                try:
+                    cur.execute("SELECT id FROM portfolios WHERE name = %s", ('CanSlim',))
+                    pid_row = cur.fetchone()
+                    if pid_row:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            """,
+                            (pid_row[0], user, 'EVENT_UPDATE', '', '',
+                             f"id={event_id} old=({old_date}, {old_label}, {old_cat}) "
+                             f"changes={ {k: v for k, v in [('date', event_date), ('label', label), ('category', category), ('notes', notes), ('color_override', color_override)] if v is not None} }"),
+                        )
+                except Exception as audit_e:
+                    print(f"update_dashboard_event audit failed (non-fatal): {audit_e}")
+
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"update_dashboard_event failed: {e}")
+        return False
+
+
 def delete_dashboard_event(event_id, user='User'):
     """Delete a dashboard event by ID."""
     try:
@@ -2311,7 +2393,7 @@ def load_recent_audit_entries(limit=200, action_filter=None):
 def sync_auto_events_from_config():
     """
     Keep auto-generated events in sync with their underlying config keys.
-    Currently syncs RESET_DATE -> a permanent personal milestone.
+    Currently syncs RESET_DATE -> a permanent system milestone.
     """
     try:
         reset_date = get_config('reset_date', '2026-02-24')
@@ -2319,7 +2401,7 @@ def sync_auto_events_from_config():
             save_dashboard_event(
                 event_date=reset_date,
                 label='RESET_DATE',
-                category='personal',
+                category='system',
                 notes='Drawdown peak resets from this date.',
                 scope='CanSlim',
                 auto_generated=True,
@@ -2329,6 +2411,33 @@ def sync_auto_events_from_config():
         return True
     except Exception as e:
         print(f"sync_auto_events_from_config failed: {e}")
+        return False
+
+
+def migrate_event_categories():
+    """
+    One-shot migration: rename old 'personal' category.
+    - Auto-generated events (e.g. RESET_DATE) -> 'system'
+    - User-created events -> 'macro' (closest match to news/political milestones)
+    Safe to run repeatedly (no-op if no 'personal' rows remain).
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dashboard_events
+                    SET category = 'system', updated_at = CURRENT_TIMESTAMP
+                    WHERE category = 'personal' AND auto_generated = TRUE
+                """)
+                cur.execute("""
+                    UPDATE dashboard_events
+                    SET category = 'macro', updated_at = CURRENT_TIMESTAMP
+                    WHERE category = 'personal' AND auto_generated = FALSE
+                """)
+                conn.commit()
+        return True
+    except Exception as e:
+        print(f"migrate_event_categories failed: {e}")
         return False
 
 

@@ -113,8 +113,11 @@ if USE_DATABASE:
             conn.commit()
 
         # Seed default config values + auto-sync RESET_DATE event (idempotent)
+        # Also migrate legacy 'personal' event category -> 'system' (auto) or 'macro' (user)
         try:
             db.seed_default_configs()
+            if hasattr(db, 'migrate_event_categories'):
+                db.migrate_event_categories()
             db.sync_auto_events_from_config()
         except Exception as seed_e:
             print(f"⚠️  Config seed/sync warning: {seed_e}")
@@ -2670,10 +2673,19 @@ if page == "Dashboard":
                                 (events_df['_dt'] >= ec_min_date) &
                                 (events_df['_dt'] <= ec_max_date)
                             ]
+                            # Per-category styling:
+                            #   market = red dashed (top label)
+                            #   macro  = purple dashed (top label)
+                            #   system = gray solid (bottom label) — RESET_DATE etc.
+                            cat_style = {
+                                'market': {'color': '#dc2626', 'dash': 'dash', 'pos': 'top'},
+                                'macro':  {'color': '#9333ea', 'dash': 'dash', 'pos': 'top'},
+                                'system': {'color': '#6b7280', 'dash': 'solid', 'pos': 'bottom'},
+                            }
                             for _, ev in visible.iterrows():
                                 cat = ev['category']
-                                color = ev['color_override'] or ('#dc2626' if cat == 'market' else '#2563eb')
-                                dash = 'dash' if cat == 'market' else 'solid'
+                                style = cat_style.get(cat, cat_style['system'])
+                                color = ev['color_override'] or style['color']
                                 # Plotly's add_vline does internal arithmetic that breaks on
                                 # modern pandas Timestamps. Use add_shape + add_annotation
                                 # with ISO-format strings to avoid the issue entirely.
@@ -2683,19 +2695,20 @@ if page == "Dashboard":
                                     x0=x_iso, x1=x_iso,
                                     y0=0, y1=1,
                                     yref='paper',
-                                    line=dict(color=color, width=1.2, dash=dash),
+                                    line=dict(color=color, width=1.2, dash=style['dash']),
                                     opacity=0.7,
                                     layer='below',
                                 )
+                                anno_top = (style['pos'] == 'top')
                                 fig.add_annotation(
                                     x=x_iso,
-                                    y=1.0 if cat == 'market' else 0.0,
+                                    y=1.0 if anno_top else 0.0,
                                     yref='paper',
                                     text=ev['label'],
                                     showarrow=False,
                                     font=dict(size=9, color=color),
                                     xanchor='left',
-                                    yanchor='bottom' if cat == 'market' else 'top',
+                                    yanchor='bottom' if anno_top else 'top',
                                     xshift=2,
                                 )
                     except Exception as evt_err:
@@ -15024,9 +15037,22 @@ elif page == "Admin":
     with st.expander("📅 Event Log — Dashboard EC Markers", expanded=True):
         st.caption(
             "Events show as vertical lines on the CanSlim Dashboard equity curve. "
-            "**Market** events (red, dashed) for things like FTDs, Iran War, Liberation Day. "
-            "**Personal** events (blue, solid) for your milestones — RESET_DATE, deck breaches, strategy changes."
+            "**🟥 Market** = technical (FTD, breakouts, deck breaches). "
+            "**🟪 Macro** = news/political (Iran War, Trump tweet, FOMC). "
+            "**⚙️ System** = auto-generated like RESET_DATE (locked)."
         )
+
+        USER_CATEGORIES = ["market", "macro"]
+
+        def _cat_meta(cat):
+            """Return (emoji, css_color) for a category."""
+            if cat == 'market':
+                return ("🟥", "#dc2626")
+            if cat == 'macro':
+                return ("🟪", "#9333ea")
+            if cat == 'system':
+                return ("⚙️", "#6b7280")
+            return ("·", "#6b7280")
 
         # --- Add new event form ---
         st.markdown("#### ➕ Add Event")
@@ -15035,9 +15061,9 @@ elif page == "Admin":
             with ef1:
                 ev_date = st.date_input("Event Date", value=get_current_date_ct(), key="ev_date")
             with ef2:
-                ev_label = st.text_input("Label", placeholder="e.g. FTD, Iran War, Liberation Day", key="ev_label")
+                ev_label = st.text_input("Label", placeholder="e.g. FTD, Iran War, Trump Tweet", key="ev_label")
             with ef3:
-                ev_category = st.selectbox("Category", ["market", "personal"], key="ev_category")
+                ev_category = st.selectbox("Category", USER_CATEGORIES, key="ev_category")
 
             ev_notes = st.text_area("Notes (optional)", key="ev_notes", height=70)
 
@@ -15069,11 +15095,16 @@ elif page == "Admin":
         else:
             # Show summary
             n_market = int((events_df['category'] == 'market').sum())
-            n_personal = int((events_df['category'] == 'personal').sum())
-            n_auto = int(events_df['auto_generated'].sum())
-            st.caption(f"**{len(events_df)}** total · {n_market} market · {n_personal} personal · {n_auto} auto-generated (read-only)")
+            n_macro = int((events_df['category'] == 'macro').sum())
+            n_system = int((events_df['category'] == 'system').sum())
+            st.caption(
+                f"**{len(events_df)}** total · {n_market} market · {n_macro} macro · {n_system} system (auto, locked)"
+            )
 
-            # Render each row
+            # Track which events are in edit mode via session state
+            if '_editing_event_ids' not in st.session_state:
+                st.session_state['_editing_event_ids'] = set()
+
             for _, row in events_df.sort_values('event_date', ascending=False).iterrows():
                 evt_id = int(row['id'])
                 evt_date = row['event_date']
@@ -15081,28 +15112,79 @@ elif page == "Admin":
                 evt_cat = row['category']
                 evt_notes = row['notes'] or ''
                 evt_auto = bool(row['auto_generated'])
-
-                cat_emoji = "🌍" if evt_cat == 'market' else "🎯"
-                cat_color = "#dc2626" if evt_cat == 'market' else "#2563eb"
-                lock = " 🔒" if evt_auto else ""
+                emoji, color = _cat_meta(evt_cat)
+                is_editing = evt_id in st.session_state['_editing_event_ids']
 
                 with st.container():
-                    rc1, rc2, rc3 = st.columns([3, 4, 1])
-                    rc1.markdown(
-                        f"<div style='padding:6px;'><span style='color:{cat_color};font-weight:600;'>{cat_emoji} {evt_date}</span> · "
-                        f"<strong>{evt_label}</strong>{lock}</div>",
-                        unsafe_allow_html=True,
-                    )
-                    rc2.caption(evt_notes if evt_notes else "—")
-                    if evt_auto:
-                        rc3.caption("auto")
-                    else:
-                        if rc3.button("🗑️", key=f"del_evt_{evt_id}", help="Delete event"):
-                            if db.delete_dashboard_event(evt_id, user='admin'):
-                                st.success(f"Deleted: {evt_label}")
-                                st.rerun()
+                    if is_editing and not evt_auto:
+                        # --- INLINE EDIT MODE ---
+                        st.markdown(f"<div style='padding:6px;background:#f3f4f6;border-left:3px solid {color};border-radius:4px;'>",
+                                    unsafe_allow_html=True)
+                        ec1, ec2, ec3 = st.columns([1, 2, 1])
+                        new_date = ec1.date_input(
+                            "Date", value=pd.to_datetime(evt_date).date(),
+                            key=f"edit_dt_{evt_id}", label_visibility="collapsed",
+                        )
+                        new_label = ec2.text_input(
+                            "Label", value=evt_label,
+                            key=f"edit_lbl_{evt_id}", label_visibility="collapsed",
+                        )
+                        cat_idx = USER_CATEGORIES.index(evt_cat) if evt_cat in USER_CATEGORIES else 0
+                        new_cat = ec3.selectbox(
+                            "Category", USER_CATEGORIES, index=cat_idx,
+                            key=f"edit_cat_{evt_id}", label_visibility="collapsed",
+                        )
+                        new_notes = st.text_area(
+                            "Notes", value=evt_notes,
+                            key=f"edit_notes_{evt_id}", height=60, label_visibility="collapsed",
+                        )
+
+                        bc1, bc2, bc3 = st.columns([1, 1, 6])
+                        if bc1.button("💾 Save", key=f"save_evt_{evt_id}", type="primary"):
+                            if not new_label.strip():
+                                st.error("Label required.")
                             else:
-                                st.error("Delete failed.")
+                                ok = db.update_dashboard_event(
+                                    event_id=evt_id,
+                                    event_date=new_date,
+                                    label=new_label.strip(),
+                                    category=new_cat,
+                                    notes=new_notes.strip(),
+                                    user='admin',
+                                )
+                                if ok:
+                                    st.session_state['_editing_event_ids'].discard(evt_id)
+                                    st.success(f"Updated: {new_label.strip()}")
+                                    st.rerun()
+                                else:
+                                    st.error("Update failed.")
+                        if bc2.button("Cancel", key=f"cancel_evt_{evt_id}"):
+                            st.session_state['_editing_event_ids'].discard(evt_id)
+                            st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    else:
+                        # --- READ-ONLY ROW ---
+                        lock = " 🔒" if evt_auto else ""
+                        rc1, rc2, rc3, rc4 = st.columns([3, 4, 1, 1])
+                        rc1.markdown(
+                            f"<div style='padding:6px;'><span style='color:{color};font-weight:600;'>"
+                            f"{emoji} {evt_date}</span> · <strong>{evt_label}</strong>{lock}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        rc2.caption(evt_notes if evt_notes else "—")
+                        if evt_auto:
+                            rc3.caption("auto")
+                            rc4.caption("")
+                        else:
+                            if rc3.button("✏️", key=f"edit_btn_{evt_id}", help="Edit event"):
+                                st.session_state['_editing_event_ids'].add(evt_id)
+                                st.rerun()
+                            if rc4.button("🗑️", key=f"del_evt_{evt_id}", help="Delete event"):
+                                if db.delete_dashboard_event(evt_id, user='admin'):
+                                    st.success(f"Deleted: {evt_label}")
+                                    st.rerun()
+                                else:
+                                    st.error("Delete failed.")
 
     # ============================================================
     # SECTION 3: PORTFOLIO HEAT
