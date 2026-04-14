@@ -824,6 +824,13 @@ def secure_save(df, filename):
             if len(test_df) == len(df):
                 # Success! Replace the original
                 shutil.move(temp_file, filename)
+                # Bust load_data cache so the next render sees fresh data.
+                # load_data is defined below, so guard against AttributeError
+                # during module load / early calls.
+                try:
+                    load_data.clear()
+                except Exception:
+                    pass
                 return True
             else:
                 st.error(f"⚠️ Save verification failed for {os.path.basename(filename)}")
@@ -840,10 +847,17 @@ def secure_save(df, filename):
             os.remove(temp_file)
         return False
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_data(file):
     """
     Load data from CSV or database based on USE_DATABASE flag.
     Maintains backward compatibility with CSV-based code.
+
+    CACHED 5 min. Cache is invalidated by:
+      - secure_save() (after CSV writes)
+      - update_campaign_summary() (after trade mutations)
+      - Daily Routine save/delete (after journal writes)
+    Manual invalidation: load_data.clear()
     """
     # If database mode is enabled, load from PostgreSQL
     if USE_DATABASE:
@@ -1103,6 +1117,12 @@ def update_campaign_summary(trade_id, df_d, df_s):
                     db.sync_trade_summary(portfolio, trade_id, update_data)
                 except Exception as db_err:
                     print(f"Database sync error: {db_err}")
+
+        # Invalidate load_data cache so subsequent renders see the updated trade data
+        try:
+            load_data.clear()
+        except Exception:
+            pass
 
         return df_d, df_s
     except Exception as e:
@@ -3665,6 +3685,9 @@ elif page == "Daily Journal":
                                 df_j.at[idx, 'Market_Action'] = edit_action
                                 df_j.at[idx, 'Score'] = edit_score
                             secure_save(df_j, TARGET_FILE)
+                        # Invalidate load_data cache (covers DB path; CSV path already cleared via secure_save)
+                        try: load_data.clear()
+                        except Exception: pass
                         msg = f"Moved entry from {edit_date} → {edit_new_date_str}" if date_changed else f"Updated entry for {edit_date}"
                         st.success(msg)
                         st.rerun()
@@ -3675,6 +3698,8 @@ elif page == "Daily Journal":
                         else:
                             df_j = df_j[df_j['Day'].dt.strftime('%Y-%m-%d') != edit_date]
                             secure_save(df_j, TARGET_FILE)
+                        try: load_data.clear()
+                        except Exception: pass
                         st.success(f"Deleted entry for {edit_date}")
                         st.rerun()
 
@@ -3750,6 +3775,8 @@ elif page == "Daily Journal":
 
                             if not USE_DATABASE:
                                 secure_save(df_j, TARGET_FILE)
+                            try: load_data.clear()
+                            except Exception: pass
                             st.success(f"✅ Updated Market Window for {updated} entries!")
                             st.rerun()
                     except Exception as e:
@@ -5170,6 +5197,8 @@ if page == "Daily Routine":
                 else: st.warning(f"Skipped {p_name}: NLV is 0.00")
 
             if success_count > 0:
+                try: load_data.clear()
+                except Exception: pass
                 st.success(f"✅ Successfully Updated {success_count} Portfolios!")
                 st.balloons()
 
