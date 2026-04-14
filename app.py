@@ -2563,19 +2563,29 @@ if page == "Dashboard":
                                 cat = ev['category']
                                 color = ev['color_override'] or ('#dc2626' if cat == 'market' else '#2563eb')
                                 dash = 'dash' if cat == 'market' else 'solid'
-                                # Annotation alternates top/bottom by category to reduce overlap
-                                anno_y = 1.02 if cat == 'market' else -0.05
-                                anno_pos = 'top' if cat == 'market' else 'bottom'
-                                fig.add_vline(
-                                    x=ev['_dt'],
-                                    line_width=1.2,
-                                    line_dash=dash,
-                                    line_color=color,
+                                # Plotly's add_vline does internal arithmetic that breaks on
+                                # modern pandas Timestamps. Use add_shape + add_annotation
+                                # with ISO-format strings to avoid the issue entirely.
+                                x_iso = ev['_dt'].strftime('%Y-%m-%d')
+                                fig.add_shape(
+                                    type='line',
+                                    x0=x_iso, x1=x_iso,
+                                    y0=0, y1=1,
+                                    yref='paper',
+                                    line=dict(color=color, width=1.2, dash=dash),
                                     opacity=0.7,
-                                    annotation_text=ev['label'],
-                                    annotation_position=f"{anno_pos} right",
-                                    annotation_font_size=9,
-                                    annotation_font_color=color,
+                                    layer='below',
+                                )
+                                fig.add_annotation(
+                                    x=x_iso,
+                                    y=1.0 if cat == 'market' else 0.0,
+                                    yref='paper',
+                                    text=ev['label'],
+                                    showarrow=False,
+                                    font=dict(size=9, color=color),
+                                    xanchor='left',
+                                    yanchor='bottom' if cat == 'market' else 'top',
+                                    xshift=2,
                                 )
                     except Exception as evt_err:
                         st.caption(f"⚠️ Event markers unavailable: {evt_err}")
