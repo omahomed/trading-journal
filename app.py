@@ -1405,11 +1405,19 @@ def get_market_state(ticker):
         return None
 
 def get_combined_market_status():
-    """Get combined M Factor market window status from Nasdaq + SPY."""
+    """Get combined M Factor market window status from Nasdaq + SPY.
+
+    Returns (status, transition_date) where status is one of:
+      "Powertrend" / "Open" / "Neutral" / "Closed" / "Unknown"
+
+    "Unknown" means at least one index fetch failed (yfinance hiccup or
+    stale cached None). Callers should not silently coerce this to "Open"
+    — surface it to the user so they know the suggestion isn't reliable.
+    """
     nasdaq = get_market_state("^IXIC")
     spy = get_market_state("SPY")
     if not nasdaq or not spy:
-        return "Open", None
+        return "Unknown", None
     ns, ss = nasdaq['state'], spy['state']
     if ns == "POWERTREND" or ss == "POWERTREND":
         status = "Powertrend"
@@ -5210,6 +5218,10 @@ if page == "Daily Routine":
         if st.form_submit_button("💾 LOG SELECTED ACCOUNTS", type="primary"):
             success_count = 0
             live_market_window, _ = get_combined_market_status()
+            # If M Factor unavailable, fall back to "Open" for the journal write
+            # (we don't want to persist "Unknown" in the market_window column)
+            if live_market_window == "Unknown":
+                live_market_window = "Open"
 
             for p_name, inputs in input_keys.items():
                 p_path = PORTFOLIO_MAP[p_name]
@@ -5701,15 +5713,26 @@ elif page == "Position Sizer":
         try:
             _ns_mfactor_status, _ = get_combined_market_status()
         except Exception:
-            _ns_mfactor_status = "Open"
+            _ns_mfactor_status = "Unknown"
 
-        _ns_suggested_idx = 1  # Normal default
+        # Map M Factor → suggested sizing mode index
         if _ns_mfactor_status == "Powertrend":
-            _ns_suggested_idx = 2
+            _ns_suggested_idx = 2  # Offense
         elif _ns_mfactor_status == "Open":
-            _ns_suggested_idx = 1
+            _ns_suggested_idx = 1  # Normal
+        elif _ns_mfactor_status in ("Neutral", "Closed"):
+            _ns_suggested_idx = 0  # Defense
         else:
-            _ns_suggested_idx = 0
+            # Unknown — M Factor data unavailable. Default to Normal but surface it.
+            _ns_suggested_idx = 1
+
+        if _ns_mfactor_status == "Unknown":
+            wc1, wc2 = st.columns([5, 1])
+            wc1.warning("⚠️ M Factor data unavailable — Sizing Mode defaulted to Normal. Suggestion may be wrong; go to **M Factor** page and click Refresh Market Data.")
+            if wc2.button("🔁 Retry", key="ns_mf_retry"):
+                try: get_market_state.clear()
+                except Exception: pass
+                st.rerun()
 
         _ns_suggested_label = ['🛡️ Defense', '⚖️ Normal', '⚔️ Offense'][_ns_suggested_idx]
         with st.expander(
@@ -5848,15 +5871,25 @@ elif page == "Position Sizer":
             try:
                 _vs_mfactor_status, _ = get_combined_market_status()
             except Exception:
-                _vs_mfactor_status = "Open"
+                _vs_mfactor_status = "Unknown"
 
-            _vs_suggested_idx = 1  # Normal default
             if _vs_mfactor_status == "Powertrend":
                 _vs_suggested_idx = 2  # Offense
             elif _vs_mfactor_status == "Open":
                 _vs_suggested_idx = 1  # Normal
-            else:
+            elif _vs_mfactor_status in ("Neutral", "Closed"):
                 _vs_suggested_idx = 0  # Defense
+            else:
+                # Unknown — M Factor data unavailable. Default to Normal but surface it.
+                _vs_suggested_idx = 1
+
+            if _vs_mfactor_status == "Unknown":
+                wv1, wv2 = st.columns([5, 1])
+                wv1.warning("⚠️ M Factor data unavailable — Sizing Mode defaulted to Normal. Suggestion may be wrong; go to **M Factor** page and click Refresh Market Data.")
+                if wv2.button("🔁 Retry", key="vs_mf_retry"):
+                    try: get_market_state.clear()
+                    except Exception: pass
+                    st.rerun()
 
             _vs_suggested_label = ['🛡️ Defense', '⚖️ Normal', '⚔️ Offense'][_vs_suggested_idx]
             with st.expander(
@@ -6508,15 +6541,25 @@ elif page == "Log Buy":
         try:
             _mfactor_status, _mfactor_asof = get_combined_market_status()
         except Exception:
-            _mfactor_status, _mfactor_asof = "Open", None
+            _mfactor_status, _mfactor_asof = "Unknown", None
 
-        _suggested_idx = 1  # Normal default
         if _mfactor_status == "Powertrend":
             _suggested_idx = 2  # Offense
         elif _mfactor_status == "Open":
             _suggested_idx = 1  # Normal
-        else:
+        elif _mfactor_status in ("Neutral", "Closed"):
             _suggested_idx = 0  # Defense
+        else:
+            # Unknown — surface the fallback
+            _suggested_idx = 1
+
+        if _mfactor_status == "Unknown":
+            wb1, wb2 = st.columns([5, 1])
+            wb1.warning("⚠️ M Factor data unavailable — Sizing Mode defaulted to Normal. Suggestion may be wrong; go to **M Factor** page and click Refresh Market Data.")
+            if wb2.button("🔁 Retry", key="lb_mf_retry"):
+                try: get_market_state.clear()
+                except Exception: pass
+                st.rerun()
 
         # Collapsible rule reference — header shows current state so the
         # actionable bit is visible without expanding
