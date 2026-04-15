@@ -200,32 +200,7 @@ class MarketSchoolRules:
         ticker = yf.Ticker(self.symbol)
         self.data = ticker.history(start=start_date, end=end_date)
 
-        # NASDAQ Composite (^IXIC) volume from yfinance is unreliable
-        # (composite-level volume quirks). QQQ (Nasdaq-100 ETF) has reliable
-        # consolidated volume and tracks ^IXIC closely, so we use QQQ's volume
-        # as a proxy while keeping ^IXIC's price/OHLC for signal computation.
-        # This makes B1/B2/B7 volume checks work correctly against the IBD rulebook.
-        if self.symbol == '^IXIC' and self.data is not None and not self.data.empty:
-            try:
-                qqq_data = yf.Ticker('QQQ').history(start=start_date, end=end_date)
-                if qqq_data is not None and not qqq_data.empty:
-                    # Reindex QQQ volume to ^IXIC's date index (handles any
-                    # calendar mismatches by forward-filling; identical in practice)
-                    q_vol = qqq_data['Volume'].copy()
-                    if q_vol.index.tz is not None:
-                        q_vol.index = q_vol.index.tz_localize(None)
-                    ixic_idx = self.data.index
-                    if ixic_idx.tz is not None:
-                        ixic_idx_naive = ixic_idx.tz_localize(None)
-                    else:
-                        ixic_idx_naive = ixic_idx
-                    mapped = q_vol.reindex(ixic_idx_naive, method='ffill')
-                    self.data['Volume_ixic_raw'] = self.data['Volume'].values  # keep for reference
-                    self.data['Volume'] = mapped.values
-            except Exception as e:
-                print(f"QQQ volume proxy fetch failed for ^IXIC (falling back to raw ^IXIC volume): {e}")
-
-        # Calculate indicators
+        # Calculate indicators (uses the symbol's own raw volume — no proxies)
         self._calculate_indicators()
         
     def _calculate_indicators(self):
@@ -395,9 +370,7 @@ class MarketSchoolRules:
             return None
 
         # Per IBD rulebook: B1/B2 require close up >= 1% AND volume higher than
-        # prior day. For ^IXIC we use QQQ as a reliable volume proxy (see
-        # fetch_data) because yfinance ^IXIC composite volume is unreliable.
-        # Distribution day rules also use volume.
+        # prior day. Uses the symbol's own raw volume (no QQQ proxy).
 
         # Check for 1.0% gain + higher volume than prior day
         volume_higher = bool(current.get('volume_up', False))
@@ -683,9 +656,8 @@ class MarketSchoolRules:
         current = self.data.iloc[idx]
         
         # B7: Accumulation Day
-        # Rule: gain >= 1.0%, heavier volume, close in upper 25% of range,
-        # close > 21EMA, and CANNOT coincide with B1/B2.
-        # For ^IXIC the volume comes from QQQ proxy (see fetch_data).
+        # Rule: gain >= 1.0%, heavier volume (raw ^IXIC or SPY), close in upper
+        # 25% of range, close > 21EMA, and CANNOT coincide with B1/B2.
         if self.buy_switch and idx > 0:
             is_ftd_today = (self.last_b1_b2_date is not None and
                             self.last_b1_b2_date == current.name)
