@@ -1662,41 +1662,51 @@ def compute_cycle_state():
             spy_analyzer = MarketSchoolRules("SPY")
             spy_analyzer.fetch_data(start_date="2024-02-24", end_date=datetime.now().strftime('%Y-%m-%d'))
             if spy_analyzer.data is not None and not spy_analyzer.data.empty:
-                spy_analyzer.analyze_market()
+                # SPY inherits from NASDAQ if NASDAQ fired first
+                spy_analyzer.analyze_market(
+                    external_ftd_date=nasdaq_ftd_date,
+                    external_ftd_source='NASDAQ',
+                )
                 spy_ftd_date = spy_analyzer.ftd_date
-                # Fallback FTD detection for SPY (defensive — analyzer enforces
-                # +1% + higher volume per IBD rules; this just catches any edge case)
-                if spy_ftd_date is None and spy_analyzer.rally_low_idx is not None:
-                    sdf = spy_analyzer.data
-                    s_rl = spy_analyzer.rally_low
-                    s_idx = spy_analyzer.rally_low_idx
-                    for i in range(s_idx + 3, len(sdf)):
-                        srow = sdf.iloc[i]
-                        svol_up = bool(srow.get('volume_up', False))
-                        if (pd.notna(srow.get('daily_gain_pct'))
-                                and srow['daily_gain_pct'] >= 1.0
-                                and svol_up):
-                            slows = sdf.iloc[s_idx:i+1]['Low']
-                            if slows.min() >= s_rl:
-                                spy_ftd_date = sdf.index[i]
-                                break
         except Exception as _spy_e:
             print(f"SPY FTD check failed (non-fatal): {_spy_e}")
 
-        # Pick the earliest FTD between NASDAQ and SPY — that's the effective
-        # FTD date for the cycle. Downstream logic (rally-over, entry ladder
-        # MA checks, etc.) continues to reference NASDAQ per Decision 1B.
-        if nasdaq_ftd_date is not None and spy_ftd_date is not None:
-            if pd.Timestamp(spy_ftd_date) < pd.Timestamp(nasdaq_ftd_date):
+        # If SPY fired earlier than NASDAQ (or NASDAQ didn't fire at all),
+        # re-run NASDAQ analyzer with SPY's FTD injected so subsequent NASDAQ
+        # signals (B2, B3, S1, etc.) fire correctly from that inherited date.
+        if spy_ftd_date is not None:
+            need_nasdaq_rerun = (
+                nasdaq_ftd_date is None
+                or pd.Timestamp(spy_ftd_date) < pd.Timestamp(nasdaq_ftd_date)
+            )
+            if need_nasdaq_rerun:
+                analyzer.analyze_market(
+                    external_ftd_date=spy_ftd_date,
+                    external_ftd_source='SPY',
+                )
+                # Refresh the NASDAQ-derived values that feed downstream logic
+                nasdaq_ftd_date = analyzer.ftd_date
+                price_ftd_date = analyzer.ftd_date
+                buy_switch = analyzer.buy_switch
+
+        # Recompute the effective ftd_source label
+        _n_ts = pd.Timestamp(nasdaq_ftd_date) if nasdaq_ftd_date is not None else None
+        _s_ts = pd.Timestamp(spy_ftd_date) if spy_ftd_date is not None else None
+        if _n_ts is not None and _s_ts is not None:
+            if _s_ts < _n_ts:
                 price_ftd_date = spy_ftd_date
                 ftd_source = 'SPY'
-            elif pd.Timestamp(spy_ftd_date) == pd.Timestamp(nasdaq_ftd_date):
+            elif _s_ts == _n_ts:
                 ftd_source = 'NASDAQ+SPY'
             else:
+                price_ftd_date = nasdaq_ftd_date
                 ftd_source = 'NASDAQ'
-        elif spy_ftd_date is not None and nasdaq_ftd_date is None:
+        elif _s_ts is not None and _n_ts is None:
             price_ftd_date = spy_ftd_date
             ftd_source = 'SPY'
+        elif _n_ts is not None and _s_ts is None:
+            price_ftd_date = nasdaq_ftd_date
+            ftd_source = 'NASDAQ'
 
         # --- Determine cycle state ---
         # Rally day count (days since rally start)
@@ -14184,8 +14194,27 @@ elif page == "IBD Market School":
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def analyze_symbol(symbol, start_date, end_date):
-        """Analyze market signals for a symbol. Returns list of daily summaries."""
+        """Analyze market signals for a symbol. Returns list of daily summaries.
+        For ^IXIC and SPY, applies dual-index FTD inheritance — if the paired
+        index fired B1 first, inject it as the FTD for the requested symbol so
+        subsequent signals (B2, B3, S1, etc.) fire off the symbol's own data."""
         try:
+            # Dual-index FTD: find the paired index's FTD to inherit if applicable
+            ext_ftd = None
+            ext_src = None
+            _pair = {'^IXIC': 'SPY', 'SPY': '^IXIC'}.get(symbol)
+            if _pair:
+                try:
+                    _paired = MarketSchoolRules(_pair)
+                    _fetch_with_qqq_volume(_paired, start_date, end_date)
+                    if _paired.data is not None and not _paired.data.empty:
+                        _paired.analyze_market()
+                        if _paired.ftd_date is not None:
+                            ext_ftd = _paired.ftd_date
+                            ext_src = _pair
+                except Exception as _pe:
+                    print(f"Paired analyzer for {_pair} failed: {_pe}")
+
             analyzer = MarketSchoolRules(symbol)
             _fetch_with_qqq_volume(analyzer, start_date, end_date)
 
@@ -14196,7 +14225,10 @@ elif page == "IBD Market School":
 
             st.info(f"{symbol}: Fetched {len(analyzer.data)} days of data")
 
-            analyzer.analyze_market()
+            analyzer.analyze_market(external_ftd_date=ext_ftd, external_ftd_source=ext_src)
+            if ext_ftd is not None and analyzer.ftd_date is not None:
+                # Surface inheritance in the debug log only when it actually kicked in
+                st.info(f"{symbol}: FTD inherited from {ext_src} ({pd.Timestamp(ext_ftd).strftime('%Y-%m-%d')})")
             st.info(f"{symbol}: Generated {len(analyzer.signals)} total signals")
 
             summaries = []

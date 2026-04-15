@@ -1137,11 +1137,22 @@ class MarketSchoolRules:
         
         return allocation_map.get(self.market_exposure, 0.0)
         
-    def analyze_market(self):
-        """Run complete market analysis and generate all signals."""
+    def analyze_market(self, external_ftd_date=None, external_ftd_source=None):
+        """Run complete market analysis and generate all signals.
+
+        Dual-index FTD support:
+            external_ftd_date   — Optional pd.Timestamp / datetime. If the
+                                  symbol's own rules don't fire B1 by this
+                                  date, inject B1 using this symbol's own bar
+                                  (Close / Low) on that date. Subsequent
+                                  signals (B2, B3, S1, etc.) flow normally
+                                  from the injected FTD state.
+            external_ftd_source — Optional label (e.g. 'SPY') used in the
+                                  synthetic B1's description.
+        """
         if self.data is None:
             raise ValueError("No data loaded. Use load_data() or fetch_data() first.")
-            
+
         # Reset state
         self.signals = []
         self.market_exposure = 0
@@ -1156,6 +1167,16 @@ class MarketSchoolRules:
         self.rally_low_idx = None
         self.ftd_date = None
         self.ftd_close = None
+
+        # Normalize external FTD date for comparison
+        _ext_ftd_ts = None
+        if external_ftd_date is not None:
+            try:
+                _ext_ftd_ts = pd.Timestamp(external_ftd_date).normalize()
+                if _ext_ftd_ts.tz is not None:
+                    _ext_ftd_ts = _ext_ftd_ts.tz_localize(None)
+            except Exception:
+                _ext_ftd_ts = None
         
         # Process each day
         for idx in range(260, len(self.data)):  # Start after 52-week high can be calculated
@@ -1212,6 +1233,34 @@ class MarketSchoolRules:
                 # If rally was reset by check_follow_through_day, check if current day is new rally start
                 if not self.rally_start_date:
                     self.detect_rally_start(idx)
+
+            # --- INHERITED FTD (dual-index rule: if paired index confirmed FTD,
+            # use it here even though this symbol didn't meet its own requirements.
+            # Uses this symbol's own bar for ftd_low so the S1 undercut check
+            # continues to work in this symbol's price space.) ---
+            if (_ext_ftd_ts is not None
+                    and self.ftd_date is None
+                    and self.rally_start_date is not None):
+                cur_ts = pd.Timestamp(current.name)
+                if cur_ts.tz is not None:
+                    cur_ts = cur_ts.tz_localize(None)
+                if cur_ts.normalize() == _ext_ftd_ts:
+                    self.ftd_date = current.name
+                    self.ftd_close = current['Close']
+                    self.ftd_low = current['Low']
+                    self.buy_switch = True
+                    self.last_b1_b2_date = current.name
+                    _src = f" from {external_ftd_source}" if external_ftd_source else " from alternate index"
+                    daily_signals.append(Signal(
+                        date=current.name,
+                        signal_type=SignalType.B1,
+                        price=current['Close'],
+                        description=f"Follow-Through Day (inherited{_src})",
+                        affects_exposure=True,
+                        exposure_change=1,
+                    ))
+                    if self.market_exposure == 0:
+                        self.restraint_active = True
                         
             # Check for failed rally (uses current_minor_low, so check before updating it)
             failed_rally = self.check_failed_rally(idx)
