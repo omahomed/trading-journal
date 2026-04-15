@@ -8785,69 +8785,37 @@ elif page == "Active Campaign Summary":
 
              
 
-             if c_btn.button("🔄 Refresh Live Prices"):
+             # Force refresh button — bypasses 60s cache so user can demand fresh prices
+             cb1, cb2 = c_btn.columns(2)
+             refresh_clicked = cb1.button("🔄 Refresh", help="Use cached prices (60s TTL — instant if recently fetched)")
+             force_refresh_clicked = cb2.button("⚡ Force", help="Skip cache and fetch fresh from network")
 
-                 tickers = df_open['Ticker'].unique().tolist()
+             if refresh_clicked or force_refresh_clicked:
+
+                 tickers = sorted(df_open['Ticker'].unique().tolist())
 
                  if tickers:
 
+                     # Force-refresh path: clear the cache first so we fetch fresh
+                     if force_refresh_clicked:
+                         try: cached_batch_live_prices.clear()
+                         except Exception: pass
+
                      with st.spinner("Fetching current prices..."):
 
-                         try:
+                         new_prices = cached_batch_live_prices(tuple(tickers))
 
-                             # 1. Download only 1 day (Much faster, less data)
-
-                             data = yf.download(tickers, period="1d", progress=False)['Close']
-
-                             
-
-                             new_prices = {}
-
-                             
-
-                             if len(tickers) == 1:
-
-                                 val = data.iloc[-1]
-
-                                 if hasattr(val, 'iloc'): val = val.iloc[0]
-
-                                 new_prices[tickers[0]] = float(val)
-
-                             else:
-
-                                 # Check valid columns
-
-                                 valid_cols = [t for t in tickers if t in data.columns]
-
-                                 last_row = data.iloc[-1]
-
-                                 
-
-                                 for t in valid_cols:
-
-                                     try:
-
-                                         val = last_row[t]
-
-                                         new_prices[t] = float(val)
-
-                                     except: pass
-
-                             
-
-                             # Update Session
+                         if new_prices:
 
                              st.session_state['live_prices'] = new_prices
 
                              st.session_state['last_update'] = datetime.now().strftime("%H:%M:%S")
 
-                             st.success("Prices Updated!")
+                             st.success("Prices Updated!" + (" (force-refreshed)" if force_refresh_clicked else " (from cache if recent)"))
 
-                             
+                         else:
 
-                         except Exception as e:
-
-                             st.warning(f"Could not fetch prices. Using saved values.")
+                             st.warning("Could not fetch prices. Using saved values.")
 
 
 
