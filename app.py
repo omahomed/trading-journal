@@ -1646,6 +1646,49 @@ def compute_cycle_state():
                         price_ftd_date = df.index[i]
                         break
 
+        # --- DUAL-INDEX FTD: either NASDAQ or SPY can confirm. Take earliest. ---
+        # IBD rule: a follow-through day on either major index confirms the turn
+        # for the broader market. NASDAQ remains the operational reference for
+        # everything else (MA stack, rally-over thresholds, entry ladder details).
+        nasdaq_ftd_date = price_ftd_date
+        spy_ftd_date = None
+        ftd_source = 'NASDAQ' if nasdaq_ftd_date is not None else None
+        try:
+            spy_analyzer = MarketSchoolRules("SPY")
+            spy_analyzer.fetch_data(start_date="2024-02-24", end_date=datetime.now().strftime('%Y-%m-%d'))
+            if spy_analyzer.data is not None and not spy_analyzer.data.empty:
+                spy_analyzer.analyze_market()
+                spy_ftd_date = spy_analyzer.ftd_date
+                # Fallback price-only FTD for SPY if the analyzer didn't flag one
+                if spy_ftd_date is None and spy_analyzer.rally_low_idx is not None:
+                    sdf = spy_analyzer.data
+                    s_rl = spy_analyzer.rally_low
+                    s_idx = spy_analyzer.rally_low_idx
+                    for i in range(s_idx + 3, len(sdf)):
+                        srow = sdf.iloc[i]
+                        if pd.notna(srow.get('daily_gain_pct')) and srow['daily_gain_pct'] >= 1.0:
+                            slows = sdf.iloc[s_idx:i+1]['Low']
+                            if slows.min() >= s_rl:
+                                spy_ftd_date = sdf.index[i]
+                                break
+        except Exception as _spy_e:
+            print(f"SPY FTD check failed (non-fatal): {_spy_e}")
+
+        # Pick the earliest FTD between NASDAQ and SPY — that's the effective
+        # FTD date for the cycle. Downstream logic (rally-over, entry ladder
+        # MA checks, etc.) continues to reference NASDAQ per Decision 1B.
+        if nasdaq_ftd_date is not None and spy_ftd_date is not None:
+            if pd.Timestamp(spy_ftd_date) < pd.Timestamp(nasdaq_ftd_date):
+                price_ftd_date = spy_ftd_date
+                ftd_source = 'SPY'
+            elif pd.Timestamp(spy_ftd_date) == pd.Timestamp(nasdaq_ftd_date):
+                ftd_source = 'NASDAQ+SPY'
+            else:
+                ftd_source = 'NASDAQ'
+        elif spy_ftd_date is not None and nasdaq_ftd_date is None:
+            price_ftd_date = spy_ftd_date
+            ftd_source = 'SPY'
+
         # --- Determine cycle state ---
         # Rally day count (days since rally start)
         rally_day_idx = rally_low_idx  # Will be updated if rally day is a subsequent day
@@ -1823,7 +1866,10 @@ def compute_cycle_state():
              'detail': f"{'Rally Day' if rally_day_type == 'rally' else 'Pink Rally Day'} — {rally_start_date.strftime('%b %d, %Y') if rally_start_date and hasattr(rally_start_date, 'strftime') else 'N/A'}" if rally_start_date else "Waiting for fresh low + reversal after 7%+ correction"},
             {'step': 1, 'label': 'Follow-Through Day', 'exposure': '60%',
              'achieved': 1 in achieved_steps,
-             'detail': f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}" if ftd_date else "Day 4+ of rally, close up 1%+"},
+             'detail': (
+                 f"FTD on {ftd_date.strftime('%b %d, %Y') if ftd_date and hasattr(ftd_date, 'strftime') else 'N/A'}"
+                 + (f" (via {ftd_source})" if ftd_source else "")
+             ) if ftd_date else "Day 4+ of rally, close up 1%+ (NASDAQ or SPY)"},
             {'step': 2, 'label': 'Close above 21 EMA', 'exposure': '40%',
              'achieved': 2 in achieved_steps,
              'detail': f"21 EMA at {ema21:,.2f}"},
@@ -1871,6 +1917,9 @@ def compute_cycle_state():
             'rally_day_date': rally_start_date,
             'rally_day_type': rally_day_type,
             'ftd_date': ftd_date,
+            'ftd_source': ftd_source,          # 'NASDAQ' / 'SPY' / 'NASDAQ+SPY' / None
+            'nasdaq_ftd_date': nasdaq_ftd_date, # NASDAQ's own FTD (may differ from ftd_date if SPY was earlier)
+            'spy_ftd_date': spy_ftd_date,       # SPY's own FTD (may be None)
             'days_since_rally': days_since_rally,
             'rally_low': rally_low,
             'rally_low_date': df.index[rally_low_idx] if rally_low_idx is not None else None,
@@ -4951,6 +5000,10 @@ if page == "Daily Routine":
             cs = cycle.get('cycle_state', '')
             day_num = cycle.get('days_since_rally')
             ftd_date = cycle.get('ftd_date')
+            # Per Decision 1B: rally-over threshold uses NASDAQ's FTD low, not SPY's.
+            # If only SPY has triggered FTD, NASDAQ's FTD low doesn't exist yet and
+            # the phase A check is skipped (handled below by ftd_low being None).
+            nasdaq_ftd_date = cycle.get('nasdaq_ftd_date')
             ref_high = cycle.get('reference_high', 0)
             price = cycle.get('price', 0)
             sma50 = cycle.get('sma50', 0)
@@ -4976,10 +5029,10 @@ if page == "Daily Routine":
 
             hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
 
-            # Find FTD low from the data
+            # Find NASDAQ FTD low (used in Phase A rally-over check per Decision 1B)
             ftd_low = None
-            if ftd_date is not None:
-                ftd_ts = pd.Timestamp(ftd_date)
+            if nasdaq_ftd_date is not None:
+                ftd_ts = pd.Timestamp(nasdaq_ftd_date)
                 ftd_mask = hist.index.date == ftd_ts.date()
                 if ftd_mask.any():
                     ftd_low = float(hist.loc[ftd_mask, 'Low'].iloc[0])
@@ -14066,7 +14119,7 @@ elif page == "Weekly Retro":
 # PAGE 13: IBD MARKET SCHOOL
 # ==============================================================================
 elif page == "IBD Market School":
-    page_header("IBD Market School", "Market timing signals · NASDAQ buy/sell · recommended exposure", "🏫")
+    page_header("IBD Market School", "Market timing signals · NASDAQ + SPY buy/sell · recommended exposure", "🏫")
 
     # Import market_school_rules
     try:
@@ -14077,6 +14130,37 @@ elif page == "IBD Market School":
 
     from datetime import datetime, timedelta
     import time
+
+    # === DUAL-INDEX FTD COMPARISON ===
+    # IBD rule: either NASDAQ or SPY can confirm the FTD for the cycle.
+    # Take the earliest and show both for context.
+    cycle_for_ftd = compute_cycle_state()
+    if cycle_for_ftd:
+        ftd_src = cycle_for_ftd.get('ftd_source')
+        eff_ftd = cycle_for_ftd.get('ftd_date')
+        nd_ftd = cycle_for_ftd.get('nasdaq_ftd_date')
+        spy_ftd = cycle_for_ftd.get('spy_ftd_date')
+
+        def _fmt_ftd(d):
+            return d.strftime('%Y-%m-%d') if d and hasattr(d, 'strftime') else '—'
+
+        with st.container():
+            cfa, cfb, cfc = st.columns([2, 1, 1])
+            if eff_ftd is None:
+                cfa.info("🏫 **No active FTD.** Watching for Day 4+ rally day with +1% close on NASDAQ or SPY.")
+            else:
+                src_color = "#8b5cf6" if ftd_src == 'SPY' else ("#3b82f6" if ftd_src == 'NASDAQ' else "#10b981")
+                cfa.markdown(
+                    f"<div style='background:#f8f9fc;border-left:4px solid {src_color};padding:10px 14px;border-radius:6px;'>"
+                    f"<div style='font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;'>Effective FTD</div>"
+                    f"<div style='font-size:18px;font-weight:800;color:#0f172a;'>{_fmt_ftd(eff_ftd)} · via {ftd_src}</div>"
+                    f"<div style='font-size:11px;color:#64748b;'>Earliest of NASDAQ or SPY confirms the cycle.</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            cfb.metric("NASDAQ FTD", _fmt_ftd(nd_ftd))
+            cfc.metric("SPY FTD", _fmt_ftd(spy_ftd))
+        st.markdown("---")
 
     # === HELPER FUNCTIONS ===
 
