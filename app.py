@@ -9740,59 +9740,29 @@ elif page == "Risk Manager":
 
                 ax.grid(True, linestyle='--', alpha=0.3)
 
-                
+                # Inline $ amount labels at the right edge of each deck line —
+                # removes the need to eyeball the Y-axis when reading thresholds.
+                _label_specs = [
+                    (deck_l1, _RM_DECKS['L1']['color']),
+                    (deck_l2, _RM_DECKS['L2']['color']),
+                    (deck_l3, _RM_DECKS['L3']['color']),
+                    (stop_out_floor_val, 'red'),
+                ]
+                for _y, _c in _label_specs:
+                    if np.isnan(_y):
+                        continue
+                    ax.annotate(
+                        f"${_y:,.0f}",
+                        xy=(0.995, _y),
+                        xycoords=('axes fraction', 'data'),
+                        xytext=(0, 0), textcoords='offset points',
+                        ha='right', va='center',
+                        fontsize=9, fontweight='bold', color=_c,
+                        bbox=dict(boxstyle='round,pad=0.25', facecolor='white',
+                                  edgecolor=_c, alpha=0.95, linewidth=1),
+                    )
 
                 st.pyplot(fig)
-
-                
-
-                # --- 5. FUSE BOX INSTRUCTIONS (UPDATED) ---
-
-                st.markdown("### 🧨 Fuse Box Protocols")
-
-                f1, f2, f3 = st.columns(3)
-
-                
-
-                # LEVEL 1
-
-                f1.markdown("#### 🟡 LEVEL 1")
-
-                f1.markdown(f"**Trigger:** -{_RM_DECKS['L1']['pct']:.1f}% DD (**${deck_l1:,.0f}**)")
-
-                if curr_nlv <= deck_l1: f1.error("❌ FUSE BLOWN")
-
-                else: f1.success("✅ SECURE")
-
-                f1.info(f"**Action:** {_RM_DECKS['L1']['action']}.\n\nLockout New Buys until steady.")
-
-
-
-                # LEVEL 2
-
-                f2.markdown("#### 🟠 LEVEL 2")
-
-                f2.markdown(f"**Trigger:** -{_RM_DECKS['L2']['pct']:.1f}% DD (**${deck_l2:,.0f}**)")
-
-                if curr_nlv <= deck_l2: f2.error("❌ FUSE BLOWN")
-
-                else: f2.success("✅ SECURE")
-
-                f2.warning(f"**Action:** {_RM_DECKS['L2']['action']}.\n\nManage winners only. Cut loose ends.")
-
-
-
-                # LEVEL 3
-
-                f3.markdown("#### ☠️ LEVEL 3")
-
-                f3.markdown(f"**Trigger:** -{_RM_DECKS['L3']['pct']:.1f}% DD (**${deck_l3:,.0f}**)")
-
-                if curr_nlv <= deck_l3: f3.error("❌ FUSE BLOWN")
-
-                else: f3.success("✅ SECURE")
-
-                f3.error(f"**Action:** {_RM_DECKS['L3']['action'].upper()}.\n\nProtection Mode. No trading for 48hrs.")
 
 
 
