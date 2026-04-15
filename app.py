@@ -3708,6 +3708,19 @@ elif page == "Daily Journal":
                             # If date changed, delete old entry first
                             if date_changed:
                                 db.delete_journal_entry(CURR_PORT_NAME, edit_date)
+
+                            # Helper: coerce existing sel_row value to float, preserving
+                            # values logged by Daily Routine (Portfolio_Heat / SPY_ATR / Nasdaq_ATR)
+                            # so a title-only edit doesn't wipe them back to 0.
+                            def _keep_float(col):
+                                try:
+                                    v = sel_row.get(col, 0)
+                                    if v is None or (isinstance(v, str) and v.strip() == ''):
+                                        return 0.0
+                                    return float(v)
+                                except Exception:
+                                    return 0.0
+
                             journal_entry = {
                                 'portfolio_id': CURR_PORT_NAME,
                                 'day': edit_new_date_str,
@@ -3724,6 +3737,10 @@ elif page == "Daily Journal":
                                 'nasdaq_close': edit_ndx,
                                 'market_notes': edit_notes,
                                 'market_action': edit_action,
+                                # Preserve metrics captured by Daily Routine
+                                'portfolio_heat': _keep_float('Portfolio_Heat'),
+                                'spy_atr': _keep_float('SPY_ATR'),
+                                'nasdaq_atr': _keep_float('Nasdaq_ATR'),
                                 'score': edit_score,
                                 'highlights': str(sel_row.get('Highlights', '') or ''),
                                 'lowlights': str(sel_row.get('Lowlights', '') or ''),
@@ -3845,6 +3862,11 @@ elif page == "Daily Journal":
                                             'nasdaq_close': float(row.get('Nasdaq', 0)),
                                             'market_notes': str(row.get('Market_Notes', '') or ''),
                                             'market_action': str(row.get('Market_Action', '') or ''),
+                                            # Preserve Daily Routine metrics so a bulk
+                                            # Market Window backfill doesn't zero them out
+                                            'portfolio_heat': float(row.get('Portfolio_Heat', 0) or 0),
+                                            'spy_atr': float(row.get('SPY_ATR', 0) or 0),
+                                            'nasdaq_atr': float(row.get('Nasdaq_ATR', 0) or 0),
                                             'score': int(row.get('Score', 0) or 0),
                                             'highlights': str(row.get('Highlights', '') or ''),
                                             'lowlights': str(row.get('Lowlights', '') or ''),
