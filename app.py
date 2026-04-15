@@ -5015,7 +5015,12 @@ if page == "Daily Routine":
                 action = str(row.get('Action', '')).upper()
                 ticker = str(row.get('Ticker', ''))
                 label = "BUY" if action == "BUY" else "SELL" if action == "SELL" else action
-                grouped.setdefault(label, []).append(ticker)
+                # De-dupe: if the same ticker appears in multiple transactions
+                # of the same category (e.g. B1 + A1 scale-in on the same day),
+                # list it once per category.
+                lst = grouped.setdefault(label, [])
+                if ticker not in lst:
+                    lst.append(ticker)
             parts = []
             for label in ["SELL", "BUY"]:
                 if label in grouped:
