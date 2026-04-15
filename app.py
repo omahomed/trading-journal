@@ -6674,9 +6674,9 @@ elif page == "Log Buy":
                         ms_screenshot.seek(0)
                         ms_url = r2.upload_image(ms_screenshot, portfolio, b_id, b_tick, 'marketsurge')
                         if ms_url:
-                            ms_image_id = db.save_trade_image(portfolio, b_id, b_tick, 'marketsurge', ms_url, ms_screenshot.name)
-                            # Also save as entry chart so it appears in Entry Charts section
-                            db.save_trade_image(portfolio, b_id, b_tick, 'entry', ms_url, ms_screenshot.name)
+                            # Save only as 'entry' so it appears in Entry Charts without a
+                            # redundant MarketSurge section. Fundamentals still link via ms_image_id.
+                            ms_image_id = db.save_trade_image(portfolio, b_id, b_tick, 'entry', ms_url, ms_screenshot.name)
 
                     if not extracted and ms_screenshot and check_vision_available():
                         with st.spinner("🔬 Extracting fundamentals..."):
