@@ -1319,7 +1319,9 @@ def get_market_state(ticker):
     """Compute M Factor market state for a given index ticker."""
     try:
         df = yf.Ticker(ticker).history(period="2y")
-        if df.empty: return None
+        if df.empty:
+            print(f"get_market_state({ticker}): yfinance returned empty DataFrame")
+            return None
 
         df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
         df['50SMA'] = df['Close'].rolling(window=50).mean()
@@ -1396,7 +1398,11 @@ def get_market_state(ticker):
             's21': streak_21, 's50': streak_50, 's200': streak_200,
             'transition_date': transition_date
         }
-    except: return None
+    except Exception as e:
+        import traceback
+        print(f"get_market_state({ticker}) failed: {type(e).__name__}: {e}")
+        print(traceback.format_exc())
+        return None
 
 def get_combined_market_status():
     """Get combined M Factor market window status from Nasdaq + SPY."""
@@ -3981,7 +3987,14 @@ elif page == "M Factor":
     # CSS Styles
     st.markdown("""<style>.market-banner {padding: 20px; border-radius: 12px; text-align: center; color: white; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);} .ticker-box {background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 10px; color: black;} .metric-row {display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 15px; color: #333; border-bottom: 1px dashed #eee; padding-bottom: 8px;} .metric-row:last-child {border-bottom: none; margin-bottom: 0; padding-bottom: 0;} .sub-text {font-size: 12px; color: #999; font-weight: 400; margin-left: 5px;}</style>""", unsafe_allow_html=True)
     
-    if st.button("Refresh Market Data"): st.cache_data.clear()
+    rc1, rc2 = st.columns([1, 5])
+    if rc1.button("🔄 Refresh Market Data"):
+        # Targeted clear — only the M Factor + cycle caches, not everything
+        try: get_market_state.clear()
+        except Exception: pass
+        try: compute_cycle_state.clear()
+        except Exception: pass
+        st.rerun()
 
     nasdaq = get_market_state("^IXIC")
     spy = get_market_state("SPY")
@@ -4106,7 +4119,20 @@ elif page == "M Factor":
 
 **IBD cross-reference** - use distribution day count as a "paranoia check" but don't let it override strong individual stock performance
             """)
-    else: st.error("Market Data Unavailable")
+    else:
+        # Identify which side failed for better diagnostics
+        missing = []
+        if not nasdaq: missing.append("NASDAQ (^IXIC)")
+        if not spy: missing.append("SPY")
+        st.error(
+            f"⚠️ **Market Data Unavailable** — {' and '.join(missing)} fetch returned no data.\n\n"
+            "Usually a transient yfinance hiccup that got cached. Click **🔄 Refresh Market Data** above to retry. "
+            "If it persists, check the Streamlit server logs for the exception trace."
+        )
+        if st.button("🔁 Retry now", key="mfactor_retry"):
+            try: get_market_state.clear()
+            except Exception: pass
+            st.rerun()
 
 # ==============================================================================
 # MARKET CYCLE TRACKER (Layer 2 on top of M Factor)
