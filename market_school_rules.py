@@ -390,7 +390,10 @@ class MarketSchoolRules:
                 price=current['Close'],
                 description=f"{signal_type.value} (+{current['daily_gain_pct']:.2f}%)",
                 affects_exposure=True,
-                exposure_change=1 if signal_type == SignalType.B1 else 0
+                # IBD Market School: every buy signal bumps exposure count by 1.
+                # B1 = initial FTD, B2 = additional FTD — both add to the pyramid.
+                # Cumulative count → allocation: 1=30%, 2=55%, 3=75%, 4=90%, 5=100%.
+                exposure_change=1
             )
 
             # Track most recent FTD (B1 or B2) for B7 coincidence check
