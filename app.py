@@ -165,6 +165,18 @@ def get_hard_decks():
 
 
 @st.cache_data(ttl=60)
+def get_max_positions():
+    """Maximum concurrent open positions. Default 12."""
+    if USE_DATABASE:
+        try:
+            v = db.get_config('max_positions', 12)
+            return int(v)
+        except Exception:
+            pass
+    return 12
+
+
+@st.cache_data(ttl=60)
 def get_heat_threshold():
     """Portfolio Heat alert threshold (%). Default 2.5%."""
     if USE_DATABASE:
@@ -279,6 +291,7 @@ def clear_config_cache():
         get_earnings_cushion.clear()
         get_pyramid_rules.clear()
         get_size_tiers.clear()
+        get_max_positions.clear()
         _get_custom_rules.clear()
     except Exception:
         pass
@@ -2470,7 +2483,7 @@ if page == "Dashboard":
             ), unsafe_allow_html=True)
 
         with col4:
-            limit = 12
+            limit = get_max_positions()
             st.markdown(metric_card(
                 "LIVE EXPOSURE", f"{calc_exposure_pct:.1f}%",
                 f"{num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%",
@@ -2890,7 +2903,7 @@ elif page == "Dashboard (Legacy)":
             c2.metric("LTD Return", f"{df_j['LTD_Pct'].iloc[-1]:.2f}%")
             c3.metric("YTD Return", f"{ytd_val:.2f}%", delta=f"{ytd_spy:+.2f}% SPY")
             
-            limit = 12
+            limit = get_max_positions()
             delta_msg = f"{num_open_pos}/{limit} Pos | Risk: {risk_pct:.2f}%"
             mode = "normal" if num_open_pos <= limit else "inverse"
             c4.metric("Live Exposure", f"{calc_exposure_pct:.1f}%", delta=delta_msg, delta_color=mode)
@@ -15123,6 +15136,33 @@ elif page == "Admin":
                     clear_config_cache()
                     st.success("✅ Reset to defaults.")
                     st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### Max Positions")
+        st.caption("Maximum concurrent open positions across the portfolio. Shown on the Dashboard Live Exposure card as `X/N Pos`. When current positions exceed this limit, the card flips to red.")
+
+        current_max_pos = get_max_positions()
+        new_max_pos = st.number_input(
+            "Max concurrent positions",
+            min_value=1, max_value=100,
+            value=int(current_max_pos), step=1,
+            key="admin_max_positions",
+            help="Default 12. Increase if you're running a wider book; decrease for tighter focus.",
+        )
+
+        if st.button("💾 Save Max Positions", key="save_max_pos", type="primary"):
+            ok = db.set_config(
+                'max_positions', int(new_max_pos),
+                value_type='number', category='risk',
+                description='Maximum concurrent open positions across the portfolio.',
+                user='admin',
+            )
+            if ok:
+                clear_config_cache()
+                st.success(f"✅ Max positions set to {int(new_max_pos)}.")
+                st.rerun()
+            else:
+                st.error("❌ Save failed.")
 
     # ============================================================
     # SECTION 2: EVENT LOG (CanSlim EC markers)

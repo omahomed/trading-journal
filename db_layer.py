@@ -2125,6 +2125,11 @@ def seed_default_configs():
          'User-added buy rules merged with the base BUY_RULES list.'),
         ('custom_sell_rules', [], 'json', 'rules',
          'User-added sell rules merged with the base SELL_RULES list.'),
+
+        # Portfolio limits
+        ('max_positions', 12, 'number', 'risk',
+         'Maximum number of concurrent open positions across the portfolio. '
+         'Shown on the Dashboard Live Exposure card (X/N Pos).'),
     ]
     try:
         with get_db_connection() as conn:
