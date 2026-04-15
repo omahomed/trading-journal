@@ -9796,6 +9796,102 @@ elif page == "Risk Manager":
 
 
 
+                # ============================================================
+                # HEAT TAPE — Portfolio vs SPY + Portfolio Heat over time
+                # (Webster Swing Trader style, starting from first heat log)
+                # ============================================================
+                st.markdown("---")
+                st.subheader("🎞️ Heat Tape")
+                st.caption("Your portfolio return vs SPY and portfolio heat over time — starting from when you began logging heat. Use it to spot whether heat spikes preceded drawdowns.")
+
+                if not PLOTLY_AVAILABLE:
+                    st.info("Plotly not available — Heat Tape requires interactive charts.")
+                elif 'Portfolio_Heat' not in df_j.columns:
+                    st.info("No `Portfolio_Heat` column in journal — Heat Tape needs heat logging.")
+                else:
+                    _ht = df_j.copy()
+                    _ht['Heat_Num'] = pd.to_numeric(_ht['Portfolio_Heat'], errors='coerce').fillna(0.0)
+                    _ht['End NLV'] = pd.to_numeric(_ht['End NLV'], errors='coerce')
+                    _ht['SPY'] = pd.to_numeric(_ht.get('SPY', 0), errors='coerce')
+                    _ht = _ht.dropna(subset=['End NLV']).sort_values('Day')
+
+                    # First day with a real heat value is our chart start
+                    _heat_logged = _ht[_ht['Heat_Num'] > 0]
+                    if _heat_logged.empty:
+                        st.info("No portfolio heat has been logged yet. The Heat Tape populates as you log daily heat.")
+                    else:
+                        _ht_start = _heat_logged.iloc[0]['Day']
+                        _w = _ht[_ht['Day'] >= _ht_start].copy()
+
+                        if len(_w) < 2:
+                            st.info(f"Only one day of heat data so far (since {_ht_start.strftime('%Y-%m-%d')}). Needs at least 2 days to plot.")
+                        else:
+                            # Normalize port + SPY as % return from the heat-tracking start
+                            _start_nlv = float(_w['End NLV'].iloc[0])
+                            _start_spy = float(_w['SPY'].iloc[0]) if _w['SPY'].iloc[0] else 0
+                            _w['Port_Pct'] = (_w['End NLV'] / _start_nlv - 1) * 100 if _start_nlv > 0 else 0
+                            _w['SPY_Pct'] = (_w['SPY'] / _start_spy - 1) * 100 if _start_spy > 0 else 0
+
+                            _heat_thresh = get_heat_threshold()
+
+                            import plotly.graph_objects as go
+                            from plotly.subplots import make_subplots
+
+                            fig_ht = make_subplots(
+                                rows=2, cols=1, shared_xaxes=True,
+                                vertical_spacing=0.08,
+                                row_heights=[0.65, 0.35],
+                                subplot_titles=('Portfolio vs SPY — % return', 'Portfolio Heat'),
+                            )
+
+                            # Top: Portfolio + SPY
+                            fig_ht.add_trace(go.Scatter(
+                                x=_w['Day'], y=_w['Port_Pct'],
+                                name='Portfolio', mode='lines',
+                                line=dict(color='#1a1d29', width=2.2),
+                            ), row=1, col=1)
+                            if _start_spy > 0:
+                                fig_ht.add_trace(go.Scatter(
+                                    x=_w['Day'], y=_w['SPY_Pct'],
+                                    name='SPY', mode='lines',
+                                    line=dict(color='#8b7bc0', width=1.5),
+                                ), row=1, col=1)
+
+                            # Zero reference line
+                            fig_ht.add_hline(y=0, line_dash='dot', line_color='gray',
+                                             opacity=0.4, line_width=0.8, row=1, col=1)
+
+                            # Bottom: Heat time series
+                            fig_ht.add_trace(go.Scatter(
+                                x=_w['Day'], y=_w['Heat_Num'],
+                                name='Heat', mode='lines',
+                                line=dict(color='#4A90E2', width=2),
+                                fill='tozeroy', fillcolor='rgba(74, 144, 226, 0.18)',
+                            ), row=2, col=1)
+
+                            # Heat alert threshold line (sourced from app_config)
+                            fig_ht.add_hline(
+                                y=float(_heat_thresh), line_dash='dash', line_color='#dc2626',
+                                opacity=0.7, line_width=1.2, row=2, col=1,
+                                annotation_text=f"Threshold {float(_heat_thresh):.2f}%",
+                                annotation_position='top right',
+                                annotation_font=dict(size=10, color='#dc2626'),
+                            )
+
+                            fig_ht.update_layout(
+                                height=500,
+                                template='plotly_white',
+                                showlegend=True,
+                                hovermode='x unified',
+                                legend=dict(orientation='h', yanchor='bottom', y=1.08, xanchor='left', x=0),
+                                margin=dict(t=80, b=40, l=40, r=40),
+                            )
+                            fig_ht.update_yaxes(ticksuffix='%', row=1, col=1)
+                            fig_ht.update_yaxes(ticksuffix='%', row=2, col=1)
+
+                            st.plotly_chart(fig_ht, use_container_width=True)
+                            st.caption(f"Data window: **{_ht_start.strftime('%Y-%m-%d')}** → **{_w['Day'].iloc[-1].strftime('%Y-%m-%d')}** · {len(_w)} trading days · heat threshold editable in Admin → Portfolio Heat.")
+
             else:
 
                 st.info(f"No journal data available after reset date.")
