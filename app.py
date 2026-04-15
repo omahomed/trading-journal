@@ -15571,7 +15571,58 @@ elif page == "Admin":
                 sr_col.caption(f"`{r}`")
 
     # ============================================================
-    # SECTION 8: AUDIT TRAIL VIEWER
+    # SECTION 8: DATA CLEANUP (one-shot fixes for legacy data)
+    # ============================================================
+    with st.expander("🧹 Data Cleanup", expanded=False):
+        st.caption("One-shot utilities to fix legacy data issues. Read the description before running.")
+
+        st.markdown("#### Duplicate MarketSurge Images")
+        st.caption(
+            "Before 2026-04-14, uploading a MarketSurge screenshot on Log Buy saved the same image twice — "
+            "once as `marketsurge` and once as `entry`. That made the Trade Journal show the same weekly chart "
+            "in both columns. This cleanup removes the redundant `marketsurge` rows where a matching `entry` "
+            "row exists (keeping one copy, re-pointing fundamentals to it)."
+        )
+
+        if not hasattr(db, 'cleanup_duplicate_marketsurge_images'):
+            st.warning("Cleanup helper not loaded. Reboot the app to pick up the latest db_layer.py.")
+        else:
+            if st.button("👁️ Preview (dry-run)", key="ms_cleanup_preview"):
+                preview = db.cleanup_duplicate_marketsurge_images(dry_run=True)
+                if preview.get('error'):
+                    st.error(f"❌ {preview['error']}")
+                elif preview['count'] == 0:
+                    st.success("✅ No duplicate MarketSurge images found — nothing to clean up.")
+                else:
+                    st.info(f"Would remove **{preview['count']}** duplicate row(s):")
+                    preview_df = pd.DataFrame([
+                        {
+                            'Trade ID': r['trade_id'],
+                            'Ticker': r['ticker'],
+                            'Portfolio': r['portfolio'],
+                            'Uploaded': r['uploaded_at'],
+                        }
+                        for r in preview['rows']
+                    ])
+                    st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                    st.session_state['_ms_cleanup_count'] = preview['count']
+
+            if st.session_state.get('_ms_cleanup_count', 0) > 0:
+                st.markdown("---")
+                if st.button(
+                    f"⚠️ Run Cleanup — delete {st.session_state['_ms_cleanup_count']} duplicate row(s)",
+                    key="ms_cleanup_run", type="primary",
+                ):
+                    result = db.cleanup_duplicate_marketsurge_images(dry_run=False, user='admin')
+                    if result.get('error'):
+                        st.error(f"❌ {result['error']}")
+                    else:
+                        st.success(f"✅ Cleaned up {result['count']} duplicate MarketSurge image rows.")
+                        st.session_state.pop('_ms_cleanup_count', None)
+                        st.rerun()
+
+    # ============================================================
+    # SECTION 9: AUDIT TRAIL VIEWER
     # ============================================================
     with st.expander("📜 Audit Trail Viewer", expanded=False):
         st.caption("Recent changes to config, events, and trades. Sourced from the `audit_trail` table.")

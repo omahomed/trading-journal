@@ -2419,6 +2419,82 @@ def sync_auto_events_from_config():
         return False
 
 
+def cleanup_duplicate_marketsurge_images(dry_run=True, user='admin'):
+    """
+    Find trade_images rows where the same (portfolio_id, trade_id, image_url)
+    exists as BOTH 'marketsurge' AND 'entry' types. These are duplicates left
+    over from the old Log Buy flow that double-saved MS screenshots.
+
+    For each duplicate:
+      1. Re-point any trade_fundamentals.image_id references from the
+         marketsurge row to the matching entry row (so fundamentals stay linked
+         to a valid image).
+      2. Delete the marketsurge row.
+
+    If dry_run=True (default), no changes are made — returns a preview list.
+    If dry_run=False, performs the cleanup and returns the actual count.
+
+    Returns: dict with keys {count, rows} where rows is list of
+             {id, portfolio, trade_id, ticker, image_url, uploaded_at}.
+    """
+    result = {'count': 0, 'rows': []}
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Find marketsurge rows that have a matching entry row with same URL
+                cur.execute("""
+                    SELECT m.id, p.name AS portfolio, m.trade_id, m.ticker,
+                           m.image_url, m.uploaded_at,
+                           e.id AS entry_id
+                    FROM trade_images m
+                    JOIN trade_images e
+                      ON e.portfolio_id = m.portfolio_id
+                     AND e.trade_id = m.trade_id
+                     AND e.image_type = 'entry'
+                     AND e.image_url = m.image_url
+                    LEFT JOIN portfolios p ON m.portfolio_id = p.id
+                    WHERE m.image_type = 'marketsurge'
+                    ORDER BY m.uploaded_at DESC
+                """)
+                rows = cur.fetchall()
+                result['count'] = len(rows)
+                result['rows'] = rows
+
+                if not dry_run and rows:
+                    # Step 1: re-point fundamentals.image_id from marketsurge -> entry
+                    for r in rows:
+                        cur.execute("""
+                            UPDATE trade_fundamentals
+                            SET image_id = %s
+                            WHERE image_id = %s
+                        """, (r['entry_id'], r['id']))
+                    # Step 2: delete the duplicate marketsurge rows
+                    ms_ids = [r['id'] for r in rows]
+                    cur.execute("DELETE FROM trade_images WHERE id = ANY(%s)", (ms_ids,))
+
+                    # Audit trail entry
+                    try:
+                        cur.execute("SELECT id FROM portfolios WHERE name = %s", ('CanSlim',))
+                        pid_row = cur.fetchone()
+                        if pid_row:
+                            cur.execute(
+                                """
+                                INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                                """,
+                                (pid_row['id'], user, 'CLEANUP_MS_DUPES', '', '',
+                                 f"Removed {len(rows)} duplicate 'marketsurge' image rows with matching 'entry' rows"),
+                            )
+                    except Exception as audit_e:
+                        print(f"Cleanup audit log failed (non-fatal): {audit_e}")
+
+                    conn.commit()
+        return result
+    except Exception as e:
+        print(f"cleanup_duplicate_marketsurge_images failed: {e}")
+        return {'count': 0, 'rows': [], 'error': str(e)}
+
+
 def migrate_event_categories():
     """
     One-shot migration: rename old 'personal' category.
