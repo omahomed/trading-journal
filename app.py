@@ -1634,12 +1634,17 @@ def compute_cycle_state():
             else:
                 break
 
-        # --- Price-only FTD detection (no volume requirement) ---
+        # --- Fallback FTD detection (defensive — primary detection happens in the
+        # analyzer, which enforces +1% close AND higher volume per IBD rules).
+        # Only runs if the analyzer didn't flag an ftd_date for some reason.
         price_ftd_date = ibd_ftd_date
         if price_ftd_date is None and rally_low_idx is not None:
             for i in range(rally_low_idx + 3, len(df)):  # Day 4+ (0-indexed: +3)
                 row = df.iloc[i]
-                if pd.notna(row.get('daily_gain_pct')) and row['daily_gain_pct'] >= 1.0:
+                vol_up = bool(row.get('volume_up', False))
+                if (pd.notna(row.get('daily_gain_pct'))
+                        and row['daily_gain_pct'] >= 1.0
+                        and vol_up):
                     # Check rally low hasn't been undercut
                     lows = df.iloc[rally_low_idx:i+1]['Low']
                     if lows.min() >= rally_low:
@@ -1659,14 +1664,18 @@ def compute_cycle_state():
             if spy_analyzer.data is not None and not spy_analyzer.data.empty:
                 spy_analyzer.analyze_market()
                 spy_ftd_date = spy_analyzer.ftd_date
-                # Fallback price-only FTD for SPY if the analyzer didn't flag one
+                # Fallback FTD detection for SPY (defensive — analyzer enforces
+                # +1% + higher volume per IBD rules; this just catches any edge case)
                 if spy_ftd_date is None and spy_analyzer.rally_low_idx is not None:
                     sdf = spy_analyzer.data
                     s_rl = spy_analyzer.rally_low
                     s_idx = spy_analyzer.rally_low_idx
                     for i in range(s_idx + 3, len(sdf)):
                         srow = sdf.iloc[i]
-                        if pd.notna(srow.get('daily_gain_pct')) and srow['daily_gain_pct'] >= 1.0:
+                        svol_up = bool(srow.get('volume_up', False))
+                        if (pd.notna(srow.get('daily_gain_pct'))
+                                and srow['daily_gain_pct'] >= 1.0
+                                and svol_up):
                             slows = sdf.iloc[s_idx:i+1]['Low']
                             if slows.min() >= s_rl:
                                 spy_ftd_date = sdf.index[i]
