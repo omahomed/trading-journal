@@ -2511,10 +2511,9 @@ if page == "Dashboard":
                 except:
                     pass
 
-        # === DRAWDOWN CALCULATION (matches Risk Manager) ===
-        RESET_DATE = get_reset_date()
+        # === DRAWDOWN CALCULATION (matches Risk Manager — all-time peak) ===
         _decks = get_hard_decks()
-        df_active = df_j[df_j['Day'] >= RESET_DATE].copy()
+        df_active = df_j.copy()
         if not df_active.empty:
             peak_nlv = df_active['End NLV'].max()
             dd_dol = peak_nlv - curr_nlv
@@ -9665,7 +9664,6 @@ elif page == "Risk Manager":
     import numpy as np
     import matplotlib.pyplot as plt
 
-    RESET_DATE = get_reset_date()
     _RM_DECKS = get_hard_decks()
 
     page_header("Risk Manager", CURR_PORT_NAME, "🛡️")
@@ -9724,9 +9722,9 @@ elif page == "Risk Manager":
 
             
 
-            # Filter for Reset Date
+            # Use full equity curve (all-time peak for hard deck calculations)
 
-            df_active = df_j[df_j['Day'] >= RESET_DATE].copy()
+            df_active = df_j.copy()
 
             
 
@@ -9926,7 +9924,7 @@ elif page == "Risk Manager":
 
                 col1.metric("Current Peak (HWM)", f"${peak_nlv:,.2f}")
 
-                col1.caption(f"Since {RESET_DATE.strftime('%m/%d/%y')}")
+                col1.caption("All-Time High Water Mark")
 
                 
 
@@ -12577,20 +12575,18 @@ elif page == "Analytics":
                 f"L3 (−{_dd_decks_cfg['L3']['pct']:.1f}%) is logged with a pass/fail verdict."
             )
 
-            RESET_DATE = get_reset_date()
-
             if df_j.empty:
                 st.info("💡 No journal data found. Drawdown Discipline requires End NLV history.")
             else:
-                dd_j = df_j[df_j['Day'] >= RESET_DATE].copy()
+                dd_j = df_j.copy()
                 if dd_j.empty or 'End NLV' not in dd_j.columns:
-                    st.info(f"💡 No journal entries since the {RESET_DATE.strftime('%Y-%m-%d')} reset date. This tab populates as new entries are logged.")
+                    st.info("💡 No journal entries found. This tab populates as new entries are logged.")
                 else:
                     dd_j = dd_j.sort_values('Day').reset_index(drop=True)
                     dd_j['End NLV'] = pd.to_numeric(dd_j['End NLV'], errors='coerce')
                     dd_j = dd_j.dropna(subset=['End NLV'])
 
-                    # Rolling peak NLV from reset date
+                    # Rolling peak NLV (all-time)
                     dd_j['Peak_NLV'] = dd_j['End NLV'].cummax()
                     dd_j['DD_Pct'] = (dd_j['End NLV'] - dd_j['Peak_NLV']) / dd_j['Peak_NLV'] * 100
                     dd_j['Pct_Invested'] = pd.to_numeric(dd_j.get('% Invested', 0), errors='coerce').fillna(0)
@@ -13882,19 +13878,17 @@ elif page == "Daily Report Card":
             if not market_window or market_window == 'nan':
                 market_window = "N/A"
 
-            # Risk / Drawdown
-            RESET_DATE = get_reset_date()
+            # Risk / Drawdown (all-time peak, matches Risk Manager)
             _drc_decks = get_hard_decks()
             hist_slice = df_j[df_j['Day'] <= pd.Timestamp(selected_date)].sort_values('Day')
-            hist_slice_post = hist_slice[hist_slice['Day'] >= RESET_DATE]
 
             risk_msg = "NO DATA"
             risk_color = "gray"
             dd_pct = 0.0
 
-            if not hist_slice_post.empty:
-                curr_nlv = hist_slice_post['End NLV'].iloc[-1]
-                peak_nlv = hist_slice_post['End NLV'].max()
+            if not hist_slice.empty:
+                curr_nlv = hist_slice['End NLV'].iloc[-1]
+                peak_nlv = hist_slice['End NLV'].max()
                 dd_pct = ((curr_nlv - peak_nlv) / peak_nlv) * 100 if peak_nlv > 0 else 0.0
 
                 # Hard decks aligned with Risk Manager (sourced from app_config)
