@@ -2245,6 +2245,7 @@ with st.sidebar:
     nav_button("IBD Market School", "🏫")
     nav_button("M Factor", "📊")
     nav_button("Market Cycle Tracker", "🔄")
+    nav_button("Rally Context", "📐")
 
     nav_section("AI")
     nav_button("AI Coach", "🤖")
@@ -14930,6 +14931,288 @@ Close below the last marked 13-week low.
 **S14 — Break Below Higher High**
 Close below a marked 13-week high that previously triggered a B8. Each marked high can only be broken once.
             """)
+
+# ==============================================================================
+# PAGE: RALLY CONTEXT
+# FTD Persona Overlay — tracks current rally against historical benchmarks.
+# ==============================================================================
+elif page == "Rally Context":
+    page_header("Rally Context", "FTD Persona Overlay · First 25 Trading Days", "📐")
+
+    if not PLOTLY_AVAILABLE:
+        st.error("Rally Context requires Plotly. Install plotly for interactive charts.")
+        st.stop()
+
+    import plotly.graph_objects as go
+
+    # --- PERSONA BENCHMARK DATA (fixed constants) ---
+    _RC_DAYS = list(range(1, 26))
+
+    _RC_LIFE_CHANGER = [
+        0.8, 1.1, 1.5, 2.1, 2.7, 2.9, 3.1, 4.0, 4.4, 4.8,
+        5.2, 5.5, 5.9, 6.3, 6.7, 7.2, 7.5, 7.8, 8.2, 8.5,
+        8.7, 8.8, 9.0, 9.2, 9.9,
+    ]
+    _RC_MONEY_MAKER = [
+        0.5, 0.8, 1.2, 1.5, 1.7, 2.0, 2.2, 2.5, 2.7, 3.0,
+        3.3, 3.6, 3.9, 4.2, 4.4, 4.7, 5.0, 5.3, 5.6, 5.8,
+        6.0, 6.1, 6.2, 6.3, 6.4,
+    ]
+    _RC_SLOG = [
+        0.3, 0.4, 0.5, 0.7, 0.8, 0.9, 1.0, 1.0, 1.1, 1.2,
+        1.3, 1.4, 1.5, 1.6, 1.6, 1.7, 1.9, 2.0, 2.0, 2.0,
+        2.0, 2.1, 2.1, 2.2, 2.2,
+    ]
+    _RC_WHIPSAW = [
+        0.1, -0.1, -0.3, -0.5, -0.6, -0.8, -0.9, -1.1, -1.3, -1.5,
+        -1.9, -2.2, -2.6, -3.0, -3.4,
+    ]
+    _RC_RALLY_2025 = [
+        2.5, 5.3, 6.6, 6.5, 7.1, 7.0, 8.7, 10.3, 9.5, 8.5,
+        8.8, 10.0, 10.0, 14.8, 16.6, 17.5, 17.3, 17.9, 17.9, 17.4,
+        15.8, 16.1, 14.9, 17.8, 17.2,
+    ]
+
+    # --- CONTROLS ---
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 1, 1])
+
+    # Auto-detect FTD from current cycle
+    _rc_cycle = compute_cycle_state()
+    _rc_auto_ftd = None
+    _rc_rally_low = None
+    if _rc_cycle:
+        _rc_auto_ftd = _rc_cycle.get('ftd_date')
+        _rc_rally_low = _rc_cycle.get('rally_low')
+
+    with ctrl1:
+        _rc_default_date = _rc_auto_ftd.date() if _rc_auto_ftd and hasattr(_rc_auto_ftd, 'date') else get_current_date_ct()
+        rc_ftd_date = st.date_input(
+            "FTD Date (Day 0)",
+            value=_rc_default_date,
+            help="Auto-filled from current cycle's FTD. Override to view a historical rally.",
+        )
+    with ctrl2:
+        rc_index = st.selectbox("Index", ["^IXIC", "SPY"], index=0, key="rc_index")
+    with ctrl3:
+        rc_show_benchmarks = st.checkbox("Show persona bands", value=True, key="rc_show_bench")
+
+    # FTD source info
+    if _rc_cycle and _rc_cycle.get('ftd_source'):
+        st.caption(f"Current FTD: **{pd.Timestamp(_rc_auto_ftd).strftime('%Y-%m-%d') if _rc_auto_ftd else 'None'}** via **{_rc_cycle.get('ftd_source')}** · Rally low: **{_rc_rally_low:,.2f}**" if _rc_rally_low else "")
+
+    st.markdown("---")
+
+    # --- FETCH RALLY DATA ---
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _fetch_rally_data(index_symbol, ftd_date_str):
+        """Fetch index closes from Day 0 (FTD) through Day 25 or today.
+        Returns list of (day_number, date, close, pct_change) tuples."""
+        try:
+            ftd_ts = pd.Timestamp(ftd_date_str)
+            # Fetch a bit extra to ensure we get 25+ trading days post-FTD
+            end_ts = ftd_ts + pd.Timedelta(days=40)
+            today_ts = pd.Timestamp(datetime.now().strftime('%Y-%m-%d'))
+            if end_ts > today_ts:
+                end_ts = today_ts + pd.Timedelta(days=1)
+
+            df = yf.Ticker(index_symbol).history(
+                start=ftd_ts - pd.Timedelta(days=5),
+                end=end_ts,
+            )
+            if df.empty:
+                return None, None, "yfinance returned no data"
+
+            df.index = df.index.tz_localize(None) if df.index.tz else df.index
+
+            # Find Day 0 close (exact FTD date or nearest trading day after)
+            ftd_mask = df.index.date >= ftd_ts.date()
+            df_post = df[ftd_mask]
+            if df_post.empty:
+                return None, None, f"No trading data on or after {ftd_date_str}"
+
+            day0_close = float(df_post.iloc[0]['Close'])
+            day0_date = df_post.index[0]
+
+            # Build Day 1..25 (skip Day 0 itself — it's the anchor)
+            points = []
+            rally_failed = False
+            fail_date = None
+            for i in range(1, min(len(df_post), 26)):
+                row = df_post.iloc[i]
+                pct = ((float(row['Close']) / day0_close) - 1) * 100
+                dt = df_post.index[i]
+                points.append({
+                    'day': i,
+                    'date': dt.strftime('%Y-%m-%d'),
+                    'close': float(row['Close']),
+                    'pct': round(pct, 2),
+                    'low': float(row['Low']),
+                })
+
+            return day0_close, points, None
+        except Exception as e:
+            return None, None, str(e)
+
+    day0_close, rally_points, fetch_err = _fetch_rally_data(rc_index, rc_ftd_date.strftime('%Y-%m-%d'))
+
+    if fetch_err:
+        st.error(f"⚠️ Could not fetch rally data: {fetch_err}")
+    elif day0_close is not None:
+        # --- CHECK RALLY FAILURE (undercut) ---
+        rally_failed = False
+        fail_day = None
+        if _rc_rally_low and rally_points:
+            for pt in rally_points:
+                if pt['low'] < _rc_rally_low:
+                    rally_failed = True
+                    fail_day = pt['day']
+                    break
+
+        # --- STATUS PANEL ---
+        current_day = len(rally_points) if rally_points else 0
+        current_pct = rally_points[-1]['pct'] if rally_points else 0.0
+
+        # Determine nearest persona
+        def _nearest_persona(pct, day_idx):
+            """Return the persona name whose Day-N value is closest to pct."""
+            if day_idx < 1 or day_idx > 25:
+                return "—"
+            idx = day_idx - 1  # 0-indexed
+            candidates = [
+                ('Life Changer', _RC_LIFE_CHANGER[idx]),
+                ('Money Maker', _RC_MONEY_MAKER[idx]),
+                ('SLOG', _RC_SLOG[idx]),
+            ]
+            if idx < len(_RC_WHIPSAW):
+                candidates.append(('Whipsaw', _RC_WHIPSAW[idx]))
+            closest = min(candidates, key=lambda c: abs(pct - c[1]))
+            return closest[0]
+
+        tracking = _nearest_persona(current_pct, current_day) if current_day > 0 else "—"
+
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Rally Day", f"Day {current_day} of 25")
+
+        pct_color = "normal" if current_pct >= 0 else "inverse"
+        sc2.metric("Current Gain", f"{current_pct:+.2f}%",
+                   delta=f"from {rc_index} FTD close ${day0_close:,.2f}",
+                   delta_color="off")
+
+        persona_colors = {
+            'Life Changer': '#2ca02c', 'Money Maker': '#1a1d29',
+            'SLOG': '#e67e22', 'Whipsaw': '#3b82f6',
+        }
+        sc3.metric("Tracking Toward", tracking)
+
+        if rally_failed:
+            st.error(f"🚨 **Rally Failed** — index low undercut rally low (${_rc_rally_low:,.2f}) on Day {fail_day}. This rally attempt is void.")
+
+        # --- BUILD CHART ---
+        fig = go.Figure()
+
+        # Persona benchmark lines
+        if rc_show_benchmarks:
+            fig.add_trace(go.Scatter(
+                x=_RC_DAYS, y=_RC_LIFE_CHANGER,
+                mode='lines', name='Life Changer',
+                line=dict(color='#2ca02c', width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=_RC_DAYS, y=_RC_MONEY_MAKER,
+                mode='lines', name='Money Maker',
+                line=dict(color='#1a1d29', width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=_RC_DAYS, y=_RC_SLOG,
+                mode='lines', name='SLOG',
+                line=dict(color='#e67e22', width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=list(range(1, 16)), y=_RC_WHIPSAW,
+                mode='lines', name='Whipsaw',
+                line=dict(color='#3b82f6', width=2),
+            ))
+
+        # 4/22/2025 benchmark rally (always shown)
+        fig.add_trace(go.Scatter(
+            x=_RC_DAYS, y=_RC_RALLY_2025,
+            mode='lines', name='4/22/2025 Rally',
+            line=dict(color='#dc2626', width=2.5, dash='dash'),
+        ))
+
+        # Current rally line
+        if rally_points:
+            rc_days = [p['day'] for p in rally_points]
+            rc_pcts = [p['pct'] for p in rally_points]
+            rc_dates = [p['date'] for p in rally_points]
+
+            # Dim the line if rally failed
+            rally_color = '#9ca3af' if rally_failed else '#7c3aed'
+            rally_name = f"Current Rally ({rc_ftd_date.strftime('%m/%d/%y')})"
+            if rally_failed:
+                rally_name += " — FAILED"
+
+            fig.add_trace(go.Scatter(
+                x=rc_days, y=rc_pcts,
+                mode='lines+markers+text',
+                name=rally_name,
+                line=dict(color=rally_color, width=3.5),
+                marker=dict(size=6, color=rally_color),
+                text=[f"{p:+.1f}%" for p in rc_pcts],
+                textposition='top center',
+                textfont=dict(size=9, color=rally_color),
+                customdata=rc_dates,
+                hovertemplate="Day %{x}: %{y:+.2f}%<br>%{customdata}<extra></extra>",
+            ))
+
+        # Zero line
+        fig.add_hline(y=0, line_width=1, line_color='black', opacity=0.5)
+
+        # Layout
+        fig.update_layout(
+            title=dict(
+                text=f"FTD Rally Context — {rc_index} from {rc_ftd_date.strftime('%Y-%m-%d')}",
+                font=dict(size=16, weight=800),
+            ),
+            xaxis_title='Trading Days Post-FTD',
+            yaxis_title='% Change from FTD Close',
+            xaxis=dict(
+                tickvals=list(range(1, 26)),
+                range=[0.5, 25.5],
+                dtick=1,
+            ),
+            yaxis=dict(ticksuffix='%'),
+            height=550,
+            template='plotly_white',
+            hovermode='x unified',
+            legend=dict(
+                orientation='h', yanchor='bottom', y=1.02,
+                xanchor='left', x=0,
+            ),
+            margin=dict(t=80, b=40, l=50, r=30),
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- DAILY BREAKDOWN TABLE (collapsible) ---
+        if rally_points:
+            with st.expander(f"📋 Daily Breakdown — {len(rally_points)} days", expanded=False):
+                df_breakdown = pd.DataFrame(rally_points)
+                df_breakdown = df_breakdown.rename(columns={
+                    'day': 'Day', 'date': 'Date', 'close': 'Close',
+                    'pct': '% from FTD', 'low': 'Low',
+                })
+                st.dataframe(
+                    df_breakdown[['Day', 'Date', 'Close', 'Low', '% from FTD']].style.format({
+                        'Close': '${:,.2f}',
+                        'Low': '${:,.2f}',
+                        '% from FTD': '{:+.2f}%',
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+    else:
+        st.info("Select an FTD date to view the rally trajectory.")
+
 
 # ==============================================================================
 # PAGE: AI COACH
