@@ -4849,6 +4849,44 @@ elif page == "Period Review":
             df_j['NDX_Pct'] = df_j['Nasdaq'].pct_change().fillna(0)
             df_j['NDX_LTD'] = ((1 + df_j['NDX_Pct']).cumprod() - 1) * 100
 
+        # --- CAPITAL DEPLOYED & STRAIGHT RETURN ---
+        # "I put $X in total, it's now worth $Y, my straight return is Z%"
+        _cf = df_j['Cash -/+'].copy()
+        _first_beg = float(df_j['Beg NLV'].iloc[0])
+        _total_deposits = float(_cf[_cf > 0].sum())
+        _total_withdrawals = float(_cf[_cf < 0].sum())  # negative number
+        _net_invested = _first_beg + _total_deposits + _total_withdrawals
+        _current_value = float(df_j['End NLV'].iloc[-1])
+        _straight_pnl = _current_value - _net_invested
+        _straight_return = (_straight_pnl / _net_invested * 100) if _net_invested > 0 else 0.0
+
+        with st.expander("💰 Capital Deployed & Straight Return (LTD)", expanded=True):
+            cd1, cd2, cd3, cd4, cd5 = st.columns(5)
+            cd1.metric("Starting Capital", f"${_first_beg:,.0f}")
+            cd2.metric("Total Deposited", f"${_total_deposits:,.0f}")
+            cd3.metric("Total Withdrawn", f"${abs(_total_withdrawals):,.0f}")
+            cd4.metric("Net Capital Deployed", f"${_net_invested:,.0f}",
+                       help="Starting capital + deposits − withdrawals = total money you put at risk")
+            cd5.metric("Current Value", f"${_current_value:,.0f}")
+
+            st.markdown("---")
+            sr1, sr2, sr3 = st.columns(3)
+            sr1.metric("Straight P&L", f"${_straight_pnl:,.0f}",
+                       delta=f"{'Profit' if _straight_pnl >= 0 else 'Loss'}",
+                       delta_color="normal" if _straight_pnl >= 0 else "inverse")
+            sr2.metric("Straight Return (LTD)", f"{_straight_return:+.2f}%",
+                       help="(Current Value − Net Capital Deployed) / Net Capital Deployed × 100")
+            _twr_ltd = float(df_j['Portfolio_LTD'].iloc[-1])
+            sr3.metric("TWR Return (LTD)", f"{_twr_ltd:+.2f}%",
+                       help="Time-Weighted Return — immune to cash flows. Measures pure trading performance.")
+            st.caption(
+                f"**Straight Return** answers: 'I deployed ${_net_invested:,.0f} and now have ${_current_value:,.0f} — "
+                f"that's a {_straight_return:+.2f}% return on capital.'  \n"
+                f"**TWR Return** answers: 'My trading decisions generated {_twr_ltd:+.2f}% regardless of deposits/withdrawals.'"
+            )
+
+        st.markdown("---")
+
         tab_w, tab_m, tab_y = st.tabs(["Weekly Review", "Monthly Review", "Annual & CAGR"])
         
         def render_period_review(mode, df_source):
