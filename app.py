@@ -9972,13 +9972,32 @@ elif page == "Risk Manager":
 
                 st.subheader("📉 The Hard Deck")
 
-                
+                # Time range selector
+                _rm_range_opts = ["3M", "6M", "YTD", "1Y", "All"]
+                _rm_range = st.radio("View Range", _rm_range_opts, index=1, horizontal=True, key="rm_range")
 
-                dates = df_active['Day']
+                _rm_today = df_active['Day'].max()
+                if _rm_range == "3M":
+                    _rm_start = _rm_today - pd.Timedelta(days=90)
+                elif _rm_range == "6M":
+                    _rm_start = _rm_today - pd.Timedelta(days=180)
+                elif _rm_range == "YTD":
+                    _rm_start = pd.Timestamp(f"{_rm_today.year}-01-01")
+                elif _rm_range == "1Y":
+                    _rm_start = _rm_today - pd.Timedelta(days=365)
+                else:
+                    _rm_start = df_active['Day'].min()
 
-                nlvs = df_active['End NLV']
+                df_chart = df_active[df_active['Day'] >= _rm_start].copy()
 
+                dates = df_chart['Day']
+
+                nlvs = df_chart['End NLV']
+
+                # HWM must use ALL data (not just the visible window) so the
+                # peak reflects the true all-time high, not a windowed high.
                 hwm_series = df_active['End NLV'].cummax()
+                hwm_series = hwm_series[df_active['Day'] >= _rm_start]
 
 
 
@@ -10017,21 +10036,23 @@ elif page == "Risk Manager":
 
 
 
-                # Dynamic Scaling
-
-                # We want to see at least the floor and the peak
-
-                vals_to_see = [stop_out_floor_val, deck_l3, curr_nlv, peak_nlv]
-
-                min_view = min(vals_to_see)
-
-                max_view = peak_nlv
-
-                
+                # Dynamic Scaling — fit to the visible data + deck lines
+                # Use the visible NLV range plus any deck lines that fall
+                # within a reasonable band, so the chart isn't stretched by
+                # a distant stop-out floor.
+                visible_min = float(nlvs.min())
+                visible_max = float(nlvs.max())
+                # Include deck lines and stop floor only if they're within
+                # 120% of the visible range (avoids stretching for distant floors)
+                visible_span = visible_max - visible_min if visible_max > visible_min else visible_max * 0.1
+                min_view = visible_min
+                for v in [deck_l1, deck_l2, deck_l3, stop_out_floor_val]:
+                    if not np.isnan(v) and v >= visible_min - visible_span * 0.5:
+                        min_view = min(min_view, v)
+                max_view = max(visible_max, peak_nlv)
 
                 if not np.isnan(min_view) and not np.isnan(max_view):
-
-                    ax.set_ylim(bottom=min_view * 0.98, top=max_view * 1.01)
+                    ax.set_ylim(bottom=min_view * 0.97, top=max_view * 1.02)
 
 
 
