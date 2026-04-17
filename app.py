@@ -6476,18 +6476,26 @@ elif page == "Position Sizer":
             if max_contracts == 0:
                 st.warning(f"⚠️ At ${opt_cost:.2f}/contract (${cost_per_contract:,.0f} total), a single contract exceeds 5% of equity (${max_dollar:,.0f}).")
 
-            # Quick sizing table
+            # Quick sizing table — fixed tiers
             st.markdown("#### Sizing Table")
             rows = []
-            for n in range(1, min(max_contracts + 3, 20)):
-                t = n * cost_per_contract
-                p = (t / opt_equity) * 100
-                flag = "✅" if p <= _opt_max_pct else "❌"
-                rows.append({'Contracts': n, 'Total Cost': t, '% of NLV': p, 'Within 5%': flag})
+            for pct in [1.0, 2.5, 5.0]:
+                budget = opt_equity * (pct / 100)
+                contracts = int(budget / cost_per_contract)
+                total = contracts * cost_per_contract
+                actual = (total / opt_equity) * 100 if opt_equity > 0 else 0
+                rows.append({
+                    'Tier': f"{pct:.1f}%",
+                    'Budget': budget,
+                    'Contracts': contracts,
+                    'Total Cost': total,
+                    'Actual %': actual,
+                })
             st.dataframe(
                 pd.DataFrame(rows).style.format({
+                    'Budget': '${:,.0f}',
                     'Total Cost': '${:,.0f}',
-                    '% of NLV': '{:.2f}%',
+                    'Actual %': '{:.2f}%',
                 }),
                 use_container_width=True, hide_index=True,
             )
