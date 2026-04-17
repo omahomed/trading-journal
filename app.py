@@ -6440,9 +6440,60 @@ elif page == "Position Sizer":
     # ==========================================================================
     with tab_opts:
         st.subheader("🎰 Options Sizer")
-        st.caption("Size option or spread positions. Max allocation is 5% of account equity.")
+        st.caption("Size option or spread positions using your Sizing Mode risk budget. Premium can go to zero = premium IS the max risk.")
 
-        _opt_max_pct = 5.0  # hard cap for options
+        _OPT_HARD_CAP_PCT = 5.0  # absolute ceiling regardless of sizing mode
+
+        # --- M Factor auto-suggestion (same as Log Buy / Normal / Volatility) ---
+        try:
+            _opt_mfactor_status, _ = get_combined_market_status()
+        except Exception:
+            _opt_mfactor_status = "Unknown"
+
+        if _opt_mfactor_status == "Powertrend":
+            _opt_suggested_idx = 2
+        elif _opt_mfactor_status == "Open":
+            _opt_suggested_idx = 1
+        elif _opt_mfactor_status in ("Neutral", "Closed"):
+            _opt_suggested_idx = 0
+        else:
+            _opt_suggested_idx = 1
+
+        if _opt_mfactor_status == "Unknown":
+            wo1, wo2 = st.columns([5, 1])
+            wo1.warning("⚠️ M Factor data unavailable — Sizing Mode defaulted to Normal. Go to **M Factor** page and click Refresh.")
+            if wo2.button("🔁 Retry", key="opt_mf_retry"):
+                try: get_market_state.clear()
+                except Exception: pass
+                st.rerun()
+
+        _opt_suggested_label = ['🛡️ Defense', '⚖️ Normal', '⚔️ Offense'][_opt_suggested_idx]
+        with st.expander(
+            f"ℹ️ M Factor: **{_opt_mfactor_status}** → suggesting **{_opt_suggested_label}** (click for rule)",
+            expanded=False,
+        ):
+            st.markdown(
+                "**Sizing Mode auto-links to M Factor market state**  \n"
+                "🛡️ **Defense (0.50%)** — Neutral / Closed  \n"
+                "⚖️ **Normal (0.75%)** — Open  \n"
+                "⚔️ **Offense (1.00%)** — Powertrend  \n\n"
+                "Premium × contracts = your total risk (option can go to zero).  \n"
+                "Risk budget = equity × sizing mode %. Hard cap: 5% of NLV."
+            )
+
+        opt_sizing_mode = st.radio("Sizing Mode",
+            ["🛡️ Defense (0.50%)", "⚖️ Normal (0.75%)", "⚔️ Offense (1.00%)"],
+            index=_opt_suggested_idx,
+            horizontal=True, key="opt_sizing_mode")
+
+        if opt_sizing_mode.startswith("⚔️"):
+            _opt_risk_pct = 1.00
+        elif opt_sizing_mode.startswith("⚖️"):
+            _opt_risk_pct = 0.75
+        else:
+            _opt_risk_pct = 0.50
+
+        st.markdown("---")
 
         oc1, oc2 = st.columns(2)
         opt_cost = oc1.number_input(
@@ -6457,35 +6508,52 @@ elif page == "Position Sizer":
             key="opt_equity",
         )
 
-        st.markdown("---")
-
         if opt_cost > 0 and opt_equity > 0:
-            cost_per_contract = opt_cost * 100  # each contract = 100 shares
-            max_dollar = opt_equity * (_opt_max_pct / 100)
-            max_contracts = int(max_dollar / cost_per_contract)
+            cost_per_contract = opt_cost * 100
+            risk_budget = opt_equity * (_opt_risk_pct / 100)
+            hard_cap_budget = opt_equity * (_OPT_HARD_CAP_PCT / 100)
+
+            # Primary sizing from risk budget
+            max_contracts_risk = int(risk_budget / cost_per_contract)
+            # Hard cap check
+            max_contracts_cap = int(hard_cap_budget / cost_per_contract)
+            # Final = min of risk-based and hard cap
+            max_contracts = min(max_contracts_risk, max_contracts_cap)
             total_cost = max_contracts * cost_per_contract
             actual_pct = (total_cost / opt_equity) * 100 if opt_equity > 0 else 0
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Max Budget (5%)", f"${max_dollar:,.0f}")
-            m2.metric("Cost per Contract", f"${cost_per_contract:,.0f}",
+            limiting = "Risk Budget" if max_contracts == max_contracts_risk else "Hard Cap (5%)"
+
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Risk Budget", f"${risk_budget:,.0f}",
+                      delta=f"{_opt_risk_pct}% of equity", delta_color="off")
+            r2.metric("Cost per Contract", f"${cost_per_contract:,.0f}",
                       delta=f"${opt_cost:.2f} × 100", delta_color="off")
-            m3.metric("Max Contracts", f"{max_contracts}",
-                      delta=f"${total_cost:,.0f} ({actual_pct:.1f}% of NLV)", delta_color="off")
+            r3.metric("Recommended", f"{max_contracts} contract{'s' if max_contracts != 1 else ''}",
+                      delta=f"${total_cost:,.0f} ({actual_pct:.1f}%) · limited by {limiting}",
+                      delta_color="off")
 
             if max_contracts == 0:
-                st.warning(f"⚠️ At ${opt_cost:.2f}/contract (${cost_per_contract:,.0f} total), a single contract exceeds 5% of equity (${max_dollar:,.0f}).")
+                st.warning(f"⚠️ A single contract (${cost_per_contract:,.0f}) exceeds your risk budget (${risk_budget:,.0f}). Consider a cheaper strike or spread.")
 
-            # Quick sizing table — fixed tiers
-            st.markdown("#### Sizing Table")
+            st.markdown("---")
+
+            # Sizing table — all three modes + hard cap
+            st.markdown("#### All Sizing Modes")
             rows = []
-            for pct in [1.0, 2.5, 5.0]:
+            for label, pct in [("🛡️ Defense", 0.50), ("⚖️ Normal", 0.75), ("⚔️ Offense", 1.00)]:
                 budget = opt_equity * (pct / 100)
                 contracts = int(budget / cost_per_contract)
+                # Apply hard cap
+                cap_contracts = int(hard_cap_budget / cost_per_contract)
+                contracts = min(contracts, cap_contracts)
                 total = contracts * cost_per_contract
                 actual = (total / opt_equity) * 100 if opt_equity > 0 else 0
+                selected = "→" if pct == _opt_risk_pct else ""
                 rows.append({
-                    'Tier': f"{pct:.1f}%",
+                    '': selected,
+                    'Mode': label,
+                    'Risk %': f"{pct:.2f}%",
                     'Budget': budget,
                     'Contracts': contracts,
                     'Total Cost': total,
@@ -6499,6 +6567,7 @@ elif page == "Position Sizer":
                 }),
                 use_container_width=True, hide_index=True,
             )
+            st.caption(f"Hard cap: 5% of NLV (${hard_cap_budget:,.0f}) — no mode can exceed this regardless of risk %.")
         else:
             st.info("Enter the cost per contract and your equity above.")
 
