@@ -10018,21 +10018,16 @@ elif page == "Risk Manager":
                 # using axhline for full width lines
 
                 ax.axhline(y=deck_l1, color=_RM_DECKS['L1']['color'], linewidth=1.5, alpha=0.8,
-                           label=f"L1: {_RM_DECKS['L1']['action']} (-{_RM_DECKS['L1']['pct']:.1f}%)")
+                           label=f"L1: {_RM_DECKS['L1']['action']} (-{_RM_DECKS['L1']['pct']:.1f}%) · ${deck_l1:,.0f}")
 
                 ax.axhline(y=deck_l2, color=_RM_DECKS['L2']['color'], linewidth=1.5, alpha=0.8,
-                           label=f"L2: {_RM_DECKS['L2']['action']} (-{_RM_DECKS['L2']['pct']:.1f}%)")
+                           label=f"L2: {_RM_DECKS['L2']['action']} (-{_RM_DECKS['L2']['pct']:.1f}%) · ${deck_l2:,.0f}")
 
                 ax.axhline(y=deck_l3, color=_RM_DECKS['L3']['color'], linewidth=2, alpha=0.8,
-                           label=f"L3: {_RM_DECKS['L3']['action']} (-{_RM_DECKS['L3']['pct']:.1f}%)")
+                           label=f"L3: {_RM_DECKS['L3']['action']} (-{_RM_DECKS['L3']['pct']:.1f}%) · ${deck_l3:,.0f}")
 
-                
-
-                # Stop Floor (Horizontal Line based on CURRENT Status)
-
-                # If all stops hit today, this is where you land.
-
-                ax.axhline(y=stop_out_floor_val, color='red', linestyle='--', linewidth=2, label=f'Stop-Out Floor')
+                ax.axhline(y=stop_out_floor_val, color='red', linestyle='--', linewidth=2,
+                           label=f'Stop-Out Floor · ${stop_out_floor_val:,.0f}')
 
 
 
@@ -10060,31 +10055,15 @@ elif page == "Risk Manager":
 
                 ax.set_ylabel("Account Value ($)")
 
-                ax.legend(loc='upper left')
+                ax.legend(
+                    loc='lower center', bbox_to_anchor=(0.5, 1.02),
+                    ncol=3, fontsize=8, frameon=True,
+                    fancybox=True, shadow=False,
+                )
 
                 ax.grid(True, linestyle='--', alpha=0.3)
 
-                # Inline $ amount labels at the right edge of each deck line —
-                # removes the need to eyeball the Y-axis when reading thresholds.
-                _label_specs = [
-                    (deck_l1, _RM_DECKS['L1']['color']),
-                    (deck_l2, _RM_DECKS['L2']['color']),
-                    (deck_l3, _RM_DECKS['L3']['color']),
-                    (stop_out_floor_val, 'red'),
-                ]
-                for _y, _c in _label_specs:
-                    if np.isnan(_y):
-                        continue
-                    ax.annotate(
-                        f"${_y:,.0f}",
-                        xy=(0.995, _y),
-                        xycoords=('axes fraction', 'data'),
-                        xytext=(0, 0), textcoords='offset points',
-                        ha='right', va='center',
-                        fontsize=9, fontweight='bold', color=_c,
-                        bbox=dict(boxstyle='round,pad=0.25', facecolor='white',
-                                  edgecolor=_c, alpha=0.95, linewidth=1),
-                    )
+                fig.subplots_adjust(top=0.82)
 
                 st.pyplot(fig)
 
