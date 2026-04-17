@@ -5409,12 +5409,13 @@ elif page == "Position Sizer":
         except:
             return 0.0, 5.0
 
-    tab_normal, tab_vol, tab_add, tab_pyr, tab_trim = st.tabs([
+    tab_normal, tab_vol, tab_add, tab_pyr, tab_trim, tab_opts = st.tabs([
         "📏 Normal Sizer",
         "⚖️ Volatility Sizer",
         "📐 Scale In Sizer",
         "🔺 Pyramid Sizer",
-        "✂️ Trim (Sell Down)"
+        "✂️ Trim (Sell Down)",
+        "🎰 Options Sizer",
     ])
     
     # --- TAB: SCALE IN SIZER ---
@@ -6435,6 +6436,64 @@ elif page == "Position Sizer":
                 st.info("No open positions found. Open a position first to use the Pyramid Sizer.")
         else:
             st.info("No trade data available.")
+
+    # ==========================================================================
+    with tab_opts:
+        st.subheader("🎰 Options Sizer")
+        st.caption("Size option or spread positions. Max allocation is 5% of account equity.")
+
+        _opt_max_pct = 5.0  # hard cap for options
+
+        oc1, oc2 = st.columns(2)
+        opt_cost = oc1.number_input(
+            "Cost per Contract ($)",
+            min_value=0.01, value=1.00, step=0.05, format="%.2f",
+            key="opt_cost",
+            help="For a single option: the premium. For a spread: the net debit. Per contract (×100 shares).",
+        )
+        opt_equity = oc2.number_input(
+            "Account Equity (NLV)",
+            value=equity, step=1000.0, format="%.2f",
+            key="opt_equity",
+        )
+
+        st.markdown("---")
+
+        if opt_cost > 0 and opt_equity > 0:
+            cost_per_contract = opt_cost * 100  # each contract = 100 shares
+            max_dollar = opt_equity * (_opt_max_pct / 100)
+            max_contracts = int(max_dollar / cost_per_contract)
+            total_cost = max_contracts * cost_per_contract
+            actual_pct = (total_cost / opt_equity) * 100 if opt_equity > 0 else 0
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Max Budget (5%)", f"${max_dollar:,.0f}")
+            m2.metric("Cost per Contract", f"${cost_per_contract:,.0f}",
+                      delta=f"${opt_cost:.2f} × 100", delta_color="off")
+            m3.metric("Max Contracts", f"{max_contracts}",
+                      delta=f"${total_cost:,.0f} ({actual_pct:.1f}% of NLV)", delta_color="off")
+
+            if max_contracts == 0:
+                st.warning(f"⚠️ At ${opt_cost:.2f}/contract (${cost_per_contract:,.0f} total), a single contract exceeds 5% of equity (${max_dollar:,.0f}).")
+
+            # Quick sizing table
+            st.markdown("#### Sizing Table")
+            rows = []
+            for n in range(1, min(max_contracts + 3, 20)):
+                t = n * cost_per_contract
+                p = (t / opt_equity) * 100
+                flag = "✅" if p <= _opt_max_pct else "❌"
+                rows.append({'Contracts': n, 'Total Cost': t, '% of NLV': p, 'Within 5%': flag})
+            st.dataframe(
+                pd.DataFrame(rows).style.format({
+                    'Total Cost': '${:,.0f}',
+                    '% of NLV': '{:.2f}%',
+                }),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("Enter the cost per contract and your equity above.")
+
 
 # ==============================================================================
 # PAGE: LOG BUY (Standalone)
