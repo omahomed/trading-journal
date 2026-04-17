@@ -4940,20 +4940,56 @@ elif page == "Period Review":
             
             st.markdown("---")
             
-            # PLOT 1: Performance
+            # PLOT 1: Performance (Plotly for hover/crosshair)
             st.subheader(f"{mode} Performance vs Benchmark")
-            fig, ax = plt.subplots(figsize=(12, 6))
-            last_port = df_p['Portfolio_LTD'].iloc[-1]
-            
-            ax.plot(df_p.index, df_p['Portfolio_LTD'], label=f"Portfolio ({last_port:+.1f}%)", color="#1f77b4", linewidth=2.5)
-            if 'SPY_LTD' in df_p.columns:
-                ax.plot(df_p.index, df_p['SPY_LTD'], label="S&P 500", color="gray", alpha=0.6, linewidth=1.5)
-            if 'NDX_LTD' in df_p.columns:
-                ax.plot(df_p.index, df_p['NDX_LTD'], label="Nasdaq", color="orange", alpha=0.6, linewidth=1.5)
-            
-            ax.set_ylabel("Total Return (%)"); ax.yaxis.set_major_formatter(mtick.PercentFormatter())
-            ax.legend(loc="upper left"); ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
+            if PLOTLY_AVAILABLE:
+                import plotly.graph_objects as go
+                last_port = df_p['Portfolio_LTD'].iloc[-1]
+                fig_perf = go.Figure()
+
+                fig_perf.add_trace(go.Scatter(
+                    x=df_p.index, y=df_p['Portfolio_LTD'],
+                    mode='lines', name=f"Portfolio ({last_port:+.1f}%)",
+                    line=dict(color='#1f77b4', width=2.5),
+                ))
+                if 'SPY_LTD' in df_p.columns:
+                    last_spy = df_p['SPY_LTD'].iloc[-1]
+                    fig_perf.add_trace(go.Scatter(
+                        x=df_p.index, y=df_p['SPY_LTD'],
+                        mode='lines', name=f"S&P 500 ({last_spy:+.1f}%)",
+                        line=dict(color='gray', width=1.5),
+                        opacity=0.7,
+                    ))
+                if 'NDX_LTD' in df_p.columns:
+                    last_ndx = df_p['NDX_LTD'].iloc[-1]
+                    fig_perf.add_trace(go.Scatter(
+                        x=df_p.index, y=df_p['NDX_LTD'],
+                        mode='lines', name=f"Nasdaq ({last_ndx:+.1f}%)",
+                        line=dict(color='#e67e22', width=1.5),
+                        opacity=0.7,
+                    ))
+
+                fig_perf.update_layout(
+                    yaxis_title='Total Return (%)',
+                    yaxis=dict(ticksuffix='%'),
+                    hovermode='x unified',
+                    height=450,
+                    template='plotly_white',
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+                    margin=dict(t=60, b=40, l=50, r=30),
+                )
+                st.plotly_chart(fig_perf, use_container_width=True)
+            else:
+                fig, ax = plt.subplots(figsize=(12, 6))
+                last_port = df_p['Portfolio_LTD'].iloc[-1]
+                ax.plot(df_p.index, df_p['Portfolio_LTD'], label=f"Portfolio ({last_port:+.1f}%)", color="#1f77b4", linewidth=2.5)
+                if 'SPY_LTD' in df_p.columns:
+                    ax.plot(df_p.index, df_p['SPY_LTD'], label="S&P 500", color="gray", alpha=0.6, linewidth=1.5)
+                if 'NDX_LTD' in df_p.columns:
+                    ax.plot(df_p.index, df_p['NDX_LTD'], label="Nasdaq", color="orange", alpha=0.6, linewidth=1.5)
+                ax.set_ylabel("Total Return (%)"); ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+                ax.legend(loc="upper left"); ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
             
             # PLOT 2: Net P&L
             st.subheader(f"Net {mode} P&L ($)")
