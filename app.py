@@ -4940,65 +4940,118 @@ elif page == "Period Review":
             
             st.markdown("---")
             
-            # PLOT 1: Performance (Plotly for hover/crosshair)
+            # Performance chart (left) + Insights (right)
             st.subheader(f"{mode} Performance vs Benchmark")
-            if PLOTLY_AVAILABLE:
-                import plotly.graph_objects as go
-                last_port = df_p['Portfolio_LTD'].iloc[-1]
-                fig_perf = go.Figure()
 
-                fig_perf.add_trace(go.Scatter(
-                    x=df_p.index, y=df_p['Portfolio_LTD'],
-                    mode='lines', name=f"Portfolio ({last_port:+.1f}%)",
-                    line=dict(color='#1f77b4', width=2.5),
-                ))
-                if 'SPY_LTD' in df_p.columns:
-                    last_spy = df_p['SPY_LTD'].iloc[-1]
-                    fig_perf.add_trace(go.Scatter(
-                        x=df_p.index, y=df_p['SPY_LTD'],
-                        mode='lines', name=f"S&P 500 ({last_spy:+.1f}%)",
-                        line=dict(color='gray', width=1.5),
-                        opacity=0.7,
-                    ))
-                if 'NDX_LTD' in df_p.columns:
-                    last_ndx = df_p['NDX_LTD'].iloc[-1]
-                    fig_perf.add_trace(go.Scatter(
-                        x=df_p.index, y=df_p['NDX_LTD'],
-                        mode='lines', name=f"Nasdaq ({last_ndx:+.1f}%)",
-                        line=dict(color='#e67e22', width=1.5),
-                        opacity=0.7,
-                    ))
+            _chart_col, _insight_col = st.columns([3, 2])
 
-                fig_perf.update_layout(
-                    yaxis_title='Total Return (%)',
-                    yaxis=dict(ticksuffix='%'),
-                    hovermode='x unified',
-                    height=450,
-                    template='plotly_white',
-                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
-                    margin=dict(t=60, b=40, l=50, r=30),
-                )
-                st.plotly_chart(fig_perf, use_container_width=True)
-            else:
-                fig, ax = plt.subplots(figsize=(12, 6))
-                last_port = df_p['Portfolio_LTD'].iloc[-1]
-                ax.plot(df_p.index, df_p['Portfolio_LTD'], label=f"Portfolio ({last_port:+.1f}%)", color="#1f77b4", linewidth=2.5)
-                if 'SPY_LTD' in df_p.columns:
-                    ax.plot(df_p.index, df_p['SPY_LTD'], label="S&P 500", color="gray", alpha=0.6, linewidth=1.5)
-                if 'NDX_LTD' in df_p.columns:
-                    ax.plot(df_p.index, df_p['NDX_LTD'], label="Nasdaq", color="orange", alpha=0.6, linewidth=1.5)
-                ax.set_ylabel("Total Return (%)"); ax.yaxis.set_major_formatter(mtick.PercentFormatter())
-                ax.legend(loc="upper left"); ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-            
-            # PLOT 2: Net P&L
-            st.subheader(f"Net {mode} P&L ($)")
-            fig2, ax2 = plt.subplots(figsize=(12, 4))
-            colors = ['#2ca02c' if x >= 0 else '#ff4b4b' for x in df_p['Period P&L ($)']]
-            w_map = {"Weekly": 2, "Monthly": 20, "Annual": 200}
-            ax2.bar(df_p.index, df_p['Period P&L ($)'], color=colors, width=w_map.get(mode, 10))
-            ax2.axhline(0, color='black', linewidth=0.5); ax2.set_ylabel("Net P&L ($)")
-            st.pyplot(fig2)
+            with _chart_col:
+                if PLOTLY_AVAILABLE:
+                    import plotly.graph_objects as go
+                    last_port = df_p['Portfolio_LTD'].iloc[-1]
+                    fig_perf = go.Figure()
+
+                    fig_perf.add_trace(go.Scatter(
+                        x=df_p.index, y=df_p['Portfolio_LTD'],
+                        mode='lines', name=f"Portfolio ({last_port:+.1f}%)",
+                        line=dict(color='#1f77b4', width=2.5),
+                    ))
+                    if 'SPY_LTD' in df_p.columns:
+                        last_spy = df_p['SPY_LTD'].iloc[-1]
+                        fig_perf.add_trace(go.Scatter(
+                            x=df_p.index, y=df_p['SPY_LTD'],
+                            mode='lines', name=f"S&P 500 ({last_spy:+.1f}%)",
+                            line=dict(color='gray', width=1.5),
+                            opacity=0.7,
+                        ))
+                    if 'NDX_LTD' in df_p.columns:
+                        last_ndx = df_p['NDX_LTD'].iloc[-1]
+                        fig_perf.add_trace(go.Scatter(
+                            x=df_p.index, y=df_p['NDX_LTD'],
+                            mode='lines', name=f"Nasdaq ({last_ndx:+.1f}%)",
+                            line=dict(color='#e67e22', width=1.5),
+                            opacity=0.7,
+                        ))
+
+                    fig_perf.update_layout(
+                        yaxis_title='Total Return (%)',
+                        yaxis=dict(ticksuffix='%'),
+                        hovermode='x unified',
+                        height=450,
+                        template='plotly_white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+                        margin=dict(t=60, b=40, l=50, r=30),
+                    )
+                    st.plotly_chart(fig_perf, use_container_width=True)
+                else:
+                    fig, ax = plt.subplots(figsize=(8, 5))
+                    last_port = df_p['Portfolio_LTD'].iloc[-1]
+                    ax.plot(df_p.index, df_p['Portfolio_LTD'], label=f"Portfolio ({last_port:+.1f}%)", color="#1f77b4", linewidth=2.5)
+                    if 'SPY_LTD' in df_p.columns:
+                        ax.plot(df_p.index, df_p['SPY_LTD'], label="S&P 500", color="gray", alpha=0.6, linewidth=1.5)
+                    if 'NDX_LTD' in df_p.columns:
+                        ax.plot(df_p.index, df_p['NDX_LTD'], label="Nasdaq", color="orange", alpha=0.6, linewidth=1.5)
+                    ax.set_ylabel("Total Return (%)"); ax.yaxis.set_major_formatter(mtick.PercentFormatter())
+                    ax.legend(loc="upper left"); ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+
+            with _insight_col:
+                st.markdown(f"#### {mode} Insights")
+
+                # Compute insights from the period data
+                _returns = df_p['Period Return %']
+                _pnl = df_p['Period P&L ($)']
+                _n_periods = len(_returns)
+                _wins = int((_returns > 0).sum())
+                _losses = int((_returns < 0).sum())
+                _flat = _n_periods - _wins - _losses
+                _win_rate = _wins / _n_periods * 100 if _n_periods > 0 else 0
+
+                _avg_win = float(_returns[_returns > 0].mean()) if _wins > 0 else 0
+                _avg_loss = float(_returns[_returns < 0].mean()) if _losses > 0 else 0
+                _best = _returns.max()
+                _worst = _returns.min()
+                _best_date = _returns.idxmax()
+                _worst_date = _returns.idxmin()
+
+                # Current streak
+                _streak = 0
+                _streak_type = ""
+                for v in reversed(_returns.tolist()):
+                    if _streak == 0:
+                        _streak_type = "W" if v > 0 else "L"
+                        _streak = 1
+                    elif (v > 0 and _streak_type == "W") or (v <= 0 and _streak_type == "L"):
+                        _streak += 1
+                    else:
+                        break
+                _streak_label = f"{'🟢' if _streak_type == 'W' else '🔴'} {_streak} {'winning' if _streak_type == 'W' else 'losing'}"
+
+                # Alpha vs benchmarks
+                _alpha_spy = last_port - last_spy if 'SPY_LTD' in df_p.columns else None
+                _alpha_ndx = last_port - last_ndx if 'NDX_LTD' in df_p.columns else None
+
+                # Display
+                st.metric("Win Rate", f"{_win_rate:.0f}%", f"{_wins}W / {_losses}L / {_flat}F out of {_n_periods}")
+                st.metric("Current Streak", _streak_label)
+
+                i1, i2 = st.columns(2)
+                i1.metric("Avg Win", f"{_avg_win:+.2f}%")
+                i2.metric("Avg Loss", f"{_avg_loss:+.2f}%")
+
+                i3, i4 = st.columns(2)
+                _best_fmt = _best_date.strftime('%m/%d') if hasattr(_best_date, 'strftime') else str(_best_date)[:10]
+                _worst_fmt = _worst_date.strftime('%m/%d') if hasattr(_worst_date, 'strftime') else str(_worst_date)[:10]
+                i3.metric("Best Period", f"{_best:+.2f}%", f"{_best_fmt}")
+                i4.metric("Worst Period", f"{_worst:+.2f}%", f"{_worst_fmt}")
+
+                if _alpha_spy is not None:
+                    a1, a2 = st.columns(2)
+                    a1.metric("Alpha vs SPY", f"{_alpha_spy:+.1f}%",
+                              delta_color="normal" if _alpha_spy >= 0 else "inverse")
+                    if _alpha_ndx is not None:
+                        a2.metric("Alpha vs Nasdaq", f"{_alpha_ndx:+.1f}%",
+                                  delta_color="normal" if _alpha_ndx >= 0 else "inverse")
             
             # TABLE
             st.subheader(f"{mode} Financial Statement")
