@@ -1318,7 +1318,7 @@ def cached_batch_live_prices(tickers_tuple):
 def get_market_state(ticker):
     """Compute M Factor market state for a given index ticker."""
     try:
-        df = yf.Ticker(ticker).history(period="2y")
+        df = yf.Ticker(ticker).history(period="1y")
         if df.empty:
             print(f"get_market_state({ticker}): yfinance returned empty DataFrame")
             return None
@@ -2093,7 +2093,7 @@ def calculate_open_risk(df_d, df_s, nlv):
 def analyze_market_trend(ticker_symbol):
     try:
         tick = yf.Ticker(ticker_symbol)
-        df = tick.history(period="2y")
+        df = tick.history(period="1y")
         if df.empty: return None
         df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
         df['50SMA'] = df['Close'].rolling(window=50).mean()
@@ -5517,7 +5517,7 @@ elif page == "Position Sizer":
     def fetch_price_and_atr(ticker):
         """Fetch current price and 21-day ATR% in one yfinance call."""
         try:
-            hist = yf.Ticker(ticker).history(period="3mo")
+            hist = yf.Ticker(ticker).history(period="40d")
             if hist.empty: return 0.0, 5.0
             current_price = float(hist['Close'].iloc[-1])
             atr_pct = 5.0
