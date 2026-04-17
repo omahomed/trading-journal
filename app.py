@@ -10011,6 +10011,24 @@ elif page == "Risk Manager":
 
                 ax.plot(dates, hwm_series, color='gray', linestyle='--', linewidth=1, alpha=0.5, label='Peak (HWM)')
 
+                # Cash flow markers — deposits (▲ green) and withdrawals (▼ red)
+                if 'Cash -/+' in df_chart.columns:
+                    _cf = pd.to_numeric(df_chart['Cash -/+'], errors='coerce').fillna(0)
+                    _deposits = df_chart[_cf > 0]
+                    _withdrawals = df_chart[_cf < 0]
+                    if not _deposits.empty:
+                        ax.scatter(
+                            _deposits['Day'], _deposits['End NLV'],
+                            marker='^', color='#2ca02c', s=50, zorder=5,
+                            label=f'Cash In ({len(_deposits)})',
+                        )
+                    if not _withdrawals.empty:
+                        ax.scatter(
+                            _withdrawals['Day'], _withdrawals['End NLV'],
+                            marker='v', color='#dc2626', s=50, zorder=5,
+                            label=f'Cash Out ({len(_withdrawals)})',
+                        )
+
                 
 
                 # Hard Decks (Horizontal Lines based on CURRENT Peak)
@@ -10050,8 +10068,6 @@ elif page == "Risk Manager":
                     ax.set_ylim(bottom=min_view * 0.97, top=max_view * 1.02)
 
 
-
-                ax.set_title(f"Risk Levels relative to Peak (Dynamic)")
 
                 ax.set_ylabel("Account Value ($)")
 
