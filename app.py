@@ -10353,6 +10353,8 @@ elif page == "Active Campaign Summary":
              for _col, (_k, _v, _s, _g) in zip(_kpi_cols, _kpi_data):
                  _col.markdown(metric_card(_k, _v, _s, _g), unsafe_allow_html=True)
 
+             st.markdown("<div style='margin-bottom:20px;'></div>", unsafe_allow_html=True)
+
              
 
              # --- 5. DATAFRAME ---
