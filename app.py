@@ -6771,11 +6771,14 @@ elif page == "Import Trades":
                                                     pid = cur.fetchone()[0]
                                                     cur.execute("""
                                                         DELETE FROM trades_details
-                                                        WHERE portfolio_id = %s AND trade_id = %s
-                                                          AND ticker = %s AND action = %s
-                                                          AND shares = %s AND amount = %s
-                                                          AND date::date = %s::date
-                                                        LIMIT 1
+                                                        WHERE id = (
+                                                            SELECT id FROM trades_details
+                                                            WHERE portfolio_id = %s AND trade_id = %s
+                                                              AND ticker = %s AND action = %s
+                                                              AND shares = %s AND amount = %s
+                                                              AND date::date = %s::date
+                                                            LIMIT 1
+                                                        )
                                                     """, (pid, _del_tid, _del_tick,
                                                           _del_row.get('Action', ''),
                                                           float(_del_row.get('Shares', 0)),
