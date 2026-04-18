@@ -2523,9 +2523,10 @@ _stc.html(f"""
   // Runs inside an iframe — target the PARENT document for DOM + events
   const doc = window.parent.document;
 
-  // Prevent double-init on Streamlit reruns
-  if (doc.__cmdk_init) return;
-  doc.__cmdk_init = true;
+  // On Streamlit reruns the iframe is recreated but the parent DOM persists.
+  // Check if the palette already exists in the parent — if so, skip init.
+  // (Don't use a flag — the DOM element IS the flag.)
+  if (doc.getElementById('cmdk-backdrop')) return;
 
   const ITEMS = {_json.dumps(_cmdk_items)};
   let isOpen = false;
