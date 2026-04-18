@@ -2381,13 +2381,6 @@ st.sidebar.markdown("---")
 if 'page' not in st.session_state:
     st.session_state.page = "Dashboard"
 
-# ⌘K command palette navigation — reads query param set by JS overlay
-_cmdk_nav = st.query_params.get('cmdk_nav')
-if _cmdk_nav:
-    st.session_state.page = _cmdk_nav
-    st.query_params.clear()
-    st.rerun()
-
 # Navigation UI
 with st.sidebar:
     # Helper function to create nav button with active state
@@ -2506,136 +2499,34 @@ st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 # inside the iframe. When a page is selected, the component sends the page
 # name back to Python via Streamlit.setComponentValue().
 # =============================================================================
-import streamlit.components.v1 as _stc
-
-_CMDK_NAV = [
-    ("Dashboards", "var(--g-dash)", ["Dashboard", "Trading Overview"]),
-    ("Trading Ops", "var(--g-ops)", ["Active Campaign Summary", "Import Trades", "Log Buy", "Log Sell", "Position Sizer", "Trade Journal", "Trade Manager"]),
-    ("Risk Management", "var(--g-risk)", ["Earnings Planner", "Portfolio Heat", "Risk Manager"]),
-    ("Daily Workflow", "var(--g-daily)", ["Daily Journal", "Daily Report Card", "Daily Routine", "Weekly Retro"]),
-    ("Market Intel", "var(--g-mkt)", ["IBD Market School", "M Factor", "Market Cycle Tracker", "Rally Context"]),
-    ("AI", "var(--g-ai)", ["AI Coach"]),
-    ("Deep Dive", "var(--g-deep)", ["Analytics", "Performance Audit", "Performance Heat Map", "Period Review", "Ticker Forensics"]),
-    ("Admin", "var(--g-admin)", ["Admin"]),
+_ALL_PAGES = [
+    "Dashboard", "Trading Overview",
+    "Active Campaign Summary", "Import Trades", "Log Buy", "Log Sell",
+    "Position Sizer", "Trade Journal", "Trade Manager",
+    "Earnings Planner", "Portfolio Heat", "Risk Manager",
+    "Daily Journal", "Daily Report Card", "Daily Routine", "Weekly Retro",
+    "IBD Market School", "M Factor", "Market Cycle Tracker", "Rally Context",
+    "AI Coach",
+    "Analytics", "Performance Audit", "Performance Heat Map", "Period Review", "Ticker Forensics",
+    "Admin",
 ]
 
-_cmdk_items = []
-for group, color, pages in _CMDK_NAV:
-    for p in pages:
-        _cmdk_items.append({"label": p, "group": group, "color": color})
+# Quick Jump — native Streamlit selectbox with search (type to filter)
+def _on_jump():
+    v = st.session_state.get('_quick_jump')
+    if v and v != "":
+        st.session_state.page = v
 
-import json as _json
-_stc.html("""
-<script>
-(function() {
-  var doc = window.parent.document;
-  if (doc.getElementById('cmdk-backdrop')) return;
-
-  var ITEMS = """ + _json.dumps(_cmdk_items) + """;
-  var COLORS = {
-    'var(--g-dash)':'#6366f1','var(--g-ops)':'#08a86b','var(--g-risk)':'#e5484d',
-    'var(--g-daily)':'#f59f00','var(--g-mkt)':'#8b5cf6','var(--g-ai)':'#0ea5a4',
-    'var(--g-deep)':'#0d6efd','var(--g-admin)':'#0f1524'
-  };
-  var isOpen = false, idx = 0, filtered = ITEMS.slice();
-
-  var style = doc.createElement('style');
-  style.textContent = '#cmdk-backdrop{position:fixed;inset:0;background:rgba(14,20,38,0.35);backdrop-filter:blur(4px);z-index:999999;display:none;place-items:start center;padding-top:12vh}#cmdk-backdrop.open{display:grid}#cmdk-modal{width:560px;max-width:90vw;background:#fff;border-radius:14px;box-shadow:0 20px 48px rgba(14,20,38,0.14);overflow:hidden;font-family:Inter,system-ui,sans-serif}#cmdk-header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e6e8ef}#cmdk-input{flex:1;border:none;outline:none;font-size:16px;font-family:Inter,system-ui,sans-serif;background:transparent;color:#0f1524}#cmdk-list{max-height:50vh;overflow-y:auto;padding:6px}.cmdk-group{font-size:10px;text-transform:uppercase;letter-spacing:0.10em;color:#8a90a2;font-weight:600;padding:10px 12px 4px}.cmdk-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;font-size:14px;cursor:pointer;color:#0f1524}.cmdk-item.on,.cmdk-item:hover{background:#eef0f6}.cmdk-dot{width:8px;height:8px;border-radius:99px;flex-shrink:0}.cmdk-grp{font-size:11px;color:#8a90a2;margin-left:auto}#cmdk-foot{padding:8px 16px;border-top:1px solid #e6e8ef;display:flex;align-items:center;gap:14px;font-size:11px;color:#8a90a2}.cmdk-kbd{font-size:10px;background:#eef0f6;border:1px solid #e6e8ef;border-radius:4px;padding:1px 6px;color:#8a90a2}';
-  doc.head.appendChild(style);
-
-  var bd = doc.createElement('div');
-  bd.id = 'cmdk-backdrop';
-  bd.innerHTML = '<div id="cmdk-modal"><div id="cmdk-header"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8a90a2" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input id="cmdk-input" placeholder="Jump to page\\u2026" autocomplete="off"/><span class="cmdk-kbd">ESC</span></div><div id="cmdk-list"></div><div id="cmdk-foot"><span><span class="cmdk-kbd">\\u2191\\u2193</span> navigate</span><span><span class="cmdk-kbd">\\u21b5</span> select</span><span id="cmdk-count" style="margin-left:auto"></span></div></div>';
-  bd.addEventListener('click', function(e) { if (e.target === bd) closePalette(); });
-  doc.body.appendChild(bd);
-
-  function render() {
-    var inp = doc.getElementById('cmdk-input');
-    var list = doc.getElementById('cmdk-list');
-    var cnt = doc.getElementById('cmdk-count');
-    if (!inp || !list) return;
-    var q = inp.value.toLowerCase().trim();
-    filtered = q ? ITEMS.filter(function(i) { return i.label.toLowerCase().indexOf(q) >= 0 || i.group.toLowerCase().indexOf(q) >= 0; }) : ITEMS.slice();
-    if (idx >= filtered.length) idx = 0;
-    var groups = {}, order = [];
-    filtered.forEach(function(item, i) {
-      if (!groups[item.group]) { groups[item.group] = []; order.push(item.group); }
-      groups[item.group].push({label: item.label, group: item.group, color: item.color, fi: i});
-    });
-    var html = '';
-    order.forEach(function(gn) {
-      html += '<div class="cmdk-group">' + gn + '</div>';
-      groups[gn].forEach(function(it) {
-        var c = COLORS[it.color] || it.color || '#8a90a2';
-        html += '<div class="cmdk-item' + (it.fi === idx ? ' on' : '') + '" data-fi="' + it.fi + '" data-lb="' + it.label + '"><div class="cmdk-dot" style="background:' + c + '"></div><span>' + it.label + '</span><span class="cmdk-grp">' + it.group + '</span></div>';
-      });
-    });
-    list.innerHTML = html || '<div style="padding:28px;text-align:center;color:#8a90a2">No matches</div>';
-    if (cnt) cnt.textContent = filtered.length + ' results';
-    list.querySelectorAll('.cmdk-item').forEach(function(el) {
-      el.addEventListener('mouseenter', function() { idx = parseInt(el.dataset.fi); render(); });
-      el.addEventListener('click', function() { selectItem(el.dataset.lb); });
-    });
-  }
-
-  function selectItem(label) {
-    closePalette();
-    // Strategy: find the sidebar button matching the label and trigger
-    // React's internal onClick by finding the __reactProps key.
-    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
-    if (!sidebar) return;
-    var buttons = sidebar.querySelectorAll('button');
-    for (var i = 0; i < buttons.length; i++) {
-      var btn = buttons[i];
-      if (btn.textContent.trim().indexOf(label) >= 0) {
-        // Try React internal props first
-        var keys = Object.keys(btn);
-        for (var k = 0; k < keys.length; k++) {
-          if (keys[k].indexOf('__reactProps') === 0 || keys[k].indexOf('__reactEvents') === 0) {
-            var props = btn[keys[k]];
-            if (props && props.onClick) { props.onClick(new MouseEvent('click')); return; }
-            if (props && props.onMouseDown) { props.onMouseDown(new MouseEvent('mousedown')); }
-          }
-        }
-        // Fallback: try native click + dispatchEvent
-        btn.focus();
-        btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true}));
-        btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true}));
-        btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true}));
-        return;
-      }
-    }
-  }
-
-  function openPalette() {
-    isOpen = true;
-    bd.classList.add('open');
-    var inp = doc.getElementById('cmdk-input');
-    if (inp) inp.value = '';
-    idx = 0;
-    render();
-    setTimeout(function() { var inp = doc.getElementById('cmdk-input'); if (inp) inp.focus(); }, 50);
-  }
-
-  function closePalette() {
-    isOpen = false;
-    bd.classList.remove('open');
-  }
-
-  doc.addEventListener('keydown', function(e) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); isOpen ? closePalette() : openPalette(); return; }
-    if (!isOpen) return;
-    if (e.key === 'Escape') { closePalette(); e.preventDefault(); }
-    if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(filtered.length - 1, idx + 1); render(); }
-    if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(0, idx - 1); render(); }
-    if (e.key === 'Enter') { e.preventDefault(); if (filtered[idx]) selectItem(filtered[idx].label); }
-  });
-
-  var inp = doc.getElementById('cmdk-input');
-  if (inp) inp.addEventListener('input', function() { idx = 0; render(); });
-})();
-</script>
-""", height=0)
+with st.sidebar:
+    st.selectbox(
+        "🔍 Quick Jump",
+        [""] + _ALL_PAGES,
+        index=0,
+        key="_quick_jump",
+        on_change=_on_jump,
+        placeholder="Type to search pages…",
+        label_visibility="collapsed",
+    )
 
 # Logout button (only if password auth is active)
 if _AUTH_ACTIVE:
