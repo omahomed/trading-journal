@@ -2327,17 +2327,6 @@ def analyze_market_trend(ticker_symbol):
 # ==============================================================================
 # 2. SIDEBAR NAVIGATION (THE ONE SOURCE OF TRUTH)
 # ==============================================================================
-st.sidebar.markdown("""
-<div style="padding: 1.25rem 0.5rem 0.75rem; text-align: left;">
-    <span style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
-        MO Money
-    </span>
-    <span style="font-size: 0.65rem; background: rgba(99,102,241,0.15); color: var(--accent-blue); padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-weight: 600;">
-        v17
-    </span>
-</div>
-""", unsafe_allow_html=True)
-
 # Sidebar brand header
 st.sidebar.markdown("""
 <div style="display:flex;align-items:center;gap:10px;padding:4px 0 12px;">
