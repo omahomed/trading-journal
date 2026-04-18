@@ -132,12 +132,15 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                       const IconFn = NAV_ICONS[item.id] || Icons.grid;
                       return (
                         <button key={item.id}
-                                className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left"
+                                className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem"
                                 style={{
                                   background: isActive ? `color-mix(in oklab, ${group.color} 14%, transparent)` : "transparent",
                                   color: isActive ? group.color : "#2c3243",
                                   fontWeight: isActive ? 600 : 500,
+                                  ["--hover-color" as string]: group.color,
                                 }}
+                                onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.background = `color-mix(in oklab, ${group.color} 8%, transparent)`; e.currentTarget.style.color = group.color; }}}
+                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#2c3243"; }}}
                                 onClick={() => onNavigate(item.id)}>
                           {isActive && (
                             <span className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full"
