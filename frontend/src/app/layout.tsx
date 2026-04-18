@@ -35,7 +35,17 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} ${fraunces.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        {/* Prevent flash: apply saved theme before React hydrates */}
+        <script dangerouslySetInnerHTML={{ __html: `
+          try {
+            const t = localStorage.getItem('mo-theme');
+            if (t === 'dark') document.documentElement.classList.add('dark');
+          } catch(e) {}
+        ` }} />
+      </head>
       <body className="min-h-full" style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
         {children}
       </body>

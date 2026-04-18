@@ -1,19 +1,59 @@
 @import "tailwindcss";
 
+/* ── Light Mode (default) ── */
 :root {
-  --background: #f6f7fb;
-  --foreground: #0f1524;
-  --nav-color: #6366f1;
+  --bg: #f6f7fb;
+  --bg-2: #eef0f6;
+  --surface: #ffffff;
+  --surface-2: #fafbfd;
+  --border: #e6e8ef;
+  --border-2: #d8dbe5;
+  --ink: #0f1524;
+  --ink-2: #2c3243;
+  --ink-3: #5a6175;
+  --ink-4: #8a90a2;
+  --ink-5: #b6bac7;
+  --sidebar-bg: #fbfbfe;
+  --header-bg: rgba(255,255,255,0.7);
+  --card-shadow: 0 1px 2px rgba(14,20,38,0.04), 0 0 0 1px rgba(14,20,38,0.04);
+  --kpi-shadow: 0 4px 14px rgba(14,20,38,0.06), 0 0 0 1px rgba(14,20,38,0.04);
+}
+
+/* ── Dark Mode ── */
+.dark {
+  --bg: #0c0e14;
+  --bg-2: #151820;
+  --surface: #1a1d27;
+  --surface-2: #1f2230;
+  --border: #2a2d3a;
+  --border-2: #363949;
+  --ink: #e8eaf0;
+  --ink-2: #c8cad4;
+  --ink-3: #8a8fa0;
+  --ink-4: #6b7085;
+  --ink-5: #4a4f62;
+  --sidebar-bg: #111318;
+  --header-bg: rgba(17,19,24,0.8);
+  --card-shadow: 0 1px 2px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.04);
+  --kpi-shadow: 0 4px 14px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background 0.2s, color 0.2s;
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #d8dbe5; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #b6bac7; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-5); }
+
+/* Privacy mode — hides dollar amounts */
+.privacy .privacy-mask {
+  filter: blur(8px);
+  user-select: none;
+  pointer-events: none;
+}

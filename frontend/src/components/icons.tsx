@@ -36,7 +36,7 @@ export const Icons = {
 };
 
 // Map nav item IDs to icons
-export const NAV_ICONS: Record<string, (p?: any) => JSX.Element> = {
+export const NAV_ICONS: Record<string, (p?: any) => React.ReactElement> = {
   dashboard: Icons.grid,
   overview: Icons.chart,
   campaign: Icons.flag,

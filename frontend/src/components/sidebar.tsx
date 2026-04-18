@@ -11,9 +11,11 @@ interface SidebarProps {
   onToggleRail?: () => void;
   privacy?: boolean;
   onTogglePrivacy?: () => void;
+  dark?: boolean;
+  onToggleDark?: () => void;
 }
 
-export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, privacy = false, onTogglePrivacy }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -30,8 +32,8 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
   };
 
   return (
-    <aside className="flex flex-col bg-[#fbfbfe] border-r border-[#e6e8ef] sticky top-0 h-screen overflow-hidden transition-all duration-250"
-           style={{ width: rail ? 64 : 260 }}>
+    <aside className="flex flex-col border-r sticky top-0 h-screen overflow-hidden transition-all duration-250"
+           style={{ width: rail ? 64 : 260, background: "var(--sidebar-bg)", borderColor: "var(--border)" }}>
 
       {/* Brand + rail toggle */}
       <div className="flex items-center justify-between px-[18px] pt-[18px] pb-2.5">
@@ -48,7 +50,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           )}
         </div>
         {!rail && onToggleRail && (
-          <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[#eef0f6] transition-colors"
+          <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[var(--bg-2)] transition-colors"
                   onClick={onToggleRail}>
             {Icons.panelLeft()}
           </button>
@@ -58,7 +60,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
       {!rail && (
         <>
           {/* Strategy picker */}
-          <div className="mx-3.5 mb-3 px-3 py-2.5 bg-white border border-[#e6e8ef] rounded-[10px] flex items-center gap-2.5 cursor-pointer hover:border-[#d8dbe5] transition-colors">
+          <div className="mx-3.5 mb-3 px-3 py-2.5 rounded-[10px] flex items-center gap-2.5 cursor-pointer transition-colors" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px #eef0ff" }} />
             <div className="flex-1 min-w-0">
               <div className="text-[10px] text-[#8a90a2] uppercase tracking-[0.10em] font-medium">Active Strategy</div>
@@ -71,7 +73,8 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           <div className="mx-3.5 mb-2 relative">
             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#8a90a2]">{Icons.search()}</span>
             <input
-              className="w-full pl-8 pr-10 py-2 bg-white border border-[#e6e8ef] rounded-[10px] text-[13px] outline-none transition-all focus:border-[#6366f1] focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)]"
+              className="w-full pl-8 pr-10 py-2 rounded-[10px] text-[13px] outline-none transition-all focus:border-[#6366f1] focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)]"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
               placeholder="Search pages…"
               readOnly
               onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
@@ -135,12 +138,12 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                                 className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem"
                                 style={{
                                   background: isActive ? `color-mix(in oklab, ${group.color} 14%, transparent)` : "transparent",
-                                  color: isActive ? group.color : "#2c3243",
+                                  color: isActive ? group.color : "var(--ink-2)",
                                   fontWeight: isActive ? 600 : 500,
                                   ["--hover-color" as string]: group.color,
                                 }}
                                 onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.background = `color-mix(in oklab, ${group.color} 8%, transparent)`; e.currentTarget.style.color = group.color; }}}
-                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#2c3243"; }}}
+                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--ink-2)"; }}}
                                 onClick={() => onNavigate(item.id)}>
                           {isActive && (
                             <span className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full"
@@ -160,20 +163,34 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[#e6e8ef] px-3.5 py-3 bg-[#fbfbfe] flex flex-col gap-2.5">
+      <div className="px-3.5 py-3 flex flex-col gap-2.5" style={{ borderTop: "1px solid var(--border)", background: "var(--sidebar-bg)" }}>
         {!rail && (
-          <div className="flex items-center gap-2.5 text-xs text-[#5a6175]">
-            <div className="w-7 h-4 rounded-full relative cursor-pointer transition-colors"
-                 style={{ background: privacy ? "#6366f1" : "#d8dbe5" }}
-                 onClick={onTogglePrivacy}>
-              <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
-                    style={{ left: privacy ? 14 : 2 }} />
+          <>
+            {/* Dark mode toggle */}
+            <div className="flex items-center gap-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+              <div className="w-7 h-4 rounded-full relative cursor-pointer transition-colors"
+                   style={{ background: dark ? "#6366f1" : "var(--border-2)" }}
+                   onClick={onToggleDark}>
+                <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
+                      style={{ left: dark ? 14 : 2 }} />
+              </div>
+              <span>🌙</span>
+              <span className="flex-1">Dark Mode</span>
             </div>
-            {Icons.lock()}
-            <span className="flex-1">Privacy Mode</span>
-          </div>
+            {/* Privacy toggle */}
+            <div className="flex items-center gap-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+              <div className="w-7 h-4 rounded-full relative cursor-pointer transition-colors"
+                   style={{ background: privacy ? "#6366f1" : "var(--border-2)" }}
+                   onClick={onTogglePrivacy}>
+                <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
+                      style={{ left: privacy ? 14 : 2 }} />
+              </div>
+              {Icons.lock()}
+              <span className="flex-1">Privacy Mode</span>
+            </div>
+          </>
         )}
-        <div className="flex items-center gap-2.5 p-1.5 rounded-[10px] hover:bg-[#eef0f6] transition-colors">
+        <div className="flex items-center gap-2.5 p-1.5 rounded-[10px] hover:bg-[var(--bg-2)] transition-colors">
           <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0"
                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
             M
@@ -184,7 +201,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                 <div className="text-[13px] font-semibold">MO</div>
                 <div className="text-[11px] text-[#8a90a2]">mo@momoney.app</div>
               </div>
-              <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[#eef0f6]">
+              <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[var(--bg-2)]">
                 {Icons.logout()}
               </button>
             </>
