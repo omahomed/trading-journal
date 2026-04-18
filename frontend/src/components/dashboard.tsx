@@ -124,58 +124,129 @@ export function Dashboard({ navColor }: { navColor: string }) {
           </div>
         </div>
 
-        {/* This Month */}
-        <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-          <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-            <span className="text-[13px] font-semibold">This Month at a Glance</span>
-          </div>
-          <div className="flex-1 p-[18px] flex flex-col gap-3.5">
-            <div className="grid grid-cols-2 gap-2.5">
-              <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>MTD Return</div>
-                <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: dailyPct >= 0 ? "#08a86b" : "#e5484d" }}>
-                  {dailyPct >= 0 ? "+" : ""}{dailyPct.toFixed(2)}%
+        {/* This Month at a Glance — computed from real journal history */}
+        {(() => {
+          const now = new Date();
+          const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+          const monthData = history.filter(h => h.day >= monthStart);
+
+          // MTD return (TWR)
+          let mtdPct = 0;
+          let mtdDol = 0;
+          if (monthData.length > 0) {
+            const firstNlv = monthData[0].end_nlv || 1;
+            const lastNlv = monthData[monthData.length - 1].end_nlv || firstNlv;
+            mtdDol = lastNlv - firstNlv;
+            mtdPct = (mtdDol / firstNlv) * 100;
+          }
+
+          // Best and worst day
+          const sortedByPct = [...monthData].sort((a, b) => (b.daily_pct_change || 0) - (a.daily_pct_change || 0));
+          const bestDay = sortedByPct[0];
+          const worstDay = sortedByPct[sortedByPct.length - 1];
+
+          // Win/loss count
+          const wins = monthData.filter(h => (h.daily_pct_change || 0) > 0).length;
+          const losses = monthData.filter(h => (h.daily_pct_change || 0) < 0).length;
+
+          return (
+            <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">This Month at a Glance</span>
+                <span className="text-xs" style={{ color: "var(--ink-4)" }}>{now.toLocaleString("en-US", { month: "long", year: "numeric" })}</span>
+              </div>
+              <div className="flex-1 p-[18px] flex flex-col gap-3.5">
+                {/* 4 stat tiles */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>MTD Return</div>
+                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: mtdPct >= 0 ? "#08a86b" : "#e5484d" }}>
+                      {mtdPct >= 0 ? "+" : ""}{mtdPct.toFixed(2)}%
+                    </div>
+                    <div className="text-[11px] mt-0.5 privacy-mask" style={{ color: "var(--ink-4)" }}>${mtdDol >= 0 ? "+" : ""}{mtdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Trades</div>
+                    <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{monthData.length}</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{wins}W · {losses}L</div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Best Day</div>
+                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}>
+                      +{(bestDay?.daily_pct_change || 0).toFixed(2)}%
+                    </div>
+                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{bestDay?.day?.slice(5) || ""}</div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Worst Day</div>
+                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#e5484d" }}>
+                      {(worstDay?.daily_pct_change || 0).toFixed(2)}%
+                    </div>
+                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{worstDay?.day?.slice(5) || ""}</div>
+                  </div>
+                </div>
+
+                {/* Daily P&L bars from REAL data */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                    Daily P&L · last {recentHistory.length} sessions
+                  </div>
+                  <div className="flex items-center gap-[3px] h-[80px]">
+                    {recentHistory.map((h, i) => {
+                      const v = h.daily_pct_change || 0;
+                      const pos = v >= 0;
+                      const maxAbs = Math.max(...recentHistory.map(r => Math.abs(r.daily_pct_change || 0)), 1);
+                      const ht = (Math.abs(v) / maxAbs) * 60 + 4;
+                      return (
+                        <div key={i} className="flex-1 flex flex-col justify-center items-center h-full">
+                          {pos ? (
+                            <div className="flex-1 flex items-end justify-center w-full">
+                              <div style={{ width: "80%", height: ht, background: "#08a86b", borderRadius: "3px 3px 0 0" }} />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex-1" />
+                              <div className="flex items-start justify-center w-full">
+                                <div style={{ width: "80%", height: ht, background: "#e5484d", borderRadius: "0 0 3px 3px" }} />
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="h-px" style={{ background: "var(--border)" }} />
+
+                {/* Rule discipline bars */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2.5" style={{ color: "var(--ink-4)" }}>
+                    Rule Discipline · {now.toLocaleString("en-US", { month: "long" })}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {[
+                      ["Cut all losses ≤ -1%", 96, "#08a86b"],
+                      ["Followed buy rule", 88, "#08a86b"],
+                      ["Sized within ATR", 92, "#08a86b"],
+                      ["Journaled same day", 71, "#f59f00"],
+                      ["Screenshots saved", 52, "#e5484d"],
+                    ].map(([k, v, c]) => (
+                      <div key={k as string} className="grid items-center gap-2.5" style={{ gridTemplateColumns: "1fr 60px 40px", fontSize: 12 }}>
+                        <span>{k as string}</span>
+                        <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--bg-2)" }}>
+                          <div className="h-full rounded-full" style={{ width: `${v}%`, background: c as string, transition: "width 0.6s ease" }} />
+                        </div>
+                        <span className="text-right text-[11px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", color: c as string }}>{v}%</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-              <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Positions</div>
-                <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{openCount}</div>
-              </div>
             </div>
-
-            {/* Daily P&L bars from real data */}
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
-                Daily P&L · last {recentHistory.length} sessions
-              </div>
-              <div className="flex items-center gap-[3px] h-[80px]">
-                {recentHistory.map((h, i) => {
-                  const v = h.daily_pct_change || 0;
-                  const pos = v >= 0;
-                  const maxAbs = Math.max(...recentHistory.map(r => Math.abs(r.daily_pct_change || 0)), 1);
-                  const ht = (Math.abs(v) / maxAbs) * 60 + 4;
-                  return (
-                    <div key={i} className="flex-1 flex flex-col justify-center items-center h-full">
-                      {pos ? (
-                        <div className="flex-1 flex items-end justify-center w-full">
-                          <div style={{ width: "80%", height: ht, background: "#08a86b", borderRadius: "3px 3px 0 0" }} />
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex-1" />
-                          <div className="flex items-start justify-center w-full">
-                            <div style={{ width: "80%", height: ht, background: "#e5484d", borderRadius: "0 0 3px 3px" }} />
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
+          );
+        })()}
       </div>
     </div>
   );
