@@ -15683,18 +15683,18 @@ elif page == "IBD Market School":
             buy_sigs = _clean_sigs(nasdaq_latest.get('buy_signals'))
             sell_sigs = _clean_sigs(nasdaq_latest.get('sell_signals'))
 
-        m1, m2 = st.columns(2)
-        m1.metric("Close", f"${close:,.2f}", f"{daily_chg:+.2f}%")
-        m2.metric("Buy Switch", "ON ✅" if buy_switch else "OFF ❌")
-
-        # Get live correction state and distribution count (not stale DB values)
+        # Get live correction state and distribution count
         corr_state = get_correction_state("^IXIC")
         live_dist_days = get_active_distribution_days("^IXIC")
         live_dist_count = len(live_dist_days)
 
-        m3, m4 = st.columns(2)
-        m3.metric("Exposure Level", f"{exposure}/6", f"{allocation:.0f}% allocation")
-        m4.metric("Distribution Days", live_dist_count)
+        _bs_g = "mo-g-green" if buy_switch else "mo-g-red"
+        _dd_g = "mo-g-green" if live_dist_count <= 3 else ("mo-g-amber" if live_dist_count <= 5 else "mo-g-red")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.markdown(metric_card("CLOSE", f"${close:,.2f}", f"{daily_chg:+.2f}%", "mo-g-indigo"), unsafe_allow_html=True)
+        m2.markdown(metric_card("BUY SWITCH", "ON" if buy_switch else "OFF", "", _bs_g), unsafe_allow_html=True)
+        m3.markdown(metric_card("EXPOSURE LEVEL", f"{exposure}/6", f"{allocation:.0f}% allocation", "mo-g-violet"), unsafe_allow_html=True)
+        m4.markdown(metric_card("DISTRIBUTION DAYS", str(live_dist_count), "", _dd_g), unsafe_allow_html=True)
 
         if buy_sigs or sell_sigs:
             st.markdown("**Signals Today:**")
