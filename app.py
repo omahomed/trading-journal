@@ -2381,6 +2381,13 @@ st.sidebar.markdown("---")
 if 'page' not in st.session_state:
     st.session_state.page = "Dashboard"
 
+# ⌘K command palette navigation — reads query param set by JS overlay
+_cmdk_nav = st.query_params.get('cmdk_nav')
+if _cmdk_nav:
+    st.session_state.page = _cmdk_nav
+    st.query_params.clear()
+    st.rerun()
+
 # Navigation UI
 with st.sidebar:
     # Helper function to create nav button with active state
@@ -2637,22 +2644,12 @@ _stc.html(f"""
 
   function selectItem(label) {{
     close();
-    // Find and click the matching sidebar button in the parent frame.
-    // Use dispatchEvent with bubbles:true so Streamlit's event system picks it up.
-    const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-    if (!sidebar) return;
-    const buttons = sidebar.querySelectorAll('button');
-    for (const btn of buttons) {{
-      const text = btn.textContent.trim();
-      if (text.includes(label)) {{
-        // Try multiple click strategies for Streamlit compatibility
-        btn.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
-        // Fallback: also try focus + native click
-        btn.focus();
-        btn.click();
-        return;
-      }}
-    }}
+    // Navigate by reloading with a query param that Python picks up.
+    // Streamlit's React buttons don't respond to programmatic DOM clicks,
+    // so this is the only reliable cross-frame navigation method.
+    const url = new URL(window.parent.location.href);
+    url.searchParams.set('cmdk_nav', label);
+    window.parent.location.href = url.toString();
   }}
 
   function open() {{
