@@ -2436,22 +2436,6 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
-    # Quick Jump — type to search pages
-    def _on_jump():
-        v = st.session_state.get('_quick_jump')
-        if v and v != "":
-            st.session_state.page = v
-
-    st.selectbox(
-        "🔍 Quick Jump",
-        [""] + _ALL_PAGES,
-        index=0,
-        key="_quick_jump",
-        on_change=_on_jump,
-        placeholder="Type to search pages…",
-        label_visibility="collapsed",
-    )
-
     nav_section("DASHBOARDS")
     nav_button("Dashboard", "📊")
     nav_button("Trading Overview", "📈")

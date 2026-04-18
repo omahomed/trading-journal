@@ -250,7 +250,7 @@ export default function Home() {
             <kbd className="text-[10px] bg-[#eef0f6] border border-[var(--border)] rounded px-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>⌘K</kbd>
           </button>
         </header>
-        <div className="flex-1 overflow-auto px-7 py-6 max-w-[1600px] mx-auto w-full">
+        <div className="flex-1 overflow-auto px-7 py-6">
           {page === "dashboard" ? <DashboardPage navColor={navColor} /> : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
         </div>
       </main>
