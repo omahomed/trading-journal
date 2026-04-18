@@ -221,9 +221,49 @@ def parse_trade_confirms(xml_root):
     return df
 
 
-def pull_ibkr_trades():
+def consolidate_partial_fills(df):
     """
-    Convenience function: fetch + parse in one call.
+    IBKR often fills a single order in multiple lots (e.g., SELL 435 TQQQ
+    gets filled as 35 + 200 + 200 at the same price and time). Consolidate
+    these into one row per logical transaction.
+
+    Groups by: symbol + action + price + trade_date + order_time + asset_class
+               + put_call + strike + expiry (so options with different strikes
+               stay separate).
+    Aggregates: quantity (sum), amount (sum), commission (sum), net_cash (sum).
+    """
+    if df.empty:
+        return df
+
+    group_keys = ['symbol', 'action', 'price', 'trade_date', 'order_time',
+                  'asset_class', 'put_call', 'strike', 'expiry']
+    # Only group by columns that exist
+    group_keys = [k for k in group_keys if k in df.columns]
+
+    agg_rules = {
+        'quantity': 'sum',
+        'amount': 'sum',
+        'commission': 'sum',
+        'net_cash': 'sum',
+        'account': 'first',
+        'settle_date': 'first',
+        'description': 'first',
+        'currency': 'first',
+    }
+    # Only aggregate columns that exist
+    agg_rules = {k: v for k, v in agg_rules.items() if k in df.columns}
+
+    consolidated = df.groupby(group_keys, as_index=False).agg(agg_rules)
+    consolidated = consolidated.sort_values(['trade_date', 'order_time'], ascending=[False, False])
+    return consolidated
+
+
+def pull_ibkr_trades(consolidate=True):
+    """
+    Convenience function: fetch + parse + optionally consolidate in one call.
+
+    Args:
+        consolidate: If True, merge partial fills into single rows.
 
     Returns:
         (DataFrame, error_message) — DataFrame of trades on success,
@@ -234,4 +274,6 @@ def pull_ibkr_trades():
         return pd.DataFrame(), err
 
     df = parse_trade_confirms(xml_root)
+    if consolidate and not df.empty:
+        df = consolidate_partial_fills(df)
     return df, None

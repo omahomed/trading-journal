@@ -6722,6 +6722,94 @@ elif page == "Import Trades":
 
         st.caption("Pull today's trade executions from Interactive Brokers and log them to your journal.")
 
+        # --- DELETE TODAY'S EXISTING TRANSACTIONS (for re-import) ---
+        with st.expander("🗑️ Delete existing transactions (for re-import)", expanded=False):
+            st.caption("If you already manually entered today's trades and want to re-import from IBKR, delete the manual entries first.")
+            df_d, df_s = load_trade_data()
+            _today_str = get_current_date_ct().strftime('%Y-%m-%d')
+
+            if not df_d.empty and 'Date' in df_d.columns:
+                df_d['_date_str'] = pd.to_datetime(df_d['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                today_txns = df_d[df_d['_date_str'] == _today_str].copy()
+                df_d = df_d.drop(columns=['_date_str'])
+
+                if today_txns.empty:
+                    st.info(f"No transactions found for {_today_str}.")
+                else:
+                    st.markdown(f"**{len(today_txns)} transaction(s) found for {_today_str}:**")
+
+                    # Show selectable list
+                    _del_selections = {}
+                    for _di, _dr in today_txns.iterrows():
+                        _t_id = _dr.get('Trade_ID', '')
+                        _t_tick = _dr.get('Ticker', '')
+                        _t_act = _dr.get('Action', '')
+                        _t_shs = int(_dr.get('Shares', 0))
+                        _t_px = float(_dr.get('Amount', 0))
+                        _t_trx = _dr.get('Trx_ID', '')
+                        _label = f"{_t_act} {_t_shs} {_t_tick} @ ${_t_px:.2f} — {_t_id} ({_t_trx})"
+                        _del_selections[_di] = st.checkbox(_label, key=f"del_txn_{_di}")
+
+                    _to_delete = [k for k, v in _del_selections.items() if v]
+                    if _to_delete:
+                        if st.button(f"⚠️ Delete {len(_to_delete)} selected transaction(s)", type="primary", key="del_today_btn"):
+                            for _del_idx in _to_delete:
+                                _del_row = today_txns.loc[_del_idx]
+                                _del_tid = _del_row.get('Trade_ID', '')
+                                _del_tick = _del_row.get('Ticker', '')
+                                if USE_DATABASE:
+                                    # Delete from DB by matching fields
+                                    try:
+                                        db_id = _del_row.get('id', None)
+                                        if db_id:
+                                            db.delete_detail_row(portfolio, int(db_id))
+                                        else:
+                                            # Fallback: delete by Trade_ID + Date + Action + Shares
+                                            with db.get_db_connection() as conn:
+                                                with conn.cursor() as cur:
+                                                    cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio,))
+                                                    pid = cur.fetchone()[0]
+                                                    cur.execute("""
+                                                        DELETE FROM trades_details
+                                                        WHERE portfolio_id = %s AND trade_id = %s
+                                                          AND ticker = %s AND action = %s
+                                                          AND shares = %s AND amount = %s
+                                                          AND date::date = %s::date
+                                                        LIMIT 1
+                                                    """, (pid, _del_tid, _del_tick,
+                                                          _del_row.get('Action', ''),
+                                                          float(_del_row.get('Shares', 0)),
+                                                          float(_del_row.get('Amount', 0)),
+                                                          _today_str))
+                                                    conn.commit()
+                                    except Exception as del_e:
+                                        st.error(f"Delete failed for {_del_tick}: {del_e}")
+                                        continue
+                                else:
+                                    df_d = df_d.drop(index=_del_idx)
+
+                                log_audit_trail('DELETE', _del_tid, _del_tick,
+                                                f"Deleted for IBKR re-import: {_del_row.get('Action','')} {int(_del_row.get('Shares',0))} shs")
+
+                            if not USE_DATABASE:
+                                secure_save(df_d, DETAILS_FILE)
+
+                            # Recalculate campaign summaries for affected trade IDs
+                            affected_tids = today_txns.loc[_to_delete, 'Trade_ID'].unique()
+                            for _atid in affected_tids:
+                                df_d_fresh = load_data(DETAILS_FILE)
+                                df_s_fresh = load_data(SUMMARY_FILE)
+                                update_campaign_summary(_atid, df_d_fresh, df_s_fresh)
+
+                            try: load_data.clear()
+                            except Exception: pass
+                            st.success(f"✅ Deleted {len(_to_delete)} transaction(s). You can now re-import from IBKR.")
+                            st.rerun()
+            else:
+                st.info("No transaction data available.")
+
+        st.markdown("---")
+
         # --- PULL BUTTON ---
         if st.button("📥 Pull IBKR Trades", type="primary"):
             with st.spinner("Fetching from IBKR Flex Web Service..."):
