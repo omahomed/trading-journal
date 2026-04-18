@@ -23,7 +23,7 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
       <div className="absolute -right-5 -top-5 w-[100px] h-[100px] rounded-full" style={{ background: "radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)" }} />
       <div className="relative z-10">
         <div className="text-[9px] font-semibold uppercase tracking-[0.10em] opacity-85" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>{label}</div>
-        <div className="text-[22px] font-semibold tracking-tight mt-0.5" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{value}</div>
+        <div className="text-[22px] font-semibold tracking-tight mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
       </div>
       <div className="relative z-10 text-[10px] font-medium opacity-80">{sub}</div>
     </div>
@@ -37,7 +37,7 @@ function DashboardPage({ navColor }: { navColor: string }) {
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <div className="mb-[22px] pb-[14px] border-b border-[#e6e8ef]">
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "'Fraunces', Georgia, serif" }}>
+        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           {greeting}, <em className="italic" style={{ color: navColor }}>{" MO"}</em>
         </h1>
         <div className="text-[13px] text-[#5a6175] mt-1.5">
@@ -81,7 +81,7 @@ function StubPage({ title, pageId }: { title: string; pageId: string }) {
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <div className="mb-[22px] pb-[14px] border-b border-[#e6e8ef]">
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "'Fraunces', Georgia, serif" }}>
+        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           {rest}{rest ? " " : ""}<em className="italic" style={{ color }}>{last}</em>
         </h1>
       </div>
@@ -90,7 +90,7 @@ function StubPage({ title, pageId }: { title: string; pageId: string }) {
              style={{ background: `color-mix(in oklab, ${color} 12%, transparent)`, color }}>
           ✦
         </div>
-        <h2 className="text-[26px] font-normal italic m-0 mb-1.5" style={{ fontFamily: "'Fraunces', Georgia, serif" }}>Coming together</h2>
+        <h2 className="text-[26px] font-normal italic m-0 mb-1.5" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>Coming together</h2>
         <p className="text-[#5a6175] text-sm max-w-[480px] mx-auto leading-relaxed">
           This page will be built next. The data layer connects to your existing Supabase PostgreSQL — same database, same trade records, same journal entries.
         </p>
@@ -116,12 +116,13 @@ const PAGE_TITLES: Record<string, string> = {
 
 export default function Home() {
   const [page, setPage] = useState("dashboard");
+  const [privacy, setPrivacy] = useState(false);
   const group = getGroupForPage(page);
   const navColor = group?.color || "#6366f1";
 
   return (
     <div className="flex h-screen">
-      <Sidebar activePage={page} onNavigate={setPage} />
+      <Sidebar activePage={page} onNavigate={setPage} privacy={privacy} onTogglePrivacy={() => setPrivacy(!privacy)} />
       <main className="flex-1 flex flex-col min-w-0 bg-[#f6f7fb]">
         <header className="h-[56px] border-b border-[#e6e8ef] flex items-center px-6 gap-5 sticky top-0 z-30"
                 style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "saturate(160%) blur(10px)" }}>
@@ -131,11 +132,16 @@ export default function Home() {
             <span className="text-[#0f1524] font-semibold">{PAGE_TITLES[page]}</span>
           </div>
           <div className="flex-1" />
+          {/* Tape status pill */}
+          <div className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-white border border-[#e6e8ef] text-[#2c3243]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#08a86b]" style={{ boxShadow: "0 0 0 3px #e5f7ee", animation: "pulse-dot 2s ease-in-out infinite" }} />
+            <span>Confirmed Uptrend · since Apr 11</span>
+          </div>
           <button className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-white border border-[#e6e8ef] text-[#2c3243] hover:bg-[#eef0f6] transition-colors"
                   onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             Quick jump
-            <kbd className="text-[10px] bg-[#eef0f6] border border-[#e6e8ef] rounded px-1" style={{ fontFamily: "'JetBrains Mono', monospace" }}>⌘K</kbd>
+            <kbd className="text-[10px] bg-[#eef0f6] border border-[#e6e8ef] rounded px-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>⌘K</kbd>
           </button>
         </header>
         <div className="flex-1 overflow-auto px-7 py-6 max-w-[1600px] mx-auto w-full">
