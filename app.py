@@ -6816,13 +6816,14 @@ elif page == "Import Trades":
         # --- PULL BUTTON ---
         if st.button("📥 Pull IBKR Trades", type="primary"):
             with st.spinner("Fetching from IBKR Flex Web Service..."):
-                df_trades, err = ibkr_flex.pull_ibkr_trades()
+                df_trades, raw_debug, err = ibkr_flex.pull_ibkr_trades()
             if err:
                 st.error(f"❌ {err}")
             elif df_trades.empty:
                 st.info("✅ No trade confirmations found for the query period. If you just executed a trade, wait 1-2 minutes and try again.")
             else:
                 st.session_state['_ibkr_trades'] = df_trades
+                st.session_state['_ibkr_debug'] = raw_debug
                 st.success(f"✅ Pulled **{len(df_trades)}** execution(s) from IBKR.")
 
         # --- DISPLAY + LOG FLOW ---
@@ -6861,10 +6862,19 @@ elif page == "Import Trades":
             )
 
             # Debug: show raw IBKR XML attributes (for field name mapping)
-            if '_raw_attribs' in df_ibkr.columns:
-                with st.expander("🔧 Debug: Raw IBKR XML attributes (first trade)", expanded=False):
-                    raw = df_ibkr['_raw_attribs'].iloc[0] if not df_ibkr['_raw_attribs'].isna().all() else "No raw data"
-                    st.code(raw, language="python")
+            raw_debug = st.session_state.get('_ibkr_debug', {})
+            with st.expander("🔧 Debug: Raw IBKR XML attributes (first trade)", expanded=False):
+                if raw_debug:
+                    st.code(str(raw_debug), language="python")
+                    # Highlight key fields
+                    st.caption(f"**orderID:** `{raw_debug.get('orderID', 'NOT FOUND')}`  \n"
+                               f"**ibOrderID:** `{raw_debug.get('ibOrderID', 'NOT FOUND')}`  \n"
+                               f"**tradePrice:** `{raw_debug.get('tradePrice', 'NOT FOUND')}`  \n"
+                               f"**price:** `{raw_debug.get('price', 'NOT FOUND')}`  \n"
+                               f"**amount:** `{raw_debug.get('amount', 'NOT FOUND')}`  \n"
+                               f"**quantity:** `{raw_debug.get('quantity', 'NOT FOUND')}`")
+                else:
+                    st.info("Pull trades first to see debug data.")
 
             st.markdown("---")
             st.markdown("### Log to Journal")

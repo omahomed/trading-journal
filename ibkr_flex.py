@@ -226,10 +226,6 @@ def parse_trade_confirms(xml_root):
             "order_id": str(order_id).strip(),
         })
 
-    # Store raw attributes for debugging (first 5 trades)
-    if trades:
-        trades[0]['_raw_attribs'] = str(dict(list(xml_root.iter("TradeConfirm"))[0].attrib)) if list(xml_root.iter("TradeConfirm")) else ""
-
     if not trades:
         return pd.DataFrame(columns=[
             "account", "trade_date", "settle_date", "symbol", "description",
@@ -310,6 +306,17 @@ def consolidate_partial_fills(df):
     return consolidated
 
 
+def get_raw_debug_info(xml_root):
+    """Extract raw XML attributes from the first TradeConfirm for debugging."""
+    try:
+        confirms = list(xml_root.iter("TradeConfirm"))
+        if confirms:
+            return dict(confirms[0].attrib)
+    except Exception:
+        pass
+    return {}
+
+
 def pull_ibkr_trades(consolidate=True):
     """
     Convenience function: fetch + parse + optionally consolidate in one call.
@@ -318,14 +325,14 @@ def pull_ibkr_trades(consolidate=True):
         consolidate: If True, merge partial fills into single rows.
 
     Returns:
-        (DataFrame, error_message) — DataFrame of trades on success,
-        empty DataFrame + error string on failure.
+        (DataFrame, raw_debug_dict, error_message)
     """
     xml_root, err = fetch_flex_report()
     if err:
-        return pd.DataFrame(), err
+        return pd.DataFrame(), {}, err
 
+    raw_debug = get_raw_debug_info(xml_root)
     df = parse_trade_confirms(xml_root)
     if consolidate and not df.empty:
         df = consolidate_partial_fills(df)
-    return df, None
+    return df, raw_debug, None
