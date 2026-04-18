@@ -2501,11 +2501,13 @@ st.sidebar.toggle(
 st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 
 # =============================================================================
-# ⌘K COMMAND PALETTE — injected as a floating JS overlay.
-# Captures ⌘K / Ctrl+K, shows a searchable page list, and clicks the
-# matching sidebar button when the user selects a page. No custom component
-# build step — pure vanilla JS manipulating Streamlit's DOM.
+# ⌘K COMMAND PALETTE — proper Streamlit component with bidirectional comms.
+# The component renders as a 0-height iframe. ⌘K opens the palette overlay
+# inside the iframe. When a page is selected, the component sends the page
+# name back to Python via Streamlit.setComponentValue().
 # =============================================================================
+from components.cmdk import command_palette as _cmdk_func
+
 _CMDK_NAV = [
     ("Dashboards", "var(--g-dash)", ["Dashboard", "Trading Overview"]),
     ("Trading Ops", "var(--g-ops)", ["Active Campaign Summary", "Import Trades", "Log Buy", "Log Sell", "Position Sizer", "Trade Journal", "Trade Manager"]),
@@ -2517,173 +2519,15 @@ _CMDK_NAV = [
     ("Admin", "var(--g-admin)", ["Admin"]),
 ]
 
-import json as _json
 _cmdk_items = []
 for group, color, pages in _CMDK_NAV:
     for p in pages:
         _cmdk_items.append({"label": p, "group": group, "color": color})
 
-import streamlit.components.v1 as _stc
-_stc.html(f"""
-<script>
-(function() {{
-  // Runs inside an iframe — target the PARENT document for DOM + events
-  const doc = window.parent.document;
-
-  // On Streamlit reruns the iframe is recreated but the parent DOM persists.
-  // Check if the palette already exists in the parent — if so, skip init.
-  // (Don't use a flag — the DOM element IS the flag.)
-  if (doc.getElementById('cmdk-backdrop')) return;
-
-  const ITEMS = {_json.dumps(_cmdk_items)};
-  let isOpen = false;
-  let idx = 0;
-  let filtered = [...ITEMS];
-
-  // Create DOM on the parent document (not the iframe)
-  const backdrop = doc.createElement('div');
-  backdrop.id = 'cmdk-backdrop';
-  backdrop.innerHTML = `
-    <div id="cmdk-modal">
-      <div id="cmdk-header">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;color:var(--ink-4);">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input id="cmdk-input" placeholder="Jump to page…" autocomplete="off" />
-        <kbd style="font-family:var(--f-num);font-size:10px;background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--ink-4);">ESC</kbd>
-      </div>
-      <div id="cmdk-list"></div>
-      <div id="cmdk-foot">
-        <span><kbd>↑↓</kbd> navigate</span>
-        <span><kbd>↵</kbd> select</span>
-        <span id="cmdk-count" style="margin-left:auto;"></span>
-      </div>
-    </div>
-  `;
-
-  // Styles
-  const style = document.createElement('style');
-  style.textContent = `
-    #cmdk-backdrop {{
-      position:fixed;inset:0;background:rgba(14,20,38,0.35);backdrop-filter:blur(4px);
-      z-index:99999;display:none;place-items:start center;padding-top:12vh;
-    }}
-    #cmdk-backdrop.open {{ display:grid; animation:cmdk-fade 0.2s; }}
-    @keyframes cmdk-fade {{ from {{ opacity:0; }} }}
-    #cmdk-modal {{
-      width:560px;max-width:90vw;background:#fff;border-radius:14px;
-      box-shadow:0 20px 48px rgba(14,20,38,0.14),0 0 0 1px rgba(14,20,38,0.06);
-      overflow:hidden;animation:cmdk-rise 0.22s cubic-bezier(.2,.9,.3,1.1);
-    }}
-    @keyframes cmdk-rise {{ from {{ transform:translateY(-10px) scale(0.97);opacity:0; }} }}
-    #cmdk-header {{
-      display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border);
-    }}
-    #cmdk-input {{
-      flex:1;border:none;outline:none;font-size:16px;font-family:var(--f-ui);background:transparent;color:var(--ink);
-    }}
-    #cmdk-list {{ max-height:50vh;overflow-y:auto;padding:6px; }}
-    .cmdk-group {{ font-size:10px;text-transform:uppercase;letter-spacing:0.10em;color:var(--ink-4);font-weight:600;padding:10px 12px 4px; }}
-    .cmdk-item {{
-      display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:10px;font-size:14px;cursor:pointer;
-      font-family:var(--f-ui);color:var(--ink);
-    }}
-    .cmdk-item.on {{ background:var(--bg-2); }}
-    .cmdk-item .cmdk-dot {{
-      width:8px;height:8px;border-radius:99px;flex-shrink:0;
-    }}
-    .cmdk-item .cmdk-grp {{ font-size:11px;color:var(--ink-4);margin-left:auto; }}
-    #cmdk-foot {{
-      padding:8px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:14px;
-      font-size:11px;color:var(--ink-4);font-family:var(--f-ui);
-    }}
-    #cmdk-foot kbd {{
-      font-family:var(--f-num);font-size:10px;background:var(--bg-2);border:1px solid var(--border);
-      border-radius:4px;padding:1px 5px;
-    }}
-  `;
-  doc.head.appendChild(style);
-  doc.body.appendChild(backdrop);
-
-  const input = doc.getElementById('cmdk-input');
-  const list = doc.getElementById('cmdk-list');
-  const countEl = doc.getElementById('cmdk-count');
-
-  function render() {{
-    const q = input.value.toLowerCase().trim();
-    filtered = q ? ITEMS.filter(i => i.label.toLowerCase().includes(q) || i.group.toLowerCase().includes(q)) : [...ITEMS];
-    if (idx >= filtered.length) idx = 0;
-
-    // Group items
-    const groups = {{}};
-    filtered.forEach((item, i) => {{
-      if (!groups[item.group]) groups[item.group] = [];
-      groups[item.group].push({{...item, flatIdx: i}});
-    }});
-
-    let html = '';
-    for (const [gname, items] of Object.entries(groups)) {{
-      html += `<div class="cmdk-group">${{gname}}</div>`;
-      items.forEach(item => {{
-        html += `<div class="cmdk-item ${{item.flatIdx === idx ? 'on' : ''}}" data-idx="${{item.flatIdx}}" data-label="${{item.label}}" style="--gc:${{item.color}}">
-          <div class="cmdk-dot" style="background:${{item.color}}"></div>
-          <span>${{item.label}}</span>
-          <span class="cmdk-grp">${{item.group}}</span>
-        </div>`;
-      }});
-    }}
-    list.innerHTML = html || '<div style="padding:28px 18px;text-align:center;color:var(--ink-4);font-size:13px;">No matches</div>';
-    countEl.textContent = filtered.length + ' results';
-
-    // Event listeners
-    list.querySelectorAll('.cmdk-item').forEach(el => {{
-      el.addEventListener('mouseenter', () => {{ idx = parseInt(el.dataset.idx); render(); }});
-      el.addEventListener('click', () => selectItem(el.dataset.label));
-    }});
-  }}
-
-  function selectItem(label) {{
-    close();
-    // Navigate by reloading with a query param that Python picks up.
-    // Streamlit's React buttons don't respond to programmatic DOM clicks,
-    // so this is the only reliable cross-frame navigation method.
-    const url = new URL(window.parent.location.href);
-    url.searchParams.set('cmdk_nav', label);
-    window.parent.location.href = url.toString();
-  }}
-
-  function open() {{
-    isOpen = true;
-    backdrop.classList.add('open');
-    input.value = '';
-    idx = 0;
-    render();
-    setTimeout(() => input.focus(), 50);
-  }}
-
-  function close() {{
-    isOpen = false;
-    backdrop.classList.remove('open');
-  }}
-
-  // Keyboard listeners on parent document
-  doc.addEventListener('keydown', (e) => {{
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {{
-      e.preventDefault();
-      isOpen ? close() : open();
-    }}
-    if (!isOpen) return;
-    if (e.key === 'Escape') {{ close(); e.preventDefault(); }}
-    if (e.key === 'ArrowDown') {{ e.preventDefault(); idx = Math.min(filtered.length - 1, idx + 1); render(); }}
-    if (e.key === 'ArrowUp') {{ e.preventDefault(); idx = Math.max(0, idx - 1); render(); }}
-    if (e.key === 'Enter') {{ e.preventDefault(); if (filtered[idx]) selectItem(filtered[idx].label); }}
-  }});
-
-  input.addEventListener('input', () => {{ idx = 0; render(); }});
-  backdrop.addEventListener('click', (e) => {{ if (e.target === backdrop) close(); }});
-}})();
-</script>
-""", height=0)
+_cmdk_selected = _cmdk_func(pages=_cmdk_items, key="cmdk_palette")
+if _cmdk_selected:
+    st.session_state.page = _cmdk_selected
+    st.rerun()
 
 # Logout button (only if password auth is active)
 if _AUTH_ACTIVE:
