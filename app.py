@@ -1294,30 +1294,95 @@ def cached_r2_download(url):
 def cached_live_price(ticker):
     if not ticker:
         return None
+    # Convert option tickers to OCC format for yfinance
+    lookup = ticker
+    if _is_option_ticker(ticker):
+        occ = _to_occ_symbol(ticker)
+        if occ:
+            lookup = occ
+        else:
+            return None
     try:
-        hist = yf.Ticker(ticker).history(period="1d")
+        hist = yf.Ticker(lookup).history(period="1d")
         if hist.empty:
             return None
         return float(hist['Close'].iloc[-1])
     except Exception:
         return None
 
+# --- OPTION TICKER UTILITIES ---
+import re as _re
+
+def _is_option_ticker(ticker):
+    """Detect if a ticker is a readable option format like 'LUMN 260717 $8C'."""
+    return bool(ticker and '$' in ticker and _re.search(r'\d{6}', ticker))
+
+
+def _to_occ_symbol(readable_ticker):
+    """Convert readable option ticker to OCC format for yfinance pricing.
+    'LUMN 260717 $8C' → 'LUMN260717C00008000'
+    'AAPL 261218 $150.5P' → 'AAPL261218P00150500'
+    """
+    try:
+        # Parse: {underlying} {YYMMDD} ${strike}{C/P}
+        m = _re.match(r'^(\S+)\s+(\d{6})\s+\$([0-9.]+)(C|P)$', readable_ticker.strip())
+        if not m:
+            return None
+        underlying = m.group(1)
+        expiry = m.group(2)
+        strike = float(m.group(3))
+        put_call = m.group(4)
+        # OCC: underlying + YYMMDD + C/P + strike×1000 zero-padded to 8 digits
+        strike_int = int(strike * 1000)
+        return f"{underlying}{expiry}{put_call}{strike_int:08d}"
+    except Exception:
+        return None
+
+
 # --- CACHED BATCH LIVE PRICES ---
 # For dashboards that need live prices for all open positions. Cache key is
 # a sorted tuple so the order of tickers doesn't matter. 60s TTL.
 @st.cache_data(ttl=60, show_spinner=False)
 def cached_batch_live_prices(tickers_tuple):
-    """Returns dict[ticker -> price]. Pass a tuple (hashable) of tickers."""
+    """Returns dict[readable_ticker -> price]. Pass a tuple (hashable) of tickers.
+    Option tickers (e.g., 'LUMN 260717 $8C') are auto-converted to OCC symbols
+    for yfinance lookup, then mapped back to the readable ticker in the result."""
     if not tickers_tuple:
         return {}
     tickers = list(tickers_tuple)
+
+    # Split into stocks and options; build lookup symbols
+    yf_symbols = []        # symbols to send to yfinance
+    yf_to_readable = {}    # maps yf symbol → readable ticker
+    for t in tickers:
+        if _is_option_ticker(t):
+            occ = _to_occ_symbol(t)
+            if occ:
+                yf_symbols.append(occ)
+                yf_to_readable[occ] = t
+            # else: skip — can't convert, won't price
+        else:
+            yf_symbols.append(t)
+            yf_to_readable[t] = t
+
+    if not yf_symbols:
+        return {}
+
     try:
-        data = yf.download(tickers, period="1d", progress=False)['Close']
-        if len(tickers) == 1:
+        data = yf.download(yf_symbols, period="1d", progress=False)['Close']
+        result = {}
+        if len(yf_symbols) == 1:
             val = float(data.iloc[-1]) if not data.empty else None
-            return {tickers[0]: val} if val is not None else {}
-        last = data.iloc[-1]
-        return {t: float(last[t]) for t in tickers if t in last.index and not pd.isna(last[t])}
+            if val is not None:
+                readable = yf_to_readable.get(yf_symbols[0], yf_symbols[0])
+                result[readable] = val
+        else:
+            last = data.iloc[-1]
+            for yf_sym in yf_symbols:
+                if yf_sym in last.index and not pd.isna(last[yf_sym]):
+                    readable = yf_to_readable.get(yf_sym, yf_sym)
+                    result[readable] = float(last[yf_sym])
+        return result
     except Exception:
         return {}
 
