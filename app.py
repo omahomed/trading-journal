@@ -2224,6 +2224,7 @@ with st.sidebar:
 
     nav_section("TRADING OPS")
     nav_button("Active Campaign Summary", "📋")
+    nav_button("Import Trades", "🔗")
     nav_button("Log Buy", "🟢")
     nav_button("Log Sell", "🔴")
     nav_button("Position Sizer", "🔢")
@@ -6696,6 +6697,253 @@ elif page == "Position Sizer":
             st.caption(f"Hard cap: 5% of NLV (${hard_cap_budget:,.0f}) — no mode can exceed this regardless of risk %.")
         else:
             st.info("Enter the cost per contract and your equity above.")
+
+
+# ==============================================================================
+# PAGE: IMPORT TRADES (IBKR Flex Query)
+# ==============================================================================
+elif page == "Import Trades":
+    page_header("Import Trades", "Pull executions from IBKR", "🔗")
+
+    # Check if ibkr_flex is available
+    try:
+        import ibkr_flex
+        _IBKR_AVAILABLE = True
+    except (ImportError, Exception) as e:
+        _IBKR_AVAILABLE = False
+        st.error(f"⚠️ ibkr_flex module not loaded: {e}")
+
+    if _IBKR_AVAILABLE:
+        # Check credentials
+        _ibkr_creds = st.secrets.get("ibkr", {})
+        if not _ibkr_creds.get("flex_token") or not _ibkr_creds.get("flex_query_id"):
+            st.error("⚠️ IBKR credentials not configured. Add `[ibkr]` with `flex_token` and `flex_query_id` to your Streamlit secrets.")
+            st.stop()
+
+        st.caption("Pull today's trade executions from Interactive Brokers and log them to your journal.")
+
+        # --- PULL BUTTON ---
+        if st.button("📥 Pull IBKR Trades", type="primary"):
+            with st.spinner("Fetching from IBKR Flex Web Service..."):
+                df_trades, err = ibkr_flex.pull_ibkr_trades()
+            if err:
+                st.error(f"❌ {err}")
+            elif df_trades.empty:
+                st.info("✅ No trade confirmations found for the query period. If you just executed a trade, wait 1-2 minutes and try again.")
+            else:
+                st.session_state['_ibkr_trades'] = df_trades
+                st.success(f"✅ Pulled **{len(df_trades)}** execution(s) from IBKR.")
+
+        # --- DISPLAY + LOG FLOW ---
+        if '_ibkr_trades' in st.session_state and not st.session_state['_ibkr_trades'].empty:
+            df_ibkr = st.session_state['_ibkr_trades']
+
+            st.markdown("---")
+            st.markdown("### Executions")
+
+            # Summary counts
+            n_buys = int((df_ibkr['action'] == 'BUY').sum())
+            n_sells = int((df_ibkr['action'] == 'SELL').sum())
+            n_stk = int((df_ibkr['asset_class'] == 'STK').sum())
+            n_opt = int((df_ibkr['asset_class'] == 'OPT').sum())
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("Total", len(df_ibkr))
+            sc2.metric("Buys / Sells", f"{n_buys} / {n_sells}")
+            sc3.metric("Stocks", n_stk)
+            sc4.metric("Options", n_opt)
+
+            # Show the raw executions table
+            display_cols = ['trade_date', 'order_time', 'symbol', 'asset_class', 'action',
+                            'quantity', 'price', 'amount', 'commission', 'net_cash']
+            if n_opt > 0:
+                display_cols += ['put_call', 'strike', 'expiry']
+
+            st.dataframe(
+                df_ibkr[display_cols].style.format({
+                    'price': '${:,.2f}',
+                    'amount': '${:,.2f}',
+                    'commission': '${:,.2f}',
+                    'net_cash': '${:,.2f}',
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+            st.markdown("---")
+            st.markdown("### Log to Journal")
+            st.caption("Select trades to log. Assign each to a campaign and tag with your rule.")
+
+            # Load existing trade data for campaign matching
+            df_d, df_s = load_trade_data()
+            open_campaigns = df_s[df_s['Status'] == 'OPEN'].sort_values('Ticker') if not df_s.empty else pd.DataFrame()
+
+            # Process each execution
+            for idx, trade in df_ibkr.iterrows():
+                t_sym = trade['symbol']
+                t_action = trade['action']
+                t_qty = int(trade['quantity'])
+                t_price = float(trade['price'])
+                t_date = trade['trade_date']
+                t_time = trade['order_time']
+                t_asset = trade['asset_class']
+
+                # Option description
+                opt_desc = ""
+                if t_asset == 'OPT':
+                    pc = trade.get('put_call', '')
+                    strike = trade.get('strike', '')
+                    expiry = trade.get('expiry', '')
+                    opt_desc = f" {expiry} ${strike} {pc}" if strike else ""
+
+                # Visual separator per trade
+                action_color = '#2ca02c' if t_action == 'BUY' else '#dc2626'
+                action_emoji = '🟢' if t_action == 'BUY' else '🔴'
+
+                with st.expander(
+                    f"{action_emoji} {t_action} {t_qty} {t_sym}{opt_desc} @ ${t_price:,.2f} — {t_date} {t_time}",
+                    expanded=False,
+                ):
+                    _key = f"ibkr_{idx}"
+
+                    # Campaign selection
+                    # Check if there's already an open campaign for this ticker
+                    matching = open_campaigns[open_campaigns['Ticker'] == t_sym] if not open_campaigns.empty else pd.DataFrame()
+
+                    if t_action == 'BUY':
+                        campaign_opts = ["➕ New Campaign"]
+                        if not matching.empty:
+                            for _, c in matching.iterrows():
+                                campaign_opts.append(f"📎 {c['Trade_ID']} — {c['Ticker']} ({int(c['Shares'])} shs)")
+
+                        tc1, tc2 = st.columns(2)
+                        campaign_sel = tc1.selectbox("Campaign", campaign_opts, key=f"{_key}_camp")
+                        if campaign_sel.startswith("➕"):
+                            # New campaign — need Trade ID
+                            now_ym = pd.Timestamp(t_date).strftime("%Y%m")
+                            existing_ids = df_s[df_s['Trade_ID'].str.startswith(now_ym)]['Trade_ID'].tolist() if not df_s.empty else []
+                            try:
+                                max_seq = max([int(x.split('-')[-1]) for x in existing_ids if '-' in x]) if existing_ids else 0
+                            except:
+                                max_seq = 0
+                            default_id = f"{now_ym}-{max_seq + 1:03d}"
+                            trade_id = tc2.text_input("Trade ID", value=default_id, key=f"{_key}_tid")
+                            is_new = True
+                        else:
+                            trade_id = campaign_sel.split(" — ")[0].replace("📎 ", "")
+                            tc2.info(f"Adding to campaign **{trade_id}**")
+                            is_new = False
+
+                        rule = st.selectbox("Buy Rule", get_buy_rules(), index=None,
+                                            placeholder="Select rule...", key=f"{_key}_rule")
+                        stop_col, note_col = st.columns(2)
+                        stop = stop_col.number_input("Stop Loss ($)", value=0.0, step=0.1,
+                                                     format="%.2f", key=f"{_key}_stop")
+                        note = note_col.text_input("Notes", key=f"{_key}_note",
+                                                   placeholder="Optional notes")
+
+                        if st.button(f"✅ Log BUY {t_qty} {t_sym}", key=f"{_key}_log", type="primary"):
+                            if not trade_id.strip():
+                                st.error("Trade ID is required.")
+                            elif not rule:
+                                st.error("Buy Rule is required.")
+                            else:
+                                # Build the detail + summary rows and save
+                                value = t_qty * t_price
+                                trx_id = generate_trx_id(df_d, trade_id, 'BUY', t_date) if not df_d.empty else 'B1'
+                                new_d = {
+                                    'Trade_ID': trade_id, 'Ticker': t_sym, 'Action': 'BUY',
+                                    'Date': t_date, 'Shares': t_qty, 'Amount': t_price,
+                                    'Value': value, 'Rule': rule,
+                                    'Notes': note, 'Realized_PL': 0, 'Stop_Loss': stop,
+                                    'Trx_ID': trx_id,
+                                }
+                                if is_new:
+                                    new_s = {
+                                        'Trade_ID': trade_id, 'Ticker': t_sym, 'Status': 'OPEN',
+                                        'Open_Date': t_date, 'Shares': t_qty, 'Avg_Entry': t_price,
+                                        'Avg_Exit': 0, 'Total_Cost': value, 'Realized_PL': 0,
+                                        'Unrealized_PL': 0, 'Rule': rule, 'Buy_Notes': note,
+                                        'Sell_Rule': '', 'Sell_Notes': '', 'Risk_Budget': 0,
+                                    }
+                                    if USE_DATABASE:
+                                        db.save_summary_row(portfolio, new_s)
+                                    else:
+                                        df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
+
+                                if USE_DATABASE:
+                                    db.save_detail_row(portfolio, new_d)
+                                else:
+                                    df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+
+                                df_d, df_s = update_campaign_summary(trade_id, df_d, df_s)
+                                if not USE_DATABASE:
+                                    secure_save(df_d, DETAILS_FILE)
+                                    secure_save(df_s, SUMMARY_FILE)
+
+                                log_audit_trail('BUY', trade_id, t_sym,
+                                                f"IBKR Import: {t_qty} shs @ ${t_price:.2f} | Rule: {rule}")
+                                st.success(f"✅ Logged: BUY {t_qty} {t_sym} @ ${t_price:.2f} → {trade_id}")
+
+                    elif t_action == 'SELL':
+                        # For sells, must match an existing campaign
+                        if matching.empty:
+                            st.warning(f"No open campaign found for {t_sym}. Log manually via Log Sell.")
+                        else:
+                            if len(matching) == 1:
+                                sell_row = matching.iloc[0]
+                                trade_id = sell_row['Trade_ID']
+                                st.info(f"Campaign: **{trade_id}** — {int(sell_row['Shares'])} shs @ ${sell_row['Avg_Entry']:.2f}")
+                            else:
+                                sell_opts = [f"{r['Trade_ID']} — {int(r['Shares'])} shs" for _, r in matching.iterrows()]
+                                sel = st.selectbox("Select Campaign", sell_opts, key=f"{_key}_sell_camp")
+                                trade_id = sel.split(" — ")[0]
+                                sell_row = matching[matching['Trade_ID'] == trade_id].iloc[0]
+
+                            rule = st.selectbox("Sell Rule", get_sell_rules(), index=None,
+                                                placeholder="Select rule...", key=f"{_key}_srule")
+                            note = st.text_input("Notes", key=f"{_key}_snote", placeholder="Optional notes")
+
+                            if st.button(f"✅ Log SELL {t_qty} {t_sym}", key=f"{_key}_slog", type="primary"):
+                                if not rule:
+                                    st.error("Sell Rule is required.")
+                                else:
+                                    value = t_qty * t_price
+                                    trx_id = generate_trx_id(df_d, trade_id, 'SELL', t_date)
+                                    new_d = {
+                                        'Trade_ID': trade_id, 'Ticker': t_sym, 'Action': 'SELL',
+                                        'Date': t_date, 'Shares': t_qty, 'Amount': t_price,
+                                        'Value': value, 'Rule': rule,
+                                        'Notes': note, 'Realized_PL': 0, 'Stop_Loss': 0,
+                                        'Trx_ID': trx_id,
+                                    }
+                                    if USE_DATABASE:
+                                        db.save_detail_row(portfolio, new_d)
+                                    else:
+                                        df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+
+                                    df_d, df_s = update_campaign_summary(trade_id, df_d, df_s)
+
+                                    # Update sell rule on summary
+                                    if USE_DATABASE:
+                                        s_match = df_s[df_s['Trade_ID'] == trade_id]
+                                        if not s_match.empty:
+                                            summary_row = s_match.iloc[0].to_dict()
+                                            summary_row['Sell_Rule'] = rule
+                                            summary_row['Sell_Notes'] = note
+                                            db.save_summary_row(portfolio, summary_row)
+
+                                    if not USE_DATABASE:
+                                        secure_save(df_d, DETAILS_FILE)
+                                        secure_save(df_s, SUMMARY_FILE)
+
+                                    log_audit_trail('SELL', trade_id, t_sym,
+                                                    f"IBKR Import: {t_qty} shs @ ${t_price:.2f} | Rule: {rule}")
+                                    st.success(f"✅ Logged: SELL {t_qty} {t_sym} @ ${t_price:.2f} → {trade_id}")
+
+            # Clear button
+            st.markdown("---")
+            if st.button("🗑️ Clear Imported Trades", key="clear_ibkr"):
+                st.session_state.pop('_ibkr_trades', None)
+                st.rerun()
 
 
 # ==============================================================================
