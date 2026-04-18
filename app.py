@@ -10325,40 +10325,26 @@ elif page == "Active Campaign Summary":
 
              
 
-             m1, m2, m3, m4, m5, m6 = st.columns(6)
-
-             # Privacy-aware formatting for the Flight Deck summary row.
-             # Dollar numbers are masked; percentages and counts stay visible.
+             # Privacy-aware formatting
              def _mk(val):
                  return "$****" if PRIVACY else f"${val:,.2f}"
 
-             m1.metric("Open Positions", len(df_open))
-
-             m2.metric("Total Market Value", _mk(total_mkt))
-
-             m3.metric("Live Exposure", f"{live_exp:.1f}%", f"of {_mk(equity)}")
-
-
-
              total_projected = df_open['Projected P&L'].sum()
-             m4.metric(
-                 "Overall P&L",
-                 _mk(total_overall),
-                 f"Projected: {_mk(total_projected)}",
-                 delta_color="normal"
-             )
-
-
-
              ir_pct = (total_initial_risk / equity) * 100
-
-             m5.metric("Initial Risk", _mk(total_initial_risk), f"{ir_pct:.2f}% of NLV", delta_color="off")
-
-
-
              or_pct = (total_open_risk_equity / equity) * 100
 
-             m6.metric("Open Risk (Heat)", _mk(total_open_risk_equity), f"{or_pct:.2f}% of NLV", delta_color="inverse")
+             # Gradient KPI tiles — symmetric 6-column layout
+             _kpi_data = [
+                 ("OPEN POSITIONS", str(len(df_open)), "", "mo-g-indigo"),
+                 ("TOTAL MARKET VALUE", _mk(total_mkt), "", "mo-g-pink"),
+                 ("LIVE EXPOSURE", f"{live_exp:.1f}%", f"of {_mk(equity)}", "mo-g-orange"),
+                 ("OVERALL P&L", _mk(total_overall), f"Projected: {_mk(total_projected)}", "mo-g-green"),
+                 ("INITIAL RISK", _mk(total_initial_risk), f"{ir_pct:.2f}% of NLV", "mo-g-blue"),
+                 ("OPEN RISK (HEAT)", _mk(total_open_risk_equity), f"{or_pct:.2f}% of NLV", "mo-g-red"),
+             ]
+             _kpi_cols = st.columns(6)
+             for _col, (_k, _v, _s, _g) in zip(_kpi_cols, _kpi_data):
+                 _col.markdown(metric_card(_k, _v, _s, _g), unsafe_allow_html=True)
 
              
 
