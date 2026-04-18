@@ -90,6 +90,12 @@ if USE_DATABASE:
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_app_config_category ON app_config (category)")
 
+                # Widen ticker columns for option symbols (IBKR options can be 30+ chars)
+                cur.execute("ALTER TABLE trades_summary ALTER COLUMN ticker TYPE VARCHAR(50)")
+                cur.execute("ALTER TABLE trades_details ALTER COLUMN ticker TYPE VARCHAR(50)")
+                cur.execute("ALTER TABLE trade_images ALTER COLUMN ticker TYPE VARCHAR(50)")
+                cur.execute("ALTER TABLE trade_fundamentals ALTER COLUMN ticker TYPE VARCHAR(50)")
+
                 # dashboard_events: EC marker events
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS dashboard_events (
@@ -6998,11 +7004,23 @@ elif page == "Import Trades":
 
                     else:
                         # === OPTIONS TRADE (inline log — no Send to Log Buy/Sell) ===
-                        _opt_pc = trade.get('put_call', '')
-                        _opt_strike = trade.get('strike', '')
-                        _opt_expiry = trade.get('expiry', '')
+                        _opt_pc = trade.get('put_call', '').strip()
+                        _opt_strike = trade.get('strike', '').strip()
+                        _opt_expiry = trade.get('expiry', '').strip()
                         _opt_total_cost = t_qty * t_price * 100
-                        _opt_readable = f"OPT: {t_sym} {_opt_expiry} ${_opt_strike} {_opt_pc}"
+
+                        # Format a readable ticker: "LUMN Jul26 8C" instead of raw IBKR symbol
+                        _pc_short = 'C' if _opt_pc.upper().startswith('C') else ('P' if _opt_pc.upper().startswith('P') else _opt_pc)
+                        _strike_clean = _opt_strike.rstrip('0').rstrip('.') if '.' in _opt_strike else _opt_strike
+                        try:
+                            _exp_dt = pd.Timestamp(_opt_expiry)
+                            _exp_fmt = _exp_dt.strftime('%b%y')  # e.g., "Jul26"
+                        except Exception:
+                            _exp_fmt = _opt_expiry
+                        # Extract underlying ticker (strip spaces + option codes from IBKR symbol)
+                        _underlying = t_sym.split()[0] if ' ' in t_sym else t_sym[:6].strip()
+                        _opt_ticker = f"{_underlying} {_exp_fmt} {_strike_clean}{_pc_short}"
+                        _opt_readable = f"OPT: {_opt_ticker}"
 
                         # Get equity for risk %
                         try:
@@ -7039,13 +7057,14 @@ elif page == "Import Trades":
                                 index=None, placeholder="Select rule...", key=f"{_key}_orule")
                             opt_note = st.text_input("Notes", value=_opt_readable, key=f"{_key}_onote")
 
-                            if st.button(f"✅ Log {t_action} {t_qty} contracts {t_sym}", key=f"{_key}_olog", type="primary"):
+                            if st.button(f"✅ Log {t_action} {t_qty} contracts {_underlying}", key=f"{_key}_olog", type="primary"):
                                 if not opt_trade_id.strip() or not opt_rule:
                                     st.error("Trade ID and Rule required.")
                                 else:
                                     # Store: Shares=contracts, Amount=premium, Value=total cost
+                                    # Use formatted ticker (e.g., "LUMN Jul26 8C") not raw IBKR symbol
                                     new_d = {
-                                        'Trade_ID': opt_trade_id, 'Ticker': t_sym,
+                                        'Trade_ID': opt_trade_id, 'Ticker': _opt_ticker,
                                         'Action': t_action, 'Date': t_date,
                                         'Shares': t_qty, 'Amount': t_price,
                                         'Value': _opt_total_cost, 'Rule': opt_rule,
@@ -7054,7 +7073,7 @@ elif page == "Import Trades":
                                         'Trx_ID': generate_trx_id(df_d, opt_trade_id, t_action, t_date) if not df_d.empty else ('B1' if t_action == 'BUY' else 'S1'),
                                     }
                                     new_s = {
-                                        'Trade_ID': opt_trade_id, 'Ticker': t_sym,
+                                        'Trade_ID': opt_trade_id, 'Ticker': _opt_ticker,
                                         'Status': 'OPEN', 'Open_Date': t_date,
                                         'Shares': t_qty, 'Avg_Entry': t_price,
                                         'Avg_Exit': 0, 'Total_Cost': _opt_total_cost,
