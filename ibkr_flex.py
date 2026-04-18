@@ -200,6 +200,11 @@ def parse_trade_confirms(xml_root):
         else:
             expiry = expiry_raw
 
+        # Order ID — same for all partial fills of one order. Primary key
+        # for consolidation (more reliable than price which can differ by
+        # fractions across fills).
+        order_id = attribs.get("orderID", attribs.get("ibOrderID", attribs.get("orderReference", "")))
+
         trades.append({
             "account": attribs.get("accountId", ""),
             "trade_date": trade_date,
@@ -218,6 +223,7 @@ def parse_trade_confirms(xml_root):
             "put_call": put_call,
             "strike": strike,
             "expiry": expiry,
+            "order_id": str(order_id).strip(),
         })
 
     # Store raw attributes for debugging (first 5 trades)
@@ -229,7 +235,7 @@ def parse_trade_confirms(xml_root):
             "account", "trade_date", "settle_date", "symbol", "description",
             "asset_class", "action", "quantity", "price", "amount",
             "commission", "net_cash", "currency", "order_time",
-            "put_call", "strike", "expiry",
+            "put_call", "strike", "expiry", "order_id",
         ])
 
     df = pd.DataFrame(trades)
@@ -241,36 +247,65 @@ def parse_trade_confirms(xml_root):
 def consolidate_partial_fills(df):
     """
     IBKR often fills a single order in multiple lots (e.g., SELL 435 TQQQ
-    gets filled as 35 + 200 + 200 at the same price and time). Consolidate
-    these into one row per logical transaction.
+    gets filled as 35 + 200 + 200 at slightly different prices). Consolidate
+    these into one row per logical order.
 
-    Groups by: symbol + action + price + trade_date + order_time + asset_class
-               + put_call + strike + expiry (so options with different strikes
-               stay separate).
-    Aggregates: quantity (sum), amount (sum), commission (sum), net_cash (sum).
+    Primary grouping key: order_id (IBKR assigns the same order ID to all
+    partial fills of one order). Falls back to symbol + action + trade_date +
+    order_time if order_id is missing.
+
+    Price is computed as a weighted average: sum(qty * price) / sum(qty).
     """
     if df.empty:
         return df
 
-    group_keys = ['symbol', 'action', 'price', 'trade_date', 'order_time',
-                  'asset_class', 'put_call', 'strike', 'expiry']
-    # Only group by columns that exist
+    # Determine grouping strategy
+    has_order_id = 'order_id' in df.columns and df['order_id'].notna().any() and (df['order_id'] != '').any()
+
+    if has_order_id:
+        # Primary: group by order_id (most reliable — same order, different fills)
+        group_keys = ['order_id']
+    else:
+        # Fallback: group by symbol + action + date + time
+        group_keys = ['symbol', 'action', 'trade_date', 'order_time',
+                      'asset_class', 'put_call', 'strike', 'expiry']
+
     group_keys = [k for k in group_keys if k in df.columns]
+
+    # Compute weighted price before grouping
+    df = df.copy()
+    df['_value'] = df['quantity'] * df['price']
 
     agg_rules = {
         'quantity': 'sum',
+        '_value': 'sum',
         'amount': 'sum',
         'commission': 'sum',
         'net_cash': 'sum',
         'account': 'first',
+        'trade_date': 'first',
+        'order_time': 'first',
         'settle_date': 'first',
+        'symbol': 'first',
         'description': 'first',
+        'asset_class': 'first',
+        'action': 'first',
         'currency': 'first',
+        'put_call': 'first',
+        'strike': 'first',
+        'expiry': 'first',
     }
-    # Only aggregate columns that exist
+    if has_order_id:
+        agg_rules['order_id'] = 'first'
     agg_rules = {k: v for k, v in agg_rules.items() if k in df.columns}
 
     consolidated = df.groupby(group_keys, as_index=False).agg(agg_rules)
+
+    # Weighted average price
+    consolidated['price'] = consolidated['_value'] / consolidated['quantity']
+    consolidated['price'] = consolidated['price'].round(4)
+    consolidated = consolidated.drop(columns=['_value'], errors='ignore')
+
     consolidated = consolidated.sort_values(['trade_date', 'order_time'], ascending=[False, False])
     return consolidated
 
