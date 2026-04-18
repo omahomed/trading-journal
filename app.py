@@ -6848,6 +6848,7 @@ elif page == "Import Trades":
 
             st.dataframe(
                 df_ibkr[display_cols].style.format({
+                    'quantity': '{:.0f}',
                     'price': '${:,.2f}',
                     'amount': '${:,.2f}',
                     'commission': '${:,.2f}',
@@ -6855,6 +6856,12 @@ elif page == "Import Trades":
                 }),
                 use_container_width=True, hide_index=True,
             )
+
+            # Debug: show raw IBKR XML attributes (for field name mapping)
+            if '_raw_attribs' in df_ibkr.columns:
+                with st.expander("🔧 Debug: Raw IBKR XML attributes (first trade)", expanded=False):
+                    raw = df_ibkr['_raw_attribs'].iloc[0] if not df_ibkr['_raw_attribs'].isna().all() else "No raw data"
+                    st.code(raw, language="python")
 
             st.markdown("---")
             st.markdown("### Log to Journal")

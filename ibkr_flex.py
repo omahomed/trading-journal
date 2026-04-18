@@ -153,13 +153,26 @@ def parse_trade_confirms(xml_root):
         # Parse quantity (IBKR sometimes uses negative for sells)
         qty = abs(float(attribs.get("quantity", 0)))
 
-        # Parse price
-        price = float(attribs.get("tradePrice", 0))
+        # Parse price — IBKR uses different field names across report types
+        price = 0.0
+        for price_key in ("tradePrice", "price", "tradeMoney", "closePrice"):
+            if price_key in attribs and float(attribs[price_key] or 0) != 0:
+                price = float(attribs[price_key])
+                break
 
-        # Parse amount / commission / net_cash
-        amount = abs(float(attribs.get("amount", 0)))
-        commission = float(attribs.get("commission", 0))
-        net_cash = float(attribs.get("netCash", 0))
+        # Parse amount / commission / net_cash — try multiple field names
+        amount = 0.0
+        for amt_key in ("amount", "proceeds", "cost", "tradeMoney"):
+            if amt_key in attribs:
+                amount = abs(float(attribs[amt_key] or 0))
+                if amount > 0:
+                    break
+        # Fallback: compute from qty * price
+        if amount == 0 and qty > 0 and price > 0:
+            amount = qty * price
+
+        commission = float(attribs.get("commission", attribs.get("ibCommission", 0)) or 0)
+        net_cash = float(attribs.get("netCash", attribs.get("net", 0)) or 0)
 
         # Format trade date
         trade_date_raw = attribs.get("tradeDate", "")
@@ -206,6 +219,10 @@ def parse_trade_confirms(xml_root):
             "strike": strike,
             "expiry": expiry,
         })
+
+    # Store raw attributes for debugging (first 5 trades)
+    if trades:
+        trades[0]['_raw_attribs'] = str(dict(list(xml_root.iter("TradeConfirm"))[0].attrib)) if list(xml_root.iter("TradeConfirm")) else ""
 
     if not trades:
         return pd.DataFrame(columns=[
