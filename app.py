@@ -6899,6 +6899,26 @@ elif page == "Import Trades":
             st.markdown("### Log to Journal")
             st.caption("**Send to Log Buy/Sell** routes the execution to the full workflow (charts, sizing, stop loss). **Quick Log** saves directly for simple cases like sells.")
 
+            # Track Trade IDs used in this session to avoid duplicates
+            # when logging multiple trades without a page reload
+            if '_ibkr_used_ids' not in st.session_state:
+                st.session_state['_ibkr_used_ids'] = set()
+
+            def _next_trade_id(date_str):
+                """Generate the next available Trade ID, accounting for both
+                DB state AND IDs already used in this import session."""
+                now_ym = pd.Timestamp(date_str).strftime("%Y%m")
+                _d, _s = load_trade_data()
+                existing = _s[_s['Trade_ID'].str.startswith(now_ym)]['Trade_ID'].tolist() if not _s.empty else []
+                all_ids = set(existing) | st.session_state.get('_ibkr_used_ids', set())
+                seqs = []
+                for x in all_ids:
+                    try:
+                        if '-' in x: seqs.append(int(x.split('-')[-1]))
+                    except: pass
+                next_seq = (max(seqs) + 1) if seqs else 1
+                return f"{now_ym}-{next_seq:03d}"
+
             # Process each execution
             for idx, trade in df_ibkr.iterrows():
                 t_sym = trade['symbol']
@@ -6962,11 +6982,7 @@ elif page == "Import Trades":
                                         campaign_opts.append(f"📎 {c['Trade_ID']} — {c['Ticker']} ({int(c['Shares'])} shs)")
                                 campaign_sel = st.selectbox("Campaign", campaign_opts, key=f"{_key}_camp")
                                 if campaign_sel.startswith("➕"):
-                                    now_ym = pd.Timestamp(t_date).strftime("%Y%m")
-                                    existing_ids = df_s[df_s['Trade_ID'].str.startswith(now_ym)]['Trade_ID'].tolist() if not df_s.empty else []
-                                    try: max_seq = max([int(x.split('-')[-1]) for x in existing_ids if '-' in x]) if existing_ids else 0
-                                    except: max_seq = 0
-                                    trade_id = st.text_input("Trade ID", value=f"{now_ym}-{max_seq + 1:03d}", key=f"{_key}_tid")
+                                    trade_id = st.text_input("Trade ID", value=_next_trade_id(t_date), key=f"{_key}_tid")
                                     is_new = True
                                 else:
                                     trade_id = campaign_sel.split(" — ")[0].replace("📎 ", "")
@@ -6987,6 +7003,7 @@ elif page == "Import Trades":
                                         df_d, df_s = update_campaign_summary(trade_id, df_d, df_s)
                                         if not USE_DATABASE: secure_save(df_d, DETAILS_FILE); secure_save(df_s, SUMMARY_FILE)
                                         log_audit_trail('BUY', trade_id, t_sym, f"IBKR Quick: {t_qty} shs @ ${t_price:.2f} | Rule: {rule}")
+                                        st.session_state.setdefault('_ibkr_used_ids', set()).add(trade_id)
                                         st.success(f"✅ {t_qty} {t_sym} → {trade_id}")
                             elif t_action == 'SELL':
                                 if matching.empty: st.warning(f"No open campaign for {t_sym}.")
@@ -7060,14 +7077,8 @@ elif page == "Import Trades":
                                        delta=f"Max loss = ${_opt_total_cost:,.0f}", delta_color="off")
 
                             # Campaign + Rule
-                            df_d, df_s = load_trade_data()
-                            now_ym = pd.Timestamp(t_date).strftime("%Y%m")
-                            existing_ids = df_s[df_s['Trade_ID'].str.startswith(now_ym)]['Trade_ID'].tolist() if not df_s.empty else []
-                            try: max_seq = max([int(x.split('-')[-1]) for x in existing_ids if '-' in x]) if existing_ids else 0
-                            except: max_seq = 0
-
                             ot1, ot2 = st.columns(2)
-                            opt_trade_id = ot1.text_input("Trade ID", value=f"{now_ym}-{max_seq + 1:03d}", key=f"{_key}_otid")
+                            opt_trade_id = ot1.text_input("Trade ID", value=_next_trade_id(t_date), key=f"{_key}_otid")
                             opt_rule = ot2.selectbox(
                                 "Buy Rule" if t_action == 'BUY' else "Sell Rule",
                                 get_buy_rules() if t_action == 'BUY' else get_sell_rules(),
@@ -7113,6 +7124,7 @@ elif page == "Import Trades":
                                                     f"IBKR OPT: {t_qty} contracts @ ${t_price:.2f} | "
                                                     f"Total: ${_opt_total_cost:,.0f} ({_opt_risk_pct:.2f}% of NLV) | "
                                                     f"Rule: {opt_rule} | {_opt_readable}")
+                                    st.session_state.setdefault('_ibkr_used_ids', set()).add(opt_trade_id)
                                     st.success(f"✅ Logged: {t_action} {t_qty} contracts {t_sym} | Total: ${_opt_total_cost:,.0f} ({_opt_risk_pct:.2f}% risk)")
 
                     st.markdown("<hr style='margin:4px 0;border:none;border-top:1px solid #eee;'>", unsafe_allow_html=True)
