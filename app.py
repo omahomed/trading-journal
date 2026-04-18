@@ -2381,6 +2381,18 @@ st.sidebar.markdown("---")
 if 'page' not in st.session_state:
     st.session_state.page = "Dashboard"
 
+_ALL_PAGES = [
+    "Dashboard", "Trading Overview",
+    "Active Campaign Summary", "Import Trades", "Log Buy", "Log Sell",
+    "Position Sizer", "Trade Journal", "Trade Manager",
+    "Earnings Planner", "Portfolio Heat", "Risk Manager",
+    "Daily Journal", "Daily Report Card", "Daily Routine", "Weekly Retro",
+    "IBD Market School", "M Factor", "Market Cycle Tracker", "Rally Context",
+    "AI Coach",
+    "Analytics", "Performance Audit", "Performance Heat Map", "Period Review", "Ticker Forensics",
+    "Admin",
+]
+
 # Navigation UI
 with st.sidebar:
     # Helper function to create nav button with active state
@@ -2515,17 +2527,6 @@ st.sidebar.caption(f"📂 **Active:** {CURR_PORT_NAME}")
 # inside the iframe. When a page is selected, the component sends the page
 # name back to Python via Streamlit.setComponentValue().
 # =============================================================================
-_ALL_PAGES = [
-    "Dashboard", "Trading Overview",
-    "Active Campaign Summary", "Import Trades", "Log Buy", "Log Sell",
-    "Position Sizer", "Trade Journal", "Trade Manager",
-    "Earnings Planner", "Portfolio Heat", "Risk Manager",
-    "Daily Journal", "Daily Report Card", "Daily Routine", "Weekly Retro",
-    "IBD Market School", "M Factor", "Market Cycle Tracker", "Rally Context",
-    "AI Coach",
-    "Analytics", "Performance Audit", "Performance Heat Map", "Period Review", "Ticker Forensics",
-    "Admin",
-]
 
 
 # Logout button (only if password auth is active)
