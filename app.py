@@ -7009,18 +7009,25 @@ elif page == "Import Trades":
                         _opt_expiry = trade.get('expiry', '').strip()
                         _opt_total_cost = t_qty * t_price * 100
 
-                        # Format a readable ticker: "LUMN Jul26 8C" instead of raw IBKR symbol
+                        # Format: "LUMN 260717 $8C"
                         _pc_short = 'C' if _opt_pc.upper().startswith('C') else ('P' if _opt_pc.upper().startswith('P') else _opt_pc)
-                        _strike_clean = _opt_strike.rstrip('0').rstrip('.') if '.' in _opt_strike else _opt_strike
+                        # Strike: clean trailing zeros, add $ prefix
                         try:
-                            _exp_dt = pd.Timestamp(_opt_expiry)
-                            _exp_fmt = _exp_dt.strftime('%b%y')  # e.g., "Jul26"
+                            _strike_num = float(_opt_strike) if _opt_strike else 0
+                            _strike_clean = f"{_strike_num:g}"  # removes trailing zeros: 8.00 → 8, 12.50 → 12.5
                         except Exception:
-                            _exp_fmt = _opt_expiry
-                        # Extract underlying ticker (strip spaces + option codes from IBKR symbol)
+                            _strike_clean = _opt_strike
+                        # Expiry: YYMMDD format (IBKR sends YYYYMMDD like "20260717" or "2026-07-17")
+                        _exp_clean = _opt_expiry.replace('-', '')  # "2026-07-17" → "20260717"
+                        if len(_exp_clean) == 8:
+                            _exp_clean = _exp_clean[2:]  # "20260717" → "260717"
+                        # Underlying: first word of IBKR symbol (strips option contract codes)
                         _underlying = t_sym.split()[0] if ' ' in t_sym else t_sym[:6].strip()
-                        _opt_ticker = f"{_underlying} {_exp_fmt} {_strike_clean}{_pc_short}"
+                        _opt_ticker = f"{_underlying} {_exp_clean} ${_strike_clean}{_pc_short}"
                         _opt_readable = f"OPT: {_opt_ticker}"
+
+                        # Debug: show raw option fields for troubleshooting
+                        st.caption(f"_Raw from IBKR — symbol: `{t_sym}` | putCall: `{_opt_pc}` | strike: `{_opt_strike}` | expiry: `{_opt_expiry}`_")
 
                         # Get equity for risk %
                         try:
