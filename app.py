@@ -4486,19 +4486,19 @@ elif page == "Market Cycle Tracker":
         )
         st.markdown(banner_html, unsafe_allow_html=True)
 
-        # Key metrics row
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("NASDAQ", f"{cycle['price']:,.2f}")
+        # Key metrics row — gradient tiles
         ref_date = cycle['reference_high_date']
         ref_date_str = ref_date.strftime('%m/%d/%y') if hasattr(ref_date, 'strftime') else str(ref_date) if ref_date else ''
-        m2.metric("Reference High", f"{cycle['reference_high']:,.2f}",
-                  delta=f"{ref_date_str}")
-        m3.metric("21 EMA", f"{cycle['ema21']:,.2f}",
-                  delta=f"{((cycle['price'] - cycle['ema21']) / cycle['ema21'] * 100):+.2f}%")
-        m4.metric("50 SMA", f"{cycle['sma50']:,.2f}",
-                  delta=f"{((cycle['price'] - cycle['sma50']) / cycle['sma50'] * 100):+.2f}%")
-        m5.metric("200 SMA", f"{cycle['sma200']:,.2f}",
-                  delta=f"{((cycle['price'] - cycle['sma200']) / cycle['sma200'] * 100):+.2f}%")
+        _d21 = ((cycle['price'] - cycle['ema21']) / cycle['ema21'] * 100)
+        _d50 = ((cycle['price'] - cycle['sma50']) / cycle['sma50'] * 100)
+        _d200 = ((cycle['price'] - cycle['sma200']) / cycle['sma200'] * 100)
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.markdown(metric_card("NASDAQ", f"{cycle['price']:,.2f}", "", "mo-g-indigo"), unsafe_allow_html=True)
+        m2.markdown(metric_card("REFERENCE HIGH", f"{cycle['reference_high']:,.2f}", ref_date_str, "mo-g-violet"), unsafe_allow_html=True)
+        m3.markdown(metric_card("21 EMA", f"{cycle['ema21']:,.2f}", f"{_d21:+.2f}%", "mo-g-green"), unsafe_allow_html=True)
+        m4.markdown(metric_card("50 SMA", f"{cycle['sma50']:,.2f}", f"{_d50:+.2f}%", "mo-g-orange"), unsafe_allow_html=True)
+        m5.markdown(metric_card("200 SMA", f"{cycle['sma200']:,.2f}", f"{_d200:+.2f}%", "mo-g-blue"), unsafe_allow_html=True)
 
         st.markdown("---")
 
@@ -7527,8 +7527,8 @@ elif page == "Log Buy":
             risk_pct_input = 0.50
         risk_budget_dol = def_equity * (risk_pct_input / 100)
 
-        rb2.metric("Account Equity (Prev)", f"${def_equity:,.2f}")
-        rb3.metric("Risk Budget", f"${risk_budget_dol:.2f}", f"{risk_pct_input}% of equity")
+        rb2.markdown(metric_card("ACCOUNT EQUITY", f"${def_equity:,.0f}", "", "mo-g-blue"), unsafe_allow_html=True)
+        rb3.markdown(metric_card("RISK BUDGET", f"${risk_budget_dol:,.0f}", f"{risk_pct_input}% of equity", "mo-g-green"), unsafe_allow_html=True)
     else:
         if b_id:
             orig_budget = df_s[df_s['Trade_ID'] == b_id]['Risk_Budget'].iloc[0]
@@ -10739,35 +10739,23 @@ elif page == "Risk Manager":
 
                 # --- 3. HEADS UP DISPLAY ---
 
-                st.markdown(f"### Current Status: ${curr_nlv:,.2f}")
-
-                
+                # Status logic
+                status_txt = "ALL CLEAR"
+                _status_g = "mo-g-green"
+                if dd_pct >= _RM_DECKS['L3']['pct']:
+                    status_txt = _RM_DECKS['L3']['action'].upper()
+                    _status_g = "mo-g-red"
+                elif dd_pct >= _RM_DECKS['L2']['pct']:
+                    status_txt = _RM_DECKS['L2']['action'].upper()
+                    _status_g = "mo-g-orange"
+                elif dd_pct >= _RM_DECKS['L1']['pct']:
+                    status_txt = _RM_DECKS['L1']['action'].upper()
+                    _status_g = "mo-g-amber"
 
                 col1, col2, col3 = st.columns(3)
-
-                col1.metric("Current Peak (HWM)", f"${peak_nlv:,.2f}")
-
-                col1.caption("All-Time High Water Mark")
-
-                
-
-                col2.metric("Current Drawdown", f"-{dd_pct:.2f}%", f"-${dd_dol:,.2f}", delta_color="inverse")
-
-                
-
-                # UPDATED STATUS LOGIC
-
-                status_txt = "🟢 ALL CLEAR"
-
-                if dd_pct >= _RM_DECKS['L3']['pct']: status_txt = f"☠️ {_RM_DECKS['L3']['action'].upper()}"
-
-                elif dd_pct >= _RM_DECKS['L2']['pct']: status_txt = f"🟠 {_RM_DECKS['L2']['action'].upper()}"
-
-                elif dd_pct >= _RM_DECKS['L1']['pct']: status_txt = f"🟡 {_RM_DECKS['L1']['action'].upper()}"
-
-                
-
-                col3.metric("Required Action", status_txt)
+                col1.markdown(metric_card("CURRENT PEAK (HWM)", f"${peak_nlv:,.0f}", "All-Time High Water Mark", "mo-g-indigo"), unsafe_allow_html=True)
+                col2.markdown(metric_card("CURRENT DRAWDOWN", f"-{dd_pct:.2f}%", f"-${dd_dol:,.0f}", "mo-g-navy"), unsafe_allow_html=True)
+                col3.markdown(metric_card("REQUIRED ACTION", status_txt, "", _status_g), unsafe_allow_html=True)
 
                 
 
@@ -11247,15 +11235,12 @@ elif page == "Portfolio Heat":
             # Check heat against MO Risk Rules (threshold from app_config)
 
             _heat_thresh = get_heat_threshold()
+            _heat_g = "mo-g-green" if total_heat < _heat_thresh else "mo-g-red"
+            _avg_vol = df_vol['ATR (21S) %'].mean()
             m1, m2, m3 = st.columns(3)
-
-            heat_color = "normal" if total_heat < _heat_thresh else "inverse"
-
-            m1.metric("Total Portfolio Heat", f"{total_heat:.2f}%", delta=f"Target < {_heat_thresh:.2f}%", delta_color=heat_color)
-
-            m2.metric("Avg Stock Volatility", f"{df_vol['ATR (21S) %'].mean():.2f}%")
-
-            m3.metric("Equity Basis", f"${calc_equity:,.0f}")
+            m1.markdown(metric_card("TOTAL PORTFOLIO HEAT", f"{total_heat:.2f}%", f"Target < {_heat_thresh:.2f}%", _heat_g), unsafe_allow_html=True)
+            m2.markdown(metric_card("AVG STOCK VOLATILITY", f"{_avg_vol:.2f}%", "", "mo-g-orange"), unsafe_allow_html=True)
+            m3.markdown(metric_card("EQUITY BASIS", f"${calc_equity:,.0f}", "", "mo-g-blue"), unsafe_allow_html=True)
 
 
 
