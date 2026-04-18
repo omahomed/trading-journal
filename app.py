@@ -2599,6 +2599,27 @@ if page == "Dashboard":
     </div>
     """, unsafe_allow_html=True)
 
+    # Market tape status pill (from M Factor)
+    try:
+        _tape_status, _tape_since = get_combined_market_status()
+        _tape_colors = {
+            'Powertrend': ('var(--g-mkt)', 'var(--g-mkt-soft)'),
+            'Open': ('var(--up)', 'var(--up-soft)'),
+            'Neutral': ('var(--warn)', 'var(--warn-soft)'),
+            'Closed': ('var(--down)', 'var(--down-soft)'),
+            'Unknown': ('var(--ink-4)', 'var(--bg-2)'),
+        }
+        _tc, _tbg = _tape_colors.get(_tape_status, _tape_colors['Unknown'])
+        _since_str = f" · since {_tape_since.strftime('%b %d')}" if _tape_since and hasattr(_tape_since, 'strftime') else ""
+        st.markdown(f"""
+        <div style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;background:{_tbg};border:1px solid transparent;font-size:12px;font-weight:500;color:{_tc};margin-bottom:16px;">
+            <div style="width:6px;height:6px;border-radius:99px;background:{_tc};box-shadow:0 0 0 3px {_tbg};animation:pulse 2s infinite;"></div>
+            Tape: {_tape_status}{_since_str}
+        </div>
+        """, unsafe_allow_html=True)
+    except Exception:
+        pass
+
     # === HELPER FUNCTIONS ===
     def fmt_money(val):
         try:
