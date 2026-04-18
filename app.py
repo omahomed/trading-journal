@@ -303,8 +303,8 @@ def clear_config_cache():
         pass
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="CAN SLIM COMMAND CENTER", layout="wide", page_icon="📈")
-APP_VERSION = "17.1 (Auth + UI Refresh)"
+st.set_page_config(page_title="MO Money", layout="wide", page_icon="📈")
+APP_VERSION = "18.0 (Design System)"
 
 # =============================================================================
 # AUTH — Simple password login gate
@@ -323,9 +323,13 @@ if _app_password:
         _spacer1, _login_col, _spacer2 = st.columns([1, 1, 1])
         with _login_col:
             st.markdown("""
+            <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400;1,500&display=swap" rel="stylesheet">
             <div style="text-align: center; margin-top: 15vh; margin-bottom: 2rem;">
-                <div style="font-size: 2.5rem; font-weight: 800; margin-bottom: 0.25rem;">MO Money</div>
-                <div style="font-size: 0.95rem; opacity: 0.5;">Trading Journal & Analytics</div>
+                <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6 55%,#0ea5a4);margin:0 auto 16px;display:grid;place-items:center;box-shadow:0 4px 14px rgba(99,102,241,0.35);">
+                    <span style="color:#fff;font-family:'Fraunces',serif;font-style:italic;font-size:26px;font-weight:500;">M</span>
+                </div>
+                <div style="font-family:'Fraunces',serif;font-size:2rem;font-weight:400;margin-bottom:4px;color:#0f1524;">MO Money</div>
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:#8a90a2;font-weight:600;">Trading Journal</div>
             </div>
             """, unsafe_allow_html=True)
             with st.form("login_form"):
@@ -344,367 +348,476 @@ if _app_password:
 st.session_state['user_name'] = 'MO'
 
 # =============================================================================
-# GLOBAL CSS THEME — Injected once, applies to every page
+# GLOBAL CSS THEME — MO Money Design System v18
+# Tokens from prototype: Inter (UI), JetBrains Mono (numbers), Fraunces (display)
 # =============================================================================
 st.markdown("""
 <style>
-/* ── Import Google Font ── */
+/* ── Import Google Fonts ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400;1,500&display=swap');
 
-/* ── Root Variables (Light Mode) ── */
+/* ── MO Money Design Tokens ── */
 :root {
-    --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --bg-primary: #f8f9fc;
-    --bg-card: #ffffff;
-    --bg-sidebar: #1a1d29;
-    --text-primary: #1a1d29;
-    --text-secondary: #6b7280;
-    --text-muted: #9ca3af;
-    --border-color: #e5e7eb;
-    --border-radius: 12px;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-    --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
-    --accent-blue: #6366f1;
-    --accent-green: #10b981;
-    --accent-red: #ef4444;
-    --accent-amber: #f59e0b;
-    --accent-purple: #8b5cf6;
+    /* Fonts */
+    --f-ui: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
+    --f-num: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    --f-display: 'Fraunces', 'Instrument Serif', Georgia, serif;
+
+    /* Canvas */
+    --bg: #f6f7fb;
+    --bg-2: #eef0f6;
+    --surface: #ffffff;
+    --surface-2: #fafbfd;
+    --border: #e6e8ef;
+    --border-2: #d8dbe5;
+
+    /* Ink (text) */
+    --ink: #0f1524;
+    --ink-2: #2c3243;
+    --ink-3: #5a6175;
+    --ink-4: #8a90a2;
+    --ink-5: #b6bac7;
+
+    /* Semantic */
+    --up: #08a86b;
+    --up-soft: #e5f7ee;
+    --down: #e5484d;
+    --down-soft: #fdecec;
+    --warn: #f59f00;
+    --warn-soft: #fff4dd;
+
+    /* Group accents */
+    --g-dash: #6366f1;
+    --g-dash-soft: #eef0ff;
+    --g-ops: #08a86b;
+    --g-ops-soft: #e6f8ef;
+    --g-risk: #e5484d;
+    --g-risk-soft: #fdecec;
+    --g-daily: #f59f00;
+    --g-daily-soft: #fff4dd;
+    --g-mkt: #8b5cf6;
+    --g-mkt-soft: #f1ecfe;
+    --g-ai: #0ea5a4;
+    --g-ai-soft: #e0f5f4;
+    --g-deep: #0d6efd;
+    --g-deep-soft: #e7f0ff;
+    --g-legacy: #64748b;
+    --g-admin: #0f1524;
+
+    /* Radii */
+    --r-1: 6px;
+    --r-2: 10px;
+    --r-3: 14px;
+    --r-4: 20px;
+
+    /* Shadows */
+    --sh-1: 0 1px 2px rgba(14,20,38,0.04), 0 0 0 1px rgba(14,20,38,0.04);
+    --sh-2: 0 4px 14px rgba(14,20,38,0.06), 0 0 0 1px rgba(14,20,38,0.04);
+    --sh-3: 0 20px 48px rgba(14,20,38,0.14), 0 0 0 1px rgba(14,20,38,0.06);
+
+    /* Legacy compat */
+    --border-radius: var(--r-3);
+    --accent-blue: var(--g-dash);
+    --accent-green: var(--up);
+    --accent-red: var(--down);
+    --accent-amber: var(--warn);
+    --accent-purple: var(--g-mkt);
     --transition: all 0.2s ease;
 }
 
 /* ── Global Typography ── */
 html, body, [class*="css"] {
-    font-family: var(--font-main) !important;
+    font-family: var(--f-ui) !important;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
-/* ── Main Content Area ── */
+/* ── Main Canvas ── */
+.main, [data-testid="stAppViewContainer"] {
+    background: var(--bg) !important;
+}
+
 .main .block-container {
     padding-top: 2rem !important;
     padding-bottom: 2rem !important;
-    max-width: 1400px;
+    max-width: 1600px;
 }
 
-/* ── Page Titles & Headers ── */
+/* ── Page Titles — Fraunces serif display font ── */
 h1 {
-    font-weight: 800 !important;
-    font-size: 1.75rem !important;
+    font-family: var(--f-display) !important;
+    font-weight: 400 !important;
+    font-size: 2rem !important;
     letter-spacing: -0.02em !important;
-    margin-bottom: 1.5rem !important;
+    margin-bottom: 1.25rem !important;
+    color: var(--ink) !important;
 }
 
 h2 {
-    font-weight: 700 !important;
-    font-size: 1.35rem !important;
+    font-family: var(--f-ui) !important;
+    font-weight: 600 !important;
+    font-size: 1.25rem !important;
     letter-spacing: -0.01em !important;
+    color: var(--ink) !important;
 }
 
 h3 {
+    font-family: var(--f-ui) !important;
     font-weight: 600 !important;
-    font-size: 1.1rem !important;
+    font-size: 1.05rem !important;
+    color: var(--ink-2) !important;
 }
 
-/* ── Streamlit Containers → Card Style ── */
+/* ── Monospace for all numbers/prices ── */
+[data-testid="stMetricValue"] {
+    font-family: var(--f-num) !important;
+}
+.stDataFrame td {
+    font-family: var(--f-num) !important;
+    font-size: 12px !important;
+}
+
+/* ── Expanders → Card Style ── */
 [data-testid="stExpander"] {
-    border-radius: var(--border-radius) !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-3) !important;
+    box-shadow: var(--sh-1);
     margin-bottom: 0.75rem;
     overflow: hidden;
 }
-
 [data-testid="stExpander"] summary {
     font-weight: 600 !important;
-    font-size: 0.95rem !important;
+    font-size: 0.9rem !important;
 }
 
-/* ── Tabs → Clean Underline Style ── */
+/* ── Tabs → Clean Underline with Accent ── */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0;
     background: transparent;
+    border-bottom: 1px solid var(--border);
 }
-
 .stTabs [data-baseweb="tab"] {
-    font-family: var(--font-main) !important;
+    font-family: var(--f-ui) !important;
     font-weight: 500 !important;
-    font-size: 0.9rem !important;
-    padding: 0.75rem 1.25rem !important;
+    font-size: 13px !important;
+    padding: 10px 14px !important;
     border-radius: 0 !important;
     border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    transition: all 0.2s ease;
+    margin-bottom: -1px;
+    color: var(--ink-3) !important;
+    transition: all 0.15s;
 }
-
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
-    color: #6366f1 !important;
-    border-bottom-color: #6366f1 !important;
+    color: var(--g-dash) !important;
+    border-bottom-color: var(--g-dash) !important;
     background: transparent !important;
     font-weight: 600 !important;
 }
-
 .stTabs [data-baseweb="tab"]:hover {
-    color: #6366f1 !important;
-    background: rgba(99, 102, 241, 0.05) !important;
+    color: var(--ink) !important;
 }
 
-/* ── Buttons → Modern Rounded ── */
+/* ── Buttons → Refined ── */
 .stButton > button {
-    font-family: var(--font-main) !important;
+    font-family: var(--f-ui) !important;
     font-weight: 500 !important;
-    border-radius: 8px !important;
-    padding: 0.5rem 1.25rem !important;
-    transition: all 0.2s ease !important;
-    font-size: 0.875rem !important;
+    border-radius: var(--r-2) !important;
+    padding: 0 14px !important;
+    height: 32px !important;
+    transition: all 0.15s !important;
+    font-size: 13px !important;
+    border: 1px solid var(--border) !important;
+    color: var(--ink-2) !important;
+    background: var(--surface) !important;
 }
-
 .stButton > button:hover {
-    transform: translateY(-1px);
+    border-color: var(--border-2) !important;
+    background: var(--bg-2) !important;
 }
-
 .stButton > button[kind="primary"],
 .stButton > button[data-testid="baseButton-primary"] {
-    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-    color: white !important;
-    border: none !important;
+    background: var(--ink) !important;
+    color: #fff !important;
+    border-color: var(--ink) !important;
 }
-
 .stButton > button[kind="primary"]:hover,
 .stButton > button[data-testid="baseButton-primary"]:hover {
-    color: white !important;
-    opacity: 0.9;
+    background: #1a2135 !important;
+    color: #fff !important;
 }
 
-/* ── Selectbox, Text Input, Number Input → Rounded ── */
+/* ── Inputs → Clean with accent focus ── */
 [data-baseweb="select"] > div,
 [data-baseweb="input"] > div,
 .stTextInput > div > div,
 .stNumberInput > div > div > div {
-    border-radius: 8px !important;
-    font-family: var(--font-main) !important;
+    border-radius: var(--r-2) !important;
+    font-family: var(--f-ui) !important;
+    border-color: var(--border) !important;
 }
-
 [data-baseweb="select"] > div:focus-within,
 .stTextInput > div > div:focus-within {
-    border-color: #6366f1 !important;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1) !important;
+    border-color: var(--g-dash) !important;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.12) !important;
 }
 
-/* ── DataFrames / Tables → Clean Cards ── */
-[data-testid="stDataFrame"],
-.stDataFrame {
-    border-radius: var(--border-radius) !important;
+/* ── DataFrames → Card wrapper ── */
+[data-testid="stDataFrame"], .stDataFrame {
+    border-radius: var(--r-3) !important;
+    border: 1px solid var(--border) !important;
     overflow: hidden;
+    box-shadow: var(--sh-1);
 }
 
-/* ── Metrics → Subtle Card ── */
+/* ── Metrics → Refined cards ── */
 [data-testid="stMetric"] {
-    border-radius: var(--border-radius);
-    padding: 1rem 1.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-3);
+    padding: 14px 16px;
+    box-shadow: var(--sh-1);
 }
-
 [data-testid="stMetric"] label {
-    font-weight: 500 !important;
-    font-size: 0.8rem !important;
+    font-family: var(--f-ui) !important;
+    font-weight: 600 !important;
+    font-size: 10px !important;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.10em;
+    color: var(--ink-4) !important;
 }
-
 [data-testid="stMetric"] [data-testid="stMetricValue"] {
-    font-weight: 700 !important;
-    font-size: 1.5rem !important;
+    font-family: var(--f-num) !important;
+    font-weight: 600 !important;
+    font-size: 22px !important;
+    color: var(--ink) !important;
+}
+[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    font-size: 11px !important;
 }
 
-/* ── Sidebar Styling (follows Streamlit theme) ── */
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: #fbfbfe !important;
+    border-right: 1px solid var(--border) !important;
+}
 [data-testid="stSidebar"] .stButton > button {
     text-align: left !important;
-    font-size: 0.85rem !important;
-    padding: 0.5rem 0.75rem !important;
-}
-
-/* ── Alerts → Rounded & Soft ── */
-.stAlert {
-    border-radius: var(--border-radius) !important;
+    font-size: 13px !important;
+    padding: 7px 10px !important;
+    border-radius: 8px !important;
     border: none !important;
-    font-size: 0.9rem !important;
+    background: transparent !important;
+    color: var(--ink-2) !important;
+    font-weight: 500 !important;
+    transition: background 0.12s, color 0.12s !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: var(--bg-2) !important;
+    color: var(--ink) !important;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"],
+[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"] {
+    background: rgba(99,102,241,0.12) !important;
+    color: var(--g-dash) !important;
+    font-weight: 600 !important;
+    border-left: 3px solid var(--g-dash) !important;
+    border-radius: 0 8px 8px 0 !important;
 }
 
-[data-testid="stAlert"] {
-    border-radius: var(--border-radius) !important;
+/* ── Alerts → Refined ── */
+.stAlert, [data-testid="stAlert"] {
+    border-radius: var(--r-3) !important;
+    border: none !important;
+    font-size: 13px !important;
 }
 
-/* ── Dividers → Subtle ── */
+/* ── Dividers ── */
 hr {
     border: none !important;
-    border-top: 1px solid rgba(128,128,128,0.2) !important;
+    border-top: 1px solid var(--border) !important;
     margin: 1.5rem 0 !important;
 }
 
-/* ── Plotly Charts → Remove Border ── */
+/* ── Plotly Charts ── */
 .js-plotly-plot {
-    border-radius: var(--border-radius) !important;
+    border-radius: var(--r-3) !important;
     overflow: hidden;
 }
 
-/* ── Form Containers ── */
+/* ── Forms ── */
 [data-testid="stForm"] {
-    border-radius: var(--border-radius) !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-3) !important;
     padding: 1.5rem !important;
+    box-shadow: var(--sh-1);
 }
 
-/* ── Multiselect Tags ── */
+/* ── Tags ── */
 [data-baseweb="tag"] {
-    border-radius: 6px !important;
-    font-family: var(--font-main) !important;
+    border-radius: var(--r-1) !important;
+    font-family: var(--f-ui) !important;
 }
 
-/* ── Toggle → Accent Color ── */
+/* ── Toggles ── */
 [data-testid="stCheckbox"] span[role="checkbox"][aria-checked="true"] {
-    background-color: var(--accent-blue) !important;
+    background-color: var(--g-dash) !important;
 }
 
-/* ── Smooth Scrollbar ── */
-::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
-    border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #a1a1a1;
-}
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-5); }
 
-/* ── Custom Card Class (for HTML cards) ── */
-.mo-card {
-    border-radius: var(--border-radius);
-    padding: 1.25rem;
-    margin-bottom: 0.75rem;
-    transition: var(--transition);
-}
-
-.mo-card:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-}
-
-.mo-card-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    opacity: 0.6;
-    margin-bottom: 0.5rem;
-}
-
-.mo-card-value {
-    font-size: 1.75rem;
-    font-weight: 800;
-    line-height: 1.2;
-}
-
-.mo-card-sub {
-    font-size: 0.85rem;
-    opacity: 0.6;
-    margin-top: 0.35rem;
-}
-
-/* ── Gradient Card (for hero metrics) ── */
+/* ── KPI Gradient Tiles (the signature visual) ── */
 .mo-gradient-card {
-    padding: 1.25rem;
-    border-radius: 12px;
-    color: white;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    transition: all 0.2s ease;
+    position: relative;
+    padding: 18px;
+    border-radius: var(--r-3);
+    color: #fff;
+    overflow: hidden;
+    min-height: 108px;
+    box-shadow: var(--sh-2);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: transform 0.15s;
 }
-
-.mo-gradient-card:hover {
-    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-    transform: translateY(-2px);
+.mo-gradient-card:hover { transform: scale(1.01); }
+.mo-gradient-card::after {
+    content: '';
+    position: absolute;
+    right: -20px; top: -20px;
+    width: 120px; height: 120px;
+    border-radius: 99px;
+    background: radial-gradient(circle, rgba(255,255,255,0.20), transparent 65%);
+    z-index: 0;
 }
-
+.mo-gradient-card > * { position: relative; z-index: 1; }
 .mo-gradient-card .label {
-    font-size: 0.75rem;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    opacity: 0.9;
+    letter-spacing: 0.12em;
+    opacity: 0.85;
 }
-
 .mo-gradient-card .value {
-    font-size: 2rem;
-    font-weight: 800;
-    margin: 0.4rem 0;
-    line-height: 1.2;
+    font-family: var(--f-num);
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 4px 0 0;
+}
+.mo-gradient-card .sub {
+    font-size: 11px;
+    opacity: 0.85;
+    font-weight: 500;
+    margin-top: 2px;
 }
 
-.mo-gradient-card .sub {
-    font-size: 0.85rem;
-    opacity: 0.9;
+/* Gradient variants */
+.mo-g-indigo { background: linear-gradient(135deg, #6366f1, #818cf8); }
+.mo-g-pink { background: linear-gradient(135deg, #ec4899, #f472b6); }
+.mo-g-green { background: linear-gradient(135deg, #10b981, #34d399); }
+.mo-g-orange { background: linear-gradient(135deg, #f97316, #fb923c); }
+.mo-g-blue { background: linear-gradient(135deg, #1e40af, #3b82f6); }
+.mo-g-violet { background: linear-gradient(135deg, #7c3aed, #a78bfa); }
+.mo-g-teal { background: linear-gradient(135deg, #0d9488, #2dd4bf); }
+.mo-g-amber { background: linear-gradient(135deg, #d97706, #f59f00); }
+.mo-g-red { background: linear-gradient(135deg, #b91c1c, #ef4444); }
+.mo-g-navy { background: linear-gradient(135deg, #334155, #64748b); }
+
+/* ── Stat blocks ── */
+.mo-stat {
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+}
+.mo-stat .k {
+    font-size: 10px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    font-weight: 600;
+}
+.mo-stat .v {
+    font-family: var(--f-num);
+    font-size: 22px;
+    font-weight: 600;
+    margin-top: 4px;
+    color: var(--ink);
+}
+.mo-stat .s { font-size: 11px; color: var(--ink-4); margin-top: 2px; }
+
+/* ── Pills / Tags ── */
+.mo-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--bg-2);
+    color: var(--ink-2);
+    border: 1px solid var(--border);
+}
+.mo-pill-up { background: var(--up-soft); color: var(--up); border-color: transparent; }
+.mo-pill-down { background: var(--down-soft); color: var(--down); border-color: transparent; }
+.mo-pill-warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+
+/* ── Section headers (uppercase kicker) ── */
+.mo-section {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-4);
+    font-weight: 600;
+    margin-bottom: 10px;
 }
 
 /* ── Status Badges ── */
 .mo-badge {
     display: inline-block;
-    padding: 0.2rem 0.6rem;
-    border-radius: 20px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 500;
 }
-.mo-badge-green { background: #d1fae5; color: #065f46; }
-.mo-badge-red { background: #fee2e2; color: #991b1b; }
-.mo-badge-amber { background: #fef3c7; color: #92400e; }
-.mo-badge-blue { background: #dbeafe; color: #1e40af; }
-.mo-badge-purple { background: #ede9fe; color: #5b21b6; }
+.mo-badge-green { background: var(--up-soft); color: var(--up); }
+.mo-badge-red { background: var(--down-soft); color: var(--down); }
+.mo-badge-amber { background: var(--warn-soft); color: var(--warn); }
+.mo-badge-blue { background: var(--g-deep-soft); color: var(--g-deep); }
+.mo-badge-purple { background: var(--g-mkt-soft); color: var(--g-mkt); }
 
-/* ── Section Accent Borders (color-coded by page category) ── */
-.section-trading { border-left: 4px solid var(--accent-blue); padding-left: 1rem; }
-.section-risk { border-left: 4px solid var(--accent-red); padding-left: 1rem; }
-.section-daily { border-left: 4px solid var(--accent-amber); padding-left: 1rem; }
-.section-market { border-left: 4px solid var(--accent-green); padding-left: 1rem; }
-.section-analytics { border-left: 4px solid var(--accent-purple); padding-left: 1rem; }
+/* ── Section Accent Borders ── */
+.section-trading { border-left: 3px solid var(--g-ops); padding-left: 1rem; }
+.section-risk { border-left: 3px solid var(--g-risk); padding-left: 1rem; }
+.section-daily { border-left: 3px solid var(--g-daily); padding-left: 1rem; }
+.section-market { border-left: 3px solid var(--g-mkt); padding-left: 1rem; }
+.section-analytics { border-left: 3px solid var(--g-deep); padding-left: 1rem; }
 
-/* ── Dark Mode: no overrides needed — Streamlit theme handles it ── */
-
-/* ── Mobile Breakpoints ── */
+/* ── Mobile ── */
 @media (max-width: 768px) {
     .main .block-container {
         padding-top: 1rem !important;
         padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
-        padding-bottom: 1rem !important;
     }
-    h1 { font-size: 1.4rem !important; margin-bottom: 1rem !important; }
-    h2 { font-size: 1.15rem !important; }
-    h3 { font-size: 1rem !important; }
-    /* Stack metric cards 2-wide instead of overflowing on narrow screens */
-    [data-testid="stMetric"] {
-        padding: 0.5rem !important;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: 1.1rem !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.7rem !important;
-    }
-    /* Make buttons easier to tap */
-    .stButton > button {
-        min-height: 44px;
-    }
-    /* Compact dataframe rows on mobile */
-    [data-testid="stDataFrame"] {
-        font-size: 0.8rem !important;
-    }
+    h1 { font-size: 1.5rem !important; }
+    [data-testid="stMetric"] { padding: 10px !important; }
+    [data-testid="stMetricValue"] { font-size: 16px !important; }
+    .stButton > button { min-height: 40px; }
 }
-
 @media (max-width: 480px) {
-    [data-testid="stMetricValue"] {
-        font-size: 0.95rem !important;
-    }
-    /* Hide sidebar section labels on very narrow screens — icons still visible */
-    h1 { font-size: 1.2rem !important; }
+    h1 { font-size: 1.3rem !important; }
 }
 
 </style>
