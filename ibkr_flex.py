@@ -307,14 +307,21 @@ def consolidate_partial_fills(df):
 
 
 def get_raw_debug_info(xml_root):
-    """Extract raw XML attributes from the first TradeConfirm for debugging."""
+    """Extract raw XML attributes from the first TradeConfirm for debugging.
+    Returns dict with 'first' (first trade) and 'first_opt' (first option trade)."""
+    result = {}
     try:
         confirms = list(xml_root.iter("TradeConfirm"))
         if confirms:
-            return dict(confirms[0].attrib)
+            result['first'] = dict(confirms[0].attrib)
+            # Also find first option trade specifically
+            for c in confirms:
+                if c.attrib.get('assetCategory', '') == 'OPT':
+                    result['first_opt'] = dict(c.attrib)
+                    break
     except Exception:
         pass
-    return {}
+    return result
 
 
 def pull_ibkr_trades(consolidate=True):

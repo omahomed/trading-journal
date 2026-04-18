@@ -6872,16 +6872,26 @@ elif page == "Import Trades":
 
             # Debug: show raw IBKR XML attributes (for field name mapping)
             raw_debug = st.session_state.get('_ibkr_debug', {})
-            with st.expander("🔧 Debug: Raw IBKR XML attributes (first trade)", expanded=False):
+            with st.expander("🔧 Debug: Raw IBKR XML attributes", expanded=False):
                 if raw_debug:
-                    st.code(str(raw_debug), language="python")
-                    # Highlight key fields
-                    st.caption(f"**orderID:** `{raw_debug.get('orderID', 'NOT FOUND')}`  \n"
-                               f"**ibOrderID:** `{raw_debug.get('ibOrderID', 'NOT FOUND')}`  \n"
-                               f"**tradePrice:** `{raw_debug.get('tradePrice', 'NOT FOUND')}`  \n"
-                               f"**price:** `{raw_debug.get('price', 'NOT FOUND')}`  \n"
-                               f"**amount:** `{raw_debug.get('amount', 'NOT FOUND')}`  \n"
-                               f"**quantity:** `{raw_debug.get('quantity', 'NOT FOUND')}`")
+                    first = raw_debug.get('first', {})
+                    first_opt = raw_debug.get('first_opt', {})
+
+                    st.markdown("**First stock trade:**")
+                    st.code(str(first), language="python")
+                    st.caption(f"**orderID:** `{first.get('orderID', 'NOT FOUND')}` · "
+                               f"**price:** `{first.get('price', 'NOT FOUND')}` · "
+                               f"**quantity:** `{first.get('quantity', 'NOT FOUND')}`")
+
+                    if first_opt:
+                        st.markdown("**First option trade:**")
+                        st.code(str(first_opt), language="python")
+                        st.caption(f"**putCall:** `{first_opt.get('putCall', 'NOT FOUND')}` · "
+                                   f"**strike:** `{first_opt.get('strike', 'NOT FOUND')}` · "
+                                   f"**expiry:** `{first_opt.get('expiry', 'NOT FOUND')}` · "
+                                   f"**symbol:** `{first_opt.get('symbol', 'NOT FOUND')}`")
+                    else:
+                        st.caption("_No option trades in this pull._")
                 else:
                     st.info("Pull trades first to see debug data.")
 
