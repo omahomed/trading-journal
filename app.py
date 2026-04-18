@@ -677,11 +677,11 @@ hr {
 /* ── KPI Gradient Tiles (the signature visual) ── */
 .mo-gradient-card {
     position: relative;
-    padding: 18px;
+    padding: 14px 16px;
     border-radius: var(--r-3);
     color: #fff;
     overflow: hidden;
-    min-height: 108px;
+    height: 90px;
     box-shadow: var(--sh-2);
     display: flex;
     flex-direction: column;
@@ -693,31 +693,38 @@ hr {
     content: '';
     position: absolute;
     right: -20px; top: -20px;
-    width: 120px; height: 120px;
+    width: 100px; height: 100px;
     border-radius: 99px;
-    background: radial-gradient(circle, rgba(255,255,255,0.20), transparent 65%);
+    background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%);
     z-index: 0;
 }
 .mo-gradient-card > * { position: relative; z-index: 1; }
 .mo-gradient-card .label {
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.10em;
     opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .mo-gradient-card .value {
     font-family: var(--f-num);
-    font-size: 28px;
+    font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.02em;
-    margin: 4px 0 0;
+    margin: 2px 0 0;
+    white-space: nowrap;
 }
 .mo-gradient-card .sub {
-    font-size: 11px;
-    opacity: 0.85;
+    font-size: 10px;
+    opacity: 0.80;
     font-weight: 500;
-    margin-top: 2px;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Gradient variants */
