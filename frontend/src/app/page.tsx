@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
+import { Dashboard } from "@/components/dashboard";
 import { getGroupForPage } from "@/lib/nav";
 
 // Mock KPI data
@@ -251,7 +252,7 @@ export default function Home() {
           </button>
         </header>
         <div className="flex-1 overflow-auto px-7 py-6">
-          {page === "dashboard" ? <DashboardPage navColor={navColor} /> : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
+          {page === "dashboard" ? <Dashboard navColor={navColor} /> : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
         </div>
       </main>
       <CommandPalette onNavigate={setPage} />
