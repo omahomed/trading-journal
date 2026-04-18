@@ -7495,11 +7495,12 @@ elif page == "Log Sell":
     page_header("Log Sell", CURR_PORT_NAME, "🔴")
     df_d, df_s = load_trade_data()
 
-    # --- Pre-fill from IBKR Import ---
-    _ibkr_sell_ticker = st.session_state.pop('ibkr_sell_ticker', None)
-    _ibkr_sell_shares = st.session_state.pop('ibkr_sell_shares', 0)
-    _ibkr_sell_price = st.session_state.pop('ibkr_sell_price', 0.0)
-    _ibkr_sell_date = st.session_state.pop('ibkr_sell_date', None)
+    # --- Pre-fill from IBKR Import (use get, not pop — values must survive reruns
+    # when user interacts with widgets like the sell rule dropdown) ---
+    _ibkr_sell_ticker = st.session_state.get('ibkr_sell_ticker', None)
+    _ibkr_sell_shares = st.session_state.get('ibkr_sell_shares', 0)
+    _ibkr_sell_price = st.session_state.get('ibkr_sell_price', 0.0)
+    _ibkr_sell_date = st.session_state.get('ibkr_sell_date', None)
 
     if _ibkr_sell_ticker:
         st.success(f"Pre-filled from IBKR Import: **{_ibkr_sell_ticker}** — {int(_ibkr_sell_shares)} shares @ ${_ibkr_sell_price:.2f}")
@@ -7627,6 +7628,9 @@ elif page == "Log Sell":
 
                         chart_msg = f" | {charts_uploaded} chart(s) uploaded" if charts_uploaded > 0 else ""
                         st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx}{chart_msg} | Saved to database"
+                        # Clear IBKR pre-fill so next visit to Log Sell starts fresh
+                        for _ik in ['ibkr_sell_ticker', 'ibkr_sell_shares', 'ibkr_sell_price', 'ibkr_sell_date']:
+                            st.session_state.pop(_ik, None)
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Database save failed: {str(e)}")
@@ -7666,6 +7670,9 @@ elif page == "Log Sell":
                         st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx} | Exit chart uploaded"
                     else:
                         st.session_state.sell_success = f"✅ Sold! Transaction ID: {s_trx}"
+                    # Clear IBKR pre-fill
+                    for _ik in ['ibkr_sell_ticker', 'ibkr_sell_shares', 'ibkr_sell_price', 'ibkr_sell_date']:
+                        st.session_state.pop(_ik, None)
                     st.rerun()
     else: st.info("No positions to sell.")
 
