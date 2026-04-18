@@ -57,14 +57,105 @@ function DashboardPage({ navColor }: { navColor: string }) {
         ))}
       </div>
 
-      <div className="bg-white rounded-[14px] border border-[#e6e8ef] overflow-hidden" style={{ boxShadow: "0 1px 2px rgba(14,20,38,0.04), 0 0 0 1px rgba(14,20,38,0.04)" }}>
-        <div className="flex items-center gap-2 px-[18px] py-3.5 border-b border-[#e6e8ef]">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-          <span className="text-[13px] font-semibold">Equity Curve</span>
-          <span className="text-xs text-[#8a90a2]">Portfolio vs Benchmark · event markers</span>
+      {/* Two-column: Equity Curve + This Month */}
+      <div className="grid gap-[18px]" style={{ gridTemplateColumns: "2fr 1fr", alignItems: "stretch" }}>
+        {/* Equity Curve */}
+        <div className="bg-white rounded-[14px] border border-[#e6e8ef] overflow-hidden flex flex-col" style={{ boxShadow: "0 1px 2px rgba(14,20,38,0.04), 0 0 0 1px rgba(14,20,38,0.04)" }}>
+          <div className="flex items-center justify-between px-[18px] py-3 border-b border-[#e6e8ef]">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+              <span className="text-[13px] font-semibold">Equity Curve</span>
+              <span className="text-xs text-[#8a90a2]">Portfolio vs SPY / NDX · event markers</span>
+            </div>
+            <div className="flex bg-[#eef0f6] border border-[#e6e8ef] rounded-[10px] p-0.5 gap-0.5">
+              {["1Y", "6M", "3M", "All"].map((t, i) => (
+                <button key={t} className="px-3 py-1 rounded-md text-xs font-medium transition-all"
+                        style={{ background: i === 0 ? "#fff" : "transparent", color: i === 0 ? "#0f1524" : "#5a6175", boxShadow: i === 0 ? "0 1px 2px rgba(14,20,38,0.04)" : "none" }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex-1 min-h-[380px] flex items-center justify-center text-[#8a90a2] text-sm">
+            [Equity curve chart — Recharts, connected to Supabase]
+          </div>
         </div>
-        <div className="h-[400px] flex items-center justify-center text-[#8a90a2] text-sm">
-          [Equity curve — connects to your Supabase data via FastAPI]
+
+        {/* This Month at a Glance */}
+        <div className="bg-white rounded-[14px] border border-[#e6e8ef] overflow-hidden flex flex-col" style={{ boxShadow: "0 1px 2px rgba(14,20,38,0.04), 0 0 0 1px rgba(14,20,38,0.04)" }}>
+          <div className="flex items-center gap-2 px-[18px] py-3 border-b border-[#e6e8ef]">
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+            <span className="text-[13px] font-semibold">This Month at a Glance</span>
+            <span className="text-xs text-[#8a90a2]">April 2026</span>
+          </div>
+          <div className="flex-1 p-[18px] flex flex-col gap-3.5">
+            {/* Stats grid */}
+            <div className="grid grid-cols-2 gap-2.5">
+              {[
+                { k: "MTD Return", v: "+4.89%", s: "$+20,843", color: "#08a86b" },
+                { k: "Trades", v: "14", s: "9W · 5L", color: "#0f1524" },
+                { k: "Best Day", v: "+2.14%", s: "Apr 11 · FTD", color: "#08a86b" },
+                { k: "Worst Day", v: "-0.62%", s: "Apr 03", color: "#e5484d" },
+              ].map((stat) => (
+                <div key={stat.k} className="p-3 border border-[#e6e8ef] rounded-[10px]">
+                  <div className="text-[10px] uppercase tracking-[0.10em] text-[#8a90a2] font-semibold">{stat.k}</div>
+                  <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: stat.color }}>{stat.v}</div>
+                  <div className="text-[11px] text-[#8a90a2] mt-0.5">{stat.s}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Daily P&L mini bars */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] text-[#8a90a2] font-semibold mb-2">Daily P&L · last 20 sessions</div>
+              <div className="flex items-center gap-[3px] h-[80px]">
+                {[0.4,-0.2,0.8,1.2,-0.6,0.3,0.9,-0.3,1.4,2.1,-0.4,0.7,1.1,-0.8,0.6,1.8,0.9,1.3,-0.5,1.4].map((v, i) => {
+                  const pos = v >= 0;
+                  const h = Math.abs(v) * 30 + 4;
+                  return (
+                    <div key={i} className="flex-1 flex flex-col justify-center items-center h-full">
+                      {pos ? (
+                        <div className="flex-1 flex items-end justify-center w-full">
+                          <div style={{ width: "80%", height: h, background: "#08a86b", borderRadius: "3px 3px 0 0" }} />
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex-1" />
+                          <div className="flex items-start justify-center w-full">
+                            <div style={{ width: "80%", height: h, background: "#e5484d", borderRadius: "0 0 3px 3px" }} />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="h-px bg-[#e6e8ef]" />
+
+            {/* Rule discipline */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] text-[#8a90a2] font-semibold mb-2.5">Rule Discipline · April</div>
+              <div className="flex flex-col gap-2">
+                {[
+                  ["Cut all losses ≤ -1%", 96, "#08a86b"],
+                  ["Followed buy rule", 88, "#08a86b"],
+                  ["Sized within ATR", 92, "#08a86b"],
+                  ["Journaled same day", 71, "#f59f00"],
+                  ["Screenshots saved", 52, "#e5484d"],
+                ].map(([k, v, c]) => (
+                  <div key={k as string} className="grid items-center gap-2.5" style={{ gridTemplateColumns: "1fr 60px 40px", fontSize: 12 }}>
+                    <span>{k as string}</span>
+                    <div className="h-2 bg-[#eef0f6] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${v}%`, background: c as string, transition: "width 0.6s ease" }} />
+                    </div>
+                    <span className="text-right text-[11px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", color: c as string }}>{v}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
