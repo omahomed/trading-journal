@@ -23,7 +23,7 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
       <div className="absolute -right-5 -top-5 w-[100px] h-[100px] rounded-full" style={{ background: "radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)" }} />
       <div className="relative z-10">
         <div className="text-[9px] font-semibold uppercase tracking-[0.10em] opacity-85" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>{label}</div>
-        <div className="text-[22px] font-semibold tracking-tight mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
+        <div className="text-[22px] font-semibold tracking-tight mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
       </div>
       <div className="relative z-10 text-[10px] font-medium opacity-80">{sub}</div>
     </div>
@@ -99,7 +99,7 @@ function DashboardPage({ navColor }: { navColor: string }) {
               ].map((stat) => (
                 <div key={stat.k} className="p-3 border border-[var(--border)] rounded-[10px]">
                   <div className="text-[10px] uppercase tracking-[0.10em] text-[var(--ink-4)] font-semibold">{stat.k}</div>
-                  <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: stat.color }}>{stat.v}</div>
+                  <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: stat.color }}>{stat.v}</div>
                   <div className="text-[11px] text-[var(--ink-4)] mt-0.5">{stat.s}</div>
                 </div>
               ))}
@@ -209,6 +209,7 @@ export default function Home() {
   const [page, setPage] = useState("dashboard");
   const [privacy, setPrivacy] = useState(false);
   const [dark, setDark] = useState(false);
+  const [rail, setRail] = useState(false);
   const group = getGroupForPage(page);
   const navColor = group?.color || "#6366f1";
 
@@ -227,7 +228,7 @@ export default function Home() {
 
   return (
     <div className={`flex h-screen ${privacy ? "privacy" : ""}`}>
-      <Sidebar activePage={page} onNavigate={setPage} privacy={privacy} onTogglePrivacy={() => setPrivacy(!privacy)} dark={dark} onToggleDark={toggleDark} />
+      <Sidebar activePage={page} onNavigate={setPage} privacy={privacy} onTogglePrivacy={() => setPrivacy(!privacy)} dark={dark} onToggleDark={toggleDark} rail={rail} onToggleRail={() => setRail(!rail)} />
       <main className="flex-1 flex flex-col min-w-0" style={{ background: "var(--bg)" }}>
         <header className="h-[56px] flex items-center px-6 gap-5 sticky top-0 z-30"
                 style={{ background: "var(--header-bg)", backdropFilter: "saturate(160%) blur(10px)", borderBottom: "1px solid var(--border)" }}>

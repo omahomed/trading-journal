@@ -85,6 +85,17 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
         </>
       )}
 
+      {/* Rail mode: hamburger to expand */}
+      {rail && (
+        <button className="mx-auto my-2 w-7 h-7 grid place-items-center rounded-lg transition-colors"
+                style={{ color: "var(--ink-3)" }}
+                onClick={onToggleRail}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+      )}
+
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1 scrollbar-thin">
         {NAV.map((group) => {
@@ -92,10 +103,27 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           const hasActive = group.items.some((i) => i.id === activePage);
 
           return (
-            <div key={group.id} className="mb-0.5">
+            <div key={group.id} className={rail ? "flex justify-center my-1" : "mb-0.5"}>
+              {rail ? (
+                /* Rail mode: colored dot per group */
+                <button
+                  className="w-8 h-8 grid place-items-center rounded-lg transition-colors"
+                  onClick={() => { setOpenGroups({ [group.id]: true }); if (onToggleRail) onToggleRail(); }}
+                  title={group.label}
+                >
+                  <span className="rounded-full transition-all"
+                        style={{
+                          width: hasActive ? 10 : 7,
+                          height: hasActive ? 10 : 7,
+                          background: group.color,
+                          opacity: hasActive ? 1 : 0.8,
+                          boxShadow: hasActive ? `0 0 0 3px color-mix(in oklab, ${group.color} 20%, transparent)` : "none",
+                        }} />
+                </button>
+              ) : (
               <button
                 className="w-full flex items-center gap-2.5 px-2.5 py-[9px] rounded-[10px] hover:bg-black/[0.03] transition-[background] duration-150"
-                onClick={(e) => !rail && toggleGroup(group.id, e.altKey)}
+                onClick={(e) => toggleGroup(group.id, e.altKey)}
               >
                 <span className="w-[3px] rounded-full shrink-0 transition-all duration-200"
                       style={{
@@ -104,8 +132,6 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                         opacity: isOpen || hasActive ? 1 : 0.35,
                         boxShadow: isOpen || hasActive ? `0 0 8px color-mix(in oklab, ${group.color} 60%, transparent)` : "none",
                       }} />
-                {!rail && (
-                  <>
                     <span className="flex-1 text-left text-[11px] uppercase tracking-[0.10em] font-semibold"
                           style={{ color: hasActive ? group.color : "#5a6175" }}>
                       {group.label}
@@ -122,9 +148,8 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                           style={{ transform: isOpen ? "rotate(90deg)" : "none" }}>
                       {Icons.chevronRight()}
                     </span>
-                  </>
-                )}
               </button>
+              )}
 
               {!rail && (
                 <div className="grid transition-[grid-template-rows] duration-300 ease-out"
