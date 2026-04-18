@@ -2338,8 +2338,20 @@ st.sidebar.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Sidebar brand header
+st.sidebar.markdown("""
+<div style="display:flex;align-items:center;gap:10px;padding:4px 0 12px;">
+    <div style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6 55%,#0ea5a4);display:grid;place-items:center;box-shadow:0 2px 8px rgba(99,102,241,0.35);flex-shrink:0;">
+        <span style="color:#fff;font-family:'Fraunces',serif;font-style:italic;font-size:17px;font-weight:500;">M</span>
+    </div>
+    <div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:-0.01em;">MO Money</div>
+        <div style="font-size:10px;color:var(--ink-4);text-transform:uppercase;letter-spacing:0.10em;font-weight:500;">v18 · Trading Journal</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 # A. SINGLE STRATEGY SELECTOR
-# This variable 'portfolio' controls the entire app context.
 portfolio = st.sidebar.selectbox(
     "Active Strategy",
     [PORT_CANSLIM, PORT_TQQQ, PORT_457B],
@@ -2571,17 +2583,18 @@ GRADIENTS = {
 # PAGE 2: DASHBOARD (NEW MODERN VERSION)
 # ==============================================================================
 if page == "Dashboard":
-    # Welcome header
+    # Welcome header — Fraunces display with italic accent
     _today_str = datetime.now().strftime('%A, %B %d, %Y')
     _hour = datetime.now().hour
     _greeting = "Good morning" if _hour < 12 else ("Good afternoon" if _hour < 17 else "Good evening")
+    _user = st.session_state.get('user_name', 'MO').split()[0]
     st.markdown(f"""
-    <div style="margin-bottom: 1.5rem;">
-        <div style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">
-            {_greeting}, {st.session_state.get('user_name', 'MO').split()[0]}
-        </div>
-        <div style="font-size: 0.9rem; opacity: 0.6; margin-top: 0.25rem;">
-            {_today_str} • {CURR_PORT_NAME}
+    <div style="margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <h1 style="font-family:var(--f-display) !important;font-weight:400 !important;font-size:32px !important;margin:0 !important;">
+            {_greeting}, <em style="color:var(--g-dash);font-style:italic;">{_user}</em>
+        </h1>
+        <div style="font-size:13px;color:var(--ink-3);margin-top:6px;">
+            {_today_str} · {CURR_PORT_NAME}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -2797,7 +2810,13 @@ if page == "Dashboard":
         st.markdown("---")
 
         # === EQUITY CURVE (INTERACTIVE PLOTLY) ===
-        st.markdown("### 📈 Equity Curve")
+        st.markdown("""
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="width:6px;height:6px;border-radius:99px;background:var(--g-dash);"></div>
+            <div style="font-size:14px;font-weight:600;">Equity Curve</div>
+            <div style="font-size:12px;color:var(--ink-4);">Portfolio vs Benchmark · event markers</div>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Calculate moving averages
         df_j['EC_10SMA'] = df_j['LTD_Pct'].rolling(window=10).mean()
