@@ -2563,7 +2563,8 @@ if page == "Dashboard":
                         return price_map.get(r['Ticker'], float(r['Avg_Entry']))
 
                     df_open['Cur_Px'] = df_open.apply(get_live_price, axis=1)
-                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open['Shares']
+                    df_open['_opt_mult'] = df_open['Ticker'].apply(lambda t: 100 if _is_option_ticker(t) else 1)
+                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open['Shares'] * df_open['_opt_mult']
                     calc_exposure_pct = (df_open['Mkt_Val'].sum() / curr_nlv) * 100
 
                     # Calculate risk
@@ -3001,7 +3002,8 @@ elif page == "Dashboard (Legacy)":
                 df_open['Sector'] = df_open['Ticker'].map(sec_map).fillna('Unknown')
                 
                 # C. CALCULATIONS
-                df_open['Mkt_Val'] = df_open['Shares'] * df_open['Cur_Px']
+                df_open['_opt_mult'] = df_open['Ticker'].apply(lambda t: 100 if _is_option_ticker(t) else 1)
+                df_open['Mkt_Val'] = df_open['Shares'] * df_open['Cur_Px'] * df_open['_opt_mult']
                 df_open['Unrealized_PL'] = df_open['Mkt_Val'] - df_open['Total_Cost']
                 df_open['Return_Pct'] = df_open.apply(lambda x: (x['Unrealized_PL'] / x['Total_Cost'] * 100) if x['Total_Cost'] != 0 else 0, axis=1)
                 
@@ -3412,7 +3414,8 @@ elif page == "Trading Overview":
                     tickers = df_open['Ticker'].unique().tolist()
                     price_map = cached_batch_live_prices(tuple(sorted(tickers)))
                     df_open['Cur_Px'] = df_open['Ticker'].map(price_map).fillna(df_open.get('Avg_Entry', 0)).astype(float)
-                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open.get('Shares', 0)
+                    df_open['_opt_mult'] = df_open['Ticker'].apply(lambda t: 100 if _is_option_ticker(t) else 1)
+                    df_open['Mkt_Val'] = df_open['Cur_Px'] * df_open.get('Shares', 0) * df_open['_opt_mult']
                     live_exposure_pct = (df_open['Mkt_Val'].sum() / current_nlv) * 100
 
                     # Calculate risk if stop loss data available
@@ -9993,9 +9996,13 @@ elif page == "Active Campaign Summary":
 
              df_open['Current Price'] = df_open.apply(get_live_price, axis=1)
 
-             df_open['Current Value'] = df_open['Shares'] * df_open['Current Price']
+             # Option multiplier: options are priced per share but each
+             # contract = 100 shares. Detect by checking _is_option_ticker.
+             df_open['_opt_mult'] = df_open['Ticker'].apply(lambda t: 100 if _is_option_ticker(t) else 1)
 
-             df_open['Unrealized_PL'] = (df_open['Current Price'] - df_open['Avg_Entry']) * df_open['Shares']
+             df_open['Current Value'] = df_open['Shares'] * df_open['Current Price'] * df_open['_opt_mult']
+
+             df_open['Unrealized_PL'] = (df_open['Current Price'] - df_open['Avg_Entry']) * df_open['Shares'] * df_open['_opt_mult']
 
              df_open['Overall_PL'] = df_open['Unrealized_PL'] + df_open['Realized Bank']
 
