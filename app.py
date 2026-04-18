@@ -2636,14 +2636,18 @@ _stc.html(f"""
 
   function selectItem(label) {{
     close();
-    // Find and click the matching sidebar button in the parent frame
+    // Find and click the matching sidebar button in the parent frame.
+    // Use dispatchEvent with bubbles:true so Streamlit's event system picks it up.
     const sidebar = doc.querySelector('[data-testid="stSidebar"]');
     if (!sidebar) return;
     const buttons = sidebar.querySelectorAll('button');
     for (const btn of buttons) {{
       const text = btn.textContent.trim();
-      // Match by label (strip emoji prefix)
       if (text.includes(label)) {{
+        // Try multiple click strategies for Streamlit compatibility
+        btn.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
+        // Fallback: also try focus + native click
+        btn.focus();
         btn.click();
         return;
       }}
