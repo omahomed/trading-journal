@@ -2580,12 +2580,30 @@ _stc.html("""
 
   function selectItem(label) {
     closePalette();
-    try {
-      var url = new URL(window.top.location.href);
-      url.searchParams.set('cmdk_nav', label);
-      window.top.location.href = url.toString();
-    } catch(e) {
-      try { window.parent.location.search = '?cmdk_nav=' + encodeURIComponent(label); } catch(e2) {}
+    // Strategy: find the sidebar button matching the label and trigger
+    // React's internal onClick by finding the __reactProps key.
+    var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+    if (!sidebar) return;
+    var buttons = sidebar.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      if (btn.textContent.trim().indexOf(label) >= 0) {
+        // Try React internal props first
+        var keys = Object.keys(btn);
+        for (var k = 0; k < keys.length; k++) {
+          if (keys[k].indexOf('__reactProps') === 0 || keys[k].indexOf('__reactEvents') === 0) {
+            var props = btn[keys[k]];
+            if (props && props.onClick) { props.onClick(new MouseEvent('click')); return; }
+            if (props && props.onMouseDown) { props.onMouseDown(new MouseEvent('mousedown')); }
+          }
+        }
+        // Fallback: try native click + dispatchEvent
+        btn.focus();
+        btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true}));
+        btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true,cancelable:true}));
+        btn.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true}));
+        return;
+      }
     }
   }
 
