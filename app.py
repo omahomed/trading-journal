@@ -2516,20 +2516,24 @@ for group, color, pages in _CMDK_NAV:
     for p in pages:
         _cmdk_items.append({"label": p, "group": group, "color": color})
 
-st.markdown(f"""
+import streamlit.components.v1 as _stc
+_stc.html(f"""
 <script>
 (function() {{
+  // Runs inside an iframe — target the PARENT document for DOM + events
+  const doc = window.parent.document;
+
   // Prevent double-init on Streamlit reruns
-  if (window.__cmdk_init) return;
-  window.__cmdk_init = true;
+  if (doc.__cmdk_init) return;
+  doc.__cmdk_init = true;
 
   const ITEMS = {_json.dumps(_cmdk_items)};
   let isOpen = false;
   let idx = 0;
   let filtered = [...ITEMS];
 
-  // Create DOM
-  const backdrop = document.createElement('div');
+  // Create DOM on the parent document (not the iframe)
+  const backdrop = doc.createElement('div');
   backdrop.id = 'cmdk-backdrop';
   backdrop.innerHTML = `
     <div id="cmdk-modal">
@@ -2590,12 +2594,12 @@ st.markdown(f"""
       border-radius:4px;padding:1px 5px;
     }}
   `;
-  document.head.appendChild(style);
-  document.body.appendChild(backdrop);
+  doc.head.appendChild(style);
+  doc.body.appendChild(backdrop);
 
-  const input = document.getElementById('cmdk-input');
-  const list = document.getElementById('cmdk-list');
-  const countEl = document.getElementById('cmdk-count');
+  const input = doc.getElementById('cmdk-input');
+  const list = doc.getElementById('cmdk-list');
+  const countEl = doc.getElementById('cmdk-count');
 
   function render() {{
     const q = input.value.toLowerCase().trim();
@@ -2632,8 +2636,8 @@ st.markdown(f"""
 
   function selectItem(label) {{
     close();
-    // Find and click the matching sidebar button
-    const sidebar = document.querySelector('[data-testid="stSidebar"]');
+    // Find and click the matching sidebar button in the parent frame
+    const sidebar = doc.querySelector('[data-testid="stSidebar"]');
     if (!sidebar) return;
     const buttons = sidebar.querySelectorAll('button');
     for (const btn of buttons) {{
@@ -2660,8 +2664,8 @@ st.markdown(f"""
     backdrop.classList.remove('open');
   }}
 
-  // Keyboard listeners
-  document.addEventListener('keydown', (e) => {{
+  // Keyboard listeners on parent document
+  doc.addEventListener('keydown', (e) => {{
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {{
       e.preventDefault();
       isOpen ? close() : open();
@@ -2677,7 +2681,7 @@ st.markdown(f"""
   backdrop.addEventListener('click', (e) => {{ if (e.target === backdrop) close(); }});
 }})();
 </script>
-""", unsafe_allow_html=True)
+""", height=0)
 
 # Logout button (only if password auth is active)
 if _AUTH_ACTIVE:
