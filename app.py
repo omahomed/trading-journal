@@ -2395,12 +2395,24 @@ with st.sidebar:
             st.rerun()
 
     # Section header helper
+    # Group accent colors for sidebar section labels
+    _NAV_COLORS = {
+        'DASHBOARDS': 'var(--g-dash)', 'TRADING OPS': 'var(--g-ops)',
+        'RISK MANAGEMENT': 'var(--g-risk)', 'DAILY WORKFLOW': 'var(--g-daily)',
+        'MARKET INTEL': 'var(--g-mkt)', 'AI': 'var(--g-ai)',
+        'DEEP DIVE': 'var(--g-deep)', 'LEGACY': 'var(--g-legacy)',
+        'ADMIN': 'var(--g-admin)',
+    }
+
     def nav_section(label):
+        accent = _NAV_COLORS.get(label, 'var(--ink-4)')
         st.markdown(f"""
-        <div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-                    letter-spacing: 0.1em; color: var(--text-muted);
-                    padding: 0.75rem 0 0.25rem 0.25rem; margin-top: 0.25rem;">
-            {label}
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 0 4px 2px;margin-top:4px;">
+            <div style="width:3px;height:12px;border-radius:99px;background:{accent};opacity:0.7;"></div>
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;
+                        letter-spacing:0.10em;color:var(--ink-4);">
+                {label}
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2499,10 +2511,17 @@ def mask(val, fmt=",.2f", prefix="$", suffix=""):
 # UI HELPER FUNCTIONS — Reusable card components
 # ==============================================================================
 
-def metric_card(label, value, sub="", gradient="linear-gradient(135deg, #667eea 0%, #764ba2 100%)"):
-    """Render a gradient metric card with consistent styling."""
+def metric_card(label, value, sub="", gradient="mo-g-indigo"):
+    """Render a gradient KPI tile using design system classes.
+    `gradient` can be a CSS class (mo-g-indigo, mo-g-green, etc.) or raw CSS gradient string."""
+    if gradient.startswith('mo-g-'):
+        cls = gradient
+        style = ""
+    else:
+        cls = ""
+        style = f"background: {gradient};"
     return f"""
-    <div class="mo-gradient-card" style="background: {gradient};">
+    <div class="mo-gradient-card {cls}" style="{style}">
         <div class="label">{label}</div>
         <div class="value">{value}</div>
         <div class="sub">{sub}</div>
@@ -2510,41 +2529,41 @@ def metric_card(label, value, sub="", gradient="linear-gradient(135deg, #667eea 
     """
 
 def flat_card(label, value, sub="", accent_color=None):
-    """Render a flat (white) metric card with optional accent border."""
-    border_style = f"border-left: 4px solid {accent_color};" if accent_color else ""
+    """Render a flat stat block with optional accent border."""
+    border_style = f"border-left: 3px solid {accent_color};" if accent_color else ""
     return f"""
-    <div class="mo-card" style="{border_style}">
-        <div class="mo-card-label">{label}</div>
-        <div class="mo-card-value">{value}</div>
-        <div class="mo-card-sub">{sub}</div>
+    <div class="mo-stat" style="{border_style}">
+        <div class="k">{label}</div>
+        <div class="v">{value}</div>
+        <div class="s">{sub}</div>
     </div>
     """
 
 def page_header(title, subtitle="", icon=""):
-    """Render a clean page header with optional subtitle."""
+    """Render page header with Fraunces display title."""
     icon_html = f'<span style="margin-right: 0.5rem;">{icon}</span>' if icon else ""
-    sub_html = f'<div style="font-size: 0.85rem; opacity: 0.6; margin-top: 0.25rem;">{subtitle}</div>' if subtitle else ""
+    sub_html = f'<div style="font-size:13px;color:var(--ink-3);margin-top:6px;">{subtitle}</div>' if subtitle else ""
     st.markdown(f"""
-    <div style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid rgba(128,128,128,0.2);">
-        <div style="font-size: 1.5rem; font-weight: 800; letter-spacing: -0.02em;">
+    <div style="margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <h1 style="font-family:var(--f-display) !important;font-weight:400 !important;font-size:32px !important;margin:0 !important;letter-spacing:-0.02em;">
             {icon_html}{title}
-        </div>
+        </h1>
         {sub_html}
     </div>
     """, unsafe_allow_html=True)
 
-# Gradient presets for consistent color usage
+# Gradient presets — mapped to CSS classes from the design system
 GRADIENTS = {
-    'blue':   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    'green':  'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
-    'pink':   'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-    'orange': 'linear-gradient(135deg, #ee0979 0%, #ff6a00 100%)',
-    'cyan':   'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-    'sunset': 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
-    'navy':   'linear-gradient(135deg, #4b6cb7 0%, #182848 100%)',
-    'indigo': 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-    'red':    'linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%)',
-    'teal':   'linear-gradient(135deg, #0d9488 0%, #14b8a6 100%)',
+    'blue':   'mo-g-blue',
+    'green':  'mo-g-green',
+    'pink':   'mo-g-pink',
+    'orange': 'mo-g-orange',
+    'navy':   'mo-g-navy',
+    'indigo': 'mo-g-indigo',
+    'red':    'mo-g-red',
+    'teal':   'mo-g-teal',
+    'violet': 'mo-g-violet',
+    'amber':  'mo-g-amber',
 }
 
 
