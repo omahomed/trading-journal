@@ -17,10 +17,10 @@ import pandas as pd
 
 app = FastAPI(title="MO Money API", version="1.0.0")
 
-# CORS — allow React dev server
+# CORS — allow React dev server + Vercel production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3003", "https://*.vercel.app"],
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
