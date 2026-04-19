@@ -1256,7 +1256,7 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
             for img in images:
                 url = img.get("image_url", "")
                 if url and not url.startswith("http"):
-                    presigned = r2.get_presigned_url(url, expires_in=3600)
+                    presigned = r2.get_image_url(url, expiration=3600)
                     img["presigned_url"] = presigned or ""
                 elif url.startswith("http"):
                     img["presigned_url"] = url
