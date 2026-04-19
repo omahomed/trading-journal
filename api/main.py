@@ -20,7 +20,7 @@ app = FastAPI(title="MO Money API", version="1.0.0")
 # CORS — allow React dev server + Vercel production
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost:\d+",
+    allow_origin_regex=r"https://.*\.vercel\.app|https://motrading\.net|http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
