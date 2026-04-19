@@ -6,7 +6,10 @@ Handles image upload/download/delete for trade charts
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-import streamlit as st
+try:
+    import streamlit as st
+except ImportError:
+    st = None  # type: ignore
 from datetime import datetime
 import io
 import os
@@ -26,9 +29,10 @@ def _get_r2_config():
         }
     # Fallback to Streamlit secrets
     try:
-        r2_config = st.secrets.get("r2", {})
-        if r2_config:
-            return dict(r2_config)
+        if st and hasattr(st, 'secrets'):
+            r2_config = st.secrets.get("r2", {})
+            if r2_config:
+                return dict(r2_config)
     except Exception:
         pass
     return {}
@@ -94,18 +98,18 @@ def upload_image(
         if not client:
             error_msg = "R2 client initialization failed - check credentials"
             print(f"[R2 ERROR] {error_msg}")
-            st.error(error_msg)
-            if 'last_upload_attempt' in st.session_state:
-                st.session_state['last_upload_attempt']['error'] = error_msg
+            if st: st.error(error_msg)
+            if st and 'last_upload_attempt' in st.session_state:
+                if st: st.session_state['last_upload_attempt']['error'] = error_msg
             return None
 
         bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             error_msg = "R2 bucket_name not found in secrets"
             print(f"[R2 ERROR] {error_msg}")
-            st.error(error_msg)
-            if 'last_upload_attempt' in st.session_state:
-                st.session_state['last_upload_attempt']['error'] = error_msg
+            if st: st.error(error_msg)
+            if st and 'last_upload_attempt' in st.session_state:
+                if st: st.session_state['last_upload_attempt']['error'] = error_msg
             return None
 
         print(f"[R2] Using bucket: {bucket_name}")
@@ -147,13 +151,13 @@ def upload_image(
     except Exception as e:
         error_msg = f"Failed to upload image to R2: {type(e).__name__}: {str(e)}"
         print(f"[R2 ERROR] {error_msg}")
-        st.error(error_msg)
+        if st: st.error(error_msg)
         import traceback
         traceback_str = traceback.format_exc()
         print(traceback_str)
 
         # Save error to session state so it persists through rerun
-        if 'last_upload_attempt' in st.session_state:
+        if st and hasattr(st, 'session_state') and 'last_upload_attempt' in st.session_state:
             st.session_state['last_upload_attempt']['error'] = error_msg
             st.session_state['last_upload_attempt']['traceback'] = traceback_str
 
@@ -184,13 +188,13 @@ def download_image(object_key: str) -> Optional[bytes]:
 
     except ClientError as e:
         if e.response['Error']['Code'] == 'NoSuchKey':
-            st.warning(f"Image not found: {object_key}")
+            if st: st.warning(f"Image not found: {object_key}")
         else:
-            st.error(f"Failed to download image: {e}")
+            if st: st.error(f"Failed to download image: {e}")
         return None
 
     except Exception as e:
-        st.error(f"Failed to download image: {e}")
+        if st: st.error(f"Failed to download image: {e}")
         return None
 
 
@@ -217,7 +221,7 @@ def delete_image(object_key: str) -> bool:
         return True
 
     except Exception as e:
-        st.error(f"Failed to delete image from R2: {e}")
+        if st: st.error(f"Failed to delete image from R2: {e}")
         return False
 
 
@@ -257,7 +261,7 @@ def list_images(portfolio_name: str, trade_id: str) -> List[Dict]:
         return images
 
     except Exception as e:
-        st.error(f"Failed to list images from R2: {e}")
+        if st: st.error(f"Failed to list images from R2: {e}")
         return []
 
 
@@ -293,7 +297,7 @@ def get_image_url(object_key: str, expiration: int = 3600) -> Optional[str]:
         return url
 
     except Exception as e:
-        st.error(f"Failed to generate presigned URL: {e}")
+        if st: st.error(f"Failed to generate presigned URL: {e}")
         return None
 
 
@@ -329,5 +333,5 @@ def delete_all_trade_images(portfolio_name: str, trade_id: str) -> bool:
         return True
 
     except Exception as e:
-        st.error(f"Failed to delete trade images: {e}")
+        if st: st.error(f"Failed to delete trade images: {e}")
         return False
