@@ -4,6 +4,29 @@ import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { Dashboard } from "@/components/dashboard";
+import { TradingOverview } from "@/components/trading-overview";
+import { ActiveCampaign } from "@/components/active-campaign";
+import { ImportTrades } from "@/components/import-trades";
+import { LogBuy } from "@/components/log-buy";
+import { LogSell } from "@/components/log-sell";
+import { PositionSizer } from "@/components/position-sizer";
+import { TradeJournal } from "@/components/trade-journal";
+import { TradeManager } from "@/components/trade-manager";
+import { RiskManager } from "@/components/risk-manager";
+import { PortfolioHeat } from "@/components/portfolio-heat";
+import { DailyJournal } from "@/components/daily-journal";
+import { MFactor } from "@/components/m-factor";
+import { EarningsPlanner } from "@/components/earnings-planner";
+import { DailyRoutine } from "@/components/daily-routine";
+import { DailyReportCard } from "@/components/daily-report-card";
+import { WeeklyRetro } from "@/components/weekly-retro";
+import { MarketCycle } from "@/components/market-cycle";
+import { RallyContext } from "@/components/rally-context";
+import { Analytics } from "@/components/analytics";
+import { PerfHeatmap } from "@/components/perf-heatmap";
+import { PeriodReview } from "@/components/period-review";
+import { AICoach } from "@/components/ai-coach";
+import { Admin } from "@/components/admin";
 import { getGroupForPage } from "@/lib/nav";
 
 // Mock KPI data
@@ -197,7 +220,7 @@ const PAGE_TITLES: Record<string, string> = {
   logbuy: "Log Buy", logsell: "Log Sell", sizer: "Position Sizer",
   journal: "Trade Journal", manager: "Trade Manager",
   earnings: "Earnings Planner", heat: "Portfolio Heat", riskmgr: "Risk Manager",
-  djournal: "Daily Journal", report: "Daily Report Card",
+  djournal: "Daily Journal", report: "Daily Report",
   routine: "Daily Routine", retro: "Weekly Retro",
   ibd: "IBD Market School", mfactor: "M Factor",
   cycle: "Market Cycle Tracker", rally: "Rally Context",
@@ -252,7 +275,31 @@ export default function Home() {
           </button>
         </header>
         <div className="flex-1 overflow-auto px-7 py-6">
-          {page === "dashboard" ? <Dashboard navColor={navColor} /> : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
+          {page === "dashboard" ? <Dashboard navColor={navColor} />
+                    : page === "overview" ? <TradingOverview navColor={navColor} />
+                    : page === "campaign" ? <ActiveCampaign navColor={navColor} />
+                    : page === "import" ? <ImportTrades navColor={navColor} />
+                    : page === "logbuy" ? <LogBuy navColor={navColor} />
+                    : page === "logsell" ? <LogSell navColor={navColor} />
+                    : page === "sizer" ? <PositionSizer navColor={navColor} onNavigate={setPage} />
+                    : page === "journal" ? <TradeJournal navColor={navColor} />
+                    : page === "manager" ? <TradeManager navColor={navColor} />
+                    : page === "riskmgr" ? <RiskManager navColor={navColor} />
+                    : page === "heat" ? <PortfolioHeat navColor={navColor} />
+                    : page === "djournal" ? <DailyJournal navColor={navColor} />
+                    : page === "mfactor" ? <MFactor navColor={navColor} />
+                    : page === "earnings" ? <EarningsPlanner navColor={navColor} />
+                    : page === "routine" ? <DailyRoutine navColor={navColor} />
+                    : page === "report" ? <DailyReportCard navColor={navColor} />
+                    : page === "retro" ? <WeeklyRetro navColor={navColor} />
+                    : page === "cycle" ? <MarketCycle navColor={navColor} />
+                    : page === "rally" ? <RallyContext navColor={navColor} />
+                    : page === "analytics" ? <Analytics navColor={navColor} />
+                    : page === "heatmap" ? <PerfHeatmap navColor={navColor} />
+                    : page === "period" ? <PeriodReview navColor={navColor} />
+                    : page === "coach" ? <AICoach navColor={navColor} />
+                    : page === "admin" ? <Admin navColor={navColor} />
+                    : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
         </div>
       </main>
       <CommandPalette onNavigate={setPage} />

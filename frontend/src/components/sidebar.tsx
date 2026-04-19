@@ -45,12 +45,12 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           {!rail && (
             <div>
               <div className="font-bold text-[15px] tracking-tight">MO Money</div>
-              <div className="text-[10px] text-[#8a90a2] uppercase tracking-[0.10em] font-medium">v.4</div>
+              <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">v.4</div>
             </div>
           )}
         </div>
         {!rail && onToggleRail && (
-          <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[var(--bg-2)] transition-colors"
+          <button className="w-7 h-7 grid place-items-center rounded-lg text-[var(--ink-3)] hover:bg-[var(--bg-2)] transition-colors"
                   onClick={onToggleRail}>
             {Icons.panelLeft()}
           </button>
@@ -61,9 +61,9 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
         <>
           {/* Strategy picker */}
           <div className="mx-3.5 mb-3 px-3 py-2.5 rounded-[10px] flex items-center gap-2.5 cursor-pointer transition-colors" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-            <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px #eef0ff" }} />
+            <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px color-mix(in oklab, #6366f1 15%, var(--surface))" }} />
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] text-[#8a90a2] uppercase tracking-[0.10em] font-medium">Active Strategy</div>
+              <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">Active Strategy</div>
               <div className="text-[13px] font-semibold">CanSlim</div>
             </div>
             {Icons.chevronDown()}
@@ -71,7 +71,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
 
           {/* Search */}
           <div className="mx-3.5 mb-2 relative">
-            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#8a90a2]">{Icons.search()}</span>
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ink-4)]">{Icons.search()}</span>
             <input
               className="w-full pl-8 pr-10 py-2 rounded-[10px] text-[13px] outline-none transition-all focus:border-[#6366f1] focus:shadow-[0_0_0_3px_rgba(99,102,241,0.1)]"
               style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
@@ -79,7 +79,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
               readOnly
               onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
             />
-            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[#8a90a2] bg-[#eef0f6] border border-[#e6e8ef] rounded px-1.5"
+            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[var(--ink-4)] bg-[var(--bg-2)] border border-[var(--border)] rounded px-1.5"
                  style={{ fontFamily: "var(--font-jetbrains), monospace" }}>⌘K</kbd>
           </div>
         </>
@@ -133,18 +133,18 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                         boxShadow: isOpen || hasActive ? `0 0 8px color-mix(in oklab, ${group.color} 60%, transparent)` : "none",
                       }} />
                     <span className="flex-1 text-left text-[11px] uppercase tracking-[0.10em] font-semibold"
-                          style={{ color: hasActive ? group.color : "#5a6175" }}>
+                          style={{ color: hasActive ? group.color : "var(--ink-3)" }}>
                       {group.label}
                     </span>
                     <span className="text-[10px] rounded-full px-[7px] min-w-[18px] text-center"
                           style={{
                             fontFamily: "var(--font-jetbrains), monospace",
-                            background: hasActive ? `color-mix(in oklab, ${group.color} 12%, transparent)` : "#eef0f6",
-                            color: hasActive ? group.color : "#8a90a2",
+                            background: hasActive ? `color-mix(in oklab, ${group.color} 12%, transparent)` : "var(--bg-2)",
+                            color: hasActive ? group.color : "var(--ink-4)",
                           }}>
                       {group.items.length}
                     </span>
-                    <span className="text-[#8a90a2] transition-transform duration-250 shrink-0"
+                    <span className="text-[var(--ink-4)] transition-transform duration-250 shrink-0"
                           style={{ transform: isOpen ? "rotate(90deg)" : "none" }}>
                       {Icons.chevronRight()}
                     </span>
@@ -224,9 +224,9 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
             <>
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-semibold">MO</div>
-                <div className="text-[11px] text-[#8a90a2]">mo@momoney.app</div>
+                <div className="text-[11px] text-[var(--ink-4)]">mo@momoney.app</div>
               </div>
-              <button className="w-7 h-7 grid place-items-center rounded-lg text-[#5a6175] hover:bg-[var(--bg-2)]">
+              <button className="w-7 h-7 grid place-items-center rounded-lg text-[var(--ink-3)] hover:bg-[var(--bg-2)]">
                 {Icons.logout()}
               </button>
             </>

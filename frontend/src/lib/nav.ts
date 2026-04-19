@@ -44,7 +44,7 @@ export const NAV: NavGroup[] = [
     id: "daily", label: "Daily Workflow", color: "#f59f00", softColor: "#fff4dd",
     items: [
       { id: "djournal", label: "Daily Journal" },
-      { id: "report", label: "Daily Report Card" },
+      { id: "report", label: "Daily Report" },
       { id: "routine", label: "Daily Routine" },
       { id: "retro", label: "Weekly Retro" },
     ],
@@ -52,7 +52,6 @@ export const NAV: NavGroup[] = [
   {
     id: "market", label: "Market Intel", color: "#8b5cf6", softColor: "#f1ecfe",
     items: [
-      { id: "ibd", label: "IBD Market School" },
       { id: "mfactor", label: "M Factor" },
       { id: "cycle", label: "Market Cycle Tracker" },
       { id: "rally", label: "Rally Context" },
@@ -68,10 +67,8 @@ export const NAV: NavGroup[] = [
     id: "deep", label: "Deep Dive", color: "#0d6efd", softColor: "#e7f0ff",
     items: [
       { id: "analytics", label: "Analytics" },
-      { id: "audit", label: "Performance Audit" },
       { id: "heatmap", label: "Performance Heat Map" },
       { id: "period", label: "Period Review" },
-      { id: "forensics", label: "Ticker Forensics" },
     ],
   },
   {

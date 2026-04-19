@@ -27,6 +27,17 @@ Thumbs.db
 # Local database backups
 *.sql.backup
 
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# MCP config (local)
+.mcp.json
+
+# API secrets
+api/.streamlit/secrets.toml
+
 # CSV files (data is in cloud database)
 portfolios/*/Trade_Log_*.csv
 portfolios/*/Trading_Journal_*.csv
