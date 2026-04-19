@@ -224,9 +224,11 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
             <>
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-semibold">MO</div>
-                <div className="text-[11px] text-[var(--ink-4)]">mo@momoney.app</div>
+                <div className="text-[11px] text-[var(--ink-4)]">motrading.net</div>
               </div>
-              <button className="w-7 h-7 grid place-items-center rounded-lg text-[var(--ink-3)] hover:bg-[var(--bg-2)]">
+              <button onClick={() => { window.location.href = "/api/auth/signout"; }}
+                      className="w-7 h-7 grid place-items-center rounded-lg text-[var(--ink-3)] hover:bg-[var(--bg-2)] cursor-pointer"
+                      title="Sign out">
                 {Icons.logout()}
               </button>
             </>
