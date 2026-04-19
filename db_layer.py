@@ -21,13 +21,16 @@ def get_db_config():
       2. Environment variables
       3. Local defaults (for development)
     """
-    # Check Streamlit secrets first (cloud deployment)
-    if hasattr(st, 'secrets') and 'database' in st.secrets:
-        return {'dsn': st.secrets['database']['url']}
-
-    # Check environment variable (DATABASE_URL)
+    # Check environment variable first (Railway, Docker, etc.)
     if os.getenv('DATABASE_URL'):
         return {'dsn': os.getenv('DATABASE_URL')}
+
+    # Check Streamlit secrets (Streamlit Cloud deployment)
+    try:
+        if hasattr(st, 'secrets') and 'database' in st.secrets:
+            return {'dsn': st.secrets['database']['url']}
+    except Exception:
+        pass
 
     # Local development defaults
     return {
