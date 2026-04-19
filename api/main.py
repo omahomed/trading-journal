@@ -11,6 +11,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, Query
+import io
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, date
 import pandas as pd
@@ -28,6 +29,14 @@ app.add_middleware(
 
 # Import existing modules
 import db_layer as db
+
+# R2 storage (optional — gracefully degrade if not configured)
+try:
+    import r2_storage as r2
+    _R2_AVAILABLE = bool(r2._get_r2_config().get("endpoint_url"))
+except Exception:
+    r2 = None
+    _R2_AVAILABLE = False
 
 
 def _df_to_records(df: pd.DataFrame) -> list:
@@ -1230,6 +1239,84 @@ Give me a behavioral profile and 3 specific things to work on."""
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
     except Exception as e:
         return {"error": str(e)}
+
+
+# ============================================================
+# R2 IMAGE ENDPOINTS
+# ============================================================
+from fastapi import UploadFile, File, Form
+
+@app.get("/api/images/{trade_id}")
+def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
+    """Get all image metadata for a trade."""
+    try:
+        images = db.get_trade_images(portfolio, trade_id)
+        # Add presigned URLs for each image
+        if _R2_AVAILABLE and images:
+            for img in images:
+                url = img.get("image_url", "")
+                if url and not url.startswith("http"):
+                    presigned = r2.get_presigned_url(url, expires_in=3600)
+                    img["presigned_url"] = presigned or ""
+                elif url.startswith("http"):
+                    img["presigned_url"] = url
+                else:
+                    img["presigned_url"] = ""
+        return images or []
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/images/upload")
+async def upload_image(
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+    trade_id: str = Form(...),
+    ticker: str = Form(...),
+    image_type: str = Form(...),
+):
+    """Upload a trade image to R2 and save metadata to DB."""
+    if not _R2_AVAILABLE:
+        return {"error": "R2 storage not configured"}
+    try:
+        # Read file content
+        content = await file.read()
+        file_like = io.BytesIO(content)
+        file_like.name = file.filename or "upload.png"
+
+        # Upload to R2
+        object_key = r2.upload_image(file_like, portfolio, trade_id, ticker, image_type)
+        if not object_key:
+            return {"error": "Upload to R2 failed"}
+
+        # Save metadata to DB
+        image_id = db.save_trade_image(portfolio, trade_id, ticker, image_type, object_key, file.filename)
+
+        return {"status": "ok", "image_id": image_id, "object_key": object_key}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/images/{image_id}")
+def delete_image(image_id: int):
+    """Delete a trade image from R2 and DB."""
+    try:
+        # Get the image URL from DB before deleting
+        if _R2_AVAILABLE:
+            url = db.delete_trade_image_by_id(image_id)
+            if url and not url.startswith("http"):
+                r2.delete_image(url)
+        else:
+            db.delete_trade_image_by_id(image_id)
+        return {"status": "ok"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/r2/status")
+def r2_status():
+    """Check R2 availability."""
+    return {"available": _R2_AVAILABLE}
 
 
 if __name__ == "__main__":

@@ -137,6 +137,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [entryCharts, setEntryCharts] = useState<File[]>([]);
+  const [positionCharts, setPositionCharts] = useState<File[]>([]);
+  const [msScreenshot, setMsScreenshot] = useState<File | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -366,21 +369,24 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: "Entry Charts (Weekly / Daily)", icon: "📈" },
-                  { label: "Position Changes (Add-ons / Trims / Exits)", icon: "🔄" },
+                  { label: "Entry Charts (Weekly / Daily)", icon: "📈", files: entryCharts, setFiles: setEntryCharts },
+                  { label: "Position Changes (Add-ons / Trims / Exits)", icon: "🔄", files: positionCharts, setFiles: setPositionCharts },
                 ].map(slot => (
                   <div key={slot.label}>
                     <div className="text-[11px] font-medium mb-1.5 flex items-center gap-1" style={{ color: "var(--ink-3)" }}>
                       <span>{slot.icon}</span> {slot.label}
                     </div>
                     <label className="flex items-center gap-2.5 h-[48px] px-4 rounded-[10px] cursor-pointer transition-colors hover:brightness-95"
-                           style={{ border: "1.5px dashed var(--border)", background: "var(--bg)" }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                           style={{ border: `1.5px dashed ${slot.files.length > 0 ? "#08a86b" : "var(--border)"}`, background: slot.files.length > 0 ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)" }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={slot.files.length > 0 ? "#08a86b" : "var(--ink-4)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                       </svg>
-                      <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>Upload</span>
+                      <span className="text-[12px]" style={{ color: slot.files.length > 0 ? "#08a86b" : "var(--ink-4)" }}>
+                        {slot.files.length > 0 ? `${slot.files.length} file${slot.files.length > 1 ? "s" : ""} selected` : "Upload"}
+                      </span>
                       <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.6 }}>PNG, JPG, JPEG</span>
-                      <input type="file" accept="image/png,image/jpeg" multiple className="hidden" />
+                      <input type="file" accept="image/png,image/jpeg" multiple className="hidden"
+                             onChange={e => { if (e.target.files) slot.setFiles(Array.from(e.target.files)); }} />
                     </label>
                   </div>
                 ))}
@@ -397,13 +403,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 Upload a MarketSurge screenshot to auto-extract ratings and fundamentals via AI.
               </div>
               <label className="flex items-center gap-2.5 h-[48px] px-4 rounded-[10px] cursor-pointer transition-colors hover:brightness-95 w-fit"
-                     style={{ border: "1.5px dashed var(--border)", background: "var(--bg)" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                     style={{ border: `1.5px dashed ${msScreenshot ? "#08a86b" : "var(--border)"}`, background: msScreenshot ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)" }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={msScreenshot ? "#08a86b" : "var(--ink-4)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
                 </svg>
-                <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>Upload</span>
+                <span className="text-[12px]" style={{ color: msScreenshot ? "#08a86b" : "var(--ink-4)" }}>
+                  {msScreenshot ? msScreenshot.name : "Upload"}
+                </span>
                 <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.6 }}>PNG, JPG, JPEG</span>
-                <input type="file" accept="image/png,image/jpeg" className="hidden" />
+                <input type="file" accept="image/png,image/jpeg" className="hidden"
+                       onChange={e => { if (e.target.files?.[0]) setMsScreenshot(e.target.files[0]); }} />
               </label>
             </div>
 

@@ -155,6 +155,25 @@ export const api = {
     });
   },
 
+  // R2 Images
+  tradeImages: (tradeId: string, portfolio = "CanSlim") =>
+    fetchJSON<any[]>(`/api/images/${tradeId}?portfolio=${portfolio}`),
+
+  uploadImage: (file: File, portfolio: string, tradeId: string, ticker: string, imageType: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("portfolio", portfolio);
+    form.append("trade_id", tradeId);
+    form.append("ticker", ticker);
+    form.append("image_type", imageType);
+    return fetch(`${API_BASE}/api/images/upload`, { method: "POST", body: form }).then(r => r.json());
+  },
+
+  deleteImage: (imageId: number) =>
+    fetch(`${API_BASE}/api/images/${imageId}`, { method: "DELETE" }).then(r => r.json()),
+
+  r2Status: () => fetchJSON<{ available: boolean }>(`/api/r2/status`),
+
   // Health
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
 };

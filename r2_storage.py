@@ -9,18 +9,40 @@ from botocore.exceptions import ClientError
 import streamlit as st
 from datetime import datetime
 import io
+import os
 from typing import Optional, List, Dict
+
+
+def _get_r2_config():
+    """Load R2 config from env vars first, then Streamlit secrets."""
+    # Check environment variables first (Railway, Docker, etc.)
+    if os.environ.get("R2_ENDPOINT_URL"):
+        return {
+            "endpoint_url": os.environ["R2_ENDPOINT_URL"],
+            "access_key_id": os.environ.get("R2_ACCESS_KEY_ID", ""),
+            "secret_access_key": os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+            "bucket_name": os.environ.get("R2_BUCKET_NAME", ""),
+            "public_url": os.environ.get("R2_PUBLIC_URL", ""),
+        }
+    # Fallback to Streamlit secrets
+    try:
+        r2_config = st.secrets.get("r2", {})
+        if r2_config:
+            return dict(r2_config)
+    except Exception:
+        pass
+    return {}
 
 
 def get_r2_client():
     """
-    Initialize and return R2 client using credentials from Streamlit secrets
+    Initialize and return R2 client using credentials from env vars or Streamlit secrets
     """
     try:
-        r2_config = st.secrets.get("r2", {})
+        r2_config = _get_r2_config()
 
         if not r2_config:
-            raise ValueError("R2 credentials not found in Streamlit secrets")
+            raise ValueError("R2 credentials not found")
 
         endpoint_url = r2_config.get("endpoint_url")
         access_key_id = r2_config.get("access_key_id")
@@ -35,13 +57,13 @@ def get_r2_client():
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
             config=Config(signature_version='s3v4'),
-            region_name='auto'  # Cloudflare R2 uses 'auto' for region
+            region_name='auto'
         )
 
         return client
 
     except Exception as e:
-        st.error(f"Failed to initialize R2 client: {e}")
+        print(f"Failed to initialize R2 client: {e}")
         return None
 
 
@@ -77,7 +99,7 @@ def upload_image(
                 st.session_state['last_upload_attempt']['error'] = error_msg
             return None
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             error_msg = "R2 bucket_name not found in secrets"
             print(f"[R2 ERROR] {error_msg}")
@@ -153,7 +175,7 @@ def download_image(object_key: str) -> Optional[bytes]:
         if not client:
             return None
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             return None
 
@@ -187,7 +209,7 @@ def delete_image(object_key: str) -> bool:
         if not client:
             return False
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             return False
 
@@ -215,7 +237,7 @@ def list_images(portfolio_name: str, trade_id: str) -> List[Dict]:
         if not client:
             return []
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             return []
 
@@ -255,7 +277,7 @@ def get_image_url(object_key: str, expiration: int = 3600) -> Optional[str]:
         if not client:
             return None
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             return None
 
@@ -296,7 +318,7 @@ def delete_all_trade_images(portfolio_name: str, trade_id: str) -> bool:
         if not client:
             return False
 
-        bucket_name = st.secrets.get("r2", {}).get("bucket_name")
+        bucket_name = _get_r2_config().get("bucket_name")
         if not bucket_name:
             return False
 

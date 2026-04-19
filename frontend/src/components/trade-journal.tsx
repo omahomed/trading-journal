@@ -34,6 +34,85 @@ function CardMetric({ label, value, color, sub }: { label: string; value: string
   );
 }
 
+const IMAGE_TYPE_MAP: Record<string, string> = {
+  entry: "Entry Charts", weekly: "Entry Charts", daily: "Entry Charts",
+  position_change: "Position Changes", exit: "Position Changes",
+  marketsurge: "MarketSurge", fundamentals: "MarketSurge",
+};
+
+function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
+  const [images, setImages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.tradeImages(tradeId).then(imgs => {
+      setImages(Array.isArray(imgs) ? imgs : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [tradeId]);
+
+  const groups: Record<string, any[]> = { "Entry Charts": [], "Position Changes": [], "MarketSurge": [] };
+  images.forEach(img => {
+    const group = IMAGE_TYPE_MAP[img.image_type] || "Entry Charts";
+    if (groups[group]) groups[group].push(img);
+  });
+
+  return (
+    <>
+      <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
+          <span>📊</span> Charts — {ticker}
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          {Object.entries(groups).map(([label, imgs]) => (
+            <div key={label}>
+              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>{label}</div>
+              {loading ? (
+                <div className="rounded-[10px] p-4 flex items-center justify-center" style={{ border: "1.5px dashed var(--border)", background: "var(--bg)", minHeight: 80 }}>
+                  <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>Loading...</span>
+                </div>
+              ) : imgs.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {imgs.map((img, i) => {
+                    const url = img.presigned_url || img.image_url || "";
+                    return (
+                      <div key={i} className="rounded-[10px] overflow-hidden cursor-pointer transition-transform hover:scale-[1.02]"
+                           style={{ border: "1px solid var(--border)" }}
+                           onClick={() => url && setLightbox(url)}>
+                        {url ? (
+                          <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 200, objectFit: "cover" }} />
+                        ) : (
+                          <div className="p-3 text-center text-[10px]" style={{ color: "var(--ink-4)" }}>No URL</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-[10px] p-4 flex flex-col items-center justify-center" style={{ border: "1.5px dashed var(--border)", background: "var(--bg)", minHeight: 80 }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-1.5 opacity-40">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
+                  </svg>
+                  <span className="text-[10px]" style={{ color: "var(--ink-5)" }}>No images</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}
+             onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="Chart" className="max-w-[90vw] max-h-[85vh] rounded-[12px]" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
+    </>
+  );
+}
+
 export function TradeJournal({ navColor }: { navColor: string }) {
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
@@ -400,24 +479,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
               {isExpanded && (
                 <div style={{ borderTop: "1px solid var(--border)", animation: "slide-up 0.15s ease-out" }}>
 
-                  {/* ── Charts Section ── */}
-                  <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
-                    <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
-                      <span>📊</span> Charts — {trade.ticker}
-                    </div>
-                    {/* Placeholder — requires R2 image API endpoint */}
-                    <div className="grid grid-cols-3 gap-3">
-                      {["Entry Charts", "Position Changes", "MarketSurge"].map(type => (
-                        <div key={type} className="rounded-[10px] p-4 flex flex-col items-center justify-center" style={{ border: "1.5px dashed var(--border)", background: "var(--bg)", minHeight: 100 }}>
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-2 opacity-40">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
-                          </svg>
-                          <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{type}</span>
-                          <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.5 }}>Connect R2 to view</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  {/* ── Charts Section (R2 images) ── */}
+                  <TradeCharts tradeId={trade.trade_id} ticker={trade.ticker} />
 
                   {/* ── Flight Deck ── */}
                   <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
