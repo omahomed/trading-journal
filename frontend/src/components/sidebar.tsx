@@ -218,8 +218,8 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
         <div className="flex items-center gap-2.5 p-1.5 rounded-[10px] hover:bg-[var(--bg-2)] transition-colors">
           <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0"
                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
-            MO
-          </div>
+            MT
+</div>
           {!rail && (
             <>
               <div className="flex-1 min-w-0">
