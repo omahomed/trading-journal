@@ -1,5 +1,9 @@
 // API client for the FastAPI backend
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// NEXT_PUBLIC_API_URL is baked in at build time. If not set, detect environment.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL
+  || (typeof window !== "undefined" && window.location.hostname !== "localhost"
+      ? "https://web-production-cdf47.up.railway.app"
+      : "http://localhost:8000");
 
 async function fetchJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
