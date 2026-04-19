@@ -44,7 +44,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           </div>
           {!rail && (
             <div>
-              <div className="font-bold text-[15px] tracking-tight">MO Money</div>
+              <div className="font-bold text-[15px] tracking-tight">MO Trading</div>
               <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">v.4</div>
             </div>
           )}
@@ -216,9 +216,9 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           </>
         )}
         <div className="flex items-center gap-2.5 p-1.5 rounded-[10px] hover:bg-[var(--bg-2)] transition-colors">
-          <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0"
+          <div className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-white text-[10px] font-semibold shrink-0"
                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
-            M
+            MO
           </div>
           {!rail && (
             <>

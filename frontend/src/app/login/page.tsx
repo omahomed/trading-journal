@@ -11,7 +11,7 @@ export default function LoginPage() {
         {/* Logo / Brand */}
         <div className="mb-6">
           <div className="text-[36px] font-bold tracking-tight" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-            MO <em className="italic" style={{ color: "#6366f1" }}>Money</em>
+            MO <em className="italic" style={{ color: "#6366f1" }}>Trading</em>
           </div>
           <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>Trading Journal & Analytics</div>
         </div>

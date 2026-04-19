@@ -22,7 +22,7 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "MO Money — Trading Journal",
+  title: "MO Trading — Trading Journal",
   description: "CANSLIM trading journal and analytics platform",
 };
 
