@@ -155,7 +155,7 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                 <div className="grid transition-[grid-template-rows] duration-300 ease-out"
                      style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}>
                   <div className="min-h-0 overflow-hidden pl-5 pr-1.5 pb-1">
-                    {group.items.map((item) => {
+                    {group.items.filter(item => !item.parentPage).map((item) => {
                       const isActive = activePage === item.id;
                       const IconFn = NAV_ICONS[item.id] || Icons.grid;
                       return (

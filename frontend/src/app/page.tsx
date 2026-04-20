@@ -231,6 +231,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 export default function Home() {
   const [page, setPage] = useState("dashboard");
+  const [pendingTab, setPendingTab] = useState<string | undefined>();
   const [privacy, setPrivacy] = useState(false);
   const [dark, setDark] = useState(false);
   const [rail, setRail] = useState(false);
@@ -283,7 +284,7 @@ export default function Home() {
                     : page === "logsell" ? <LogSell navColor={navColor} />
                     : page === "sizer" ? <PositionSizer navColor={navColor} onNavigate={setPage} />
                     : page === "journal" ? <TradeJournal navColor={navColor} />
-                    : page === "manager" ? <TradeManager navColor={navColor} />
+                    : page === "manager" ? <TradeManager navColor={navColor} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "riskmgr" ? <RiskManager navColor={navColor} />
                     : page === "heat" ? <PortfolioHeat navColor={navColor} />
                     : page === "djournal" ? <DailyJournal navColor={navColor} />
@@ -302,7 +303,7 @@ export default function Home() {
                     : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
         </div>
       </main>
-      <CommandPalette onNavigate={setPage} />
+      <CommandPalette onNavigate={(pageId, tab) => { setPage(pageId); setPendingTab(tab); }} />
 
       <style jsx global>{`
         @keyframes slide-up { from { opacity: 0; transform: translateY(6px); } }

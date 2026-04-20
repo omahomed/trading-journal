@@ -65,8 +65,15 @@ function SearchSelect({ value, onChange, options, placeholder }: {
   );
 }
 
-export function TradeManager({ navColor }: { navColor: string }) {
-  const [tab, setTab] = useState<Tab>("stops");
+export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor: string; initialTab?: string; onTabConsumed?: () => void }) {
+  const [tab, setTab] = useState<Tab>((initialTab as Tab) || "stops");
+
+  useEffect(() => {
+    if (initialTab && ["stops", "edit", "delete", "export"].includes(initialTab)) {
+      setTab(initialTab as Tab);
+      onTabConsumed?.();
+    }
+  }, [initialTab, onTabConsumed]);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [details, setDetails] = useState<TradeDetail[]>([]);

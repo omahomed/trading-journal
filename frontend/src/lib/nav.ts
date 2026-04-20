@@ -2,6 +2,9 @@
 export interface NavItem {
   id: string;
   label: string;
+  /** If set, this is a sub-page: navigate to parentPage and pass this tab key */
+  parentPage?: string;
+  tab?: string;
 }
 
 export interface NavGroup {
@@ -30,6 +33,10 @@ export const NAV: NavGroup[] = [
       { id: "sizer", label: "Position Sizer" },
       { id: "journal", label: "Trade Journal" },
       { id: "manager", label: "Trade Manager" },
+      { id: "manager:stops", label: "Stop Loss Adjustment", parentPage: "manager", tab: "stops" },
+      { id: "manager:edit", label: "Edit Transaction", parentPage: "manager", tab: "edit" },
+      { id: "manager:delete", label: "Delete Trade", parentPage: "manager", tab: "delete" },
+      { id: "manager:export", label: "Export Trades", parentPage: "manager", tab: "export" },
     ],
   },
   {

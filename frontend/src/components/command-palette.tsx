@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { getAllPages } from "@/lib/nav";
 
 interface CommandPaletteProps {
-  onNavigate: (pageId: string) => void;
+  onNavigate: (pageId: string, tab?: string) => void;
 }
 
 export function CommandPalette({ onNavigate }: CommandPaletteProps) {
@@ -43,12 +43,19 @@ export function CommandPalette({ onNavigate }: CommandPaletteProps) {
     return { groups, order };
   }, [filtered]);
 
-  const select = (pageId: string) => { setOpen(false); onNavigate(pageId); };
+  const select = (item: typeof allPages[0]) => {
+    setOpen(false);
+    if (item.parentPage) {
+      onNavigate(item.parentPage, item.tab);
+    } else {
+      onNavigate(item.id);
+    }
+  };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setIdx((i) => Math.min(filtered.length - 1, i + 1)); }
     if (e.key === "ArrowUp") { e.preventDefault(); setIdx((i) => Math.max(0, i - 1)); }
-    if (e.key === "Enter") { e.preventDefault(); if (filtered[idx]) select(filtered[idx].id); }
+    if (e.key === "Enter") { e.preventDefault(); if (filtered[idx]) select(filtered[idx]); }
   };
 
   if (!open) return null;
@@ -80,7 +87,7 @@ export function CommandPalette({ onNavigate }: CommandPaletteProps) {
                 <div key={item.id}
                      className="flex items-center gap-2.5 px-3 py-[9px] rounded-[10px] text-sm cursor-pointer transition-colors"
                      style={{ background: item.flatIdx === idx ? "var(--bg-2)" : "transparent", color: item.flatIdx === idx ? "var(--ink)" : "var(--ink-2)" }}
-                     onMouseEnter={() => setIdx(item.flatIdx)} onClick={() => select(item.id)}>
+                     onMouseEnter={() => setIdx(item.flatIdx)} onClick={() => select(item)}>
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: item.color }} />
                   <span className="flex-1 font-medium">{item.label}</span>
                   <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{item.group}</span>
