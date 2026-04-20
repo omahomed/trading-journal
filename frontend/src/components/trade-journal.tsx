@@ -67,13 +67,39 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
     });
   }, [tradeId]);
 
+  // Deduplicate images by view_url (same chart saved as both entry + marketsurge)
+  const seen = new Set<string>();
+  const deduped = images.filter(img => {
+    const url = img.view_url || img.image_url || "";
+    if (!url || seen.has(url)) return false;
+    seen.add(url);
+    return true;
+  });
+
   const groups: Record<string, any[]> = { "Entry Charts": [], "Position Changes": [] };
-  images.forEach(img => {
+  deduped.forEach(img => {
     const group = IMAGE_TYPE_MAP[img.image_type] || "Entry Charts";
     if (groups[group]) groups[group].push(img);
   });
 
-  const totalImages = images.length;
+  const totalImages = deduped.length;
+  const [uploading, setUploading] = useState(false);
+
+  const handleUpload = async (files: FileList, imageType: string) => {
+    setUploading(true);
+    for (const file of Array.from(files)) {
+      await api.uploadImage(file, "CanSlim", tradeId, ticker, imageType);
+    }
+    // Reload images
+    const imgs = await api.tradeImages(tradeId).catch(() => []);
+    setImages(Array.isArray(imgs) ? imgs : []);
+    setUploading(false);
+  };
+
+  const handleDelete = async (imageId: number) => {
+    await api.deleteImage(imageId);
+    setImages(prev => prev.filter(img => img.id !== imageId));
+  };
 
   return (
     <>
@@ -85,23 +111,29 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
 
         {loading ? (
           <div className="text-[12px] py-3" style={{ color: "var(--ink-4)" }}>Loading charts...</div>
-        ) : totalImages === 0 ? (
-          <div className="text-[12px] py-2" style={{ color: "var(--ink-4)" }}>No charts uploaded for this trade.</div>
         ) : (
           <div className="flex flex-col gap-1.5">
             {Object.entries(groups).map(([label, imgs]) => {
-              if (imgs.length === 0) return null;
               const isOpen = expandedGroup === label;
+              const uploadType = label === "Entry Charts" ? "entry" : "position_change";
               return (
                 <div key={label} className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--border)" }}>
                   {/* Expander header */}
-                  <button onClick={() => setExpandedGroup(isOpen ? null : label)}
-                          className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left cursor-pointer transition-colors hover:brightness-95"
-                          style={{ background: "var(--surface-2)" }}>
-                    <span className="text-[10px] transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
-                    <span className="text-[12px] font-semibold flex-1" style={{ color: "var(--ink)" }}>{label}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "var(--bg)", color: "var(--ink-4)" }}>{imgs.length}</span>
-                  </button>
+                  <div className="flex items-center px-3.5 py-2.5" style={{ background: "var(--surface-2)" }}>
+                    <button onClick={() => setExpandedGroup(isOpen ? null : label)}
+                            className="flex items-center gap-2 flex-1 text-left cursor-pointer">
+                      <span className="text-[10px] transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                      <span className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>{label}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "var(--bg)", color: "var(--ink-4)" }}>{imgs.length}</span>
+                    </button>
+                    {/* Upload button */}
+                    <label className="text-[10px] px-2 py-1 rounded-[6px] cursor-pointer transition-colors hover:brightness-95"
+                           style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+                      {uploading ? "..." : "+ Upload"}
+                      <input type="file" accept="image/png,image/jpeg" multiple className="hidden"
+                             onChange={e => e.target.files && handleUpload(e.target.files, uploadType)} />
+                    </label>
+                  </div>
 
                   {/* Expanded: show images */}
                   {isOpen && (
@@ -109,21 +141,33 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
                       {imgs.map((img, i) => {
                         const url = img.view_url || "";
                         return (
-                          <div key={i} className="rounded-[8px] overflow-hidden cursor-pointer transition-all hover:shadow-md"
-                               style={{ border: "1px solid var(--border)" }}
-                               onClick={() => url && setLightbox(url)}>
-                            {url ? (
-                              <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
-                            ) : (
-                              <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
-                            )}
+                          <div key={img.id || i} className="rounded-[8px] overflow-hidden transition-all hover:shadow-md"
+                               style={{ border: "1px solid var(--border)" }}>
+                            <div className="cursor-pointer" onClick={() => url && setLightbox(url)}>
+                              {url ? (
+                                <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
+                              ) : (
+                                <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
+                              )}
+                            </div>
                             <div className="px-2.5 py-1.5 text-[10px] flex items-center justify-between" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
-                              <span>{img.file_name || `${label} ${i + 1}`}</span>
-                              <span>Click to enlarge</span>
+                              <span className="truncate flex-1">{img.file_name || `${label} ${i + 1}`}</span>
+                              <button onClick={() => { if (confirm("Delete this image?")) handleDelete(img.id); }}
+                                      className="ml-2 px-1.5 py-0.5 rounded text-[9px] cursor-pointer transition-colors hover:brightness-90"
+                                      style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 8%, var(--surface))" }}>
+                                Delete
+                              </button>
                             </div>
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {/* Empty state with upload prompt */}
+                  {isOpen && imgs.length === 0 && (
+                    <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>
+                      No images. Click "+ Upload" above to add charts.
                     </div>
                   )}
                 </div>
