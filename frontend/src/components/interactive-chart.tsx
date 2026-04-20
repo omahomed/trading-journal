@@ -160,7 +160,6 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         priceSeries = chart.addSeries(BarSeries, {
           upColor: "#22c55e",
           downColor: "#ef4444",
-          thinBars: false,
         });
         priceSeries.setData(candles.map(c => ({
           time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
@@ -250,7 +249,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         markers.push({
           time: candleTime as Time,
           position: "aboveBar",
-          color: isBuy ? "#22c55e" : "#ef4444",
+          color: isBuy ? "#3b82f6" : "#f97316",
           shape: "arrowDown",
           text: label,
         });
