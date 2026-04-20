@@ -6,6 +6,7 @@ import { api, type TradeDetail } from "@/lib/api";
 
 type ChartType = "candlestick" | "line" | "area";
 type Interval = "1d" | "1wk" | "1mo";
+type VisibleRange = "5d" | "1m" | "3m" | "1y" | "5y" | "all";
 
 const MA_COLORS = {
   ema8: "#f59e0b",   // amber
@@ -57,6 +58,30 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
   const [chartType, setChartType] = useState<ChartType>("candlestick");
   const [interval, setInterval] = useState<Interval>("1d");
   const [maVisible, setMaVisible] = useState({ ema8: true, ema21: true, sma50: true, sma200: true });
+  const [visibleRange, setVisibleRange] = useState<VisibleRange>("3m");
+  const candlesRef = useRef<{ time: number }[]>([]);
+
+  const applyVisibleRange = useCallback((chart: IChartApi, candles: { time: number }[], range: VisibleRange) => {
+    if (!candles.length) { chart.timeScale().fitContent(); return; }
+    if (range === "all") { chart.timeScale().fitContent(); return; }
+
+    const lastTime = candles[candles.length - 1].time;
+    const daysMap: Record<string, number> = { "5d": 5, "1m": 30, "3m": 90, "1y": 365, "5y": 1825 };
+    const days = daysMap[range] || 90;
+    const fromTime = lastTime - days * 86400;
+
+    chart.timeScale().setVisibleRange({
+      from: fromTime as Time,
+      to: lastTime as Time,
+    });
+  }, []);
+
+  const handleRangeChange = useCallback((range: VisibleRange) => {
+    setVisibleRange(range);
+    if (chartRef.current && candlesRef.current.length) {
+      applyVisibleRange(chartRef.current, candlesRef.current, range);
+    }
+  }, [applyVisibleRange]);
 
   const buildChart = useCallback(async () => {
     if (!containerRef.current) return;
@@ -242,7 +267,11 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         }
       }
 
-      chart.timeScale().fitContent();
+      // Store candles ref for range changes
+      candlesRef.current = candles;
+
+      // Set visible range based on selected preset
+      applyVisibleRange(chart, candles, visibleRange);
 
       // Resize observer
       const ro = new ResizeObserver(() => {
@@ -256,7 +285,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
       setError(err.message || "Failed to load chart");
       setLoading(false);
     }
-  }, [ticker, tradeId, openDate, closedDate, details, navColor, chartType, interval, maVisible]);
+  }, [ticker, tradeId, openDate, closedDate, details, navColor, chartType, interval, maVisible, visibleRange, applyVisibleRange]);
 
   useEffect(() => {
     buildChart();
@@ -313,6 +342,17 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
             <button key={val} onClick={() => setInterval(val)}
                     className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
                     style={btnStyle(interval === val)}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Visible range presets */}
+        <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {([["5d", "5d"], ["1m", "1m"], ["3m", "3m"], ["1y", "1y"], ["5y", "5y"], ["all", "All"]] as [VisibleRange, string][]).map(([val, label]) => (
+            <button key={val} onClick={() => handleRangeChange(val)}
+                    className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
+                    style={btnStyle(visibleRange === val)}>
               {label}
             </button>
           ))}
