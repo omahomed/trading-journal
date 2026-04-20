@@ -145,6 +145,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         timeScale: {
           borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
           timeVisible: false,
+          rightOffset: 12,
         },
       });
       chartRef.current = chart;
