@@ -1439,7 +1439,8 @@ async def upload_image(
     ticker: str = Form(...),
     image_type: str = Form(...),
 ):
-    """Upload a trade image to R2 and save metadata to DB."""
+    """Upload a trade image to R2 and save metadata to DB.
+    For marketsurge images, also extracts fundamentals via Claude Vision."""
     if not _is_r2_available():
         return {"error": "R2 storage not configured"}
     try:
@@ -1448,15 +1449,34 @@ async def upload_image(
         file_like = io.BytesIO(content)
         file_like.name = file.filename or "upload.png"
 
+        # For MarketSurge screenshots, save as 'entry' type so it appears
+        # in Entry Charts, and also run AI extraction
+        save_type = "entry" if image_type == "marketsurge" else image_type
+
         # Upload to R2
-        object_key = r2.upload_image(file_like, portfolio, trade_id, ticker, image_type)
+        object_key = r2.upload_image(file_like, portfolio, trade_id, ticker, save_type)
         if not object_key:
             return {"error": "Upload to R2 failed"}
 
         # Save metadata to DB
-        image_id = db.save_trade_image(portfolio, trade_id, ticker, image_type, object_key, file.filename)
+        image_id = db.save_trade_image(portfolio, trade_id, ticker, save_type, object_key, file.filename)
 
-        return {"status": "ok", "image_id": image_id, "object_key": object_key}
+        # Extract fundamentals from MarketSurge screenshots
+        fundamentals = None
+        if image_type == "marketsurge":
+            try:
+                import vision_extract
+                extracted = vision_extract.extract_fundamentals(content, file.filename or "image.png")
+                if extracted:
+                    db.save_trade_fundamentals(portfolio, trade_id, ticker, extracted, image_id)
+                    fundamentals = extracted
+                    print(f"[Vision] Extracted fundamentals for {ticker} ({trade_id})")
+                else:
+                    print(f"[Vision] No data extracted for {ticker}")
+            except Exception as ve:
+                print(f"[Vision] Extraction failed: {ve}")
+
+        return {"status": "ok", "image_id": image_id, "object_key": object_key, "fundamentals": fundamentals}
     except Exception as e:
         return {"error": str(e)}
 
