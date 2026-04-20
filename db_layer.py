@@ -472,11 +472,22 @@ def save_summary_row(portfolio_name, row_dict):
     Returns:
         int: ID of inserted/updated row
     """
-    # Clean NaT/NaN values - convert to None for SQL NULL
+    # Clean NaT/NaN values and numpy types for SQL compatibility
     def clean_value(val):
-        if pd.isna(val) or str(val).strip() == 'NaT':
+        if val is None:
             return None
+        try:
+            if pd.isna(val) or str(val).strip() == 'NaT':
+                return None
+        except (TypeError, ValueError):
+            pass
+        # Convert numpy types to native Python types
+        if hasattr(val, 'item'):  # np.float64, np.int64, etc.
+            return val.item()
         return val
+
+    # Sanitize all values in row_dict to prevent numpy types reaching psycopg2
+    row_dict = {k: clean_value(v) for k, v in row_dict.items()}
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -582,6 +593,20 @@ def save_detail_row(portfolio_name, row_dict):
     Returns:
         int: ID of inserted row
     """
+    # Sanitize numpy types
+    def _clean(val):
+        if val is None:
+            return None
+        if hasattr(val, 'item'):
+            return val.item()
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return val
+    row_dict = {k: _clean(v) for k, v in row_dict.items()}
+
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             # Get portfolio_id
