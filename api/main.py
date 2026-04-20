@@ -1347,12 +1347,12 @@ def log_buy(body: dict):
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": str(row.get("open_date", date_str))[:10],
-                    "Shares": new_total_shares,
-                    "Avg_Entry": round(new_avg_entry, 4),
-                    "Total_Cost": round(new_total_cost, 2),
-                    "Stop_Loss": stop_loss if stop_loss > 0 else row.get("stop_loss", 0),
-                    "Rule": row.get("rule") or rule,
-                    "Buy_Notes": notes or row.get("buy_notes", ""),
+                    "Shares": float(new_total_shares),
+                    "Avg_Entry": float(round(new_avg_entry, 4)),
+                    "Total_Cost": float(round(new_total_cost, 2)),
+                    "Stop_Loss": float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0),
+                    "Rule": str(row.get("rule", "") or rule or ""),
+                    "Buy_Notes": str(notes or row.get("buy_notes", "") or ""),
                 }
             else:
                 summary_row = {
