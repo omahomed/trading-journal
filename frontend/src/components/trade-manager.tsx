@@ -88,6 +88,8 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   const [editTradeId, setEditTradeId] = useState("");
   const [editTxIdx, setEditTxIdx] = useState(-1);
   const [editFields, setEditFields] = useState<Record<string, string>>({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [editResult, setEditResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Delete tab
   const [deleteTradeId, setDeleteTradeId] = useState("");
@@ -289,7 +291,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
               <div className="p-5 flex flex-col gap-4">
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Date / Time">
-                    <input type="text" value={editFields.date || ""} onChange={e => setEditFields({ ...editFields, date: e.target.value })}
+                    <input type="datetime-local" value={editFields.date || ""} onChange={e => setEditFields({ ...editFields, date: e.target.value })}
                            className={inputCls} style={inputStyle} />
                   </Field>
                   <Field label="Rule (Strategy)">
@@ -321,11 +323,55 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                            step="0.01" className={inputCls} style={inputStyle} />
                   </Field>
                 </div>
-                <button onClick={() => alert("Backend write endpoint needed: PUT /api/trades/edit-transaction")}
-                        className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 w-fit"
-                        style={{ background: navColor }}>
-                  Save Changes
-                </button>
+                <div className="flex items-center gap-4">
+                  <button disabled={editSaving}
+                          onClick={async () => {
+                            if (!editTx) return;
+                            setEditSaving(true);
+                            setEditResult(null);
+                            try {
+                              const res = await api.editTransaction({
+                                detail_id: editTx.id,
+                                trade_id: editTx.trade_id,
+                                ticker: editTx.ticker,
+                                action: editTx.action,
+                                date: editFields.date || "",
+                                shares: parseFloat(editFields.shares || "0"),
+                                amount: parseFloat(editFields.amount || "0"),
+                                value: parseFloat(editFields.shares || "0") * parseFloat(editFields.amount || "0"),
+                                rule: editFields.rule || "",
+                                notes: editFields.notes || "",
+                                stop_loss: parseFloat(editFields.stop_loss || "0"),
+                                trx_id: editFields.trx_id || "",
+                              });
+                              if (res.error) {
+                                setEditResult({ ok: false, msg: res.error });
+                              } else {
+                                setEditResult({ ok: true, msg: "Transaction updated successfully" });
+                                // Refresh data
+                                const [open, closed, det] = await Promise.all([
+                                  api.tradesOpen("CanSlim"),
+                                  api.tradesClosed("CanSlim", 500),
+                                  api.tradesRecent("CanSlim", 500),
+                                ]);
+                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det as TradeDetail[]);
+                              }
+                            } catch (err: any) {
+                              setEditResult({ ok: false, msg: err.message || "Failed to save" });
+                            } finally {
+                              setEditSaving(false);
+                            }
+                          }}
+                          className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 w-fit disabled:opacity-50"
+                          style={{ background: navColor }}>
+                    {editSaving ? "Saving..." : "Save Changes"}
+                  </button>
+                  {editResult && (
+                    <span className="text-[12px] font-medium" style={{ color: editResult.ok ? "#16a34a" : "#e5484d" }}>
+                      {editResult.msg}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}

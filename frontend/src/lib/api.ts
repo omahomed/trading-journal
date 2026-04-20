@@ -174,6 +174,12 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
 
+  editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
+    fetch(`${API_BASE}/api/trades/edit-transaction`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio: "CanSlim", ...body }),
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
+
   deleteTrade: (tradeId: string, portfolio = "CanSlim") =>
     fetch(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {
       method: "DELETE",

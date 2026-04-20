@@ -10,7 +10,7 @@ import os
 # Add parent directory to path so we can import existing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Body
 import io
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, date
@@ -1572,6 +1572,44 @@ def log_sell(body: dict):
             "remaining_shares": round(remaining_shares, 4),
             "is_closed": is_closed,
         }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/api/trades/edit-transaction")
+def edit_transaction_endpoint(body: dict = Body(...)):
+    """Edit an existing transaction detail row."""
+    try:
+        detail_id = body.get("detail_id")
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = body.get("trade_id", "")
+
+        if not detail_id:
+            return {"error": "detail_id is required"}
+
+        row_dict = {
+            "Trade_ID": trade_id,
+            "Ticker": body.get("ticker", ""),
+            "Action": body.get("action", ""),
+            "Date": body.get("date", ""),
+            "Shares": body.get("shares", 0),
+            "Amount": body.get("amount", 0),
+            "Value": body.get("value", 0),
+            "Rule": body.get("rule", ""),
+            "Notes": body.get("notes", ""),
+            "Stop_Loss": body.get("stop_loss", 0),
+            "Trx_ID": body.get("trx_id", ""),
+        }
+
+        db.update_detail_row(portfolio, detail_id, row_dict)
+
+        try:
+            db.log_audit(portfolio, "EDIT", trade_id, row_dict.get("Trx_ID", ""),
+                         f"Transaction {detail_id} edited", username="web")
+        except Exception:
+            pass
+
+        return {"status": "ok", "detail_id": detail_id}
     except Exception as e:
         return {"error": str(e)}
 
