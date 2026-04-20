@@ -331,6 +331,16 @@ export function TradeJournal({ navColor }: { navColor: string }) {
         } catch { /* fall back */ }
       }
       setLoading(false);
+
+      // Prefill ticker filter from Active Campaign (via localStorage)
+      try {
+        const prefill = localStorage.getItem("journal_prefill_ticker");
+        if (prefill) {
+          localStorage.removeItem("journal_prefill_ticker");
+          setSelectedTickers([prefill]);
+          setStatusFilter("all");
+        }
+      } catch { /* ignore */ }
     });
   }, []);
 

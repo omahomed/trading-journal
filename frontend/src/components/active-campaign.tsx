@@ -345,6 +345,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     if (onNavigate) onNavigate("logsell");
   }, [onNavigate]);
 
+  const ctxViewJournal = useCallback((p: EnrichedPosition) => {
+    localStorage.setItem("journal_prefill_ticker", p.ticker);
+    if (onNavigate) onNavigate("journal");
+  }, [onNavigate]);
+
   const handleSort = useCallback((key: string) => {
     if (key === "idx") return;
     const k = key as SortKey;
@@ -739,6 +744,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                   onClick={e => { e.stopPropagation(); ctxSellPosition(ctxMenu.position); }}>
             <span style={{ color: "#e5484d" }}>−</span> Sell / Trim
+          </button>
+          <div style={{ borderTop: "1px solid var(--border)", margin: "2px 0" }} />
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxViewJournal(ctxMenu.position); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x1F4CB;</span> View in Journal
           </button>
         </div>
       )}
