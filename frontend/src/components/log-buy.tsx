@@ -534,7 +534,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
             )}
             <button onClick={handleSubmit} disabled={submitting}
                     className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 cursor-pointer disabled:opacity-50"
-                    style={{ background: "#6366f1" }}>
+                    style={{ background: "#08a86b" }}>
               {submitting ? "Saving..." : "LOG BUY ORDER"}
             </button>
           </div>

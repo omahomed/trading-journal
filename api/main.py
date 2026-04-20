@@ -1471,30 +1471,31 @@ def log_sell(body: dict):
 
         # Compute avg_exit from all sells
         sells = txns[txns["action"].str.upper() == "SELL"]
-        total_sell_val = (sells["shares"].astype(float) * sells["amount"].astype(float)).sum()
-        total_sell_shs = sells["shares"].astype(float).sum()
-        avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0
+        total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
+        total_sell_shs = float(sells["shares"].astype(float).sum())
+        avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0.0
 
         is_closed = remaining_shares < 0.01
         buys = txns[txns["action"].str.upper() == "BUY"]
-        total_cost = (buys["shares"].astype(float) * buys["amount"].astype(float)).sum()
-        return_pct = (total_realized / total_cost * 100) if is_closed and total_cost > 0 else 0
+        total_cost = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
+        total_buy_shs = float(buys["shares"].astype(float).sum())
+        return_pct = (total_realized / total_cost * 100) if is_closed and total_cost > 0 else 0.0
 
         summary_row = {
-            "Trade_ID": trade_id, "Ticker": ticker,
+            "Trade_ID": trade_id, "Ticker": str(ticker),
             "Status": "CLOSED" if is_closed else "OPEN",
             "Open_Date": str(row.get("open_date", ""))[:10],
             "Closed_Date": date_str if is_closed else None,
-            "Shares": remaining_shares if not is_closed else buys["shares"].astype(float).sum(),
-            "Avg_Entry": round(avg_entry, 4),
-            "Avg_Exit": round(avg_exit, 4) if avg_exit > 0 else 0,
-            "Total_Cost": round(remaining_cost if not is_closed else total_cost, 2),
-            "Realized_PL": round(total_realized, 2),
-            "Return_Pct": round(return_pct, 4),
+            "Shares": float(remaining_shares if not is_closed else total_buy_shs),
+            "Avg_Entry": float(round(avg_entry, 4)),
+            "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
+            "Total_Cost": float(round(remaining_cost if not is_closed else total_cost, 2)),
+            "Realized_PL": float(round(total_realized, 2)),
+            "Return_Pct": float(round(return_pct, 4)),
             "Sell_Rule": rule,
             "Sell_Notes": notes,
-            "Rule": row.get("rule", ""),
-            "Buy_Notes": row.get("buy_notes", ""),
+            "Rule": str(row.get("rule", "") or ""),
+            "Buy_Notes": str(row.get("buy_notes", "") or ""),
         }
         summary_id = db.save_summary_row(portfolio, summary_row)
 
