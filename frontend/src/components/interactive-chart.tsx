@@ -219,11 +219,11 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
       if (maVisible.sma50) addMA(calcSMA(closes, 50), MA_COLORS.sma50, "50S");
       if (maVisible.sma200) addMA(calcSMA(closes, 200), MA_COLORS.sma200, "200S");
 
-      // Build time lookup for markers
+      // Build time lookup for markers (use UTC to avoid timezone shift)
       const dateToTime = new Map<string, number>();
       for (const c of candles) {
         const d = new Date(c.time * 1000);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
         dateToTime.set(key, c.time);
       }
 
