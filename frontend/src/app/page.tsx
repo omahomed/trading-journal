@@ -278,7 +278,7 @@ export default function Home() {
         <div className="flex-1 overflow-auto px-7 py-6">
           {page === "dashboard" ? <Dashboard navColor={navColor} />
                     : page === "overview" ? <TradingOverview navColor={navColor} />
-                    : page === "campaign" ? <ActiveCampaign navColor={navColor} />
+                    : page === "campaign" ? <ActiveCampaign navColor={navColor} onNavigate={setPage} />
                     : page === "import" ? <ImportTrades navColor={navColor} />
                     : page === "logbuy" ? <LogBuy navColor={navColor} />
                     : page === "logsell" ? <LogSell navColor={navColor} />

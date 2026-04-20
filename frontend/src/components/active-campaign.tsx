@@ -263,7 +263,7 @@ type RiskFilter = "all" | "at_risk" | "free_roll";
 type SortKey = keyof EnrichedPosition;
 type SortDir = "asc" | "desc";
 
-export function ActiveCampaign({ navColor }: { navColor: string }) {
+export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
   const [positions, setPositions] = useState<EnrichedPosition[]>([]);
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -271,6 +271,7 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -311,6 +312,38 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Close context menu on click anywhere or Escape
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [ctxMenu]);
+
+  const ctxAddPosition = useCallback((p: EnrichedPosition) => {
+    localStorage.setItem("ps_prefill", JSON.stringify({
+      ticker: p.ticker,
+      shares: 0,
+      price: p.current_price,
+      stop: p.avg_stop > 0 ? p.avg_stop : undefined,
+      trade_id: p.trade_id,
+      action: "scale_in",
+    }));
+    if (onNavigate) onNavigate("logbuy");
+  }, [onNavigate]);
+
+  const ctxSellPosition = useCallback((p: EnrichedPosition) => {
+    localStorage.setItem("ps_prefill_sell", JSON.stringify({
+      ticker: p.ticker,
+      shares: 0,
+      price: p.current_price,
+      trade_id: p.trade_id,
+    }));
+    if (onNavigate) onNavigate("logsell");
+  }, [onNavigate]);
 
   const handleSort = useCallback((key: string) => {
     if (key === "idx") return;
@@ -578,7 +611,8 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
                   <tr key={p.trade_id} className="transition-colors"
                       style={{ borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none" }}
                       onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                      onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
                     {/* # */}
                     <td className="px-2.5 py-2.5 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>
                       {i + 1}
@@ -678,6 +712,36 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
           </table>
         </div>
       </div>
+
+      {/* Right-click context menu */}
+      {ctxMenu && (
+        <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[180px] overflow-hidden"
+             style={{
+               left: ctxMenu.x,
+               top: ctxMenu.y,
+               background: "var(--surface)",
+               border: "1px solid var(--border)",
+               boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+             }}>
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
+            {ctxMenu.position.ticker}
+          </div>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxAddPosition(ctxMenu.position); }}>
+            <span style={{ color: "#16a34a" }}>+</span> Add to Position
+          </button>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxSellPosition(ctxMenu.position); }}>
+            <span style={{ color: "#e5484d" }}>−</span> Sell / Trim
+          </button>
+        </div>
+      )}
 
       {/* ── Risk Monitor ── */}
       <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
