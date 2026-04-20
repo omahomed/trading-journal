@@ -36,24 +36,38 @@ function CardMetric({ label, value, color, sub }: { label: string; value: string
 
 const IMAGE_TYPE_MAP: Record<string, string> = {
   entry: "Entry Charts", weekly: "Entry Charts", daily: "Entry Charts",
-  position_change: "Position Changes", exit: "Position Changes",
-  marketsurge: "MarketSurge", fundamentals: "MarketSurge",
+  marketsurge: "Entry Charts",
+  position_change: "Position Changes", position: "Position Changes", exit: "Position Changes",
 };
+
+const FUND_RATINGS = [
+  { key: "composite_rating", label: "Composite", max: 99 },
+  { key: "eps_rating", label: "EPS Rating", max: 99 },
+  { key: "rs_rating", label: "RS Rating", max: 99 },
+  { key: "group_rs_rating", label: "Group RS" },
+  { key: "smr_rating", label: "SMR" },
+  { key: "acc_dis_rating", label: "Acc/Dis" },
+];
 
 function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
   const [images, setImages] = useState<any[]>([]);
+  const [fundamentals, setFundamentals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
   useEffect(() => {
-    api.tradeImages(tradeId).then(imgs => {
+    Promise.all([
+      api.tradeImages(tradeId).catch(() => []),
+      api.tradeFundamentals(tradeId).catch(() => []),
+    ]).then(([imgs, funds]) => {
       setImages(Array.isArray(imgs) ? imgs : []);
+      setFundamentals(Array.isArray(funds) ? funds : []);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    });
   }, [tradeId]);
 
-  const groups: Record<string, any[]> = { "Entry Charts": [], "Position Changes": [], "MarketSurge": [] };
+  const groups: Record<string, any[]> = { "Entry Charts": [], "Position Changes": [] };
   images.forEach(img => {
     const group = IMAGE_TYPE_MAP[img.image_type] || "Entry Charts";
     if (groups[group]) groups[group].push(img);
@@ -118,6 +132,61 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
           </div>
         )}
       </div>
+
+      {/* ── MarketSurge Fundamentals ── */}
+      {fundamentals.length > 0 && (
+        <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
+          <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
+            <span>🔬</span> MarketSurge Fundamentals
+          </div>
+          {fundamentals.map((f, fi) => (
+            <div key={fi} className="rounded-[10px] p-4" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+              {/* Ratings row */}
+              <div className="grid grid-cols-6 gap-2 mb-3">
+                {FUND_RATINGS.map(r => {
+                  const val = f[r.key];
+                  if (val == null || val === "" || val === 0) return <div key={r.key} />;
+                  const isNum = typeof val === "number";
+                  const color = isNum ? (val >= 80 ? "#08a86b" : val >= 50 ? "#f59f00" : "#e5484d") : "var(--ink)";
+                  return (
+                    <div key={r.key} className="text-center p-2 rounded-[8px]" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                      <div className="text-[9px] uppercase tracking-[0.06em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>{r.label}</div>
+                      <div className="text-[18px] font-bold" style={{ fontFamily: "var(--font-jetbrains), monospace", color }}>{val}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Extra details */}
+              <div className="grid grid-cols-4 gap-2 text-[11px]">
+                {f.eps_growth_rate != null && f.eps_growth_rate !== 0 && (
+                  <div><span style={{ color: "var(--ink-4)" }}>EPS Growth:</span> <strong>{f.eps_growth_rate}%</strong></div>
+                )}
+                {f.ud_vol_ratio != null && f.ud_vol_ratio !== 0 && (
+                  <div><span style={{ color: "var(--ink-4)" }}>U/D Vol:</span> <strong>{f.ud_vol_ratio}</strong></div>
+                )}
+                {f.num_funds != null && f.num_funds !== 0 && (
+                  <div><span style={{ color: "var(--ink-4)" }}>Funds:</span> <strong>{f.num_funds}</strong></div>
+                )}
+                {f.industry_group && (
+                  <div><span style={{ color: "var(--ink-4)" }}>Group:</span> <strong>{f.industry_group}</strong>{f.industry_group_rank ? ` (#${f.industry_group_rank})` : ""}</div>
+                )}
+                {f.funds_own_pct != null && f.funds_own_pct !== 0 && (
+                  <div><span style={{ color: "var(--ink-4)" }}>Fund Own:</span> <strong>{f.funds_own_pct}%</strong></div>
+                )}
+                {f.mgmt_own_pct != null && f.mgmt_own_pct !== 0 && (
+                  <div><span style={{ color: "var(--ink-4)" }}>Mgmt Own:</span> <strong>{f.mgmt_own_pct}%</strong></div>
+                )}
+                {f.market_cap && (
+                  <div><span style={{ color: "var(--ink-4)" }}>Mkt Cap:</span> <strong>{f.market_cap}</strong></div>
+                )}
+              </div>
+              {f.extracted_at && (
+                <div className="text-[10px] mt-2" style={{ color: "var(--ink-5)" }}>Extracted: {String(f.extracted_at).slice(0, 10)}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Lightbox — full screen overlay */}
       {lightbox && (

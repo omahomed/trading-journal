@@ -1245,6 +1245,26 @@ Give me a behavioral profile and 3 specific things to work on."""
 
 
 # ============================================================
+# FUNDAMENTALS ENDPOINT
+# ============================================================
+@app.get("/api/fundamentals/{trade_id}")
+def get_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
+    """Get extracted MarketSurge fundamentals for a trade."""
+    try:
+        funds = db.get_trade_fundamentals(portfolio, trade_id)
+        # Convert Decimal to float for JSON serialization
+        for f in funds:
+            for k, v in f.items():
+                if hasattr(v, 'as_tuple'):  # Decimal
+                    f[k] = float(v)
+                elif hasattr(v, 'isoformat'):  # datetime
+                    f[k] = v.isoformat()
+        return funds or []
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================
 # R2 IMAGE ENDPOINTS
 # ============================================================
 from fastapi import UploadFile, File, Form

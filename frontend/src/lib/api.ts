@@ -155,6 +155,10 @@ export const api = {
     });
   },
 
+  // Fundamentals
+  tradeFundamentals: (tradeId: string, portfolio = "CanSlim") =>
+    fetchJSON<any[]>(`/api/fundamentals/${tradeId}?portfolio=${portfolio}`),
+
   // R2 Images
   tradeImages: (tradeId: string, portfolio = "CanSlim") =>
     fetchJSON<any[]>(`/api/images/${tradeId}?portfolio=${portfolio}`),
