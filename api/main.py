@@ -1254,17 +1254,26 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
     """Get all image metadata for a trade."""
     try:
         images = db.get_trade_images(portfolio, trade_id)
-        # Add presigned URLs for each image
-        if _R2_AVAILABLE and images:
+        # Build viewable URLs for each image
+        if images:
+            public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
             for img in images:
                 url = img.get("image_url", "")
-                if url and not url.startswith("http"):
-                    presigned = r2.get_image_url(url, expiration=3600)
-                    img["presigned_url"] = presigned or ""
-                elif url.startswith("http"):
-                    img["presigned_url"] = url
+                if url and url.startswith("http"):
+                    # Already a full URL
+                    img["view_url"] = url
+                elif url and public_base:
+                    # Build from public R2 URL + object key
+                    img["view_url"] = f"{public_base}/{url}"
+                elif url and _R2_AVAILABLE:
+                    # Fallback to presigned URL
+                    try:
+                        presigned = r2.get_image_url(url, expiration=3600)
+                        img["view_url"] = presigned or ""
+                    except Exception:
+                        img["view_url"] = ""
                 else:
-                    img["presigned_url"] = ""
+                    img["view_url"] = ""
         return images or []
     except Exception as e:
         return {"error": str(e)}

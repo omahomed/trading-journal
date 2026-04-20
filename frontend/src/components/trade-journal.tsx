@@ -75,7 +75,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
               ) : imgs.length > 0 ? (
                 <div className="flex flex-col gap-2">
                   {imgs.map((img, i) => {
-                    const url = img.presigned_url || img.image_url || "";
+                    const url = img.view_url || img.presigned_url || "";
                     return (
                       <div key={i} className="rounded-[10px] overflow-hidden cursor-pointer transition-transform hover:scale-[1.02]"
                            style={{ border: "1px solid var(--border)" }}
