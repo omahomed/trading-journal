@@ -43,6 +43,15 @@ for _k, _v in _R2_DEFAULTS.items():
     if not os.environ.get(_k):
         os.environ[_k] = _v
 
+# IBKR Flex Query — same pattern as R2 above
+_IBKR_DEFAULTS = {
+    "IBKR_FLEX_TOKEN": "495598822765055545010994",
+    "IBKR_FLEX_QUERY_ID": "1476779",
+}
+for _k, _v in _IBKR_DEFAULTS.items():
+    if not os.environ.get(_k):
+        os.environ[_k] = _v
+
 try:
     import r2_storage as r2
     print(f"[R2] Module loaded, endpoint: {os.environ.get('R2_ENDPOINT_URL', 'NONE')[:40]}")
