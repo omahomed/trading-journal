@@ -282,7 +282,7 @@ export default function Home() {
                     : page === "import" ? <ImportTrades navColor={navColor} />
                     : page === "logbuy" ? <LogBuy navColor={navColor} />
                     : page === "logsell" ? <LogSell navColor={navColor} />
-                    : page === "sizer" ? <PositionSizer navColor={navColor} onNavigate={setPage} />
+                    : page === "sizer" ? <PositionSizer navColor={navColor} onNavigate={setPage} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "journal" ? <TradeJournal navColor={navColor} />
                     : page === "manager" ? <TradeManager navColor={navColor} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "riskmgr" ? <RiskManager navColor={navColor} />
@@ -295,9 +295,9 @@ export default function Home() {
                     : page === "retro" ? <WeeklyRetro navColor={navColor} />
                     : page === "cycle" ? <MarketCycle navColor={navColor} />
                     : page === "rally" ? <RallyContext navColor={navColor} />
-                    : page === "analytics" ? <Analytics navColor={navColor} />
+                    : page === "analytics" ? <Analytics navColor={navColor} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "heatmap" ? <PerfHeatmap navColor={navColor} />
-                    : page === "period" ? <PeriodReview navColor={navColor} />
+                    : page === "period" ? <PeriodReview navColor={navColor} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "coach" ? <AICoach navColor={navColor} />
                     : page === "admin" ? <Admin navColor={navColor} />
                     : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}

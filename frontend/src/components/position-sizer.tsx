@@ -135,8 +135,15 @@ function lifoAvgCost(inventory: InventoryLot[]): number {
 
 // --- Main Component ---
 
-export function PositionSizer({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
-  const [tab, setTab] = useState<SizerTab>("normal");
+export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed }: { navColor: string; onNavigate?: (page: string) => void; initialTab?: string; onTabConsumed?: () => void }) {
+  const [tab, setTab] = useState<SizerTab>((initialTab as SizerTab) || "normal");
+
+  useEffect(() => {
+    if (initialTab && ["normal", "volatility", "scalein", "pyramid", "trim", "options"].includes(initialTab)) {
+      setTab(initialTab as SizerTab);
+      onTabConsumed?.();
+    }
+  }, [initialTab, onTabConsumed]);
   const [equity, setEquity] = useState(0);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);

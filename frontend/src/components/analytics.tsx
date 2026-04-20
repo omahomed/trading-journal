@@ -45,13 +45,20 @@ function QualityTile({ label, value, status, ok }: { label: string; value: strin
   );
 }
 
-export function Analytics({ navColor }: { navColor: string }) {
+export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: string; initialTab?: string; onTabConsumed?: () => void }) {
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [openCount, setOpenCount] = useState(0);
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>((initialTab as Tab) || "overview");
+
+  useEffect(() => {
+    if (initialTab && ["overview", "buyrules", "sellrules", "drawdown", "review", "campaigns"].includes(initialTab)) {
+      setTab(initialTab as Tab);
+      onTabConsumed?.();
+    }
+  }, [initialTab, onTabConsumed]);
   const [scope, setScope] = useState<"ltd" | "2026">("ltd");
   // drillRule kept for sell rules tab (TODO)
 

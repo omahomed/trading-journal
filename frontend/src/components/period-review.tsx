@@ -453,11 +453,18 @@ function PeriodTab({ data, closedTrades, mode }: { data: any[]; closedTrades: Tr
 /* ══════════════════════════════════════════════════════════ */
 /* ██ MAIN EXPORT                                          ██ */
 /* ══════════════════════════════════════════════════════════ */
-export function PeriodReview({ navColor }: { navColor: string }) {
+export function PeriodReview({ navColor, initialTab, onTabConsumed }: { navColor: string; initialTab?: string; onTabConsumed?: () => void }) {
   const [data, setData] = useState<any[]>([]);
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("weekly");
+  const [tab, setTab] = useState<Tab>((initialTab as Tab) || "weekly");
+
+  useEffect(() => {
+    if (initialTab && ["weekly", "monthly", "annual"].includes(initialTab)) {
+      setTab(initialTab as Tab);
+      onTabConsumed?.();
+    }
+  }, [initialTab, onTabConsumed]);
 
   useEffect(() => {
     Promise.all([
