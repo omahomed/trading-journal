@@ -1345,8 +1345,17 @@ def delete_image(image_id: int):
 
 @app.get("/api/r2/status")
 def r2_status():
-    """Check R2 availability."""
-    return {"available": _is_r2_available()}
+    """Check R2 availability with debug info."""
+    has_module = r2 is not None
+    env_url = os.environ.get("R2_ENDPOINT_URL", "")
+    env_keys = [k for k in os.environ.keys() if k.startswith("R2")]
+    return {
+        "available": _is_r2_available(),
+        "module_loaded": has_module,
+        "env_url_set": bool(env_url),
+        "env_url_prefix": env_url[:30] if env_url else "",
+        "r2_env_keys": env_keys,
+    }
 
 
 if __name__ == "__main__":
