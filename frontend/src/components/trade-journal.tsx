@@ -785,9 +785,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                           if (!row.isSell && row.remaining > 0) {
                             const buyPrice = parseFloat(String(row.tx.amount || 0)) || enrichedEntry;
                             row.unrealizedPl = (currentPrice - buyPrice) * row.remaining;
-                            // Return % for open rows = (live - buy) / buy
-                            if (buyPrice > 0 && row.realizedPl === 0) {
-                              row.returnPct = ((currentPrice - buyPrice) / buyPrice) * 100;
+                            // Return % = (realized + unrealized) / original cost
+                            const origCost = row.displayShares * buyPrice;
+                            if (origCost > 0) {
+                              row.returnPct = ((row.realizedPl + row.unrealizedPl) / origCost) * 100;
                             }
                           }
                         });
