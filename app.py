@@ -118,13 +118,11 @@ if USE_DATABASE:
 
             conn.commit()
 
-        # Seed default config values + auto-sync RESET_DATE event (idempotent)
-        # Also migrate legacy 'personal' event category -> 'system' (auto) or 'macro' (user)
+        # Seed default config values
         try:
             db.seed_default_configs()
             if hasattr(db, 'migrate_event_categories'):
                 db.migrate_event_categories()
-            db.sync_auto_events_from_config()
         except Exception as seed_e:
             print(f"⚠️  Config seed/sync warning: {seed_e}")
 
@@ -16576,7 +16574,6 @@ elif page == "Admin":
                     user='admin',
                 )
                 if ok:
-                    db.sync_auto_events_from_config()
                     clear_config_cache()
                     st.success(f"✅ Reset date updated to {new_reset.strftime('%Y-%m-%d')}")
                     st.rerun()
