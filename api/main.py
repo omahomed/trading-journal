@@ -1254,24 +1254,15 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
     """Get all image metadata for a trade."""
     try:
         images = db.get_trade_images(portfolio, trade_id)
-        # Build viewable URLs for each image
+        # Build viewable URLs — use public R2 CDN
+        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev").rstrip("/")
         if images:
-            public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
             for img in images:
-                url = img.get("image_url", "")
-                if url and url.startswith("http"):
-                    # Already a full URL
-                    img["view_url"] = url
-                elif url and public_base:
-                    # Build from public R2 URL + object key
-                    img["view_url"] = f"{public_base}/{url}"
-                elif url and _R2_AVAILABLE:
-                    # Fallback to presigned URL
-                    try:
-                        presigned = r2.get_image_url(url, expiration=3600)
-                        img["view_url"] = presigned or ""
-                    except Exception:
-                        img["view_url"] = ""
+                key = img.get("image_url", "")
+                if key and key.startswith("http"):
+                    img["view_url"] = key
+                elif key:
+                    img["view_url"] = f"{R2_PUBLIC}/{key}"
                 else:
                     img["view_url"] = ""
         return images or []
