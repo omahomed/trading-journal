@@ -222,11 +222,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   }, []);
 
   useEffect(() => {
-    if (actionType === "new" && !tradeId) {
-      const n = new Date();
-      setTradeId(`${n.getFullYear()}${String(n.getMonth() + 1).padStart(2, "0")}-0XX`);
+    if (actionType === "new" && (!tradeId || tradeId.endsWith("-0XX"))) {
+      api.nextTradeId("CanSlim", date).then(r => {
+        if (r.trade_id) setTradeId(r.trade_id);
+      }).catch(() => {
+        const n = new Date();
+        setTradeId(`${n.getFullYear()}${String(n.getMonth() + 1).padStart(2, "0")}-0XX`);
+      });
     }
-  }, [actionType, tradeId]);
+  }, [actionType]);
 
   // Prefill from Position Sizer (via localStorage)
   useEffect(() => {
@@ -304,9 +308,60 @@ export function LogBuy({ navColor }: { navColor: string }) {
     return e.length === 0;
   };
 
-  const handleSubmit = () => {
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleSubmit = async () => {
     if (!validate()) return;
-    alert("Backend write endpoint not yet available.");
+    setSubmitting(true);
+    setSubmitResult(null);
+
+    try {
+      const body = {
+        portfolio: "CanSlim",
+        action_type: actionType,
+        ticker,
+        trade_id: actionType === "scalein" ? selectedCampaign : tradeId,
+        shares: parseFloat(shares),
+        price: parseFloat(price),
+        stop_loss: stopMode === "price" ? parseFloat(stopValue) : parseFloat(price) * (1 - parseFloat(slPct) / 100),
+        rule,
+        notes,
+        date: date,
+        time: time,
+      };
+
+      const result = await api.logBuy(body);
+
+      if (result.error) {
+        setSubmitResult({ ok: false, msg: result.error });
+      } else {
+        // Upload images if any
+        const tid = actionType === "scalein" ? selectedCampaign : tradeId;
+        const uploadPromises: Promise<any>[] = [];
+        for (const file of entryCharts) {
+          uploadPromises.push(api.uploadImage(file, "CanSlim", tid, ticker, "entry"));
+        }
+        for (const file of positionCharts) {
+          uploadPromises.push(api.uploadImage(file, "CanSlim", tid, ticker, "position_change"));
+        }
+        if (msScreenshot) {
+          uploadPromises.push(api.uploadImage(msScreenshot, "CanSlim", tid, ticker, "marketsurge"));
+        }
+        if (uploadPromises.length > 0) {
+          await Promise.all(uploadPromises);
+        }
+
+        setSubmitResult({ ok: true, msg: `Logged ${result.trx_id || "B1"}: ${shares} shs of ${ticker} @ $${price}` });
+        // Reset form
+        setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
+        setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
+      }
+    } catch (err: any) {
+      setSubmitResult({ ok: false, msg: err.message || "Failed to log buy" });
+    }
+
+    setSubmitting(false);
   };
 
   return (
@@ -467,10 +522,20 @@ export function LogBuy({ navColor }: { navColor: string }) {
             )}
 
             {/* Submit */}
-            <button onClick={handleSubmit}
-                    className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110"
+            {submitResult && (
+              <div className="mb-3 px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
+                   style={{
+                     background: submitResult.ok ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                     color: submitResult.ok ? "#08a86b" : "#e5484d",
+                     border: `1px solid ${submitResult.ok ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "color-mix(in oklab, #e5484d 30%, var(--border))"}`,
+                   }}>
+                {submitResult.ok ? "✅" : "❌"} {submitResult.msg}
+              </div>
+            )}
+            <button onClick={handleSubmit} disabled={submitting}
+                    className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 cursor-pointer disabled:opacity-50"
                     style={{ background: "#6366f1" }}>
-              LOG BUY ORDER
+              {submitting ? "Saving..." : "LOG BUY ORDER"}
             </button>
           </div>
         </div>

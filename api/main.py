@@ -1263,6 +1263,129 @@ Give me a behavioral profile and 3 specific things to work on."""
 
 
 # ============================================================
+# ============================================================
+# TRADE WRITE ENDPOINTS (Log Buy / Log Sell)
+# ============================================================
+@app.get("/api/trades/next-id")
+def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
+    """Generate next available trade ID for a given month."""
+    try:
+        if not date:
+            date = datetime.now().strftime("%Y-%m-%d")
+        ym = pd.Timestamp(date).strftime("%Y%m")
+        df_s = db.load_summary(portfolio)
+        df_s = _normalize_trades(df_s)
+        existing = df_s[df_s["trade_id"].str.startswith(ym)]["trade_id"].tolist() if not df_s.empty else []
+        seqs = []
+        for x in existing:
+            try:
+                if "-" in x:
+                    seqs.append(int(x.split("-")[-1]))
+            except:
+                pass
+        next_seq = (max(seqs) + 1) if seqs else 1
+        return {"trade_id": f"{ym}-{next_seq:03d}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/buy")
+def log_buy(body: dict):
+    """Log a buy transaction. Creates/updates summary + inserts detail row."""
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        action_type = body.get("action_type", "new")  # "new" or "scalein"
+        ticker = body.get("ticker", "").upper()
+        trade_id = body.get("trade_id", "")
+        shares = float(body.get("shares", 0))
+        price = float(body.get("price", 0))
+        stop_loss = float(body.get("stop_loss", 0))
+        rule = body.get("rule", "")
+        notes = body.get("notes", "")
+        date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+        time_str = body.get("time", datetime.now().strftime("%H:%M"))
+        trx_id = body.get("trx_id", "")
+
+        if not ticker or not trade_id or shares <= 0 or price <= 0:
+            return {"error": "Missing required fields: ticker, trade_id, shares, price"}
+
+        value = shares * price
+        date_time = f"{date_str} {time_str}:00"
+
+        # Determine trx_id if not provided
+        if not trx_id:
+            df_d = db.load_details(portfolio)
+            if not df_d.empty:
+                df_d = _normalize_trades(df_d)
+                existing_txns = df_d[df_d["trade_id"] == trade_id]
+                buy_count = len(existing_txns[existing_txns["action"].str.upper() == "BUY"]) if not existing_txns.empty else 0
+                trx_id = f"B{buy_count + 1}" if buy_count == 0 else f"A{buy_count}"
+            else:
+                trx_id = "B1"
+
+        # Save detail row
+        detail_row = {
+            "Trade_ID": trade_id, "Ticker": ticker, "Action": "BUY",
+            "Date": date_time, "Shares": shares, "Amount": price,
+            "Value": value, "Rule": rule, "Notes": notes,
+            "Stop_Loss": stop_loss, "Trx_ID": trx_id,
+        }
+        detail_id = db.save_detail_row(portfolio, detail_row)
+
+        # Update or create summary row
+        if action_type == "new":
+            summary_row = {
+                "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
+                "Open_Date": date_str, "Shares": shares,
+                "Avg_Entry": price, "Total_Cost": value,
+                "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+            }
+        else:
+            # Scale-in: load existing summary and update
+            df_s = db.load_summary(portfolio)
+            df_s = _normalize_trades(df_s)
+            existing = df_s[df_s["trade_id"] == trade_id]
+            if not existing.empty:
+                row = existing.iloc[0]
+                old_shares = float(row.get("shares", 0))
+                old_entry = float(row.get("avg_entry", 0))
+                old_cost = float(row.get("total_cost", 0))
+                new_total_shares = old_shares + shares
+                new_total_cost = old_cost + value
+                new_avg_entry = new_total_cost / new_total_shares if new_total_shares > 0 else price
+                summary_row = {
+                    "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
+                    "Open_Date": str(row.get("open_date", date_str))[:10],
+                    "Shares": new_total_shares,
+                    "Avg_Entry": round(new_avg_entry, 4),
+                    "Total_Cost": round(new_total_cost, 2),
+                    "Stop_Loss": stop_loss if stop_loss > 0 else row.get("stop_loss", 0),
+                    "Rule": row.get("rule") or rule,
+                    "Buy_Notes": notes or row.get("buy_notes", ""),
+                }
+            else:
+                summary_row = {
+                    "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
+                    "Open_Date": date_str, "Shares": shares,
+                    "Avg_Entry": price, "Total_Cost": value,
+                    "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+                }
+
+        summary_id = db.save_summary_row(portfolio, summary_row)
+
+        # Audit trail
+        try:
+            db.log_audit(portfolio, "BUY", trade_id, ticker,
+                         f"{trx_id}: {shares} shs @ ${price:.2f}", username="web")
+        except Exception:
+            pass
+
+        return {"status": "ok", "detail_id": detail_id, "summary_id": summary_id, "trx_id": trx_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================
 # FUNDAMENTALS ENDPOINT
 # ============================================================
 @app.get("/api/fundamentals/{trade_id}")
