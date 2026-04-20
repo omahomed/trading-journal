@@ -7250,17 +7250,20 @@ elif page == "Import Trades":
                                         value = t_qty * t_price
                                         trx_id = generate_trx_id(df_d, trade_id, 'BUY', t_date) if not df_d.empty else 'B1'
                                         new_d = {'Trade_ID': trade_id, 'Ticker': t_sym, 'Action': 'BUY', 'Date': t_date, 'Shares': t_qty, 'Amount': t_price, 'Value': value, 'Rule': rule, 'Notes': 'IBKR Import', 'Realized_PL': 0, 'Stop_Loss': 0, 'Trx_ID': trx_id}
-                                        if is_new:
-                                            new_s = {'Trade_ID': trade_id, 'Ticker': t_sym, 'Status': 'OPEN', 'Open_Date': t_date, 'Shares': t_qty, 'Avg_Entry': t_price, 'Avg_Exit': 0, 'Total_Cost': value, 'Realized_PL': 0, 'Unrealized_PL': 0, 'Rule': rule, 'Buy_Notes': 'IBKR Import', 'Sell_Rule': '', 'Sell_Notes': '', 'Risk_Budget': 0}
-                                            if USE_DATABASE: db.save_summary_row(portfolio, new_s)
-                                            else: df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
-                                        if USE_DATABASE: db.save_detail_row(portfolio, new_d)
-                                        else: df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
-                                        df_d, df_s = update_campaign_summary(trade_id, df_d, df_s)
-                                        if not USE_DATABASE: secure_save(df_d, DETAILS_FILE); secure_save(df_s, SUMMARY_FILE)
-                                        log_audit_trail('BUY', trade_id, t_sym, f"IBKR Quick: {t_qty} shs @ ${t_price:.2f} | Rule: {rule}")
-                                        st.session_state.setdefault('_ibkr_used_ids', set()).add(trade_id)
-                                        st.success(f"✅ {t_qty} {t_sym} → {trade_id}")
+                                        try:
+                                            if is_new:
+                                                new_s = {'Trade_ID': trade_id, 'Ticker': t_sym, 'Status': 'OPEN', 'Open_Date': t_date, 'Shares': t_qty, 'Avg_Entry': t_price, 'Avg_Exit': 0, 'Total_Cost': value, 'Realized_PL': 0, 'Unrealized_PL': 0, 'Rule': rule, 'Buy_Notes': 'IBKR Import', 'Sell_Rule': '', 'Sell_Notes': '', 'Risk_Budget': 0}
+                                                if USE_DATABASE: db.save_summary_row(portfolio, new_s)
+                                                else: df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
+                                            if USE_DATABASE: db.save_detail_row(portfolio, new_d)
+                                            else: df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
+                                            df_d, df_s = update_campaign_summary(trade_id, df_d, df_s)
+                                            if not USE_DATABASE: secure_save(df_d, DETAILS_FILE); secure_save(df_s, SUMMARY_FILE)
+                                            log_audit_trail('BUY', trade_id, t_sym, f"IBKR Quick: {t_qty} shs @ ${t_price:.2f} | Rule: {rule}")
+                                            st.session_state.setdefault('_ibkr_used_ids', set()).add(trade_id)
+                                            st.success(f"✅ {t_qty} {t_sym} → {trade_id}")
+                                        except Exception as e:
+                                            st.error(f"❌ Quick log failed: {e}")
                             elif t_action == 'SELL':
                                 if matching.empty: st.warning(f"No open campaign for {t_sym}.")
                                 else:
@@ -7741,7 +7744,8 @@ elif page == "Log Buy":
                     try:
                         db.save_summary_row(portfolio, new_s)
                     except Exception as e:
-                        st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+                        st.error(f"❌ Failed to create campaign in database: {e}")
+                        st.stop()
 
                 df_s = pd.concat([df_s, pd.DataFrame([new_s])], ignore_index=True)
 
@@ -7749,9 +7753,15 @@ elif page == "Log Buy":
 
             if USE_DATABASE:
                 try:
+                    # For Scale In: ensure summary row exists in DB (may only be in CSV)
+                    if trade_type != "Start New Campaign":
+                        summary_match = df_s[df_s['Trade_ID'] == b_id]
+                        if not summary_match.empty:
+                            db.save_summary_row(portfolio, summary_match.iloc[0].to_dict())
                     db.save_detail_row(portfolio, new_d)
                 except Exception as e:
-                    st.warning(f"⚠️ Database save failed: {e}. CSV saved successfully.")
+                    st.error(f"❌ Failed to save transaction in database: {e}")
+                    st.stop()
 
             df_d = pd.concat([df_d, pd.DataFrame([new_d])], ignore_index=True)
 
