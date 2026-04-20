@@ -42,6 +42,65 @@ const inputStyle: React.CSSProperties = {
   fontFamily: "var(--font-jetbrains), monospace",
 };
 
+function DropZone({ label, icon, files, onFiles, multiple, accept }: {
+  label: string; icon: string; files: File[]; onFiles: (f: File[]) => void; multiple?: boolean; accept?: string;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    const dropped = Array.from(e.dataTransfer.files).filter(f => !accept || accept.split(",").some(a => f.type === a.trim()));
+    if (dropped.length > 0) onFiles(multiple ? [...files, ...dropped] : [dropped[0]]);
+  };
+
+  const hasFiles = files.length > 0;
+  const borderColor = dragging ? "#6366f1" : hasFiles ? "#08a86b" : "var(--border)";
+  const bgColor = dragging ? "color-mix(in oklab, #6366f1 5%, var(--bg))" : hasFiles ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)";
+  const textColor = hasFiles ? "#08a86b" : "var(--ink-4)";
+
+  return (
+    <div>
+      {label && (
+        <div className="text-[11px] font-medium mb-1.5 flex items-center gap-1" style={{ color: "var(--ink-3)" }}>
+          {icon && <span>{icon}</span>} {label}
+        </div>
+      )}
+      <div
+        className="flex flex-col items-center justify-center rounded-[10px] cursor-pointer transition-all"
+        style={{ border: `1.5px dashed ${borderColor}`, background: bgColor, padding: hasFiles ? "10px 16px" : "16px", minHeight: 70 }}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+      >
+        {hasFiles ? (
+          <div className="flex flex-wrap gap-1.5 w-full">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-[6px] text-[10px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+                <span className="truncate" style={{ maxWidth: 120 }}>{f.name}</span>
+                <button onClick={e => { e.stopPropagation(); onFiles(files.filter((_, j) => j !== i)); }}
+                        className="text-[10px] font-bold cursor-pointer" style={{ color: "#e5484d" }}>x</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={dragging ? "#6366f1" : "var(--ink-4)"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-1.5 opacity-60">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span className="text-[11px]" style={{ color: textColor }}>{dragging ? "Drop files here" : "Drag & drop or click to upload"}</span>
+            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, JPEG</span>
+          </>
+        )}
+        <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
+               onChange={e => { if (e.target.files) onFiles(multiple ? [...files, ...Array.from(e.target.files)] : Array.from(e.target.files)); e.target.value = ""; }} />
+      </div>
+    </div>
+  );
+}
+
 function SearchSelect({ value, onChange, options, placeholder }: {
   value: string; onChange: (v: string) => void; options: string[]; placeholder?: string;
 }) {
@@ -372,23 +431,8 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   { label: "Entry Charts (Weekly / Daily)", icon: "📈", files: entryCharts, setFiles: setEntryCharts },
                   { label: "Position Changes (Add-ons / Trims / Exits)", icon: "🔄", files: positionCharts, setFiles: setPositionCharts },
                 ].map(slot => (
-                  <div key={slot.label}>
-                    <div className="text-[11px] font-medium mb-1.5 flex items-center gap-1" style={{ color: "var(--ink-3)" }}>
-                      <span>{slot.icon}</span> {slot.label}
-                    </div>
-                    <label className="flex items-center gap-2.5 h-[48px] px-4 rounded-[10px] cursor-pointer transition-colors hover:brightness-95"
-                           style={{ border: `1.5px dashed ${slot.files.length > 0 ? "#08a86b" : "var(--border)"}`, background: slot.files.length > 0 ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)" }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={slot.files.length > 0 ? "#08a86b" : "var(--ink-4)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                      </svg>
-                      <span className="text-[12px]" style={{ color: slot.files.length > 0 ? "#08a86b" : "var(--ink-4)" }}>
-                        {slot.files.length > 0 ? `${slot.files.length} file${slot.files.length > 1 ? "s" : ""} selected` : "Upload"}
-                      </span>
-                      <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.6 }}>PNG, JPG, JPEG</span>
-                      <input type="file" accept="image/png,image/jpeg" multiple className="hidden"
-                             onChange={e => { if (e.target.files) slot.setFiles(Array.from(e.target.files)); }} />
-                    </label>
-                  </div>
+                  <DropZone key={slot.label} label={slot.label} icon={slot.icon} files={slot.files}
+                            onFiles={slot.setFiles} multiple accept="image/png,image/jpeg" />
                 ))}
               </div>
             </div>
@@ -402,18 +446,8 @@ export function LogBuy({ navColor }: { navColor: string }) {
               <div className="text-[11px] mb-2" style={{ color: "var(--ink-4)" }}>
                 Upload a MarketSurge screenshot to auto-extract ratings and fundamentals via AI.
               </div>
-              <label className="flex items-center gap-2.5 h-[48px] px-4 rounded-[10px] cursor-pointer transition-colors hover:brightness-95 w-fit"
-                     style={{ border: `1.5px dashed ${msScreenshot ? "#08a86b" : "var(--border)"}`, background: msScreenshot ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={msScreenshot ? "#08a86b" : "var(--ink-4)"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <span className="text-[12px]" style={{ color: msScreenshot ? "#08a86b" : "var(--ink-4)" }}>
-                  {msScreenshot ? msScreenshot.name : "Upload"}
-                </span>
-                <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.6 }}>PNG, JPG, JPEG</span>
-                <input type="file" accept="image/png,image/jpeg" className="hidden"
-                       onChange={e => { if (e.target.files?.[0]) setMsScreenshot(e.target.files[0]); }} />
-              </label>
+              <DropZone label="" icon="" files={msScreenshot ? [msScreenshot] : []}
+                        onFiles={fs => setMsScreenshot(fs[0] || null)} accept="image/png,image/jpeg" />
             </div>
 
             {/* Errors + Warnings */}
