@@ -9,10 +9,10 @@ type Interval = "1d" | "1wk" | "1mo";
 type VisibleRange = "5d" | "1m" | "3m" | "1y" | "5y" | "all";
 
 const MA_COLORS = {
-  ema8: "#22c55e",   // green
-  ema21: "#f59e0b",  // orange
+  ema8: "#f59e0b",   // orange
+  ema21: "#22c55e",  // green
   sma50: "#ef4444",  // red
-  sma200: "#a855f7", // purple/magenta
+  sma200: "#6b7280", // dark grey
 };
 
 function calcEMA(closes: number[], period: number): (number | null)[] {
@@ -58,7 +58,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
   const [chartType, setChartType] = useState<ChartType>("bar");
   const [interval, setInterval] = useState<Interval>("1d");
   const [maVisible, setMaVisible] = useState({ ema8: true, ema21: true, sma50: true, sma200: true });
-  const [visibleRange, setVisibleRange] = useState<VisibleRange>("3m");
+  const [visibleRange, setVisibleRange] = useState<VisibleRange>("1y");
   const candlesRef = useRef<{ time: number }[]>([]);
 
   const applyVisibleRange = useCallback((chart: IChartApi, candles: { time: number }[], range: VisibleRange) => {
@@ -145,7 +145,8 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         timeScale: {
           borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
           timeVisible: false,
-          rightOffset: 12,
+          rightOffset: 20,
+          rightBarStaysOnScroll: true,
         },
       });
       chartRef.current = chart;
