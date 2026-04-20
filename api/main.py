@@ -1323,16 +1323,7 @@ def log_buy(body: dict):
             else:
                 trx_id = "B1"
 
-        # Save detail row
-        detail_row = {
-            "Trade_ID": trade_id, "Ticker": ticker, "Action": "BUY",
-            "Date": date_time, "Shares": shares, "Amount": price,
-            "Value": value, "Rule": rule, "Notes": notes,
-            "Stop_Loss": stop_loss, "Trx_ID": trx_id,
-        }
-        detail_id = db.save_detail_row(portfolio, detail_row)
-
-        # Update or create summary row
+        # Build summary row first (FK requires summary before detail)
         if action_type == "new":
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
@@ -1372,6 +1363,15 @@ def log_buy(body: dict):
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)
+
+        # Save detail row (after summary so FK constraint is satisfied)
+        detail_row = {
+            "Trade_ID": trade_id, "Ticker": ticker, "Action": "BUY",
+            "Date": date_time, "Shares": shares, "Amount": price,
+            "Value": value, "Rule": rule, "Notes": notes,
+            "Stop_Loss": stop_loss, "Trx_ID": trx_id,
+        }
+        detail_id = db.save_detail_row(portfolio, detail_row)
 
         # Audit trail
         try:
