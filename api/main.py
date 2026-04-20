@@ -33,13 +33,20 @@ import db_layer as db
 # R2 storage (optional — gracefully degrade if not configured)
 try:
     import r2_storage as r2
-    _r2_cfg = r2._get_r2_config()
-    _R2_AVAILABLE = bool(_r2_cfg.get("endpoint_url"))
-    print(f"[R2] Available: {_R2_AVAILABLE}, endpoint: {_r2_cfg.get('endpoint_url', 'NONE')[:40]}")
+    print("[R2] Module imported successfully")
 except Exception as _r2_err:
     print(f"[R2] Import failed: {_r2_err}")
     r2 = None
-    _R2_AVAILABLE = False
+
+def _is_r2_available():
+    """Check R2 availability at request time (not startup)."""
+    if r2 is None:
+        return False
+    try:
+        cfg = r2._get_r2_config()
+        return bool(cfg.get("endpoint_url"))
+    except Exception:
+        return False
 
 
 def _df_to_records(df: pd.DataFrame) -> list:
@@ -1299,7 +1306,7 @@ async def upload_image(
     image_type: str = Form(...),
 ):
     """Upload a trade image to R2 and save metadata to DB."""
-    if not _R2_AVAILABLE:
+    if not _is_r2_available():
         return {"error": "R2 storage not configured"}
     try:
         # Read file content
@@ -1325,7 +1332,7 @@ def delete_image(image_id: int):
     """Delete a trade image from R2 and DB."""
     try:
         # Get the image URL from DB before deleting
-        if _R2_AVAILABLE:
+        if _is_r2_available():
             url = db.delete_trade_image_by_id(image_id)
             if url and not url.startswith("http"):
                 r2.delete_image(url)
@@ -1339,7 +1346,7 @@ def delete_image(image_id: int):
 @app.get("/api/r2/status")
 def r2_status():
     """Check R2 availability."""
-    return {"available": _R2_AVAILABLE}
+    return {"available": _is_r2_available()}
 
 
 if __name__ == "__main__":
