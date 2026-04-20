@@ -1300,6 +1300,30 @@ def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
         return {"error": str(e)}
 
 
+@app.post("/api/trades/import")
+def import_ibkr_trades():
+    """Pull today's trade confirmations from IBKR Flex Query."""
+    try:
+        import ibkr_flex
+        df, debug, err = ibkr_flex.pull_ibkr_trades(consolidate=True)
+        if err:
+            return {"error": err}
+        if df.empty:
+            return {"status": "ok", "trades": [], "count": 0, "message": "No trades found in IBKR report"}
+        # Convert to list of dicts for JSON response
+        records = df.to_dict(orient="records")
+        # Clean numpy types
+        for r in records:
+            for k, v in r.items():
+                if hasattr(v, 'item'):
+                    r[k] = v.item()
+                elif pd.isna(v) if not isinstance(v, str) else False:
+                    r[k] = None
+        return {"status": "ok", "trades": records, "count": len(records)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/trades/buy")
 def log_buy(body: dict):
     """Log a buy transaction. Creates/updates summary + inserts detail row."""

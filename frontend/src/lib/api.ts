@@ -159,6 +159,9 @@ export const api = {
   nextTradeId: (portfolio = "CanSlim", date = "") =>
     fetchJSON<{ trade_id: string }>(`/api/trades/next-id?portfolio=${portfolio}&date=${date}`),
 
+  importTrades: () =>
+    fetch(`${API_BASE}/api/trades/import`, { method: "POST" }).then(r => r.json()) as Promise<{ status?: string; error?: string; trades?: any[]; count?: number; message?: string }>,
+
   logBuy: (body: Record<string, any>) =>
     fetch(`${API_BASE}/api/trades/buy`, {
       method: "POST", headers: { "Content-Type": "application/json" },

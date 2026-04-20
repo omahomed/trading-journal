@@ -11,7 +11,11 @@ import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
 import time
-import streamlit as st
+import os
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 
 
 # IBKR Flex Web Service endpoints
@@ -21,16 +25,25 @@ _GET_URL = f"{_BASE}.GetStatement"
 
 
 def _get_credentials():
-    """Read IBKR Flex credentials from Streamlit secrets."""
+    """Read IBKR Flex credentials from env vars or Streamlit secrets."""
+    # 1. Check environment variables (FastAPI / Railway)
+    token = os.environ.get("IBKR_FLEX_TOKEN", "")
+    query_id = os.environ.get("IBKR_FLEX_QUERY_ID", "")
+    if token and query_id:
+        return token.strip(), query_id.strip(), None
+
+    # 2. Fallback to Streamlit secrets
     try:
-        ibkr = st.secrets.get("ibkr", {})
-        token = ibkr.get("flex_token", "")
-        query_id = ibkr.get("flex_query_id", "")
-        if not token or not query_id:
-            return None, None, "IBKR credentials not configured. Add [ibkr] flex_token and flex_query_id to secrets."
-        return str(token).strip(), str(query_id).strip(), None
-    except Exception as e:
-        return None, None, f"Could not read IBKR secrets: {e}"
+        if st and hasattr(st, 'secrets'):
+            ibkr = st.secrets.get("ibkr", {})
+            token = ibkr.get("flex_token", "")
+            query_id = ibkr.get("flex_query_id", "")
+            if token and query_id:
+                return str(token).strip(), str(query_id).strip(), None
+    except Exception:
+        pass
+
+    return None, None, "IBKR credentials not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID env vars."
 
 
 def fetch_flex_report(token=None, query_id=None, max_retries=5, retry_delay=3):

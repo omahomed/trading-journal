@@ -1,22 +1,32 @@
 "use client";
 
 import { useState } from "react";
+import { api } from "@/lib/api";
 
 export function ImportTrades({ navColor }: { navColor: string }) {
   const [pulling, setPulling] = useState(false);
   const [executions, setExecutions] = useState<any[]>([]);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   const handlePull = async () => {
     setPulling(true);
     setError("");
+    setMessage("");
     try {
-      // TODO: POST /api/trades/import endpoint needed
-      // Will call ibkr_flex.pull_ibkr_trades() on the backend
-      await new Promise(r => setTimeout(r, 1000));
-      setError("Backend endpoint not yet available. Connect POST /api/trades/import to ibkr_flex.pull_ibkr_trades()");
-    } catch {
-      setError("Failed to connect to IBKR");
+      const result = await api.importTrades();
+      if (result.error) {
+        setError(result.error);
+      } else {
+        setExecutions(result.trades || []);
+        if (result.count === 0) {
+          setMessage(result.message || "No trades found");
+        } else {
+          setMessage(`Pulled ${result.count} execution(s) from IBKR`);
+        }
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to connect to IBKR");
     } finally {
       setPulling(false);
     }
@@ -64,8 +74,15 @@ export function ImportTrades({ navColor }: { navColor: string }) {
 
       {error && (
         <div className="mb-5 flex items-center gap-2 px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
-             style={{ background: "color-mix(in oklab, #f59f00 10%, var(--surface))", color: "#d97706", border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))" }}>
+             style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))", color: "#e5484d", border: "1px solid #e5484d30" }}>
           {error}
+        </div>
+      )}
+
+      {message && !error && (
+        <div className="mb-5 flex items-center gap-2 px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
+             style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#08a86b", border: "1px solid #08a86b30" }}>
+          {message}
         </div>
       )}
 
