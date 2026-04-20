@@ -222,14 +222,16 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
         return 0.0
 
 
-def _compute_market_window() -> str:
+def _compute_market_window(as_of_date: str = "") -> str:
     """Compute market window using rally-prefix state logic.
-    Returns 'Powertrend' / 'Open' / 'Closed' based on IBD market state."""
+    Returns 'Powertrend' / 'Open' / 'Closed' based on IBD market state.
+    If as_of_date is provided, computes historical state for that date."""
     try:
         from market_school_rules import MarketSchoolRules
         from datetime import date as _date
+        end_date = as_of_date if as_of_date else _date.today().strftime('%Y-%m-%d')
         analyzer = MarketSchoolRules("^IXIC")
-        analyzer.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
+        analyzer.fetch_data(start_date="2024-02-24", end_date=end_date)
         if analyzer.data is None or analyzer.data.empty:
             return ""
         analyzer.analyze_market()
@@ -344,7 +346,7 @@ def journal_edit(entry: dict):
         # Auto-compute missing market/risk metrics
         day_str = str(day).strip()[:10]
         if not journal_entry["market_window"]:
-            journal_entry["market_window"] = _compute_market_window()
+            journal_entry["market_window"] = _compute_market_window(day_str)
         if not journal_entry["spy_atr"]:
             journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
         if not journal_entry["nasdaq_atr"]:
@@ -355,6 +357,91 @@ def journal_edit(entry: dict):
 
         row_id = db.save_journal_entry(journal_entry)
         return {"status": "ok", "id": row_id}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.post("/api/journal/backfill-metrics")
+def journal_backfill_metrics(body: dict = Body(...)):
+    """Backfill missing market_window, portfolio_heat, spy_atr, nasdaq_atr
+    for existing journal entries. Only updates rows where these fields are
+    empty/zero; preserves any existing non-zero values."""
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        start_date = body.get("start_date", "")
+        end_date = body.get("end_date", "")
+        force = bool(body.get("force", False))
+
+        df = db.load_journal(portfolio)
+        if df.empty:
+            return {"status": "ok", "updated": 0, "checked": 0, "message": "No entries"}
+
+        df = _normalize_journal(df)
+        df["day"] = pd.to_datetime(df["day"], errors="coerce")
+        df = df.sort_values("day")
+
+        if start_date:
+            df = df[df["day"] >= pd.Timestamp(start_date)]
+        if end_date:
+            df = df[df["day"] <= pd.Timestamp(end_date)]
+
+        updated = 0
+        checked = 0
+        errors = []
+
+        for _, row in df.iterrows():
+            checked += 1
+            day_str = row["day"].strftime("%Y-%m-%d")
+
+            existing_mw = str(row.get("market_window", "") or "")
+            existing_heat = float(row.get("portfolio_heat", 0) or 0)
+            existing_spy_atr = float(row.get("spy_atr", 0) or 0)
+            existing_ndx_atr = float(row.get("nasdaq_atr", 0) or 0)
+
+            need_mw = force or not existing_mw
+            need_heat = force or existing_heat == 0
+            need_spy_atr = force or existing_spy_atr == 0
+            need_ndx_atr = force or existing_ndx_atr == 0
+
+            if not any([need_mw, need_heat, need_spy_atr, need_ndx_atr]):
+                continue
+
+            try:
+                journal_entry = {
+                    "portfolio_id": portfolio,
+                    "day": day_str,
+                    "ending_nlv": float(row.get("end_nlv", 0) or 0),
+                    "beginning_nlv": float(row.get("beg_nlv", 0) or 0),
+                    "cash_flow": float(row.get("cash_change", 0) or 0),
+                    "daily_dollar_change": float(row.get("daily_dollar_change", 0) or 0),
+                    "daily_percent_change": float(row.get("daily_pct_change", 0) or 0),
+                    "percent_invested": float(row.get("pct_invested", 0) or 0),
+                    "spy_close": float(row.get("spy", 0) or 0),
+                    "nasdaq_close": float(row.get("nasdaq", 0) or 0),
+                    "market_window": _compute_market_window(day_str) if need_mw else existing_mw,
+                    "market_notes": str(row.get("market_notes", "") or ""),
+                    "market_action": str(row.get("market_action", "") or ""),
+                    "portfolio_heat": _compute_portfolio_heat(portfolio, day_str, float(row.get("end_nlv", 0) or 0)) if need_heat else existing_heat,
+                    "spy_atr": _compute_ticker_atr_pct("SPY", day_str) if need_spy_atr else existing_spy_atr,
+                    "nasdaq_atr": _compute_ticker_atr_pct("^IXIC", day_str) if need_ndx_atr else existing_ndx_atr,
+                    "score": int(row.get("score", 0) or 0),
+                    "highlights": str(row.get("highlights", "") or ""),
+                    "lowlights": str(row.get("lowlights", "") or ""),
+                    "mistakes": str(row.get("mistakes", "") or ""),
+                    "top_lesson": str(row.get("top_lesson", "") or ""),
+                }
+                db.save_journal_entry(journal_entry)
+                updated += 1
+            except Exception as row_err:
+                errors.append(f"{day_str}: {str(row_err)}")
+
+        return {
+            "status": "ok",
+            "portfolio": portfolio,
+            "checked": checked,
+            "updated": updated,
+            "errors": errors[:5] if errors else [],
+        }
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 

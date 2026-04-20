@@ -106,6 +106,13 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
+  journalBackfillMetrics: (body: { portfolio?: string; start_date?: string; end_date?: string; force?: boolean }) =>
+    fetch(`${API_BASE}/api/journal/backfill-metrics`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ status: string; checked?: number; updated?: number; errors?: string[]; detail?: string }>,
+
   // Prices
   priceLookup: (ticker: string) =>
     fetchJSON<{ ticker: string; price: number; atr: number; atr_pct: number }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),

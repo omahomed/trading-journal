@@ -88,6 +88,36 @@ export function Admin({ navColor }: { navColor: string }) {
   const [auditFilter, setAuditFilter] = useState("All");
   const [auditLimit, setAuditLimit] = useState(100);
 
+  // Backfill state
+  const [backfillPortfolio, setBackfillPortfolio] = useState("CanSlim");
+  const [backfillStart, setBackfillStart] = useState("");
+  const [backfillEnd, setBackfillEnd] = useState("");
+  const [backfillForce, setBackfillForce] = useState(false);
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<{ checked: number; updated: number; errors: string[] } | null>(null);
+
+  const runBackfill = async () => {
+    setBackfillRunning(true);
+    setBackfillResult(null);
+    try {
+      const res = await api.journalBackfillMetrics({
+        portfolio: backfillPortfolio,
+        start_date: backfillStart || undefined,
+        end_date: backfillEnd || undefined,
+        force: backfillForce,
+      });
+      if (res.status === "ok") {
+        setBackfillResult({ checked: res.checked || 0, updated: res.updated || 0, errors: res.errors || [] });
+        flash(`Backfilled ${res.updated}/${res.checked} entries`, "ok");
+      } else {
+        flash(res.detail || "Backfill failed", "err");
+      }
+    } catch (err: any) {
+      flash(err.message || "Backfill failed", "err");
+    }
+    setBackfillRunning(false);
+  };
+
   const flash = (msg: string, type: "ok" | "err") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
@@ -415,6 +445,44 @@ export function Admin({ navColor }: { navColor: string }) {
           </div>
         ) : (
           <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>Click Load to fetch audit entries.</div>
+        )}
+      </Section>
+
+      {/* ── 7. Journal Metrics Backfill ── */}
+      <Section title="Journal Metrics Backfill" icon="B">
+        <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Compute <strong>market_window</strong>, <strong>portfolio_heat</strong>, <strong>spy_atr</strong>, and <strong>nasdaq_atr</strong> for existing journal entries that are missing these values. Re-runs yfinance lookups, so may take time.
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          <InputRow label="Portfolio">
+            <select value={backfillPortfolio} onChange={e => setBackfillPortfolio(e.target.value)}
+              className="h-[34px] px-2.5 rounded-[8px] text-[12px] w-full"
+              style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+              {["CanSlim", "457B Plan", "TQQQ Strategy"].map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </InputRow>
+          <InputRow label="Start Date (optional)">
+            <TextInput type="date" value={backfillStart} onChange={setBackfillStart} mono />
+          </InputRow>
+          <InputRow label="End Date (optional)">
+            <TextInput type="date" value={backfillEnd} onChange={setBackfillEnd} mono />
+          </InputRow>
+        </div>
+        <label className="flex items-center gap-2 text-[12px] mb-3 cursor-pointer" style={{ color: "var(--ink-3)" }}>
+          <input type="checkbox" checked={backfillForce} onChange={e => setBackfillForce(e.target.checked)} />
+          <span>Force recompute (overwrite existing non-zero values)</span>
+        </label>
+        <SaveBtn label={backfillRunning ? "Running..." : "Run Backfill"} loading={backfillRunning} onClick={runBackfill} />
+        {backfillResult && (
+          <div className="mt-3 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+            Checked <strong style={{ color: "var(--ink)" }}>{backfillResult.checked}</strong> entries, updated <strong style={{ color: "#08a86b" }}>{backfillResult.updated}</strong>.
+            {backfillResult.errors.length > 0 && (
+              <div className="mt-2 text-[11px]" style={{ color: "#e5484d" }}>
+                First errors:<br />
+                {backfillResult.errors.map((e, i) => <div key={i} style={{ fontFamily: mono }}>{e}</div>)}
+              </div>
+            )}
+          </div>
         )}
       </Section>
     </div>
