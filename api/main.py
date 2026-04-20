@@ -946,9 +946,6 @@ def set_config(key: str, body: dict):
         ok = db.set_config(key, value, value_type=value_type, category=category,
                            description=description, user=user)
         if ok:
-            # Sync auto-events when reset_date changes
-            if key == "reset_date" and hasattr(db, "sync_auto_events_from_config"):
-                db.sync_auto_events_from_config()
             return {"status": "ok"}
         return {"status": "error", "detail": "set_config returned False"}
     except Exception as e:
@@ -958,6 +955,20 @@ def set_config(key: str, body: dict):
 # ============================================================
 # ADMIN — DASHBOARD EVENTS
 # ============================================================
+@app.delete("/api/events/auto-cleanup")
+def cleanup_auto_events():
+    """Remove all auto-generated events (e.g. RESET_DATE) from dashboard_events."""
+    try:
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM dashboard_events WHERE auto_generated = TRUE")
+                deleted = cur.rowcount
+                conn.commit()
+        return {"status": "ok", "deleted": deleted}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/events")
 def list_events(scope: str = "CanSlim"):
     """List dashboard events."""
