@@ -85,6 +85,7 @@ export function TradeManager({ navColor }: { navColor: string }) {
   // Delete tab
   const [deleteTradeId, setDeleteTradeId] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleteResult, setDeleteResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Export tab
   const [exportType, setExportType] = useState<"summary" | "details">("summary");
@@ -331,6 +332,15 @@ export function TradeManager({ navColor }: { navColor: string }) {
             Permanently delete an entire campaign and all its transactions.
           </div>
 
+          {deleteResult && (
+            <div className="px-4 py-3 rounded-[10px] text-[13px]"
+                 style={{ background: deleteResult.ok ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                          border: `1px solid ${deleteResult.ok ? "#08a86b30" : "#e5484d30"}`,
+                          color: deleteResult.ok ? "#08a86b" : "#e5484d" }}>
+              {deleteResult.msg}
+            </div>
+          )}
+
           <Field label="Select Trade to Delete">
             <select value={deleteTradeId} onChange={e => { setDeleteTradeId(e.target.value); setDeleteConfirm(""); }}
                     className={inputCls} style={{ ...inputStyle, appearance: "none" as any }}>
@@ -359,15 +369,16 @@ export function TradeManager({ navColor }: { navColor: string }) {
                          style={{ ...inputStyle, borderColor: "color-mix(in oklab, #e5484d 30%, var(--border))" }} />
                 </div>
                 <button onClick={async () => {
-                          if (deleteConfirm !== "DELETE") return alert("Type DELETE to confirm");
+                          if (deleteConfirm !== "DELETE") return;
                           try {
-                            const res = await api.deleteTrade(deleteTradeId);
-                            if (res.error) { alert(res.error); return; }
-                            setAllTrades(prev => prev.filter(t => t.trade_id !== deleteTradeId));
-                            setDetails(prev => prev.filter(d => d.trade_id !== deleteTradeId));
+                            const tid = deleteTradeId;
+                            const res = await api.deleteTrade(tid);
+                            if (res.error) { setDeleteResult({ ok: false, msg: res.error }); return; }
+                            setAllTrades(prev => prev.filter(t => t.trade_id !== tid));
+                            setDetails(prev => prev.filter(d => d.trade_id !== tid));
                             setDeleteTradeId(""); setDeleteConfirm("");
-                            alert(`Trade ${deleteTradeId} permanently deleted.`);
-                          } catch (e: any) { alert(e.message || "Delete failed"); }
+                            setDeleteResult({ ok: true, msg: `Trade ${tid} permanently deleted.` });
+                          } catch (e: any) { setDeleteResult({ ok: false, msg: e.message || "Delete failed" }); }
                         }}
                         disabled={deleteConfirm !== "DELETE"}
                         className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all disabled:opacity-40"
