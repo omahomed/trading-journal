@@ -761,9 +761,9 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                               buyRow.remaining = last.qty;
                               buyRow.realizedPl += rpl;
                               buyRow.exitPrice = sellPrice;
-                              // Recompute return % from total realized vs original cost
-                              const origCost = buyRow.displayShares * (parseFloat(String(buyRow.tx.amount || 0)) || enrichedEntry);
-                              buyRow.returnPct = origCost > 0 ? (buyRow.realizedPl / origCost) * 100 : retPct;
+                              // For fully closed rows, return % = exit vs entry price
+                              const buyRowPrice = parseFloat(String(buyRow.tx.amount || 0)) || enrichedEntry;
+                              buyRow.returnPct = buyRowPrice > 0 ? ((sellPrice - buyRowPrice) / buyRowPrice) * 100 : 0;
                               if (last.qty < 0.00001) buyRow.status = "Closed";
                             }
                             if (last.qty < 0.00001) inventory.pop();
@@ -785,10 +785,9 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                           if (!row.isSell && row.remaining > 0) {
                             const buyPrice = parseFloat(String(row.tx.amount || 0)) || enrichedEntry;
                             row.unrealizedPl = (currentPrice - buyPrice) * row.remaining;
-                            // Return % = (realized + unrealized) / original cost
-                            const origCost = row.displayShares * buyPrice;
-                            if (origCost > 0) {
-                              row.returnPct = ((row.realizedPl + row.unrealizedPl) / origCost) * 100;
+                            // Return % = simple price change from entry
+                            if (buyPrice > 0) {
+                              row.returnPct = ((currentPrice - buyPrice) / buyPrice) * 100;
                             }
                           }
                         });
