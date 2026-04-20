@@ -113,11 +113,12 @@ export const api = {
   batchPrices: (tickers: string[]) =>
     fetchJSON<Record<string, number>>(`/api/prices/batch?tickers=${encodeURIComponent(tickers.join(","))}`),
 
-  chartOhlcv: (ticker: string, start?: string, end?: string, period?: string) => {
+  chartOhlcv: (ticker: string, start?: string, end?: string, period?: string, interval?: string) => {
     const params = new URLSearchParams();
     if (start) params.set("start", start);
     if (end) params.set("end", end);
     if (period) params.set("period", period);
+    if (interval) params.set("interval", interval);
     return fetchJSON<{ ticker: string; candles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] }>(
       `/api/charts/ohlcv/${encodeURIComponent(ticker)}?${params.toString()}`
     );

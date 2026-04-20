@@ -1,8 +1,44 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createChart, type IChartApi, CandlestickSeries, HistogramSeries, ColorType, type Time, createSeriesMarkers, type SeriesMarker } from "lightweight-charts";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { createChart, type IChartApi, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType, type Time, createSeriesMarkers, type SeriesMarker } from "lightweight-charts";
 import { api, type TradeDetail } from "@/lib/api";
+
+type ChartType = "candlestick" | "line" | "area";
+type Interval = "1d" | "1wk" | "1mo";
+
+const MA_COLORS = {
+  ema8: "#f59e0b",   // amber
+  ema21: "#3b82f6",  // blue
+  sma50: "#ef4444",  // red
+  sma200: "#8b5cf6", // purple
+};
+
+function calcEMA(closes: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = [];
+  const k = 2 / (period + 1);
+  let ema: number | null = null;
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    if (ema === null) {
+      ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    } else {
+      ema = closes[i] * k + ema * (1 - k);
+    }
+    result.push(ema);
+  }
+  return result;
+}
+
+function calcSMA(closes: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) { result.push(null); continue; }
+    const sum = closes.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+    result.push(sum / period);
+  }
+  return result;
+}
 
 interface Props {
   ticker: string;
@@ -16,77 +52,85 @@ interface Props {
 export function InteractiveChart({ ticker, tradeId, openDate, closedDate, details, navColor }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [chartType, setChartType] = useState<ChartType>("candlestick");
+  const [interval, setInterval] = useState<Interval>("1d");
+  const [maVisible, setMaVisible] = useState({ ema8: true, ema21: true, sma50: true, sma200: true });
 
-  useEffect(() => {
+  const buildChart = useCallback(async () => {
     if (!containerRef.current) return;
+    setLoading(true);
+    setError("");
 
-    let cancelled = false;
+    try {
+      // Calculate date range
+      const openD = new Date(openDate);
+      const startD = new Date(openD);
+      // More history for weekly/monthly, and for MA calculation
+      const lookback = interval === "1mo" ? 365 : interval === "1wk" ? 300 : 200;
+      startD.setDate(startD.getDate() - lookback);
+      const start = startD.toISOString().slice(0, 10);
 
-    const build = async () => {
-      try {
-        // Calculate date range: 20 days before open, 20 days after close (or today)
-        const openD = new Date(openDate);
-        const startD = new Date(openD);
-        startD.setDate(startD.getDate() - 20);
-        const start = startD.toISOString().slice(0, 10);
+      let end: string | undefined;
+      if (closedDate) {
+        const closeD = new Date(closedDate);
+        closeD.setDate(closeD.getDate() + 20);
+        end = closeD.toISOString().slice(0, 10);
+      }
 
-        let end: string | undefined;
-        if (closedDate) {
-          const closeD = new Date(closedDate);
-          closeD.setDate(closeD.getDate() + 20);
-          end = closeD.toISOString().slice(0, 10);
-        }
+      const result = await api.chartOhlcv(ticker, start, end, closedDate ? undefined : "2y", interval);
 
-        const result = await api.chartOhlcv(ticker, start, end, closedDate ? undefined : "6mo");
-        if (cancelled) return;
+      if ("error" in result || !result.candles?.length) {
+        setError("No chart data available");
+        setLoading(false);
+        return;
+      }
 
-        if ("error" in result || !result.candles?.length) {
-          setError("No chart data available");
-          setLoading(false);
-          return;
-        }
+      // Clean up previous chart
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
 
-        // Clean up previous chart
-        if (chartRef.current) {
-          chartRef.current.remove();
-          chartRef.current = null;
-        }
+      // Detect theme
+      const isDark = document.documentElement.classList.contains("dark") ||
+        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim().startsWith("#1");
 
-        // Detect theme
-        const isDark = document.documentElement.classList.contains("dark") ||
-          getComputedStyle(document.documentElement).getPropertyValue("--bg").trim().startsWith("#1");
+      const chart = createChart(containerRef.current!, {
+        width: containerRef.current!.clientWidth,
+        height: 420,
+        layout: {
+          background: { type: ColorType.Solid, color: "transparent" },
+          textColor: isDark ? "#9ca3af" : "#6b7280",
+          fontFamily: "var(--font-jetbrains), monospace",
+          fontSize: 11,
+        },
+        grid: {
+          vertLines: { color: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
+          horzLines: { color: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
+        },
+        crosshair: {
+          vertLine: { labelBackgroundColor: navColor },
+          horzLine: { labelBackgroundColor: navColor },
+        },
+        rightPriceScale: {
+          borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+        },
+        timeScale: {
+          borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
+          timeVisible: false,
+        },
+      });
+      chartRef.current = chart;
 
-        const chart = createChart(containerRef.current!, {
-          width: containerRef.current!.clientWidth,
-          height: 400,
-          layout: {
-            background: { type: ColorType.Solid, color: "transparent" },
-            textColor: isDark ? "#9ca3af" : "#6b7280",
-            fontFamily: "var(--font-jetbrains), monospace",
-            fontSize: 11,
-          },
-          grid: {
-            vertLines: { color: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
-            horzLines: { color: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
-          },
-          crosshair: {
-            vertLine: { labelBackgroundColor: navColor },
-            horzLine: { labelBackgroundColor: navColor },
-          },
-          rightPriceScale: {
-            borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-          },
-          timeScale: {
-            borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-            timeVisible: false,
-          },
-        });
-        chartRef.current = chart;
+      const candles = result.candles;
+      const closes = candles.map(c => c.close);
 
-        // Candlestick series (v5 API)
-        const candleSeries = chart.addSeries(CandlestickSeries, {
+      // Main price series based on chart type
+      let priceSeries: any;
+      if (chartType === "candlestick") {
+        priceSeries = chart.addSeries(CandlestickSeries, {
           upColor: "#22c55e",
           downColor: "#ef4444",
           borderDownColor: "#ef4444",
@@ -94,118 +138,139 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
           wickDownColor: "#ef4444",
           wickUpColor: "#22c55e",
         });
-
-        candleSeries.setData(result.candles.map(c => ({
-          time: c.time as Time,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
+        priceSeries.setData(candles.map(c => ({
+          time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
         })));
-
-        // Volume series (v5 API)
-        const volumeSeries = chart.addSeries(HistogramSeries, {
-          priceFormat: { type: "volume" },
-          priceScaleId: "volume",
+      } else if (chartType === "line") {
+        priceSeries = chart.addSeries(LineSeries, {
+          color: navColor,
+          lineWidth: 2,
         });
-        chart.priceScale("volume").applyOptions({
-          scaleMargins: { top: 0.85, bottom: 0 },
+        priceSeries.setData(candles.map(c => ({ time: c.time as Time, value: c.close })));
+      } else {
+        priceSeries = chart.addSeries(AreaSeries, {
+          topColor: navColor + "40",
+          bottomColor: navColor + "05",
+          lineColor: navColor,
+          lineWidth: 2,
         });
-        volumeSeries.setData(result.candles.map(c => ({
-          time: c.time as Time,
-          value: c.volume,
-          color: c.close >= c.open
-            ? (isDark ? "rgba(34,197,94,0.15)" : "rgba(34,197,94,0.2)")
-            : (isDark ? "rgba(239,68,68,0.15)" : "rgba(239,68,68,0.2)"),
-        })));
+        priceSeries.setData(candles.map(c => ({ time: c.time as Time, value: c.close })));
+      }
 
-        // Build a time lookup map for matching trade dates to candle times
-        const dateToTime = new Map<string, number>();
-        for (const c of result.candles) {
-          const d = new Date(c.time * 1000);
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          dateToTime.set(key, c.time);
-        }
+      // Volume
+      const volumeSeries = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+      });
+      chart.priceScale("volume").applyOptions({
+        scaleMargins: { top: 0.85, bottom: 0 },
+      });
+      volumeSeries.setData(candles.map(c => ({
+        time: c.time as Time,
+        value: c.volume,
+        color: c.close >= c.open
+          ? (isDark ? "rgba(34,197,94,0.12)" : "rgba(34,197,94,0.18)")
+          : (isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.18)"),
+      })));
 
-        // Add buy/sell markers from trade details (v5 API)
-        const tradeDetails = details.filter(d => d.trade_id === tradeId);
-        const markers: SeriesMarker<Time>[] = [];
+      // Moving averages
+      const addMA = (values: (number | null)[], color: string, title: string) => {
+        const s = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 1,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title,
+        });
+        const data = candles
+          .map((c, i) => values[i] !== null ? { time: c.time as Time, value: values[i]! } : null)
+          .filter(Boolean) as { time: Time; value: number }[];
+        s.setData(data);
+      };
 
-        for (const tx of tradeDetails) {
-          const txDate = String(tx.date || "").slice(0, 10);
-          const candleTime = dateToTime.get(txDate);
-          if (!candleTime) continue;
+      if (maVisible.ema8) addMA(calcEMA(closes, 8), MA_COLORS.ema8, "8E");
+      if (maVisible.ema21) addMA(calcEMA(closes, 21), MA_COLORS.ema21, "21E");
+      if (maVisible.sma50) addMA(calcSMA(closes, 50), MA_COLORS.sma50, "50S");
+      if (maVisible.sma200) addMA(calcSMA(closes, 200), MA_COLORS.sma200, "200S");
 
-          const isBuy = String(tx.action).toUpperCase() === "BUY";
-          const price = parseFloat(String(tx.amount || 0));
-          const shares = Math.abs(parseFloat(String(tx.shares || 0)));
-          const label = tx.trx_id || (isBuy ? "B" : "S");
+      // Build time lookup for markers
+      const dateToTime = new Map<string, number>();
+      for (const c of candles) {
+        const d = new Date(c.time * 1000);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        dateToTime.set(key, c.time);
+      }
 
-          markers.push({
-            time: candleTime as Time,
-            position: isBuy ? "belowBar" : "aboveBar",
-            color: isBuy ? "#22c55e" : "#ef4444",
-            shape: isBuy ? "arrowUp" : "arrowDown",
-            text: `${label} ${shares}@$${price.toFixed(2)}`,
+      // Buy/sell markers
+      const tradeDetails = details.filter(d => d.trade_id === tradeId);
+      const markers: SeriesMarker<Time>[] = [];
+      for (const tx of tradeDetails) {
+        const txDate = String(tx.date || "").slice(0, 10);
+        const candleTime = dateToTime.get(txDate);
+        if (!candleTime) continue;
+        const isBuy = String(tx.action).toUpperCase() === "BUY";
+        const price = parseFloat(String(tx.amount || 0));
+        const shares = Math.abs(parseFloat(String(tx.shares || 0)));
+        const label = tx.trx_id || (isBuy ? "B" : "S");
+        markers.push({
+          time: candleTime as Time,
+          position: isBuy ? "belowBar" : "aboveBar",
+          color: isBuy ? "#22c55e" : "#ef4444",
+          shape: isBuy ? "arrowUp" : "arrowDown",
+          text: `${label} ${shares}@$${price.toFixed(2)}`,
+        });
+      }
+      markers.sort((a, b) => (a.time as number) - (b.time as number));
+      if (markers.length > 0) {
+        createSeriesMarkers(priceSeries, markers);
+      }
+
+      // Stop loss line
+      const buyTxns = tradeDetails.filter(d => String(d.action).toUpperCase() === "BUY" && parseFloat(String(d.stop_loss || 0)) > 0);
+      if (buyTxns.length > 0) {
+        const latestStop = parseFloat(String(buyTxns[buyTxns.length - 1].stop_loss || 0));
+        if (latestStop > 0) {
+          priceSeries.createPriceLine({
+            price: latestStop,
+            color: "#f59e0b",
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: "Stop",
           });
         }
-
-        // Sort markers by time (required by lightweight-charts)
-        markers.sort((a, b) => (a.time as number) - (b.time as number));
-        if (markers.length > 0) {
-          createSeriesMarkers(candleSeries, markers);
-        }
-
-        // Add stop loss line from latest buy transaction
-        const buyTxns = tradeDetails.filter(d => String(d.action).toUpperCase() === "BUY" && parseFloat(String(d.stop_loss || 0)) > 0);
-        if (buyTxns.length > 0) {
-          const latestStop = parseFloat(String(buyTxns[buyTxns.length - 1].stop_loss || 0));
-          if (latestStop > 0) {
-            candleSeries.createPriceLine({
-              price: latestStop,
-              color: "#f59e0b",
-              lineWidth: 1,
-              lineStyle: 2, // dashed
-              axisLabelVisible: true,
-              title: "Stop",
-            });
-          }
-        }
-
-        // Fit content
-        chart.timeScale().fitContent();
-
-        // Resize observer
-        const ro = new ResizeObserver(() => {
-          if (containerRef.current && chartRef.current) {
-            chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
-          }
-        });
-        ro.observe(containerRef.current!);
-
-        setLoading(false);
-
-        return () => {
-          ro.disconnect();
-        };
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err.message || "Failed to load chart");
-          setLoading(false);
-        }
       }
-    };
 
-    build();
+      chart.timeScale().fitContent();
 
+      // Resize observer
+      const ro = new ResizeObserver(() => {
+        if (containerRef.current && chartRef.current) {
+          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+        }
+      });
+      ro.observe(containerRef.current!);
+      setLoading(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to load chart");
+      setLoading(false);
+    }
+  }, [ticker, tradeId, openDate, closedDate, details, navColor, chartType, interval, maVisible]);
+
+  useEffect(() => {
+    buildChart();
     return () => {
-      cancelled = true;
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
       }
     };
-  }, [ticker, tradeId, openDate, closedDate, details, navColor]);
+  }, [buildChart]);
+
+  const toggleMA = (key: keyof typeof maVisible) => {
+    setMaVisible(prev => ({ ...prev, [key]: !prev[key] }));
+  };
 
   if (error) {
     return (
@@ -215,15 +280,72 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
     );
   }
 
+  const btnStyle = (active: boolean): React.CSSProperties => ({
+    background: active ? "var(--surface)" : "transparent",
+    color: active ? "var(--ink)" : "var(--ink-4)",
+    boxShadow: active ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+    border: "none",
+    cursor: "pointer",
+  });
+
+  const maBtn = (key: keyof typeof maVisible, label: string, color: string): React.ReactNode => (
+    <button key={key} onClick={() => toggleMA(key)}
+            className="px-2 py-1 rounded-md text-[10px] font-semibold transition-all flex items-center gap-1"
+            style={{
+              background: maVisible[key] ? `${color}18` : "transparent",
+              color: maVisible[key] ? color : "var(--ink-4)",
+              border: `1px solid ${maVisible[key] ? `${color}40` : "var(--border)"}`,
+              cursor: "pointer",
+              opacity: maVisible[key] ? 1 : 0.5,
+            }}>
+      <span className="w-2.5 h-0.5 rounded-full inline-block" style={{ background: color, opacity: maVisible[key] ? 1 : 0.3 }} />
+      {label}
+    </button>
+  );
+
   return (
     <div className="px-5 py-4">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        {/* Timeframe */}
+        <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {([["1d", "D"], ["1wk", "W"], ["1mo", "M"]] as [Interval, string][]).map(([val, label]) => (
+            <button key={val} onClick={() => setInterval(val)}
+                    className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
+                    style={btnStyle(interval === val)}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Chart type */}
+        <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {([["candlestick", "Candle"], ["line", "Line"], ["area", "Area"]] as [ChartType, string][]).map(([val, label]) => (
+            <button key={val} onClick={() => setChartType(val)}
+                    className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
+                    style={btnStyle(chartType === val)}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* MA toggles */}
+        <div className="flex gap-1.5 ml-auto">
+          {maBtn("ema8", "8 EMA", MA_COLORS.ema8)}
+          {maBtn("ema21", "21 EMA", MA_COLORS.ema21)}
+          {maBtn("sma50", "50 SMA", MA_COLORS.sma50)}
+          {maBtn("sma200", "200 SMA", MA_COLORS.sma200)}
+        </div>
+      </div>
+
+      {/* Chart */}
       {loading && (
         <div className="flex items-center gap-2 text-[12px] mb-2" style={{ color: "var(--ink-4)" }}>
           <div className="w-3 h-3 border-2 rounded-full animate-spin" style={{ borderColor: "var(--border)", borderTopColor: navColor }} />
           Loading chart...
         </div>
       )}
-      <div ref={containerRef} style={{ width: "100%", minHeight: loading ? 0 : 400 }} />
+      <div ref={containerRef} style={{ width: "100%", minHeight: 420 }} />
     </div>
   );
 }

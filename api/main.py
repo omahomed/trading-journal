@@ -404,16 +404,19 @@ def price_lookup(ticker: str = ""):
 
 
 @app.get("/api/charts/ohlcv/{ticker}")
-def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo"):
+def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo", interval: str = "1d"):
     """Get OHLCV candlestick data for lightweight-charts."""
     import yfinance as yf
     try:
         t = ticker.strip().upper()
+        # Map friendly interval names
+        interval_map = {"1d": "1d", "1wk": "1wk", "1mo": "1mo", "daily": "1d", "weekly": "1wk", "monthly": "1mo"}
+        yf_interval = interval_map.get(interval, "1d")
         stock = yf.Ticker(t)
         if start and end:
-            df = stock.history(start=start, end=end)
+            df = stock.history(start=start, end=end, interval=yf_interval)
         else:
-            df = stock.history(period=period)
+            df = stock.history(period=period, interval=yf_interval)
         if df.empty:
             return {"error": f"No data for {t}"}
 

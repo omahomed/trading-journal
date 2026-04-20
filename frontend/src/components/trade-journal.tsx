@@ -310,6 +310,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
   const [analysisOpen, setAnalysisOpen] = useState<string | null>(null);
+  const [liveChartOpen, setLiveChartOpen] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -862,16 +863,27 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     })()}
                   </div>
 
-                  {/* ── Interactive Trade Chart ── */}
+                  {/* ── Interactive Trade Chart (collapsible) ── */}
                   <div style={{ borderTop: "1px solid var(--border)" }}>
-                    <InteractiveChart
-                      ticker={trade.ticker}
-                      tradeId={trade.trade_id}
-                      openDate={trade.open_date}
-                      closedDate={trade.closed_date}
-                      details={allDetails}
-                      navColor={navColor}
-                    />
+                    <button onClick={() => setLiveChartOpen(liveChartOpen === trade.trade_id ? null : trade.trade_id)}
+                            className="w-full flex items-center gap-2 px-5 py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                            style={{ background: "var(--surface-2)" }}>
+                      <span className="text-[10px] transition-transform" style={{ transform: liveChartOpen === trade.trade_id ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                      <span className="text-[12px] font-semibold" style={{ color: "var(--ink-3)" }}>Interactive Chart</span>
+                      <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>(daily · weekly · monthly)</span>
+                    </button>
+                    {liveChartOpen === trade.trade_id && (
+                      <div style={{ animation: "slide-up 0.12s ease-out" }}>
+                        <InteractiveChart
+                          ticker={trade.ticker}
+                          tradeId={trade.trade_id}
+                          openDate={trade.open_date}
+                          closedDate={trade.closed_date}
+                          details={allDetails}
+                          navColor={navColor}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {/* ── Section 2: Charts, Fundamentals, Notes (post-analysis — collapsed by default) ── */}
