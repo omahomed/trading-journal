@@ -169,8 +169,8 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                     const mw = (h as any).market_window || "";
                     const spyAtr = (h as any).spy_atr || 0;
                     const ndxAtr = (h as any).nasdaq_atr || 0;
-                    const spyPct = h.spy_ltd || 0; // daily spy change approx
-                    const ndxPct = h.ndx_ltd || 0;
+                    const spyPct = (h as any).spy_daily_pct || 0;
+                    const ndxPct = (h as any).ndx_daily_pct || 0;
 
                     return (
                       <tr key={i} className="transition-colors"

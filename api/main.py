@@ -150,22 +150,122 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
     df["twr_curve"] = (1 + df["daily_return"]).cumprod()
     df["portfolio_ltd"] = (df["twr_curve"] - 1) * 100
 
-    # SPY/NDX benchmarks
+    # SPY/NDX benchmarks — LTD (cumulative) + daily % change
     if "spy" in df.columns:
         spy_start = df["spy"].iloc[0] if df["spy"].iloc[0] > 0 else 1
         df["spy_ltd"] = (df["spy"] / spy_start - 1) * 100
+        df["spy_daily_pct"] = df["spy"].pct_change().fillna(0) * 100
     if "nasdaq" in df.columns:
         ndx_start = df["nasdaq"].iloc[0] if df["nasdaq"].iloc[0] > 0 else 1
         df["ndx_ltd"] = (df["nasdaq"] / ndx_start - 1) * 100
+        df["ndx_daily_pct"] = df["nasdaq"].pct_change().fillna(0) * 100
 
     cols = ["day", "end_nlv", "beg_nlv", "daily_pct_change", "daily_dollar_change",
-            "daily_return", "pct_invested", "portfolio_ltd", "spy_ltd", "ndx_ltd",
+            "daily_return", "pct_invested", "portfolio_ltd",
+            "spy_ltd", "ndx_ltd", "spy_daily_pct", "ndx_daily_pct",
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
             "market_window", "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
             "highlights", "lowlights", "mistakes", "top_lesson"]
     available_cols = [c for c in cols if c in df.columns]
     return _df_to_records(df[available_cols])
+
+
+def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
+    """Compute 21-period ATR% = SMA(TR, 21) / SMA(Low, 21) * 100."""
+    import yfinance as yf
+    try:
+        if as_of_date:
+            end_dt = pd.Timestamp(as_of_date) + pd.Timedelta(days=1)
+            start_dt = pd.Timestamp(as_of_date) - pd.Timedelta(days=60)
+            df = yf.Ticker(ticker).history(start=start_dt.strftime("%Y-%m-%d"), end=end_dt.strftime("%Y-%m-%d"))
+        else:
+            df = yf.Ticker(ticker).history(period="45d")
+        if df.empty or len(df) < 21:
+            return 0.0
+        tr = pd.concat([
+            df["High"] - df["Low"],
+            (df["High"] - df["Close"].shift(1)).abs(),
+            (df["Low"] - df["Close"].shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        sma_tr = float(tr.tail(21).mean())
+        sma_low = float(df["Low"].tail(21).mean())
+        if sma_low <= 0:
+            return 0.0
+        return round((sma_tr / sma_low) * 100, 4)
+    except Exception:
+        return 0.0
+
+
+def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> float:
+    """Portfolio heat = sum(weight% * atr%/100) for all open positions."""
+    try:
+        summary_df = db.load_summary(portfolio)
+        if summary_df.empty or equity <= 0:
+            return 0.0
+        summary_df = _normalize_trades(summary_df)
+        status_col = "status" if "status" in summary_df.columns else "Status"
+        open_df = summary_df[summary_df[status_col].str.upper() == "OPEN"]
+        if open_df.empty:
+            return 0.0
+        heat = 0.0
+        for _, row in open_df.iterrows():
+            ticker = str(row.get("ticker", "")).strip()
+            total_cost = float(row.get("total_cost", 0) or 0)
+            if not ticker or total_cost <= 0:
+                continue
+            atr_pct = _compute_ticker_atr_pct(ticker, as_of_date)
+            weight_pct = (total_cost / equity) * 100
+            heat += weight_pct * (atr_pct / 100)
+        return round(heat, 4)
+    except Exception:
+        return 0.0
+
+
+def _compute_market_window() -> str:
+    """Compute market window using rally-prefix state logic.
+    Returns 'Powertrend' / 'Open' / 'Closed' based on IBD market state."""
+    try:
+        from market_school_rules import MarketSchoolRules
+        from datetime import date as _date
+        analyzer = MarketSchoolRules("^IXIC")
+        analyzer.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
+        if analyzer.data is None or analyzer.data.empty:
+            return ""
+        analyzer.analyze_market()
+
+        df = analyzer.data
+        market_in_correction = analyzer.market_in_correction
+        ftd_date = analyzer.ftd_date
+        buy_switch = analyzer.buy_switch
+        rally_start_date = analyzer.rally_start_date
+
+        if market_in_correction and not buy_switch and ftd_date is None:
+            return "Closed"
+
+        # Compute MAs
+        df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
+        df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
+        df['50SMA'] = df['Close'].rolling(window=50).mean()
+        df['200SMA'] = df['Close'].rolling(window=200).mean()
+
+        curr = df.iloc[-1]
+        price = float(curr['Close'])
+        ema8 = float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0
+        ema21 = float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0
+        sma50 = float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0
+        sma200 = float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0
+
+        ftd_achieved = ftd_date is not None or (not market_in_correction or buy_switch)
+
+        # Full Powertrend: 8 > 21 > 50 > 200 stack with FTD and price above 21
+        if ftd_achieved and ema8 > ema21 > sma50 > sma200 and price > ema21:
+            return "Powertrend"
+        if rally_start_date is not None or ftd_achieved:
+            return "Open"
+        return "Closed"
+    except Exception:
+        return ""
 
 
 @app.post("/api/journal/edit")
@@ -240,6 +340,19 @@ def journal_edit(entry: dict):
             "mistakes": _s("mistakes", "mistakes"),
             "top_lesson": _s("top_lesson", "top_lesson"),
         }
+
+        # Auto-compute missing market/risk metrics
+        day_str = str(day).strip()[:10]
+        if not journal_entry["market_window"]:
+            journal_entry["market_window"] = _compute_market_window()
+        if not journal_entry["spy_atr"]:
+            journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
+        if not journal_entry["nasdaq_atr"]:
+            journal_entry["nasdaq_atr"] = _compute_ticker_atr_pct("^IXIC", day_str)
+        if not journal_entry["portfolio_heat"]:
+            equity = journal_entry["ending_nlv"]
+            journal_entry["portfolio_heat"] = _compute_portfolio_heat(portfolio, day_str, equity)
+
         row_id = db.save_journal_entry(journal_entry)
         return {"status": "ok", "id": row_id}
     except Exception as e:
