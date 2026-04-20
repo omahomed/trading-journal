@@ -33,8 +33,11 @@ import db_layer as db
 # R2 storage (optional — gracefully degrade if not configured)
 try:
     import r2_storage as r2
-    _R2_AVAILABLE = bool(r2._get_r2_config().get("endpoint_url"))
-except Exception:
+    _r2_cfg = r2._get_r2_config()
+    _R2_AVAILABLE = bool(_r2_cfg.get("endpoint_url"))
+    print(f"[R2] Available: {_R2_AVAILABLE}, endpoint: {_r2_cfg.get('endpoint_url', 'NONE')[:40]}")
+except Exception as _r2_err:
+    print(f"[R2] Import failed: {_r2_err}")
     r2 = None
     _R2_AVAILABLE = False
 
