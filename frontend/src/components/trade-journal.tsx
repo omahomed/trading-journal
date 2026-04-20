@@ -299,8 +299,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sort, setSort] = useState<SortKey>("newest");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [sort, setSort] = useState<SortKey>("oldest");
   const [selectedTickers, setSelectedTickers] = useState<string[]>([]);
   const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
   const [tickerQuery, setTickerQuery] = useState("");
