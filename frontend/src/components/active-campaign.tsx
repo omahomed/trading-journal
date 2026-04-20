@@ -260,6 +260,8 @@ function computeEnrichedPositions(
 }
 
 type RiskFilter = "all" | "at_risk" | "free_roll";
+type SortKey = keyof EnrichedPosition;
+type SortDir = "asc" | "desc";
 
 export function ActiveCampaign({ navColor }: { navColor: string }) {
   const [positions, setPositions] = useState<EnrichedPosition[]>([]);
@@ -267,6 +269,8 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("return_pct");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const loadData = useCallback(async () => {
     try {
@@ -308,12 +312,31 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Filtered positions
+  const handleSort = useCallback((key: string) => {
+    if (key === "idx") return;
+    const k = key as SortKey;
+    setSortDir(prev => (sortKey === k ? (prev === "desc" ? "asc" : "desc") : "desc"));
+    setSortKey(k);
+  }, [sortKey]);
+
+  // Filtered + sorted positions
   const filtered = useMemo(() => {
-    if (riskFilter === "at_risk") return positions.filter(p => p.risk_status === "At Risk");
-    if (riskFilter === "free_roll") return positions.filter(p => p.risk_status === "Free Roll");
-    return positions;
-  }, [positions, riskFilter]);
+    let list = positions;
+    if (riskFilter === "at_risk") list = positions.filter(p => p.risk_status === "At Risk");
+    else if (riskFilter === "free_roll") list = positions.filter(p => p.risk_status === "Free Roll");
+
+    return [...list].sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      let cmp: number;
+      if (typeof av === "string" && typeof bv === "string") {
+        cmp = av.localeCompare(bv);
+      } else {
+        cmp = (av as number) - (bv as number);
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [positions, riskFilter, sortKey, sortDir]);
 
   const atRiskCount = positions.filter(p => p.risk_status === "At Risk").length;
   const freeRollCount = positions.filter(p => p.risk_status === "Free Roll").length;
@@ -476,7 +499,7 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
         <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
           <span className="text-[13px] font-semibold">Active Positions</span>
-          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Sorted by return %</span>
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Click headers to sort</span>
 
           {/* Filter tabs */}
           <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
@@ -502,12 +525,27 @@ export function ActiveCampaign({ navColor }: { navColor: string }) {
           <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
             <thead>
               <tr>
-                {COL_HEADERS.map(h => (
-                  <th key={h.key + h.label} className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
-                      style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
-                    {h.label}
-                  </th>
-                ))}
+                {COL_HEADERS.map(h => {
+                  const sortable = h.key !== "idx";
+                  const active = sortKey === h.key;
+                  return (
+                    <th key={h.key + h.label}
+                        className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
+                        style={{
+                          color: active ? "var(--ink)" : "var(--ink-4)",
+                          background: "var(--surface-2)",
+                          borderBottom: "1px solid var(--border)",
+                          cursor: sortable ? "pointer" : "default",
+                          userSelect: "none",
+                        }}
+                        onClick={() => sortable && handleSort(h.key)}>
+                      {h.label}
+                      {active && (
+                        <span className="ml-1 text-[9px]">{sortDir === "desc" ? "▼" : "▲"}</span>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
