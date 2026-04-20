@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { api, type TradePosition } from "@/lib/api";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { api, type TradePosition, type TradeDetail } from "@/lib/api";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -173,6 +173,8 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [mFactorSuggestion, setMFactorSuggestion] = useState("Unknown");
 
+  const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
+  const [campPrice, setCampPrice] = useState(0);
   const [actionType, setActionType] = useState<"new" | "scalein">("new");
   const [date, setDate] = useState(() => {
     const n = new Date();
@@ -205,9 +207,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
       api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
       api.tradesOpen("CanSlim").catch(() => []),
       api.mfactor().catch(() => ({})),
-    ]).then(([j, open, mf]) => {
+      api.tradesOpenDetails("CanSlim").catch(() => []),
+    ]).then(([j, open, mf, det]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
+      setAllDetails(det as TradeDetail[]);
       const nasdaq = (mf as any)?.nasdaq;
       if (nasdaq) {
         if (nasdaq.above_21ema && nasdaq.above_50sma) {
@@ -292,6 +296,124 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const withinBudget = riskDollars > 0 && riskDollars <= riskBudget;
 
   const selectedCamp = openTrades.find(t => t.trade_id === selectedCampaign);
+
+  // Fetch live price when campaign is selected for scale-in
+  useEffect(() => {
+    if (actionType !== "scalein" || !selectedCamp?.ticker) { setCampPrice(0); return; }
+    api.priceLookup(selectedCamp.ticker).then(data => {
+      if (data && !("error" in data)) setCampPrice(data.price);
+    }).catch(() => {});
+  }, [actionType, selectedCamp?.ticker]);
+
+  // ── Scale-In Cockpit computations ──
+  const scaleIn = useMemo(() => {
+    if (actionType !== "scalein" || !selectedCamp) return null;
+
+    const campDetails = allDetails.filter(d => d.trade_id === selectedCamp.trade_id);
+    const curShares = selectedCamp.shares || 0;
+    const avgEntry = selectedCamp.avg_entry || 0;
+    const livePrice = campPrice || avgEntry;
+    const currentReturn = avgEntry > 0 ? ((livePrice - avgEntry) / avgEntry) * 100 : 0;
+    const currentValue = curShares * livePrice;
+    const currentPosPct = equity > 0 ? (currentValue / equity) * 100 : 0;
+
+    // Rebuild LIFO inventory to get last lot price
+    const sorted = [...campDetails].sort((a, b) => {
+      const da = String(a.date || ""); const db = String(b.date || "");
+      if (da !== db) return da.localeCompare(db);
+      return (String(a.action).toUpperCase() === "BUY" ? 0 : 1) - (String(b.action).toUpperCase() === "BUY" ? 0 : 1);
+    });
+    const inv: { qty: number; price: number; stop: number }[] = [];
+    for (const tx of sorted) {
+      const action = String(tx.action || "").toUpperCase();
+      const txShares = Math.abs(parseFloat(String(tx.shares || 0)));
+      if (action === "BUY") {
+        let p = parseFloat(String(tx.amount || 0)); if (p === 0) p = avgEntry;
+        let s = parseFloat(String(tx.stop_loss || 0)); if (s === 0) s = p;
+        inv.push({ qty: txShares, price: p, stop: s });
+      } else if (action === "SELL") {
+        let toSell = txShares;
+        while (toSell > 0 && inv.length > 0) {
+          const last = inv[inv.length - 1];
+          const take = Math.min(toSell, last.qty);
+          last.qty -= take; toSell -= take;
+          if (last.qty < 0.00001) inv.pop();
+        }
+      }
+    }
+
+    // Last lot return
+    const lastLot = inv.length > 0 ? inv[inv.length - 1] : null;
+    const lastLotPrice = lastLot?.price || avgEntry;
+    const lastLotReturn = lastLotPrice > 0 ? ((livePrice - lastLotPrice) / lastLotPrice) * 100 : 0;
+
+    // Pyramid check: last lot must be up >= 5%, max add = 20% of current shares
+    const pyramidReady = lastLotReturn >= 5;
+    const maxPyramidShares = Math.floor(curShares * 0.20);
+
+    // Post-add projection
+    const addShares = sharesNum || 0;
+    const addPrice = priceNum || livePrice;
+    const newTotalShares = curShares + addShares;
+    const newAvgCost = newTotalShares > 0 ? ((curShares * avgEntry) + (addShares * addPrice)) / newTotalShares : 0;
+    const newValue = newTotalShares * livePrice;
+    const newPosPct = equity > 0 ? (newValue / equity) * 100 : 0;
+
+    // Stop rules based on current return
+    // >= 20% → stop at least entry + 5% (lock gains)
+    // >= 10% → stop at break-even
+    // otherwise → original risk budget stop
+    let stopRule = "";
+    let minStop = 0;
+    let riskFreeAdd = false;
+    if (currentReturn >= 20) {
+      minStop = avgEntry * 1.05;
+      stopRule = "Up 20%+ → stop at +5% gain minimum";
+      riskFreeAdd = true;
+    } else if (currentReturn >= 10) {
+      minStop = avgEntry;
+      stopRule = "Up 10%+ → stop at break-even";
+      riskFreeAdd = true;
+    }
+
+    // Combined stop: weighted stop across all lots that keeps risk within budget
+    const addStop = stopPrice > 0 ? stopPrice : (addPrice > 0 ? addPrice * 0.92 : 0);
+    let combinedStop = 0;
+    if (newTotalShares > 0) {
+      // Weighted stop from existing lots + new add
+      let totalWeightedStop = 0;
+      let totalQty = 0;
+      for (const lot of inv) {
+        if (lot.qty > 0) {
+          totalWeightedStop += lot.qty * lot.stop;
+          totalQty += lot.qty;
+        }
+      }
+      if (addShares > 0 && addStop > 0) {
+        totalWeightedStop += addShares * addStop;
+        totalQty += addShares;
+      }
+      combinedStop = totalQty > 0 ? totalWeightedStop / totalQty : 0;
+    }
+
+    // If stop rules require a higher stop, enforce that
+    if (minStop > 0 && combinedStop < minStop) {
+      combinedStop = minStop;
+    }
+
+    // Risk with combined stop
+    const combinedRisk = combinedStop > 0 && newTotalShares > 0
+      ? Math.max(0, (newAvgCost - combinedStop) * newTotalShares) : 0;
+    const combinedRiskPct = equity > 0 ? (combinedRisk / equity) * 100 : 0;
+
+    return {
+      curShares, avgEntry, livePrice, currentReturn, currentValue, currentPosPct,
+      lastLotPrice, lastLotReturn, pyramidReady, maxPyramidShares,
+      newTotalShares, newAvgCost, newValue, newPosPct,
+      stopRule, minStop, riskFreeAdd, combinedStop, combinedRisk, combinedRiskPct,
+      addShares, addPrice,
+    };
+  }, [actionType, selectedCamp, allDetails, campPrice, equity, sharesNum, priceNum, stopPrice]);
 
   const validate = () => {
     const e: string[] = [];
@@ -541,109 +663,272 @@ export function LogBuy({ navColor }: { navColor: string }) {
         </div>
 
         {/* ════════════════════════════════════════════════════════
-            RIGHT — Live Sizer (sticky cockpit)
+            RIGHT — Live Sizer / Scale-In Cockpit (sticky)
             ════════════════════════════════════════════════════════ */}
         <div className="sticky top-[72px] flex flex-col gap-4">
-          <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-            <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-              <span className="text-[13px] font-semibold">Live Sizer</span>
-              <span className="text-xs" style={{ color: "var(--ink-4)" }}>Risk-based position sizing</span>
-            </div>
-            <div className="p-5 flex flex-col gap-4">
 
-              {/* M Factor suggestion */}
-              <div className="px-3 py-2 rounded-[8px] text-[12px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                <span style={{ color: "var(--ink-4)" }}>M Factor:</span>{" "}
-                <span className="font-semibold">{mFactorSuggestion}</span>
-                <span style={{ color: "var(--ink-4)" }}> → </span>
-                <span className="font-semibold">{SIZING_MODES[sizingMode].icon} {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}</span>
+          {/* ── SCALE-IN COCKPIT ── */}
+          {actionType === "scalein" && scaleIn ? (
+            <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">Scale-In Cockpit</span>
+                <span className="text-xs" style={{ color: "var(--ink-4)" }}>{selectedCamp?.ticker || ""}</span>
               </div>
+              <div className="p-5 flex flex-col gap-4">
 
-              {/* Sizing mode radios */}
-              <Field label="Sizing Mode">
-                <div className="flex flex-col gap-1.5 mt-1">
-                  {SIZING_MODES.map((m, i) => (
-                    <Radio key={m.key} checked={sizingMode === i} onClick={() => setSizingMode(i)} label={`${m.icon} ${m.label}`} />
-                  ))}
-                </div>
-              </Field>
-
-              {/* Account Equity */}
-              <Field label="Account Equity">
-                <div className="h-[42px] px-3.5 rounded-[10px] flex items-center text-[15px] font-semibold privacy-mask"
-                     style={{ background: "var(--bg)", border: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                  ${equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </div>
-              </Field>
-
-              {/* Risk Budget + Stop Dist */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Risk $</div>
-                  <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                    ${riskBudget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {/* Current Position */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Current Position</div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Shares</div>
+                      <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {scaleIn.curShares.toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg Entry</div>
+                      <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        ${scaleIn.avgEntry.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 mt-2.5">
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Live Price</div>
+                      <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        ${scaleIn.livePrice.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Return</div>
+                      <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: scaleIn.currentReturn >= 0 ? "#16a34a" : "#e5484d" }}>
+                        {scaleIn.currentReturn >= 0 ? "+" : ""}{scaleIn.currentReturn.toFixed(2)}%
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 text-[12px] font-medium px-3 py-1.5 rounded-[8px] privacy-mask" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+                    Position: {scaleIn.currentPosPct.toFixed(1)}% of NLV · ${scaleIn.currentValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </div>
                 </div>
-                <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Stop Dist</div>
-                  <div className="text-[20px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                    {stopDist > 0 ? `$${stopDist.toFixed(2)}` : "—"}
+
+                {/* Divider */}
+                <div style={{ borderTop: "1px solid var(--border)" }} />
+
+                {/* Pyramid Check */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Pyramid Check</div>
+                  <div className="px-3 py-2.5 rounded-[10px] text-[12px]" style={{
+                    background: scaleIn.pyramidReady ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #f59f00 10%, var(--surface))",
+                    border: `1px solid ${scaleIn.pyramidReady ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "color-mix(in oklab, #f59f00 30%, var(--border))"}`,
+                    color: scaleIn.pyramidReady ? "#16a34a" : "#d97706",
+                  }}>
+                    <div className="font-semibold mb-1">
+                      {scaleIn.pyramidReady ? "Pyramid Ready" : "Not Ready"}
+                    </div>
+                    <div style={{ color: "var(--ink-3)" }}>
+                      Last lot @ ${scaleIn.lastLotPrice.toFixed(2)} → {scaleIn.lastLotReturn >= 0 ? "+" : ""}{scaleIn.lastLotReturn.toFixed(2)}%
+                      {!scaleIn.pyramidReady && " (need +5%)"}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2.5 mt-2.5">
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Max Pyramid Add (20%)</div>
+                      <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {scaleIn.maxPyramidShares} shs
+                        <span className="text-[12px] font-normal ml-2 privacy-mask" style={{ color: "var(--ink-4)" }}>
+                          ~${(scaleIn.maxPyramidShares * scaleIn.livePrice).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Shares + Cost */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Shares</div>
-                  <div className="text-[20px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                    {recommendedShares > 0 ? recommendedShares.toLocaleString() : sharesNum > 0 ? sharesNum.toLocaleString() : "—"}
-                  </div>
-                </div>
-                <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Cost</div>
-                  <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                    {recommendedCost > 0 ? `$${recommendedCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
-                  </div>
-                </div>
-              </div>
+                {/* Divider */}
+                <div style={{ borderTop: "1px solid var(--border)" }} />
 
-              {/* Position weight + rule check */}
-              {priceNum > 0 && (sharesNum > 0 || recommendedShares > 0) && (
-                <>
-                  <div className="text-[12px] font-medium px-3 py-2 rounded-[8px]"
-                       style={{
-                         background: posSizePct > 25 ? "color-mix(in oklab, #e5484d 10%, var(--surface))" : posSizePct > 15 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #08a86b 10%, var(--surface))",
-                         color: posSizePct > 25 ? "#dc2626" : posSizePct > 15 ? "#d97706" : "#16a34a",
-                         border: `1px solid ${posSizePct > 25 ? "color-mix(in oklab, #e5484d 30%, var(--border))" : posSizePct > 15 ? "color-mix(in oklab, #f59f00 30%, var(--border))" : "color-mix(in oklab, #08a86b 30%, var(--border))"}`,
-                       }}>
-                    {posSizePct.toFixed(2)}% of NLV
-                    {stopPct > 0 && ` · within ${stopPct.toFixed(1)}% rule`}
-                    {stopPct > 0 && stopPct <= 8 ? " ✓" : ""}
-                  </div>
+                {/* Post-Add Projection */}
+                {scaleIn.addShares > 0 && (
+                  <>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Post-Add Projection</div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>New Shares</div>
+                          <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                            {scaleIn.newTotalShares.toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>New Avg Cost</div>
+                          <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                            ${scaleIn.newAvgCost.toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2.5 text-[12px] font-medium px-3 py-1.5 rounded-[8px] privacy-mask"
+                           style={{
+                             background: scaleIn.newPosPct > 25 ? "color-mix(in oklab, #e5484d 10%, var(--surface))" : scaleIn.newPosPct > 15 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                             color: scaleIn.newPosPct > 25 ? "#dc2626" : scaleIn.newPosPct > 15 ? "#d97706" : "#16a34a",
+                             border: `1px solid ${scaleIn.newPosPct > 25 ? "color-mix(in oklab, #e5484d 30%, var(--border))" : scaleIn.newPosPct > 15 ? "color-mix(in oklab, #f59f00 30%, var(--border))" : "color-mix(in oklab, #08a86b 30%, var(--border))"}`,
+                           }}>
+                        New position: {scaleIn.newPosPct.toFixed(1)}% of NLV · ${scaleIn.newValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </div>
+                    </div>
 
-                  {stopPrice > 0 && (
-                    <div className="text-[12px] font-medium px-3 py-2 rounded-[8px]"
-                         style={{
-                           background: riskViolation ? "color-mix(in oklab, #e5484d 10%, var(--surface))" : withinBudget ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "var(--bg)",
-                           color: riskViolation ? "#dc2626" : withinBudget ? "#16a34a" : "var(--ink-3)",
-                           border: `1px solid ${riskViolation ? "color-mix(in oklab, #e5484d 30%, var(--border))" : withinBudget ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "var(--border)"}`,
-                         }}>
-                      <span className="font-semibold">Rule check</span>
-                      <br />
-                      {riskViolation
-                        ? `Risk $${riskDollars.toFixed(0)} > Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)}`
-                        : withinBudget
-                          ? `Risk $${riskDollars.toFixed(0)} within budget $${riskBudget.toFixed(0)} ✓`
-                          : "Enter stop loss to validate"
-                      }
+                    {/* Divider */}
+                    <div style={{ borderTop: "1px solid var(--border)" }} />
+                  </>
+                )}
+
+                {/* Stop & Risk */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Combined Stop & Risk</div>
+
+                  {/* Stop rule status */}
+                  {scaleIn.stopRule && (
+                    <div className="px-3 py-2.5 rounded-[10px] text-[12px] mb-2.5" style={{
+                      background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                      border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))",
+                      color: "#16a34a",
+                    }}>
+                      <div className="font-semibold">Risk-Free Add</div>
+                      <div style={{ color: "var(--ink-3)" }}>{scaleIn.stopRule}</div>
+                      <div className="font-semibold mt-1">Min stop: ${scaleIn.minStop.toFixed(2)}</div>
                     </div>
                   )}
-                </>
-              )}
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Combined Stop</div>
+                      <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {scaleIn.combinedStop > 0 ? `$${scaleIn.combinedStop.toFixed(2)}` : "—"}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Total Risk</div>
+                      <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{
+                        fontFamily: "var(--font-jetbrains), monospace",
+                        color: scaleIn.riskFreeAdd ? "#16a34a" : scaleIn.combinedRiskPct > 1 ? "#e5484d" : "var(--ink)",
+                      }}>
+                        {scaleIn.riskFreeAdd ? "$0" : scaleIn.combinedRisk > 0 ? `$${scaleIn.combinedRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                      </div>
+                      {!scaleIn.riskFreeAdd && scaleIn.combinedRisk > 0 && (
+                        <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                          {scaleIn.combinedRiskPct.toFixed(2)}% of NLV
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
             </div>
-          </div>
+
+          ) : (
+            /* ── NEW TRADE SIZER (original) ── */
+            <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">Live Sizer</span>
+                <span className="text-xs" style={{ color: "var(--ink-4)" }}>Risk-based position sizing</span>
+              </div>
+              <div className="p-5 flex flex-col gap-4">
+
+                {/* M Factor suggestion */}
+                <div className="px-3 py-2 rounded-[8px] text-[12px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  <span style={{ color: "var(--ink-4)" }}>M Factor:</span>{" "}
+                  <span className="font-semibold">{mFactorSuggestion}</span>
+                  <span style={{ color: "var(--ink-4)" }}> → </span>
+                  <span className="font-semibold">{SIZING_MODES[sizingMode].icon} {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}</span>
+                </div>
+
+                {/* Sizing mode radios */}
+                <Field label="Sizing Mode">
+                  <div className="flex flex-col gap-1.5 mt-1">
+                    {SIZING_MODES.map((m, i) => (
+                      <Radio key={m.key} checked={sizingMode === i} onClick={() => setSizingMode(i)} label={`${m.icon} ${m.label}`} />
+                    ))}
+                  </div>
+                </Field>
+
+                {/* Account Equity */}
+                <Field label="Account Equity">
+                  <div className="h-[42px] px-3.5 rounded-[10px] flex items-center text-[15px] font-semibold privacy-mask"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                    ${equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </div>
+                </Field>
+
+                {/* Risk Budget + Stop Dist */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Risk $</div>
+                    <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                      ${riskBudget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Stop Dist</div>
+                    <div className="text-[20px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                      {stopDist > 0 ? `$${stopDist.toFixed(2)}` : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Shares + Cost */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Shares</div>
+                    <div className="text-[20px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                      {recommendedShares > 0 ? recommendedShares.toLocaleString() : sharesNum > 0 ? sharesNum.toLocaleString() : "—"}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Cost</div>
+                    <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                      {recommendedCost > 0 ? `$${recommendedCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Position weight + rule check */}
+                {priceNum > 0 && (sharesNum > 0 || recommendedShares > 0) && (
+                  <>
+                    <div className="text-[12px] font-medium px-3 py-2 rounded-[8px]"
+                         style={{
+                           background: posSizePct > 25 ? "color-mix(in oklab, #e5484d 10%, var(--surface))" : posSizePct > 15 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                           color: posSizePct > 25 ? "#dc2626" : posSizePct > 15 ? "#d97706" : "#16a34a",
+                           border: `1px solid ${posSizePct > 25 ? "color-mix(in oklab, #e5484d 30%, var(--border))" : posSizePct > 15 ? "color-mix(in oklab, #f59f00 30%, var(--border))" : "color-mix(in oklab, #08a86b 30%, var(--border))"}`,
+                         }}>
+                      {posSizePct.toFixed(2)}% of NLV
+                      {stopPct > 0 && ` · within ${stopPct.toFixed(1)}% rule`}
+                      {stopPct > 0 && stopPct <= 8 ? " ✓" : ""}
+                    </div>
+
+                    {stopPrice > 0 && (
+                      <div className="text-[12px] font-medium px-3 py-2 rounded-[8px]"
+                           style={{
+                             background: riskViolation ? "color-mix(in oklab, #e5484d 10%, var(--surface))" : withinBudget ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "var(--bg)",
+                             color: riskViolation ? "#dc2626" : withinBudget ? "#16a34a" : "var(--ink-3)",
+                             border: `1px solid ${riskViolation ? "color-mix(in oklab, #e5484d 30%, var(--border))" : withinBudget ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "var(--border)"}`,
+                           }}>
+                        <span className="font-semibold">Rule check</span>
+                        <br />
+                        {riskViolation
+                          ? `Risk $${riskDollars.toFixed(0)} > Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)}`
+                          : withinBudget
+                            ? `Risk $${riskDollars.toFixed(0)} within budget $${riskBudget.toFixed(0)} ✓`
+                            : "Enter stop loss to validate"
+                        }
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
