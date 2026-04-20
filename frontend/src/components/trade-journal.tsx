@@ -84,6 +84,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
 
   const totalImages = deduped.length;
   const [uploading, setUploading] = useState(false);
+  const [msUploading, setMsUploading] = useState(false);
 
   const handleUpload = async (files: FileList, imageType: string) => {
     setUploading(true);
@@ -94,6 +95,21 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
     const imgs = await api.tradeImages(tradeId).catch(() => []);
     setImages(Array.isArray(imgs) ? imgs : []);
     setUploading(false);
+  };
+
+  const handleMsUpload = async (files: FileList) => {
+    setMsUploading(true);
+    for (const file of Array.from(files)) {
+      await api.uploadImage(file, "CanSlim", tradeId, ticker, "marketsurge");
+    }
+    // Reload both images and fundamentals (extraction happens server-side)
+    const [imgs, funds] = await Promise.all([
+      api.tradeImages(tradeId).catch(() => []),
+      api.tradeFundamentals(tradeId).catch(() => []),
+    ]);
+    setImages(Array.isArray(imgs) ? imgs : []);
+    setFundamentals(Array.isArray(funds) ? funds : []);
+    setMsUploading(false);
   };
 
   const handleDelete = async (imageId: number) => {
@@ -177,7 +193,32 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
         )}
       </div>
 
-      {/* ── MarketSurge Fundamentals ── */}
+      {/* ── MarketSurge Upload Zone ── */}
+      <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="text-[13px] font-semibold mb-2 flex items-center gap-2">
+          <span>🔬</span> MarketSurge Fundamentals
+        </div>
+        {fundamentals.length === 0 && !msUploading && (
+          <p className="text-[11px] mb-2" style={{ color: "var(--ink-4)" }}>
+            Upload a MarketSurge screenshot to auto-extract ratings via AI.
+          </p>
+        )}
+        {msUploading ? (
+          <div className="flex items-center gap-2 py-3 text-[12px]" style={{ color: "var(--ink-3)" }}>
+            <span className="animate-spin inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full" />
+            Extracting fundamentals...
+          </div>
+        ) : (
+          <label className="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-[8px] cursor-pointer transition-colors hover:brightness-95"
+                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+            {fundamentals.length > 0 ? "Re-upload Screenshot" : "+ Upload MarketSurge Screenshot"}
+            <input type="file" accept="image/png,image/jpeg" className="hidden"
+                   onChange={e => e.target.files && handleMsUpload(e.target.files)} />
+          </label>
+        )}
+      </div>
+
+      {/* ── MarketSurge Fundamentals (extracted data) ── */}
       {fundamentals.length > 0 && (
         <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
           <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
