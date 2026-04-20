@@ -1305,10 +1305,14 @@ def ibkr_status():
     """Check if IBKR credentials are configured."""
     token = os.environ.get("IBKR_FLEX_TOKEN", "")
     query_id = os.environ.get("IBKR_FLEX_QUERY_ID", "")
+    # Also check all env var keys that contain IBKR (case-insensitive)
+    ibkr_vars = {k: f"{v[:4]}..." for k, v in os.environ.items() if "IBKR" in k.upper() or "FLEX" in k.upper()}
     return {
         "token_set": bool(token),
         "query_id_set": bool(query_id),
         "token_preview": f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "(empty)",
+        "env_keys_found": ibkr_vars,
+        "total_env_vars": len(os.environ),
     }
 
 
