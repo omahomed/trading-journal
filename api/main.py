@@ -639,7 +639,7 @@ def rally_prefix():
             active_exits.append({"signal": "50 SMA Violation", "detail": "Price below 50 SMA", "target": "0%", "severity": "CRITICAL"})
 
         return {
-            "prefix": f"Day {days_since_rally} {state}: ",
+            "prefix": f"Day {days_since_rally}: ",
             "day_num": days_since_rally,
             "state": state,
             "entry_step": entry_step,
