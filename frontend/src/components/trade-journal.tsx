@@ -44,6 +44,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
   const [images, setImages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
 
   useEffect(() => {
     api.tradeImages(tradeId).then(imgs => {
@@ -58,55 +59,80 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
     if (groups[group]) groups[group].push(img);
   });
 
+  const totalImages = images.length;
+
   return (
     <>
       <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
         <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
           <span>📊</span> Charts — {ticker}
+          {!loading && <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>({totalImages} image{totalImages !== 1 ? "s" : ""})</span>}
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          {Object.entries(groups).map(([label, imgs]) => (
-            <div key={label}>
-              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>{label}</div>
-              {loading ? (
-                <div className="rounded-[10px] p-4 flex items-center justify-center" style={{ border: "1.5px dashed var(--border)", background: "var(--bg)", minHeight: 80 }}>
-                  <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>Loading...</span>
+
+        {loading ? (
+          <div className="text-[12px] py-3" style={{ color: "var(--ink-4)" }}>Loading charts...</div>
+        ) : totalImages === 0 ? (
+          <div className="text-[12px] py-2" style={{ color: "var(--ink-4)" }}>No charts uploaded for this trade.</div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {Object.entries(groups).map(([label, imgs]) => {
+              if (imgs.length === 0) return null;
+              const isOpen = expandedGroup === label;
+              return (
+                <div key={label} className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--border)" }}>
+                  {/* Expander header */}
+                  <button onClick={() => setExpandedGroup(isOpen ? null : label)}
+                          className="w-full flex items-center gap-2 px-3.5 py-2.5 text-left cursor-pointer transition-colors hover:brightness-95"
+                          style={{ background: "var(--surface-2)" }}>
+                    <span className="text-[10px] transition-transform" style={{ transform: isOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                    <span className="text-[12px] font-semibold flex-1" style={{ color: "var(--ink)" }}>{label}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: "var(--bg)", color: "var(--ink-4)" }}>{imgs.length}</span>
+                  </button>
+
+                  {/* Expanded: show images */}
+                  {isOpen && (
+                    <div className="p-3 grid gap-3" style={{ gridTemplateColumns: imgs.length === 1 ? "1fr" : "1fr 1fr" }}>
+                      {imgs.map((img, i) => {
+                        const url = img.view_url || "";
+                        return (
+                          <div key={i} className="rounded-[8px] overflow-hidden cursor-pointer transition-all hover:shadow-md"
+                               style={{ border: "1px solid var(--border)" }}
+                               onClick={() => url && setLightbox(url)}>
+                            {url ? (
+                              <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
+                            ) : (
+                              <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
+                            )}
+                            <div className="px-2.5 py-1.5 text-[10px] flex items-center justify-between" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
+                              <span>{img.file_name || `${label} ${i + 1}`}</span>
+                              <span>Click to enlarge</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              ) : imgs.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  {imgs.map((img, i) => {
-                    const url = img.view_url || img.presigned_url || "";
-                    return (
-                      <div key={i} className="rounded-[10px] overflow-hidden cursor-pointer transition-transform hover:scale-[1.02]"
-                           style={{ border: "1px solid var(--border)" }}
-                           onClick={() => url && setLightbox(url)}>
-                        {url ? (
-                          <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 200, objectFit: "cover" }} />
-                        ) : (
-                          <div className="p-3 text-center text-[10px]" style={{ color: "var(--ink-4)" }}>No URL</div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="rounded-[10px] p-4 flex flex-col items-center justify-center" style={{ border: "1.5px dashed var(--border)", background: "var(--bg)", minHeight: 80 }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-1.5 opacity-40">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>
-                  </svg>
-                  <span className="text-[10px]" style={{ color: "var(--ink-5)" }}>No images</span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Lightbox */}
+      {/* Lightbox — full screen overlay */}
       {lightbox && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}
+        <div className="fixed inset-0 z-[200] flex items-center justify-center cursor-pointer"
+             style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(6px)" }}
              onClick={() => setLightbox(null)}>
-          <img src={lightbox} alt="Chart" className="max-w-[90vw] max-h-[85vh] rounded-[12px]" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+          <div className="relative" onClick={e => e.stopPropagation()}>
+            <img src={lightbox} alt="Chart" className="max-w-[92vw] max-h-[88vh] rounded-[10px]"
+                 style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
+            <button onClick={() => setLightbox(null)}
+                    className="absolute -top-3 -right-3 w-8 h-8 rounded-full flex items-center justify-center text-white text-[14px] font-bold cursor-pointer"
+                    style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}>
+              x
+            </button>
+          </div>
         </div>
       )}
     </>
