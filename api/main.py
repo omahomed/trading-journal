@@ -30,16 +30,27 @@ app.add_middleware(
 # Import existing modules
 import db_layer as db
 
-# R2 storage (optional — gracefully degrade if not configured)
+# R2 storage — set env vars explicitly if not already present
+# (Railway sometimes doesn't inject service vars into the Python runtime)
+_R2_DEFAULTS = {
+    "R2_ENDPOINT_URL": "https://ecdf0141a44925b262e8334b8850e7b6.r2.cloudflarestorage.com",
+    "R2_ACCESS_KEY_ID": "d7e0b5d0ec72ee0936591c63f1ece144",
+    "R2_SECRET_ACCESS_KEY": "79a1e621db58ba13ab16839d6eed49c5d2ef6c08e8be8a2f62e1dd9376eace88",
+    "R2_BUCKET_NAME": "trading-journal-images",
+    "R2_PUBLIC_URL": "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev",
+}
+for _k, _v in _R2_DEFAULTS.items():
+    if not os.environ.get(_k):
+        os.environ[_k] = _v
+
 try:
     import r2_storage as r2
-    print("[R2] Module imported successfully")
+    print(f"[R2] Module loaded, endpoint: {os.environ.get('R2_ENDPOINT_URL', 'NONE')[:40]}")
 except Exception as _r2_err:
     print(f"[R2] Import failed: {_r2_err}")
     r2 = None
 
 def _is_r2_available():
-    """Check R2 availability at request time (not startup)."""
     if r2 is None:
         return False
     try:
