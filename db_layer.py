@@ -2272,13 +2272,10 @@ def update_dashboard_event(event_id, event_date=None, label=None, category=None,
                            notes=None, color_override=None, user='User'):
     """
     Edit an existing dashboard event in place. Only non-None fields are updated.
-    Auto-generated events (auto_generated=TRUE) cannot be edited via this path —
-    use sync_auto_events_from_config() to keep them in sync with their source key.
     """
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # Verify event exists and is not auto-generated
                 cur.execute(
                     "SELECT event_date, label, category, auto_generated FROM dashboard_events WHERE id = %s",
                     (event_id,),
@@ -2286,9 +2283,6 @@ def update_dashboard_event(event_id, event_date=None, label=None, category=None,
                 row = cur.fetchone()
                 if not row:
                     print(f"update_dashboard_event: event id={event_id} not found")
-                    return False
-                if row[3]:  # auto_generated
-                    print(f"Refusing to edit auto-generated event id={event_id}")
                     return False
 
                 old_date, old_label, old_cat = row[0], row[1], row[2]
@@ -2360,10 +2354,6 @@ def delete_dashboard_event(event_id, user='User'):
                 row = cur.fetchone()
                 if not row:
                     return False
-                if row[2]:  # auto_generated — block manual delete
-                    print(f"Refusing to delete auto-generated event id={event_id}")
-                    return False
-
                 cur.execute("DELETE FROM dashboard_events WHERE id = %s", (event_id,))
 
                 # Audit log
