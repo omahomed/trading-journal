@@ -358,9 +358,16 @@ export function TradeManager({ navColor }: { navColor: string }) {
                          placeholder="DELETE" className={inputCls}
                          style={{ ...inputStyle, borderColor: "color-mix(in oklab, #e5484d 30%, var(--border))" }} />
                 </div>
-                <button onClick={() => {
+                <button onClick={async () => {
                           if (deleteConfirm !== "DELETE") return alert("Type DELETE to confirm");
-                          alert("Backend write endpoint needed: DELETE /api/trades/delete");
+                          try {
+                            const res = await api.deleteTrade(deleteTradeId);
+                            if (res.error) { alert(res.error); return; }
+                            setAllTrades(prev => prev.filter(t => t.trade_id !== deleteTradeId));
+                            setDetails(prev => prev.filter(d => d.trade_id !== deleteTradeId));
+                            setDeleteTradeId(""); setDeleteConfirm("");
+                            alert(`Trade ${deleteTradeId} permanently deleted.`);
+                          } catch (e: any) { alert(e.message || "Delete failed"); }
                         }}
                         disabled={deleteConfirm !== "DELETE"}
                         className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all disabled:opacity-40"

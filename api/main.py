@@ -1516,6 +1516,23 @@ def log_sell(body: dict):
         return {"error": str(e)}
 
 
+@app.delete("/api/trades/delete")
+def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("CanSlim")):
+    """Permanently delete a trade and all its transactions."""
+    try:
+        if not trade_id:
+            return {"error": "trade_id is required"}
+        db.delete_trade(portfolio, trade_id)
+        try:
+            db.log_audit(portfolio, "DELETE", trade_id, "",
+                         f"Campaign permanently deleted", username="web")
+        except Exception:
+            pass
+        return {"status": "ok", "trade_id": trade_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ============================================================
 # FUNDAMENTALS ENDPOINT
 # ============================================================
