@@ -1300,6 +1300,18 @@ def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
         return {"error": str(e)}
 
 
+@app.get("/api/ibkr/status")
+def ibkr_status():
+    """Check if IBKR credentials are configured."""
+    token = os.environ.get("IBKR_FLEX_TOKEN", "")
+    query_id = os.environ.get("IBKR_FLEX_QUERY_ID", "")
+    return {
+        "token_set": bool(token),
+        "query_id_set": bool(query_id),
+        "token_preview": f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "(empty)",
+    }
+
+
 @app.post("/api/trades/import")
 def import_ibkr_trades():
     """Pull today's trade confirmations from IBKR Flex Query."""
