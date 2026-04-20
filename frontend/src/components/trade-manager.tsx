@@ -331,7 +331,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                             setEditResult(null);
                             try {
                               const res = await api.editTransaction({
-                                detail_id: editTx.id,
+                                detail_id: editTx.detail_id,
                                 trade_id: editTx.trade_id,
                                 ticker: editTx.ticker,
                                 action: editTx.action,
