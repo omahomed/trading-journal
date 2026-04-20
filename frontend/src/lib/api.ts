@@ -165,6 +165,12 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string }>,
 
+  logSell: (body: Record<string, any>) =>
+    fetch(`${API_BASE}/api/trades/sell`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
+
   // Fundamentals
   tradeFundamentals: (tradeId: string, portfolio = "CanSlim") =>
     fetchJSON<any[]>(`/api/fundamentals/${tradeId}?portfolio=${portfolio}`),

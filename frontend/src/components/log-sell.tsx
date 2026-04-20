@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api, type TradePosition } from "@/lib/api";
 
 const SELL_RULES = [
@@ -23,7 +23,66 @@ function FormField({ label, children, hint }: { label: string; children: React.R
   );
 }
 
-const inputStyle = {
+function DropZone({ label, icon, files, onFiles, multiple, accept }: {
+  label: string; icon: string; files: File[]; onFiles: (f: File[]) => void; multiple?: boolean; accept?: string;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false);
+    const dropped = Array.from(e.dataTransfer.files).filter(f => !accept || accept.split(",").some(a => f.type === a.trim()));
+    if (dropped.length > 0) onFiles(multiple ? [...files, ...dropped] : [dropped[0]]);
+  };
+
+  const hasFiles = files.length > 0;
+  const borderColor = dragging ? "#6366f1" : hasFiles ? "#08a86b" : "var(--border)";
+  const bgColor = dragging ? "color-mix(in oklab, #6366f1 5%, var(--bg))" : hasFiles ? "color-mix(in oklab, #08a86b 5%, var(--bg))" : "var(--bg)";
+  const textColor = hasFiles ? "#08a86b" : "var(--ink-4)";
+
+  return (
+    <div>
+      {label && (
+        <div className="text-[11px] font-medium mb-1.5 flex items-center gap-1" style={{ color: "var(--ink-3)" }}>
+          {icon && <span>{icon}</span>} {label}
+        </div>
+      )}
+      <div
+        className="flex flex-col items-center justify-center rounded-[10px] cursor-pointer transition-all"
+        style={{ border: `1.5px dashed ${borderColor}`, background: bgColor, padding: hasFiles ? "10px 16px" : "16px", minHeight: 70 }}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+      >
+        {hasFiles ? (
+          <div className="flex flex-wrap gap-1.5 w-full">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-[6px] text-[10px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+                <span className="truncate" style={{ maxWidth: 120 }}>{f.name}</span>
+                <button onClick={e => { e.stopPropagation(); onFiles(files.filter((_, j) => j !== i)); }}
+                        className="text-[10px] font-bold cursor-pointer" style={{ color: "#e5484d" }}>x</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={dragging ? "#6366f1" : "var(--ink-4)"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-1.5 opacity-60">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span className="text-[11px]" style={{ color: textColor }}>{dragging ? "Drop files here" : "Drag & drop or click to upload"}</span>
+            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, JPEG</span>
+          </>
+        )}
+        <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
+               onChange={e => { if (e.target.files) onFiles(multiple ? [...files, ...Array.from(e.target.files)] : Array.from(e.target.files)); e.target.value = ""; }} />
+      </div>
+    </div>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
   background: "var(--surface)",
   border: "1px solid var(--border)",
   color: "var(--ink)",
@@ -37,7 +96,10 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [price, setPrice] = useState("");
   const [rule, setRule] = useState(SELL_RULES[0]);
   const [notes, setNotes] = useState("");
+  const [positionCharts, setPositionCharts] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     api.tradesOpen("CanSlim").then(trades => {
@@ -65,13 +127,57 @@ export function LogSell({ navColor }: { navColor: string }) {
   const returnPct = avgEntry > 0 && priceNum > 0 ? ((priceNum - avgEntry) / avgEntry) * 100 : 0;
   const realizedPl = avgEntry > 0 ? (priceNum - avgEntry) * sharesNum : 0;
 
-  const handleSubmit = () => {
-    if (!selectedTrade) return alert("Select a campaign");
-    if (sharesNum <= 0) return alert("Shares must be > 0");
-    if (priceNum <= 0) return alert("Price must be > 0");
-    if (selected && sharesNum > selected.shares) return alert(`Max shares: ${selected.shares}`);
-    // TODO: POST /api/trades/sell endpoint needed
-    alert("Backend write endpoint not yet available. Will save via POST /api/trades/sell");
+  const handleSubmit = async () => {
+    if (!selectedTrade || !selected) return;
+    if (sharesNum <= 0) return setSubmitResult({ ok: false, msg: "Shares must be > 0" });
+    if (priceNum <= 0) return setSubmitResult({ ok: false, msg: "Price must be > 0" });
+    if (sharesNum > selected.shares) return setSubmitResult({ ok: false, msg: `Max shares: ${selected.shares}` });
+
+    setSubmitting(true);
+    setSubmitResult(null);
+
+    try {
+      const now = new Date();
+      const body = {
+        portfolio: "CanSlim",
+        trade_id: selectedTrade,
+        shares: sharesNum,
+        price: priceNum,
+        rule,
+        notes,
+        date: now.toISOString().slice(0, 10),
+        time: now.toTimeString().slice(0, 5),
+      };
+
+      const result = await api.logSell(body);
+
+      if (result.error) {
+        setSubmitResult({ ok: false, msg: result.error });
+      } else {
+        // Upload position change charts
+        if (positionCharts.length > 0) {
+          for (const file of positionCharts) {
+            await api.uploadImage(file, "CanSlim", selectedTrade, selected.ticker, "position_change");
+          }
+        }
+
+        const plStr = result.realized_pl != null ? ` | P&L: $${result.realized_pl.toFixed(2)}` : "";
+        const closedStr = result.is_closed ? " (CLOSED)" : ` (${result.remaining_shares} remaining)`;
+        setSubmitResult({ ok: true, msg: `Sold ${result.trx_id || "S1"}: ${shares} shs of ${selected.ticker} @ $${price}${plStr}${closedStr}` });
+
+        // Reset form
+        setShares(""); setPrice(""); setNotes(""); setPositionCharts([]);
+
+        // Refresh open trades
+        const trades = await api.tradesOpen("CanSlim").catch(() => []);
+        setOpenTrades(trades);
+        if (result.is_closed) setSelectedTrade("");
+      }
+    } catch (err: any) {
+      setSubmitResult({ ok: false, msg: err.message || "Failed to log sell" });
+    }
+
+    setSubmitting(false);
   };
 
   if (loading) {
@@ -88,6 +194,15 @@ export function LogSell({ navColor }: { navColor: string }) {
           Record a sell order against an open campaign
         </div>
       </div>
+
+      {submitResult && (
+        <div className="mb-4 px-4 py-3 rounded-[10px] text-[13px]"
+             style={{ background: submitResult.ok ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                      border: `1px solid ${submitResult.ok ? "#08a86b30" : "#e5484d30"}`,
+                      color: submitResult.ok ? "#08a86b" : "#e5484d" }}>
+          {submitResult.msg}
+        </div>
+      )}
 
       <div className="grid gap-6" style={{ gridTemplateColumns: "2fr 1fr" }}>
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
@@ -133,30 +248,15 @@ export function LogSell({ navColor }: { navColor: string }) {
                      style={{ ...inputStyle, fontFamily: "inherit" }} />
             </FormField>
 
-            {/* Position Changes (Optional) */}
-            <div>
-              <div className="flex items-center gap-2 mb-2 mt-1">
-                <span className="text-[14px]">📸</span>
-                <span className="text-[13px] font-semibold">Position Changes (Optional)</span>
-              </div>
-              <div className="text-[11px] mb-2 flex items-center gap-1" style={{ color: "var(--ink-3)" }}>
-                <span>🔄</span> Upload charts (Partial Sells / Full Exits)
-              </div>
-              <label className="flex items-center gap-2.5 h-[48px] px-4 rounded-[10px] cursor-pointer transition-colors hover:brightness-95"
-                     style={{ border: "1.5px dashed var(--border)", background: "var(--bg)" }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>Upload</span>
-                <span className="text-[10px]" style={{ color: "var(--ink-4)", opacity: 0.6 }}>200MB per file · PNG, JPG, JPEG</span>
-                <input type="file" accept="image/png,image/jpeg" multiple className="hidden" />
-              </label>
-            </div>
+            {/* Position Changes — drag & drop */}
+            <DropZone label="Position Changes (Partial Sells / Full Exits)" icon="🔄"
+                      files={positionCharts} onFiles={setPositionCharts}
+                      multiple accept="image/png,image/jpeg" />
 
-            <button onClick={handleSubmit}
-                    className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110"
-                    style={{ background: "#6366f1" }}>
-              LOG SELL ORDER
+            <button onClick={handleSubmit} disabled={submitting || !selectedTrade}
+                    className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                    style={{ background: "#e5484d" }}>
+              {submitting ? "Saving..." : "LOG SELL ORDER"}
             </button>
           </div>
         </div>

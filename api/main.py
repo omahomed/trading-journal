@@ -1385,6 +1385,136 @@ def log_buy(body: dict):
         return {"error": str(e)}
 
 
+@app.post("/api/trades/sell")
+def log_sell(body: dict):
+    """Log a sell transaction. Updates summary via LIFO + inserts detail row."""
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = body.get("trade_id", "")
+        shares = float(body.get("shares", 0))
+        price = float(body.get("price", 0))
+        rule = body.get("rule", "")
+        notes = body.get("notes", "")
+        date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
+        time_str = body.get("time", datetime.now().strftime("%H:%M"))
+        trx_id = body.get("trx_id", "")
+
+        if not trade_id or shares <= 0 or price <= 0:
+            return {"error": "Missing required fields: trade_id, shares, price"}
+
+        # Load existing summary to get ticker and validate shares
+        df_s = db.load_summary(portfolio)
+        df_s = _normalize_trades(df_s)
+        existing = df_s[df_s["trade_id"] == trade_id]
+        if existing.empty:
+            return {"error": f"Trade {trade_id} not found"}
+
+        row = existing.iloc[0]
+        ticker = row.get("ticker", "")
+        current_shares = float(row.get("shares", 0))
+
+        if shares > current_shares:
+            return {"error": f"Cannot sell {shares} shares — only {current_shares} held"}
+
+        value = shares * price
+        date_time = f"{date_str} {time_str}:00"
+
+        # Generate trx_id if not provided
+        if not trx_id:
+            df_d = db.load_details(portfolio)
+            if not df_d.empty:
+                df_d = _normalize_trades(df_d)
+                existing_txns = df_d[df_d["trade_id"] == trade_id]
+                sell_count = len(existing_txns[existing_txns["action"].str.upper() == "SELL"]) if not existing_txns.empty else 0
+                trx_id = f"S{sell_count + 1}"
+            else:
+                trx_id = "S1"
+
+        # Save detail row
+        detail_row = {
+            "Trade_ID": trade_id, "Ticker": ticker, "Action": "SELL",
+            "Date": date_time, "Shares": shares, "Amount": price,
+            "Value": value, "Rule": rule, "Notes": notes,
+            "Realized_PL": 0, "Trx_ID": trx_id,
+        }
+        detail_id = db.save_detail_row(portfolio, detail_row)
+
+        # LIFO recalculation: reload all details and recompute summary
+        df_d = db.load_details(portfolio)
+        df_d = _normalize_trades(df_d)
+        txns = df_d[df_d["trade_id"] == trade_id].copy()
+        txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
+        txns = txns.dropna(subset=["date"]).sort_values("date")
+
+        inventory = []
+        total_realized = 0.0
+        for _, tx in txns.iterrows():
+            action = str(tx.get("action", "")).upper()
+            tx_shares = float(tx.get("shares", 0))
+            tx_price = float(tx.get("amount", 0))
+            if action == "BUY":
+                inventory.append({"price": tx_price, "shares": tx_shares})
+            elif action == "SELL":
+                to_sell = tx_shares
+                while to_sell > 0 and inventory:
+                    last = inventory[-1]
+                    take = min(to_sell, last["shares"])
+                    total_realized += (tx_price - last["price"]) * take
+                    last["shares"] -= take
+                    to_sell -= take
+                    if last["shares"] < 0.0001:
+                        inventory.pop()
+
+        remaining_shares = sum(lot["shares"] for lot in inventory)
+        remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
+        avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else float(row.get("avg_entry", 0))
+
+        # Compute avg_exit from all sells
+        sells = txns[txns["action"].str.upper() == "SELL"]
+        total_sell_val = (sells["shares"].astype(float) * sells["amount"].astype(float)).sum()
+        total_sell_shs = sells["shares"].astype(float).sum()
+        avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0
+
+        is_closed = remaining_shares < 0.01
+        buys = txns[txns["action"].str.upper() == "BUY"]
+        total_cost = (buys["shares"].astype(float) * buys["amount"].astype(float)).sum()
+        return_pct = (total_realized / total_cost * 100) if is_closed and total_cost > 0 else 0
+
+        summary_row = {
+            "Trade_ID": trade_id, "Ticker": ticker,
+            "Status": "CLOSED" if is_closed else "OPEN",
+            "Open_Date": str(row.get("open_date", ""))[:10],
+            "Closed_Date": date_str if is_closed else None,
+            "Shares": remaining_shares if not is_closed else buys["shares"].astype(float).sum(),
+            "Avg_Entry": round(avg_entry, 4),
+            "Avg_Exit": round(avg_exit, 4) if avg_exit > 0 else 0,
+            "Total_Cost": round(remaining_cost if not is_closed else total_cost, 2),
+            "Realized_PL": round(total_realized, 2),
+            "Return_Pct": round(return_pct, 4),
+            "Sell_Rule": rule,
+            "Sell_Notes": notes,
+            "Rule": row.get("rule", ""),
+            "Buy_Notes": row.get("buy_notes", ""),
+        }
+        summary_id = db.save_summary_row(portfolio, summary_row)
+
+        # Audit trail
+        try:
+            db.log_audit(portfolio, "SELL", trade_id, ticker,
+                         f"{trx_id}: {shares} shs @ ${price:.2f} | P&L: ${total_realized:.2f}", username="web")
+        except Exception:
+            pass
+
+        return {
+            "status": "ok", "detail_id": detail_id, "summary_id": summary_id,
+            "trx_id": trx_id, "realized_pl": round(total_realized, 2),
+            "remaining_shares": round(remaining_shares, 4),
+            "is_closed": is_closed,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ============================================================
 # FUNDAMENTALS ENDPOINT
 # ============================================================
