@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
 type StatusFilter = "all" | "open" | "closed";
@@ -859,6 +860,18 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No transaction details available</div>
                       );
                     })()}
+                  </div>
+
+                  {/* ── Interactive Trade Chart ── */}
+                  <div style={{ borderTop: "1px solid var(--border)" }}>
+                    <InteractiveChart
+                      ticker={trade.ticker}
+                      tradeId={trade.trade_id}
+                      openDate={trade.open_date}
+                      closedDate={trade.closed_date}
+                      details={allDetails}
+                      navColor={navColor}
+                    />
                   </div>
 
                   {/* ── Section 2: Charts, Fundamentals, Notes (post-analysis — collapsed by default) ── */}

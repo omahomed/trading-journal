@@ -403,6 +403,36 @@ def price_lookup(ticker: str = ""):
         return {"error": str(e)}
 
 
+@app.get("/api/charts/ohlcv/{ticker}")
+def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo"):
+    """Get OHLCV candlestick data for lightweight-charts."""
+    import yfinance as yf
+    try:
+        t = ticker.strip().upper()
+        stock = yf.Ticker(t)
+        if start and end:
+            df = stock.history(start=start, end=end)
+        else:
+            df = stock.history(period=period)
+        if df.empty:
+            return {"error": f"No data for {t}"}
+
+        candles = []
+        for idx, row in df.iterrows():
+            ts = int(idx.timestamp()) if hasattr(idx, 'timestamp') else 0
+            candles.append({
+                "time": ts,
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(row.get("Volume", 0)),
+            })
+        return {"ticker": t, "candles": candles}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/prices/batch")
 def batch_prices(tickers: str = ""):
     """Get live prices for a comma-separated list of tickers.

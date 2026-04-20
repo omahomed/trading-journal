@@ -113,6 +113,16 @@ export const api = {
   batchPrices: (tickers: string[]) =>
     fetchJSON<Record<string, number>>(`/api/prices/batch?tickers=${encodeURIComponent(tickers.join(","))}`),
 
+  chartOhlcv: (ticker: string, start?: string, end?: string, period?: string) => {
+    const params = new URLSearchParams();
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    if (period) params.set("period", period);
+    return fetchJSON<{ ticker: string; candles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] }>(
+      `/api/charts/ohlcv/${encodeURIComponent(ticker)}?${params.toString()}`
+    );
+  },
+
   // Market
   rallyPrefix: () => fetchJSON<{ prefix: string; day_num?: number; state?: string }>(`/api/market/rally-prefix`),
   mfactor: () => fetchJSON<any>(`/api/market/mfactor`),
