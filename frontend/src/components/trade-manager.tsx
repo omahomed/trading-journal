@@ -3,6 +3,30 @@
 import { useState, useEffect, useRef } from "react";
 import { api, type TradePosition, type TradeDetail } from "@/lib/api";
 
+const BUY_RULES = [
+  "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
+  "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot", "br1.8 High Tight Flag",
+  "br2.1 HVE", "br2.2 HVSI", "br2.3 HV1",
+  "br3.1 Reclaim 21e", "br3.2 Reclaim 50s", "br3.3 Reclaim 200s", "br3.4 Reclaim 10W", "br3.5 Reclaim 8e",
+  "br4.1 PB 21e", "br4.2 PB 50s", "br4.3 PB 10w", "br4.4 PB 200s", "br4.5 PB 8e", "br4.6 VWAP",
+  "br5.1 Undercut & Rally", "br5.2 Upside Reversal",
+  "br6.1 Gapper", "br6.2 Continuation Gap Up",
+  "br7.1 TQQQ Strategy", "br7.2 New High after Gentle PB", "br7.3 JL Century Mark",
+  "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break",
+  "br9.1 21e Strategy",
+  "br10.1 Hedging with leverage product",
+  "br11.1 Shorting",
+  "br12.1 Option Play",
+];
+
+const SELL_RULES = [
+  "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
+  "sr4 Time Stop", "sr5 Climax Top", "sr6 Exhaustion Gap",
+  "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
+  "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
+  "sr13 Earnings Exit", "sr14 Market Correction Exit",
+];
+
 type Tab = "stops" | "edit" | "delete" | "export";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
@@ -295,8 +319,12 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                            className={inputCls} style={inputStyle} />
                   </Field>
                   <Field label="Rule (Strategy)">
-                    <input type="text" value={editFields.rule || ""} onChange={e => setEditFields({ ...editFields, rule: e.target.value })}
-                           className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
+                    <SearchSelect
+                      value={editFields.rule || ""}
+                      onChange={v => setEditFields({ ...editFields, rule: v })}
+                      options={editTx && String(editTx.action).toUpperCase() === "SELL" ? SELL_RULES : BUY_RULES}
+                      placeholder="Select rule..."
+                    />
                   </Field>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
