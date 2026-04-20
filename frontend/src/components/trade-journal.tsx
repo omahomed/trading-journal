@@ -267,6 +267,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
+  const [analysisOpen, setAnalysisOpen] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -618,10 +619,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
               {isExpanded && (
                 <div style={{ borderTop: "1px solid var(--border)", animation: "slide-up 0.15s ease-out" }}>
 
-                  {/* ── Charts Section (R2 images) ── */}
-                  <TradeCharts tradeId={trade.trade_id} ticker={trade.ticker} />
-
-                  {/* ── Flight Deck ── */}
+                  {/* ── Section 3: Flight Deck (daily driver — always visible) ── */}
                   <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
                     <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
                       <span>🚁</span> Flight Deck: {trade.ticker}
@@ -725,13 +723,17 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         }
                       }
 
-                      // Compute unrealized P&L for open buy rows using live price
+                      // Compute unrealized P&L and return % for open buy rows using live price
                       const currentPrice = isOpen ? livePrice : 0;
                       if (currentPrice > 0) {
                         rowData.forEach(row => {
                           if (!row.isSell && row.remaining > 0) {
                             const buyPrice = parseFloat(String(row.tx.amount || 0)) || enrichedEntry;
                             row.unrealizedPl = (currentPrice - buyPrice) * row.remaining;
+                            // Return % for open rows = (live - buy) / buy
+                            if (buyPrice > 0 && row.realizedPl === 0) {
+                              row.returnPct = ((currentPrice - buyPrice) / buyPrice) * 100;
+                            }
                           }
                         });
                       }
@@ -806,27 +808,45 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     })()}
                   </div>
 
-                  {/* ── Trade Notes ── */}
-                  <div className="px-5 py-4">
-                    <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
-                      <span>📝</span> Trade Notes
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                        <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Entry Notes</div>
-                        <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
-                          {trade.buy_notes || "_No entry notes_"}
+                  {/* ── Section 2: Charts, Fundamentals, Notes (post-analysis — collapsed by default) ── */}
+                  <div style={{ borderTop: "1px solid var(--border)" }}>
+                    <button onClick={() => setAnalysisOpen(analysisOpen === trade.trade_id ? null : trade.trade_id)}
+                            className="w-full flex items-center gap-2 px-5 py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                            style={{ background: "var(--surface-2)" }}>
+                      <span className="text-[10px] transition-transform" style={{ transform: analysisOpen === trade.trade_id ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                      <span className="text-[12px] font-semibold" style={{ color: "var(--ink-3)" }}>Charts, Fundamentals & Notes</span>
+                      <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>(post-analysis)</span>
+                    </button>
+
+                    {analysisOpen === trade.trade_id && (
+                      <div style={{ animation: "slide-up 0.12s ease-out" }}>
+                        {/* Charts */}
+                        <TradeCharts tradeId={trade.trade_id} ticker={trade.ticker} />
+
+                        {/* Trade Notes */}
+                        <div className="px-5 py-4">
+                          <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
+                            <span>📝</span> Trade Notes
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Entry Notes</div>
+                              <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+                                {trade.buy_notes || "_No entry notes_"}
+                              </div>
+                            </div>
+                            <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
+                                {trade.sell_rule ? `Sell Rule: ${trade.sell_rule}` : "Setup/Rule"}
+                              </div>
+                              <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+                                {trade.sell_notes || trade.rule || "_No notes_"}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                        <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
-                          {trade.sell_rule ? `Sell Rule: ${trade.sell_rule}` : "Setup/Rule"}
-                        </div>
-                        <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
-                          {trade.sell_notes || trade.rule || "_No notes_"}
-                        </div>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               )}
