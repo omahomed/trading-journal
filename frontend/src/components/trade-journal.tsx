@@ -361,8 +361,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
     // Sort
     switch (sort) {
-      case "newest": result.sort((a, b) => String(b.open_date || "").localeCompare(String(a.open_date || ""))); break;
-      case "oldest": result.sort((a, b) => String(a.open_date || "").localeCompare(String(b.open_date || ""))); break;
+      case "newest": result.sort((a, b) => String(b.open_date || "").localeCompare(String(a.open_date || "")) || String(b.trade_id || "").localeCompare(String(a.trade_id || ""))); break;
+      case "oldest": result.sort((a, b) => String(a.open_date || "").localeCompare(String(b.open_date || "")) || String(a.trade_id || "").localeCompare(String(b.trade_id || ""))); break;
       case "best": result.sort((a, b) => parseFloat(String(b.realized_pl || 0)) - parseFloat(String(a.realized_pl || 0))); break;
       case "worst": result.sort((a, b) => parseFloat(String(a.realized_pl || 0)) - parseFloat(String(b.realized_pl || 0))); break;
       case "ticker": result.sort((a, b) => (a.ticker || "").localeCompare(b.ticker || "")); break;
