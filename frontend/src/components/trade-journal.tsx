@@ -332,13 +332,15 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       }
       setLoading(false);
 
-      // Prefill ticker filter from Active Campaign (via localStorage)
+      // Prefill from Active Campaign right-click (via localStorage)
       try {
-        const prefill = localStorage.getItem("journal_prefill_ticker");
-        if (prefill) {
-          localStorage.removeItem("journal_prefill_ticker");
-          setSelectedTickers([prefill]);
-          setStatusFilter("all");
+        const raw = localStorage.getItem("journal_prefill");
+        if (raw) {
+          localStorage.removeItem("journal_prefill");
+          const data = JSON.parse(raw);
+          if (data.ticker) setSelectedTickers([data.ticker]);
+          if (data.trade_id) setExpandedCard(data.trade_id);
+          setStatusFilter("open");
         }
       } catch { /* ignore */ }
     });

@@ -346,7 +346,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   }, [onNavigate]);
 
   const ctxViewJournal = useCallback((p: EnrichedPosition) => {
-    localStorage.setItem("journal_prefill_ticker", p.ticker);
+    localStorage.setItem("journal_prefill", JSON.stringify({ ticker: p.ticker, trade_id: p.trade_id }));
     if (onNavigate) onNavigate("journal");
   }, [onNavigate]);
 
