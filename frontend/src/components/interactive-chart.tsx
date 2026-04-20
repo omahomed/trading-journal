@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { createChart, type IChartApi, CandlestickSeries, HistogramSeries, LineSeries, AreaSeries, ColorType, type Time, createSeriesMarkers, type SeriesMarker } from "lightweight-charts";
+import { createChart, type IChartApi, CandlestickSeries, BarSeries, HistogramSeries, LineSeries, AreaSeries, ColorType, type Time, createSeriesMarkers, type SeriesMarker } from "lightweight-charts";
 import { api, type TradeDetail } from "@/lib/api";
 
-type ChartType = "candlestick" | "line" | "area";
+type ChartType = "bar" | "candlestick" | "line" | "area";
 type Interval = "1d" | "1wk" | "1mo";
 type VisibleRange = "5d" | "1m" | "3m" | "1y" | "5y" | "all";
 
 const MA_COLORS = {
-  ema8: "#f59e0b",   // amber
-  ema21: "#3b82f6",  // blue
+  ema8: "#22c55e",   // green
+  ema21: "#f59e0b",  // orange
   sma50: "#ef4444",  // red
-  sma200: "#8b5cf6", // purple
+  sma200: "#a855f7", // purple/magenta
 };
 
 function calcEMA(closes: number[], period: number): (number | null)[] {
@@ -55,7 +55,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
   const chartRef = useRef<IChartApi | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [chartType, setChartType] = useState<ChartType>("candlestick");
+  const [chartType, setChartType] = useState<ChartType>("bar");
   const [interval, setInterval] = useState<Interval>("1d");
   const [maVisible, setMaVisible] = useState({ ema8: true, ema21: true, sma50: true, sma200: true });
   const [visibleRange, setVisibleRange] = useState<VisibleRange>("3m");
@@ -155,7 +155,15 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
 
       // Main price series based on chart type
       let priceSeries: any;
-      if (chartType === "candlestick") {
+      if (chartType === "bar") {
+        priceSeries = chart.addSeries(BarSeries, {
+          upColor: "#22c55e",
+          downColor: "#ef4444",
+        });
+        priceSeries.setData(candles.map(c => ({
+          time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
+        })));
+      } else if (chartType === "candlestick") {
         priceSeries = chart.addSeries(CandlestickSeries, {
           upColor: "#22c55e",
           downColor: "#ef4444",
@@ -203,7 +211,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
       const addMA = (values: (number | null)[], color: string, title: string) => {
         const s = chart.addSeries(LineSeries, {
           color,
-          lineWidth: 1,
+          lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
@@ -228,7 +236,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         dateToTime.set(key, c.time);
       }
 
-      // Buy/sell markers
+      // Buy/sell markers — just trx_id, all above bar
       const tradeDetails = details.filter(d => d.trade_id === tradeId);
       const markers: SeriesMarker<Time>[] = [];
       for (const tx of tradeDetails) {
@@ -236,15 +244,13 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
         const candleTime = dateToTime.get(txDate);
         if (!candleTime) continue;
         const isBuy = String(tx.action).toUpperCase() === "BUY";
-        const price = parseFloat(String(tx.amount || 0));
-        const shares = Math.abs(parseFloat(String(tx.shares || 0)));
         const label = tx.trx_id || (isBuy ? "B" : "S");
         markers.push({
           time: candleTime as Time,
-          position: isBuy ? "belowBar" : "aboveBar",
+          position: "aboveBar",
           color: isBuy ? "#22c55e" : "#ef4444",
-          shape: isBuy ? "arrowUp" : "arrowDown",
-          text: `${label} ${shares}@$${price.toFixed(2)}`,
+          shape: "arrowDown",
+          text: label,
         });
       }
       markers.sort((a, b) => (a.time as number) - (b.time as number));
@@ -361,7 +367,7 @@ export function InteractiveChart({ ticker, tradeId, openDate, closedDate, detail
 
         {/* Chart type */}
         <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-          {([["candlestick", "Candle"], ["line", "Line"], ["area", "Area"]] as [ChartType, string][]).map(([val, label]) => (
+          {([["bar", "Bar"], ["candlestick", "Candle"], ["line", "Line"], ["area", "Area"]] as [ChartType, string][]).map(([val, label]) => (
             <button key={val} onClick={() => setChartType(val)}
                     className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
                     style={btnStyle(chartType === val)}>
