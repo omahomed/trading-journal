@@ -19,7 +19,7 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
     setBusy(true);
     setMsg(null);
     try {
-      const html2canvas = (await import("html2canvas")).default;
+      const { toBlob } = await import("html-to-image");
       const node = targetSelector ? (document.querySelector(targetSelector) as HTMLElement | null) : document.body;
       if (!node) {
         setMsg({ ok: false, text: "Target not found" });
@@ -27,16 +27,17 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         return;
       }
 
-      const canvas = await html2canvas(node, {
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff",
-        scale: 2,
-        useCORS: true,
-        logging: false,
+      const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
+      const blob = await toBlob(node, {
+        backgroundColor: bg,
+        pixelRatio: 2,
+        cacheBust: true,
       });
-
-      const blob: Blob = await new Promise((resolve, reject) => {
-        canvas.toBlob(b => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
-      });
+      if (!blob) {
+        setMsg({ ok: false, text: "Capture produced no image" });
+        setBusy(false);
+        return;
+      }
 
       const today = new Date();
       const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
