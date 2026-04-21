@@ -128,6 +128,30 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     setThoughtsDirty(false);
   }, [selectedDate]);
 
+  // Lazy-fill market_cycle for the selected day if the entry exists but the
+  // value is missing. Fires at most once per date per session via the
+  // attempted set. Same auto-compute path used by Market Window.
+  const attemptedCycleFill = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedDate || history.length === 0) return;
+    const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
+    if (!entry) return;
+    if (entry.market_cycle) return;
+    if (attemptedCycleFill.current.has(selectedDate)) return;
+    attemptedCycleFill.current.add(selectedDate);
+    api.journalEdit({ portfolio: "CanSlim", day: selectedDate })
+      .then(res => {
+        if (res.status !== "ok") return;
+        return api.journalHistory("CanSlim", 0);
+      })
+      .then(fresh => {
+        if (!fresh) return;
+        const h = (fresh as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
+        setHistory(h);
+      })
+      .catch(() => { /* ignore */ });
+  }, [selectedDate, history]);
+
   // Hydrate thoughts from the selected journal entry (stored in lowlights field)
   useEffect(() => {
     if (!selectedDate || history.length === 0) { setThoughts(""); return; }
