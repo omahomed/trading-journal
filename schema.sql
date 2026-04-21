@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS trading_journal (
     day DATE NOT NULL,
     status VARCHAR(50),
     market_window VARCHAR(50),
+    market_cycle VARCHAR(50),
     above_21ema INTEGER DEFAULT 0,  -- Column name: "> 21e"
     cash_change NUMERIC(15, 2) DEFAULT 0,  -- Column name: "Cash -/+"
     beg_nlv NUMERIC(15, 2) DEFAULT 0,

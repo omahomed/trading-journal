@@ -91,7 +91,6 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   }, [thoughtsMode]);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [imageMsg, setImageMsg] = useState<string | null>(null);
-  const [cycleState, setCycleState] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -116,7 +115,6 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       if (h.length > 0) setSelectedDate(String(h[0].day).slice(0, 10));
       setLoading(false);
     });
-    api.rallyPrefix().then(d => setCycleState((d as any)?.state || "")).catch(() => setCycleState(""));
   }, []);
 
   // Load snapshots + thoughts when selectedDate changes
@@ -351,11 +349,10 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
               {windowBadge((day as any).market_window || "")}
             </div>
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>NASDAQ Cycle</div>
-                <span className="text-[8px] font-semibold px-1.5 py-0.5 rounded" style={{ background: "var(--bg)", color: "var(--ink-4)", border: "1px solid var(--border)" }}>LIVE</span>
-              </div>
-              {cycleBadge(cycleState)}
+              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>NASDAQ Cycle</div>
+              {(day as any).market_cycle
+                ? cycleBadge((day as any).market_cycle)
+                : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
             </div>
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Risk Status</div>

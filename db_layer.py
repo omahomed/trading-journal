@@ -341,12 +341,25 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
         with get_db_connection() as conn:
             # Use cursor to execute query with parameters, then pandas to read results
             with conn.cursor() as cur:
-                query = """
+                # Detect whether market_cycle column exists so we can include it
+                # in the SELECT without failing on older DBs that haven't run the
+                # add_market_cycle_column.sql migration yet.
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'market_cycle'"
+                    )
+                    has_market_cycle = cur.fetchone() is not None
+                except Exception:
+                    has_market_cycle = False
+
+                cycle_select = 'j.market_cycle AS "Market Cycle",\n                        ' if has_market_cycle else ''
+                query = f"""
                     SELECT
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        j.above_21ema AS "> 21e",
+                        {cycle_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
@@ -1058,6 +1071,7 @@ def save_journal_entry(journal_entry):
             day = journal_entry.get('day')
             status = journal_entry.get('status', 'U')
             market_window = journal_entry.get('market_window', 'Open')
+            market_cycle = journal_entry.get('market_cycle', '')
             above_21ema = journal_entry.get('above_21ema', 0.0)
             cash_change = journal_entry.get('cash_flow', 0.0)
             beg_nlv = journal_entry.get('beginning_nlv', 0.0)
@@ -1086,11 +1100,13 @@ def save_journal_entry(journal_entry):
             existing = cur.fetchone()
 
             if existing:
-                # UPDATE existing entry — try with all columns, fall back without new columns
+                # UPDATE existing entry — try with all columns incl. market_cycle,
+                # fall back progressively if newer columns are missing.
                 try:
                     update_query = """
                         UPDATE trading_journal
-                        SET status = %s, market_window = %s, above_21ema = %s,
+                        SET status = %s, market_window = %s, market_cycle = %s,
+                            above_21ema = %s,
                             cash_change = %s, beg_nlv = %s, end_nlv = %s,
                             daily_dollar_change = %s, daily_pct_change = %s,
                             pct_invested = %s, spy = %s, nasdaq = %s,
@@ -1103,7 +1119,7 @@ def save_journal_entry(journal_entry):
                         RETURNING id
                     """
                     cur.execute(update_query, (
-                        status, market_window, above_21ema,
+                        status, market_window, market_cycle, above_21ema,
                         cash_change, beg_nlv, end_nlv,
                         daily_dollar_change, daily_pct_change,
                         pct_invested, spy, nasdaq,
@@ -1116,34 +1132,65 @@ def save_journal_entry(journal_entry):
                     ))
                 except Exception:
                     conn.rollback()
-                    update_query = """
-                        UPDATE trading_journal
-                        SET status = %s, market_window = %s, above_21ema = %s,
-                            cash_change = %s, beg_nlv = %s, end_nlv = %s,
-                            daily_dollar_change = %s, daily_pct_change = %s,
-                            pct_invested = %s, spy = %s, nasdaq = %s,
-                            market_notes = %s, market_action = %s, score = %s,
-                            highlights = %s, lowlights = %s, mistakes = %s,
-                            top_lesson = %s
-                        WHERE id = %s
-                        RETURNING id
-                    """
-                    cur.execute(update_query, (
-                        status, market_window, above_21ema,
-                        cash_change, beg_nlv, end_nlv,
-                        daily_dollar_change, daily_pct_change,
-                        pct_invested, spy, nasdaq,
-                        market_notes, market_action, score,
-                        highlights, lowlights, mistakes,
-                        top_lesson,
-                        existing[0]
-                    ))
+                    try:
+                        update_query = """
+                            UPDATE trading_journal
+                            SET status = %s, market_window = %s, above_21ema = %s,
+                                cash_change = %s, beg_nlv = %s, end_nlv = %s,
+                                daily_dollar_change = %s, daily_pct_change = %s,
+                                pct_invested = %s, spy = %s, nasdaq = %s,
+                                market_notes = %s, market_action = %s,
+                                portfolio_heat = %s, spy_atr = %s, nasdaq_atr = %s,
+                                score = %s,
+                                highlights = %s, lowlights = %s, mistakes = %s,
+                                top_lesson = %s
+                            WHERE id = %s
+                            RETURNING id
+                        """
+                        cur.execute(update_query, (
+                            status, market_window, above_21ema,
+                            cash_change, beg_nlv, end_nlv,
+                            daily_dollar_change, daily_pct_change,
+                            pct_invested, spy, nasdaq,
+                            market_notes, market_action,
+                            portfolio_heat, spy_atr, nasdaq_atr,
+                            score,
+                            highlights, lowlights, mistakes,
+                            top_lesson,
+                            existing[0]
+                        ))
+                    except Exception:
+                        conn.rollback()
+                        update_query = """
+                            UPDATE trading_journal
+                            SET status = %s, market_window = %s, above_21ema = %s,
+                                cash_change = %s, beg_nlv = %s, end_nlv = %s,
+                                daily_dollar_change = %s, daily_pct_change = %s,
+                                pct_invested = %s, spy = %s, nasdaq = %s,
+                                market_notes = %s, market_action = %s, score = %s,
+                                highlights = %s, lowlights = %s, mistakes = %s,
+                                top_lesson = %s
+                            WHERE id = %s
+                            RETURNING id
+                        """
+                        cur.execute(update_query, (
+                            status, market_window, above_21ema,
+                            cash_change, beg_nlv, end_nlv,
+                            daily_dollar_change, daily_pct_change,
+                            pct_invested, spy, nasdaq,
+                            market_notes, market_action, score,
+                            highlights, lowlights, mistakes,
+                            top_lesson,
+                            existing[0]
+                        ))
             else:
-                # INSERT new entry — try with all columns, fall back without new columns
+                # INSERT new entry — try with all columns incl. market_cycle,
+                # fall back progressively if newer columns are missing.
                 try:
                     insert_query = """
                         INSERT INTO trading_journal (
-                            portfolio_id, day, status, market_window, above_21ema,
+                            portfolio_id, day, status, market_window, market_cycle,
+                            above_21ema,
                             cash_change, beg_nlv, end_nlv, daily_dollar_change,
                             daily_pct_change, pct_invested, spy, nasdaq,
                             market_notes, market_action, portfolio_heat,
@@ -1152,12 +1199,13 @@ def save_journal_entry(journal_entry):
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s
+                            %s, %s, %s, %s
                         )
                         RETURNING id
                     """
                     cur.execute(insert_query, (
-                        portfolio_id, day, status, market_window, above_21ema,
+                        portfolio_id, day, status, market_window, market_cycle,
+                        above_21ema,
                         cash_change, beg_nlv, end_nlv, daily_dollar_change,
                         daily_pct_change, pct_invested, spy, nasdaq,
                         market_notes, market_action, portfolio_heat,
@@ -1166,26 +1214,52 @@ def save_journal_entry(journal_entry):
                     ))
                 except Exception:
                     conn.rollback()
-                    insert_query = """
-                        INSERT INTO trading_journal (
+                    try:
+                        insert_query = """
+                            INSERT INTO trading_journal (
+                                portfolio_id, day, status, market_window, above_21ema,
+                                cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                                daily_pct_change, pct_invested, spy, nasdaq,
+                                market_notes, market_action, portfolio_heat,
+                                spy_atr, nasdaq_atr, score,
+                                highlights, lowlights, mistakes, top_lesson
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s
+                            )
+                            RETURNING id
+                        """
+                        cur.execute(insert_query, (
+                            portfolio_id, day, status, market_window, above_21ema,
+                            cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                            daily_pct_change, pct_invested, spy, nasdaq,
+                            market_notes, market_action, portfolio_heat,
+                            spy_atr, nasdaq_atr, score,
+                            highlights, lowlights, mistakes, top_lesson
+                        ))
+                    except Exception:
+                        conn.rollback()
+                        insert_query = """
+                            INSERT INTO trading_journal (
+                                portfolio_id, day, status, market_window, above_21ema,
+                                cash_change, beg_nlv, end_nlv, daily_dollar_change,
+                                daily_pct_change, pct_invested, spy, nasdaq,
+                                market_notes, market_action, score,
+                                highlights, lowlights, mistakes, top_lesson
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            )
+                            RETURNING id
+                        """
+                        cur.execute(insert_query, (
                             portfolio_id, day, status, market_window, above_21ema,
                             cash_change, beg_nlv, end_nlv, daily_dollar_change,
                             daily_pct_change, pct_invested, spy, nasdaq,
                             market_notes, market_action, score,
                             highlights, lowlights, mistakes, top_lesson
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        )
-                        RETURNING id
-                    """
-                    cur.execute(insert_query, (
-                        portfolio_id, day, status, market_window, above_21ema,
-                        cash_change, beg_nlv, end_nlv, daily_dollar_change,
-                        daily_pct_change, pct_invested, spy, nasdaq,
-                        market_notes, market_action, score,
-                        highlights, lowlights, mistakes, top_lesson
-                    ))
+                        ))
 
             row_id = cur.fetchone()[0]
             conn.commit()

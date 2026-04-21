@@ -87,6 +87,7 @@ def _normalize_journal(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize journal column names to lowercase with underscores."""
     rename = {
         "Day": "day", "Status": "status", "Market Window": "market_window",
+        "Market Cycle": "market_cycle",
         "> 21e": "above_21ema", "Cash -/+": "cash_change",
         "Beg NLV": "beg_nlv", "End NLV": "end_nlv",
         "Daily $ Change": "daily_dollar_change", "Daily % Change": "daily_pct_change",
@@ -164,7 +165,7 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
             "daily_return", "pct_invested", "portfolio_ltd",
             "spy_ltd", "ndx_ltd", "spy_daily_pct", "ndx_daily_pct",
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
-            "market_window", "market_notes", "market_action",
+            "market_window", "market_cycle", "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
             "highlights", "lowlights", "mistakes", "top_lesson"]
     available_cols = [c for c in cols if c in df.columns]
@@ -220,6 +221,22 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
         return round(heat, 4)
     except Exception:
         return 0.0
+
+
+def _compute_cycle_state_live() -> str:
+    """Snapshot of the current NASDAQ cycle state.
+
+    Returns one of: POWERTREND / UPTREND / RALLY MODE / CORRECTION / "".
+    Delegates to the /api/market/rally-prefix route handler, which is just
+    a regular function we can call directly.
+    """
+    try:
+        result = rally_prefix()
+        if isinstance(result, dict):
+            return str(result.get("state", "") or "")
+        return ""
+    except Exception:
+        return ""
 
 
 def _compute_market_window(as_of_date: str = "") -> str:
@@ -296,6 +313,7 @@ def journal_edit(entry: dict):
                     "spy_close": float(row.get("spy", 0) or 0),
                     "nasdaq_close": float(row.get("nasdaq", 0) or 0),
                     "market_window": str(row.get("market_window", "") or ""),
+                    "market_cycle": str(row.get("market_cycle", "") or ""),
                     "market_notes": str(row.get("market_notes", "") or ""),
                     "market_action": str(row.get("market_action", "") or ""),
                     "portfolio_heat": float(row.get("portfolio_heat", 0) or 0),
@@ -331,6 +349,7 @@ def journal_edit(entry: dict):
             "spy_close": _f("spy", "spy_close"),
             "nasdaq_close": _f("nasdaq", "nasdaq_close"),
             "market_window": _s("market_window", "market_window"),
+            "market_cycle": _s("market_cycle", "market_cycle"),
             "market_notes": _s("market_notes", "market_notes"),
             "market_action": _s("market_action", "market_action"),
             "portfolio_heat": _f("portfolio_heat", "portfolio_heat"),
@@ -347,6 +366,8 @@ def journal_edit(entry: dict):
         day_str = str(day).strip()[:10]
         if not journal_entry["market_window"]:
             journal_entry["market_window"] = _compute_market_window(day_str)
+        if not journal_entry["market_cycle"]:
+            journal_entry["market_cycle"] = _compute_cycle_state_live()
         if not journal_entry["spy_atr"]:
             journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
         if not journal_entry["nasdaq_atr"]:
@@ -431,6 +452,7 @@ def journal_backfill_metrics(body: dict = Body(...)):
                     "spy_close": float(row.get("spy", 0) or 0),
                     "nasdaq_close": float(row.get("nasdaq", 0) or 0),
                     "market_window": _compute_market_window(day_str) if need_mw else existing_mw,
+                    "market_cycle": str(row.get("market_cycle", "") or ""),
                     "market_notes": str(row.get("market_notes", "") or ""),
                     "market_action": str(row.get("market_action", "") or ""),
                     "portfolio_heat": _compute_portfolio_heat(portfolio, day_str, float(row.get("end_nlv", 0) or 0)) if need_heat else existing_heat,
