@@ -106,6 +106,11 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
+  journalDelete: (day: string, portfolio = "CanSlim") =>
+    fetch(`${API_BASE}/api/journal/delete?portfolio=${encodeURIComponent(portfolio)}&day=${encodeURIComponent(day)}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
+
   journalBackfillMetrics: (body: { portfolio?: string; start_date?: string; end_date?: string; force?: boolean }) =>
     fetch(`${API_BASE}/api/journal/backfill-metrics`, {
       method: "POST",

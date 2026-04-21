@@ -361,6 +361,18 @@ def journal_edit(entry: dict):
         return {"status": "error", "detail": str(e)}
 
 
+@app.delete("/api/journal/delete")
+def journal_delete(portfolio: str = Query("CanSlim"), day: str = Query(...)):
+    """Delete a single journal entry for the given portfolio and day."""
+    try:
+        deleted_id = db.delete_journal_entry(portfolio, day)
+        if deleted_id:
+            return {"status": "ok", "id": deleted_id}
+        return {"status": "not_found", "detail": f"No entry for {day} in {portfolio}"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
 @app.post("/api/journal/backfill-metrics")
 def journal_backfill_metrics(body: dict = Body(...)):
     """Backfill missing market_window, portfolio_heat, spy_atr, nasdaq_atr

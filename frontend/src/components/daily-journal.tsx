@@ -285,16 +285,31 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             portfolio_heat: editFields.portfolio_heat,
             spy_atr: editFields.spy_atr,
             nasdaq_atr: editFields.nasdaq_atr,
-            highlights: editFields.highlights,
-            lowlights: editFields.lowlights,
-            mistakes: editFields.mistakes,
-            top_lesson: editFields.top_lesson,
           });
           setSaving(false);
           if (result.status === "ok") {
             setSaveMsg("Saved successfully");
           } else {
             setSaveMsg(`Error: ${result.detail || "Unknown error"}`);
+          }
+        };
+
+        const handleDelete = async () => {
+          if (editIdx < 0) return;
+          const h = history[editIdx];
+          const day = String(h.day).slice(0, 10);
+          if (!confirm(`Delete journal entry for ${day}? This cannot be undone.`)) return;
+          setSaving(true);
+          const result = await api.journalDelete(day, "CanSlim");
+          setSaving(false);
+          if (result.status === "ok") {
+            setSaveMsg(`Deleted entry for ${day}`);
+            setEditIdx(-1);
+            // Reload history
+            const h2 = await api.journalHistory("CanSlim", 0).catch(() => []);
+            setHistory(h2 as any);
+          } else {
+            setSaveMsg(`Error: ${result.detail || "Delete failed"}`);
           }
         };
 
@@ -370,18 +385,6 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                       <input type="text" value={editFields.market_notes} onChange={e => setEditFields({ ...editFields, market_notes: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
                     <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Market Action</label>
                       <input type="text" value={editFields.market_action} onChange={e => setEditFields({ ...editFields, market_action: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Highlights</label>
-                        <input type="text" value={editFields.highlights} onChange={e => setEditFields({ ...editFields, highlights: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
-                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Lowlights</label>
-                        <input type="text" value={editFields.lowlights} onChange={e => setEditFields({ ...editFields, lowlights: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Mistakes</label>
-                        <input type="text" value={editFields.mistakes} onChange={e => setEditFields({ ...editFields, mistakes: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
-                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Top Lesson</label>
-                        <input type="text" value={editFields.top_lesson} onChange={e => setEditFields({ ...editFields, top_lesson: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
-                    </div>
 
                     {saveMsg && (
                       <div className="text-[12px] font-medium px-3 py-2 rounded-[8px]"
@@ -390,11 +393,18 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                       </div>
                     )}
 
-                    <button onClick={handleSave} disabled={saving}
-                            className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 w-fit disabled:opacity-50"
-                            style={{ background: navColor }}>
-                      {saving ? "Saving..." : "Save Changes"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={handleSave} disabled={saving}
+                              className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 w-fit disabled:opacity-50"
+                              style={{ background: navColor }}>
+                        {saving ? "Saving..." : "Save Changes"}
+                      </button>
+                      <button onClick={handleDelete} disabled={saving}
+                              className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 w-fit disabled:opacity-50"
+                              style={{ background: "#e5484d" }}>
+                        Delete Entry
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
