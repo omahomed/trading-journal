@@ -199,6 +199,7 @@ def load_summary(portfolio_name, status=None):
                     s.buy_notes AS "Buy_Notes",
                     s.sell_notes AS "Sell_Notes",
                     s.risk_budget AS "Risk_Budget",
+                    s.grade AS "Grade",
                     COALESCE(
                         (SELECT d.rule
                          FROM trades_details d
@@ -518,73 +519,194 @@ def save_summary_row(portfolio_name, row_dict):
             )
             existing = cur.fetchone()
 
+            # Grade is optional: omitting it from row_dict should leave the
+            # existing DB value untouched. Only write when the caller passes
+            # 'Grade' explicitly (including None to clear it).
+            grade_val = row_dict.get('Grade', '__unset__')
+            update_grade = grade_val != '__unset__'
+            grade_clean = None
+            if update_grade and grade_val is not None:
+                try:
+                    g = int(grade_val)
+                    grade_clean = g if 1 <= g <= 5 else None
+                except (ValueError, TypeError):
+                    grade_clean = None
+
             if existing:
-                # UPDATE existing trade
-                update_query = """
-                    UPDATE trades_summary
-                    SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
-                        shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
-                        realized_pl = %s, unrealized_pl = %s, return_pct = %s,
-                        sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
-                        buy_notes = %s, sell_notes = %s, risk_budget = %s
-                    WHERE id = %s
-                    RETURNING id
-                """
-                cur.execute(update_query, (
-                    row_dict.get('Ticker'),
-                    row_dict.get('Status', 'OPEN'),
-                    clean_value(row_dict.get('Open_Date')),
-                    clean_value(row_dict.get('Closed_Date')),
-                    row_dict.get('Shares', 0),
-                    row_dict.get('Avg_Entry', 0),
-                    row_dict.get('Avg_Exit', 0),
-                    row_dict.get('Total_Cost', 0),
-                    row_dict.get('Realized_PL', 0),
-                    row_dict.get('Unrealized_PL', 0),
-                    row_dict.get('Return_Pct', 0),
-                    row_dict.get('Sell_Rule'),
-                    row_dict.get('Notes'),
-                    row_dict.get('Stop_Loss'),
-                    row_dict.get('Rule'),
-                    row_dict.get('Buy_Notes'),
-                    row_dict.get('Sell_Notes'),
-                    row_dict.get('Risk_Budget', 0),
-                    existing[0]
-                ))
+                # UPDATE existing trade — try with grade, fall back without.
+                try:
+                    if update_grade:
+                        update_query = """
+                            UPDATE trades_summary
+                            SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
+                                shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
+                                realized_pl = %s, unrealized_pl = %s, return_pct = %s,
+                                sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
+                                buy_notes = %s, sell_notes = %s, risk_budget = %s,
+                                grade = %s
+                            WHERE id = %s
+                            RETURNING id
+                        """
+                        params = (
+                            row_dict.get('Ticker'),
+                            row_dict.get('Status', 'OPEN'),
+                            clean_value(row_dict.get('Open_Date')),
+                            clean_value(row_dict.get('Closed_Date')),
+                            row_dict.get('Shares', 0),
+                            row_dict.get('Avg_Entry', 0),
+                            row_dict.get('Avg_Exit', 0),
+                            row_dict.get('Total_Cost', 0),
+                            row_dict.get('Realized_PL', 0),
+                            row_dict.get('Unrealized_PL', 0),
+                            row_dict.get('Return_Pct', 0),
+                            row_dict.get('Sell_Rule'),
+                            row_dict.get('Notes'),
+                            row_dict.get('Stop_Loss'),
+                            row_dict.get('Rule'),
+                            row_dict.get('Buy_Notes'),
+                            row_dict.get('Sell_Notes'),
+                            row_dict.get('Risk_Budget', 0),
+                            grade_clean,
+                            existing[0],
+                        )
+                    else:
+                        update_query = """
+                            UPDATE trades_summary
+                            SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
+                                shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
+                                realized_pl = %s, unrealized_pl = %s, return_pct = %s,
+                                sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
+                                buy_notes = %s, sell_notes = %s, risk_budget = %s
+                            WHERE id = %s
+                            RETURNING id
+                        """
+                        params = (
+                            row_dict.get('Ticker'),
+                            row_dict.get('Status', 'OPEN'),
+                            clean_value(row_dict.get('Open_Date')),
+                            clean_value(row_dict.get('Closed_Date')),
+                            row_dict.get('Shares', 0),
+                            row_dict.get('Avg_Entry', 0),
+                            row_dict.get('Avg_Exit', 0),
+                            row_dict.get('Total_Cost', 0),
+                            row_dict.get('Realized_PL', 0),
+                            row_dict.get('Unrealized_PL', 0),
+                            row_dict.get('Return_Pct', 0),
+                            row_dict.get('Sell_Rule'),
+                            row_dict.get('Notes'),
+                            row_dict.get('Stop_Loss'),
+                            row_dict.get('Rule'),
+                            row_dict.get('Buy_Notes'),
+                            row_dict.get('Sell_Notes'),
+                            row_dict.get('Risk_Budget', 0),
+                            existing[0],
+                        )
+                    cur.execute(update_query, params)
+                except Exception:
+                    # DB missing grade column — retry without
+                    conn.rollback()
+                    update_query = """
+                        UPDATE trades_summary
+                        SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
+                            shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
+                            realized_pl = %s, unrealized_pl = %s, return_pct = %s,
+                            sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
+                            buy_notes = %s, sell_notes = %s, risk_budget = %s
+                        WHERE id = %s
+                        RETURNING id
+                    """
+                    cur.execute(update_query, (
+                        row_dict.get('Ticker'),
+                        row_dict.get('Status', 'OPEN'),
+                        clean_value(row_dict.get('Open_Date')),
+                        clean_value(row_dict.get('Closed_Date')),
+                        row_dict.get('Shares', 0),
+                        row_dict.get('Avg_Entry', 0),
+                        row_dict.get('Avg_Exit', 0),
+                        row_dict.get('Total_Cost', 0),
+                        row_dict.get('Realized_PL', 0),
+                        row_dict.get('Unrealized_PL', 0),
+                        row_dict.get('Return_Pct', 0),
+                        row_dict.get('Sell_Rule'),
+                        row_dict.get('Notes'),
+                        row_dict.get('Stop_Loss'),
+                        row_dict.get('Rule'),
+                        row_dict.get('Buy_Notes'),
+                        row_dict.get('Sell_Notes'),
+                        row_dict.get('Risk_Budget', 0),
+                        existing[0],
+                    ))
             else:
-                # INSERT new trade
-                insert_query = """
-                    INSERT INTO trades_summary (
-                        portfolio_id, trade_id, ticker, status, open_date, closed_date,
-                        shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
-                        return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes, risk_budget
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    RETURNING id
-                """
-                cur.execute(insert_query, (
-                    portfolio_id,
-                    row_dict.get('Trade_ID'),
-                    row_dict.get('Ticker'),
-                    row_dict.get('Status', 'OPEN'),
-                    clean_value(row_dict.get('Open_Date')),
-                    clean_value(row_dict.get('Closed_Date')),
-                    row_dict.get('Shares', 0),
-                    row_dict.get('Avg_Entry', 0),
-                    row_dict.get('Avg_Exit', 0),
-                    row_dict.get('Total_Cost', 0),
-                    row_dict.get('Realized_PL', 0),
-                    row_dict.get('Unrealized_PL', 0),
-                    row_dict.get('Return_Pct', 0),
-                    row_dict.get('Sell_Rule'),
-                    row_dict.get('Notes'),
-                    row_dict.get('Stop_Loss'),
-                    row_dict.get('Rule'),
-                    row_dict.get('Buy_Notes'),
-                    row_dict.get('Sell_Notes'),
-                    row_dict.get('Risk_Budget', 0)
-                ))
+                # INSERT new trade — try with grade, fall back without.
+                try:
+                    insert_query = """
+                        INSERT INTO trades_summary (
+                            portfolio_id, trade_id, ticker, status, open_date, closed_date,
+                            shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
+                            return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes, risk_budget,
+                            grade
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        RETURNING id
+                    """
+                    cur.execute(insert_query, (
+                        portfolio_id,
+                        row_dict.get('Trade_ID'),
+                        row_dict.get('Ticker'),
+                        row_dict.get('Status', 'OPEN'),
+                        clean_value(row_dict.get('Open_Date')),
+                        clean_value(row_dict.get('Closed_Date')),
+                        row_dict.get('Shares', 0),
+                        row_dict.get('Avg_Entry', 0),
+                        row_dict.get('Avg_Exit', 0),
+                        row_dict.get('Total_Cost', 0),
+                        row_dict.get('Realized_PL', 0),
+                        row_dict.get('Unrealized_PL', 0),
+                        row_dict.get('Return_Pct', 0),
+                        row_dict.get('Sell_Rule'),
+                        row_dict.get('Notes'),
+                        row_dict.get('Stop_Loss'),
+                        row_dict.get('Rule'),
+                        row_dict.get('Buy_Notes'),
+                        row_dict.get('Sell_Notes'),
+                        row_dict.get('Risk_Budget', 0),
+                        grade_clean,
+                    ))
+                except Exception:
+                    conn.rollback()
+                    insert_query = """
+                        INSERT INTO trades_summary (
+                            portfolio_id, trade_id, ticker, status, open_date, closed_date,
+                            shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
+                            return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes, risk_budget
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        RETURNING id
+                    """
+                    cur.execute(insert_query, (
+                        portfolio_id,
+                        row_dict.get('Trade_ID'),
+                        row_dict.get('Ticker'),
+                        row_dict.get('Status', 'OPEN'),
+                        clean_value(row_dict.get('Open_Date')),
+                        clean_value(row_dict.get('Closed_Date')),
+                        row_dict.get('Shares', 0),
+                        row_dict.get('Avg_Entry', 0),
+                        row_dict.get('Avg_Exit', 0),
+                        row_dict.get('Total_Cost', 0),
+                        row_dict.get('Realized_PL', 0),
+                        row_dict.get('Unrealized_PL', 0),
+                        row_dict.get('Return_Pct', 0),
+                        row_dict.get('Sell_Rule'),
+                        row_dict.get('Notes'),
+                        row_dict.get('Stop_Loss'),
+                        row_dict.get('Rule'),
+                        row_dict.get('Buy_Notes'),
+                        row_dict.get('Sell_Notes'),
+                        row_dict.get('Risk_Budget', 0),
+                    ))
 
             row_id = cur.fetchone()[0]
             conn.commit()

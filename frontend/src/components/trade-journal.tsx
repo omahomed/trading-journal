@@ -25,6 +25,33 @@ function PLColor(val: number) {
   return val > 0 ? "#08a86b" : val < 0 ? "#e5484d" : "var(--ink-3)";
 }
 
+function GradeStars({ value, onChange }: { value: number | null | undefined; onChange: (v: number | null) => void }) {
+  const [hover, setHover] = useState<number>(0);
+  const current = typeof value === "number" && value >= 1 && value <= 5 ? value : 0;
+  return (
+    <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}
+         onClick={e => e.stopPropagation()} title={current ? `${current}/5 — click again to clear` : "Grade this trade"}>
+      {[1, 2, 3, 4, 5].map(n => {
+        const filled = hover ? n <= hover : n <= current;
+        return (
+          <button key={n} type="button"
+                  onMouseEnter={() => setHover(n)}
+                  onClick={() => onChange(current === n ? null : n)}
+                  className="p-0.5 bg-transparent border-0 cursor-pointer transition-transform hover:scale-110"
+                  aria-label={`${n} star${n > 1 ? "s" : ""}`}>
+            <svg width="14" height="14" viewBox="0 0 24 24"
+                 fill={filled ? "#f59f00" : "none"}
+                 stroke={filled ? "#f59f00" : "var(--ink-4)"}
+                 strokeWidth="2" strokeLinejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function CardMetric({ label, value, color, sub }: { label: string; value: string; color?: string; sub?: string }) {
   return (
     <div>
@@ -582,6 +609,18 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     <span className="text-[20px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{trade.ticker}</span>
                     <StatusBadge status={trade.status || ""} />
                     <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{trade.trade_id}</span>
+                    <GradeStars
+                      value={typeof (trade as any).grade === "number" ? (trade as any).grade : null}
+                      onChange={(v) => {
+                        // optimistic local update
+                        setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: v } as any : t));
+                        api.setTradeGrade({ portfolio: "CanSlim", trade_id: trade.trade_id, grade: v })
+                          .catch(() => {
+                            // revert on failure
+                            setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: (trade as any).grade ?? null } as any : t));
+                          });
+                      }}
+                    />
                   </div>
                   <div className="text-right">
                     <div className="text-[20px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: PLColor(totalPl) }}>

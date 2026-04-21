@@ -33,6 +33,7 @@ interface EnrichedPosition {
   realized_bank: number;
   open_risk_equity: number;
   stop_pct: number;
+  grade: number | null;
 }
 
 function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
@@ -256,11 +257,13 @@ function computeEnrichedPositions(
       realized_bank: lifo.realizedBank,
       open_risk_equity: openRiskEquity,
       stop_pct: stopPct,
+      grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
     };
   }).sort((a, b) => b.return_pct - a.return_pct);
 }
 
 type RiskFilter = "all" | "at_risk" | "free_roll";
+type GradeFilter = "all" | "unrated" | "1" | "2" | "3" | "4" | "5";
 type SortKey = keyof EnrichedPosition;
 type SortDir = "asc" | "desc";
 
@@ -270,6 +273,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
@@ -372,21 +376,27 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // Filtered + sorted positions
   const filtered = useMemo(() => {
     let list = positions;
-    if (riskFilter === "at_risk") list = positions.filter(p => p.risk_status === "At Risk");
-    else if (riskFilter === "free_roll") list = positions.filter(p => p.risk_status === "Free Roll");
+    if (riskFilter === "at_risk") list = list.filter(p => p.risk_status === "At Risk");
+    else if (riskFilter === "free_roll") list = list.filter(p => p.risk_status === "Free Roll");
+
+    if (gradeFilter === "unrated") list = list.filter(p => p.grade == null);
+    else if (gradeFilter !== "all") {
+      const n = parseInt(gradeFilter, 10);
+      list = list.filter(p => p.grade === n);
+    }
 
     return [...list].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
       let cmp: number;
-      if (typeof av === "string" && typeof bv === "string") {
-        cmp = av.localeCompare(bv);
-      } else {
-        cmp = (av as number) - (bv as number);
-      }
+      if (av == null && bv == null) cmp = 0;
+      else if (av == null) cmp = -1;
+      else if (bv == null) cmp = 1;
+      else if (typeof av === "string" && typeof bv === "string") cmp = av.localeCompare(bv);
+      else cmp = (av as number) - (bv as number);
       return sortDir === "desc" ? -cmp : cmp;
     });
-  }, [positions, riskFilter, sortKey, sortDir]);
+  }, [positions, riskFilter, gradeFilter, sortKey, sortDir]);
 
   const atRiskCount = positions.filter(p => p.risk_status === "At Risk").length;
   const freeRollCount = positions.filter(p => p.risk_status === "Free Roll").length;
@@ -553,22 +563,36 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           <span className="text-xs" style={{ color: "var(--ink-4)" }}>Click headers to sort</span>
 
           {/* Filter tabs */}
-          <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-            {([
-              { key: "all" as RiskFilter, label: "All", count: totalPositions },
-              { key: "at_risk" as RiskFilter, label: "At Risk", count: atRiskCount },
-              { key: "free_roll" as RiskFilter, label: "Free Roll", count: freeRollCount },
-            ]).map(f => (
-              <button key={f.key} onClick={() => setRiskFilter(f.key)}
-                      className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
-                      style={{
-                        background: riskFilter === f.key ? "var(--surface)" : "transparent",
-                        color: riskFilter === f.key ? "var(--ink)" : "var(--ink-4)",
-                        boxShadow: riskFilter === f.key ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
-                      }}>
-                {f.label} <span style={{ opacity: 0.6 }}>({f.count})</span>
-              </button>
-            ))}
+          <div className="ml-auto flex items-center gap-2">
+            <select value={gradeFilter} onChange={e => setGradeFilter(e.target.value as GradeFilter)}
+                    className="h-[28px] px-2 rounded-[8px] text-[11px]"
+                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                    title="Filter by grade">
+              <option value="all">All grades</option>
+              <option value="unrated">Unrated</option>
+              <option value="5">★★★★★ (5)</option>
+              <option value="4">★★★★ (4)</option>
+              <option value="3">★★★ (3)</option>
+              <option value="2">★★ (2)</option>
+              <option value="1">★ (1)</option>
+            </select>
+            <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+              {([
+                { key: "all" as RiskFilter, label: "All", count: totalPositions },
+                { key: "at_risk" as RiskFilter, label: "At Risk", count: atRiskCount },
+                { key: "free_roll" as RiskFilter, label: "Free Roll", count: freeRollCount },
+              ]).map(f => (
+                <button key={f.key} onClick={() => setRiskFilter(f.key)}
+                        className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
+                        style={{
+                          background: riskFilter === f.key ? "var(--surface)" : "transparent",
+                          color: riskFilter === f.key ? "var(--ink)" : "var(--ink-4)",
+                          boxShadow: riskFilter === f.key ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                        }}>
+                  {f.label} <span style={{ opacity: 0.6 }}>({f.count})</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

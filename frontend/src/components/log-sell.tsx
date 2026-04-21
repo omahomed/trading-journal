@@ -96,6 +96,7 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [price, setPrice] = useState("");
   const [rule, setRule] = useState(SELL_RULES[0]);
   const [notes, setNotes] = useState("");
+  const [grade, setGrade] = useState<number | null>(null);
   const [positionCharts, setPositionCharts] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -120,6 +121,13 @@ export function LogSell({ navColor }: { navColor: string }) {
   }, []);
 
   const selected = openTrades.find(t => t.trade_id === selectedTrade);
+
+  // Prefill Grade from the selected trade's existing grade, if any
+  useEffect(() => {
+    if (!selected) return;
+    const g = (selected as any).grade;
+    setGrade(typeof g === "number" && g >= 1 && g <= 5 ? g : null);
+  }, [selectedTrade]); // intentionally not `selected` to avoid thrash
   const sharesNum = parseFloat(shares) || 0;
   const priceNum = parseFloat(price) || 0;
   const proceeds = sharesNum * priceNum;
@@ -145,6 +153,7 @@ export function LogSell({ navColor }: { navColor: string }) {
         price: priceNum,
         rule,
         notes,
+        grade,
         date: now.toISOString().slice(0, 10),
         time: now.toTimeString().slice(0, 5),
       };
@@ -166,7 +175,7 @@ export function LogSell({ navColor }: { navColor: string }) {
         setSubmitResult({ ok: true, msg: `Sold ${result.trx_id || "S1"}: ${shares} shs of ${selected.ticker} @ $${price}${plStr}${closedStr}` });
 
         // Reset form
-        setShares(""); setPrice(""); setNotes(""); setPositionCharts([]);
+        setShares(""); setPrice(""); setNotes(""); setGrade(null); setPositionCharts([]);
 
         // Refresh open trades
         const trades = await api.tradesOpen("CanSlim").catch(() => []);
@@ -246,6 +255,30 @@ export function LogSell({ navColor }: { navColor: string }) {
                      placeholder="Why did you sell?"
                      className="w-full h-[38px] px-3 rounded-[10px] text-[13px]"
                      style={{ ...inputStyle, fontFamily: "inherit" }} />
+            </FormField>
+
+            <FormField label="Grade" hint="Rate the trade 1-5 stars. Click again to clear.">
+              <div className="flex items-center gap-1 h-[38px]" onMouseLeave={() => { /* no-op */ }}>
+                {[1, 2, 3, 4, 5].map(n => {
+                  const filled = grade != null && n <= grade;
+                  return (
+                    <button key={n} type="button"
+                            onClick={() => setGrade(grade === n ? null : n)}
+                            className="p-1 bg-transparent border-0 cursor-pointer transition-transform hover:scale-110"
+                            aria-label={`${n} star${n > 1 ? "s" : ""}`}>
+                      <svg width="22" height="22" viewBox="0 0 24 24"
+                           fill={filled ? "#f59f00" : "none"}
+                           stroke={filled ? "#f59f00" : "var(--ink-4)"}
+                           strokeWidth="2" strokeLinejoin="round">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                      </svg>
+                    </button>
+                  );
+                })}
+                {grade != null && (
+                  <span className="ml-2 text-[12px]" style={{ color: "var(--ink-3)" }}>{grade}/5</span>
+                )}
+              </div>
             </FormField>
 
             {/* Position Changes — drag & drop */}

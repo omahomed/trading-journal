@@ -494,7 +494,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Total_Cost": "total_cost", "Realized_PL": "realized_pl",
         "Unrealized_PL": "unrealized_pl", "Return_Pct": "return_pct",
         "Rule": "rule", "Buy_Notes": "buy_notes", "Sell_Rule": "sell_rule",
-        "Sell_Notes": "sell_notes", "Risk_Budget": "risk_budget",
+        "Sell_Notes": "sell_notes", "Risk_Budget": "risk_budget", "Grade": "grade",
         "Action": "action", "Date": "date", "Amount": "amount",
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
@@ -1724,6 +1724,62 @@ def log_buy(body: dict):
         return {"error": str(e)}
 
 
+@app.post("/api/trades/grade")
+def set_trade_grade(body: dict = Body(...)):
+    """Set or clear the 1-5 star grade on a trade campaign (by trade_id).
+    Pass grade=null to clear."""
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = str(body.get("trade_id", "")).strip()
+        if not trade_id:
+            return {"error": "Missing trade_id"}
+        raw = body.get("grade", None)
+        grade_val = None
+        if raw is not None and str(raw).strip() != "":
+            try:
+                g = int(raw)
+                if not (1 <= g <= 5):
+                    return {"error": "grade must be 1-5 or null"}
+                grade_val = g
+            except (ValueError, TypeError):
+                return {"error": "grade must be integer 1-5"}
+
+        # Load existing summary row so we don't blow away other fields
+        df_s = db.load_summary(portfolio)
+        df_s = _normalize_trades(df_s)
+        existing = df_s[df_s["trade_id"] == trade_id]
+        if existing.empty:
+            return {"error": f"Trade {trade_id} not found"}
+        row = existing.iloc[0]
+
+        summary_row = {
+            "Trade_ID": trade_id,
+            "Ticker": str(row.get("ticker", "")),
+            "Status": str(row.get("status", "OPEN")),
+            "Open_Date": str(row.get("open_date", ""))[:10] if row.get("open_date") else None,
+            "Closed_Date": str(row.get("closed_date", ""))[:10] if row.get("closed_date") else None,
+            "Shares": float(row.get("shares", 0) or 0),
+            "Avg_Entry": float(row.get("avg_entry", 0) or 0),
+            "Avg_Exit": float(row.get("avg_exit", 0) or 0),
+            "Total_Cost": float(row.get("total_cost", 0) or 0),
+            "Realized_PL": float(row.get("realized_pl", 0) or 0),
+            "Unrealized_PL": float(row.get("unrealized_pl", 0) or 0),
+            "Return_Pct": float(row.get("return_pct", 0) or 0),
+            "Sell_Rule": row.get("sell_rule") or None,
+            "Notes": row.get("notes") or None,
+            "Stop_Loss": row.get("stop_loss") or None,
+            "Rule": row.get("rule") or None,
+            "Buy_Notes": row.get("buy_notes") or None,
+            "Sell_Notes": row.get("sell_notes") or None,
+            "Risk_Budget": float(row.get("risk_budget", 0) or 0),
+            "Grade": grade_val,
+        }
+        summary_id = db.save_summary_row(portfolio, summary_row)
+        return {"status": "ok", "trade_id": trade_id, "grade": grade_val, "summary_id": summary_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/trades/sell")
 def log_sell(body: dict):
     """Log a sell transaction. Updates summary via LIFO + inserts detail row."""
@@ -1737,6 +1793,7 @@ def log_sell(body: dict):
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
         time_str = body.get("time", datetime.now().strftime("%H:%M"))
         trx_id = body.get("trx_id", "")
+        grade_raw = body.get("grade", None)
 
         if not trade_id or shares <= 0 or price <= 0:
             return {"error": "Missing required fields: trade_id, shares, price"}
@@ -1836,6 +1893,13 @@ def log_sell(body: dict):
             "Rule": str(row.get("rule", "") or ""),
             "Buy_Notes": str(row.get("buy_notes", "") or ""),
         }
+        if grade_raw is not None and str(grade_raw).strip() != "":
+            try:
+                g = int(grade_raw)
+                if 1 <= g <= 5:
+                    summary_row["Grade"] = g
+            except (ValueError, TypeError):
+                pass
         summary_id = db.save_summary_row(portfolio, summary_row)
 
         # Audit trail

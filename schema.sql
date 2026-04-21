@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     buy_notes TEXT,
     sell_notes TEXT,
     risk_budget NUMERIC(15, 2) DEFAULT 0,
+    grade SMALLINT CHECK (grade IS NULL OR (grade BETWEEN 1 AND 5)),
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_trade_per_portfolio UNIQUE (portfolio_id, trade_id)

@@ -48,6 +48,7 @@ export interface TradePosition {
   total_cost: number;
   realized_pl: number;
   rule: string;
+  grade?: number | null;
   [key: string]: any;
 }
 
@@ -87,6 +88,12 @@ export const api = {
 
   tradesRecent: (portfolio = "CanSlim", limit = 20) =>
     fetchJSON<TradeDetail[]>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
+
+  setTradeGrade: (body: { portfolio?: string; trade_id: string; grade: number | null }) =>
+    fetch(`${API_BASE}/api/trades/grade`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string; trade_id?: string; grade?: number | null }>,
 
   // Trade lessons
   getTradeLessons: (portfolio = "CanSlim") =>
