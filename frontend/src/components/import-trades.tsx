@@ -615,7 +615,15 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                       <td className="px-3 py-2.5 text-[11px]" style={{ color: "var(--ink-3)" }}>{optionLabel(t)}</td>
                       <td className="px-3 py-2.5">
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
-                              style={{ background: t.action === "BUY" ? "#e5f7ee" : "#fdecec", color: t.action === "BUY" ? "#08a86b" : "#e5484d" }}>
+                              style={{
+                                background: t.action === "BUY"
+                                  ? "color-mix(in oklab, #08a86b 14%, var(--surface))"
+                                  : "color-mix(in oklab, #e5484d 14%, var(--surface))",
+                                color: t.action === "BUY" ? "#16a34a" : "#ef4444",
+                                border: `1px solid ${t.action === "BUY"
+                                  ? "color-mix(in oklab, #08a86b 32%, var(--border))"
+                                  : "color-mix(in oklab, #e5484d 32%, var(--border))"}`,
+                              }}>
                           {t.action}
                         </span>
                       </td>

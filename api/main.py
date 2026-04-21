@@ -1664,12 +1664,20 @@ def log_buy(body: dict):
                 trx_id = "B1"
 
         # Build summary row first (FK requires summary before detail)
+        # risk_budget = the initial $ at risk at entry (shares * (entry - stop)).
+        # Historically set by the sizing calculator path but missing when a
+        # trade is logged directly (e.g. IBKR Quick Log) without going through
+        # the sizer. Compute from stop_loss here so the column is populated.
+        def _calc_risk_budget(s: float, p: float, sl: float) -> float:
+            return round(s * (p - sl), 2) if (sl and sl > 0 and p > sl and s > 0) else 0.0
+
         if action_type == "new":
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+                "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
             }
         else:
             # Scale-in: load existing summary and update
@@ -1684,15 +1692,20 @@ def log_buy(body: dict):
                 new_total_shares = old_shares + shares
                 new_total_cost = old_cost + value
                 new_avg_entry = new_total_cost / new_total_shares if new_total_shares > 0 else price
+                effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
+                existing_rb = float(row.get("risk_budget", 0) or 0)
+                added_rb = _calc_risk_budget(shares, price, effective_stop)
+                new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": str(row.get("open_date", date_str))[:10],
                     "Shares": float(new_total_shares),
                     "Avg_Entry": float(round(new_avg_entry, 4)),
                     "Total_Cost": float(round(new_total_cost, 2)),
-                    "Stop_Loss": float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0),
+                    "Stop_Loss": effective_stop,
                     "Rule": str(row.get("rule", "") or rule or ""),
                     "Buy_Notes": str(notes or row.get("buy_notes", "") or ""),
+                    "Risk_Budget": round(new_rb, 2),
                 }
             else:
                 summary_row = {
@@ -1700,6 +1713,7 @@ def log_buy(body: dict):
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+                    "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)
