@@ -178,7 +178,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [actionType, setActionType] = useState<"new" | "scalein">("new");
   const [date, setDate] = useState(() => {
     const n = new Date();
-    return `${n.getFullYear()}/${String(n.getMonth() + 1).padStart(2, "0")}/${String(n.getDate()).padStart(2, "0")}`;
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
   });
   const [time, setTime] = useState(() => {
     const n = new Date();
@@ -518,10 +518,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </Field>
               <div className="flex flex-col gap-3">
                 <Field label="Date">
-                  <input type="text" value={date} onChange={e => setDate(e.target.value)} className={inputCls} style={inputStyle} />
+                  <input type="date" value={date} onChange={e => setDate(e.target.value)} className={inputCls} style={inputStyle} />
                 </Field>
                 <Field label="Time">
-                  <input type="text" value={time} onChange={e => setTime(e.target.value)} className={inputCls} style={inputStyle} />
+                  <input type="time" value={time} onChange={e => setTime(e.target.value)} className={inputCls} style={inputStyle} />
                 </Field>
               </div>
             </div>

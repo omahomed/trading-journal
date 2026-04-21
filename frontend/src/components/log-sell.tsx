@@ -97,8 +97,14 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [rule, setRule] = useState(SELL_RULES[0]);
   const [notes, setNotes] = useState("");
   const [grade, setGrade] = useState<number | null>(null);
-  const [prefillDate, setPrefillDate] = useState<string>("");
-  const [prefillTime, setPrefillTime] = useState<string>("");
+  const [date, setDate] = useState(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+  });
+  const [time, setTime] = useState(() => {
+    const n = new Date();
+    return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`;
+  });
   const [positionCharts, setPositionCharts] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -118,8 +124,8 @@ export function LogSell({ navColor }: { navColor: string }) {
         if (data.trade_id) setSelectedTrade(data.trade_id);
         if (data.shares) setShares(String(data.shares));
         if (data.price) setPrice(String(data.price));
-        if (data.date) setPrefillDate(String(data.date));
-        if (data.time) setPrefillTime(String(data.time));
+        if (data.date) setDate(String(data.date));
+        if (data.time) setTime(String(data.time));
       } catch { /* ignore */ }
     }).catch(() => setLoading(false));
   }, []);
@@ -149,7 +155,6 @@ export function LogSell({ navColor }: { navColor: string }) {
     setSubmitResult(null);
 
     try {
-      const now = new Date();
       const body = {
         portfolio: "CanSlim",
         trade_id: selectedTrade,
@@ -158,8 +163,8 @@ export function LogSell({ navColor }: { navColor: string }) {
         rule,
         notes,
         grade,
-        date: prefillDate || now.toISOString().slice(0, 10),
-        time: prefillTime || now.toTimeString().slice(0, 5),
+        date,
+        time,
       };
 
       const result = await api.logSell(body);
@@ -251,6 +256,17 @@ export function LogSell({ navColor }: { navColor: string }) {
               <FormField label="Sell Price ($)">
                 <input type="number" value={price} onChange={e => setPrice(e.target.value)} step="0.01"
                        placeholder="0.00" className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
+              </FormField>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField label="Date">
+                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                       className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
+              </FormField>
+              <FormField label="Time">
+                <input type="time" value={time} onChange={e => setTime(e.target.value)}
+                       className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
               </FormField>
             </div>
 
