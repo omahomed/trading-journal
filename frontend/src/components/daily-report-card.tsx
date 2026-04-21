@@ -135,6 +135,29 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightbox]);
 
+  // Paste images from clipboard — works anywhere on the page when a date is selected
+  useEffect(() => {
+    if (!selectedDate) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        uploadFiles(files);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [selectedDate]);
+
   const day = useMemo(() => {
     if (!selectedDate || history.length === 0) return null;
     return history.find(h => String(h.day).slice(0, 10) === selectedDate) || null;
@@ -462,7 +485,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
                   <div className="text-[12px] font-medium">Uploading...</div>
                 ) : (
                   <>
-                    <div className="text-[12px] font-medium mb-1">Drag &amp; drop images here or click to upload</div>
+                    <div className="text-[12px] font-medium mb-1">Drag &amp; drop, click to upload, or paste (⌘V)</div>
                     <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>Multiple files supported. PNG / JPG</div>
                   </>
                 )}
