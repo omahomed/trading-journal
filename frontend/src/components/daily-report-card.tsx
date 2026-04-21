@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
  *  > [!great] / > [!bad] / > [!candle] / > [!facts] / > [!expectation] / > [!macro]
@@ -19,7 +20,6 @@ function preprocessCallouts(md: string): string {
     return `<div class="callout callout-${t}">\n<div class="callout-title">${type.toUpperCase()}</div>\n\n${cleaned}\n\n</div>\n`;
   });
 }
-import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_at?: string };
 
