@@ -65,9 +65,19 @@ function optionTicker(t: Trade) {
   return `${t.symbol} ${exp} $${strike}${pc}`;
 }
 
+const EXEC_CACHE_KEY = "importTrades.executions.v1";
+
 export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
   const [pulling, setPulling] = useState(false);
-  const [executions, setExecutions] = useState<Trade[]>([]);
+  const [executions, setExecutions] = useState<Trade[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(EXEC_CACHE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed.trades) ? parsed.trades : [];
+    } catch { return []; }
+  });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [todayDetails, setTodayDetails] = useState<TradeDetail[]>([]);
@@ -91,6 +101,18 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
   };
 
   useEffect(() => { loadContext(); }, []);
+
+  // Persist pulled executions to localStorage so the table survives page navigation
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (executions.length > 0) {
+        window.localStorage.setItem(EXEC_CACHE_KEY, JSON.stringify({ trades: executions, cached_at: Date.now() }));
+      } else {
+        window.localStorage.removeItem(EXEC_CACHE_KEY);
+      }
+    } catch { /* ignore quota errors */ }
+  }, [executions]);
 
   const handlePull = async () => {
     setPulling(true); setError(""); setMessage("");
@@ -133,8 +155,14 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
 
   const sendToLogBuy = (t: Trade) => {
     const ticker = isOption(t) ? optionTicker(t) : t.symbol;
+    // If there's already an open campaign for this ticker, flip to scale-in
+    // mode so the Log Buy form opens pre-pointed at that campaign instead of
+    // creating a duplicate new trade.
+    const existing = openTrades.find(o => String(o.ticker || "").toUpperCase() === ticker.toUpperCase());
     localStorage.setItem("ps_prefill", JSON.stringify({
-      ticker, shares: t.quantity, price: t.price, action: "new",
+      ticker, shares: t.quantity, price: t.price,
+      action: existing ? "scale_in" : "new",
+      trade_id: existing?.trade_id || undefined,
     }));
     onNavigate?.("logbuy");
   };
