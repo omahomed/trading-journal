@@ -3,6 +3,22 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+
+/** Convert GitHub-style alert blockquotes into styled callout divs.
+ *  > [!great] / > [!bad] / > [!candle] / > [!facts] / > [!expectation] / > [!macro]
+ */
+function preprocessCallouts(md: string): string {
+  return md.replace(/^> \[!(\w+)\][ \t]*\r?\n((?:> ?.*(?:\r?\n|$))+)/gmi, (_m, type: string, body: string) => {
+    const cleaned = body
+      .split(/\r?\n/)
+      .map(l => l.replace(/^> ?/, ""))
+      .join("\n")
+      .trim();
+    const t = type.toLowerCase();
+    return `<div class="callout callout-${t}">\n<div class="callout-title">${type.toUpperCase()}</div>\n\n${cleaned}\n\n</div>\n`;
+  });
+}
 import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_at?: string };
@@ -497,7 +513,9 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
                 <div className="px-5 py-4 rounded-[10px] prose-custom"
                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", lineHeight: 1.6, minHeight: 200 }}>
                   {thoughts.trim() ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{thoughts}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                      {preprocessCallouts(thoughts)}
+                    </ReactMarkdown>
                   ) : (
                     <div style={{ color: "var(--ink-4)", fontStyle: "italic" }}>Nothing written yet. Switch to Edit to start.</div>
                   )}

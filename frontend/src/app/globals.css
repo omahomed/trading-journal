@@ -84,3 +84,65 @@ body {
 .prose-custom th, .prose-custom td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
 .prose-custom th { background: var(--bg-2); font-weight: 600; }
 .prose-custom a { color: #3b82f6; text-decoration: underline; }
+
+/* Callouts — colored section boxes for Daily Thoughts recap */
+.prose-custom .callout {
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 10px 0;
+  border: 1px solid;
+}
+.prose-custom .callout-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+.prose-custom .callout > *:last-child { margin-bottom: 0; }
+.prose-custom .callout ul { margin: 0; padding-left: 20px; }
+
+/* Color variants */
+.prose-custom .callout-great,
+.prose-custom .callout-good,
+.prose-custom .callout-candle {
+  background: color-mix(in oklab, #08a86b 8%, var(--surface));
+  border-color: color-mix(in oklab, #08a86b 30%, var(--border));
+}
+.prose-custom .callout-great .callout-title,
+.prose-custom .callout-good .callout-title,
+.prose-custom .callout-candle .callout-title { color: #16a34a; }
+
+.prose-custom .callout-bad,
+.prose-custom .callout-warn {
+  background: color-mix(in oklab, #f59f00 10%, var(--surface));
+  border-color: color-mix(in oklab, #f59f00 32%, var(--border));
+}
+.prose-custom .callout-bad .callout-title,
+.prose-custom .callout-warn .callout-title { color: #c27803; }
+
+.prose-custom .callout-expectation,
+.prose-custom .callout-note,
+.prose-custom .callout-powertrend {
+  background: color-mix(in oklab, #8b5cf6 10%, var(--surface));
+  border-color: color-mix(in oklab, #8b5cf6 30%, var(--border));
+}
+.prose-custom .callout-expectation .callout-title,
+.prose-custom .callout-note .callout-title,
+.prose-custom .callout-powertrend .callout-title { color: #7c3aed; }
+
+.prose-custom .callout-facts,
+.prose-custom .callout-macro {
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+.prose-custom .callout-facts .callout-title,
+.prose-custom .callout-macro .callout-title { color: var(--ink-3); }
+
+.prose-custom .callout-danger,
+.prose-custom .callout-error {
+  background: color-mix(in oklab, #e5484d 10%, var(--surface));
+  border-color: color-mix(in oklab, #e5484d 30%, var(--border));
+}
+.prose-custom .callout-danger .callout-title,
+.prose-custom .callout-error .callout-title { color: #dc2626; }
