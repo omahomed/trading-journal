@@ -274,6 +274,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>("all");
+  const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
@@ -793,13 +794,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         </div>
       )}
 
-      {/* ── Risk Monitor ── */}
+      {/* ── Risk Monitor (collapsible, default collapsed so EOD captures
+           don't swell in height) ── */}
       <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-        <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <button onClick={() => setRiskMonitorOpen(!riskMonitorOpen)}
+                className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                style={{ borderBottom: riskMonitorOpen ? "1px solid var(--border)" : "none", background: "var(--surface-2)" }}>
+          <span className="text-[10px] transition-transform" style={{ transform: riskMonitorOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
           <span className="text-[13px] font-semibold">Risk Monitor</span>
-          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Active alerts · {positions.length} positions</span>
-        </div>
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+            Active alerts · {positions.length} positions
+            {!riskMonitorOpen && monitorAlerts.length > 0 && ` · ${monitorAlerts.length} alert${monitorAlerts.length === 1 ? "" : "s"}`}
+            {!riskMonitorOpen && " · click to expand"}
+          </span>
+        </button>
+        {riskMonitorOpen && (
         <div className="p-4 flex flex-col gap-2.5">
           {/* Info alerts (move to BE) */}
           {monitorAlerts.filter(a => a.type === "info").map((a, i) => (
@@ -853,6 +863,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );

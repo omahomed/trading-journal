@@ -42,11 +42,31 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       const today = new Date();
       const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
+      // Replace-if-exists: the DB has a unique constraint on (portfolio,
+      // trade_id, image_type), so uploading twice for the same day would
+      // collide. Delete any existing snapshots of this exact type for today
+      // before the upload so a re-capture Just Works.
+      const wantedType = `eod_${snapshotType}`;
+      let replaced = false;
+      try {
+        const existing = await api.listEodSnapshots(day, portfolio);
+        if (Array.isArray(existing)) {
+          for (const snap of existing) {
+            if ((snap as any).image_type === wantedType && (snap as any).id) {
+              try {
+                await api.deleteImage((snap as any).id);
+                replaced = true;
+              } catch { /* ignore individual delete failures */ }
+            }
+          }
+        }
+      } catch { /* if listing fails, just try the upload */ }
+
       const res = await api.uploadEodSnapshot(blob, day, snapshotType, portfolio);
       if (res.error) {
         setMsg({ ok: false, text: res.error });
       } else {
-        setMsg({ ok: true, text: `Saved to ${day}` });
+        setMsg({ ok: true, text: replaced ? `Replaced ${day}` : `Saved to ${day}` });
       }
     } catch (err: any) {
       setMsg({ ok: false, text: err.message || "Capture failed" });
