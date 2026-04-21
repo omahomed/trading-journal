@@ -952,18 +952,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
           {tab === "volatility" && volResults && (
             <>
               <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {volSizerMode === "audit" ? holdingData?.ticker : ticker || "—"}</h3>
-              <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className={`grid ${volSizerMode === "audit" ? "grid-cols-3" : "grid-cols-2"} gap-3 mb-4`}>
                 <MetricCard label="Risk Budget" value={fmtDol(volResults.dailyRiskBudget)}
                             sub={`${volResults.tolPct}% Risk (${volResults.tierName})`}
                             accent="#6366f1" />
                 <MetricCard label="Volatility Risk" value={`${atr.toFixed(2)}%`}
                             sub="ATR (Noise)"
                             accent="#f59f00" />
-                {volSizerMode === "new" ? (
-                  <MetricCard label="Vol Profile" value={VOL_PROFILES[volProfile].label}
-                              sub={`${volResults.atrMultiplier.toFixed(1)}x ATR`}
-                              accent="#3b82f6" />
-                ) : (
+                {volSizerMode === "audit" && (
                   <MetricCard label="Profit Cushion" value={`${volResults.cushionPct.toFixed(2)}%`}
                               sub={volResults.tierName}
                               accent={volResults.cushionPct >= 20 ? "#08a86b" : volResults.cushionPct >= 5 ? "#f59f00" : "#e5484d"} />
@@ -984,14 +980,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
 
               <div className="grid grid-cols-3 gap-3 mb-6">
                 <MetricCard label="ATR Limit" value={`${volResults.maxSharesVol} shs`}
-                            sub={`Risk ${fmtDol(volResults.atrRiskAtVol)} · ${volResults.atrCostPct.toFixed(1)}% NLV`} />
+                            sub={`Cost ${fmtDol(volResults.maxSharesVol * entry)} · Risk ${fmtDol(volResults.atrRiskAtVol)}`} />
                 {volSizerMode === "new" && volResults.effectiveStop > 0 ? (
                   <MetricCard label="Tech Stop Limit" value={`${volResults.maxSharesTech} shs`}
-                              sub={`Risk ${fmtDol(volResults.techRiskAtMax)} · ${volResults.techCostPct.toFixed(1)}% NLV`}
+                              sub={`Cost ${fmtDol(volResults.maxSharesTech * entry)} · Risk ${fmtDol(volResults.techRiskAtMax)}`}
                               accent={volResults.maxSharesTech < volResults.maxSharesVol ? "#f59f00" : undefined} />
                 ) : (
                   <MetricCard label="Hard Cap Limit" value={`${volResults.maxSharesCap} shs`}
-                              sub="20% Max Alloc" />
+                              sub={`Cost ${fmtDol(volResults.maxSharesCap * entry)} · 20% Max Alloc`} />
                 )}
                 <MetricCard label="Trade Risk $" value={fmtDol(volResults.finalRiskDol)}
                             sub={volResults.riskLabel} />
