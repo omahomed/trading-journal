@@ -48,7 +48,7 @@ function windowBadge(mw: string) {
   };
   const s = styles[wl] || { bg: "#888", fg: "#fff" };
   return (
-    <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: s.bg, color: s.fg }}>{mw || "N/A"}</span>
+    <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: s.bg, color: s.fg }}>{(mw || "N/A").toUpperCase()}</span>
   );
 }
 
