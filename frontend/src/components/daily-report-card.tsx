@@ -439,7 +439,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
                                   className="block w-full p-0 border-0 cursor-zoom-in"
                                   style={{ background: "transparent" }}>
                             <img src={snap.view_url} alt={snap.image_type}
-                                 style={{ width: "100%", maxHeight: 180, objectFit: "cover", display: "block" }} />
+                                 style={{ width: "100%", maxHeight: 220, objectFit: "contain", display: "block", background: "var(--bg-2)" }} />
                           </button>
                         )}
                       </div>
@@ -496,15 +496,31 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
                 const noteSnaps = snapshots.filter(s => (s.image_type || "") === "eod_note");
                 if (noteSnaps.length === 0) return null;
                 return (
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                     {noteSnaps.map((snap, idx) => (
-                      <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                      <div key={snap.id ?? idx} className="relative rounded-[8px] overflow-hidden group"
+                           style={{ border: "1px solid var(--border)", background: "var(--bg-2)" }}>
                         {snap.view_url && (
                           <button onClick={() => setLightbox(snap.view_url || null)}
                                   className="block w-full p-0 border-0 cursor-zoom-in"
                                   style={{ background: "transparent" }}>
                             <img src={snap.view_url} alt="note attachment"
-                                 style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                                 style={{ width: "100%", maxHeight: 260, objectFit: "contain", display: "block", background: "var(--bg)" }} />
+                          </button>
+                        )}
+                        {snap.id && (
+                          <button
+                            onClick={async () => {
+                              if (!confirm("Delete this image?")) return;
+                              try {
+                                await api.deleteImage(snap.id!);
+                                await reloadSnapshots();
+                              } catch { /* ignore */ }
+                            }}
+                            className="absolute top-2 right-2 w-7 h-7 rounded-full text-white text-[13px] flex items-center justify-center transition-opacity opacity-0 group-hover:opacity-100"
+                            style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)" }}
+                            title="Delete">
+                            ✕
                           </button>
                         )}
                       </div>
