@@ -247,6 +247,8 @@ export function LogBuy({ navColor }: { navColor: string }) {
       if (data.shares) setShares(String(data.shares));
       if (data.price) setPrice(String(data.price));
       if (data.stop) setStopValue(String(data.stop.toFixed(2)));
+      if (data.date) setDate(String(data.date));
+      if (data.time) setTime(String(data.time));
       if (data.action === "scale_in" && data.trade_id) {
         setActionType("scalein");
         setSelectedCampaign(data.trade_id);

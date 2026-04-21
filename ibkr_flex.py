@@ -195,13 +195,47 @@ def parse_trade_confirms(xml_root):
         else:
             trade_date = trade_date_raw
 
-        # Format order time
-        order_time_raw = attribs.get("orderTime", "")
+        # Format order time — IBKR's Flex XML uses several possible field
+        # names depending on how the query is configured. Try in priority
+        # order and normalise to HH:MM:SS.
+        def _fmt_time(raw: str) -> str:
+            raw = (raw or "").strip()
+            if not raw:
+                return ""
+            # Combined "YYYYMMDD;HHMMSS" or "YYYY-MM-DD HH:MM:SS" timestamps
+            if ";" in raw:
+                raw = raw.split(";", 1)[1]
+            elif "T" in raw:
+                raw = raw.split("T", 1)[1]
+            elif " " in raw:
+                raw = raw.split(" ", 1)[1]
+            # Strip timezone suffixes like "+0000"
+            for sep in ("+", "-", "Z"):
+                if sep in raw[3:]:
+                    raw = raw.split(sep)[0]
+                    break
+            raw = raw.strip()
+            # Already HH:MM:SS or HH:MM — pass through (pad seconds if needed)
+            if ":" in raw:
+                parts = raw.split(":")
+                if len(parts) >= 3:
+                    return f"{parts[0][:2]}:{parts[1][:2]}:{parts[2][:2]}"
+                if len(parts) == 2:
+                    return f"{parts[0][:2]}:{parts[1][:2]}:00"
+                return raw
+            # Bare HHMMSS or HHMM
+            if len(raw) >= 6 and raw.isdigit():
+                return f"{raw[:2]}:{raw[2:4]}:{raw[4:6]}"
+            if len(raw) == 4 and raw.isdigit():
+                return f"{raw[:2]}:{raw[2:4]}:00"
+            return raw
+
         order_time = ""
-        if len(order_time_raw) >= 6:
-            order_time = f"{order_time_raw[:2]}:{order_time_raw[2:4]}:{order_time_raw[4:6]}"
-        else:
-            order_time = order_time_raw
+        for time_key in ("orderTime", "dateTime", "tradeTime", "executionTime", "reportDate"):
+            candidate = _fmt_time(attribs.get(time_key, ""))
+            if candidate and ":" in candidate:
+                order_time = candidate
+                break
 
         # Option fields
         put_call = attribs.get("putCall", "").strip()

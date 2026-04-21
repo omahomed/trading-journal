@@ -163,6 +163,8 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
       ticker, shares: t.quantity, price: t.price,
       action: existing ? "scale_in" : "new",
       trade_id: existing?.trade_id || undefined,
+      date: t.trade_date || undefined,
+      time: t.order_time ? t.order_time.slice(0, 5) : undefined,
     }));
     onNavigate?.("logbuy");
   };
@@ -174,6 +176,8 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
     localStorage.setItem("ps_prefill_sell", JSON.stringify({
       ticker, shares: t.quantity, price: t.price,
       trade_id: match?.trade_id || "",
+      date: t.trade_date || undefined,
+      time: t.order_time ? t.order_time.slice(0, 5) : undefined,
     }));
     onNavigate?.("logsell");
   };

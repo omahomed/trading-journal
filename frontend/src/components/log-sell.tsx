@@ -97,6 +97,8 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [rule, setRule] = useState(SELL_RULES[0]);
   const [notes, setNotes] = useState("");
   const [grade, setGrade] = useState<number | null>(null);
+  const [prefillDate, setPrefillDate] = useState<string>("");
+  const [prefillTime, setPrefillTime] = useState<string>("");
   const [positionCharts, setPositionCharts] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -116,6 +118,8 @@ export function LogSell({ navColor }: { navColor: string }) {
         if (data.trade_id) setSelectedTrade(data.trade_id);
         if (data.shares) setShares(String(data.shares));
         if (data.price) setPrice(String(data.price));
+        if (data.date) setPrefillDate(String(data.date));
+        if (data.time) setPrefillTime(String(data.time));
       } catch { /* ignore */ }
     }).catch(() => setLoading(false));
   }, []);
@@ -154,8 +158,8 @@ export function LogSell({ navColor }: { navColor: string }) {
         rule,
         notes,
         grade,
-        date: now.toISOString().slice(0, 10),
-        time: now.toTimeString().slice(0, 5),
+        date: prefillDate || now.toISOString().slice(0, 10),
+        time: prefillTime || now.toTimeString().slice(0, 5),
       };
 
       const result = await api.logSell(body);
