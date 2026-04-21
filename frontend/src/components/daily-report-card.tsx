@@ -25,6 +25,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState("");
+  const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
 
   useEffect(() => {
     Promise.all([
@@ -40,6 +41,15 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       setLoading(false);
     });
   }, []);
+
+  // Load snapshots when selectedDate changes
+  useEffect(() => {
+    if (!selectedDate) { setSnapshots([]); return; }
+    api.listEodSnapshots(selectedDate, "CanSlim").then(res => {
+      if (Array.isArray(res)) setSnapshots(res as any);
+      else setSnapshots([]);
+    }).catch(() => setSnapshots([]));
+  }, [selectedDate]);
 
   const day = useMemo(() => {
     if (!selectedDate || history.length === 0) return null;
@@ -288,6 +298,39 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
               </div>
             );
           })()}
+
+          {/* EOD Snapshots */}
+          {snapshots.length > 0 && (
+            <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">End-of-Day Snapshots</span>
+                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{snapshots.length} captured</span>
+              </div>
+              <div className="p-4 flex flex-col gap-4">
+                {snapshots.map((snap, idx) => (
+                  <div key={snap.id ?? idx} className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                    <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+                      <span className="text-[11px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
+                        {snap.image_type?.replace("eod_", "") || "Snapshot"}
+                      </span>
+                      {snap.uploaded_at && (
+                        <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                          {String(snap.uploaded_at).slice(0, 19)}
+                        </span>
+                      )}
+                    </div>
+                    {snap.view_url && (
+                      <a href={snap.view_url} target="_blank" rel="noopener noreferrer">
+                        <img src={snap.view_url} alt={snap.image_type}
+                             style={{ width: "100%", display: "block", cursor: "zoom-in" }} />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
