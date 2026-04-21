@@ -7,17 +7,30 @@ import rehypeRaw from "rehype-raw";
 import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
- *  > [!great] / > [!bad] / > [!candle] / > [!facts] / > [!expectation] / > [!macro]
+ *  Supports both two-line form:
+ *    > [!great]
+ *    > content
+ *  and single-line form:
+ *    > [!great] content
  */
 function preprocessCallouts(md: string): string {
-  return md.replace(/^> \[!(\w+)\][ \t]*\r?\n((?:> ?.*(?:\r?\n|$))+)/gmi, (_m, type: string, body: string) => {
-    const cleaned = body
-      .split(/\r?\n/)
-      .map(l => l.replace(/^> ?/, ""))
-      .join("\n")
-      .trim();
+  // Matches: start of line, optional leading ">", "[!TYPE]", optional same-line content,
+  // optional continuation lines starting with ">"
+  const pattern = /^> \[!(\w+)\][ \t]*(.*?)(?:\r?\n((?:> ?.*(?:\r?\n|$))+))?(?=\r?\n[^>]|\r?\n$|$)/gmi;
+  return md.replace(pattern, (_m, type: string, sameLine: string, body: string | undefined) => {
+    const parts: string[] = [];
+    if (sameLine && sameLine.trim()) parts.push(sameLine.trim());
+    if (body) {
+      const cleaned = body
+        .split(/\r?\n/)
+        .map(l => l.replace(/^> ?/, ""))
+        .join("\n")
+        .trim();
+      if (cleaned) parts.push(cleaned);
+    }
+    const content = parts.join("\n");
     const t = type.toLowerCase();
-    return `<div class="callout callout-${t}">\n<div class="callout-title">${type.toUpperCase()}</div>\n\n${cleaned}\n\n</div>\n`;
+    return `<div class="callout callout-${t}">\n<div class="callout-title">${type.toUpperCase()}</div>\n\n${content}\n\n</div>\n`;
   });
 }
 
