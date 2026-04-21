@@ -275,7 +275,11 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
         <>
           {/* Header date */}
           <div className="text-[16px] font-semibold mb-4">
-            {new Date(selectedDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+            {(() => {
+              const [y, m, d] = selectedDate.split("-").map(n => parseInt(n));
+              const dt = new Date(y, m - 1, d);
+              return dt.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+            })()}
           </div>
 
           {/* Section 1: Header Metrics */}
