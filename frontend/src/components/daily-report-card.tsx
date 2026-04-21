@@ -68,6 +68,8 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [thoughtsMode, setThoughtsMode] = useState<"edit" | "preview">("edit");
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [imageMsg, setImageMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -261,15 +263,39 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       </div>
 
       {/* Date selector */}
-      <div className="mb-5">
-        <select value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
-                className="h-[38px] px-3 rounded-[10px] text-[13px] w-[220px]"
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any, fontFamily: "var(--font-jetbrains), monospace" }}>
-          {history.map((h, i) => (
-            <option key={i} value={String(h.day).slice(0, 10)}>{String(h.day).slice(0, 10)}</option>
-          ))}
-        </select>
-      </div>
+      {(() => {
+        const days = history.map(h => String(h.day).slice(0, 10));
+        const minDay = days.length ? days[days.length - 1] : undefined;
+        const maxDay = days.length ? days[0] : undefined;
+        const hasData = !!selectedDate && days.includes(selectedDate);
+        const step = (delta: number) => {
+          if (!selectedDate || days.length === 0) return;
+          const sortedAsc = [...days].sort();
+          const idx = sortedAsc.indexOf(selectedDate);
+          if (idx === -1) return;
+          const next = sortedAsc[idx + delta];
+          if (next) setSelectedDate(next);
+        };
+        return (
+          <div className="mb-5 flex items-center gap-2">
+            <button onClick={() => step(-1)} disabled={!hasData || selectedDate === minDay}
+                    className="h-[38px] w-[38px] rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 disabled:opacity-40"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                    title="Previous day with data">‹</button>
+            <input type="date" value={selectedDate} min={minDay} max={maxDay}
+                   onChange={e => setSelectedDate(e.target.value)}
+                   className="h-[38px] px-3 rounded-[10px] text-[13px] w-[180px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }} />
+            <button onClick={() => step(1)} disabled={!hasData || selectedDate === maxDay}
+                    className="h-[38px] w-[38px] rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 disabled:opacity-40"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                    title="Next day with data">›</button>
+            {selectedDate && !hasData && (
+              <span className="text-[12px] ml-2" style={{ color: "var(--ink-4)" }}>No data for this date</span>
+            )}
+          </div>
+        );
+      })()}
 
       {day && (
         <>
@@ -566,37 +592,62 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
               {/* Uploaded notes images */}
               {(() => {
                 const noteSnaps = snapshots.filter(s => (s.image_type || "") === "eod_note");
-                if (noteSnaps.length === 0) return null;
+                if (noteSnaps.length === 0 && !imageMsg) return null;
                 return (
-                  <div className="grid grid-cols-2 gap-3">
-                    {noteSnaps.map((snap, idx) => (
-                      <div key={snap.id ?? idx} className="relative rounded-[8px] overflow-hidden group"
-                           style={{ border: "1px solid var(--border)", background: "var(--bg-2)" }}>
-                        {snap.view_url && (
-                          <button onClick={() => setLightbox(snap.view_url || null)}
-                                  className="block w-full p-0 border-0 cursor-zoom-in"
-                                  style={{ background: "transparent" }}>
-                            <img src={snap.view_url} alt="note attachment"
-                                 style={{ width: "100%", maxHeight: 260, objectFit: "contain", display: "block", background: "var(--bg)" }} />
-                          </button>
-                        )}
-                        {snap.id && (
-                          <button
-                            onClick={async () => {
-                              if (!confirm("Delete this image?")) return;
-                              try {
-                                await api.deleteImage(snap.id!);
-                                await reloadSnapshots();
-                              } catch { /* ignore */ }
-                            }}
-                            className="absolute top-2 right-2 w-7 h-7 rounded-full text-white text-[13px] flex items-center justify-center transition-opacity opacity-0 group-hover:opacity-100"
-                            style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)" }}
-                            title="Delete">
-                            ✕
-                          </button>
-                        )}
+                  <div className="flex flex-col gap-2">
+                    {imageMsg && (
+                      <div className="text-[12px] font-medium px-3 py-1.5 rounded-[6px] self-start"
+                           style={{ background: "color-mix(in oklab, #08a86b 12%, var(--surface))", color: "#16a34a", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))", fontFamily: "var(--font-jetbrains), monospace" }}>
+                        ✓ {imageMsg}
                       </div>
-                    ))}
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      {noteSnaps.map((snap, idx) => {
+                        const isPending = pendingDeleteId === snap.id;
+                        return (
+                          <div key={snap.id ?? idx} className="relative rounded-[8px] overflow-hidden group"
+                               style={{ border: `1px solid ${isPending ? "#e5484d" : "var(--border)"}`, background: "var(--bg-2)" }}>
+                            {snap.view_url && (
+                              <button onClick={() => setLightbox(snap.view_url || null)}
+                                      className="block w-full p-0 border-0 cursor-zoom-in"
+                                      style={{ background: "transparent" }}>
+                                <img src={snap.view_url} alt="note attachment"
+                                     style={{ width: "100%", maxHeight: 260, objectFit: "contain", display: "block", background: "var(--bg)" }} />
+                              </button>
+                            )}
+                            {snap.id && (
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!isPending) {
+                                    setPendingDeleteId(snap.id!);
+                                    setTimeout(() => {
+                                      setPendingDeleteId(prev => prev === snap.id ? null : prev);
+                                    }, 3000);
+                                    return;
+                                  }
+                                  try {
+                                    await api.deleteImage(snap.id!);
+                                    setPendingDeleteId(null);
+                                    setImageMsg("Image deleted");
+                                    setTimeout(() => setImageMsg(null), 2500);
+                                    await reloadSnapshots();
+                                  } catch {
+                                    setPendingDeleteId(null);
+                                    setImageMsg("Delete failed");
+                                    setTimeout(() => setImageMsg(null), 2500);
+                                  }
+                                }}
+                                className={`absolute top-2 right-2 h-7 rounded-full text-white text-[11px] font-semibold flex items-center justify-center transition-all ${isPending ? "px-3 opacity-100" : "w-7 opacity-0 group-hover:opacity-100"}`}
+                                style={{ background: isPending ? "#e5484d" : "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)" }}
+                                title={isPending ? "Click again to confirm" : "Delete"}>
+                                {isPending ? "Confirm" : "✕"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()}
