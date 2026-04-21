@@ -52,6 +52,20 @@ function windowBadge(mw: string) {
   );
 }
 
+function cycleBadge(state: string) {
+  const s = (state || "").toUpperCase();
+  const styles: Record<string, { bg: string; fg: string }> = {
+    POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
+    UPTREND: { bg: "#08a86b", fg: "#fff" },
+    "RALLY MODE": { bg: "#f59f00", fg: "#000" },
+    CORRECTION: { bg: "#e5484d", fg: "#fff" },
+  };
+  const st = styles[s] || { bg: "#888", fg: "#fff" };
+  return (
+    <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: st.bg, color: st.fg }}>{state || "N/A"}</span>
+  );
+}
+
 export function DailyReportCard({ navColor }: { navColor: string }) {
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [details, setDetails] = useState<TradeDetail[]>([]);
@@ -77,6 +91,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   }, [thoughtsMode]);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [imageMsg, setImageMsg] = useState<string | null>(null);
+  const [cycleState, setCycleState] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -101,6 +116,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       if (h.length > 0) setSelectedDate(String(h[0].day).slice(0, 10));
       setLoading(false);
     });
+    api.rallyPrefix().then(d => setCycleState((d as any)?.state || "")).catch(() => setCycleState(""));
   }, []);
 
   // Load snapshots + thoughts when selectedDate changes
@@ -316,7 +332,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
           </div>
 
           {/* Section 1: Header Metrics */}
-          <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-5 gap-3 mb-5">
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
               <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${(day.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
@@ -333,6 +349,13 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Market Window</div>
               {windowBadge((day as any).market_window || "")}
+            </div>
+            <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>NASDAQ Cycle</div>
+                <span className="text-[8px] font-semibold px-1.5 py-0.5 rounded" style={{ background: "var(--bg)", color: "var(--ink-4)", border: "1px solid var(--border)" }}>LIVE</span>
+              </div>
+              {cycleBadge(cycleState)}
             </div>
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Risk Status</div>
