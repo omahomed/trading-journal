@@ -67,7 +67,14 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [thoughtsMode, setThoughtsMode] = useState<"edit" | "preview">("edit");
+  const [thoughtsMode, setThoughtsMode] = useState<"edit" | "preview">(() => {
+    if (typeof window === "undefined") return "edit";
+    const v = window.localStorage.getItem("dailyReport.thoughtsMode");
+    return v === "preview" ? "preview" : "edit";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem("dailyReport.thoughtsMode", thoughtsMode);
+  }, [thoughtsMode]);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [imageMsg, setImageMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
