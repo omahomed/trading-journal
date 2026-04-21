@@ -41,7 +41,7 @@ function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "v
 function windowBadge(mw: string) {
   const wl = (mw || "").toUpperCase();
   const styles: Record<string, { bg: string; fg: string }> = {
-    POWERTREND: { bg: "#8b5cf6", fg: "#fff" },
+    POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
     OPEN: { bg: "#08a86b", fg: "#fff" },
     NEUTRAL: { bg: "#f59f00", fg: "#000" },
     CLOSED: { bg: "#e5484d", fg: "#fff" },
