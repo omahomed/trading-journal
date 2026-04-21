@@ -97,6 +97,42 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     });
   }, []);
 
+  // Auto-populate Actions from each portfolio's detail rows on entryDate.
+  // Format matches Streamlit: "SELL: GOOG, AAPL | BUY: NVDA". Tickers
+  // de-duped per action (same ticker across B1+A1 same day shows once).
+  // Fires on entryDate change.
+  useEffect(() => {
+    const buildActions = (details: any[]) => {
+      const grouped: Record<string, string[]> = {};
+      for (const d of details) {
+        const dDate = String(d.date || "").slice(0, 10);
+        if (dDate !== entryDate) continue;
+        const action = String(d.action || "").toUpperCase();
+        const ticker = String(d.ticker || "").trim();
+        if (!action || !ticker) continue;
+        const label = action === "BUY" || action === "SELL" ? action : action;
+        if (!grouped[label]) grouped[label] = [];
+        if (!grouped[label].includes(ticker)) grouped[label].push(ticker);
+      }
+      const parts: string[] = [];
+      for (const label of ["SELL", "BUY"]) {
+        if (grouped[label]) parts.push(`${label}: ${grouped[label].join(", ")}`);
+      }
+      for (const label of Object.keys(grouped)) {
+        if (label !== "SELL" && label !== "BUY") parts.push(`${label}: ${grouped[label].join(", ")}`);
+      }
+      return parts.join(" | ");
+    };
+
+    Promise.all([
+      api.tradesRecent("CanSlim", 1000).catch(() => []),
+      api.tradesRecent("457B Plan", 1000).catch(() => []),
+    ]).then(([csDet, b4Det]) => {
+      setCsAction(buildActions(csDet as any[]));
+      setB4Action(buildActions(b4Det as any[]));
+    });
+  }, [entryDate]);
+
   // Computed
   const csNlvN = parseFloat(csNlv) || 0;
   const csCashN = parseFloat(csCash) || 0;
