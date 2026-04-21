@@ -194,7 +194,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [price, setPrice] = useState("");
   const [stopMode, setStopMode] = useState<"price" | "pct">("price");
   const [stopValue, setStopValue] = useState("");
-  const [slPct, setSlPct] = useState("8.0");
+  const [slPct, setSlPct] = useState("5.0");
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -283,7 +283,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
   if (stopMode === "price") {
     stopPrice = parseFloat(stopValue) || 0;
   } else {
-    const pct = parseFloat(slPct) || 8;
+    const pct = parseFloat(slPct) || 5;
     stopPrice = priceNum > 0 ? priceNum * (1 - pct / 100) : 0;
   }
   const stopDist = priceNum > 0 && stopPrice > 0 ? priceNum - stopPrice : 0;
@@ -588,7 +588,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                          step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
                 ) : (
                   <input type="number" value={slPct} onChange={e => setSlPct(e.target.value)}
-                         step="0.5" placeholder="8.0" className={inputCls} style={inputStyle} />
+                         step="0.5" placeholder="5.0" className={inputCls} style={inputStyle} />
                 )}
               </Field>
             </div>

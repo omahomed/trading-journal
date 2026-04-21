@@ -1637,9 +1637,9 @@ def log_buy(body: dict):
         action_type = body.get("action_type", "new")  # "new" or "scalein"
         ticker = body.get("ticker", "").upper()
         trade_id = body.get("trade_id", "")
-        shares = float(body.get("shares", 0))
-        price = float(body.get("price", 0))
-        stop_loss = float(body.get("stop_loss", 0))
+        shares = float(body.get("shares") or 0)
+        price = float(body.get("price") or 0)
+        stop_loss = float(body.get("stop_loss") or 0)
         rule = body.get("rule", "")
         notes = body.get("notes", "")
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -1787,12 +1787,12 @@ def log_sell(body: dict):
     try:
         portfolio = body.get("portfolio", "CanSlim")
         trade_id = body.get("trade_id", "")
-        shares = float(body.get("shares", 0))
-        price = float(body.get("price", 0))
+        shares = float(body.get("shares") or 0)
+        price = float(body.get("price") or 0)
         rule = body.get("rule", "")
         notes = body.get("notes", "")
-        date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
-        time_str = body.get("time", datetime.now().strftime("%H:%M"))
+        date_str = body.get("date") or datetime.now().strftime("%Y-%m-%d")
+        time_str = body.get("time") or datetime.now().strftime("%H:%M")
         trx_id = body.get("trx_id", "")
         grade_raw = body.get("grade", None)
 
@@ -1946,6 +1946,16 @@ def edit_transaction_endpoint(body: dict = Body(...)):
         }
 
         db.update_detail_row(portfolio, detail_id, row_dict)
+
+        # Recompute the campaign summary so avg_entry / realized_pl /
+        # return_pct reflect the edited detail. Without this the face card
+        # keeps stale numbers (e.g. edit a buy price after the sell already
+        # closed the trade — the card still shows the pre-edit P&L).
+        try:
+            if trade_id:
+                _recompute_summary_lifo(portfolio, trade_id, body.get("ticker", ""))
+        except Exception:
+            pass
 
         try:
             db.log_audit(portfolio, "EDIT", trade_id, row_dict.get("Trx_ID", ""),

@@ -57,12 +57,16 @@ function optionLabel(t: Trade) {
   return `${pc} ${strike} ${exp}`.trim();
 }
 
-// Build IBKR-style option ticker: UNDERLYING YYMMDD $STRIKE{C|P}
+// Build a clean human-readable option ticker: UNDERLYING YYMMDD $STRIKE{C|P}
+// IBKR's raw `symbol` for options already includes the OCC serial
+// ("ARM   260618C00175000"); strip everything after the first whitespace
+// block so we don't end up with both notations smashed together.
 function optionTicker(t: Trade) {
+  const underlying = (t.symbol || "").trim().split(/\s+/)[0] || t.symbol || "";
   const pc = (t.put_call || "").toUpperCase() === "P" ? "P" : "C";
   const exp = (t.expiry || "").replace(/-/g, "").slice(2); // YYMMDD
   const strike = t.strike || "";
-  return `${t.symbol} ${exp} $${strike}${pc}`;
+  return `${underlying} ${exp} $${strike}${pc}`;
 }
 
 const EXEC_CACHE_KEY = "importTrades.executions.v1";
@@ -451,7 +455,15 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                         </td>
                         <td className="px-3 py-2.5">
                           <span className="px-2 py-0.5 rounded-full text-[11px] font-medium"
-                                style={{ background: t.action === "BUY" ? "#e5f7ee" : "#fdecec", color: t.action === "BUY" ? "#08a86b" : "#e5484d" }}>
+                                style={{
+                                  background: t.action === "BUY"
+                                    ? "color-mix(in oklab, #08a86b 14%, var(--surface))"
+                                    : "color-mix(in oklab, #e5484d 14%, var(--surface))",
+                                  color: t.action === "BUY" ? "#16a34a" : "#ef4444",
+                                  border: `1px solid ${t.action === "BUY"
+                                    ? "color-mix(in oklab, #08a86b 32%, var(--border))"
+                                    : "color-mix(in oklab, #e5484d 32%, var(--border))"}`,
+                                }}>
                             {t.action}
                           </span>
                         </td>
