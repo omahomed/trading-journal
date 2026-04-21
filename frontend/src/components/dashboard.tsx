@@ -35,21 +35,35 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
 
-  const loadData = useCallback(() => {
-    Promise.all([
+  const [openTrades, setOpenTrades] = useState<any[]>([]);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+
+  const loadData = useCallback(async () => {
+    const [lat, hist, open, closed, ev] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory("CanSlim", 0).catch(() => []),
       api.tradesOpen().catch(() => []),
       api.tradesClosed("CanSlim", 5000).catch(() => []),
       api.events().catch(() => []),
-    ]).then(([lat, hist, open, closed, ev]) => {
-      setLatest(lat as JournalEntry);
-      setHistory(hist as JournalHistoryPoint[]);
-      setOpenCount((open as any[]).length);
-      setClosedTrades(Array.isArray(closed) ? closed : []);
-      setEvents(Array.isArray(ev) ? ev : []);
-      setLoading(false);
-    });
+    ]);
+    setLatest(lat as JournalEntry);
+    setHistory(hist as JournalHistoryPoint[]);
+    const openArr = (open as any[]) || [];
+    setOpenTrades(openArr);
+    setOpenCount(openArr.length);
+    setClosedTrades(Array.isArray(closed) ? closed : []);
+    setEvents(Array.isArray(ev) ? ev : []);
+
+    // Fetch live prices for open positions (for live exposure calc)
+    const tickers = openArr.map(t => t.ticker).filter(Boolean);
+    if (tickers.length > 0) {
+      try {
+        const prices = await api.batchPrices(tickers);
+        if (prices && !("error" in prices)) setLivePrices(prices as Record<string, number>);
+      } catch { /* fall back to EOD pct_invested */ }
+    }
+
+    setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -148,7 +162,16 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const dailyPct = latest?.daily_pct_change || 0;
   const ltdPct = history.length > 0 ? history[history.length - 1]?.portfolio_ltd || 0 : 0;
   const ltdDol = history.reduce((sum, h) => sum + (h.daily_dollar_change || 0), 0);
-  const exposure = latest?.pct_invested || 0;
+  // Live exposure — match Active Campaign Summary: sum(shares × live price) / NLV
+  const liveMarketValue = openTrades.reduce((sum, t) => {
+    const ticker = t.ticker || "";
+    const shares = parseFloat(String(t.shares || 0));
+    const isOpt = /\d{6}/.test(ticker) || (t.buy_notes || "").startsWith("OPT:");
+    const mult = isOpt ? 100 : 1;
+    const price = livePrices[ticker] || parseFloat(String(t.avg_entry || 0));
+    return sum + shares * price * mult;
+  }, 0);
+  const exposure = nlv > 0 && liveMarketValue > 0 ? (liveMarketValue / nlv) * 100 : (latest?.pct_invested || 0);
   const portfolioHeat = latest?.portfolio_heat || 0;
   const lastH = history.length > 0 ? history[history.length - 1] : null;
 
