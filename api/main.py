@@ -1957,6 +1957,131 @@ def edit_transaction_endpoint(body: dict = Body(...)):
         return {"error": str(e)}
 
 
+def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback_open_date: str = "") -> None:
+    """Recompute a trade campaign's summary from its remaining detail rows
+    using LIFO. If no details remain, deletes the summary entirely. Shared
+    helper used by delete-by-date cleanup."""
+    df_d = db.load_details(portfolio)
+    if df_d.empty:
+        db.delete_trade(portfolio, trade_id)
+        return
+    df_d = _normalize_trades(df_d)
+    txns = df_d[df_d["trade_id"] == trade_id].copy()
+    if txns.empty:
+        db.delete_trade(portfolio, trade_id)
+        return
+    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
+    txns = txns.dropna(subset=["date"]).sort_values("date")
+
+    inventory = []
+    total_realized = 0.0
+    for _, tx in txns.iterrows():
+        action = str(tx.get("action", "")).upper()
+        tx_shares = float(tx.get("shares", 0) or 0)
+        tx_price = float(tx.get("amount", 0) or 0)
+        if action == "BUY":
+            inventory.append({"price": tx_price, "shares": tx_shares})
+        elif action == "SELL":
+            to_sell = tx_shares
+            while to_sell > 0 and inventory:
+                last = inventory[-1]
+                take = min(to_sell, last["shares"])
+                total_realized += (tx_price - last["price"]) * take
+                last["shares"] -= take
+                to_sell -= take
+                if last["shares"] < 0.0001:
+                    inventory.pop()
+
+    remaining_shares = sum(lot["shares"] for lot in inventory)
+    remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
+    avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else 0.0
+
+    sells = txns[txns["action"].str.upper() == "SELL"]
+    total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
+    total_sell_shs = float(sells["shares"].astype(float).sum())
+    avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0.0
+
+    buys = txns[txns["action"].str.upper() == "BUY"]
+    total_cost_all = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
+    total_buy_shs = float(buys["shares"].astype(float).sum())
+    is_closed = remaining_shares < 0.01 and total_sell_shs > 0
+    return_pct = (total_realized / total_cost_all * 100) if is_closed and total_cost_all > 0 else 0.0
+
+    first_date = txns["date"].min()
+    open_date = first_date.strftime("%Y-%m-%d") if pd.notna(first_date) else (fallback_open_date or "")
+    last_date = txns["date"].max()
+    closed_date = last_date.strftime("%Y-%m-%d") if is_closed and pd.notna(last_date) else None
+
+    summary_row = {
+        "Trade_ID": trade_id, "Ticker": ticker,
+        "Status": "CLOSED" if is_closed else "OPEN",
+        "Open_Date": open_date,
+        "Closed_Date": closed_date,
+        "Shares": float(remaining_shares if not is_closed else total_buy_shs),
+        "Avg_Entry": float(round(avg_entry, 4)),
+        "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
+        "Total_Cost": float(round(remaining_cost if not is_closed else total_cost_all, 2)),
+        "Realized_PL": float(round(total_realized, 2)),
+        "Return_Pct": float(round(return_pct, 4)),
+    }
+    db.save_summary_row(portfolio, summary_row)
+
+
+@app.delete("/api/trades/delete-transactions-by-date")
+def delete_transactions_by_date(date: str = Query(...), portfolio: str = Query("CanSlim")):
+    """Delete every trades_details row on the given date (YYYY-MM-DD) and
+    cascade-clean affected campaigns: rows with no remaining details get
+    their summary deleted; the rest get LIFO-recomputed. Use for "undo"
+    after an IBKR import mishap."""
+    try:
+        day = str(date).strip()[:10]
+        if not day:
+            return {"error": "date required (YYYY-MM-DD)"}
+
+        df_d = db.load_details(portfolio)
+        if df_d.empty:
+            return {"status": "ok", "deleted": 0, "trade_ids": []}
+        df_d = _normalize_trades(df_d)
+        df_d["date_str"] = df_d["date"].astype(str).str[:10]
+        rows_today = df_d[df_d["date_str"] == day]
+        if rows_today.empty:
+            return {"status": "ok", "deleted": 0, "trade_ids": []}
+
+        # Capture the affected (trade_id, ticker) pairs BEFORE deleting,
+        # so we can recompute/clean-up their summaries afterward.
+        affected = rows_today[["trade_id", "ticker", "detail_id"]].copy()
+        ticker_by_tid = {}
+        for _, r in affected.iterrows():
+            tid = str(r["trade_id"])
+            if tid not in ticker_by_tid:
+                ticker_by_tid[tid] = str(r.get("ticker", ""))
+
+        deleted = 0
+        for did in affected["detail_id"].dropna().tolist():
+            try:
+                db.delete_detail_row(portfolio, int(did))
+                deleted += 1
+            except Exception:
+                pass
+
+        for tid, ticker in ticker_by_tid.items():
+            try:
+                _recompute_summary_lifo(portfolio, tid, ticker)
+            except Exception:
+                pass
+
+        try:
+            db.log_audit(portfolio, "DELETE", "", "",
+                         f"Deleted {deleted} txn(s) for {day} — affected: {', '.join(ticker_by_tid.keys())}",
+                         username="web")
+        except Exception:
+            pass
+
+        return {"status": "ok", "deleted": deleted, "trade_ids": list(ticker_by_tid.keys())}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.delete("/api/trades/delete")
 def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("CanSlim")):
     """Permanently delete a trade and all its transactions."""

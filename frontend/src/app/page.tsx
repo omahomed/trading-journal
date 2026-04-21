@@ -279,7 +279,7 @@ export default function Home() {
           {page === "dashboard" ? <Dashboard navColor={navColor} />
                     : page === "overview" ? <TradingOverview navColor={navColor} />
                     : page === "campaign" ? <ActiveCampaign navColor={navColor} onNavigate={setPage} />
-                    : page === "import" ? <ImportTrades navColor={navColor} />
+                    : page === "import" ? <ImportTrades navColor={navColor} onNavigate={setPage} />
                     : page === "logbuy" ? <LogBuy navColor={navColor} />
                     : page === "logsell" ? <LogSell navColor={navColor} />
                     : page === "sizer" ? <PositionSizer navColor={navColor} onNavigate={setPage} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />

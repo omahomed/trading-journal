@@ -204,6 +204,11 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
 
+  deleteTransactionsByDate: (date: string, portfolio = "CanSlim") =>
+    fetch(`${API_BASE}/api/trades/delete-transactions-by-date?date=${encodeURIComponent(date)}&portfolio=${encodeURIComponent(portfolio)}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string; deleted?: number; trade_ids?: string[] }>,
+
   editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
     fetch(`${API_BASE}/api/trades/edit-transaction`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
