@@ -451,7 +451,7 @@ export function Admin({ navColor }: { navColor: string }) {
       {/* ── 7. Journal Metrics Backfill ── */}
       <Section title="Journal Metrics Backfill" icon="B">
         <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
-          Compute <strong>market_window</strong>, <strong>portfolio_heat</strong>, <strong>spy_atr</strong>, and <strong>nasdaq_atr</strong> for existing journal entries that are missing these values. Re-runs yfinance lookups, so may take time.
+          Compute <strong>market_window</strong>, <strong>market_cycle</strong>, <strong>portfolio_heat</strong>, <strong>spy_atr</strong>, and <strong>nasdaq_atr</strong> for existing journal entries that are missing these values. Re-runs yfinance lookups, so may take time.
         </div>
         <div className="grid grid-cols-3 gap-3 mb-3">
           <InputRow label="Portfolio">

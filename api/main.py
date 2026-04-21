@@ -223,15 +223,15 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
         return 0.0
 
 
-def _compute_cycle_state_live() -> str:
-    """Snapshot of the current NASDAQ cycle state.
+def _compute_cycle_state(as_of_date: str = "") -> str:
+    """Compute NASDAQ cycle state for a given date (or today if empty).
 
     Returns one of: POWERTREND / UPTREND / RALLY MODE / CORRECTION / "".
-    Delegates to the /api/market/rally-prefix route handler, which is just
-    a regular function we can call directly.
+    Delegates to the /api/market/rally-prefix route handler, which is
+    just a regular function we can call directly with an as_of_date.
     """
     try:
-        result = rally_prefix()
+        result = rally_prefix(as_of_date)
         if isinstance(result, dict):
             return str(result.get("state", "") or "")
         return ""
@@ -367,7 +367,7 @@ def journal_edit(entry: dict):
         if not journal_entry["market_window"]:
             journal_entry["market_window"] = _compute_market_window(day_str)
         if not journal_entry["market_cycle"]:
-            journal_entry["market_cycle"] = _compute_cycle_state_live()
+            journal_entry["market_cycle"] = _compute_cycle_state(day_str)
         if not journal_entry["spy_atr"]:
             journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
         if not journal_entry["nasdaq_atr"]:
@@ -427,16 +427,18 @@ def journal_backfill_metrics(body: dict = Body(...)):
             day_str = row["day"].strftime("%Y-%m-%d")
 
             existing_mw = str(row.get("market_window", "") or "")
+            existing_cycle = str(row.get("market_cycle", "") or "")
             existing_heat = float(row.get("portfolio_heat", 0) or 0)
             existing_spy_atr = float(row.get("spy_atr", 0) or 0)
             existing_ndx_atr = float(row.get("nasdaq_atr", 0) or 0)
 
             need_mw = force or not existing_mw
+            need_cycle = force or not existing_cycle
             need_heat = force or existing_heat == 0
             need_spy_atr = force or existing_spy_atr == 0
             need_ndx_atr = force or existing_ndx_atr == 0
 
-            if not any([need_mw, need_heat, need_spy_atr, need_ndx_atr]):
+            if not any([need_mw, need_cycle, need_heat, need_spy_atr, need_ndx_atr]):
                 continue
 
             try:
@@ -452,7 +454,7 @@ def journal_backfill_metrics(body: dict = Body(...)):
                     "spy_close": float(row.get("spy", 0) or 0),
                     "nasdaq_close": float(row.get("nasdaq", 0) or 0),
                     "market_window": _compute_market_window(day_str) if need_mw else existing_mw,
-                    "market_cycle": str(row.get("market_cycle", "") or ""),
+                    "market_cycle": _compute_cycle_state(day_str) if need_cycle else existing_cycle,
                     "market_notes": str(row.get("market_notes", "") or ""),
                     "market_action": str(row.get("market_action", "") or ""),
                     "portfolio_heat": _compute_portfolio_heat(portfolio, day_str, float(row.get("end_nlv", 0) or 0)) if need_heat else existing_heat,
@@ -719,9 +721,14 @@ def batch_prices(tickers: str = ""):
 # MARKET ENDPOINTS
 # ============================================================
 @app.get("/api/market/rally-prefix")
-def rally_prefix():
+def rally_prefix(as_of_date: str = ""):
     """Get rally day prefix for Market/Global Notes (e.g., 'Day 14 POWERTREND:').
-    Uses the same compute_cycle_state() logic as the Streamlit Daily Routine."""
+    Uses the same compute_cycle_state() logic as the Streamlit Daily Routine.
+
+    If as_of_date is provided (YYYY-MM-DD), computes the cycle state as it
+    was on that historical date (data up to and including that date only).
+    Otherwise computes live state through today.
+    """
     try:
         # Import the app's compute_cycle_state function
         # It lives in the parent directory's app.py — but it's complex.
@@ -730,8 +737,11 @@ def rally_prefix():
         from market_school_rules import MarketSchoolRules
         from datetime import date as _date
 
+        eff_end = as_of_date.strip()[:10] if as_of_date else _date.today().strftime('%Y-%m-%d')
+        is_historical = bool(as_of_date)
+
         analyzer = MarketSchoolRules("^IXIC")
-        analyzer.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
+        analyzer.fetch_data(start_date="2024-02-24", end_date=eff_end)
         if analyzer.data is None or analyzer.data.empty:
             return {"prefix": ""}
         analyzer.analyze_market()
@@ -747,7 +757,7 @@ def rally_prefix():
         nasdaq_ftd_date = ftd_date
         try:
             spy_analyzer = MarketSchoolRules("SPY")
-            spy_analyzer.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
+            spy_analyzer.fetch_data(start_date="2024-02-24", end_date=eff_end)
             if spy_analyzer.data is not None and not spy_analyzer.data.empty:
                 spy_analyzer.analyze_market(
                     external_ftd_date=nasdaq_ftd_date,
@@ -799,11 +809,13 @@ def rally_prefix():
         if days_since_rally is None or (market_in_correction and not buy_switch and ftd_date is None):
             return {"prefix": "CORRECTION: ", "day_num": 0, "state": "CORRECTION"}
 
-        # Add 1 if today is after last data bar
-        _today = _date.today()
-        _last_d = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
-        if _today.weekday() < 5 and _today > _last_d:
-            days_since_rally += 1
+        # Add 1 if today is after last data bar (live mode only — skip for
+        # historical backfill, where we should measure from the actual bars).
+        if not is_historical:
+            _today = _date.today()
+            _last_d = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+            if _today.weekday() < 5 and _today > _last_d:
+                days_since_rally += 1
 
         # Entry ladder steps (same as compute_cycle_state)
         ftd_achieved = ftd_date is not None or (not market_in_correction or buy_switch)
