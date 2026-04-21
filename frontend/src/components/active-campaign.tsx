@@ -314,6 +314,17 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Auto-refresh when tab regains focus
+  useEffect(() => {
+    const onFocus = () => { if (!document.hidden) loadData(); };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadData]);
+
   // Close context menu on click anywhere or Escape
   useEffect(() => {
     if (!ctxMenu) return;

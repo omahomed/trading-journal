@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, type JournalEntry, type JournalHistoryPoint } from "@/lib/api";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -35,7 +35,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
 
-  useEffect(() => {
+  const loadData = useCallback(() => {
     Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory("CanSlim", 0).catch(() => []),
@@ -51,6 +51,19 @@ export function Dashboard({ navColor }: { navColor: string }) {
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-refresh when tab regains focus
+  useEffect(() => {
+    const onFocus = () => { if (!document.hidden) loadData(); };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadData]);
 
   const ecData = useMemo(() => {
     if (history.length === 0) return [];
