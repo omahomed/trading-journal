@@ -504,7 +504,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
                         <div className="flex gap-2 ml-2">
                           {[
                             { k: "plan", l: "Plan" }, { k: "stops", l: "Stops" }, { k: "sized", l: "Sized" },
-                            { k: "fomo", l: "FOMO" }, { k: "journaled", l: "Jrnl" },
+                            { k: "fomo", l: "FOMO" },
                           ].map(cat => rc![cat.k] != null ? (
                             <span key={cat.k} className="text-[10px] px-1.5 py-0.5 rounded" style={{
                               background: rc![cat.k] >= 4 ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : rc![cat.k] >= 3 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #e5484d 12%, var(--surface))",

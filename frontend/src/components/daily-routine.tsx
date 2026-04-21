@@ -8,7 +8,6 @@ const REPORT_CATEGORIES = [
   { key: "stops", label: "Respected stops" },
   { key: "sized", label: "Sized correctly" },
   { key: "fomo", label: "No FOMO entries" },
-  { key: "journaled", label: "Journaled" },
 ];
 
 function letterGrade(total: number, max: number): string {
@@ -75,7 +74,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [b4Prev, setB4Prev] = useState(0);
 
   // Report Card
-  const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5, journaled: 5 });
+  const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
   const [gradeNotes, setGradeNotes] = useState("");
   const [forceOverwrite, setForceOverwrite] = useState(false);
 
