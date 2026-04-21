@@ -230,8 +230,11 @@ def parse_trade_confirms(xml_root):
                 return f"{raw[:2]}:{raw[2:4]}:00"
             return raw
 
+        # IMPORTANT: do not include report-wide timestamps (reportDate,
+        # whenGenerated) — those are the report-generation time and would
+        # paint every row with the same fetch timestamp.
         order_time = ""
-        for time_key in ("orderTime", "dateTime", "tradeTime", "executionTime", "reportDate"):
+        for time_key in ("orderTime", "tradeTime", "executionTime", "transactionTime", "dateTime"):
             candidate = _fmt_time(attribs.get(time_key, ""))
             if candidate and ":" in candidate:
                 order_time = candidate

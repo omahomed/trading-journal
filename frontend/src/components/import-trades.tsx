@@ -80,6 +80,8 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
   });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [rawDebug, setRawDebug] = useState<Record<string, any> | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
   const [todayDetails, setTodayDetails] = useState<TradeDetail[]>([]);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [quickLogRow, setQuickLogRow] = useState<number | null>(null);
@@ -118,6 +120,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
     setPulling(true); setError(""); setMessage("");
     try {
       const result = await api.importTrades();
+      setRawDebug(result.debug || null);
       if (result.error) {
         setError(result.error);
       } else {
@@ -345,6 +348,40 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
         <div className="mb-5 flex items-center gap-2 px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
              style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#08a86b", border: "1px solid #08a86b30" }}>
           {message}
+        </div>
+      )}
+
+      {/* Raw IBKR fields inspector — helpful when parser is picking the wrong
+          time / date / quantity field for a particular Flex Query config. */}
+      {rawDebug && (rawDebug.first || rawDebug.first_opt) && (
+        <div className="mb-5 rounded-[10px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <button onClick={() => setShowDebug(!showDebug)}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-left cursor-pointer text-[11px] font-medium"
+                  style={{ color: "var(--ink-3)" }}>
+            <span className="text-[9px] transition-transform" style={{ transform: showDebug ? "rotate(90deg)" : "none" }}>▶</span>
+            Raw IBKR fields (first trade) · {showDebug ? "hide" : "show"}
+            <span className="ml-auto text-[10px]" style={{ color: "var(--ink-4)" }}>diagnose parser mismatches</span>
+          </button>
+          {showDebug && (
+            <div className="px-4 pb-3">
+              {rawDebug.first && (
+                <>
+                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mt-1 mb-1" style={{ color: "var(--ink-4)" }}>Stock (first row)</div>
+                  <pre className="text-[10px] p-2 rounded overflow-x-auto" style={{ background: "var(--bg)", fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>
+{JSON.stringify(rawDebug.first, null, 2)}
+                  </pre>
+                </>
+              )}
+              {rawDebug.first_opt && (
+                <>
+                  <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mt-2 mb-1" style={{ color: "var(--ink-4)" }}>Option (first row)</div>
+                  <pre className="text-[10px] p-2 rounded overflow-x-auto" style={{ background: "var(--bg)", fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>
+{JSON.stringify(rawDebug.first_opt, null, 2)}
+                  </pre>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
