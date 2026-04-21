@@ -952,14 +952,30 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
           {tab === "volatility" && volResults && (
             <>
               <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {volSizerMode === "audit" ? holdingData?.ticker : ticker || "—"}</h3>
-              <div className={`grid ${volSizerMode === "audit" ? "grid-cols-3" : "grid-cols-2"} gap-3 mb-4`}>
+              <div className="grid grid-cols-3 gap-3 mb-4">
                 <MetricCard label="Risk Budget" value={fmtDol(volResults.dailyRiskBudget)}
                             sub={`${volResults.tolPct}% Risk (${volResults.tierName})`}
                             accent="#6366f1" />
                 <MetricCard label="Volatility Risk" value={`${atr.toFixed(2)}%`}
                             sub="ATR (Noise)"
                             accent="#f59f00" />
-                {volSizerMode === "audit" && (
+                {volSizerMode === "new" ? (
+                  <div className="p-4 rounded-[12px] relative overflow-hidden" style={{
+                    border: "1px solid var(--border)",
+                    borderLeft: "4px solid #3b82f6",
+                    background: "color-mix(in oklab, #3b82f6 4%, var(--surface))",
+                  }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Buy Cost</div>
+                    <div className="flex items-baseline justify-between mt-1.5">
+                      <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>ATR Limit</span>
+                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(volResults.maxSharesVol * entry)}</span>
+                    </div>
+                    <div className="flex items-baseline justify-between mt-1">
+                      <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{volResults.effectiveStop > 0 ? "Tech Stop" : "Hard Cap"}</span>
+                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol((volResults.effectiveStop > 0 ? volResults.maxSharesTech : volResults.maxSharesCap) * entry)}</span>
+                    </div>
+                  </div>
+                ) : (
                   <MetricCard label="Profit Cushion" value={`${volResults.cushionPct.toFixed(2)}%`}
                               sub={volResults.tierName}
                               accent={volResults.cushionPct >= 20 ? "#08a86b" : volResults.cushionPct >= 5 ? "#f59f00" : "#e5484d"} />
@@ -980,14 +996,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
 
               <div className="grid grid-cols-3 gap-3 mb-6">
                 <MetricCard label="ATR Limit" value={`${volResults.maxSharesVol} shs`}
-                            sub={`Cost ${fmtDol(volResults.maxSharesVol * entry)} · Risk ${fmtDol(volResults.atrRiskAtVol)}`} />
+                            sub={`Risk ${fmtDol(volResults.atrRiskAtVol)} · ${volResults.atrCostPct.toFixed(1)}% NLV`} />
                 {volSizerMode === "new" && volResults.effectiveStop > 0 ? (
                   <MetricCard label="Tech Stop Limit" value={`${volResults.maxSharesTech} shs`}
-                              sub={`Cost ${fmtDol(volResults.maxSharesTech * entry)} · Risk ${fmtDol(volResults.techRiskAtMax)}`}
+                              sub={`Risk ${fmtDol(volResults.techRiskAtMax)} · ${volResults.techCostPct.toFixed(1)}% NLV`}
                               accent={volResults.maxSharesTech < volResults.maxSharesVol ? "#f59f00" : undefined} />
                 ) : (
                   <MetricCard label="Hard Cap Limit" value={`${volResults.maxSharesCap} shs`}
-                              sub={`Cost ${fmtDol(volResults.maxSharesCap * entry)} · 20% Max Alloc`} />
+                              sub="20% Max Alloc" />
                 )}
                 <MetricCard label="Trade Risk $" value={fmtDol(volResults.finalRiskDol)}
                             sub={volResults.riskLabel} />
