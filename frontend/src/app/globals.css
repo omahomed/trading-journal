@@ -66,3 +66,21 @@ body {
   user-select: none;
   pointer-events: none;
 }
+
+/* Markdown rendering — Daily Thoughts, etc. */
+.prose-custom h1 { font-size: 20px; font-weight: 700; margin: 12px 0 8px; }
+.prose-custom h2 { font-size: 16px; font-weight: 700; margin: 16px 0 8px; color: var(--ink); }
+.prose-custom h3 { font-size: 14px; font-weight: 700; margin: 12px 0 6px; color: var(--ink); }
+.prose-custom p { margin: 8px 0; font-size: 13px; }
+.prose-custom ul, .prose-custom ol { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+.prose-custom li { margin: 4px 0; }
+.prose-custom strong { font-weight: 700; color: var(--ink); }
+.prose-custom em { font-style: italic; }
+.prose-custom code { font-family: var(--font-jetbrains), monospace; font-size: 12px; background: var(--bg-2); padding: 1px 5px; border-radius: 4px; }
+.prose-custom pre { background: var(--bg-2); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+.prose-custom blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--ink-3); margin: 8px 0; }
+.prose-custom hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.prose-custom table { border-collapse: collapse; margin: 10px 0; font-size: 12px; width: auto; }
+.prose-custom th, .prose-custom td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.prose-custom th { background: var(--bg-2); font-weight: 600; }
+.prose-custom a { color: #3b82f6; text-decoration: underline; }

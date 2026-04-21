@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_at?: string };
@@ -36,7 +38,17 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [thoughtsMode, setThoughtsMode] = useState<"edit" | "preview">("edit");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize the textarea to fit its content
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.max(200, ta.scrollHeight + 2) + "px";
+  }, [thoughts, thoughtsMode]);
 
   useEffect(() => {
     Promise.all([
@@ -455,17 +467,42 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
             <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
               <span className="text-[13px] font-semibold">Daily Thoughts</span>
-              <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>write your reflection · drag images to attach</span>
+              <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>markdown supported · drag/paste images to attach</span>
+              <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                {([["edit", "Edit"], ["preview", "Preview"]] as const).map(([val, label]) => (
+                  <button key={val} onClick={() => setThoughtsMode(val)}
+                          className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
+                          style={{
+                            background: thoughtsMode === val ? "var(--surface)" : "transparent",
+                            color: thoughtsMode === val ? "var(--ink)" : "var(--ink-4)",
+                            boxShadow: thoughtsMode === val ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                            border: "none", cursor: "pointer",
+                          }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="p-4 flex flex-col gap-4">
-              <textarea
-                value={thoughts}
-                onChange={e => { setThoughts(e.target.value); setThoughtsDirty(true); }}
-                placeholder="What did you learn today? What went well? What didn't? Decisions, mistakes, observations..."
-                rows={8}
-                className="w-full px-3.5 py-3 rounded-[10px] text-[13px] outline-none resize-y"
-                style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.6 }}
-              />
+              {thoughtsMode === "edit" ? (
+                <textarea
+                  ref={textareaRef}
+                  value={thoughts}
+                  onChange={e => { setThoughts(e.target.value); setThoughtsDirty(true); }}
+                  placeholder="What did you learn today? What went well? What didn't? Decisions, mistakes, observations..."
+                  className="w-full px-3.5 py-3 rounded-[10px] text-[13px] outline-none"
+                  style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.6, minHeight: 200, overflow: "hidden" }}
+                />
+              ) : (
+                <div className="px-5 py-4 rounded-[10px] prose-custom"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", lineHeight: 1.6, minHeight: 200 }}>
+                  {thoughts.trim() ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{thoughts}</ReactMarkdown>
+                  ) : (
+                    <div style={{ color: "var(--ink-4)", fontStyle: "italic" }}>Nothing written yet. Switch to Edit to start.</div>
+                  )}
+                </div>
+              )}
 
               {/* Drag-drop zone + file picker */}
               <div
