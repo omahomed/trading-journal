@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
+
+type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_at?: string };
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
@@ -25,7 +27,16 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState("");
-  const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
+  const [snapshots, setSnapshots] = useState<SnapItem[]>([]);
+  const [eodOpen, setEodOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [thoughts, setThoughts] = useState("");
+  const [thoughtsDirty, setThoughtsDirty] = useState(false);
+  const [savingThoughts, setSavingThoughts] = useState(false);
+  const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     Promise.all([
@@ -42,14 +53,87 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     });
   }, []);
 
-  // Load snapshots when selectedDate changes
+  // Load snapshots + thoughts when selectedDate changes
   useEffect(() => {
-    if (!selectedDate) { setSnapshots([]); return; }
+    if (!selectedDate) { setSnapshots([]); setThoughts(""); return; }
     api.listEodSnapshots(selectedDate, "CanSlim").then(res => {
       if (Array.isArray(res)) setSnapshots(res as any);
       else setSnapshots([]);
     }).catch(() => setSnapshots([]));
+    setThoughtsMsg(null);
+    setThoughtsDirty(false);
   }, [selectedDate]);
+
+  // Hydrate thoughts from the selected journal entry (stored in lowlights field)
+  useEffect(() => {
+    if (!selectedDate || history.length === 0) { setThoughts(""); return; }
+    const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
+    setThoughts(entry?.lowlights || "");
+    setThoughtsDirty(false);
+  }, [selectedDate, history]);
+
+  const reloadSnapshots = useCallback(async () => {
+    if (!selectedDate) return;
+    try {
+      const res = await api.listEodSnapshots(selectedDate, "CanSlim");
+      if (Array.isArray(res)) setSnapshots(res as any);
+    } catch { /* ignore */ }
+  }, [selectedDate]);
+
+  const saveThoughts = async () => {
+    if (!selectedDate) return;
+    setSavingThoughts(true);
+    setThoughtsMsg(null);
+    try {
+      const res = await api.journalEdit({
+        portfolio: "CanSlim",
+        day: selectedDate,
+        lowlights: thoughts,
+      });
+      if (res.status === "ok") {
+        setThoughtsMsg({ ok: true, text: "Saved" });
+        setThoughtsDirty(false);
+        // Refresh history cache locally
+        setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
+          ? ({ ...h, lowlights: thoughts } as any) : h));
+      } else {
+        setThoughtsMsg({ ok: false, text: res.detail || "Save failed" });
+      }
+    } catch (err: any) {
+      setThoughtsMsg({ ok: false, text: err.message || "Save failed" });
+    }
+    setSavingThoughts(false);
+    setTimeout(() => setThoughtsMsg(null), 3000);
+  };
+
+  const uploadFiles = async (files: FileList | File[]) => {
+    if (!selectedDate) return;
+    setUploading(true);
+    try {
+      const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
+      for (const file of arr) {
+        await api.uploadEodSnapshot(file, selectedDate, "note", "CanSlim");
+      }
+      await reloadSnapshots();
+    } catch (err) {
+      console.error("Upload failed:", err);
+    }
+    setUploading(false);
+  };
+
+  const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files.length > 0) uploadFiles(e.dataTransfer.files);
+  };
+
+  // Close lightbox on Escape
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightbox(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   const day = useMemo(() => {
     if (!selectedDate || history.length === 0) return null;
@@ -299,39 +383,145 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
             );
           })()}
 
-          {/* EOD Snapshots */}
-          {snapshots.length > 0 && (
-            <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-                <span className="text-[13px] font-semibold">End-of-Day Snapshots</span>
-                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{snapshots.length} captured</span>
-              </div>
-              <div className="p-4 flex flex-col gap-4">
-                {snapshots.map((snap, idx) => (
-                  <div key={snap.id ?? idx} className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
-                    <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
-                      <span className="text-[11px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
-                        {snap.image_type?.replace("eod_", "") || "Snapshot"}
-                      </span>
-                      {snap.uploaded_at && (
-                        <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                          {String(snap.uploaded_at).slice(0, 19)}
-                        </span>
-                      )}
-                    </div>
-                    {snap.view_url && (
-                      <a href={snap.view_url} target="_blank" rel="noopener noreferrer">
-                        <img src={snap.view_url} alt={snap.image_type}
-                             style={{ width: "100%", display: "block", cursor: "zoom-in" }} />
-                      </a>
-                    )}
+          {/* ── EOD Snapshots (collapsible) ── */}
+          {(() => {
+            const eodSnaps = snapshots.filter(s => (s.image_type || "").startsWith("eod_"));
+            if (eodSnaps.length === 0) return null;
+            return (
+              <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+                <button onClick={() => setEodOpen(!eodOpen)}
+                        className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                        style={{ background: "var(--surface-2)" }}>
+                  <span className="text-[10px] transition-transform" style={{ transform: eodOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                  <span className="text-[13px] font-semibold">End-of-Day Snapshots</span>
+                  <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{eodSnaps.length} captured · click to expand</span>
+                </button>
+                {eodOpen && (
+                  <div className="p-4 grid grid-cols-2 gap-3" style={{ animation: "slide-up 0.12s ease-out" }}>
+                    {eodSnaps.map((snap, idx) => (
+                      <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                        <div className="px-2.5 py-1.5 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+                          <span className="text-[10px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
+                            {snap.image_type?.replace("eod_", "") || "Snapshot"}
+                          </span>
+                          {snap.uploaded_at && (
+                            <span className="text-[9px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                              {String(snap.uploaded_at).slice(11, 19)}
+                            </span>
+                          )}
+                        </div>
+                        {snap.view_url && (
+                          <button onClick={() => setLightbox(snap.view_url || null)}
+                                  className="block w-full p-0 border-0 cursor-zoom-in"
+                                  style={{ background: "transparent" }}>
+                            <img src={snap.view_url} alt={snap.image_type}
+                                 style={{ width: "100%", maxHeight: 180, objectFit: "cover", display: "block" }} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── Daily Thoughts ── */}
+          <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+            <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+              <span className="text-[13px] font-semibold">Daily Thoughts</span>
+              <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>write your reflection · drag images to attach</span>
+            </div>
+            <div className="p-4 flex flex-col gap-4">
+              <textarea
+                value={thoughts}
+                onChange={e => { setThoughts(e.target.value); setThoughtsDirty(true); }}
+                placeholder="What did you learn today? What went well? What didn't? Decisions, mistakes, observations..."
+                rows={8}
+                className="w-full px-3.5 py-3 rounded-[10px] text-[13px] outline-none resize-y"
+                style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.6 }}
+              />
+
+              {/* Drag-drop zone + file picker */}
+              <div
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={onDrop}
+                className="rounded-[10px] px-4 py-6 text-center cursor-pointer transition-all"
+                style={{
+                  border: `2px dashed ${dragOver ? navColor : "var(--border)"}`,
+                  background: dragOver ? `${navColor}08` : "var(--bg)",
+                  color: "var(--ink-3)",
+                }}
+                onClick={() => fileInputRef.current?.click()}>
+                <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+                       onChange={e => { if (e.target.files) uploadFiles(e.target.files); e.target.value = ""; }} />
+                {uploading ? (
+                  <div className="text-[12px] font-medium">Uploading...</div>
+                ) : (
+                  <>
+                    <div className="text-[12px] font-medium mb-1">Drag &amp; drop images here or click to upload</div>
+                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>Multiple files supported. PNG / JPG</div>
+                  </>
+                )}
+              </div>
+
+              {/* Uploaded notes images */}
+              {(() => {
+                const noteSnaps = snapshots.filter(s => (s.image_type || "") === "eod_note");
+                if (noteSnaps.length === 0) return null;
+                return (
+                  <div className="grid grid-cols-3 gap-3">
+                    {noteSnaps.map((snap, idx) => (
+                      <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                        {snap.view_url && (
+                          <button onClick={() => setLightbox(snap.view_url || null)}
+                                  className="block w-full p-0 border-0 cursor-zoom-in"
+                                  style={{ background: "transparent" }}>
+                            <img src={snap.view_url} alt="note attachment"
+                                 style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* Save row */}
+              <div className="flex items-center gap-3">
+                <button onClick={saveThoughts} disabled={savingThoughts || !thoughtsDirty}
+                        className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                        style={{ background: navColor }}>
+                  {savingThoughts ? "Saving..." : "Save Thoughts"}
+                </button>
+                {thoughtsMsg && (
+                  <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
+                    {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
+                  </span>
+                )}
               </div>
             </div>
-          )}
+          </div>
         </>
+      )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div onClick={() => setLightbox(null)}
+             className="fixed inset-0 z-50 flex items-center justify-center p-6 cursor-zoom-out"
+             style={{ background: "rgba(0,0,0,0.85)" }}>
+          <img src={lightbox} alt="full size"
+               onClick={e => e.stopPropagation()}
+               style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
+          <button onClick={() => setLightbox(null)}
+                  className="fixed top-4 right-4 w-10 h-10 rounded-full text-white text-[20px] flex items-center justify-center"
+                  style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)" }}>
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );
