@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, type JournalEntry, type JournalHistoryPoint } from "@/lib/api";
+import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -171,14 +172,19 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const recentHistory = history.slice(-20);
 
   return (
-    <div style={{ animation: "slide-up 0.18s ease-out" }}>
+    <div id="dashboard-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
       {/* Header */}
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          {greeting}, <em className="italic" style={{ color: navColor }}>MO</em>
-        </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} · CanSlim
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+              {greeting}, <em className="italic" style={{ color: navColor }}>MO</em>
+            </h1>
+            <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+              {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} · CanSlim
+            </div>
+          </div>
+          <CaptureSnapshotButton targetSelector="#dashboard-capture-root" snapshotType="dashboard" label="Capture EOD Snapshot" />
         </div>
       </div>
 

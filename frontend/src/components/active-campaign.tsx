@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { CaptureSnapshotButton } from "./capture-snapshot";
 
 interface EnrichedPosition {
   trade_id: string;
@@ -502,7 +503,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   ];
 
   return (
-    <div style={{ animation: "slide-up 0.18s ease-out" }}>
+    <div id="campaign-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
       {/* Header */}
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <div className="flex items-center justify-between">
@@ -523,6 +524,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </svg>
               Refresh
             </button>
+            <CaptureSnapshotButton targetSelector="#campaign-capture-root" snapshotType="campaign" label="Capture EOD Snapshot" />
           </div>
         </div>
       </div>

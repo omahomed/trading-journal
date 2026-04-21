@@ -50,6 +50,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   });
   const [editIdx, setEditIdx] = useState(-1);
   const [editFields, setEditFields] = useState<Record<string, string>>({});
+  const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
 
@@ -250,6 +251,11 @@ export function DailyJournal({ navColor }: { navColor: string }) {
           const h = history[idx];
           setEditIdx(idx);
           setSaveMsg("");
+          setSnapshots([]);
+          const day = String(h.day).slice(0, 10);
+          api.listEodSnapshots(day, "CanSlim").then(res => {
+            if (Array.isArray(res)) setSnapshots(res as any);
+          }).catch(() => {});
           setEditFields({
             end_nlv: String(h.end_nlv || 0),
             daily_pct_change: String(h.daily_pct_change || 0),
@@ -405,6 +411,37 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                         Delete Entry
                       </button>
                     </div>
+
+                    {/* EOD Snapshots */}
+                    {snapshots.length > 0 && (
+                      <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+                        <div className="text-[12px] font-semibold mb-3" style={{ color: "var(--ink-3)" }}>
+                          End-of-Day Snapshots ({snapshots.length})
+                        </div>
+                        <div className="grid grid-cols-1 gap-3">
+                          {snapshots.map((snap, idx) => (
+                            <div key={snap.id ?? idx} className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                              <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+                                <span className="text-[11px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
+                                  {snap.image_type?.replace("eod_", "") || "Snapshot"}
+                                </span>
+                                {snap.uploaded_at && (
+                                  <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                                    {String(snap.uploaded_at).slice(0, 19)}
+                                  </span>
+                                )}
+                              </div>
+                              {snap.view_url && (
+                                <a href={snap.view_url} target="_blank" rel="noopener noreferrer">
+                                  <img src={snap.view_url} alt={snap.image_type}
+                                       style={{ width: "100%", display: "block", cursor: "zoom-in" }} />
+                                </a>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (

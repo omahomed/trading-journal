@@ -216,6 +216,21 @@ export const api = {
   tradeImages: (tradeId: string, portfolio = "CanSlim") =>
     fetchJSON<any[]>(`/api/images/${tradeId}?portfolio=${portfolio}`),
 
+  uploadEodSnapshot: (blob: Blob, day: string, snapshotType: string, portfolio = "CanSlim") => {
+    const form = new FormData();
+    form.append("file", blob, `${snapshotType}_${day}.png`);
+    form.append("portfolio", portfolio);
+    form.append("day", day);
+    form.append("snapshot_type", snapshotType);
+    return fetch(`${API_BASE}/api/snapshots/upload`, { method: "POST", body: form })
+      .then(r => r.json()) as Promise<{ status?: string; image_id?: number; error?: string }>;
+  },
+
+  listEodSnapshots: (day: string, portfolio = "CanSlim") =>
+    fetchJSON<{ image_url?: string; view_url?: string; image_type?: string; file_name?: string; uploaded_at?: string; id?: number }[]>(
+      `/api/snapshots/${day}?portfolio=${portfolio}`
+    ),
+
   uploadImage: (file: File, portfolio: string, tradeId: string, ticker: string, imageType: string) => {
     const form = new FormData();
     form.append("file", file);

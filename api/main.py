@@ -1972,6 +1972,57 @@ async def upload_image(
         return {"error": str(e)}
 
 
+@app.post("/api/snapshots/upload")
+async def upload_eod_snapshot(
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+    day: str = Form(...),
+    snapshot_type: str = Form(...),  # "dashboard" or "campaign"
+):
+    """Upload an end-of-day snapshot (PNG) to R2 tied to a journal day."""
+    if not _is_r2_available():
+        return {"error": "R2 storage not configured"}
+    try:
+        content = await file.read()
+        file_like = io.BytesIO(content)
+        file_like.name = file.filename or f"{snapshot_type}.png"
+
+        # Use synthetic trade_id: EOD-2026-04-20
+        trade_id = f"EOD-{day}"
+        ticker = snapshot_type.upper()
+        image_type = f"eod_{snapshot_type}"
+
+        object_key = r2.upload_image(file_like, portfolio, trade_id, ticker, image_type)
+        if not object_key:
+            return {"error": "Upload to R2 failed"}
+
+        image_id = db.save_trade_image(portfolio, trade_id, ticker, image_type, object_key, file.filename)
+        return {"status": "ok", "image_id": image_id, "object_key": object_key}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/snapshots/{day}")
+def list_eod_snapshots(day: str, portfolio: str = "CanSlim"):
+    """List EOD snapshots for a specific day."""
+    try:
+        trade_id = f"EOD-{day}"
+        images = db.get_trade_images(portfolio, trade_id)
+        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev").rstrip("/")
+        if images:
+            for img in images:
+                key = img.get("image_url", "")
+                if key and str(key).startswith("http"):
+                    img["view_url"] = key
+                elif key:
+                    img["view_url"] = f"{R2_PUBLIC}/{key}"
+                else:
+                    img["view_url"] = ""
+        return images or []
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.delete("/api/images/{image_id}")
 def delete_image(image_id: int):
     """Delete a trade image from R2 and DB."""
