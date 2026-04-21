@@ -724,11 +724,11 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       {/* Lightbox */}
       {lightbox && (
         <div onClick={() => setLightbox(null)}
-             className="fixed inset-0 z-50 flex items-center justify-center p-6 cursor-zoom-out"
-             style={{ background: "rgba(0,0,0,0.85)" }}>
+             className="fixed inset-0 z-50 flex items-center justify-center cursor-zoom-out"
+             style={{ background: "rgba(0,0,0,0.92)" }}>
           <img src={lightbox} alt="full size"
                onClick={e => e.stopPropagation()}
-               style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
+               style={{ maxWidth: "99vw", maxHeight: "99vh", objectFit: "contain", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
           <button onClick={() => setLightbox(null)}
                   className="fixed top-4 right-4 w-10 h-10 rounded-full text-white text-[20px] flex items-center justify-center"
                   style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)" }}>
