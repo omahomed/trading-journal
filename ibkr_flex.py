@@ -12,10 +12,35 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import time
 import os
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+    _TZ_ET = ZoneInfo("America/New_York")
+    _TZ_CT = ZoneInfo("America/Chicago")
+except ImportError:
+    _TZ_ET = None
+    _TZ_CT = None
 try:
     import streamlit as st
 except ImportError:
     st = None
+
+
+def _et_to_ct(date_str: str, time_str: str):
+    """Convert (YYYY-MM-DD, HH:MM:SS) from Eastern to Central time.
+    IBKR Flex reports are published in the account's configured timezone,
+    which for US accounts defaults to ET. We normalise to CT to match the
+    rest of the trading journal (per CLAUDE.md, all timestamps are
+    America/Chicago). Handles DST via zoneinfo. Returns ("", "") on error.
+    """
+    if not _TZ_ET or not _TZ_CT or not date_str or not time_str:
+        return ("", "")
+    try:
+        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+        dt = dt.replace(tzinfo=_TZ_ET).astimezone(_TZ_CT)
+        return (dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M:%S"))
+    except Exception:
+        return ("", "")
 
 
 # IBKR Flex Web Service endpoints
@@ -239,6 +264,17 @@ def parse_trade_confirms(xml_root):
             if candidate and ":" in candidate:
                 order_time = candidate
                 break
+
+        # Convert ET → CT. IBKR Flex reports stamp times in the account's
+        # configured timezone (ET for US accounts); the rest of the app runs
+        # in America/Chicago. Also update trade_date if the conversion rolls
+        # it over to an adjacent day (rare but possible for very early /
+        # very late fills).
+        if order_time and trade_date:
+            ct_date, ct_time = _et_to_ct(trade_date, order_time)
+            if ct_time:
+                order_time = ct_time
+                trade_date = ct_date
 
         # Option fields
         put_call = attribs.get("putCall", "").strip()
