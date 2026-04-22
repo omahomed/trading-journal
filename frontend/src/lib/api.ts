@@ -95,7 +95,15 @@ export interface TradeDetail {
 export interface Portfolio {
   id: number;
   name: string;
+  starting_capital: number | null;
+  reset_date: string | null;
   created_at: string;
+}
+
+export interface PortfolioInput {
+  name?: string;
+  starting_capital?: number | null;
+  reset_date?: string | null;
 }
 
 // API functions
@@ -295,13 +303,23 @@ export const api = {
   // Health
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
 
-  // Portfolios — multi-tenant CRUD. listPortfolios is called once at app load
-  // by PortfolioProvider; createPortfolio is called from the onboarding screen.
+  // Portfolios — multi-tenant CRUD. listPortfolios is called at app load by
+  // PortfolioProvider; others are used by the onboarding screen and Settings.
   listPortfolios: () => fetchJSON<Portfolio[]>(`/api/portfolios`),
 
-  createPortfolio: (name: string) =>
+  createPortfolio: (body: { name: string; starting_capital?: number | null; reset_date?: string | null }) =>
     fetchWithAuth(`${API_BASE}/api/portfolios`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<Portfolio | { error: string }>,
+
+  updatePortfolio: (id: number, body: PortfolioInput) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios/${id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<Portfolio | { error: string }>,
+
+  deletePortfolio: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios/${id}`, { method: "DELETE" })
+      .then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 };

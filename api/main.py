@@ -1328,6 +1328,17 @@ def health():
 # ============================================================
 # PORTFOLIOS — multi-tenant CRUD
 # ============================================================
+def _serialize_portfolio(row: dict) -> dict:
+    """Make a portfolio row JSON-safe (dates → ISO, Decimals → float)."""
+    if row.get("created_at") is not None:
+        row["created_at"] = row["created_at"].isoformat()
+    if row.get("reset_date") is not None:
+        row["reset_date"] = row["reset_date"].isoformat()
+    if row.get("starting_capital") is not None:
+        row["starting_capital"] = float(row["starting_capital"])
+    return row
+
+
 @app.get("/api/portfolios")
 def list_portfolios_endpoint():
     """Return portfolios owned by the authenticated user. Empty list for a
@@ -1335,11 +1346,7 @@ def list_portfolios_endpoint():
     to render the onboarding screen."""
     try:
         rows = db.list_portfolios()
-        # Serialize created_at for JSON
-        for r in rows:
-            if r.get("created_at") is not None:
-                r["created_at"] = r["created_at"].isoformat()
-        return rows
+        return [_serialize_portfolio(r) for r in rows]
     except Exception as e:
         return {"error": str(e)}
 
@@ -1347,16 +1354,51 @@ def list_portfolios_endpoint():
 @app.post("/api/portfolios")
 @limiter.limit("5/minute")
 def create_portfolio_endpoint(request: Request, body: dict = Body(...)):
-    """Create a new portfolio for the authenticated user. Name must be
-    non-empty and unique within this user's portfolios."""
+    """Create a new portfolio for the authenticated user. Name is required
+    and unique per user; starting_capital and reset_date are optional."""
     try:
         name = body.get("name", "")
-        row = db.create_portfolio(name)
-        if row.get("created_at") is not None:
-            row["created_at"] = row["created_at"].isoformat()
-        return row
+        starting_capital = body.get("starting_capital")
+        reset_date = body.get("reset_date") or None
+        row = db.create_portfolio(name, starting_capital=starting_capital, reset_date=reset_date)
+        return _serialize_portfolio(row)
     except ValueError as e:
         return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/api/portfolios/{portfolio_id}")
+@limiter.limit("30/minute")
+def update_portfolio_endpoint(portfolio_id: int, request: Request, body: dict = Body(...)):
+    """Update a portfolio the authenticated user owns. Only the fields
+    present in the body are modified (name, starting_capital, reset_date)."""
+    try:
+        row = db.update_portfolio(
+            portfolio_id,
+            name=body.get("name"),
+            starting_capital=body.get("starting_capital"),
+            reset_date=body.get("reset_date") or None,
+        )
+        if row is None:
+            return {"error": "Portfolio not found"}
+        return _serialize_portfolio(row)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/portfolios/{portfolio_id}")
+@limiter.limit("10/minute")
+def delete_portfolio_endpoint(portfolio_id: int, request: Request):
+    """Delete a portfolio the authenticated user owns. Cascades to all
+    trades, journal entries, and snapshots under it — irreversible."""
+    try:
+        deleted = db.delete_portfolio(portfolio_id)
+        if not deleted:
+            return {"error": "Portfolio not found"}
+        return {"status": "ok"}
     except Exception as e:
         return {"error": str(e)}
 

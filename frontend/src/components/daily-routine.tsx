@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api, getActivePortfolio } from "@/lib/api";
+import { usePortfolio } from "@/lib/portfolio-context";
 
 const REPORT_CATEGORIES = [
   { key: "plan", label: "Followed plan" },
@@ -44,6 +45,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 export function DailyRoutine({ navColor }: { navColor: string }) {
+  const { activePortfolio } = usePortfolio();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -57,21 +59,13 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
   });
 
-  // CanSlim
-  const [csEnabled, setCsEnabled] = useState(true);
-  const [csNlv, setCsNlv] = useState("");
-  const [csHold, setCsHold] = useState("");
-  const [csCash, setCsCash] = useState("0");
-  const [csAction, setCsAction] = useState("");
-  const [csPrev, setCsPrev] = useState(0);
-
-  // 457B
-  const [b4Enabled, setB4Enabled] = useState(true);
-  const [b4Nlv, setB4Nlv] = useState("");
-  const [b4Hold, setB4Hold] = useState("");
-  const [b4Cash, setB4Cash] = useState("0");
-  const [b4Action, setB4Action] = useState("");
-  const [b4Prev, setB4Prev] = useState(0);
+  // Active portfolio (single-portfolio UI; multi-portfolio switching will
+  // come with the top-nav selector post-beta)
+  const [portNlv, setPortNlv] = useState("");
+  const [portHold, setPortHold] = useState("");
+  const [portCash, setPortCash] = useState("0");
+  const [portAction, setPortAction] = useState("");
+  const [portPrev, setPortPrev] = useState(0);
 
   // Report Card
   const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
@@ -81,12 +75,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   useEffect(() => {
     Promise.all([
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 0 })),
-      api.journalLatest("457B Plan").catch(() => ({ end_nlv: 0 })),
       api.batchPrices(["SPY", "^IXIC"]).catch(() => ({})),
       api.rallyPrefix().catch(() => ({ prefix: "" })),
-    ]).then(([csJ, b4J, prices, rally]) => {
-      setCsPrev(parseFloat(String((csJ as any).end_nlv || 0)));
-      setB4Prev(parseFloat(String((b4J as any).end_nlv || 0)));
+    ]).then(([latestJ, prices, rally]) => {
+      setPortPrev(parseFloat(String((latestJ as any).end_nlv || 0)));
       const p = prices as Record<string, number>;
       if (p["SPY"]) setSpyClose(p["SPY"].toFixed(2));
       if (p["^IXIC"]) setNdxClose(p["^IXIC"].toFixed(2));
@@ -96,10 +88,8 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     });
   }, []);
 
-  // Auto-populate Actions from each portfolio's detail rows on entryDate.
-  // Format matches Streamlit: "SELL: GOOG, AAPL | BUY: NVDA". Tickers
-  // de-duped per action (same ticker across B1+A1 same day shows once).
-  // Fires on entryDate change.
+  // Auto-populate Actions from today's detail rows.
+  // Format: "SELL: GOOG, AAPL | BUY: NVDA".
   useEffect(() => {
     const buildActions = (details: any[]) => {
       const grouped: Record<string, string[]> = {};
@@ -109,9 +99,8 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         const action = String(d.action || "").toUpperCase();
         const ticker = String(d.ticker || "").trim();
         if (!action || !ticker) continue;
-        const label = action === "BUY" || action === "SELL" ? action : action;
-        if (!grouped[label]) grouped[label] = [];
-        if (!grouped[label].includes(ticker)) grouped[label].push(ticker);
+        if (!grouped[action]) grouped[action] = [];
+        if (!grouped[action].includes(ticker)) grouped[action].push(ticker);
       }
       const parts: string[] = [];
       for (const label of ["SELL", "BUY"]) {
@@ -123,78 +112,43 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       return parts.join(" | ");
     };
 
-    Promise.all([
-      api.tradesRecent(getActivePortfolio(), 1000).catch(() => []),
-      api.tradesRecent("457B Plan", 1000).catch(() => []),
-    ]).then(([csDet, b4Det]) => {
-      setCsAction(buildActions(csDet as any[]));
-      setB4Action(buildActions(b4Det as any[]));
+    api.tradesRecent(getActivePortfolio(), 1000).catch(() => []).then(det => {
+      setPortAction(buildActions(det as any[]));
     });
   }, [entryDate]);
 
   // Computed
-  const csNlvN = parseFloat(csNlv) || 0;
-  const csCashN = parseFloat(csCash) || 0;
-  const csDailyChg = csPrev > 0 ? csNlvN - csPrev - csCashN : 0;
-  const csAdj = csPrev + csCashN;
-  const csDailyPct = csAdj > 0 ? (csDailyChg / csAdj) * 100 : 0;
-  const csInvPct = csNlvN > 0 ? ((parseFloat(csHold) || 0) / csNlvN) * 100 : 0;
-
-  const b4NlvN = parseFloat(b4Nlv) || 0;
-  const b4CashN = parseFloat(b4Cash) || 0;
-  const b4DailyChg = b4Prev > 0 ? b4NlvN - b4Prev - b4CashN : 0;
-  const b4Adj = b4Prev + b4CashN;
-  const b4DailyPct = b4Adj > 0 ? (b4DailyChg / b4Adj) * 100 : 0;
-  const b4InvPct = b4NlvN > 0 ? ((parseFloat(b4Hold) || 0) / b4NlvN) * 100 : 0;
+  const portNlvN = parseFloat(portNlv) || 0;
+  const portCashN = parseFloat(portCash) || 0;
+  const portDailyChg = portPrev > 0 ? portNlvN - portPrev - portCashN : 0;
+  const portAdj = portPrev + portCashN;
+  const portDailyPct = portAdj > 0 ? (portDailyChg / portAdj) * 100 : 0;
+  const portInvPct = portNlvN > 0 ? ((parseFloat(portHold) || 0) / portNlvN) * 100 : 0;
 
   const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
   const grade = letterGrade(totalScore, REPORT_CATEGORIES.length * 5);
   const overallScore = gradeToScore(grade);
 
-  const savePortfolio = async (portfolio: string, nlv: number, prev: number, holdings: string, cash: number, action: string, dc: number, dp: number, ip: number) => {
-    if (nlv <= 0 && cash === 0) return { status: "skip" };
-    return api.journalEdit({
-      portfolio, day: entryDate, end_nlv: nlv, beg_nlv: prev,
-      cash_change: cash, daily_dollar_change: dc, daily_pct_change: dp,
-      pct_invested: ip, spy: parseFloat(spyClose) || 0, nasdaq: parseFloat(ndxClose) || 0,
-      market_notes: marketNotes, market_action: action, score: overallScore,
-      highlights: JSON.stringify(scores), mistakes: gradeNotes, market_window: "",
-    });
-  };
-
   const handleSubmit = async () => {
     setSaving(true); setSaveMsg("");
-    let ok = 0;
-    if (csEnabled && (csNlvN > 0 || csCashN !== 0)) {
-      const r = await savePortfolio(getActivePortfolio(), csNlvN, csPrev, csHold, csCashN, csAction, csDailyChg, csDailyPct, csInvPct);
-      if (r.status === "ok") ok++;
+    if (portNlvN <= 0 && portCashN === 0) {
+      setSaveMsg("Error: Enter closing NLV");
+      setSaving(false);
+      return;
     }
-    if (b4Enabled && (b4NlvN > 0 || b4CashN !== 0)) {
-      const r = await savePortfolio("457B Plan", b4NlvN, b4Prev, b4Hold, b4CashN, b4Action, b4DailyChg, b4DailyPct, b4InvPct);
-      if (r.status === "ok") ok++;
-    }
+    const r = await api.journalEdit({
+      portfolio: getActivePortfolio(), day: entryDate,
+      end_nlv: portNlvN, beg_nlv: portPrev,
+      cash_change: portCashN, daily_dollar_change: portDailyChg, daily_pct_change: portDailyPct,
+      pct_invested: portInvPct, spy: parseFloat(spyClose) || 0, nasdaq: parseFloat(ndxClose) || 0,
+      market_notes: marketNotes, market_action: portAction, score: overallScore,
+      highlights: JSON.stringify(scores), mistakes: gradeNotes, market_window: "",
+    });
     setSaving(false);
-    setSaveMsg(ok > 0 ? `Successfully updated ${ok} portfolio(s)!` : "Error: Enter NLV for at least one portfolio");
+    setSaveMsg(r.status === "ok" ? "Saved" : `Error: ${r.detail || "Failed to save"}`);
   };
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
-
-  // Computed preview helper
-  const Preview = ({ prev, dc, dp, ip }: { prev: number; dc: number; dp: number; ip: number }) => (
-    <div className="grid grid-cols-2 gap-2 mt-3">
-      {[
-        { k: "Prev NLV", v: `$${prev.toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
-        { k: "Daily $", v: `${dc >= 0 ? "+" : ""}$${dc.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, c: dc >= 0 ? "#08a86b" : "#e5484d" },
-        { k: "Daily %", v: `${dp >= 0 ? "+" : ""}${dp.toFixed(2)}%`, c: dp >= 0 ? "#08a86b" : "#e5484d" },
-        { k: "% Invested", v: `${ip.toFixed(1)}%` },
-      ].map(s => (
-        <div key={s.k} className="p-2 rounded-[8px]" style={{ border: "1px solid var(--border)" }}>
-          <div className="text-[8px] uppercase tracking-[0.06em] font-semibold" style={{ color: "var(--ink-4)" }}>{s.k}</div>
-          <div className="text-[13px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: (s as any).c || "var(--ink)" }}>{s.v}</div>
-        </div>
-      ))}
-    </div>
-  );
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -205,10 +159,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Master Blotter · End-of-Day</div>
       </div>
 
-      {/* ═══ 4 COLUMNS: Market | CanSlim | 457B | Report Card ═══ */}
-      <div className="grid grid-cols-4 gap-4 mb-6" style={{ alignItems: "start" }}>
+      {/* 3 columns: Market | Portfolio | Report Card */}
+      <div className="grid grid-cols-3 gap-4 mb-6" style={{ alignItems: "start" }}>
 
-        {/* ── Column 1: General Market Data ── */}
+        {/* Market */}
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center gap-2 px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
@@ -231,71 +185,45 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
           </div>
         </div>
 
-        {/* ── Column 1: CanSlim ── */}
+        {/* Active Portfolio */}
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-          <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#6366f1" }} />
-              <span className="text-[13px] font-semibold">CanSlim</span>
-            </div>
-            <label className="flex items-center gap-1.5 cursor-pointer text-[11px]" style={{ color: "var(--ink-4)" }}>
-              <input type="checkbox" checked={csEnabled} onChange={e => setCsEnabled(e.target.checked)} className="rounded" />
-              Update
-            </label>
+          <div className="flex items-center gap-2 px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#6366f1" }} />
+            <span className="text-[13px] font-semibold">{activePortfolio?.name ?? "Portfolio"}</span>
           </div>
-          {csEnabled && (
-            <div className="p-4 flex flex-col gap-3">
-              <Field label="Closing NLV">
-                <input type="number" value={csNlv} onChange={e => setCsNlv(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Total Holdings">
-                <input type="number" value={csHold} onChange={e => setCsHold(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Cash +/-">
-                <input type="number" value={csCash} onChange={e => setCsCash(e.target.value)} step="100" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Actions">
-                <input type="text" value={csAction} onChange={e => setCsAction(e.target.value)} placeholder="BUY: NVDA"
-                       className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
-              </Field>
-              {csNlvN > 0 && <Preview prev={csPrev} dc={csDailyChg} dp={csDailyPct} ip={csInvPct} />}
-            </div>
-          )}
+          <div className="p-4 flex flex-col gap-3">
+            <Field label="Closing NLV">
+              <input type="number" value={portNlv} onChange={e => setPortNlv(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
+            </Field>
+            <Field label="Total Holdings">
+              <input type="number" value={portHold} onChange={e => setPortHold(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
+            </Field>
+            <Field label="Cash +/-">
+              <input type="number" value={portCash} onChange={e => setPortCash(e.target.value)} step="100" className={inputCls} style={inputStyle} />
+            </Field>
+            <Field label="Actions">
+              <input type="text" value={portAction} onChange={e => setPortAction(e.target.value)} placeholder="BUY: NVDA"
+                     className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
+            </Field>
+            {portNlvN > 0 && (
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                {[
+                  { k: "Prev NLV", v: `$${portPrev.toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
+                  { k: "Daily $", v: `${portDailyChg >= 0 ? "+" : ""}$${portDailyChg.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, c: portDailyChg >= 0 ? "#08a86b" : "#e5484d" },
+                  { k: "Daily %", v: `${portDailyPct >= 0 ? "+" : ""}${portDailyPct.toFixed(2)}%`, c: portDailyPct >= 0 ? "#08a86b" : "#e5484d" },
+                  { k: "% Invested", v: `${portInvPct.toFixed(1)}%` },
+                ].map(s => (
+                  <div key={s.k} className="p-2 rounded-[8px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[8px] uppercase tracking-[0.06em] font-semibold" style={{ color: "var(--ink-4)" }}>{s.k}</div>
+                    <div className="text-[13px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: (s as any).c || "var(--ink)" }}>{s.v}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* ── Column 2: 457B ── */}
-        <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-          <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#f59f00" }} />
-              <span className="text-[13px] font-semibold">457B Plan</span>
-            </div>
-            <label className="flex items-center gap-1.5 cursor-pointer text-[11px]" style={{ color: "var(--ink-4)" }}>
-              <input type="checkbox" checked={b4Enabled} onChange={e => setB4Enabled(e.target.checked)} className="rounded" />
-              Update
-            </label>
-          </div>
-          {b4Enabled && (
-            <div className="p-4 flex flex-col gap-3">
-              <Field label="Closing NLV">
-                <input type="number" value={b4Nlv} onChange={e => setB4Nlv(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Total Holdings">
-                <input type="number" value={b4Hold} onChange={e => setB4Hold(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Cash +/-">
-                <input type="number" value={b4Cash} onChange={e => setB4Cash(e.target.value)} step="100" className={inputCls} style={inputStyle} />
-              </Field>
-              <Field label="Actions">
-                <input type="text" value={b4Action} onChange={e => setB4Action(e.target.value)} placeholder="Rebalance"
-                       className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
-              </Field>
-              {b4NlvN > 0 && <Preview prev={b4Prev} dc={b4DailyChg} dp={b4DailyPct} ip={b4InvPct} />}
-            </div>
-          )}
-        </div>
-
-        {/* ── Column 3: Daily Report Card ── */}
+        {/* Report Card */}
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
             <div className="flex items-center gap-2">
@@ -331,7 +259,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         </div>
       </div>
 
-      {/* ═══ Bottom: Overwrite + Submit ═══ */}
+      {/* Submit */}
       <label className="flex items-center gap-2 mb-4 cursor-pointer text-[12px]" style={{ color: "var(--ink-3)" }}>
         <input type="checkbox" checked={forceOverwrite} onChange={e => setForceOverwrite(e.target.checked)} className="rounded" />
         Force Overwrite Existing Entry
@@ -351,7 +279,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       <button onClick={handleSubmit} disabled={saving}
               className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
               style={{ background: "#6366f1" }}>
-        {saving ? "Saving..." : "LOG SELECTED ACCOUNTS"}
+        {saving ? "Saving..." : "Save Daily Routine"}
       </button>
     </div>
   );

@@ -27,6 +27,7 @@ import { PerfHeatmap } from "@/components/perf-heatmap";
 import { PeriodReview } from "@/components/period-review";
 import { AICoach } from "@/components/ai-coach";
 import { Admin } from "@/components/admin";
+import { Settings } from "@/components/settings";
 import { Onboarding } from "@/components/onboarding";
 import { PortfolioProvider, usePortfolio } from "@/lib/portfolio-context";
 import { getGroupForPage } from "@/lib/nav";
@@ -228,7 +229,7 @@ const PAGE_TITLES: Record<string, string> = {
   cycle: "Market Cycle Tracker", rally: "Rally Context",
   coach: "AI Coach", analytics: "Analytics", audit: "Performance Audit",
   heatmap: "Performance Heat Map", period: "Period Review",
-  forensics: "Ticker Forensics", admin: "Admin",
+  forensics: "Ticker Forensics", admin: "Admin", settings: "Settings",
 };
 
 export default function Home() {
@@ -339,6 +340,7 @@ function HomeApp() {
                     : page === "period" ? <PeriodReview navColor={navColor} initialTab={pendingTab} onTabConsumed={() => setPendingTab(undefined)} />
                     : page === "coach" ? <AICoach navColor={navColor} />
                     : page === "admin" ? <Admin navColor={navColor} />
+                    : page === "settings" ? <Settings navColor={navColor} />
                     : <StubPage title={PAGE_TITLES[page] || page} pageId={page} />}
         </div>
       </main>

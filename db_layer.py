@@ -2831,6 +2831,9 @@ def test_connection():
 # ============================================
 # PORTFOLIO CRUD (multi-tenant)
 # ============================================
+_PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at"
+
+
 def list_portfolios():
     """Return portfolios owned by the current authenticated user.
 
@@ -2842,27 +2845,29 @@ def list_portfolios():
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, name, created_at FROM portfolios ORDER BY created_at ASC"
+                f"SELECT {_PORTFOLIO_COLS} FROM portfolios ORDER BY created_at ASC"
             )
             return [dict(r) for r in cur.fetchall()]
 
 
-def create_portfolio(name):
+def create_portfolio(name, starting_capital=None, reset_date=None):
     """Create a portfolio for the current user and return the new row.
 
     user_id is populated by the column DEFAULT added in migration 003 (reads
     from app.user_id). The per-user UNIQUE (user_id, name) index from
     migration 007 prevents one user from creating two portfolios with the
     same name. Raises ValueError on empty/oversized name or collision.
+    starting_capital and reset_date are optional; both can be set later via
+    update_portfolio.
     """
     name = validate_portfolio_name(name)
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             try:
                 cur.execute(
-                    "INSERT INTO portfolios (name) VALUES (%s) "
-                    "RETURNING id, name, created_at",
-                    (name,),
+                    f"INSERT INTO portfolios (name, starting_capital, reset_date) "
+                    f"VALUES (%s, %s, %s) RETURNING {_PORTFOLIO_COLS}",
+                    (name, starting_capital, reset_date),
                 )
                 row = cur.fetchone()
                 conn.commit()
@@ -2870,3 +2875,65 @@ def create_portfolio(name):
             except psycopg2.errors.UniqueViolation:
                 conn.rollback()
                 raise ValueError(f"Portfolio '{name}' already exists")
+
+
+def update_portfolio(portfolio_id, *, name=None, starting_capital=None, reset_date=None):
+    """Update a portfolio the current user owns. Only passed fields change;
+    pass `None` (or omit) to leave a column untouched.
+
+    Returns the updated row or None if no portfolio matched (RLS would hide
+    rows belonging to other users — callers should treat None as 404).
+    """
+    updates = []
+    params: list = []
+    if name is not None:
+        updates.append("name = %s")
+        params.append(validate_portfolio_name(name))
+    if starting_capital is not None:
+        updates.append("starting_capital = %s")
+        params.append(starting_capital)
+    if reset_date is not None:
+        updates.append("reset_date = %s")
+        params.append(reset_date)
+
+    if not updates:
+        # Nothing to do — return current row unchanged so callers get consistent shape.
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(f"SELECT {_PORTFOLIO_COLS} FROM portfolios WHERE id = %s",
+                            (portfolio_id,))
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    params.append(portfolio_id)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            try:
+                cur.execute(
+                    f"UPDATE portfolios SET {', '.join(updates)} "
+                    f"WHERE id = %s RETURNING {_PORTFOLIO_COLS}",
+                    params,
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row) if row else None
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                raise ValueError(f"Portfolio '{name}' already exists")
+
+
+def delete_portfolio(portfolio_id):
+    """Delete a portfolio the current user owns.
+
+    Cascades via trades_summary/trades_details FKs (ON DELETE CASCADE) — all
+    trades, journal entries, snapshots, etc. under this portfolio go with it.
+    RLS ensures a user can only delete their own portfolios.
+
+    Returns True if a row was deleted, False if not found.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM portfolios WHERE id = %s", (portfolio_id,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted

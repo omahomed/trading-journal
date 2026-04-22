@@ -93,8 +93,9 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
-    id: "admin", label: "Admin", color: "#0f1524", softColor: "#eceef3",
+    id: "admin", label: "Account", color: "#0f1524", softColor: "#eceef3",
     items: [
+      { id: "settings", label: "Settings" },
       { id: "admin", label: "Admin" },
     ],
   },
