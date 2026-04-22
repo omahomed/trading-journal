@@ -29,11 +29,27 @@ from starlette.responses import JSONResponse
 from datetime import datetime, date
 import pandas as pd
 import jwt
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 # Import existing modules (needed by the middleware below).
 import db_layer as db
 
+
+def _rate_limit_key(request: Request) -> str:
+    """Rate-limit per authenticated user; fall back to IP if unauthenticated."""
+    uid = getattr(request.state, "user_id", None)
+    return uid or get_remote_address(request)
+
+
+# slowapi is opt-in: only endpoints with @limiter.limit(...) are rate-limited.
+# No global default so we don't accidentally throttle normal navigation.
+limiter = Limiter(key_func=_rate_limit_key)
+
 app = FastAPI(title="MO Money API", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — allow React dev server + Vercel production
 app.add_middleware(
@@ -1042,7 +1058,8 @@ def rally_prefix(as_of_date: str = ""):
 
 
 @app.get("/api/market/ibd")
-def ibd_market_school():
+@limiter.limit("30/minute")
+def ibd_market_school(request: Request):
     """Get IBD Market School current status for NASDAQ — exposure, distribution days, signals."""
     try:
         from market_school_rules import MarketSchoolRules
@@ -1183,7 +1200,8 @@ def rally_data(ftd_date: str = "", index: str = "^IXIC"):
 
 
 @app.get("/api/market/mfactor")
-def market_mfactor():
+@limiter.limit("30/minute")
+def market_mfactor(request: Request):
     """Get current M Factor state for NASDAQ + SPY with full MA stack."""
     try:
         import yfinance as yf
@@ -1560,7 +1578,8 @@ Current portfolio: CanSlim
 
 
 @app.post("/api/coach/chat")
-def coach_chat(body: dict):
+@limiter.limit("20/minute")
+def coach_chat(request: Request, body: dict):
     """AI Coach chat endpoint — streams response via SSE."""
     try:
         import anthropic
