@@ -1,0 +1,90 @@
+name: Backup DB to R2
+
+# Daily pg_dump of the Neon database, gzipped and uploaded to R2. Runs at
+# 07:00 UTC (≈02:00 America/Chicago) so it doesn't overlap US market hours.
+# Also triggerable manually from the Actions tab.
+#
+# Retention: deletes db-backups/*.sql.gz older than 30 days on every run.
+#
+# Restore procedure (for future-you):
+#   1. aws s3 cp s3://<bucket>/db-backups/backup-YYYYMMDD-HHMMSS.sql.gz . \
+#        --endpoint-url $R2_ENDPOINT_URL  (or use the Cloudflare dashboard)
+#   2. gunzip backup-*.sql.gz
+#   3. Create a Neon branch from the target point — restore into the branch,
+#      verify, then promote. Never restore directly over the live DB.
+#      psql "$BRANCH_DATABASE_URL" < backup-YYYYMMDD-HHMMSS.sql
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: pg_dump → R2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install postgres-client-17 + boto3
+        # Neon runs Postgres 17; match the pg_dump version so we can restore
+        # into a same-version branch without serializer mismatches.
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pip install --quiet boto3
+
+      - name: pg_dump
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: |
+          set -eo pipefail
+          TS=$(date -u +%Y%m%d-%H%M%S)
+          FILE="backup-${TS}.sql.gz"
+          echo "Dumping to ${FILE}"
+          pg_dump --no-owner --no-privileges "$BACKUP_DATABASE_URL" | gzip > "$FILE"
+          SIZE=$(stat -c%s "$FILE")
+          echo "Dump complete: ${SIZE} bytes"
+          if [ "$SIZE" -lt 1024 ]; then
+            echo "Dump is suspiciously small — failing the run."
+            exit 1
+          fi
+          echo "BACKUP_FILE=$FILE" >> $GITHUB_ENV
+
+      - name: Upload to R2 + prune >30d
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          BACKUP_FILE: ${{ env.BACKUP_FILE }}
+        run: |
+          python <<'PY'
+          import os, boto3
+          from datetime import datetime, timezone, timedelta
+
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["R2_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+              region_name="auto",
+          )
+          bucket = os.environ["R2_BUCKET_NAME"]
+          local = os.environ["BACKUP_FILE"]
+          key = f"db-backups/{local}"
+          s3.upload_file(local, bucket, key)
+          print(f"Uploaded s3://{bucket}/{key}")
+
+          # Prune backups older than 30 days.
+          cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+          pruned = 0
+          paginator = s3.get_paginator("list_objects_v2")
+          for page in paginator.paginate(Bucket=bucket, Prefix="db-backups/"):
+              for obj in page.get("Contents", []):
+                  if obj["LastModified"] < cutoff:
+                      s3.delete_object(Bucket=bucket, Key=obj["Key"])
+                      print(f"Pruned {obj['Key']}")
+                      pruned += 1
+          print(f"Pruned {pruned} old backup(s)")
+          PY
