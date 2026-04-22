@@ -322,4 +322,24 @@ export const api = {
   deletePortfolio: (id: number) =>
     fetchWithAuth(`${API_BASE}/api/portfolios/${id}`, { method: "DELETE" })
       .then(r => r.json()) as Promise<{ status?: string; error?: string }>,
+
+  portfolioNlv: (id: number) =>
+    fetchJSON<PortfolioNlv>(`/api/portfolios/${id}/nlv`),
 };
+
+// Live-derived NLV snapshot (cash + Σ positions at live price)
+export interface PortfolioNlv {
+  cash: number;
+  market_value: number;
+  nlv: number;
+  positions: Array<{
+    ticker: string;
+    shares: number;
+    avg_entry: number;
+    current_price: number | null;
+    market_value: number;
+    unrealized_pl: number;
+    price_unavailable?: boolean;
+  }>;
+  as_of: string;
+}

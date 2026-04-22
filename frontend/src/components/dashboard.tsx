@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv } from "@/lib/api";
+import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
@@ -25,6 +26,7 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
 }
 
 export function Dashboard({ navColor }: { navColor: string }) {
+  const { activePortfolio } = usePortfolio();
   const [latest, setLatest] = useState<JournalEntry | null>(null);
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [openCount, setOpenCount] = useState(0);
@@ -34,18 +36,22 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("1Y");
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
+  const [nlvSnapshot, setNlvSnapshot] = useState<PortfolioNlv | null>(null);
 
   const [openTrades, setOpenTrades] = useState<any[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
 
   const loadData = useCallback(async () => {
-    const [lat, hist, open, closed, ev] = await Promise.all([
+    const activeId = activePortfolio?.id;
+    const [lat, hist, open, closed, ev, nlv] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
       api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
       api.events().catch(() => []),
+      activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
     ]);
+    setNlvSnapshot(nlv as PortfolioNlv | null);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
@@ -66,7 +72,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
 
   // Auto-refresh when tab regains focus
   useEffect(() => {
@@ -156,8 +162,10 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
-  // Compute KPI values from real data
-  const nlv = latest?.end_nlv || 0;
+  // Compute KPI values from real data. NLV prefers the derived snapshot
+  // (cash + Σ positions × live price) — falls back to the most recent
+  // journal entry's end_nlv if the derivation is unavailable.
+  const nlv = nlvSnapshot?.nlv ?? latest?.end_nlv ?? 0;
   const dailyDol = latest?.daily_dollar_change || 0;
   const dailyPct = latest?.daily_pct_change || 0;
   const ltdPct = history.length > 0 ? history[history.length - 1]?.portfolio_ltd || 0 : 0;
@@ -217,7 +225,8 @@ export function Dashboard({ navColor }: { navColor: string }) {
               {greeting}, <em className="italic" style={{ color: navColor }}>MO</em>
             </h1>
             <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-              {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} · CanSlim
+              {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+              {activePortfolio ? ` · ${activePortfolio.name}` : ""}
             </div>
           </div>
           <CaptureSnapshotButton targetSelector="#dashboard-capture-root" snapshotType="dashboard" label="Capture EOD Snapshot" />
@@ -233,9 +242,38 @@ export function Dashboard({ navColor }: { navColor: string }) {
       </div>
 
       {/* KPI Strip — REAL DATA */}
-      <div className="grid grid-cols-5 gap-3.5 mb-6">
+      <div className="grid grid-cols-5 gap-3.5 mb-3">
         {kpis.map((kpi) => <KPITile key={kpi.label} {...kpi} />)}
       </div>
+
+      {/* NLV breakdown: cash + positions, with a "journal not ledger" disclaimer */}
+      {nlvSnapshot && (
+        <div className="flex items-center gap-4 mb-6 text-[11px] flex-wrap" style={{ color: "var(--ink-4)" }}>
+          <div>
+            <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
+              ${nlvSnapshot.cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span> cash
+          </div>
+          <span>·</span>
+          <div>
+            <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
+              ${nlvSnapshot.market_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span> positions
+          </div>
+          {nlvSnapshot.positions.some((p) => p.price_unavailable) && (
+            <>
+              <span>·</span>
+              <div style={{ color: "#f59f00" }}>
+                Some prices unavailable — using cost basis
+              </div>
+            </>
+          )}
+          <span className="ml-auto">
+            NLV excludes commissions &amp; margin interest.{" "}
+            <span className="italic">Reconcile in Settings to match your broker.</span>
+          </span>
+        </div>
+      )}
 
       {/* Two-column: EC + This Month (or full-width when maximized) */}
       <div className="grid gap-[18px]" style={{ gridTemplateColumns: ecMaximized ? "1fr" : "2fr 1fr", alignItems: "stretch" }}>
