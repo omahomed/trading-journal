@@ -35,6 +35,11 @@ from slowapi.util import get_remote_address
 
 # Import existing modules (needed by the middleware below).
 import db_layer as db
+from trade_calc import (
+    calc_risk_budget,
+    compute_lifo_summary,
+    normalize_journal_columns as _normalize_journal,
+)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -195,24 +200,6 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # ============================================================
 # JOURNAL ENDPOINTS
 # ============================================================
-def _normalize_journal(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize journal column names to lowercase with underscores."""
-    rename = {
-        "Day": "day", "Status": "status", "Market Window": "market_window",
-        "Market Cycle": "market_cycle",
-        "> 21e": "above_21ema", "Cash -/+": "cash_change",
-        "Beg NLV": "beg_nlv", "End NLV": "end_nlv",
-        "Daily $ Change": "daily_dollar_change", "Daily % Change": "daily_pct_change",
-        "% Invested": "pct_invested", "SPY": "spy", "Nasdaq": "nasdaq",
-        "Market_Notes": "market_notes", "Market_Action": "market_action",
-        "Portfolio_Heat": "portfolio_heat", "SPY_ATR": "spy_atr", "Nasdaq_ATR": "nasdaq_atr",
-        "Score": "score", "Highlights": "highlights", "Lowlights": "lowlights",
-        "Mistakes": "mistakes", "Top_Lesson": "top_lesson",
-    }
-    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-    return df
-
-
 @app.get("/api/journal/latest")
 def journal_latest(portfolio: str = "CanSlim"):
     """Get the most recent journal entry (NLV, daily change, etc.)."""
@@ -507,7 +494,8 @@ def journal_delete(portfolio: str = Query("CanSlim"), day: str = Query(...)):
 
 
 @app.post("/api/journal/backfill-metrics")
-def journal_backfill_metrics(body: dict = Body(...)):
+@limiter.limit("2/minute")
+def journal_backfill_metrics(request: Request, body: dict = Body(...)):
     """Backfill missing market_window, portfolio_heat, spy_atr, nasdaq_atr
     for existing journal entries. Only updates rows where these fields are
     empty/zero; preserves any existing non-zero values."""
@@ -711,7 +699,8 @@ def _to_occ_symbol(readable_ticker):
 
 
 @app.get("/api/prices/lookup")
-def price_lookup(ticker: str = ""):
+@limiter.limit("30/minute")
+def price_lookup(request: Request, ticker: str = ""):
     """Get live price + ATR for a single ticker. Used by Position Sizer and Log Buy."""
     if not ticker.strip():
         return {"error": "No ticker provided"}
@@ -752,7 +741,8 @@ def price_lookup(ticker: str = ""):
 
 
 @app.get("/api/charts/ohlcv/{ticker}")
-def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo", interval: str = "1d"):
+@limiter.limit("20/minute")
+def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", period: str = "6mo", interval: str = "1d"):
     """Get OHLCV candlestick data for lightweight-charts."""
     import yfinance as yf
     try:
@@ -785,7 +775,8 @@ def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo"
 
 
 @app.get("/api/prices/batch")
-def batch_prices(tickers: str = ""):
+@limiter.limit("10/minute")
+def batch_prices(request: Request, tickers: str = ""):
     """Get live prices for a comma-separated list of tickers.
     Supports both stock tickers and readable option format ('LUMN 260717 $8C').
     Returns dict of {readable_ticker: price}.
@@ -1159,7 +1150,8 @@ def ibd_market_school(request: Request):
 
 
 @app.get("/api/market/rally-data")
-def rally_data(ftd_date: str = "", index: str = "^IXIC"):
+@limiter.limit("25/minute")
+def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
     """Fetch index closes from FTD through Day 25 for Rally Context chart."""
     if not ftd_date:
         return {"error": "ftd_date required"}
@@ -1449,7 +1441,8 @@ def audit_trail(limit: int = 100, action_filter: str = None):
 # ADMIN — DATA CLEANUP
 # ============================================================
 @app.post("/api/admin/cleanup-marketsurge")
-def cleanup_marketsurge(body: dict):
+@limiter.limit("5/minute")
+def cleanup_marketsurge(request: Request, body: dict):
     """Clean up duplicate MarketSurge images."""
     try:
         if not hasattr(db, "cleanup_duplicate_marketsurge_images"):
@@ -1708,7 +1701,8 @@ def ibkr_status():
 
 
 @app.post("/api/trades/import")
-def import_ibkr_trades():
+@limiter.limit("3/minute")
+def import_ibkr_trades(request: Request):
     """Pull today's trade confirmations from IBKR Flex Query."""
     try:
         import ibkr_flex
@@ -1733,7 +1727,8 @@ def import_ibkr_trades():
 
 
 @app.post("/api/trades/buy")
-def log_buy(body: dict):
+@limiter.limit("10/minute")
+def log_buy(request: Request, body: dict):
     """Log a buy transaction. Creates/updates summary + inserts detail row."""
     try:
         portfolio = body.get("portfolio", "CanSlim")
@@ -1766,21 +1761,17 @@ def log_buy(body: dict):
             else:
                 trx_id = "B1"
 
-        # Build summary row first (FK requires summary before detail)
-        # risk_budget = the initial $ at risk at entry (shares * (entry - stop)).
-        # Historically set by the sizing calculator path but missing when a
-        # trade is logged directly (e.g. IBKR Quick Log) without going through
-        # the sizer. Compute from stop_loss here so the column is populated.
-        def _calc_risk_budget(s: float, p: float, sl: float) -> float:
-            return round(s * (p - sl), 2) if (sl and sl > 0 and p > sl and s > 0) else 0.0
-
+        # Build summary row first (FK requires summary before detail).
+        # risk_budget = initial $ at risk at entry (shares * (entry - stop)).
+        # Populated here because direct-log paths (e.g. IBKR Quick Log) skip
+        # the sizing calculator that historically set this column.
         if action_type == "new":
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
+                "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
             }
         else:
             # Scale-in: load existing summary and update
@@ -1797,7 +1788,7 @@ def log_buy(body: dict):
                 new_avg_entry = new_total_cost / new_total_shares if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
                 existing_rb = float(row.get("risk_budget", 0) or 0)
-                added_rb = _calc_risk_budget(shares, price, effective_stop)
+                added_rb = calc_risk_budget(shares, price, effective_stop)
                 new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
@@ -1816,7 +1807,7 @@ def log_buy(body: dict):
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                    "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
+                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)
@@ -1899,7 +1890,8 @@ def set_trade_grade(body: dict = Body(...)):
 
 
 @app.post("/api/trades/sell")
-def log_sell(body: dict):
+@limiter.limit("10/minute")
+def log_sell(request: Request, body: dict):
     """Log a sell transaction. Updates summary via LIFO + inserts detail row."""
     try:
         portfolio = body.get("portfolio", "CanSlim")
@@ -2038,7 +2030,8 @@ def log_sell(body: dict):
 
 
 @app.put("/api/trades/edit-transaction")
-def edit_transaction_endpoint(body: dict = Body(...)):
+@limiter.limit("15/minute")
+def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
     """Edit an existing transaction detail row."""
     try:
         detail_id = body.get("detail_id")
@@ -2094,64 +2087,11 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         db.delete_trade(portfolio, trade_id)
         return
     df_d = _normalize_trades(df_d)
-    txns = df_d[df_d["trade_id"] == trade_id].copy()
-    if txns.empty:
+    txns = df_d[df_d["trade_id"] == trade_id]
+    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date)
+    if summary_row is None:
         db.delete_trade(portfolio, trade_id)
         return
-    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
-    txns = txns.dropna(subset=["date"]).sort_values("date")
-
-    inventory = []
-    total_realized = 0.0
-    for _, tx in txns.iterrows():
-        action = str(tx.get("action", "")).upper()
-        tx_shares = float(tx.get("shares", 0) or 0)
-        tx_price = float(tx.get("amount", 0) or 0)
-        if action == "BUY":
-            inventory.append({"price": tx_price, "shares": tx_shares})
-        elif action == "SELL":
-            to_sell = tx_shares
-            while to_sell > 0 and inventory:
-                last = inventory[-1]
-                take = min(to_sell, last["shares"])
-                total_realized += (tx_price - last["price"]) * take
-                last["shares"] -= take
-                to_sell -= take
-                if last["shares"] < 0.0001:
-                    inventory.pop()
-
-    remaining_shares = sum(lot["shares"] for lot in inventory)
-    remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
-    avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else 0.0
-
-    sells = txns[txns["action"].str.upper() == "SELL"]
-    total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
-    total_sell_shs = float(sells["shares"].astype(float).sum())
-    avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0.0
-
-    buys = txns[txns["action"].str.upper() == "BUY"]
-    total_cost_all = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
-    total_buy_shs = float(buys["shares"].astype(float).sum())
-    is_closed = remaining_shares < 0.01 and total_sell_shs > 0
-    return_pct = (total_realized / total_cost_all * 100) if is_closed and total_cost_all > 0 else 0.0
-
-    first_date = txns["date"].min()
-    open_date = first_date.strftime("%Y-%m-%d") if pd.notna(first_date) else (fallback_open_date or "")
-    last_date = txns["date"].max()
-    closed_date = last_date.strftime("%Y-%m-%d") if is_closed and pd.notna(last_date) else None
-
-    summary_row = {
-        "Trade_ID": trade_id, "Ticker": ticker,
-        "Status": "CLOSED" if is_closed else "OPEN",
-        "Open_Date": open_date,
-        "Closed_Date": closed_date,
-        "Shares": float(remaining_shares if not is_closed else total_buy_shs),
-        "Avg_Entry": float(round(avg_entry, 4)),
-        "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
-        "Total_Cost": float(round(remaining_cost if not is_closed else total_cost_all, 2)),
-        "Realized_PL": float(round(total_realized, 2)),
-        "Return_Pct": float(round(return_pct, 4)),
-    }
     db.save_summary_row(portfolio, summary_row)
 
 
@@ -2274,7 +2214,9 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
 
 
 @app.post("/api/images/upload")
+@limiter.limit("5/minute")
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     portfolio: str = Form("CanSlim"),
     trade_id: str = Form(...),
@@ -2324,7 +2266,9 @@ async def upload_image(
 
 
 @app.post("/api/snapshots/upload")
+@limiter.limit("5/minute")
 async def upload_eod_snapshot(
+    request: Request,
     file: UploadFile = File(...),
     portfolio: str = Form("CanSlim"),
     day: str = Form(...),
