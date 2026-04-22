@@ -2894,17 +2894,31 @@ _PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at"
 
 
 def list_portfolios():
-    """Return portfolios owned by the current authenticated user.
+    """Return portfolios owned by the current authenticated user plus a
+    live cash_balance derived from the cash_transactions ledger.
 
     RLS filters by app.user_id; caller must have populated current_user_id
     before this runs. Ordered by creation time so the first-created portfolio
     comes first — matches the onboarding UX where a user creates one and
     expects it to be the default.
+
+    cash_balance is a LEFT JOIN subquery, returning 0 for portfolios with no
+    activity yet.
     """
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"SELECT {_PORTFOLIO_COLS} FROM portfolios ORDER BY created_at ASC"
+                f"""
+                SELECT {", ".join("p." + c for c in _PORTFOLIO_COLS.split(", "))},
+                       COALESCE(c.cash_balance, 0) AS cash_balance
+                FROM portfolios p
+                LEFT JOIN (
+                    SELECT portfolio_id, SUM(amount) AS cash_balance
+                    FROM cash_transactions
+                    GROUP BY portfolio_id
+                ) c ON c.portfolio_id = p.id
+                ORDER BY p.created_at ASC
+                """
             )
             return [dict(r) for r in cur.fetchall()]
 

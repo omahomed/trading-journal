@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { api, type Portfolio } from "@/lib/api";
+import { api, type CashAction, type Portfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 
 export function Settings({ navColor }: { navColor: string }) {
@@ -110,22 +110,26 @@ function PortfolioCard({
     }
   }
 
+  const [cashAction, setCashAction] = useState<CashAction | null>(null);
+
   const capitalDisplay = portfolio.starting_capital != null
     ? `$${portfolio.starting_capital.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
     : "—";
   const resetDisplay = portfolio.reset_date ?? "—";
+  const cashDisplay = `$${portfolio.cash_balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
   return (
     <div className="rounded-[14px] p-5"
          style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
       {!editing ? (
+        <>
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2.5">
               <span className="w-2 h-2 rounded-full" style={{ background: navColor }} />
               <div className="text-[15px] font-semibold" style={{ color: "var(--ink)" }}>{portfolio.name}</div>
             </div>
-            <div className="grid grid-cols-2 gap-4 mt-3 text-[12px]">
+            <div className="grid grid-cols-3 gap-4 mt-3 text-[12px]">
               <div>
                 <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
                   Starting capital
@@ -135,13 +139,36 @@ function PortfolioCard({
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                  Cash balance
+                </div>
+                <div className="mt-0.5 privacy-mask"
+                     style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink)" }}>{cashDisplay}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
                   Reset date
                 </div>
                 <div className="mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink)" }}>{resetDisplay}</div>
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button onClick={() => setCashAction("deposit")} disabled={busy}
+                    className="h-[32px] px-3 rounded-[8px] text-[12px] font-medium"
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "#08a86b" }}>
+              Deposit
+            </button>
+            <button onClick={() => setCashAction("withdraw")} disabled={busy}
+                    className="h-[32px] px-3 rounded-[8px] text-[12px] font-medium"
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "#f59f00" }}>
+              Withdraw
+            </button>
+            <button onClick={() => setCashAction("reconcile")} disabled={busy}
+                    className="h-[32px] px-3 rounded-[8px] text-[12px] font-medium"
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+              Reconcile
+            </button>
+            <span className="w-px h-5" style={{ background: "var(--border)" }} />
             <button onClick={() => setEditing(true)} disabled={busy}
                     className="h-[32px] px-3 rounded-[8px] text-[12px] font-medium"
                     style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
@@ -154,6 +181,17 @@ function PortfolioCard({
             </button>
           </div>
         </div>
+        {cashAction && (
+          <CashActionForm
+            portfolioId={portfolio.id}
+            cashBalance={portfolio.cash_balance}
+            action={cashAction}
+            navColor={navColor}
+            onDone={async () => { setCashAction(null); await onChanged(); }}
+            onCancel={() => setCashAction(null)}
+          />
+        )}
+        </>
       ) : (
         <div className="space-y-3">
           <label className="block">
@@ -274,6 +312,140 @@ function NewPortfolioCard({
             Cancel
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+function CashActionForm({
+  portfolioId, cashBalance, action, navColor, onDone, onCancel,
+}: {
+  portfolioId: number;
+  cashBalance: number;
+  action: CashAction;
+  navColor: string;
+  onDone: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  const titles: Record<CashAction, { title: string; subtitle: string; button: string; color: string }> = {
+    deposit: {
+      title: "Deposit cash",
+      subtitle: "Money added from your broker account.",
+      button: "Deposit",
+      color: "#08a86b",
+    },
+    withdraw: {
+      title: "Withdraw cash",
+      subtitle: "Money removed from your portfolio.",
+      button: "Withdraw",
+      color: "#f59f00",
+    },
+    reconcile: {
+      title: "Reconcile with broker",
+      subtitle: `Enter your actual broker cash balance. The system will record the delta as a single adjustment — absorbing any commissions or margin interest drift since your last reconcile.`,
+      button: "Reconcile",
+      color: navColor,
+    },
+  };
+  const meta = titles[action];
+
+  async function submit() {
+    setErr(null);
+    setInfo(null);
+    const num = parseFloat(amount);
+    if (!isFinite(num) || num <= 0) {
+      setErr("Amount must be a positive number");
+      return;
+    }
+    setBusy(true);
+    const res = await api.createCashTransaction(portfolioId, {
+      source: action,
+      amount: num,
+      note: note.trim() || null,
+    });
+    if ("error" in res) {
+      setErr(res.error);
+      setBusy(false);
+      return;
+    }
+    if ("status" in res && res.status === "noop") {
+      setInfo(res.message || "Already in sync");
+      setBusy(false);
+      return;
+    }
+    await onDone();
+  }
+
+  return (
+    <div className="mt-4 pt-4 space-y-3" style={{ borderTop: "1px solid var(--border)" }}>
+      <div>
+        <div className="text-[13px] font-semibold" style={{ color: "var(--ink)" }}>{meta.title}</div>
+        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{meta.subtitle}</div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+            {action === "reconcile" ? "Broker cash balance" : "Amount"}
+          </span>
+          <div className="mt-1 relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: "var(--ink-4)" }}>$</span>
+            <input type="number" min={0} step="0.01" value={amount} autoFocus
+                   onChange={(e) => setAmount(e.target.value)}
+                   className="w-full h-10 pl-7 pr-3 rounded-[8px] text-[13px]"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                            fontFamily: "var(--font-jetbrains), monospace" }} />
+          </div>
+          {action === "reconcile" && (
+            <span className="block mt-1 text-[11px]" style={{ color: "var(--ink-4)" }}>
+              System currently shows{" "}
+              <span style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                ${cashBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </span>
+            </span>
+          )}
+        </label>
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+            Note <span className="normal-case font-normal" style={{ color: "var(--ink-5)" }}>(optional)</span>
+          </span>
+          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200}
+                 placeholder="e.g. ACH transfer"
+                 className="mt-1 w-full h-10 px-3 rounded-[8px] text-[13px]"
+                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+        </label>
+      </div>
+      {err && (
+        <div className="text-[12px] px-3 py-2 rounded-[8px]"
+             style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                      border: "1px solid color-mix(in oklab, #e5484d 25%, var(--border))" }}>
+          {err}
+        </div>
+      )}
+      {info && (
+        <div className="text-[12px] px-3 py-2 rounded-[8px]"
+             style={{ color: "var(--ink-2)", background: "color-mix(in oklab, #3b82f6 10%, var(--surface))",
+                      border: "1px solid color-mix(in oklab, #3b82f6 25%, var(--border))" }}>
+          {info}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button onClick={submit} disabled={busy || !amount.trim()}
+                className="h-[34px] px-4 rounded-[8px] text-white text-[13px] font-medium disabled:opacity-50"
+                style={{ background: meta.color }}>
+          {busy ? "Saving…" : meta.button}
+        </button>
+        <button onClick={onCancel} disabled={busy}
+                className="h-[34px] px-4 rounded-[8px] text-[13px] font-medium"
+                style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+          Cancel
+        </button>
       </div>
     </div>
   );

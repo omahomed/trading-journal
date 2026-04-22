@@ -1337,7 +1337,26 @@ def _serialize_portfolio(row: dict) -> dict:
         row["reset_date"] = row["reset_date"].isoformat()
     if row.get("starting_capital") is not None:
         row["starting_capital"] = float(row["starting_capital"])
+    if row.get("cash_balance") is not None:
+        row["cash_balance"] = float(row["cash_balance"])
     return row
+
+
+def _serialize_cash_tx(row: dict) -> dict:
+    """Make a cash_transactions row JSON-safe."""
+    if row.get("date") is not None:
+        row["date"] = row["date"].isoformat()
+    if row.get("created_at") is not None:
+        row["created_at"] = row["created_at"].isoformat()
+    if row.get("amount") is not None:
+        row["amount"] = float(row["amount"])
+    return row
+
+
+def _ensure_user_owns_portfolio(portfolio_id: int) -> bool:
+    """RLS will hide portfolios the user doesn't own, so list_portfolios()
+    returning no match for a given id implies 404."""
+    return any(p["id"] == portfolio_id for p in db.list_portfolios())
 
 
 @app.get("/api/portfolios")
@@ -1419,6 +1438,81 @@ def get_portfolio_nlv(portfolio_id: int, request: Request):
         if match is None:
             return {"error": "Portfolio not found"}
         return nlv_service.compute_nlv(portfolio_id, match["name"])
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/portfolios/{portfolio_id}/cash-transactions")
+@limiter.limit("60/minute")
+def list_cash_transactions_endpoint(portfolio_id: int, request: Request, limit: int = 50):
+    """Return recent cash_transactions for a portfolio, newest first. Used
+    by the Settings cash-activity view."""
+    try:
+        if not _ensure_user_owns_portfolio(portfolio_id):
+            return {"error": "Portfolio not found"}
+        rows = db.list_cash_transactions(portfolio_id, limit=limit)
+        return [_serialize_cash_tx(r) for r in rows]
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/portfolios/{portfolio_id}/cash-transactions")
+@limiter.limit("30/minute")
+def create_cash_transaction_endpoint(portfolio_id: int, request: Request, body: dict = Body(...)):
+    """Insert a user-initiated cash transaction — deposit, withdrawal, or
+    broker reconcile.
+
+    Body shape:
+        {
+          "source":  "deposit" | "withdraw" | "reconcile",
+          "amount":  <positive number — sign is derived from source>,
+          "date":    "<ISO date|datetime>",  (optional, defaults to now)
+          "note":    "<free text>"           (optional)
+        }
+
+    For `source = 'reconcile'`, amount is interpreted as the user's ACTUAL
+    broker cash balance. The system computes (actual - system) and writes a
+    signed reconcile row for the delta, absorbing commissions, interest, and
+    any other drift in a single line without per-trade fee tracking.
+
+    Buy/sell sources are reserved for save_detail_row and rejected here.
+    """
+    try:
+        if not _ensure_user_owns_portfolio(portfolio_id):
+            return {"error": "Portfolio not found"}
+
+        source = (body.get("source") or "").lower()
+        if source not in ("deposit", "withdraw", "reconcile"):
+            return {"error": "source must be deposit, withdraw, or reconcile"}
+
+        try:
+            amount = float(body.get("amount") or 0)
+        except (TypeError, ValueError):
+            return {"error": "amount must be numeric"}
+        if amount <= 0:
+            return {"error": "amount must be greater than zero"}
+
+        note = body.get("note") or None
+        date = body.get("date") or None  # None → db_layer defaults to now()
+
+        if source == "deposit":
+            signed = amount
+        elif source == "withdraw":
+            signed = -amount
+        else:  # reconcile — amount is the user's actual broker cash balance
+            current = db.get_cash_balance(portfolio_id)
+            signed = amount - current
+            if abs(signed) < 0.01:
+                # No drift to record; surface that to the user instead of
+                # silently inserting a zero-dollar row.
+                return {"status": "noop", "delta": 0.0, "message": "Already in sync with broker"}
+            if note is None:
+                note = f"Reconcile: system had ${current:,.2f}, broker has ${amount:,.2f}"
+
+        row = db.insert_cash_transaction(
+            portfolio_id, signed, source, date=date, note=note,
+        )
+        return _serialize_cash_tx(row)
     except Exception as e:
         return {"error": str(e)}
 

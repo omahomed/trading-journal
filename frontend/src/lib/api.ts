@@ -98,6 +98,7 @@ export interface Portfolio {
   starting_capital: number | null;
   reset_date: string | null;
   created_at: string;
+  cash_balance: number;
 }
 
 export interface PortfolioInput {
@@ -105,6 +106,19 @@ export interface PortfolioInput {
   starting_capital?: number | null;
   reset_date?: string | null;
 }
+
+export interface CashTransaction {
+  id: number;
+  portfolio_id: number;
+  date: string;
+  amount: number;
+  source: "deposit" | "withdraw" | "buy" | "sell" | "reconcile";
+  trade_detail_id: number | null;
+  note: string | null;
+  created_at?: string;
+}
+
+export type CashAction = "deposit" | "withdraw" | "reconcile";
 
 // API functions
 export const api = {
@@ -325,6 +339,23 @@ export const api = {
 
   portfolioNlv: (id: number) =>
     fetchJSON<PortfolioNlv>(`/api/portfolios/${id}/nlv`),
+
+  // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
+  // are emitted automatically by the trade logging backend; the UI never
+  // creates those directly.
+  listCashTransactions: (portfolioId: number, limit = 50) =>
+    fetchJSON<CashTransaction[]>(`/api/portfolios/${portfolioId}/cash-transactions?limit=${limit}`),
+
+  createCashTransaction: (portfolioId: number, body: {
+    source: CashAction;
+    amount: number;
+    date?: string | null;
+    note?: string | null;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios/${portfolioId}/cash-transactions`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<CashTransaction | { status: string; delta: number; message: string } | { error: string }>,
 };
 
 // Live-derived NLV snapshot (cash + Σ positions at live price)
