@@ -304,11 +304,30 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Daily <em className="italic" style={{ color: navColor }}>Report</em>
         </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>CanSlim · End-of-day debrief</div>
+        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{getActivePortfolio()} · End-of-day debrief</div>
       </div>
 
+      {history.length === 0 && (
+        <div className="border-[1.5px] border-dashed rounded-[14px] p-16 text-center"
+             style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+          <div className="w-14 h-14 rounded-[16px] flex items-center justify-center mx-auto mb-[18px] text-2xl"
+               style={{ background: `color-mix(in oklab, ${navColor} 12%, transparent)`, color: navColor }}>
+            ✦
+          </div>
+          <h2 className="text-[22px] font-normal italic m-0 mb-1.5"
+              style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            No report yet
+          </h2>
+          <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed"
+             style={{ color: "var(--ink-3)" }}>
+            Fill out the <strong>Daily Routine</strong> first — your end-of-day NLV,
+            scorecard, and journal entries feed this report.
+          </p>
+        </div>
+      )}
+
       {/* Date selector */}
-      {(() => {
+      {history.length > 0 && (() => {
         const days = history.map(h => String(h.day).slice(0, 10));
         const minDay = days.length ? days[days.length - 1] : undefined;
         const maxDay = days.length ? days[0] : undefined;

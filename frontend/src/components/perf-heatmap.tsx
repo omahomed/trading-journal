@@ -99,7 +99,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Performance <em className="italic" style={{ color: navColor }}>Heat Map</em>
         </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>CanSlim · 2026 trades</div>
+        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{getActivePortfolio()} · 2026 trades</div>
       </div>
 
       {/* Controls */}

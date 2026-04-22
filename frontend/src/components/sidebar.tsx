@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { NAV } from "@/lib/nav";
 import { Icons, NAV_ICONS } from "@/components/icons";
+import { usePortfolio } from "@/lib/portfolio-context";
 
 interface SidebarProps {
   activePage: string;
@@ -17,6 +18,7 @@ interface SidebarProps {
 
 export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const { activePortfolio } = usePortfolio();
 
   useEffect(() => {
     const group = NAV.find((g) => g.items.some((i) => i.id === activePage));
@@ -63,8 +65,8 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
           <div className="mx-3.5 mb-3 px-3 py-2.5 rounded-[10px] flex items-center gap-2.5 cursor-pointer transition-colors" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px color-mix(in oklab, #6366f1 15%, var(--surface))" }} />
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">Active Strategy</div>
-              <div className="text-[13px] font-semibold">CanSlim</div>
+              <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">Active Portfolio</div>
+              <div className="text-[13px] font-semibold">{activePortfolio?.name ?? "—"}</div>
             </div>
             {Icons.chevronDown()}
           </div>
