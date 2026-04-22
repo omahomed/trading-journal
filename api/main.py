@@ -73,7 +73,7 @@ if not AUTH_SECRET:
     print("[AUTH] AUTH_SECRET not set — every /api/* call will be rejected (except /api/health).")
 
 # Paths that remain reachable without a bearer token.
-_PUBLIC_PATHS = {"/api/health", "/", "/api/_sentry_debug"}
+_PUBLIC_PATHS = {"/api/health", "/"}
 
 # Must mirror the CORSMiddleware regex above. CORS headers don't automatically
 # propagate onto responses an inner middleware returns early (known Starlette
@@ -1321,13 +1321,6 @@ def save_trade_lesson(entry: dict):
         return {"status": "ok" if ok else "error"}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
-
-
-# TEMPORARY — remove after Sentry is verified. Hitting this endpoint raises
-# an uncaught exception so we can confirm the backend SDK is wired up.
-@app.get("/api/_sentry_debug")
-def _sentry_debug():
-    raise RuntimeError("Sentry backend verification — safe to ignore")
 
 
 @app.get("/api/health")
