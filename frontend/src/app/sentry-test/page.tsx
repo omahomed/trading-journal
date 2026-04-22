@@ -1,8 +1,9 @@
-"use client";
+// TEMPORARY — remove after Sentry is verified. Server component that throws
+// on request so we can confirm the SDK is wired up. force-dynamic keeps it
+// out of the static pre-render step; without it the build fails on the
+// deliberate throw. Delete this folder once the event lands in Sentry.
 
-// TEMPORARY — remove after Sentry is verified. This page throws on render so
-// we can confirm the client + server SDKs are wired up. Delete the folder
-// once events land in both motrading-web and motrading-api dashboards.
+export const dynamic = "force-dynamic";
 
 export default function SentryTest() {
   throw new Error("Sentry frontend verification — safe to ignore");
