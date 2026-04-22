@@ -30,31 +30,23 @@ app.add_middleware(
 # Import existing modules
 import db_layer as db
 
-# R2 storage — set env vars explicitly if not already present
-# (Railway sometimes doesn't inject service vars into the Python runtime)
-_R2_DEFAULTS = {
-    "R2_ENDPOINT_URL": "https://ecdf0141a44925b262e8334b8850e7b6.r2.cloudflarestorage.com",
-    "R2_ACCESS_KEY_ID": "d7e0b5d0ec72ee0936591c63f1ece144",
-    "R2_SECRET_ACCESS_KEY": "79a1e621db58ba13ab16839d6eed49c5d2ef6c08e8be8a2f62e1dd9376eace88",
-    "R2_BUCKET_NAME": "trading-journal-images",
-    "R2_PUBLIC_URL": "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev",
+# Required secrets are expected in the runtime environment (Railway service
+# variables in production; .env / shell export locally). No values are
+# hardcoded here — every secret must come from the environment so rotation
+# doesn't require a code change and nothing leaks to git history.
+_REQUIRED_ENV = {
+    "R2": ["R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_PUBLIC_URL"],
+    "IBKR": ["IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID"],
 }
-for _k, _v in _R2_DEFAULTS.items():
-    if not os.environ.get(_k):
-        os.environ[_k] = _v
-
-# IBKR Flex Query — same pattern as R2 above
-_IBKR_DEFAULTS = {
-    "IBKR_FLEX_TOKEN": "495598822765055545010994",
-    "IBKR_FLEX_QUERY_ID": "1476779",
-}
-for _k, _v in _IBKR_DEFAULTS.items():
-    if not os.environ.get(_k):
-        os.environ[_k] = _v
+for _group, _keys in _REQUIRED_ENV.items():
+    _missing = [k for k in _keys if not os.environ.get(k)]
+    if _missing:
+        print(f"[{_group}] Missing env vars: {', '.join(_missing)} — related endpoints will fail until set.")
 
 try:
     import r2_storage as r2
-    print(f"[R2] Module loaded, endpoint: {os.environ.get('R2_ENDPOINT_URL', 'NONE')[:40]}")
+    _r2_ep = os.environ.get("R2_ENDPOINT_URL", "")
+    print(f"[R2] Module loaded, endpoint: {_r2_ep[:40] if _r2_ep else 'NOT CONFIGURED'}")
 except Exception as _r2_err:
     print(f"[R2] Import failed: {_r2_err}")
     r2 = None
@@ -2155,7 +2147,7 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
     try:
         images = db.get_trade_images(portfolio, trade_id)
         # Build viewable URLs — use public R2 CDN
-        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev").rstrip("/")
+        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
         if images:
             for img in images:
                 key = img.get("image_url", "")
@@ -2256,7 +2248,7 @@ def list_eod_snapshots(day: str, portfolio: str = "CanSlim"):
     try:
         trade_id = f"EOD-{day}"
         images = db.get_trade_images(portfolio, trade_id)
-        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "https://pub-a55e7ca9f1ed4305a3de0d614ea0ea79.r2.dev").rstrip("/")
+        R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
         if images:
             for img in images:
                 key = img.get("image_url", "")
