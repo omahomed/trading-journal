@@ -77,10 +77,13 @@ def get_db_connection(max_retries=3, retry_delay=1):
             # Apply tenant context to this connection before anything reads.
             # SET (not SET LOCAL) is session-scoped, so it survives commits and
             # rollbacks for the lifetime of the connection.
+            # Then SET ROLE app_runtime to drop BYPASSRLS so RLS actually
+            # enforces. Migrations run as neondb_owner and skip both SETs.
             uid = current_user_id.get()
             if uid:
                 with conn.cursor() as _cur:
                     _cur.execute("SET app.user_id = %s", (uid,))
+                    _cur.execute("SET ROLE app_runtime")
                 conn.commit()
 
             yield conn
