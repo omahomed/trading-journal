@@ -17,8 +17,12 @@ const nextConfig: NextConfig = {
 
 export default withSentryConfig(nextConfig, {
   // Source-map upload is skipped until we add SENTRY_AUTH_TOKEN to Vercel;
-  // without it stack traces land in Sentry minified. Acceptable for v1;
-  // follow-up to add the token and turn on sourceMaps.
+  // without it stack traces land in Sentry minified. Acceptable for v1.
+  //
+  // No tunnelRoute: Sentry events POST directly to ingest.sentry.io from the
+  // browser. Tunneling through our own domain (via /monitoring) would dodge
+  // ad-blockers, but our auth proxy gates every non-excluded path and was
+  // swallowing the POSTs. If we want to enable tunneling later, add the tunnel
+  // path to proxy.ts's matcher exclusions.
   silent: true,
-  tunnelRoute: "/monitoring",
 });
