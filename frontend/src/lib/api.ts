@@ -2,13 +2,25 @@
 // NEXT_PUBLIC_API_URL is baked in at build time. If not set, detect environment.
 // Production fallback points at the canonical Railway backend (lucky-adaptation
 // → web service). Set NEXT_PUBLIC_API_URL on Vercel to override.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL
+import { getSession } from "next-auth/react";
+
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL
   || (typeof window !== "undefined" && window.location.hostname !== "localhost"
       ? "https://web-production-ad135.up.railway.app"
       : "http://localhost:8000");
 
+// fetchWithAuth: drop-in replacement for fetch() that attaches the Bearer token
+// from the current next-auth session. Cached in-memory by next-auth so the
+// /api/auth/session round-trip is only paid once per few minutes.
+export async function fetchWithAuth(input: string, init?: RequestInit): Promise<Response> {
+  const session = await getSession();
+  const headers = new Headers(init?.headers);
+  if (session?.apiToken) headers.set("Authorization", `Bearer ${session.apiToken}`);
+  return fetch(input, { ...init, headers });
+}
+
 async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const res = await fetchWithAuth(`${API_BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -92,7 +104,7 @@ export const api = {
     fetchJSON<TradeDetail[]>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
 
   setTradeGrade: (body: { portfolio?: string; trade_id: string; grade: number | null }) =>
-    fetch(`${API_BASE}/api/trades/grade`, {
+    fetchWithAuth(`${API_BASE}/api/trades/grade`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trade_id?: string; grade?: number | null }>,
@@ -102,26 +114,26 @@ export const api = {
     fetchJSON<{ lessons: Record<string, { note: string; category: string }> }>(`/api/trades/lessons?portfolio=${portfolio}`),
 
   saveTradeLessons: (entry: { portfolio: string; trade_id: string; note: string; category: string }) =>
-    fetch(`${API_BASE}/api/trades/lessons`, {
+    fetchWithAuth(`${API_BASE}/api/trades/lessons`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string }>,
 
   // Journal write
   journalEdit: (entry: Record<string, any>) =>
-    fetch(`${API_BASE}/api/journal/edit`, {
+    fetchWithAuth(`${API_BASE}/api/journal/edit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
   journalDelete: (day: string, portfolio = "CanSlim") =>
-    fetch(`${API_BASE}/api/journal/delete?portfolio=${encodeURIComponent(portfolio)}&day=${encodeURIComponent(day)}`, {
+    fetchWithAuth(`${API_BASE}/api/journal/delete?portfolio=${encodeURIComponent(portfolio)}&day=${encodeURIComponent(day)}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
   journalBackfillMetrics: (body: { portfolio?: string; start_date?: string; end_date?: string; force?: boolean }) =>
-    fetch(`${API_BASE}/api/journal/backfill-metrics`, {
+    fetchWithAuth(`${API_BASE}/api/journal/backfill-metrics`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -154,7 +166,7 @@ export const api = {
 
   // Admin — config
   setConfig: (key: string, value: any, opts?: { value_type?: string; category?: string; description?: string }) =>
-    fetch(`${API_BASE}/api/config/${key}`, {
+    fetchWithAuth(`${API_BASE}/api/config/${key}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ value, ...opts, user: "admin" }),
     }).then(r => r.json()) as Promise<{ status: string; detail?: string }>,
@@ -162,11 +174,11 @@ export const api = {
   // Admin — events
   events: (scope = "CanSlim") => fetchJSON<any[]>(`/api/events?scope=${scope}`),
   addEvent: (body: Record<string, any>) =>
-    fetch(`${API_BASE}/api/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json()),
+    fetchWithAuth(`${API_BASE}/api/events`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json()),
   updateEvent: (id: number, body: Record<string, any>) =>
-    fetch(`${API_BASE}/api/events/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json()),
+    fetchWithAuth(`${API_BASE}/api/events/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json()),
   deleteEvent: (id: number) =>
-    fetch(`${API_BASE}/api/events/${id}`, { method: "DELETE" }).then(r => r.json()),
+    fetchWithAuth(`${API_BASE}/api/events/${id}`, { method: "DELETE" }).then(r => r.json()),
 
   // Admin — audit
   audit: (limit = 100, actionFilter?: string) =>
@@ -174,14 +186,14 @@ export const api = {
 
   // Admin — cleanup
   cleanupMarketsurge: (dryRun = true) =>
-    fetch(`${API_BASE}/api/admin/cleanup-marketsurge`, {
+    fetchWithAuth(`${API_BASE}/api/admin/cleanup-marketsurge`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dry_run: dryRun }),
     }).then(r => r.json()),
 
   // AI Coach
   coachChat: (message: string, preset?: string, portfolio = "CanSlim") => {
-    return fetch(`${API_BASE}/api/coach/chat`, {
+    return fetchWithAuth(`${API_BASE}/api/coach/chat`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, preset, portfolio }),
     });
@@ -192,33 +204,33 @@ export const api = {
     fetchJSON<{ trade_id: string }>(`/api/trades/next-id?portfolio=${portfolio}&date=${date}`),
 
   importTrades: () =>
-    fetch(`${API_BASE}/api/trades/import`, { method: "POST" }).then(r => r.json()) as Promise<{ status?: string; error?: string; trades?: any[]; count?: number; message?: string; debug?: Record<string, any> }>,
+    fetchWithAuth(`${API_BASE}/api/trades/import`, { method: "POST" }).then(r => r.json()) as Promise<{ status?: string; error?: string; trades?: any[]; count?: number; message?: string; debug?: Record<string, any> }>,
 
   logBuy: (body: Record<string, any>) =>
-    fetch(`${API_BASE}/api/trades/buy`, {
+    fetchWithAuth(`${API_BASE}/api/trades/buy`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string }>,
 
   logSell: (body: Record<string, any>) =>
-    fetch(`${API_BASE}/api/trades/sell`, {
+    fetchWithAuth(`${API_BASE}/api/trades/sell`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
 
   deleteTransactionsByDate: (date: string, portfolio = "CanSlim") =>
-    fetch(`${API_BASE}/api/trades/delete-transactions-by-date?date=${encodeURIComponent(date)}&portfolio=${encodeURIComponent(portfolio)}`, {
+    fetchWithAuth(`${API_BASE}/api/trades/delete-transactions-by-date?date=${encodeURIComponent(date)}&portfolio=${encodeURIComponent(portfolio)}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; deleted?: number; trade_ids?: string[] }>,
 
   editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
-    fetch(`${API_BASE}/api/trades/edit-transaction`, {
+    fetchWithAuth(`${API_BASE}/api/trades/edit-transaction`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ portfolio: "CanSlim", ...body }),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 
   deleteTrade: (tradeId: string, portfolio = "CanSlim") =>
-    fetch(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {
+    fetchWithAuth(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 
@@ -236,7 +248,7 @@ export const api = {
     form.append("portfolio", portfolio);
     form.append("day", day);
     form.append("snapshot_type", snapshotType);
-    return fetch(`${API_BASE}/api/snapshots/upload`, { method: "POST", body: form })
+    return fetchWithAuth(`${API_BASE}/api/snapshots/upload`, { method: "POST", body: form })
       .then(r => r.json()) as Promise<{ status?: string; image_id?: number; error?: string }>;
   },
 
@@ -252,11 +264,11 @@ export const api = {
     form.append("trade_id", tradeId);
     form.append("ticker", ticker);
     form.append("image_type", imageType);
-    return fetch(`${API_BASE}/api/images/upload`, { method: "POST", body: form }).then(r => r.json());
+    return fetchWithAuth(`${API_BASE}/api/images/upload`, { method: "POST", body: form }).then(r => r.json());
   },
 
   deleteImage: (imageId: number) =>
-    fetch(`${API_BASE}/api/images/${imageId}`, { method: "DELETE" }).then(r => r.json()),
+    fetchWithAuth(`${API_BASE}/api/images/${imageId}`, { method: "DELETE" }).then(r => r.json()),
 
   r2Status: () => fetchJSON<{ available: boolean }>(`/api/r2/status`),
 

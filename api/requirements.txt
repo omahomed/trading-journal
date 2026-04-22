@@ -5,3 +5,4 @@ yfinance
 psycopg2-binary
 numpy
 anthropic
+PyJWT

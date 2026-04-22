@@ -10,11 +10,13 @@ import os
 # Add parent directory to path so we can import existing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, Query, Body
+from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 from datetime import datetime, date
 import pandas as pd
+import jwt
 
 app = FastAPI(title="MO Money API", version="1.0.0")
 
@@ -26,6 +28,64 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================
+# JWT AUTH MIDDLEWARE
+# ============================================================
+# next-auth on the frontend mints an HS256 JWT in the session callback using
+# AUTH_SECRET (shared with Railway). Every request to /api/* except /api/health
+# must arrive with Authorization: Bearer <token>. We verify with the same
+# secret, pull `sub` (user UUID), and stash it on request.state.user_id so
+# handlers can scope DB queries by owner.
+AUTH_SECRET = os.environ.get("AUTH_SECRET")
+if not AUTH_SECRET:
+    print("[AUTH] AUTH_SECRET not set — every /api/* call will be rejected (except /api/health).")
+
+# Paths that remain reachable without a bearer token.
+_PUBLIC_PATHS = {"/api/health", "/"}
+
+
+@app.middleware("http")
+async def jwt_auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # CORS preflight always passes through.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    if path in _PUBLIC_PATHS or not path.startswith("/api/"):
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return JSONResponse({"detail": "Missing bearer token"}, status_code=401)
+
+    if not AUTH_SECRET:
+        return JSONResponse({"detail": "Server auth not configured"}, status_code=500)
+
+    token = auth_header[7:].strip()
+    try:
+        payload = jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return JSONResponse({"detail": "Token expired"}, status_code=401)
+    except jwt.InvalidTokenError:
+        return JSONResponse({"detail": "Invalid token"}, status_code=401)
+
+    user_id = payload.get("sub")
+    if not user_id:
+        return JSONResponse({"detail": "Token missing user id"}, status_code=401)
+
+    request.state.user_id = user_id
+    return await call_next(request)
+
+
+def get_user_id(request: Request) -> str:
+    """FastAPI dependency: pull the authenticated user_id set by the middleware."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user_id
+
 
 # Import existing modules
 import db_layer as db

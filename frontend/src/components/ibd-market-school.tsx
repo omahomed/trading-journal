@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { api } from "@/lib/api";
+import { api, API_BASE, fetchWithAuth } from "@/lib/api";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip,
 } from "recharts";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // IBD count-based pyramid: count → allocation %
 const ALLOC_MAP: Record<number, number> = { 0: 0, 1: 30, 2: 55, 3: 75, 4: 90, 5: 100, 6: 100 };
@@ -30,7 +28,7 @@ export function IBDMarketSchool({ navColor }: { navColor: string }) {
 
   const loadData = () => {
     setLoading(true);
-    fetch(`${API_BASE}/api/market/ibd`).then(r => r.json())
+    fetchWithAuth(`${API_BASE}/api/market/ibd`).then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   };

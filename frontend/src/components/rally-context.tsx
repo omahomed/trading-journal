@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api } from "@/lib/api";
+import { api, API_BASE, fetchWithAuth } from "@/lib/api";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, Legend,
 } from "recharts";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // Persona benchmarks (% gain from FTD close, Day 1-25)
 const LIFE_CHANGER = [0.8,1.1,1.5,2.1,2.7,2.9,3.1,4.0,4.4,4.8,5.2,5.5,5.9,6.3,6.7,7.2,7.5,7.8,8.2,8.5,8.7,8.8,9.0,9.2,9.9];
@@ -46,7 +44,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
 
       // Fetch rally price data from yfinance via API
       try {
-        const res = await fetch(`${API_BASE}/api/market/rally-data?ftd_date=${ftd}&index=^IXIC`);
+        const res = await fetchWithAuth(`${API_BASE}/api/market/rally-data?ftd_date=${ftd}&index=^IXIC`);
         const data = await res.json();
         if (data.error) { setError(data.error); }
         else {
