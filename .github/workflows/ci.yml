@@ -27,7 +27,7 @@ jobs:
         run: pytest
 
   frontend-typecheck:
-    name: Frontend (tsc)
+    name: Frontend (tsc + vitest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -46,3 +46,6 @@ jobs:
 
       - name: Type-check
         run: npx tsc --noEmit
+
+      - name: Run vitest
+        run: npm test
