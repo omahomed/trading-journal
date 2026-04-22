@@ -1,14 +1,24 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+import { useState } from "react";
 
 export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function handleMagicLink(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email || sending) return;
+    setSending(true);
+    await signIn("resend", { email, callbackUrl: "/" });
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
       <div className="w-[400px] max-w-[90vw] rounded-[20px] p-8 text-center"
            style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 8px 30px rgba(0,0,0,0.08)" }}>
 
-        {/* Logo / Brand */}
         <div className="mb-6">
           <div className="text-[36px] font-bold tracking-tight" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
             MO <em className="italic" style={{ color: "#6366f1" }}>Trading</em>
@@ -16,10 +26,8 @@ export default function LoginPage() {
           <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>Trading Journal & Analytics</div>
         </div>
 
-        {/* Divider */}
         <div className="h-px mb-6" style={{ background: "var(--border)" }} />
 
-        {/* Sign in button */}
         <button
           onClick={() => signIn("google", { callbackUrl: "/" })}
           className="w-full h-[48px] rounded-[12px] flex items-center justify-center gap-3 text-[14px] font-semibold transition-all hover:brightness-95 cursor-pointer"
@@ -33,9 +41,32 @@ export default function LoginPage() {
           Sign in with Google
         </button>
 
-        <div className="text-[11px] mt-4" style={{ color: "var(--ink-5)" }}>
-          Access is restricted to authorized accounts only.
+        <div className="flex items-center gap-3 my-5">
+          <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+          <div className="text-[11px] uppercase tracking-wider" style={{ color: "var(--ink-5)" }}>or</div>
+          <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
         </div>
+
+        <form onSubmit={handleMagicLink} className="space-y-3">
+          <input
+            type="email"
+            required
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={sending}
+            className="w-full h-[48px] px-4 rounded-[12px] text-[14px] outline-none"
+            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}
+          />
+          <button
+            type="submit"
+            disabled={sending || !email}
+            className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            style={{ background: "#6366f1", color: "white" }}>
+            {sending ? "Sending link…" : "Email me a sign-in link"}
+          </button>
+        </form>
+
       </div>
     </div>
   );

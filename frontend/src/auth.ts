@@ -1,33 +1,32 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Resend from "next-auth/providers/resend";
+import PostgresAdapter from "@auth/pg-adapter";
+import { Pool } from "pg";
 
-// Only allow these email addresses to sign in
-const ALLOWED_EMAILS = [
-  "omahomed@gmail.com",
-  // Add more emails here if needed
-];
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  adapter: PostgresAdapter(pool),
+  session: { strategy: "jwt" },
+  trustHost: true,
   providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    }),
+    Google,
+    Resend({ from: process.env.EMAIL_FROM }),
   ],
   callbacks: {
-    async signIn({ user }) {
-      // Only allow whitelisted emails
-      if (user.email && ALLOWED_EMAILS.includes(user.email.toLowerCase())) {
-        return true;
-      }
-      return false;
+    async jwt({ token, user }) {
+      if (user) token.sub = user.id;
+      return token;
     },
-    async session({ session }) {
+    async session({ session, token }) {
+      if (token.sub && session.user) session.user.id = token.sub;
       return session;
     },
   },
   pages: {
     signIn: "/login",
+    verifyRequest: "/login/check-email",
     error: "/login",
   },
 });
