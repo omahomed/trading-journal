@@ -18,15 +18,27 @@ async function mintApiToken(userId: string, email: string | null | undefined) {
     .sign(SECRET_KEY);
 }
 
+// Temporary owner allowlist — blocks anyone else from signing in until Step 3
+// (multi-tenant query filtering) is complete. Remove the signIn callback and
+// this set once every API query filters by user_id.
+const ALLOWED_EMAILS = new Set([
+  "omahomed@gmail.com",
+  "omahomed@icloud.com",
+]);
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: PostgresAdapter(pool),
   session: { strategy: "jwt" },
   trustHost: true,
   providers: [
-    Google,
+    Google({ allowDangerousEmailAccountLinking: true }),
     Resend({ from: process.env.EMAIL_FROM }),
   ],
   callbacks: {
+    async signIn({ user }) {
+      const email = user.email?.toLowerCase();
+      return !!email && ALLOWED_EMAILS.has(email);
+    },
     async jwt({ token, user }) {
       if (user) token.sub = user.id;
       return token;
