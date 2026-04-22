@@ -507,7 +507,8 @@ def journal_delete(portfolio: str = Query("CanSlim"), day: str = Query(...)):
 
 
 @app.post("/api/journal/backfill-metrics")
-def journal_backfill_metrics(body: dict = Body(...)):
+@limiter.limit("2/minute")
+def journal_backfill_metrics(request: Request, body: dict = Body(...)):
     """Backfill missing market_window, portfolio_heat, spy_atr, nasdaq_atr
     for existing journal entries. Only updates rows where these fields are
     empty/zero; preserves any existing non-zero values."""
@@ -711,7 +712,8 @@ def _to_occ_symbol(readable_ticker):
 
 
 @app.get("/api/prices/lookup")
-def price_lookup(ticker: str = ""):
+@limiter.limit("30/minute")
+def price_lookup(request: Request, ticker: str = ""):
     """Get live price + ATR for a single ticker. Used by Position Sizer and Log Buy."""
     if not ticker.strip():
         return {"error": "No ticker provided"}
@@ -752,7 +754,8 @@ def price_lookup(ticker: str = ""):
 
 
 @app.get("/api/charts/ohlcv/{ticker}")
-def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo", interval: str = "1d"):
+@limiter.limit("20/minute")
+def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", period: str = "6mo", interval: str = "1d"):
     """Get OHLCV candlestick data for lightweight-charts."""
     import yfinance as yf
     try:
@@ -785,7 +788,8 @@ def chart_ohlcv(ticker: str, start: str = "", end: str = "", period: str = "6mo"
 
 
 @app.get("/api/prices/batch")
-def batch_prices(tickers: str = ""):
+@limiter.limit("10/minute")
+def batch_prices(request: Request, tickers: str = ""):
     """Get live prices for a comma-separated list of tickers.
     Supports both stock tickers and readable option format ('LUMN 260717 $8C').
     Returns dict of {readable_ticker: price}.
@@ -1159,7 +1163,8 @@ def ibd_market_school(request: Request):
 
 
 @app.get("/api/market/rally-data")
-def rally_data(ftd_date: str = "", index: str = "^IXIC"):
+@limiter.limit("25/minute")
+def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
     """Fetch index closes from FTD through Day 25 for Rally Context chart."""
     if not ftd_date:
         return {"error": "ftd_date required"}
@@ -1449,7 +1454,8 @@ def audit_trail(limit: int = 100, action_filter: str = None):
 # ADMIN — DATA CLEANUP
 # ============================================================
 @app.post("/api/admin/cleanup-marketsurge")
-def cleanup_marketsurge(body: dict):
+@limiter.limit("5/minute")
+def cleanup_marketsurge(request: Request, body: dict):
     """Clean up duplicate MarketSurge images."""
     try:
         if not hasattr(db, "cleanup_duplicate_marketsurge_images"):
@@ -1708,7 +1714,8 @@ def ibkr_status():
 
 
 @app.post("/api/trades/import")
-def import_ibkr_trades():
+@limiter.limit("3/minute")
+def import_ibkr_trades(request: Request):
     """Pull today's trade confirmations from IBKR Flex Query."""
     try:
         import ibkr_flex
@@ -1733,7 +1740,8 @@ def import_ibkr_trades():
 
 
 @app.post("/api/trades/buy")
-def log_buy(body: dict):
+@limiter.limit("10/minute")
+def log_buy(request: Request, body: dict):
     """Log a buy transaction. Creates/updates summary + inserts detail row."""
     try:
         portfolio = body.get("portfolio", "CanSlim")
@@ -1899,7 +1907,8 @@ def set_trade_grade(body: dict = Body(...)):
 
 
 @app.post("/api/trades/sell")
-def log_sell(body: dict):
+@limiter.limit("10/minute")
+def log_sell(request: Request, body: dict):
     """Log a sell transaction. Updates summary via LIFO + inserts detail row."""
     try:
         portfolio = body.get("portfolio", "CanSlim")
@@ -2038,7 +2047,8 @@ def log_sell(body: dict):
 
 
 @app.put("/api/trades/edit-transaction")
-def edit_transaction_endpoint(body: dict = Body(...)):
+@limiter.limit("15/minute")
+def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
     """Edit an existing transaction detail row."""
     try:
         detail_id = body.get("detail_id")
@@ -2274,7 +2284,9 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
 
 
 @app.post("/api/images/upload")
+@limiter.limit("5/minute")
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     portfolio: str = Form("CanSlim"),
     trade_id: str = Form(...),
@@ -2324,7 +2336,9 @@ async def upload_image(
 
 
 @app.post("/api/snapshots/upload")
+@limiter.limit("5/minute")
 async def upload_eod_snapshot(
+    request: Request,
     file: UploadFile = File(...),
     portfolio: str = Form("CanSlim"),
     day: str = Form(...),
