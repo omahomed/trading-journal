@@ -844,6 +844,17 @@ def save_detail_row(portfolio_name, row_dict):
             ))
 
             row_id = cur.fetchone()[0]
+
+            # Emit cash_transactions row for the NLV ledger (BUY/SELL only).
+            # Runs inside the same transaction so the trade and its cash
+            # movement commit together or not at all.
+            _emit_trade_cash_tx(
+                cur, portfolio_id, row_id,
+                action=row_dict.get('Action'),
+                date=row_dict.get('Date'),
+                value=row_dict.get('Value'),
+            )
+
             conn.commit()
 
             # Clear cache so next load gets fresh data
@@ -923,6 +934,20 @@ def update_detail_row(portfolio_name, detail_id, row_dict):
                 detail_id
             ))
 
+            # Sync the cash_tx row for this trade: delete the old one and
+            # re-emit with the new values. Simpler than UPDATE and handles
+            # edge cases (action flipped BUY↔SELL, value changed) uniformly.
+            cur.execute(
+                "DELETE FROM cash_transactions WHERE trade_detail_id = %s",
+                (detail_id,),
+            )
+            _emit_trade_cash_tx(
+                cur, portfolio_id, detail_id,
+                action=row_dict.get('Action'),
+                date=row_dict.get('Date'),
+                value=row_dict.get('Value'),
+            )
+
             conn.commit()
 
             # Clear cache so next load gets fresh data
@@ -930,6 +955,31 @@ def update_detail_row(portfolio_name, detail_id, row_dict):
             load_summary.clear()
 
             return True
+
+
+def _emit_trade_cash_tx(cur, portfolio_id, detail_id, *, action, date, value):
+    """Insert the cash_transactions row that mirrors a BUY/SELL trade detail.
+
+    Non-BUY/SELL actions (defensive — current code only writes BUY or SELL)
+    produce no ledger row. Zero-value trades are also skipped — they don't
+    move cash so there's nothing to record.
+    """
+    action_upper = str(action or "").upper()
+    if action_upper not in ("BUY", "SELL"):
+        return
+    try:
+        value_num = float(value or 0)
+    except (TypeError, ValueError):
+        return
+    if value_num <= 0:
+        return
+    cash_amount = -value_num if action_upper == "BUY" else value_num
+    cur.execute(
+        "INSERT INTO cash_transactions "
+        "(portfolio_id, date, amount, source, trade_detail_id) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (portfolio_id, date, cash_amount, action_upper.lower(), detail_id),
+    )
 
 
 def delete_detail_row(portfolio_name, detail_id):
@@ -984,6 +1034,15 @@ def delete_detail_row(portfolio_name, detail_id):
 
             if cur.rowcount == 0:
                 raise ValueError(f"Detail row {detail_id} not found for portfolio '{portfolio_name}'")
+
+            # Remove the linked cash_tx row so cash_balance no longer counts
+            # this trade. If the trade is ever restored (deleted_at → NULL),
+            # the restore flow will need to re-emit the cash_tx — no restore
+            # UI exists yet, so this is a forward problem.
+            cur.execute(
+                "DELETE FROM cash_transactions WHERE trade_detail_id = %s",
+                (detail_id,),
+            )
 
             conn.commit()
 

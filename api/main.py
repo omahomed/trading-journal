@@ -35,6 +35,7 @@ from slowapi.util import get_remote_address
 
 # Import existing modules (needed by the middleware below).
 import db_layer as db
+import nlv_service
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
@@ -1399,6 +1400,25 @@ def delete_portfolio_endpoint(portfolio_id: int, request: Request):
         if not deleted:
             return {"error": "Portfolio not found"}
         return {"status": "ok"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/portfolios/{portfolio_id}/nlv")
+@limiter.limit("30/minute")
+def get_portfolio_nlv(portfolio_id: int, request: Request):
+    """Live NLV snapshot: cash + Σ(open position market values).
+
+    Live prices come from the configured PriceProvider (yfinance today).
+    Positions with unresolved prices fall back to cost basis and are flagged
+    with price_unavailable: true so the UI can show a warning.
+    """
+    try:
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["id"] == portfolio_id), None)
+        if match is None:
+            return {"error": "Portfolio not found"}
+        return nlv_service.compute_nlv(portfolio_id, match["name"])
     except Exception as e:
         return {"error": str(e)}
 
