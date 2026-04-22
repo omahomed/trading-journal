@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // Prefer the Vercel-provided commit SHA when available so the build ID
 // matches what's in git; fall back to a timestamp for local/preview
@@ -14,4 +15,10 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  // Source-map upload is skipped until we add SENTRY_AUTH_TOKEN to Vercel;
+  // without it stack traces land in Sentry minified. Acceptable for v1;
+  // follow-up to add the token and turn on sourceMaps.
+  silent: true,
+  tunnelRoute: "/monitoring",
+});

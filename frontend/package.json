@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@auth/pg-adapter": "^1.11.2",
+    "@sentry/nextjs": "^10.49.0",
     "clsx": "^2.1.1",
     "html-to-image": "^1.11.13",
     "lightweight-charts": "^5.1.0",

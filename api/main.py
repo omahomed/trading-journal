@@ -10,6 +10,17 @@ import os
 # Add parent directory to path so we can import existing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Sentry must init before any application code runs so it can hook uncaught
+# exceptions from the first request onward. Env var set on Railway; missing
+# DSN is a no-op (SDK initializes but never sends).
+import sentry_sdk
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    traces_sample_rate=0.1,
+    environment=os.environ.get("RAILWAY_ENVIRONMENT_NAME", "development"),
+    send_default_pii=False,
+)
+
 from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
 import re
