@@ -2870,6 +2870,12 @@ def create_portfolio(name, starting_capital=None, reset_date=None):
                     (name, starting_capital, reset_date),
                 )
                 row = cur.fetchone()
+                # Seed the initial-capital deposit row so cash_balance is right
+                # from minute one. Same connection keeps both writes atomic.
+                _sync_initial_deposit(
+                    cur, row["id"], starting_capital,
+                    effective_date=reset_date or row["created_at"],
+                )
                 conn.commit()
                 return dict(row)
             except psycopg2.errors.UniqueViolation:
@@ -2915,6 +2921,13 @@ def update_portfolio(portfolio_id, *, name=None, starting_capital=None, reset_da
                     params,
                 )
                 row = cur.fetchone()
+                if row is not None and (starting_capital is not None or reset_date is not None):
+                    # Keep the initial-deposit cash_tx row in sync whenever the
+                    # user edits either setting (both affect the deposit row).
+                    _sync_initial_deposit(
+                        cur, row["id"], row["starting_capital"],
+                        effective_date=row["reset_date"] or row["created_at"],
+                    )
                 conn.commit()
                 return dict(row) if row else None
             except psycopg2.errors.UniqueViolation:
@@ -2937,3 +2950,120 @@ def delete_portfolio(portfolio_id):
             deleted = cur.rowcount > 0
             conn.commit()
             return deleted
+
+
+# ============================================
+# CASH TRANSACTIONS (ledger for derived NLV)
+# ============================================
+# A cash_transactions row is appended every time money enters or leaves a
+# portfolio's cash balance:
+#   - deposit / withdraw — user-initiated transfers (via Settings)
+#   - buy / sell — emitted by log_buy / log_sell in api/main.py
+#   - reconcile — manual drift correction ("my broker says X, system says Y")
+#
+# amount is signed: + for money in, - for money out. Cash balance is simply
+# SUM(amount) grouped by portfolio_id.
+#
+# NLV = cash_balance + Σ(open_position.shares × live_price). That derivation
+# lives in a separate module (nlv_service.py) once Phase 2 lands.
+# ============================================
+
+_INITIAL_DEPOSIT_NOTE = "Initial capital"
+
+
+def insert_cash_transaction(portfolio_id, amount, source, *, date=None,
+                            trade_detail_id=None, note=None):
+    """Append a signed cash_transactions row for the current user's portfolio.
+
+    - amount: signed NUMERIC — positive for money in, negative for money out
+    - source: one of 'deposit', 'withdraw', 'buy', 'sell', 'reconcile'
+    - date: defaults to now() if omitted
+    - trade_detail_id: link back to the originating trade (nullable)
+
+    RLS + the column DEFAULT tag the row with the session's user_id, so the
+    caller doesn't thread user_id through.
+    """
+    if date is None:
+        date = datetime.now()
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "INSERT INTO cash_transactions "
+                "(portfolio_id, date, amount, source, trade_detail_id, note) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "RETURNING id, portfolio_id, date, amount, source, trade_detail_id, note",
+                (portfolio_id, date, amount, source, trade_detail_id, note),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+
+
+def get_cash_balance(portfolio_id):
+    """Current cash balance for a portfolio: signed sum of its cash_tx rows.
+    Returns 0.0 when no rows exist (new portfolio, no activity yet)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM cash_transactions "
+                "WHERE portfolio_id = %s",
+                (portfolio_id,),
+            )
+            row = cur.fetchone()
+            return float(row[0])
+
+
+def list_cash_transactions(portfolio_id, limit=200):
+    """Return the most recent cash_tx rows for a portfolio, newest first.
+    Used by an Activity/Cash ledger view in the UI."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, portfolio_id, date, amount, source, trade_detail_id, note, created_at "
+                "FROM cash_transactions WHERE portfolio_id = %s "
+                "ORDER BY date DESC, id DESC LIMIT %s",
+                (portfolio_id, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def _sync_initial_deposit(cur, portfolio_id, starting_capital, effective_date):
+    """Keep exactly one 'Initial capital' deposit row in sync with a
+    portfolio's starting_capital setting.
+
+    - starting_capital None/<=0 → remove any existing initial deposit
+    - starting_capital > 0 and no existing → insert new deposit
+    - starting_capital > 0 and existing → update amount + date
+
+    This is the one spot where we mutate an existing cash_tx row (normally
+    append-only). The rationale: starting_capital is a user-editable setting,
+    not a true historical cash event. If a user typo-ed $20K instead of $200K,
+    they should be able to correct the setting without polluting the ledger
+    with a reconciliation row. Real adjustments after the fact should use
+    deposit/withdraw/reconcile rows.
+    """
+    cur.execute(
+        "SELECT id FROM cash_transactions "
+        "WHERE portfolio_id = %s AND source = 'deposit' AND note = %s "
+        "ORDER BY id ASC LIMIT 1",
+        (portfolio_id, _INITIAL_DEPOSIT_NOTE),
+    )
+    existing = cur.fetchone()
+
+    if starting_capital is None or float(starting_capital) <= 0:
+        if existing:
+            cur.execute("DELETE FROM cash_transactions WHERE id = %s", (existing[0],))
+        return
+
+    if existing:
+        cur.execute(
+            "UPDATE cash_transactions SET amount = %s, date = %s "
+            "WHERE id = %s",
+            (starting_capital, effective_date, existing[0]),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO cash_transactions (portfolio_id, date, amount, source, note) "
+            "VALUES (%s, %s, %s, 'deposit', %s)",
+            (portfolio_id, effective_date, starting_capital, _INITIAL_DEPOSIT_NOTE),
+        )
