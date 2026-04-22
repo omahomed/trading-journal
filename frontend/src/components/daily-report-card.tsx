@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import { api, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
  *  Supports both two-line form:
@@ -104,9 +104,9 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory("CanSlim", 0).catch(() => []),
-      api.tradesRecent("CanSlim", 500).catch(() => []),
-      api.tradesClosed("CanSlim", 500).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
     ]).then(([hist, det, closed]) => {
       const h = (hist as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
       setHistory(h);
@@ -120,7 +120,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   // Load snapshots + thoughts when selectedDate changes
   useEffect(() => {
     if (!selectedDate) { setSnapshots([]); setThoughts(""); return; }
-    api.listEodSnapshots(selectedDate, "CanSlim").then(res => {
+    api.listEodSnapshots(selectedDate, getActivePortfolio()).then(res => {
       if (Array.isArray(res)) setSnapshots(res as any);
       else setSnapshots([]);
     }).catch(() => setSnapshots([]));
@@ -139,10 +139,10 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     if (entry.market_cycle) return;
     if (attemptedCycleFill.current.has(selectedDate)) return;
     attemptedCycleFill.current.add(selectedDate);
-    api.journalEdit({ portfolio: "CanSlim", day: selectedDate })
+    api.journalEdit({ portfolio: getActivePortfolio(), day: selectedDate })
       .then(res => {
         if (res.status !== "ok") return;
-        return api.journalHistory("CanSlim", 0);
+        return api.journalHistory(getActivePortfolio(), 0);
       })
       .then(fresh => {
         if (!fresh) return;
@@ -163,7 +163,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
   const reloadSnapshots = useCallback(async () => {
     if (!selectedDate) return;
     try {
-      const res = await api.listEodSnapshots(selectedDate, "CanSlim");
+      const res = await api.listEodSnapshots(selectedDate, getActivePortfolio());
       if (Array.isArray(res)) setSnapshots(res as any);
     } catch { /* ignore */ }
   }, [selectedDate]);
@@ -174,7 +174,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     setThoughtsMsg(null);
     try {
       const res = await api.journalEdit({
-        portfolio: "CanSlim",
+        portfolio: getActivePortfolio(),
         day: selectedDate,
         lowlights: thoughts,
       });
@@ -200,7 +200,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
     try {
       const arr = Array.from(files).filter(f => f.type.startsWith("image/"));
       for (const file of arr) {
-        await api.uploadEodSnapshot(file, selectedDate, "note", "CanSlim");
+        await api.uploadEodSnapshot(file, selectedDate, "note", getActivePortfolio());
       }
       await reloadSnapshots();
     } catch (err) {

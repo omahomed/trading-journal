@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type JournalHistoryPoint, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type JournalHistoryPoint, type TradePosition } from "@/lib/api";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -31,10 +31,10 @@ export function TradingOverview({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory("CanSlim", 0).catch(() => []),
-      api.tradesClosed("CanSlim", 500).catch(() => []),
-      api.tradesRecent("CanSlim", 10).catch(() => []),
-      api.tradesOpen("CanSlim").catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 10).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
     ]).then(async ([hist, cl, rec, open]) => {
       setHistory(hist as JournalHistoryPoint[]);
       setClosed(cl as TradePosition[]);

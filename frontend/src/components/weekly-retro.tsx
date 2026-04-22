@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradeDetail } from "@/lib/api";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
 const BEHAVIOR_TAGS = [
@@ -80,7 +80,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [retros, setRetros] = useState<Record<string, any>>({});
 
   useEffect(() => {
-    api.tradesRecent("CanSlim", 1000).then(d => {
+    api.tradesRecent(getActivePortfolio(), 1000).then(d => {
       setDetails(d as TradeDetail[]);
       setLoading(false);
     }).catch(() => setLoading(false));

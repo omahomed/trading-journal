@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -128,9 +128,9 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
 
   useEffect(() => {
     Promise.all([
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.tradesClosed("CanSlim", 500).catch(() => []),
-      api.tradesRecent("CanSlim", 500).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
     ]).then(([open, closed, det]) => {
       setOpenTrades(open as TradePosition[]);
       setAllTrades([...open as TradePosition[], ...closed as TradePosition[]]);
@@ -378,9 +378,9 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                                 setEditResult({ ok: true, msg: "Transaction updated successfully" });
                                 // Refresh data
                                 const [open, closed, det] = await Promise.all([
-                                  api.tradesOpen("CanSlim"),
-                                  api.tradesClosed("CanSlim", 500),
-                                  api.tradesRecent("CanSlim", 500),
+                                  api.tradesOpen(getActivePortfolio()),
+                                  api.tradesClosed(getActivePortfolio(), 500),
+                                  api.tradesRecent(getActivePortfolio(), 500),
                                 ]);
                                 setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det as TradeDetail[]);
                               }

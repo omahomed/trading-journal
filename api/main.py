@@ -1326,6 +1326,42 @@ def health():
 
 
 # ============================================================
+# PORTFOLIOS — multi-tenant CRUD
+# ============================================================
+@app.get("/api/portfolios")
+def list_portfolios_endpoint():
+    """Return portfolios owned by the authenticated user. Empty list for a
+    brand-new user until they create one. The frontend uses the empty state
+    to render the onboarding screen."""
+    try:
+        rows = db.list_portfolios()
+        # Serialize created_at for JSON
+        for r in rows:
+            if r.get("created_at") is not None:
+                r["created_at"] = r["created_at"].isoformat()
+        return rows
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/portfolios")
+@limiter.limit("5/minute")
+def create_portfolio_endpoint(request: Request, body: dict = Body(...)):
+    """Create a new portfolio for the authenticated user. Name must be
+    non-empty and unique within this user's portfolios."""
+    try:
+        name = body.get("name", "")
+        row = db.create_portfolio(name)
+        if row.get("created_at") is not None:
+            row["created_at"] = row["created_at"].isoformat()
+        return row
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================
 # ADMIN — CONFIG WRITE
 # ============================================================
 @app.post("/api/config/{key}")

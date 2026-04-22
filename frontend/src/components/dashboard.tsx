@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, type JournalEntry, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint } from "@/lib/api";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
@@ -41,9 +41,9 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const loadData = useCallback(async () => {
     const [lat, hist, open, closed, ev] = await Promise.all([
       api.journalLatest().catch(() => null),
-      api.journalHistory("CanSlim", 0).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
-      api.tradesClosed("CanSlim", 5000).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
       api.events().catch(() => []),
     ]);
     setLatest(lat as JournalEntry);

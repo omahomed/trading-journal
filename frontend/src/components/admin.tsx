@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, getActivePortfolio } from "@/lib/api";
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -89,7 +89,7 @@ export function Admin({ navColor }: { navColor: string }) {
   const [auditLimit, setAuditLimit] = useState(100);
 
   // Backfill state
-  const [backfillPortfolio, setBackfillPortfolio] = useState("CanSlim");
+  const [backfillPortfolio, setBackfillPortfolio] = useState(getActivePortfolio());
   const [backfillStart, setBackfillStart] = useState("");
   const [backfillEnd, setBackfillEnd] = useState("");
   const [backfillForce, setBackfillForce] = useState(false);

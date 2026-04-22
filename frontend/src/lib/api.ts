@@ -25,6 +25,20 @@ async function fetchJSON<T>(path: string): Promise<T> {
   return res.json();
 }
 
+// Active portfolio — single global value that PortfolioProvider keeps in sync
+// with the user's selection. API defaults read this via getActivePortfolio()
+// so handlers don't have to thread a prop through every component. Empty string
+// until the provider has fetched + set it; callers that fire before that point
+// will pass "" to the backend and get a "portfolio not found" error (which is
+// correct — we should never fire API calls before the onboarding gate clears).
+let _activePortfolio = "";
+export function setActivePortfolio(name: string): void {
+  _activePortfolio = name;
+}
+export function getActivePortfolio(): string {
+  return _activePortfolio;
+}
+
 // Types
 export interface JournalEntry {
   day: string;
@@ -78,29 +92,35 @@ export interface TradeDetail {
   [key: string]: any;
 }
 
+export interface Portfolio {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
 // API functions
 export const api = {
   // Journal
-  journalLatest: (portfolio = "CanSlim") =>
+  journalLatest: (portfolio = getActivePortfolio()) =>
     fetchJSON<JournalEntry>(`/api/journal/latest?portfolio=${portfolio}`),
 
-  journalHistory: (portfolio = "CanSlim", days = 365) =>
+  journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
 
   // Trades
-  tradesOpen: (portfolio = "CanSlim") =>
+  tradesOpen: (portfolio = getActivePortfolio()) =>
     fetchJSON<TradePosition[]>(`/api/trades/open?portfolio=${portfolio}`),
 
-  tradesClosed: (portfolio = "CanSlim", limit = 50) =>
+  tradesClosed: (portfolio = getActivePortfolio(), limit = 50) =>
     fetchJSON<TradePosition[]>(`/api/trades/closed?portfolio=${portfolio}&limit=${limit}`),
 
-  tradeDetails: (tradeId: string, portfolio = "CanSlim") =>
+  tradeDetails: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<TradeDetail[]>(`/api/trades/details/${tradeId}?portfolio=${portfolio}`),
 
-  tradesOpenDetails: (portfolio = "CanSlim") =>
+  tradesOpenDetails: (portfolio = getActivePortfolio()) =>
     fetchJSON<TradeDetail[]>(`/api/trades/open/details?portfolio=${portfolio}`),
 
-  tradesRecent: (portfolio = "CanSlim", limit = 20) =>
+  tradesRecent: (portfolio = getActivePortfolio(), limit = 20) =>
     fetchJSON<TradeDetail[]>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
 
   setTradeGrade: (body: { portfolio?: string; trade_id: string; grade: number | null }) =>
@@ -110,7 +130,7 @@ export const api = {
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trade_id?: string; grade?: number | null }>,
 
   // Trade lessons
-  getTradeLessons: (portfolio = "CanSlim") =>
+  getTradeLessons: (portfolio = getActivePortfolio()) =>
     fetchJSON<{ lessons: Record<string, { note: string; category: string }> }>(`/api/trades/lessons?portfolio=${portfolio}`),
 
   saveTradeLessons: (entry: { portfolio: string; trade_id: string; note: string; category: string }) =>
@@ -127,7 +147,7 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
-  journalDelete: (day: string, portfolio = "CanSlim") =>
+  journalDelete: (day: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/journal/delete?portfolio=${encodeURIComponent(portfolio)}&day=${encodeURIComponent(day)}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
@@ -192,7 +212,7 @@ export const api = {
     }).then(r => r.json()),
 
   // AI Coach
-  coachChat: (message: string, preset?: string, portfolio = "CanSlim") => {
+  coachChat: (message: string, preset?: string, portfolio = getActivePortfolio()) => {
     return fetchWithAuth(`${API_BASE}/api/coach/chat`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, preset, portfolio }),
@@ -200,7 +220,7 @@ export const api = {
   },
 
   // Trade writes
-  nextTradeId: (portfolio = "CanSlim", date = "") =>
+  nextTradeId: (portfolio = getActivePortfolio(), date = "") =>
     fetchJSON<{ trade_id: string }>(`/api/trades/next-id?portfolio=${portfolio}&date=${date}`),
 
   importTrades: () =>
@@ -218,7 +238,7 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
 
-  deleteTransactionsByDate: (date: string, portfolio = "CanSlim") =>
+  deleteTransactionsByDate: (date: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/trades/delete-transactions-by-date?date=${encodeURIComponent(date)}&portfolio=${encodeURIComponent(portfolio)}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; deleted?: number; trade_ids?: string[] }>,
@@ -226,23 +246,23 @@ export const api = {
   editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
     fetchWithAuth(`${API_BASE}/api/trades/edit-transaction`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ portfolio: "CanSlim", ...body }),
+      body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 
-  deleteTrade: (tradeId: string, portfolio = "CanSlim") =>
+  deleteTrade: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 
   // Fundamentals
-  tradeFundamentals: (tradeId: string, portfolio = "CanSlim") =>
+  tradeFundamentals: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<any[]>(`/api/fundamentals/${tradeId}?portfolio=${portfolio}`),
 
   // R2 Images
-  tradeImages: (tradeId: string, portfolio = "CanSlim") =>
+  tradeImages: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<any[]>(`/api/images/${tradeId}?portfolio=${portfolio}`),
 
-  uploadEodSnapshot: (blob: Blob, day: string, snapshotType: string, portfolio = "CanSlim") => {
+  uploadEodSnapshot: (blob: Blob, day: string, snapshotType: string, portfolio = getActivePortfolio()) => {
     const form = new FormData();
     form.append("file", blob, `${snapshotType}_${day}.png`);
     form.append("portfolio", portfolio);
@@ -252,7 +272,7 @@ export const api = {
       .then(r => r.json()) as Promise<{ status?: string; image_id?: number; error?: string }>;
   },
 
-  listEodSnapshots: (day: string, portfolio = "CanSlim") =>
+  listEodSnapshots: (day: string, portfolio = getActivePortfolio()) =>
     fetchJSON<{ image_url?: string; view_url?: string; image_type?: string; file_name?: string; uploaded_at?: string; id?: number }[]>(
       `/api/snapshots/${day}?portfolio=${portfolio}`
     ),
@@ -274,4 +294,14 @@ export const api = {
 
   // Health
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
+
+  // Portfolios — multi-tenant CRUD. listPortfolios is called once at app load
+  // by PortfolioProvider; createPortfolio is called from the onboarding screen.
+  listPortfolios: () => fetchJSON<Portfolio[]>(`/api/portfolios`),
+
+  createPortfolio: (name: string) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then(r => r.json()) as Promise<Portfolio | { error: string }>,
 };

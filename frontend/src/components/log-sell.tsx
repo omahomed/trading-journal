@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { api, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 
 const SELL_RULES = [
   "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
@@ -111,7 +111,7 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
-    api.tradesOpen("CanSlim").then(trades => {
+    api.tradesOpen(getActivePortfolio()).then(trades => {
       setOpenTrades(trades);
       setLoading(false);
 
@@ -156,7 +156,7 @@ export function LogSell({ navColor }: { navColor: string }) {
 
     try {
       const body = {
-        portfolio: "CanSlim",
+        portfolio: getActivePortfolio(),
         trade_id: selectedTrade,
         shares: sharesNum,
         price: priceNum,
@@ -175,7 +175,7 @@ export function LogSell({ navColor }: { navColor: string }) {
         // Upload position change charts
         if (positionCharts.length > 0) {
           for (const file of positionCharts) {
-            await api.uploadImage(file, "CanSlim", selectedTrade, selected.ticker, "position_change");
+            await api.uploadImage(file, getActivePortfolio(), selectedTrade, selected.ticker, "position_change");
           }
         }
 
@@ -187,7 +187,7 @@ export function LogSell({ navColor }: { navColor: string }) {
         setShares(""); setPrice(""); setNotes(""); setGrade(null); setPositionCharts([]);
 
         // Refresh open trades
-        const trades = await api.tradesOpen("CanSlim").catch(() => []);
+        const trades = await api.tradesOpen(getActivePortfolio()).catch(() => []);
         setOpenTrades(trades);
         if (result.is_closed) setSelectedTrade("");
       }

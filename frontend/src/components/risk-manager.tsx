@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -33,7 +33,7 @@ export function RiskManager({ navColor }: { navColor: string }) {
   const [chartRange, setChartRange] = useState<"3M" | "6M" | "YTD" | "1Y" | "All">("6M");
 
   useEffect(() => {
-    api.journalHistory("CanSlim", 0).then(h => {
+    api.journalHistory(getActivePortfolio(), 0).then(h => {
       setHistory(h as JournalHistoryPoint[]);
       setLoading(false);
     }).catch(() => setLoading(false));

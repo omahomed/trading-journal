@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { api, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -46,8 +46,8 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
     ]).then(async ([open, journal]) => {
       const openArr = open as TradePosition[];
       setOpenTrades(openArr);

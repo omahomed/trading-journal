@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
@@ -117,7 +117,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
   const handleUpload = async (files: FileList, imageType: string) => {
     setUploading(true);
     for (const file of Array.from(files)) {
-      await api.uploadImage(file, "CanSlim", tradeId, ticker, imageType);
+      await api.uploadImage(file, getActivePortfolio(), tradeId, ticker, imageType);
     }
     // Reload images
     const imgs = await api.tradeImages(tradeId).catch(() => []);
@@ -128,7 +128,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
   const handleMsUpload = async (files: FileList) => {
     setMsUploading(true);
     for (const file of Array.from(files)) {
-      await api.uploadImage(file, "CanSlim", tradeId, ticker, "marketsurge");
+      await api.uploadImage(file, getActivePortfolio(), tradeId, ticker, "marketsurge");
     }
     // Reload both images and fundamentals (extraction happens server-side)
     const [imgs, funds] = await Promise.all([
@@ -341,10 +341,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.tradesClosed("CanSlim", 500).catch(() => []),
-      api.tradesRecent("CanSlim", 5000).catch(() => []),
-      api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 5000).catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
     ]).then(async ([open, closed, details, journal]) => {
       const openArr = open as TradePosition[];
       setAllTrades([...openArr, ...closed as TradePosition[]]);
@@ -614,7 +614,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                       onChange={(v) => {
                         // optimistic local update
                         setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: v } as any : t));
-                        api.setTradeGrade({ portfolio: "CanSlim", trade_id: trade.trade_id, grade: v })
+                        api.setTradeGrade({ portfolio: getActivePortfolio(), trade_id: trade.trade_id, grade: v })
                           .catch(() => {
                             // revert on failure
                             setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: (trade as any).grade ?? null } as any : t));

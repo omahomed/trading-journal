@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -99,8 +99,8 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
 
   const loadContext = async () => {
     const [details, open] = await Promise.all([
-      api.tradesRecent("CanSlim", 500).catch(() => []),
-      api.tradesOpen("CanSlim").catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
     ]);
     setTodayDetails(details as TradeDetail[]);
     setOpenTrades(open as TradePosition[]);
@@ -196,7 +196,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
       // Default to a new campaign; try to grab the next trade_id
       let tradeId = "";
       try {
-        const r = await api.nextTradeId("CanSlim", t.trade_date);
+        const r = await api.nextTradeId(getActivePortfolio(), t.trade_date);
         if (!("error" in r)) tradeId = r.trade_id;
       } catch { /* ignore */ }
       // If there's already an open campaign for this ticker, default to scale-in
@@ -232,7 +232,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
           return;
         }
         const res = await api.logBuy({
-          portfolio: "CanSlim",
+          portfolio: getActivePortfolio(),
           action_type: quickLog.action_type,
           ticker, trade_id: quickLog.trade_id,
           shares: t.quantity, price: t.price,
@@ -251,7 +251,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
           return;
         }
         const res = await api.logSell({
-          portfolio: "CanSlim",
+          portfolio: getActivePortfolio(),
           trade_id: quickLog.trade_id,
           shares: t.quantity, price: t.price,
           rule: quickLog.rule,
@@ -275,7 +275,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
     setDeleteBusy(true);
     try {
       const today = executions[0]?.trade_date || new Date().toISOString().slice(0, 10);
-      const res = await api.deleteTransactionsByDate(today, "CanSlim");
+      const res = await api.deleteTransactionsByDate(today, getActivePortfolio());
       if (res.error) {
         setError(res.error);
       } else {

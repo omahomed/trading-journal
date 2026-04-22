@@ -2826,3 +2826,47 @@ def test_connection():
     except Exception as e:
         print(f"Connection test failed: {e}")
         return False
+
+
+# ============================================
+# PORTFOLIO CRUD (multi-tenant)
+# ============================================
+def list_portfolios():
+    """Return portfolios owned by the current authenticated user.
+
+    RLS filters by app.user_id; caller must have populated current_user_id
+    before this runs. Ordered by creation time so the first-created portfolio
+    comes first — matches the onboarding UX where a user creates one and
+    expects it to be the default.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, name, created_at FROM portfolios ORDER BY created_at ASC"
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def create_portfolio(name):
+    """Create a portfolio for the current user and return the new row.
+
+    user_id is populated by the column DEFAULT added in migration 003 (reads
+    from app.user_id). The per-user UNIQUE (user_id, name) index from
+    migration 007 prevents one user from creating two portfolios with the
+    same name. Raises ValueError on empty/oversized name or collision.
+    """
+    name = validate_portfolio_name(name)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO portfolios (name) VALUES (%s) "
+                    "RETURNING id, name, created_at",
+                    (name,),
+                )
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row)
+            except psycopg2.errors.UniqueViolation:
+                conn.rollback()
+                raise ValueError(f"Portfolio '{name}' already exists")

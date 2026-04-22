@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 // Pure CSS bar chart — no Recharts dependency
 
 type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns";
@@ -64,10 +64,10 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
 
   useEffect(() => {
     Promise.all([
-      api.tradesClosed("CanSlim", 1000).catch(() => []),
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.journalHistory("CanSlim", 0).catch(() => []),
-      api.tradesRecent("CanSlim", 2000).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 2000).catch(() => []),
     ]).then(([closed, open, journal, details]) => {
       setAllTrades(closed as TradePosition[]);
       const openArr = open as TradePosition[];
@@ -76,7 +76,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
       setJournalHistory(journal as any[]);
       setAllDetails(details as TradeDetail[]);
       // Fetch trade lessons
-      api.getTradeLessons("CanSlim").then(r => { if (r.lessons) setLessons(r.lessons); }).catch(() => {});
+      api.getTradeLessons(getActivePortfolio()).then(r => { if (r.lessons) setLessons(r.lessons); }).catch(() => {});
       setLoading(false);
     });
   }, []);
@@ -1224,7 +1224,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
                       <button onClick={async () => {
                                 const saveCat = editCats.join("|");
-                                const result = await api.saveTradeLessons({ portfolio: "CanSlim", trade_id: t.trade_id, note: currentText, category: saveCat });
+                                const result = await api.saveTradeLessons({ portfolio: getActivePortfolio(), trade_id: t.trade_id, note: currentText, category: saveCat });
                                 if (result.status === "ok") {
                                   setLessons(prev => ({ ...prev, [t.trade_id]: { note: currentText, category: saveCat } }));
                                 }

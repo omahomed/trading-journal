@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 
@@ -195,9 +195,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const loadData = useCallback(async () => {
     try {
       const [openTrades, details, journal] = await Promise.all([
-        api.tradesOpen("CanSlim").catch(() => []),
-        api.tradesOpenDetails("CanSlim").catch(() => []),
-        api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
+        api.tradesOpen(getActivePortfolio()).catch(() => []),
+        api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+        api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
       ]);
       const eq = parseFloat(String(journal.end_nlv || 100000));
       setEquity(eq);

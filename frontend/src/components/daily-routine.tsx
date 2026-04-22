@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { api } from "@/lib/api";
+import { api, getActivePortfolio } from "@/lib/api";
 
 const REPORT_CATEGORIES = [
   { key: "plan", label: "Followed plan" },
@@ -80,7 +80,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalLatest("CanSlim").catch(() => ({ end_nlv: 0 })),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 0 })),
       api.journalLatest("457B Plan").catch(() => ({ end_nlv: 0 })),
       api.batchPrices(["SPY", "^IXIC"]).catch(() => ({})),
       api.rallyPrefix().catch(() => ({ prefix: "" })),
@@ -124,7 +124,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     };
 
     Promise.all([
-      api.tradesRecent("CanSlim", 1000).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 1000).catch(() => []),
       api.tradesRecent("457B Plan", 1000).catch(() => []),
     ]).then(([csDet, b4Det]) => {
       setCsAction(buildActions(csDet as any[]));
@@ -166,7 +166,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     setSaving(true); setSaveMsg("");
     let ok = 0;
     if (csEnabled && (csNlvN > 0 || csCashN !== 0)) {
-      const r = await savePortfolio("CanSlim", csNlvN, csPrev, csHold, csCashN, csAction, csDailyChg, csDailyPct, csInvPct);
+      const r = await savePortfolio(getActivePortfolio(), csNlvN, csPrev, csHold, csCashN, csAction, csDailyChg, csDailyPct, csInvPct);
       if (r.status === "ok") ok++;
     }
     if (b4Enabled && (b4NlvN > 0 || b4CashN !== 0)) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type JournalHistoryPoint } from "@/lib/api";
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function heatColor(val: number, zMin: number, zMax: number): string {
@@ -28,10 +28,10 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.tradesClosed("CanSlim", 1000).catch(() => []),
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.journalHistory("CanSlim", 0).catch(() => []),
-      api.tradesRecent("CanSlim", 2000).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 2000).catch(() => []),
     ]).then(([closed, open, jrnl, details]) => {
       setTrades(closed as TradePosition[]);
       setOpenTrades(open as TradePosition[]);

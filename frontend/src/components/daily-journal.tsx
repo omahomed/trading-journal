@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 
 type ViewFilter = "week" | "month" | "all";
 type Tab = "view" | "manage";
@@ -54,7 +54,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   const [saveMsg, setSaveMsg] = useState("");
 
   useEffect(() => {
-    api.journalHistory("CanSlim", 0).then(h => {
+    api.journalHistory(getActivePortfolio(), 0).then(h => {
       setHistory((h as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day))));
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -252,7 +252,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
           setSaveMsg("");
           setSnapshots([]);
           const day = String(h.day).slice(0, 10);
-          api.listEodSnapshots(day, "CanSlim").then(res => {
+          api.listEodSnapshots(day, getActivePortfolio()).then(res => {
             if (Array.isArray(res)) setSnapshots(res as any);
           }).catch(() => {});
           setEditFields({
@@ -278,7 +278,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
           setSaving(true);
           const h = history[editIdx];
           const result = await api.journalEdit({
-            portfolio: "CanSlim",
+            portfolio: getActivePortfolio(),
             day: String(h.day).slice(0, 10),
             end_nlv: editFields.end_nlv,
             daily_pct_change: editFields.daily_pct_change,
@@ -305,13 +305,13 @@ export function DailyJournal({ navColor }: { navColor: string }) {
           const day = String(h.day).slice(0, 10);
           if (!confirm(`Delete journal entry for ${day}? This cannot be undone.`)) return;
           setSaving(true);
-          const result = await api.journalDelete(day, "CanSlim");
+          const result = await api.journalDelete(day, getActivePortfolio());
           setSaving(false);
           if (result.status === "ok") {
             setSaveMsg(`Deleted entry for ${day}`);
             setEditIdx(-1);
             // Reload history
-            const h2 = await api.journalHistory("CanSlim", 0).catch(() => []);
+            const h2 = await api.journalHistory(getActivePortfolio(), 0).catch(() => []);
             setHistory(h2 as any);
           } else {
             setSaveMsg(`Error: ${result.detail || "Delete failed"}`);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, getActivePortfolio } from "@/lib/api";
 
 interface Props {
   /** CSS selector or element to capture. If not provided, captures document.body. */
@@ -11,7 +11,7 @@ interface Props {
   portfolio?: string;
 }
 
-export function CaptureSnapshotButton({ targetSelector, snapshotType, label, portfolio = "CanSlim" }: Props) {
+export function CaptureSnapshotButton({ targetSelector, snapshotType, label, portfolio = getActivePortfolio() }: Props) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 

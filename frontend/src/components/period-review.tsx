@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -468,8 +468,8 @@ export function PeriodReview({ navColor, initialTab, onTabConsumed }: { navColor
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory("CanSlim", 0).catch(() => []),
-      api.tradesClosed("CanSlim", 5000).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
     ]).then(([jrnl, trades]) => {
       setData(jrnl as any[]);
       setClosedTrades(trades as TradePosition[]);

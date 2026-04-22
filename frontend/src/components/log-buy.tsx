@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -204,10 +204,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
-      api.tradesOpen("CanSlim").catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
       api.mfactor().catch(() => ({})),
-      api.tradesOpenDetails("CanSlim").catch(() => []),
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
     ]).then(([j, open, mf, det]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
@@ -227,7 +227,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     if (actionType === "new" && (!tradeId || tradeId.endsWith("-0XX"))) {
-      api.nextTradeId("CanSlim", date).then(r => {
+      api.nextTradeId(getActivePortfolio(), date).then(r => {
         if (r.trade_id) setTradeId(r.trade_id);
       }).catch(() => {
         const n = new Date();
@@ -442,7 +442,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
     try {
       const body = {
-        portfolio: "CanSlim",
+        portfolio: getActivePortfolio(),
         action_type: actionType,
         ticker,
         trade_id: actionType === "scalein" ? selectedCampaign : tradeId,
@@ -464,13 +464,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
         const tid = actionType === "scalein" ? selectedCampaign : tradeId;
         const uploadPromises: Promise<any>[] = [];
         for (const file of entryCharts) {
-          uploadPromises.push(api.uploadImage(file, "CanSlim", tid, ticker, "entry"));
+          uploadPromises.push(api.uploadImage(file, getActivePortfolio(), tid, ticker, "entry"));
         }
         for (const file of positionCharts) {
-          uploadPromises.push(api.uploadImage(file, "CanSlim", tid, ticker, "position_change"));
+          uploadPromises.push(api.uploadImage(file, getActivePortfolio(), tid, ticker, "position_change"));
         }
         if (msScreenshot) {
-          uploadPromises.push(api.uploadImage(msScreenshot, "CanSlim", tid, ticker, "marketsurge"));
+          uploadPromises.push(api.uploadImage(msScreenshot, getActivePortfolio(), tid, ticker, "marketsurge"));
         }
         if (uploadPromises.length > 0) {
           await Promise.all(uploadPromises);

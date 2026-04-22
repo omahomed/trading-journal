@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 
 type SizerTab = "normal" | "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
@@ -199,9 +199,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
 
   useEffect(() => {
     Promise.all([
-      api.journalLatest("CanSlim").catch(() => ({ end_nlv: 100000 })),
-      api.tradesOpen("CanSlim").catch(() => []),
-      api.tradesOpenDetails("CanSlim").catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
       api.mfactor().catch(() => ({})),
       api.config("pyramid_rules").catch(() => ({ value: { trigger_pct: 5, alloc_pct: 20 } })),
     ]).then(([j, open, details, mf, pyrCfg]) => {
