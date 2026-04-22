@@ -1589,18 +1589,6 @@ def coach_chat(request: Request, body: dict):
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
-            # Try loading from streamlit secrets
-            try:
-                import tomllib
-                secrets_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                            ".streamlit", "secrets.toml")
-                with open(secrets_path, "rb") as f:
-                    secrets = tomllib.load(f)
-                api_key = secrets.get("anthropic", {}).get("api_key", "")
-            except Exception:
-                pass
-
-        if not api_key:
             return {"error": "Anthropic API key not configured"}
 
         client = anthropic.Anthropic(api_key=api_key)

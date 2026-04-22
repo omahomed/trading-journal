@@ -6,10 +6,6 @@ Handles image upload/download/delete for trade charts
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-try:
-    import streamlit as st
-except ImportError:
-    st = None  # type: ignore
 from datetime import datetime
 import io
 import os
@@ -17,8 +13,11 @@ from typing import Optional, List, Dict
 
 
 def _get_r2_config():
-    """Load R2 config from env vars first, then Streamlit secrets."""
-    # Check environment variables first (Railway, Docker, etc.)
+    """Load R2 config from environment variables.
+
+    Set on Railway in production. Local dev should `export` them or use a
+    .env loader before importing this module.
+    """
     if os.environ.get("R2_ENDPOINT_URL"):
         return {
             "endpoint_url": os.environ["R2_ENDPOINT_URL"],
@@ -27,14 +26,6 @@ def _get_r2_config():
             "bucket_name": os.environ.get("R2_BUCKET_NAME", ""),
             "public_url": os.environ.get("R2_PUBLIC_URL", ""),
         }
-    # Fallback to Streamlit secrets
-    try:
-        if st and hasattr(st, 'secrets'):
-            r2_config = st.secrets.get("r2", {})
-            if r2_config:
-                return dict(r2_config)
-    except Exception:
-        pass
     return {}
 
 

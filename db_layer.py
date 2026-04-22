@@ -4,12 +4,55 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
 import pandas as pd
 import os
-import streamlit as st
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
+from functools import wraps
 import time
 from decimal import Decimal
+
+
+# ============================================
+# TTL CACHE (Streamlit-free replacement for @st.cache_data)
+# ============================================
+# Tiny in-process memoizer that mirrors the API db_layer was using:
+#   @ttl_cache(ttl=30)
+#   def f(...): ...
+#   f.clear()                # invalidate everything
+# Accepts arbitrary kwargs (e.g. show_spinner) and ignores any it doesn't
+# recognise, so we can drop it in over the old `@ttl_cache(ttl=N,
+# show_spinner=False)` calls without touching them. Cache keys are the
+# argument tuple — all our cached functions take hashable scalars.
+class _TTLCache:
+    def __init__(self, func, ttl):
+        self.func = func
+        self.ttl = ttl
+        self.cache: dict[tuple, tuple] = {}  # key -> (value, expires_at)
+        self.lock = threading.Lock()
+        wraps(func)(self)
+
+    def __call__(self, *args, **kwargs):
+        key = (args, tuple(sorted(kwargs.items())))
+        now = time.time()
+        with self.lock:
+            hit = self.cache.get(key)
+            if hit is not None and hit[1] > now:
+                return hit[0]
+        value = self.func(*args, **kwargs)
+        with self.lock:
+            self.cache[key] = (value, now + self.ttl)
+        return value
+
+    def clear(self) -> None:
+        with self.lock:
+            self.cache.clear()
+
+
+def ttl_cache(ttl: float, **_unused):
+    def decorator(func):
+        return _TTLCache(func, ttl=ttl)
+    return decorator
 
 # ============================================
 # TENANT CONTEXT
@@ -36,13 +79,6 @@ def get_db_config():
     # Check environment variable first (Railway, Docker, etc.)
     if os.getenv('DATABASE_URL'):
         return {'dsn': os.getenv('DATABASE_URL')}
-
-    # Check Streamlit secrets (Streamlit Cloud deployment)
-    try:
-        if hasattr(st, 'secrets') and 'database' in st.secrets:
-            return {'dsn': st.secrets['database']['url']}
-    except Exception:
-        pass
 
     # Local development defaults
     return {
@@ -186,7 +222,7 @@ def atomic_transaction():
 # ============================================
 # CORE READ OPERATIONS (Replace load_data)
 # ============================================
-@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
+@ttl_cache(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_summary(portfolio_name, status=None):
     """
     Load trades summary for a portfolio.
@@ -279,7 +315,7 @@ def load_summary(portfolio_name, status=None):
             return df
 
 
-@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
+@ttl_cache(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_details(portfolio_name, trade_id=None):
     """
     Load transaction details for a portfolio.
@@ -352,7 +388,7 @@ def load_details(portfolio_name, trade_id=None):
             return df
 
 
-@st.cache_data(ttl=30, show_spinner=False)  # Cache for 30 seconds
+@ttl_cache(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_journal(portfolio_name, start_date=None, end_date=None):
     """
     Load trading journal entries.
@@ -1086,7 +1122,7 @@ def get_all_open_trades():
 # MARKET SIGNALS OPERATIONS
 # ============================================
 
-@st.cache_data(ttl=600, show_spinner=False)
+@ttl_cache(ttl=600, show_spinner=False)
 def load_market_signals(symbol=None, days=30):
     """Load market signals for display (cached 10 minutes)."""
     with get_db_connection() as conn:
@@ -1638,7 +1674,7 @@ def save_trade_image(portfolio_name: str, trade_id: str, ticker: str,
         return None
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@ttl_cache(ttl=120, show_spinner=False)
 def get_trade_images(portfolio_name: str, trade_id: str):
     """
     Get all images for a specific trade. Cached 2 min; invalidated by
@@ -1903,7 +1939,7 @@ def save_trade_fundamentals(portfolio_name: str, trade_id: str, ticker: str,
         return None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@ttl_cache(ttl=300, show_spinner=False)
 def get_trade_fundamentals(portfolio_name: str, trade_id: str):
     """
     Get all extracted fundamentals for a trade. Cached 5 min; invalidated
@@ -1972,7 +2008,7 @@ def get_trade_fundamentals(portfolio_name: str, trade_id: str):
 # ============================================
 # DRAWDOWN NOTES (Drawdown Discipline tab)
 # ============================================
-@st.cache_data(ttl=60, show_spinner=False)
+@ttl_cache(ttl=60, show_spinner=False)
 def get_drawdown_notes(portfolio_name: str):
     """
     Return {(deck_level, crossing_date_str): note} for a portfolio.
@@ -2005,7 +2041,7 @@ def get_drawdown_notes(portfolio_name: str):
         return {}
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@ttl_cache(ttl=60, show_spinner=False)
 def get_trade_lessons(portfolio_name: str):
     """
     Return {trade_id: (note, category)} for a portfolio.
@@ -2034,7 +2070,7 @@ def get_trade_lessons(portfolio_name: str):
         return {}
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@ttl_cache(ttl=60, show_spinner=False)
 def get_rule_notes(portfolio_name: str, rule_side: str):
     """
     Return {rule_name: (note, status)} for a portfolio and side.

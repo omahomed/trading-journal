@@ -5,30 +5,17 @@ Extracts fundamental data from MarketSurge stock analysis screenshots.
 
 import anthropic
 import os
-try:
-    import streamlit as st
-except ImportError:
-    st = None
 import base64
 import json
 from typing import Optional, Dict
 
 
 def get_anthropic_client():
-    """Initialize Anthropic client from env var or Streamlit secrets."""
+    """Initialize Anthropic client from ANTHROPIC_API_KEY env var."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
     try:
-        # 1. Check environment variable (FastAPI / Railway)
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-
-        # 2. Fallback to Streamlit secrets
-        if not api_key:
-            try:
-                api_key = st.secrets.get("anthropic", {}).get("api_key")
-            except Exception:
-                pass
-
-        if not api_key:
-            return None
         return anthropic.Anthropic(api_key=api_key)
     except Exception as e:
         print(f"[Vision] Failed to init Anthropic client: {e}")
@@ -151,5 +138,4 @@ def extract_fundamentals(image_bytes: bytes, file_name: str = "image.png") -> Op
 
 def is_available() -> bool:
     """Check if Vision API is configured and available."""
-    api_key = st.secrets.get("anthropic", {}).get("api_key")
-    return bool(api_key)
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))

@@ -5,7 +5,8 @@
 #   2. Download report XML using the reference code
 #   3. Parse XML into a clean DataFrame of executions
 #
-# Requires: flex_token + flex_query_id in st.secrets['ibkr']
+# Requires: IBKR_FLEX_TOKEN + IBKR_FLEX_QUERY_ID env vars
+# (set on Railway in production; export locally for dev).
 
 import requests
 import xml.etree.ElementTree as ET
@@ -20,10 +21,6 @@ try:
 except ImportError:
     _TZ_ET = None
     _TZ_CT = None
-try:
-    import streamlit as st
-except ImportError:
-    st = None
 
 
 def _et_to_ct(date_str: str, time_str: str):
@@ -50,24 +47,11 @@ _GET_URL = f"{_BASE}.GetStatement"
 
 
 def _get_credentials():
-    """Read IBKR Flex credentials from env vars or Streamlit secrets."""
-    # 1. Check environment variables (FastAPI / Railway)
+    """Read IBKR Flex credentials from env vars (Railway service config)."""
     token = os.environ.get("IBKR_FLEX_TOKEN", "")
     query_id = os.environ.get("IBKR_FLEX_QUERY_ID", "")
     if token and query_id:
         return token.strip(), query_id.strip(), None
-
-    # 2. Fallback to Streamlit secrets
-    try:
-        if st and hasattr(st, 'secrets'):
-            ibkr = st.secrets.get("ibkr", {})
-            token = ibkr.get("flex_token", "")
-            query_id = ibkr.get("flex_query_id", "")
-            if token and query_id:
-                return str(token).strip(), str(query_id).strip(), None
-    except Exception:
-        pass
-
     return None, None, "IBKR credentials not configured. Set IBKR_FLEX_TOKEN and IBKR_FLEX_QUERY_ID env vars."
 
 
