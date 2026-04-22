@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
+import re
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from datetime import datetime, date
@@ -44,6 +45,29 @@ if not AUTH_SECRET:
 # Paths that remain reachable without a bearer token.
 _PUBLIC_PATHS = {"/api/health", "/"}
 
+# Must mirror the CORSMiddleware regex above. CORS headers don't automatically
+# propagate onto responses an inner middleware returns early (known Starlette
+# quirk), so we attach them ourselves on every 4xx/5xx we emit from here.
+_CORS_ORIGIN_RE = re.compile(r"https://.*\.vercel\.app|https://motrading\.net|http://localhost:\d+")
+
+
+def _cors_headers_for(request: Request) -> dict:
+    origin = request.headers.get("origin", "")
+    if origin and _CORS_ORIGIN_RE.fullmatch(origin):
+        return {
+            "access-control-allow-origin": origin,
+            "access-control-allow-credentials": "true",
+            "vary": "Origin",
+        }
+    return {}
+
+
+def _reject(request: Request, status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        {"detail": detail}, status_code=status_code,
+        headers=_cors_headers_for(request),
+    )
+
 
 @app.middleware("http")
 async def jwt_auth_middleware(request: Request, call_next):
@@ -58,22 +82,22 @@ async def jwt_auth_middleware(request: Request, call_next):
 
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("bearer "):
-        return JSONResponse({"detail": "Missing bearer token"}, status_code=401)
+        return _reject(request, 401, "Missing bearer token")
 
     if not AUTH_SECRET:
-        return JSONResponse({"detail": "Server auth not configured"}, status_code=500)
+        return _reject(request, 500, "Server auth not configured")
 
     token = auth_header[7:].strip()
     try:
         payload = jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
-        return JSONResponse({"detail": "Token expired"}, status_code=401)
-    except jwt.InvalidTokenError:
-        return JSONResponse({"detail": "Invalid token"}, status_code=401)
+        return _reject(request, 401, "Token expired")
+    except jwt.InvalidTokenError as e:
+        return _reject(request, 401, f"Invalid token: {e}")
 
     user_id = payload.get("sub")
     if not user_id:
-        return JSONResponse({"detail": "Token missing user id"}, status_code=401)
+        return _reject(request, 401, "Token missing user id")
 
     request.state.user_id = user_id
     return await call_next(request)
