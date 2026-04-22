@@ -1580,6 +1580,28 @@ def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
         return {"error": str(e)}
 
 
+@app.get("/api/debug/env")
+def debug_env_status():
+    """Read-only diagnostic: reports which R2/IBKR env vars the runtime sees.
+    Returns the first 4 chars only, so nothing sensitive is exposed. Remove
+    once multi-tenant auth is in place (Tier 1)."""
+    keys = [
+        "R2_ENDPOINT_URL", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET_NAME", "R2_PUBLIC_URL",
+        "IBKR_FLEX_TOKEN", "IBKR_FLEX_QUERY_ID",
+        "DATABASE_URL",
+    ]
+    out = {}
+    for k in keys:
+        v = os.environ.get(k, "")
+        out[k] = {
+            "set": bool(v),
+            "preview": (v[:4] + "…") if v else "(empty)",
+            "length": len(v),
+        }
+    return out
+
+
 @app.get("/api/ibkr/status")
 def ibkr_status():
     """Check if IBKR credentials are configured."""
