@@ -231,6 +231,7 @@ def load_summary(portfolio_name, status=None):
                          WHERE d.trade_id = s.trade_id
                            AND d.portfolio_id = s.portfolio_id
                            AND d.action = 'BUY'
+                           AND d.deleted_at IS NULL
                          ORDER BY d.date ASC
                          LIMIT 1),
                         s.rule
@@ -238,6 +239,7 @@ def load_summary(portfolio_name, status=None):
                 FROM trades_summary s
                 JOIN portfolios p ON s.portfolio_id = p.id
                 WHERE p.name = %s
+                  AND s.deleted_at IS NULL
             """
             params = [portfolio_name]
 
@@ -313,6 +315,7 @@ def load_details(portfolio_name, trade_id=None):
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
                 WHERE p.name = %s
+                  AND d.deleted_at IS NULL
             """
             params = [portfolio_name]
 
@@ -408,7 +411,7 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 # Build WHERE clause with safe string substitution
                 # Note: Using direct substitution instead of params due to psycopg2/DSN compatibility issue
                 # Safe because portfolio_name is from controlled selectbox with known values
-                where_parts = [f"p.name = '{portfolio_name}'"]
+                where_parts = [f"p.name = '{portfolio_name}'", "j.deleted_at IS NULL"]
 
                 if start_date:
                     where_parts.append(f"j.day >= '{start_date}'")
@@ -933,9 +936,13 @@ def delete_detail_row(portfolio_name, detail_id):
 
             portfolio_id = result[0]
 
-            # Delete the row (with portfolio verification)
+            # Soft-delete: stamp deleted_at instead of removing the row, so
+            # an accidental delete is reversible by clearing the column.
+            # Only stamps live rows — re-deleting a soft-deleted row is a
+            # no-op that we treat as "not found" below.
             cur.execute(
-                "DELETE FROM trades_details WHERE id = %s AND portfolio_id = %s",
+                "UPDATE trades_details SET deleted_at = NOW() "
+                "WHERE id = %s AND portfolio_id = %s AND deleted_at IS NULL",
                 (detail_id, portfolio_id)
             )
 
@@ -1022,8 +1029,10 @@ def sync_trade_summary(portfolio_name, trade_id, update_data):
 # ============================================
 def delete_trade(portfolio_name, trade_id):
     """
-    Delete a trade and all its transactions.
-    Explicitly deletes from both details and summary tables.
+    Soft-delete a trade and all its transactions.
+    Stamps deleted_at on both the summary row and every detail row; rows stay
+    in the table but become invisible to load_summary / load_details. To
+    restore, clear deleted_at on the affected rows.
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -1033,16 +1042,17 @@ def delete_trade(portfolio_name, trade_id):
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            # Delete details first (child rows)
+            # Soft-delete details first (child rows) then summary.
             cur.execute("""
-                DELETE FROM trades_details
+                UPDATE trades_details SET deleted_at = NOW()
                 WHERE portfolio_id = %s AND trade_id = %s
+                  AND deleted_at IS NULL
             """, (portfolio_id, trade_id))
 
-            # Delete summary (parent row)
             cur.execute("""
-                DELETE FROM trades_summary
+                UPDATE trades_summary SET deleted_at = NOW()
                 WHERE portfolio_id = %s AND trade_id = %s
+                  AND deleted_at IS NULL
             """, (portfolio_id, trade_id))
 
             conn.commit()
@@ -1066,6 +1076,7 @@ def get_all_open_trades():
             FROM trades_summary s
             JOIN portfolios p ON s.portfolio_id = p.id
             WHERE s.status = 'OPEN'
+              AND s.deleted_at IS NULL
             ORDER BY p.name, s.open_date DESC
         """
         return pd.read_sql(query, conn)
@@ -1437,7 +1448,9 @@ def delete_journal_entry(portfolio_name, day):
             portfolio_id = result[0]
 
             cur.execute(
-                "DELETE FROM trading_journal WHERE portfolio_id = %s AND day = %s RETURNING id",
+                "UPDATE trading_journal SET deleted_at = NOW() "
+                "WHERE portfolio_id = %s AND day = %s "
+                "  AND deleted_at IS NULL RETURNING id",
                 (portfolio_id, day)
             )
             deleted = cur.fetchone()
