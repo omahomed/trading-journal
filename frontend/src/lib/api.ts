@@ -1,8 +1,10 @@
 // API client for the FastAPI backend
 // NEXT_PUBLIC_API_URL is baked in at build time. If not set, detect environment.
+// Production fallback points at the canonical Railway backend (lucky-adaptation
+// → web service). Set NEXT_PUBLIC_API_URL on Vercel to override.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL
   || (typeof window !== "undefined" && window.location.hostname !== "localhost"
-      ? "https://web-production-cdf47.up.railway.app"
+      ? "https://web-production-ad135.up.railway.app"
       : "http://localhost:8000");
 
 async function fetchJSON<T>(path: string): Promise<T> {
