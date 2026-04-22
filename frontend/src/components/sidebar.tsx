@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { NAV } from "@/lib/nav";
 import { Icons, NAV_ICONS } from "@/components/icons";
 import { usePortfolio } from "@/lib/portfolio-context";
+import type { Portfolio } from "@/lib/api";
 
 interface SidebarProps {
   activePage: string;
@@ -18,7 +19,31 @@ interface SidebarProps {
 
 export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  const { activePortfolio } = usePortfolio();
+  const { portfolios, activePortfolio, setActive } = usePortfolio();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  // Close the portfolio picker on outside click or Escape
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) setPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPickerOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [pickerOpen]);
+
+  const handlePortfolioPick = (p: Portfolio) => {
+    setPickerOpen(false);
+    if (p.id !== activePortfolio?.id) setActive(p);
+  };
 
   useEffect(() => {
     const group = NAV.find((g) => g.items.some((i) => i.id === activePage));
@@ -61,14 +86,59 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
 
       {!rail && (
         <>
-          {/* Strategy picker */}
-          <div className="mx-3.5 mb-3 px-3 py-2.5 rounded-[10px] flex items-center gap-2.5 cursor-pointer transition-colors" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-            <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px color-mix(in oklab, #6366f1 15%, var(--surface))" }} />
-            <div className="flex-1 min-w-0">
-              <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">Active Portfolio</div>
-              <div className="text-[13px] font-semibold">{activePortfolio?.name ?? "—"}</div>
-            </div>
-            {Icons.chevronDown()}
+          {/* Portfolio picker */}
+          <div className="mx-3.5 mb-3 relative" ref={pickerRef}>
+            <button
+              type="button"
+              onClick={() => setPickerOpen((v) => !v)}
+              disabled={portfolios.length === 0}
+              className="w-full px-3 py-2.5 rounded-[10px] flex items-center gap-2.5 transition-colors hover:brightness-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+            >
+              <span className="w-2 h-2 rounded-full bg-[#6366f1]" style={{ boxShadow: "0 0 0 3px color-mix(in oklab, #6366f1 15%, var(--surface))" }} />
+              <div className="flex-1 min-w-0 text-left">
+                <div className="text-[10px] text-[var(--ink-4)] uppercase tracking-[0.10em] font-medium">Active Portfolio</div>
+                <div className="text-[13px] font-semibold truncate" style={{ color: "var(--ink)" }}>
+                  {activePortfolio?.name ?? "—"}
+                </div>
+              </div>
+              <span style={{ transform: pickerOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+                {Icons.chevronDown()}
+              </span>
+            </button>
+            {pickerOpen && portfolios.length > 0 && (
+              <div
+                className="absolute left-0 right-0 top-full mt-1 rounded-[10px] overflow-hidden z-30"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 8px 24px rgba(14,20,38,0.12)" }}
+              >
+                {portfolios.map((p) => {
+                  const isActive = p.id === activePortfolio?.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => handlePortfolioPick(p)}
+                      className="w-full px-3 py-2 text-left text-[13px] flex items-center gap-2 transition-colors hover:brightness-[0.96]"
+                      style={{
+                        background: isActive ? "color-mix(in oklab, #6366f1 10%, var(--surface))" : "var(--surface)",
+                        color: "var(--ink)",
+                      }}
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full"
+                        style={{ background: isActive ? "#6366f1" : "var(--ink-5)" }}
+                      />
+                      <span className="flex-1 truncate font-medium">{p.name}</span>
+                      {isActive && (
+                        <span className="text-[10px] uppercase tracking-[0.10em]" style={{ color: "var(--ink-4)" }}>
+                          Active
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Search */}

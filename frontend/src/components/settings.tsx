@@ -21,7 +21,7 @@ export function Settings({ navColor }: { navColor: string }) {
       </div>
 
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[16px] font-semibold">Portfolios</h2>
+        <h2 className="text-[16px] font-semibold" style={{ color: "var(--ink)" }}>Portfolios</h2>
         <button
           onClick={() => setCreating(true)}
           className="h-[34px] px-4 rounded-[10px] text-white font-medium text-[13px]"
@@ -123,7 +123,7 @@ function PortfolioCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2.5">
               <span className="w-2 h-2 rounded-full" style={{ background: navColor }} />
-              <div className="text-[15px] font-semibold">{portfolio.name}</div>
+              <div className="text-[15px] font-semibold" style={{ color: "var(--ink)" }}>{portfolio.name}</div>
             </div>
             <div className="grid grid-cols-2 gap-4 mt-3 text-[12px]">
               <div>
@@ -131,20 +131,20 @@ function PortfolioCard({
                   Starting capital
                 </div>
                 <div className="mt-0.5 privacy-mask"
-                     style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{capitalDisplay}</div>
+                     style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink)" }}>{capitalDisplay}</div>
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
                   Reset date
                 </div>
-                <div className="mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{resetDisplay}</div>
+                <div className="mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink)" }}>{resetDisplay}</div>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setEditing(true)} disabled={busy}
                     className="h-[32px] px-3 rounded-[8px] text-[12px] font-medium"
-                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)" }}>
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
               Edit
             </button>
             <button onClick={remove} disabled={busy}
@@ -190,7 +190,7 @@ function PortfolioCard({
             <button onClick={() => { setEditing(false); setName(portfolio.name); setErr(null); }}
                     disabled={busy}
                     className="h-[34px] px-4 rounded-[8px] text-[13px] font-medium"
-                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)" }}>
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
               Cancel
             </button>
           </div>
@@ -234,7 +234,7 @@ function NewPortfolioCard({
   return (
     <div className="rounded-[14px] p-5"
          style={{ background: "var(--surface)", border: `1px solid ${navColor}` }}>
-      <div className="text-[13px] font-semibold mb-3">New portfolio</div>
+      <div className="text-[13px] font-semibold mb-3" style={{ color: "var(--ink)" }}>New portfolio</div>
       <div className="space-y-3">
         <label className="block">
           <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Name</span>
