@@ -35,6 +35,11 @@ from slowapi.util import get_remote_address
 
 # Import existing modules (needed by the middleware below).
 import db_layer as db
+from trade_calc import (
+    calc_risk_budget,
+    compute_lifo_summary,
+    normalize_journal_columns as _normalize_journal,
+)
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -195,24 +200,6 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # ============================================================
 # JOURNAL ENDPOINTS
 # ============================================================
-def _normalize_journal(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize journal column names to lowercase with underscores."""
-    rename = {
-        "Day": "day", "Status": "status", "Market Window": "market_window",
-        "Market Cycle": "market_cycle",
-        "> 21e": "above_21ema", "Cash -/+": "cash_change",
-        "Beg NLV": "beg_nlv", "End NLV": "end_nlv",
-        "Daily $ Change": "daily_dollar_change", "Daily % Change": "daily_pct_change",
-        "% Invested": "pct_invested", "SPY": "spy", "Nasdaq": "nasdaq",
-        "Market_Notes": "market_notes", "Market_Action": "market_action",
-        "Portfolio_Heat": "portfolio_heat", "SPY_ATR": "spy_atr", "Nasdaq_ATR": "nasdaq_atr",
-        "Score": "score", "Highlights": "highlights", "Lowlights": "lowlights",
-        "Mistakes": "mistakes", "Top_Lesson": "top_lesson",
-    }
-    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
-    return df
-
-
 @app.get("/api/journal/latest")
 def journal_latest(portfolio: str = "CanSlim"):
     """Get the most recent journal entry (NLV, daily change, etc.)."""
@@ -1774,21 +1761,17 @@ def log_buy(request: Request, body: dict):
             else:
                 trx_id = "B1"
 
-        # Build summary row first (FK requires summary before detail)
-        # risk_budget = the initial $ at risk at entry (shares * (entry - stop)).
-        # Historically set by the sizing calculator path but missing when a
-        # trade is logged directly (e.g. IBKR Quick Log) without going through
-        # the sizer. Compute from stop_loss here so the column is populated.
-        def _calc_risk_budget(s: float, p: float, sl: float) -> float:
-            return round(s * (p - sl), 2) if (sl and sl > 0 and p > sl and s > 0) else 0.0
-
+        # Build summary row first (FK requires summary before detail).
+        # risk_budget = initial $ at risk at entry (shares * (entry - stop)).
+        # Populated here because direct-log paths (e.g. IBKR Quick Log) skip
+        # the sizing calculator that historically set this column.
         if action_type == "new":
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
+                "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
             }
         else:
             # Scale-in: load existing summary and update
@@ -1805,7 +1788,7 @@ def log_buy(request: Request, body: dict):
                 new_avg_entry = new_total_cost / new_total_shares if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
                 existing_rb = float(row.get("risk_budget", 0) or 0)
-                added_rb = _calc_risk_budget(shares, price, effective_stop)
+                added_rb = calc_risk_budget(shares, price, effective_stop)
                 new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
@@ -1824,7 +1807,7 @@ def log_buy(request: Request, body: dict):
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                    "Risk_Budget": _calc_risk_budget(shares, price, stop_loss),
+                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)
@@ -2104,64 +2087,11 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         db.delete_trade(portfolio, trade_id)
         return
     df_d = _normalize_trades(df_d)
-    txns = df_d[df_d["trade_id"] == trade_id].copy()
-    if txns.empty:
+    txns = df_d[df_d["trade_id"] == trade_id]
+    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date)
+    if summary_row is None:
         db.delete_trade(portfolio, trade_id)
         return
-    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
-    txns = txns.dropna(subset=["date"]).sort_values("date")
-
-    inventory = []
-    total_realized = 0.0
-    for _, tx in txns.iterrows():
-        action = str(tx.get("action", "")).upper()
-        tx_shares = float(tx.get("shares", 0) or 0)
-        tx_price = float(tx.get("amount", 0) or 0)
-        if action == "BUY":
-            inventory.append({"price": tx_price, "shares": tx_shares})
-        elif action == "SELL":
-            to_sell = tx_shares
-            while to_sell > 0 and inventory:
-                last = inventory[-1]
-                take = min(to_sell, last["shares"])
-                total_realized += (tx_price - last["price"]) * take
-                last["shares"] -= take
-                to_sell -= take
-                if last["shares"] < 0.0001:
-                    inventory.pop()
-
-    remaining_shares = sum(lot["shares"] for lot in inventory)
-    remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
-    avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else 0.0
-
-    sells = txns[txns["action"].str.upper() == "SELL"]
-    total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
-    total_sell_shs = float(sells["shares"].astype(float).sum())
-    avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0.0
-
-    buys = txns[txns["action"].str.upper() == "BUY"]
-    total_cost_all = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
-    total_buy_shs = float(buys["shares"].astype(float).sum())
-    is_closed = remaining_shares < 0.01 and total_sell_shs > 0
-    return_pct = (total_realized / total_cost_all * 100) if is_closed and total_cost_all > 0 else 0.0
-
-    first_date = txns["date"].min()
-    open_date = first_date.strftime("%Y-%m-%d") if pd.notna(first_date) else (fallback_open_date or "")
-    last_date = txns["date"].max()
-    closed_date = last_date.strftime("%Y-%m-%d") if is_closed and pd.notna(last_date) else None
-
-    summary_row = {
-        "Trade_ID": trade_id, "Ticker": ticker,
-        "Status": "CLOSED" if is_closed else "OPEN",
-        "Open_Date": open_date,
-        "Closed_Date": closed_date,
-        "Shares": float(remaining_shares if not is_closed else total_buy_shs),
-        "Avg_Entry": float(round(avg_entry, 4)),
-        "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
-        "Total_Cost": float(round(remaining_cost if not is_closed else total_cost_all, 2)),
-        "Realized_PL": float(round(total_realized, 2)),
-        "Return_Pct": float(round(return_pct, 4)),
-    }
     db.save_summary_row(portfolio, summary_row)
 
 
