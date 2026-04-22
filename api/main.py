@@ -19,6 +19,9 @@ from datetime import datetime, date
 import pandas as pd
 import jwt
 
+# Import existing modules (needed by the middleware below).
+import db_layer as db
+
 app = FastAPI(title="MO Money API", version="1.0.0")
 
 # CORS — allow React dev server + Vercel production
@@ -100,7 +103,16 @@ async def jwt_auth_middleware(request: Request, call_next):
         return _reject(request, 401, "Token missing user id")
 
     request.state.user_id = user_id
-    return await call_next(request)
+
+    # Tell db_layer which user this request belongs to. get_db_connection()
+    # reads this ContextVar and does `SET app.user_id = <uuid>` on each new
+    # connection, which is what Postgres RLS policies filter by. Reset in
+    # finally so the ContextVar doesn't leak into any background tasks.
+    ctx_token = db.current_user_id.set(user_id)
+    try:
+        return await call_next(request)
+    finally:
+        db.current_user_id.reset(ctx_token)
 
 
 def get_user_id(request: Request) -> str:
@@ -110,9 +122,6 @@ def get_user_id(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user_id
 
-
-# Import existing modules
-import db_layer as db
 
 # Required secrets are expected in the runtime environment (Railway service
 # variables in production; .env / shell export locally). No values are

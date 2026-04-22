@@ -6,9 +6,21 @@ import pandas as pd
 import os
 import streamlit as st
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 import time
 from decimal import Decimal
+
+# ============================================
+# TENANT CONTEXT
+# ============================================
+# Row-level security in Postgres filters every query by user_id = the session
+# variable `app.user_id`. We carry the current request's user_id in a
+# ContextVar, then SET it on every new DB connection below. FastAPI middleware
+# in api/main.py populates this from the verified JWT. If unset (e.g. CLI
+# scripts, legacy Streamlit paths), connections run with no user_id and RLS
+# makes every tenant table return zero rows — safe failure mode.
+current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
 
 # ============================================
 # CONNECTION CONFIGURATION
@@ -61,6 +73,16 @@ def get_db_connection(max_retries=3, retry_delay=1):
                 conn = psycopg2.connect(config['dsn'])
             else:
                 conn = psycopg2.connect(**config)
+
+            # Apply tenant context to this connection before anything reads.
+            # SET (not SET LOCAL) is session-scoped, so it survives commits and
+            # rollbacks for the lifetime of the connection.
+            uid = current_user_id.get()
+            if uid:
+                with conn.cursor() as _cur:
+                    _cur.execute("SET app.user_id = %s", (uid,))
+                conn.commit()
+
             yield conn
             return  # Success, exit retry loop
         except psycopg2.OperationalError as e:
