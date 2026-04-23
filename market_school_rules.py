@@ -425,12 +425,9 @@ class MarketSchoolRules:
         if days_since_rally < 3 or days_since_rally > 24:
             return None
 
-        # Per IBD rulebook: B1/B2 require close up >= 1% AND volume higher than
-        # prior day. Uses the symbol's own raw volume (no QQQ proxy).
-
-        # Check for 1.0% gain + higher volume than prior day
-        volume_higher = bool(current.get('volume_up', False))
-        if current['daily_gain_pct'] >= 1.0 and volume_higher:
+        # Market Cycle Tracker FTD: close up ≥ 1% on day 4-25 of the rally.
+        # Volume requirement dropped — MCT uses price action only.
+        if current['daily_gain_pct'] >= 1.0:
             # B2 requires: close above the low of the initial follow-through day
             if self.ftd_date is not None:
                 if self.ftd_low is None or current['Close'] <= self.ftd_low:
