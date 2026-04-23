@@ -781,14 +781,18 @@ def batch_prices(request: Request, tickers: str = ""):
     """Get live prices for a comma-separated list of tickers.
     Supports both stock tickers and readable option format ('LUMN 260717 $8C').
     Returns dict of {readable_ticker: price}.
+
+    Delegates to the shared PriceProvider so the Dashboard NLV and Active
+    Campaign Current columns are guaranteed to agree — both go through the
+    same yfinance path.
     """
     if not tickers.strip():
         return {}
-    import yfinance as yf
+    from price_providers import get_price_provider
 
     ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
-    yf_symbols = []
-    yf_to_readable = {}
+    yf_to_readable: dict[str, str] = {}
+    yf_symbols: list[str] = []
     for t in ticker_list:
         if _is_option_ticker(t):
             occ = _to_occ_symbol(t)
@@ -803,20 +807,11 @@ def batch_prices(request: Request, tickers: str = ""):
         return {}
 
     try:
-        data = yf.download(yf_symbols, period="1d", progress=False)['Close']
-        result = {}
-        if len(yf_symbols) == 1:
-            val = float(data.iloc[-1]) if not data.empty else None
-            if val is not None:
-                readable = yf_to_readable.get(yf_symbols[0], yf_symbols[0])
-                result[readable] = val
-        else:
-            last = data.iloc[-1]
-            for yf_sym in yf_symbols:
-                if yf_sym in last.index and not pd.isna(last[yf_sym]):
-                    readable = yf_to_readable.get(yf_sym, yf_sym)
-                    result[readable] = float(last[yf_sym])
-        return result
+        prices = get_price_provider().get_current_prices(yf_symbols)
+        # Re-key by the readable ticker so callers can look up by the format
+        # they know (e.g. "LUMN 260717 $8C" instead of the OCC-encoded symbol).
+        return {yf_to_readable.get(yf_sym, yf_sym): price
+                for yf_sym, price in prices.items()}
     except Exception as e:
         return {"error": str(e)}
 
