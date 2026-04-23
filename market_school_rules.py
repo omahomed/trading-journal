@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -148,9 +149,12 @@ class MarketSchoolRules:
         self.marked_highs = []
         self.marked_lows = []
         
-        # Reference high for correction detection
-        # Tracks the peak of the current bull cycle, resets after each FTD
+        # Reference high for correction detection.
+        # Derived per-bar as max(latest ±9 pivot marked high, rolling 52w high).
+        # Pivot = bar whose High strictly exceeds the High of all 9 bars before
+        # AND all 9 bars after (19-bar window). Correction = Close ≤ 7% below it.
         self.reference_high = None
+        self.reference_high_date = None
         self.recent_high = None
         self.recent_high_date = None
         self.market_in_correction = False
@@ -245,13 +249,64 @@ class MarketSchoolRules:
         self.data['intraday_gain'] = ((self.data['High'] - self.data['Open']) / self.data['Open']) * 100
         self.data['give_back'] = ((self.data['High'] - self.data['Close']) / self.data['High']) * 100
         
+    def _find_latest_marked_high(self, idx: int):
+        """
+        Return (price, date) of the most recent confirmed ±9 pivot marked high
+        at or before ``idx``, or (None, None) if none exists yet.
+
+        A bar j qualifies as a marked high iff its High is strictly greater than
+        the High of all 9 bars before AND all 9 bars after (19-bar window).
+        Confirmation requires 9 bars of forward data, so only j ≤ idx − 9 can be
+        evaluated here.
+        """
+        # Walk backwards from the latest confirmable pivot position.
+        for j in range(idx - 9, 8, -1):
+            pivot_high = self.data.iloc[j]['High']
+            before = self.data.iloc[j - 9:j]['High']
+            after = self.data.iloc[j + 1:j + 10]['High']
+            if (before < pivot_high).all() and (after < pivot_high).all():
+                return float(pivot_high), self.data.index[j]
+        return None, None
+
+    def _derive_reference_high(self, idx: int):
+        """
+        Reference high = max(latest ±9 pivot marked high, rolling 52w high).
+
+        The 52w term catches fresh peaks that have not yet collected 9 bars of
+        forward confirmation; the marked-high term preserves a confirmed anchor
+        in the rare case where the 52w high has aged out of its window.
+
+        Returns (price, date) or (None, None) if no data is available.
+        """
+        current = self.data.iloc[idx]
+        high_52w = float(current['high_52w']) if pd.notna(current['high_52w']) else None
+        marked_price, marked_date = self._find_latest_marked_high(idx)
+
+        candidates = []
+        if high_52w is not None:
+            candidates.append(('52w', high_52w, None))
+        if marked_price is not None:
+            candidates.append(('pivot', marked_price, marked_date))
+
+        if not candidates:
+            return None, None
+
+        src, price, date = max(candidates, key=lambda c: c[1])
+        if src == '52w':
+            # Locate the bar realizing the current 52w high (most recent match).
+            window_start = max(0, idx - 259)
+            window = self.data.iloc[window_start:idx + 1]
+            mask = window['High'] >= price - 1e-9
+            if mask.any():
+                date = window.index[mask][-1]
+        return price, date
+
     def check_market_correction(self, idx: int) -> bool:
         """
         Check if market has declined 7% from the reference high.
 
-        The reference high tracks the peak of the current bull cycle,
-        not the rolling 52-week high. It resets after each FTD so that
-        the next correction is measured from the new cycle's peak.
+        Reference high is derived per-bar as max(latest ±9 pivot marked high,
+        rolling 52w high) — see ``_derive_reference_high``.
 
         Args:
             idx: Current index in data
@@ -261,19 +316,20 @@ class MarketSchoolRules:
         """
         current = self.data.iloc[idx]
 
-        # Initialize reference high from 52-week high if not set
-        if self.reference_high is None:
-            self.reference_high = current['high_52w']
+        ref_price, ref_date = self._derive_reference_high(idx)
+        self.reference_high = ref_price
+        self.reference_high_date = ref_date
 
-        # Update 52-week high tracking (kept for display purposes)
-        if current['High'] >= current['high_52w']:
+        # Legacy display fields (kept for downstream consumers).
+        if current['High'] >= (current['high_52w'] if pd.notna(current['high_52w']) else -math.inf):
             self.recent_high = current['High']
             self.recent_high_date = current.name
 
-        # Calculate decline from reference high (not 52-week high)
-        decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
+        if ref_price is None or ref_price <= 0:
+            self.market_in_correction = False
+            return False
 
-        # Check if we're down 7% or more from reference high
+        decline_from_ref = (current['Close'] - ref_price) / ref_price * 100
         if decline_from_ref <= -7:
             if not self.market_in_correction:
                 self.market_in_correction = True
@@ -403,8 +459,8 @@ class MarketSchoolRules:
                 self.ftd_close = current['Close']
                 self.ftd_low = current['Low']  # Store FTD day's low for S1 undercut check
                 self.buy_switch = True
-                # Reset reference high for new bull cycle
-                self.reference_high = current['High']
+                # Reference high is now derived per-bar from ±9 pivot highs +
+                # 52w rolling high; nothing to reset on FTD.
                 self.market_in_correction = False
                 # Reset distribution day count — new uptrend starts fresh
                 self.distribution_days = []
@@ -1159,6 +1215,7 @@ class MarketSchoolRules:
         self.buy_switch = False
         self.distribution_days = []
         self.reference_high = None
+        self.reference_high_date = None
         self.market_in_correction = False
 
         # Reset rally tracking
@@ -1183,16 +1240,17 @@ class MarketSchoolRules:
             current = self.data.iloc[idx]
             daily_signals = []
 
-            # Track reference high during non-correction periods
-            if self.reference_high is None:
-                self.reference_high = current['high_52w']
-            elif not self.market_in_correction and current['High'] > self.reference_high:
-                self.reference_high = current['High']
+            # Derive reference high = max(latest ±9 pivot marked high, 52w high).
+            # During correction this naturally freezes: price is falling so the
+            # 52w high doesn't tick up, and no new pivots form on the way down.
+            ref_price, ref_date = self._derive_reference_high(idx)
+            self.reference_high = ref_price
+            self.reference_high_date = ref_date
 
             # Check if market has entered a new correction (7% decline from reference high)
             # This runs EVERY day, not just when rally_start_date is None
-            if not self.market_in_correction:
-                decline_from_ref = (current['Close'] - self.reference_high) / self.reference_high * 100
+            if not self.market_in_correction and ref_price is not None and ref_price > 0:
+                decline_from_ref = (current['Close'] - ref_price) / ref_price * 100
                 if decline_from_ref <= -7:
                     self.market_in_correction = True
                     # Reset rally tracking for new correction cycle
