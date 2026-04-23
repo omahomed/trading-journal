@@ -927,6 +927,7 @@ def rally_prefix(as_of_date: str = ""):
         # Streak checks
         low_above_21_streak = 0
         low_above_50_streak = 0
+        ema21_above_sma50_streak = 0
         for i in range(len(df) - 1, -1, -1):
             row = df.iloc[i]
             if pd.notna(row.get('21EMA')) and row['Low'] > row['21EMA']:
@@ -939,6 +940,28 @@ def rally_prefix(as_of_date: str = ""):
                 low_above_50_streak += 1
             else:
                 break
+        for i in range(len(df) - 1, -1, -1):
+            row = df.iloc[i]
+            if (pd.notna(row.get('21EMA')) and pd.notna(row.get('50SMA'))
+                    and row['21EMA'] > row['50SMA']):
+                ema21_above_sma50_streak += 1
+            else:
+                break
+
+        # Step 8 (IBD Power-Trend ON) additional gates
+        prev_row = df.iloc[-2] if len(df) >= 2 else None
+        close_up_or_flat = prev_row is not None and price >= float(prev_row['Close'])
+        sma50_uptrend_1d = (
+            prev_row is not None
+            and pd.notna(prev_row.get('50SMA')) and pd.notna(curr.get('50SMA'))
+            and float(curr['50SMA']) > float(prev_row['50SMA'])
+        )
+        power_trend_on = (
+            ema21_above_sma50_streak >= 5
+            and close_up_or_flat
+            and sma50_uptrend_1d
+            and low_above_21_streak >= 10
+        )
 
         achieved_steps = set()
         if has_rally:
@@ -959,9 +982,14 @@ def rally_prefix(as_of_date: str = ""):
                     achieved_steps.add(6)
                 if 6 in achieved_steps and ema8 > ema21 > sma50 > sma200:
                     achieved_steps.add(7)
+        # Step 8 stands alone — fires on IBD Power-Trend ON conditions
+        # regardless of step 7's MA stack, so POWERTREND lights up in sync
+        # with IBD's rule even when 50 SMA has not yet crossed 200 SMA.
+        if has_rally and power_trend_on:
+            achieved_steps.add(8)
 
         entry_step = max(achieved_steps) if achieved_steps else -1
-        if entry_step >= 7:
+        if 8 in achieved_steps:
             state = "POWERTREND"
         elif entry_step >= 4:
             state = "UPTREND"
@@ -975,10 +1003,11 @@ def rally_prefix(as_of_date: str = ""):
             "Rally Day", "Follow-Through Day", "Close > 21 EMA",
             "Low > 21 EMA", "Low > 21 EMA (3 days)", "Low > 50 SMA (3 days)",
             "21 EMA > 50 SMA > 200 SMA", "8 EMA > 21 EMA > 50 SMA > 200 SMA",
+            "Power-Trend ON",
         ]
-        step_exposures = [20, 60, 60, 80, 100, 120, 150, 200]
+        step_exposures = [20, 60, 60, 80, 100, 120, 150, 200, 200]
         entry_ladder = []
-        for s in range(8):
+        for s in range(9):
             entry_ladder.append({
                 "step": s, "label": step_labels[s],
                 "achieved": s in achieved_steps,
