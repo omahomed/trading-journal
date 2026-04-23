@@ -54,35 +54,34 @@ class YFinanceProvider(PriceProvider):
             return {}
 
         # Drop empty/duplicate symbols before hitting yfinance
-        clean = list({t.strip().upper() for t in tickers if t and t.strip()})
+        clean = sorted({t.strip().upper() for t in tickers if t and t.strip()})
         if not clean:
             return {}
 
         result: dict[str, float] = {}
-        try:
-            data = yf.download(clean, period="1d", progress=False)
-            # yf.download returns a MultiIndex column frame for multi-ticker,
-            # a flat frame for single-ticker. Normalize by pulling 'Close'.
-            close = data["Close"] if "Close" in data.columns else data
-            if close.empty:
-                return {}
-            last = close.iloc[-1]
-            if len(clean) == 1:
-                # Single ticker: last is a scalar Series/value
-                val = float(last) if not pd.isna(last) else None
-                if val is not None and val > 0:
-                    result[clean[0]] = val
-            else:
-                # Multi-ticker: last is a Series indexed by symbol
-                for sym in clean:
-                    if sym in last.index and not pd.isna(last[sym]):
-                        val = float(last[sym])
-                        if val > 0:
-                            result[sym] = val
-        except Exception:
-            # A download failure for the whole basket → empty result; caller
-            # falls back to cost basis per position. No partial retry today.
-            pass
+
+        def _extract(symbol: str) -> None:
+            """Fetch a single symbol via yf.Ticker.history — works uniformly
+            for any number of tickers. Called in a loop; yf.download with a
+            list behaves inconsistently across versions (MultiIndex vs flat
+            columns) so we pay the per-ticker cost for predictable output."""
+            try:
+                tk = yf.Ticker(symbol)
+                hist = tk.history(period="1d", auto_adjust=False)
+                if hist is None or hist.empty:
+                    return
+                val = hist["Close"].iloc[-1]
+                if pd.isna(val):
+                    return
+                price = float(val)
+                if price > 0:
+                    result[symbol] = price
+            except Exception:
+                # Drop on any error — caller falls back to cost basis
+                return
+
+        for sym in clean:
+            _extract(sym)
         return result
 
 
