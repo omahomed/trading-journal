@@ -72,7 +72,7 @@ function DropZone({ label, icon, files, onFiles, multiple, accept }: {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
             <span className="text-[11px]" style={{ color: textColor }}>{dragging ? "Drop files here" : "Drag & drop or click to upload"}</span>
-            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, JPEG</span>
+            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, PDF</span>
           </>
         )}
         <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
@@ -304,7 +304,7 @@ export function LogSell({ navColor }: { navColor: string }) {
             {/* Position Changes — drag & drop */}
             <DropZone label="Position Changes (Partial Sells / Full Exits)" icon="🔄"
                       files={positionCharts} onFiles={setPositionCharts}
-                      multiple accept="image/png,image/jpeg" />
+                      multiple accept="image/png,image/jpeg,application/pdf" />
 
             <button onClick={handleSubmit} disabled={submitting || !selectedTrade}
                     className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"

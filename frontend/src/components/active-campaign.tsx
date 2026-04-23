@@ -176,7 +176,6 @@ function computeEnrichedPositions(
 }
 
 type RiskFilter = "all" | "at_risk" | "free_roll";
-type GradeFilter = "all" | "unrated" | "1" | "2" | "3" | "4" | "5";
 type SortKey = keyof EnrichedPosition;
 type SortDir = "asc" | "desc";
 
@@ -186,7 +185,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>("");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
-  const [gradeFilter, setGradeFilter] = useState<GradeFilter>("all");
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -293,12 +291,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     if (riskFilter === "at_risk") list = list.filter(p => p.risk_status === "At Risk");
     else if (riskFilter === "free_roll") list = list.filter(p => p.risk_status === "Free Roll");
 
-    if (gradeFilter === "unrated") list = list.filter(p => p.grade == null);
-    else if (gradeFilter !== "all") {
-      const n = parseInt(gradeFilter, 10);
-      list = list.filter(p => p.grade === n);
-    }
-
     return [...list].sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -310,7 +302,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       else cmp = (av as number) - (bv as number);
       return sortDir === "desc" ? -cmp : cmp;
     });
-  }, [positions, riskFilter, gradeFilter, sortKey, sortDir]);
+  }, [positions, riskFilter, sortKey, sortDir]);
 
   const atRiskCount = positions.filter(p => p.risk_status === "At Risk").length;
   const freeRollCount = positions.filter(p => p.risk_status === "Free Roll").length;
@@ -478,18 +470,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
           {/* Filter tabs */}
           <div className="ml-auto flex items-center gap-2">
-            <select value={gradeFilter} onChange={e => setGradeFilter(e.target.value as GradeFilter)}
-                    className="h-[28px] px-2 rounded-[8px] text-[11px]"
-                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}
-                    title="Filter by grade">
-              <option value="all">All grades</option>
-              <option value="unrated">Unrated</option>
-              <option value="5">★★★★★ (5)</option>
-              <option value="4">★★★★ (4)</option>
-              <option value="3">★★★ (3)</option>
-              <option value="2">★★ (2)</option>
-              <option value="1">★ (1)</option>
-            </select>
             <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
               {([
                 { key: "all" as RiskFilter, label: "All", count: totalPositions },

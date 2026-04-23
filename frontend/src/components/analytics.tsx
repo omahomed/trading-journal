@@ -181,6 +181,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [campTicker, setCampTicker] = useState("");
   const [campDateRange, setCampDateRange] = useState("YTD");
   const [campResult, setCampResult] = useState<"all" | "winners" | "losers">("all");
+  const [campGrade, setCampGrade] = useState<"all" | "unrated" | "1" | "2" | "3" | "4" | "5">("all");
   const [campSort, setCampSort] = useState<{ col: string; asc: boolean }>({ col: "open", asc: false });
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
 
@@ -1340,6 +1341,12 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
           const pl = parseFloat(String(t.realized_pl || 0));
           if (campResult === "winners" && pl <= 0) return false;
           if (campResult === "losers" && pl >= 0) return false;
+          // Grade
+          if (campGrade !== "all") {
+            const g = (t as any).grade;
+            if (campGrade === "unrated" && g != null) return false;
+            if (campGrade !== "unrated" && g !== parseInt(campGrade, 10)) return false;
+          }
           return true;
         });
 
@@ -1445,6 +1452,19 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                   </button>
                 ))}
               </div>
+
+              {/* Grade */}
+              <select value={campGrade} onChange={e => setCampGrade(e.target.value as typeof campGrade)}
+                      className="h-[32px] px-2.5 rounded-[8px] text-[11px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+                <option value="all">All grades</option>
+                <option value="unrated">Unrated</option>
+                <option value="5">★★★★★ (5)</option>
+                <option value="4">★★★★ (4)</option>
+                <option value="3">★★★ (3)</option>
+                <option value="2">★★ (2)</option>
+                <option value="1">★ (1)</option>
+              </select>
 
               <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
             </div>
