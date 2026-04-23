@@ -986,17 +986,12 @@ def rally_prefix(as_of_date: str = ""):
         stack_21_50 = ema21 > sma50
         stack_50_200 = sma50 > sma200
 
-        # Drawdown + reference high date
+        # Drawdown + reference high date. Reference high is derived in the
+        # analyzer as max(latest ±9 pivot marked high, rolling 52w high); its
+        # date is tracked alongside so we don't need to re-scan.
         reference_high = analyzer.reference_high or 0
         drawdown_pct = ((price - reference_high) / reference_high * 100) if reference_high > 0 else 0
-
-        # Find reference high date
-        ref_high_date = None
-        if reference_high > 0:
-            for i in range(len(df) - 1, -1, -1):
-                if abs(df.iloc[i]['High'] - reference_high) < 0.01:
-                    ref_high_date = str(df.index[i])[:10]
-                    break
+        ref_high_date = str(analyzer.reference_high_date)[:10] if analyzer.reference_high_date is not None else None
 
         # Consecutive closes below 21 EMA
         consecutive_below_21 = 0
