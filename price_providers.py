@@ -35,10 +35,13 @@ class PriceProvider(ABC):
 class YFinanceProvider(PriceProvider):
     """Free, delayed, flaky but good-enough for beta.
 
-    Uses yf.Ticker(symbol).fast_info to avoid the full `info` dict which
-    sometimes times out on thin tickers. Falls back to a 1-day history if
-    fast_info is empty. Silently drops tickers that error — the NLV service
-    handles missing entries by falling back to cost basis.
+    Uses the batch yf.download(period='1d') path to match /api/prices/batch —
+    both endpoints return the regular-session close. Using fast_info.last_price
+    instead would sometimes include after-hours ticks, causing the Dashboard
+    NLV and the Active Campaign Current column to disagree after 4pm ET.
+
+    Silently drops tickers that error — the NLV service handles missing
+    entries by falling back to cost basis.
     """
 
     def get_current_prices(self, tickers: list[str]) -> dict[str, float]:
@@ -46,34 +49,40 @@ class YFinanceProvider(PriceProvider):
             return {}
         try:
             import yfinance as yf
+            import pandas as pd
         except ImportError:
             return {}
 
+        # Drop empty/duplicate symbols before hitting yfinance
+        clean = list({t.strip().upper() for t in tickers if t and t.strip()})
+        if not clean:
+            return {}
+
         result: dict[str, float] = {}
-        for t in tickers:
-            symbol = t.strip().upper()
-            if not symbol:
-                continue
-            try:
-                tk = yf.Ticker(symbol)
-                price: float | None = None
-                # fast_info is cached and cheap
-                fi = getattr(tk, "fast_info", None)
-                if fi is not None:
-                    for attr in ("last_price", "lastPrice", "regular_market_price"):
-                        val = getattr(fi, attr, None) if not isinstance(fi, dict) else fi.get(attr)
-                        if val is not None:
-                            price = float(val)
-                            break
-                if price is None:
-                    hist = tk.history(period="1d")
-                    if not hist.empty:
-                        price = float(hist["Close"].iloc[-1])
-                if price is not None and price > 0:
-                    result[symbol] = price
-            except Exception:
-                # Drop the ticker on any error — caller falls back gracefully
-                continue
+        try:
+            data = yf.download(clean, period="1d", progress=False)
+            # yf.download returns a MultiIndex column frame for multi-ticker,
+            # a flat frame for single-ticker. Normalize by pulling 'Close'.
+            close = data["Close"] if "Close" in data.columns else data
+            if close.empty:
+                return {}
+            last = close.iloc[-1]
+            if len(clean) == 1:
+                # Single ticker: last is a scalar Series/value
+                val = float(last) if not pd.isna(last) else None
+                if val is not None and val > 0:
+                    result[clean[0]] = val
+            else:
+                # Multi-ticker: last is a Series indexed by symbol
+                for sym in clean:
+                    if sym in last.index and not pd.isna(last[sym]):
+                        val = float(last[sym])
+                        if val > 0:
+                            result[sym] = val
+        except Exception:
+            # A download failure for the whole basket → empty result; caller
+            # falls back to cost basis per position. No partial retry today.
+            pass
         return result
 
 
