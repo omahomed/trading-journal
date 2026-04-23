@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
+import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 
 interface EnrichedPosition {
@@ -181,6 +182,7 @@ type SortKey = keyof EnrichedPosition;
 type SortDir = "asc" | "desc";
 
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
+  const { activePortfolio } = usePortfolio();
   const [positions, setPositions] = useState<EnrichedPosition[]>([]);
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -194,12 +196,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
   const loadData = useCallback(async () => {
     try {
-      const [openTrades, details, journal] = await Promise.all([
+      const activeId = activePortfolio?.id;
+      const [openTrades, details, nlv, journal] = await Promise.all([
         api.tradesOpen(getActivePortfolio()).catch(() => []),
         api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
-        api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+        activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
+        api.journalLatest(getActivePortfolio()).catch(() => null),
       ]);
-      const eq = parseFloat(String(journal.end_nlv || 100000));
+      // Prefer the derived NLV (cash + live positions). Fall back to the
+      // last journal entry's end_nlv if the derivation is unavailable, and
+      // finally to 0 — the UI handles 0 by hiding the % exposure.
+      const derivedNlv = nlv && typeof nlv === "object" && !("error" in nlv)
+        ? (nlv as { nlv: number }).nlv
+        : null;
+      const eq = derivedNlv ?? (journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0);
       setEquity(eq);
 
       // Fetch live prices for all open tickers
