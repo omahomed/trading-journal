@@ -91,7 +91,7 @@ function DropZone({ label, icon, files, onFiles, multiple, accept }: {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
             <span className="text-[11px]" style={{ color: textColor }}>{dragging ? "Drop files here" : "Drag & drop or click to upload"}</span>
-            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, JPEG</span>
+            <span className="text-[9px] mt-0.5" style={{ color: "var(--ink-5)" }}>PNG, JPG, PDF</span>
           </>
         )}
         <input ref={inputRef} type="file" accept={accept} multiple={multiple} className="hidden"
@@ -611,7 +611,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   { label: "Position Changes (Add-ons / Trims / Exits)", icon: "🔄", files: positionCharts, setFiles: setPositionCharts },
                 ].map(slot => (
                   <DropZone key={slot.label} label={slot.label} icon={slot.icon} files={slot.files}
-                            onFiles={slot.setFiles} multiple accept="image/png,image/jpeg" />
+                            onFiles={slot.setFiles} multiple accept="image/png,image/jpeg,application/pdf" />
                 ))}
               </div>
             </div>
@@ -626,7 +626,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 Upload a MarketSurge screenshot to auto-extract ratings and fundamentals via AI.
               </div>
               <DropZone label="" icon="" files={msScreenshot ? [msScreenshot] : []}
-                        onFiles={fs => setMsScreenshot(fs[0] || null)} accept="image/png,image/jpeg" />
+                        onFiles={fs => setMsScreenshot(fs[0] || null)} accept="image/png,image/jpeg,application/pdf" />
             </div>
 
             {/* Errors + Warnings */}

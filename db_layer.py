@@ -2024,8 +2024,16 @@ def get_trade_fundamentals(portfolio_name: str, trade_id: str):
 
                 portfolio_id = result[0]
 
+                # DISTINCT ON (ticker) returns one row per unique ticker —
+                # the most recent extraction, since ORDER BY picks it. This
+                # collapses accidental duplicate extractions from the same
+                # MarketSurge upload (the "duplicate MarketSurge card" bug
+                # users saw on options trades) while still allowing legitimate
+                # multiple tickers under one trade_id (e.g. an options trade
+                # where the user also uploaded the underlying's screenshot).
                 query = """
-                    SELECT id, ticker, image_id, extracted_at,
+                    SELECT DISTINCT ON (ticker)
+                           id, ticker, image_id, extracted_at,
                            composite_rating, eps_rating, rs_rating, group_rs_rating,
                            smr_rating, acc_dis_rating, timeliness_rating, sponsorship_rating,
                            eps_growth_rate, ud_vol_ratio,
@@ -2034,7 +2042,7 @@ def get_trade_fundamentals(portfolio_name: str, trade_id: str):
                            raw_json
                     FROM trade_fundamentals
                     WHERE portfolio_id = %s AND trade_id = %s
-                    ORDER BY extracted_at DESC
+                    ORDER BY ticker, extracted_at DESC
                 """
 
                 cur.execute(query, (portfolio_id, trade_id))
