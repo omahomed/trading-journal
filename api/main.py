@@ -1437,6 +1437,26 @@ def get_portfolio_nlv(portfolio_id: int, request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/portfolios/{portfolio_id}/returns")
+@limiter.limit("30/minute")
+def get_portfolio_returns(portfolio_id: int, request: Request):
+    """LTD + YTD P&L in dollars and percent.
+
+    Derived from the cash_transactions ledger (net contributions) and the
+    live NLV. YTD is only meaningful when the portfolio started this year
+    OR when an EOD snapshot exists for a prior year-end (Phase 4); until
+    then it reports ytd_available = false so the UI can show '—'.
+    """
+    try:
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["id"] == portfolio_id), None)
+        if match is None:
+            return {"error": "Portfolio not found"}
+        return nlv_service.compute_returns(portfolio_id, match["name"], match)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
 def list_cash_transactions_endpoint(portfolio_id: int, request: Request, limit: int = 50):

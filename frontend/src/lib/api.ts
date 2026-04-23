@@ -340,6 +340,9 @@ export const api = {
   portfolioNlv: (id: number) =>
     fetchJSON<PortfolioNlv>(`/api/portfolios/${id}/nlv`),
 
+  portfolioReturns: (id: number) =>
+    fetchJSON<PortfolioReturns>(`/api/portfolios/${id}/returns`),
+
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
@@ -372,5 +375,19 @@ export interface PortfolioNlv {
     unrealized_pl: number;
     price_unavailable?: boolean;
   }>;
+  as_of: string;
+}
+
+// LTD / YTD returns derived from NLV + cash-transactions ledger.
+// ytd_available=false when the portfolio started before the current year
+// and no start-of-year NLV snapshot exists yet (pre-Phase-4).
+export interface PortfolioReturns {
+  nlv: number;
+  net_contributions: number;
+  ltd_pl: number;
+  ltd_pct: number;
+  ytd_pl: number | null;
+  ytd_pct: number | null;
+  ytd_available: boolean;
   as_of: string;
 }

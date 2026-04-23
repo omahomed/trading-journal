@@ -3086,6 +3086,26 @@ def get_cash_balance(portfolio_id):
             return float(row[0])
 
 
+def get_net_contributions(portfolio_id):
+    """Net external contributions for a portfolio — sum of all deposit,
+    withdraw, and reconcile rows. BUY/SELL rows are internal cash flows and
+    excluded. This is the denominator for LTD return calcs:
+        LTD return% = (NLV − net_contributions) / net_contributions × 100
+    Starting_capital already lives here as the initial 'Initial capital'
+    deposit row, so callers don't have to add it separately.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(amount), 0) FROM cash_transactions "
+                "WHERE portfolio_id = %s "
+                "AND source IN ('deposit', 'withdraw', 'reconcile')",
+                (portfolio_id,),
+            )
+            row = cur.fetchone()
+            return float(row[0])
+
+
 def list_cash_transactions(portfolio_id, limit=200):
     """Return the most recent cash_tx rows for a portfolio, newest first.
     Used by an Activity/Cash ledger view in the UI."""

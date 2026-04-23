@@ -1,4 +1,4 @@
-"""Derived Net Liquidation Value (NLV) for a portfolio.
+"""Derived Net Liquidation Value (NLV) + returns for a portfolio.
 
     NLV = cash_balance + Σ(open_position.shares × live_price)
 
@@ -9,10 +9,12 @@ the configured PriceProvider (yfinance today; swappable later).
 Prices that can't be resolved don't crash the calculation — we fall back to
 the position's cost basis so the NLV remains monotonically meaningful, and
 we flag the position as price_unavailable so the UI can show a warning.
+
+Also exposes compute_returns() — LTD and YTD P&L in both dollars and %.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Any
 
 import db_layer as db
@@ -126,5 +128,61 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         "market_value": round(market_value, 2),
         "nlv": round(cash + market_value, 2),
         "positions": positions,
+        "as_of": datetime.now().isoformat(),
+    }
+
+
+def _as_year(value) -> int | None:
+    """Best-effort year extraction from a DATE / TIMESTAMP / ISO string."""
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.year
+    try:
+        return int(str(value)[:4])
+    except (ValueError, TypeError):
+        return None
+
+
+def compute_returns(portfolio_id: int, portfolio_name: str,
+                    portfolio_row: dict[str, Any]) -> dict[str, Any]:
+    """LTD + YTD returns for a portfolio. Builds on compute_nlv().
+
+    LTD:
+        net_contributions = Σ cash_tx with source IN (deposit, withdraw, reconcile)
+        ltd_pl     = NLV − net_contributions
+        ltd_pct    = (ltd_pl / net_contributions) × 100      [guarded for /0]
+
+    YTD:
+        A portfolio with a reset_date (or created_at) in the current year
+        has its whole lifespan within YTD, so YTD == LTD. Any portfolio
+        that started in a prior year needs a start-of-year NLV snapshot to
+        compute YTD meaningfully — that snapshot only exists once the EOD
+        cron (Phase 4) is running. Until then: ytd_available = false.
+    """
+    nlv_snap = compute_nlv(portfolio_id, portfolio_name)
+    nlv = float(nlv_snap["nlv"])
+
+    net_contributions = db.get_net_contributions(portfolio_id)
+    ltd_pl = nlv - net_contributions
+    ltd_pct = (ltd_pl / net_contributions * 100) if net_contributions > 0 else 0.0
+
+    this_year = datetime.now().year
+    effective_year = _as_year(portfolio_row.get("reset_date")) \
+                     or _as_year(portfolio_row.get("created_at")) \
+                     or this_year
+
+    ytd_available = effective_year >= this_year
+    ytd_pl: float | None = ltd_pl if ytd_available else None
+    ytd_pct: float | None = ltd_pct if ytd_available else None
+
+    return {
+        "nlv": round(nlv, 2),
+        "net_contributions": round(net_contributions, 2),
+        "ltd_pl": round(ltd_pl, 2),
+        "ltd_pct": round(ltd_pct, 4),
+        "ytd_pl": round(ytd_pl, 2) if ytd_pl is not None else None,
+        "ytd_pct": round(ytd_pct, 4) if ytd_pct is not None else None,
+        "ytd_available": ytd_available,
         "as_of": datetime.now().isoformat(),
     }

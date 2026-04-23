@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -37,19 +37,21 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
   const [nlvSnapshot, setNlvSnapshot] = useState<PortfolioNlv | null>(null);
+  const [returns, setReturns] = useState<PortfolioReturns | null>(null);
 
   const [openTrades, setOpenTrades] = useState<any[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
 
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, nlv] = await Promise.all([
+    const [lat, hist, open, closed, ev, nlv, rets] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
       api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
       api.events().catch(() => []),
       activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
+      activeId != null ? api.portfolioReturns(activeId).catch(() => null) : Promise.resolve(null),
     ]);
     // Guard: backend can return {error: "..."} at HTTP 200 when something
     // goes wrong server-side. Don't let that poison the render.
@@ -57,6 +59,10 @@ export function Dashboard({ navColor }: { navColor: string }) {
       ? (nlv as PortfolioNlv)
       : null;
     setNlvSnapshot(safeNlv);
+    const safeReturns = (rets && typeof rets === "object" && !("error" in rets))
+      ? (rets as PortfolioReturns)
+      : null;
+    setReturns(safeReturns);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
@@ -173,8 +179,11 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const nlv = nlvSnapshot?.nlv ?? latest?.end_nlv ?? 0;
   const dailyDol = latest?.daily_dollar_change || 0;
   const dailyPct = latest?.daily_pct_change || 0;
-  const ltdPct = history.length > 0 ? history[history.length - 1]?.portfolio_ltd || 0 : 0;
-  const ltdDol = history.reduce((sum, h) => sum + (h.daily_dollar_change || 0), 0);
+  // LTD now comes from the returns endpoint (NLV − net_contributions) —
+  // no more daily-sum from journal. Fall back to 0 when we haven't loaded
+  // a portfolio yet.
+  const ltdPct = returns?.ltd_pct ?? 0;
+  const ltdDol = returns?.ltd_pl ?? 0;
   // Live exposure — match Active Campaign Summary: sum(shares × live price) / NLV
   const liveMarketValue = openTrades.reduce((sum, t) => {
     const ticker = t.ticker || "";
@@ -188,15 +197,18 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const portfolioHeat = latest?.portfolio_heat || 0;
   const lastH = history.length > 0 ? history[history.length - 1] : null;
 
-  // YTD — TWR of daily returns within current year (matches Streamlit)
+  // YTD comes from the returns endpoint. ytd_available is false when the
+  // portfolio started before the current year and we don't yet have a
+  // start-of-year NLV snapshot (Phase 4 EOD cron). In that case we surface
+  // '—' instead of a misleading number.
+  const ytdAvailable = returns?.ytd_available ?? false;
+  const ytdPct = returns?.ytd_pct ?? 0;
+
+  // SPY/NDX YTD benchmarks still come from the journal history. If no
+  // history, both are 0.
   const currYear = new Date().getFullYear();
   const currYearStr = `${currYear}`;
   const ytdHistory = history.filter(h => String(h.day).slice(0, 4) === currYearStr);
-  const ytdPct = ytdHistory.length > 0
-    ? (ytdHistory.reduce((prod, h) => prod * (1 + (h.daily_pct_change || 0) / 100), 1) - 1) * 100
-    : 0;
-
-  // SPY/NDX YTD — price ratio from first trading day of year
   const jan1 = ytdHistory.length > 0 ? ytdHistory[0] : null;
   const spySt = jan1?.spy || 0;
   const spyCurr = lastH?.spy || 0;
@@ -212,7 +224,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const kpis = [
     { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
     { label: "LTD RETURN", value: `${ltdPct.toFixed(2)}%`, sub: `$${ltdDol >= 0 ? "+" : ""}${ltdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #ec4899, #f472b6)" },
-    { label: "YTD RETURN", value: `${ytdPct.toFixed(2)}%`, sub: `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`, gradient: "linear-gradient(135deg, #10b981, #34d399)" },
+    { label: "YTD RETURN", value: ytdAvailable ? `${ytdPct.toFixed(2)}%` : "—", sub: ytdAvailable ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%` : "Available once EOD snapshots exist", gradient: "linear-gradient(135deg, #10b981, #34d399)" },
     { label: "LIVE EXPOSURE", value: `${exposure.toFixed(1)}%`, sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`, gradient: "linear-gradient(135deg, #f97316, #fb923c)" },
     { label: "DRAWDOWN", value: `${ddPct.toFixed(2)}%`, sub: ddPct >= -0.01 ? "Clear" : `from peak $${peakNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #1e40af, #3b82f6)" },
   ];
