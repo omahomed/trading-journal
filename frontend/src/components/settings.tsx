@@ -116,7 +116,8 @@ function PortfolioCard({
     ? `$${portfolio.starting_capital.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
     : "—";
   const resetDisplay = portfolio.reset_date ?? "—";
-  const cashDisplay = `$${portfolio.cash_balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const cashBalance = portfolio.cash_balance ?? 0;
+  const cashDisplay = `$${cashBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
   return (
     <div className="rounded-[14px] p-5"
@@ -184,7 +185,7 @@ function PortfolioCard({
         {cashAction && (
           <CashActionForm
             portfolioId={portfolio.id}
-            cashBalance={portfolio.cash_balance}
+            cashBalance={cashBalance}
             action={cashAction}
             navColor={navColor}
             onDone={async () => { setCashAction(null); await onChanged(); }}

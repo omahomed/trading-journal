@@ -51,7 +51,12 @@ export function Dashboard({ navColor }: { navColor: string }) {
       api.events().catch(() => []),
       activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
     ]);
-    setNlvSnapshot(nlv as PortfolioNlv | null);
+    // Guard: backend can return {error: "..."} at HTTP 200 when something
+    // goes wrong server-side. Don't let that poison the render.
+    const safeNlv = (nlv && typeof nlv === "object" && !("error" in nlv))
+      ? (nlv as PortfolioNlv)
+      : null;
+    setNlvSnapshot(safeNlv);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
@@ -251,16 +256,16 @@ export function Dashboard({ navColor }: { navColor: string }) {
         <div className="flex items-center gap-4 mb-6 text-[11px] flex-wrap" style={{ color: "var(--ink-4)" }}>
           <div>
             <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${nlvSnapshot.cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${(nlvSnapshot.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span> cash
           </div>
           <span>·</span>
           <div>
             <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${nlvSnapshot.market_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${(nlvSnapshot.market_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span> positions
           </div>
-          {nlvSnapshot.positions.some((p) => p.price_unavailable) && (
+          {Array.isArray(nlvSnapshot.positions) && nlvSnapshot.positions.some((p) => p.price_unavailable) && (
             <>
               <span>·</span>
               <div style={{ color: "#f59f00" }}>
