@@ -52,11 +52,20 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
             "as_of": datetime.now().isoformat(),
         }
 
+    # load_summary returns Title_Case columns (Ticker, Shares, Avg_Entry...)
+    # because it's the legacy CSV-era convention. Read from those directly —
+    # we don't need _normalize_trades here since we only touch three fields.
+    ticker_col = "Ticker" if "Ticker" in summary_df.columns else "ticker"
+    shares_col = "Shares" if "Shares" in summary_df.columns else "shares"
+    entry_col  = "Avg_Entry" if "Avg_Entry" in summary_df.columns else "avg_entry"
+
     # Build a lookup from the app's readable ticker → the symbol yfinance
     # actually accepts. Options need an OCC conversion; equities pass through.
     # Keeping the dict keyed by the original readable ticker lets us resolve
     # prices back to positions without another transformation on the read side.
-    original_tickers = summary_df["ticker"].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    original_tickers = (
+        summary_df[ticker_col].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    )
     ticker_to_yf: dict[str, str | None] = {}
     yf_symbols: list[str] = []
     for t in original_tickers:
@@ -72,9 +81,9 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
 
     market_value = 0.0
     for _, row in summary_df.iterrows():
-        ticker = str(row.get("ticker", "") or "").upper()
-        shares = float(row.get("shares", 0) or 0)
-        avg_entry = float(row.get("avg_entry", 0) or 0)
+        ticker = str(row.get(ticker_col, "") or "").upper()
+        shares = float(row.get(shares_col, 0) or 0)
+        avg_entry = float(row.get(entry_col, 0) or 0)
         if shares <= 0:
             continue
 
