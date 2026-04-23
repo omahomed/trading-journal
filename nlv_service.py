@@ -17,6 +17,11 @@ from typing import Any
 
 import db_layer as db
 from price_providers import get_price_provider
+from tickers import is_option_ticker, to_occ_symbol
+
+# Options positions at 100x multiplier (1 contract = 100 shares of underlying).
+# Mirrors the convention in active-campaign.tsx so NLV matches the React UI.
+_OPTION_CONTRACT_MULTIPLIER = 100
 
 
 def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
@@ -47,8 +52,23 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
             "as_of": datetime.now().isoformat(),
         }
 
-    tickers = summary_df["ticker"].dropna().astype(str).str.strip().str.upper().unique().tolist()
-    prices = get_price_provider().get_current_prices(tickers) if tickers else {}
+    # Build a lookup from the app's readable ticker → the symbol yfinance
+    # actually accepts. Options need an OCC conversion; equities pass through.
+    # Keeping the dict keyed by the original readable ticker lets us resolve
+    # prices back to positions without another transformation on the read side.
+    original_tickers = summary_df["ticker"].dropna().astype(str).str.strip().str.upper().unique().tolist()
+    ticker_to_yf: dict[str, str | None] = {}
+    yf_symbols: list[str] = []
+    for t in original_tickers:
+        if is_option_ticker(t):
+            occ = to_occ_symbol(t)
+            ticker_to_yf[t] = occ  # may be None if malformed
+            if occ:
+                yf_symbols.append(occ)
+        else:
+            ticker_to_yf[t] = t
+            yf_symbols.append(t)
+    prices = get_price_provider().get_current_prices(yf_symbols) if yf_symbols else {}
 
     market_value = 0.0
     for _, row in summary_df.iterrows():
@@ -57,19 +77,27 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         avg_entry = float(row.get("avg_entry", 0) or 0)
         if shares <= 0:
             continue
-        live = prices.get(ticker)
+
+        is_option = is_option_ticker(ticker)
+        multiplier = _OPTION_CONTRACT_MULTIPLIER if is_option else 1
+        yf_sym = ticker_to_yf.get(ticker)
+        live = prices.get(yf_sym) if yf_sym else None
+
         if live is not None:
-            mv = shares * live
+            mv = shares * live * multiplier
             position = {
                 "ticker": ticker,
                 "shares": shares,
                 "avg_entry": round(avg_entry, 4),
                 "current_price": round(live, 4),
                 "market_value": round(mv, 2),
-                "unrealized_pl": round(mv - shares * avg_entry, 2),
+                "unrealized_pl": round(mv - shares * avg_entry * multiplier, 2),
             }
         else:
             # Price unknown — fall back to cost basis so NLV stays sensible.
+            # For equities: cost = shares × avg_entry. For options: avg_entry
+            # is already the per-contract premium × 100, so we use shares ×
+            # avg_entry directly — do NOT apply the multiplier again.
             cost = shares * avg_entry
             mv = cost
             position = {
