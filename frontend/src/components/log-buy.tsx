@@ -444,7 +444,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
       const body = {
         portfolio: getActivePortfolio(),
         action_type: actionType,
-        ticker,
+        ticker: actionType === "scalein" ? (selectedCamp?.ticker || "") : ticker,
         trade_id: actionType === "scalein" ? selectedCampaign : tradeId,
         shares: parseFloat(shares),
         price: parseFloat(price),
