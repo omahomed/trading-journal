@@ -357,7 +357,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
   const [tickerQuery, setTickerQuery] = useState("");
   const [dateRange, setDateRange] = useState<DateRange>("all");
-  const [recentActivity, setRecentActivity] = useState<RecentActivity>("off");
+  const [recentActivity, setRecentActivity] = useState<RecentActivity>("10");
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
