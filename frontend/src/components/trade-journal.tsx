@@ -641,10 +641,17 @@ export function TradeJournal({ navColor }: { navColor: string }) {
               {/* ── Card Header ── */}
               <div className="px-5 pt-4 pb-3">
                 <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-[20px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{trade.ticker}</span>
                     <StatusBadge status={trade.status || ""} />
                     <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{trade.trade_id}</span>
+                    {(trade as any).be_stop_moved_at && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                            title={`Moved stop to BE on ${String((trade as any).be_stop_moved_at).slice(0, 10)} (+10% rule)`}
+                            style={{ background: "color-mix(in oklab, #8b5cf6 12%, var(--surface))", color: "#8b5cf6" }}>
+                        🎯 BE
+                      </span>
+                    )}
                     <GradeStars
                       value={typeof (trade as any).grade === "number" ? (trade as any).grade : null}
                       onChange={(v) => {
