@@ -2457,6 +2457,34 @@ def get_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
         return {"error": str(e)}
 
 
+@app.delete("/api/fundamentals/{trade_id}")
+def delete_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
+    """Hard-delete all extracted MarketSurge fundamentals rows for a trade.
+    Used to re-extract from a new screenshot or to clear a bad extraction.
+    """
+    try:
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio,))
+                row = cur.fetchone()
+                if not row:
+                    return {"error": f"Portfolio '{portfolio}' not found"}
+                portfolio_id = row[0]
+                cur.execute(
+                    "DELETE FROM trade_fundamentals WHERE portfolio_id = %s AND trade_id = %s",
+                    (portfolio_id, trade_id),
+                )
+                deleted = cur.rowcount
+                conn.commit()
+        try:
+            db.get_trade_fundamentals.clear()
+        except Exception:
+            pass
+        return {"status": "ok", "deleted": deleted}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ============================================================
 # R2 IMAGE ENDPOINTS
 # ============================================================

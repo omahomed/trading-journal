@@ -120,13 +120,26 @@ def upload_image(
 
         print(f"[R2] File size: {len(file_content)} bytes")
 
+        # Map file extension → correct MIME type. Prior code hardcoded
+        # `image/{ext}` which produced `image/pdf` for PDFs (not a valid type
+        # and causes browsers to download instead of render).
+        content_type_map = {
+            'pdf': 'application/pdf',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'webp': 'image/webp',
+        }
+        content_type = content_type_map.get(file_extension.lower(), f'image/{file_extension}')
+
         # Upload to R2
         print(f"[R2] Uploading to bucket...")
         client.put_object(
             Bucket=bucket_name,
             Key=object_key,
             Body=file_content,
-            ContentType=f'image/{file_extension}',
+            ContentType=content_type,
             Metadata={
                 'portfolio': portfolio_name,
                 'trade_id': trade_id,

@@ -1065,10 +1065,11 @@ def sync_trade_summary(portfolio_name, trade_id, update_data):
 # ============================================
 def delete_trade(portfolio_name, trade_id):
     """
-    Soft-delete a trade and all its transactions.
-    Stamps deleted_at on both the summary row and every detail row; rows stay
-    in the table but become invisible to load_summary / load_details. To
-    restore, clear deleted_at on the affected rows.
+    Soft-delete a trade and all its transactions; hard-delete related images
+    and fundamentals so a reused trade_id doesn't resurrect prior artifacts.
+    Stamps deleted_at on both the summary row and every detail row; the rows
+    stay in the table but become invisible to load_summary / load_details.
+    To restore, clear deleted_at on the affected rows.
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -1091,11 +1092,33 @@ def delete_trade(portfolio_name, trade_id):
                   AND deleted_at IS NULL
             """, (portfolio_id, trade_id))
 
+            # Hard-delete images and fundamentals — trade_fundamentals.image_id
+            # is ON DELETE SET NULL, so clear fundamentals first or they'd be
+            # orphaned with NULL image_id instead of removed. Neither table has
+            # a deleted_at column, so a soft-delete pattern doesn't apply here.
+            cur.execute("""
+                DELETE FROM trade_fundamentals
+                WHERE portfolio_id = %s AND trade_id = %s
+            """, (portfolio_id, trade_id))
+
+            cur.execute("""
+                DELETE FROM trade_images
+                WHERE portfolio_id = %s AND trade_id = %s
+            """, (portfolio_id, trade_id))
+
             conn.commit()
 
-            # Clear cache so next load gets fresh data
+            # Clear caches so next load gets fresh data
             load_summary.clear()
             load_details.clear()
+            try:
+                get_trade_images.clear()
+            except Exception:
+                pass
+            try:
+                get_trade_fundamentals.clear()
+            except Exception:
+                pass
 
 
 # ============================================
