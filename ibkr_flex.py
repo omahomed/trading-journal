@@ -394,12 +394,68 @@ def get_raw_debug_info(xml_root):
     return result
 
 
-def pull_ibkr_trades(consolidate=True):
+def group_same_day_orders(df):
+    """
+    Second-stage consolidation: after partial fills are merged by order_id,
+    also group multiple distinct orders placed the same day for the same
+    ticker + side into a single logical transaction. Prevents the log flow
+    from creating B1+B2 (or A1+A2+A3) when the user really made one decision
+    that got executed in multiple installments over the course of the day.
+
+    Grouping key: trade_date + symbol + action + asset_class + put_call +
+    strike + expiry (options need the contract specifics too so different
+    strikes on the same underlying don't collapse).
+
+    Price is the share-weighted average across all orders. Earliest
+    order_time is kept (represents when the user first committed to the
+    position that day). order_id becomes a comma-joined list so the grouping
+    is traceable; downstream code only uses it as a passthrough string.
+    """
+    if df.empty:
+        return df
+
+    group_keys = ['trade_date', 'symbol', 'action']
+    for optional in ('asset_class', 'put_call', 'strike', 'expiry'):
+        if optional in df.columns:
+            group_keys.append(optional)
+
+    df = df.copy()
+    df['_value'] = df['quantity'] * df['price']
+
+    agg_rules = {
+        'quantity': 'sum',
+        '_value': 'sum',
+        'amount': 'sum',
+        'commission': 'sum',
+        'net_cash': 'sum',
+        'account': 'first',
+        'order_time': 'min',
+        'settle_date': 'first',
+        'description': 'first',
+        'currency': 'first',
+        'order_id': lambda s: ",".join(sorted({str(x) for x in s if str(x).strip() and str(x) != 'nan'})),
+    }
+    agg_rules = {k: v for k, v in agg_rules.items() if k in df.columns}
+
+    # dropna=False keeps rows whose option-specific keys (put_call, strike,
+    # expiry) are NaN for stocks — otherwise pandas silently drops them.
+    grouped = df.groupby(group_keys, as_index=False, dropna=False).agg(agg_rules)
+    grouped['price'] = grouped['_value'] / grouped['quantity']
+    grouped['price'] = grouped['price'].round(4)
+    grouped = grouped.drop(columns=['_value'], errors='ignore')
+    grouped = grouped.sort_values(['trade_date', 'order_time'], ascending=[False, False])
+    return grouped
+
+
+def pull_ibkr_trades(consolidate=True, group_same_day=True):
     """
     Convenience function: fetch + parse + optionally consolidate in one call.
 
     Args:
-        consolidate: If True, merge partial fills into single rows.
+        consolidate: If True, merge partial fills into single rows (order_id).
+        group_same_day: If True, additionally group same-day same-ticker same-side
+            orders into one row (prevents spurious B1/B2 or A1/A2/A3 from the
+            log flow when the user made one logical buy in multiple installments).
 
     Returns:
         (DataFrame, raw_debug_dict, error_message)
@@ -412,4 +468,6 @@ def pull_ibkr_trades(consolidate=True):
     df = parse_trade_confirms(xml_root)
     if consolidate and not df.empty:
         df = consolidate_partial_fills(df)
+    if group_same_day and not df.empty:
+        df = group_same_day_orders(df)
     return df, raw_debug, None
