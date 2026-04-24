@@ -2464,6 +2464,79 @@ def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("Ca
         return {"error": str(e)}
 
 
+@app.put("/api/trades/update-stops")
+def update_trade_stops(body: dict):
+    """Update stop loss across every open lot of a trade. If the new stop is
+    within 0.5% of avg_entry AND the current price is ≥ 10% above avg_entry,
+    stamp be_stop_moved_at as the +10% BE rule being applied. If the stop
+    later moves off BE, clear the flag.
+    """
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = body.get("trade_id", "")
+        new_stop = float(body.get("new_stop") or 0)
+        if not trade_id or new_stop <= 0:
+            return {"error": "trade_id and new_stop (>0) are required"}
+
+        df_s = db.load_summary(portfolio)
+        if df_s is None or df_s.empty:
+            return {"error": "No trades found"}
+        df_s = _normalize_trades(df_s)
+        match = df_s[df_s["trade_id"] == trade_id]
+        if match.empty:
+            return {"error": f"Trade {trade_id} not found"}
+        row = match.iloc[0]
+        ticker = str(row.get("ticker", "")).strip()
+        avg_entry = float(row.get("avg_entry", 0) or 0)
+
+        # Fetch current price to detect the +10% BE rule condition. Failure
+        # falls back to no auto-flagging (user can still set via sell rule).
+        current_price = 0.0
+        if ticker:
+            try:
+                import yfinance as yf
+                if _is_option_ticker(ticker):
+                    occ = _to_occ_symbol(ticker)
+                    fetch_sym = occ or ticker
+                else:
+                    fetch_sym = ticker
+                data = yf.download(fetch_sym, period="1d", progress=False, auto_adjust=False)["Close"]
+                if not data.empty:
+                    current_price = float(data.iloc[-1])
+            except Exception:
+                pass
+
+        # BE rule detection: new stop within 0.5% of avg_entry AND price
+        # ≥ avg_entry × 1.10. Tolerant window handles small rounding.
+        be_applied = False
+        be_cleared = False
+        if avg_entry > 0:
+            stop_near_be = abs(new_stop - avg_entry) / avg_entry <= 0.005
+            price_up_10 = current_price >= avg_entry * 1.10
+            be_applied = stop_near_be and price_up_10
+            # If we're moving the stop AWAY from BE (to a higher or lower
+            # value outside the tolerance), clear any prior BE flag.
+            be_cleared = not stop_near_be
+
+        # Update all open-lot stop_loss values in trades_details + the
+        # trades_summary.stop_loss mirror, plus the BE flag.
+        updated_lots = db.update_trade_stops(portfolio, trade_id, new_stop,
+                                             be_applied=be_applied,
+                                             be_cleared=be_cleared)
+        try:
+            db.log_audit(portfolio, "STOP_UPDATE", trade_id, ticker,
+                         f"Stop → ${new_stop:.2f} across {updated_lots} lot(s)" +
+                         (" · BE rule applied" if be_applied else ""),
+                         username="web")
+        except Exception:
+            pass
+        return {"status": "ok", "trade_id": trade_id, "updated_lots": updated_lots,
+                "be_applied": be_applied, "current_price": round(current_price, 4)}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 # ============================================================
 # FUNDAMENTALS ENDPOINT
 # ============================================================
