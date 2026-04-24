@@ -870,7 +870,9 @@ def nlv_shadow_today(portfolio: str = "CanSlim"):
             if mv is not None and float(mv) > 0:
                 manual_nlv = float(mv)
 
-        # Today's trade cash flows (BUY subtracts, SELL adds)
+        # Today's trade cash flows (BUY subtracts, SELL adds). For options,
+        # trades_details.Value is shares*amount (no 100x), so we recompute
+        # with the contract multiplier to match actual broker cash impact.
         details = db.load_details(portfolio)
         today_trade_flow = 0.0
         if details is not None and not details.empty:
@@ -878,7 +880,11 @@ def nlv_shadow_today(portfolio: str = "CanSlim"):
             details['Date'] = pd.to_datetime(details['Date']).dt.date
             today_trades = details[details['Date'] == today]
             for _, row in today_trades.iterrows():
-                value = float(row.get('Value') or 0)
+                t_ticker = str(row.get('Ticker') or '').strip()
+                shares_d = float(row.get('Shares') or 0)
+                amount_d = float(row.get('Amount') or 0)
+                mult_d = 100.0 if _is_option_ticker(t_ticker) else 1.0
+                value = shares_d * amount_d * mult_d
                 action = str(row.get('Action') or '').upper()
                 if action == 'BUY':
                     today_trade_flow -= value
@@ -887,25 +893,41 @@ def nlv_shadow_today(portfolio: str = "CanSlim"):
 
         today_cash = yesterday_cash + today_cash_change + today_trade_flow
 
-        # Value open positions at today's price
+        # Value open positions at today's price. Options need OCC conversion
+        # (yfinance can't resolve "LUMN 260717 $8C") plus the 100x contract
+        # multiplier — same logic Active Campaign Summary uses via batch_prices.
         summary = db.load_summary(portfolio, status='OPEN')
         holdings_value = 0.0
         breakdown = []
         missing_prices = []
         if summary is not None and not summary.empty:
             tickers = [str(t).strip() for t in summary['Ticker'].tolist() if t]
+            yf_symbols = []
+            yf_to_readable = {}
+            for t in tickers:
+                if _is_option_ticker(t):
+                    occ = _to_occ_symbol(t)
+                    if occ:
+                        yf_symbols.append(occ)
+                        yf_to_readable[occ] = t
+                else:
+                    yf_symbols.append(t)
+                    yf_to_readable[t] = t
+
             prices: dict = {}
-            if tickers:
+            if yf_symbols:
                 try:
-                    data = yf.download(tickers, period='1d', progress=False, auto_adjust=False)['Close']
-                    if len(tickers) == 1:
+                    data = yf.download(yf_symbols, period='1d', progress=False, auto_adjust=False)['Close']
+                    if len(yf_symbols) == 1:
                         if not data.empty:
-                            prices[tickers[0]] = float(data.iloc[-1])
+                            readable = yf_to_readable.get(yf_symbols[0], yf_symbols[0])
+                            prices[readable] = float(data.iloc[-1])
                     else:
                         last = data.iloc[-1]
-                        for t in tickers:
-                            if t in last.index and not pd.isna(last[t]):
-                                prices[t] = float(last[t])
+                        for yf_sym in yf_symbols:
+                            if yf_sym in last.index and not pd.isna(last[yf_sym]):
+                                readable = yf_to_readable.get(yf_sym, yf_sym)
+                                prices[readable] = float(last[yf_sym])
                 except Exception:
                     pass
 
@@ -916,12 +938,17 @@ def nlv_shadow_today(portfolio: str = "CanSlim"):
                 if price is None:
                     missing_prices.append(ticker)
                     price = 0.0
-                value = shares * price
+                # Options trade per-share but each contract represents 100
+                # underlying shares — apply the 100x multiplier so the shadow
+                # matches how brokers/Active Campaign Summary report value.
+                multiplier = 100.0 if _is_option_ticker(ticker) else 1.0
+                value = shares * price * multiplier
                 holdings_value += value
                 breakdown.append({
                     "ticker": ticker,
                     "shares": shares,
                     "price": round(price, 4),
+                    "multiplier": multiplier,
                     "value": round(value, 2),
                 })
 
