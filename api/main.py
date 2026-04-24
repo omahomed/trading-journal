@@ -596,6 +596,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Unrealized_PL": "unrealized_pl", "Return_Pct": "return_pct",
         "Rule": "rule", "Buy_Notes": "buy_notes", "Sell_Rule": "sell_rule",
         "Sell_Notes": "sell_notes", "Risk_Budget": "risk_budget", "Grade": "grade",
+        "BE_Stop_Moved_At": "be_stop_moved_at",
         "Action": "action", "Date": "date", "Amount": "amount",
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
@@ -2589,6 +2590,56 @@ def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("Ca
         except Exception:
             pass
         return {"status": "ok", "trade_id": trade_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/flag-be")
+def flag_be_rule(body: dict):
+    """Manually set or clear the be_stop_moved_at flag for a trade without
+    changing the stop price. Used to backfill trades where the user already
+    moved stop to BE before the auto-detect was wired up.
+    """
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = body.get("trade_id", "")
+        flagged = bool(body.get("flagged", True))
+        if not trade_id:
+            return {"error": "trade_id is required"}
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio,))
+                row = cur.fetchone()
+                if not row:
+                    return {"error": f"Portfolio '{portfolio}' not found"}
+                portfolio_id = row[0]
+                if flagged:
+                    cur.execute("""
+                        UPDATE trades_summary
+                        SET be_stop_moved_at = COALESCE(be_stop_moved_at, NOW())
+                        WHERE portfolio_id = %s AND trade_id = %s
+                          AND deleted_at IS NULL
+                    """, (portfolio_id, trade_id))
+                else:
+                    cur.execute("""
+                        UPDATE trades_summary
+                        SET be_stop_moved_at = NULL
+                        WHERE portfolio_id = %s AND trade_id = %s
+                          AND deleted_at IS NULL
+                    """, (portfolio_id, trade_id))
+                rowcount = cur.rowcount
+                conn.commit()
+        try:
+            db.load_summary.clear()
+        except Exception:
+            pass
+        try:
+            db.log_audit(portfolio, "BE_FLAG", trade_id, "",
+                         f"BE rule flag {'set' if flagged else 'cleared'}",
+                         username="web")
+        except Exception:
+            pass
+        return {"status": "ok", "trade_id": trade_id, "flagged": flagged, "updated": rowcount}
     except Exception as e:
         return {"error": str(e)}
 

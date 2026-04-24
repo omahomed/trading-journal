@@ -308,6 +308,54 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                   {stopResult.ok ? "✓" : "✗"} {stopResult.msg}
                 </div>
               )}
+
+              {/* BE rule manual flag — backfill for trades where stop was
+                  already moved to BE before the auto-detect was wired up. */}
+              <div className="rounded-[10px] px-4 py-3 flex items-center justify-between"
+                   style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-[12px] font-semibold">🎯 +10% BE Rule Flag</div>
+                  <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                    {(stopTrade as any)?.be_stop_moved_at
+                      ? <>Flagged on <strong style={{ color: "#8b5cf6" }}>{String((stopTrade as any).be_stop_moved_at).slice(0, 10)}</strong></>
+                      : <>Not flagged — use this if you already moved stop to BE before the auto-detect was wired up.</>}
+                  </div>
+                </div>
+                <button
+                  disabled={stopSaving}
+                  onClick={async () => {
+                    const currentlyFlagged = !!(stopTrade as any)?.be_stop_moved_at;
+                    setStopSaving(true);
+                    setStopResult(null);
+                    const r = await api.flagBeRule({
+                      portfolio: getActivePortfolio(),
+                      trade_id: selectedStop,
+                      flagged: !currentlyFlagged,
+                    });
+                    setStopSaving(false);
+                    if (r.error) {
+                      setStopResult({ ok: false, msg: r.error });
+                    } else {
+                      setStopResult({ ok: true, msg: r.flagged ? "Flagged as BE rule applied" : "BE flag cleared" });
+                      const [open, closed, det] = await Promise.all([
+                        api.tradesOpen(getActivePortfolio()),
+                        api.tradesClosed(getActivePortfolio(), 500),
+                        api.tradesRecent(getActivePortfolio(), 500),
+                      ]);
+                      setOpenTrades(open as TradePosition[]);
+                      setAllTrades([...(open as TradePosition[]), ...(closed as TradePosition[])]);
+                      setDetails(det as TradeDetail[]);
+                    }
+                  }}
+                  className="h-[32px] px-3 rounded-[8px] text-[11px] font-semibold transition-all hover:brightness-95 disabled:opacity-50"
+                  style={{
+                    background: (stopTrade as any)?.be_stop_moved_at ? "var(--bg)" : "#8b5cf6",
+                    color: (stopTrade as any)?.be_stop_moved_at ? "var(--ink)" : "white",
+                    border: (stopTrade as any)?.be_stop_moved_at ? "1px solid var(--border)" : "none",
+                  }}>
+                  {(stopTrade as any)?.be_stop_moved_at ? "Clear Flag" : "Flag BE Applied"}
+                </button>
+              </div>
             </>
           )}
         </div>
