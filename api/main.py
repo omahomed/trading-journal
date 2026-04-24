@@ -596,6 +596,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Rule": "rule", "Buy_Notes": "buy_notes", "Sell_Rule": "sell_rule",
         "Sell_Notes": "sell_notes", "Risk_Budget": "risk_budget", "Grade": "grade",
         "BE_Stop_Moved_At": "be_stop_moved_at",
+        "Last_Updated": "last_updated",
         "Action": "action", "Date": "date", "Amount": "amount",
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
