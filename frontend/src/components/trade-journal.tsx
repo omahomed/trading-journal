@@ -6,7 +6,8 @@ import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
 type StatusFilter = "all" | "open" | "closed";
-type DateRange = "all" | "7d" | "30d" | "90d" | "ytd" | "recent10";
+type DateRange = "all" | "7d" | "30d" | "90d" | "ytd";
+type RecentActivity = "off" | "10" | "20" | "50";
 
 function StatusBadge({ status }: { status: string }) {
   const isOpen = status.toUpperCase() === "OPEN";
@@ -356,6 +357,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
   const [tickerQuery, setTickerQuery] = useState("");
   const [dateRange, setDateRange] = useState<DateRange>("all");
+  const [recentActivity, setRecentActivity] = useState<RecentActivity>("off");
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
@@ -401,6 +403,28 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const filtered = useMemo(() => {
     let result = [...allTrades];
 
+    // Recent Activity: last N most-recently-touched trades across open AND
+    // closed (ignores status filter / date range / sort so the list is
+    // always "show me what I just worked on"). Activity = trades_summary
+    // .last_updated, which bumps on any edit — scale-ins, stop changes,
+    // grade updates, sells, etc.
+    if (recentActivity !== "off") {
+      const n = parseInt(recentActivity, 10);
+      const activityTs = (t: TradePosition) => {
+        const lu = new Date(String((t as any).last_updated || 0)).getTime() || 0;
+        const o = new Date(String(t.open_date || 0)).getTime() || 0;
+        const c = new Date(String(t.closed_date || 0)).getTime() || 0;
+        return Math.max(lu, o, c);
+      };
+      // Still respect ticker multi-select; everything else is overridden.
+      let base = [...allTrades];
+      if (selectedTickers.length > 0) {
+        base = base.filter(t => selectedTickers.includes(t.ticker || ""));
+      }
+      base.sort((a, b) => activityTs(b) - activityTs(a));
+      return base.slice(0, n);
+    }
+
     // Status
     if (statusFilter !== "all") {
       result = result.filter(t => (t.status || "").toUpperCase() === statusFilter.toUpperCase());
@@ -411,19 +435,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       result = result.filter(t => selectedTickers.includes(t.ticker || ""));
     }
 
-    // Date range / Recent filter
-    if (dateRange === "recent10") {
-      // "Recently added or closed" = latest of open_date / closed_date.
-      // Sort by that desc and slice to 10. Overrides the sort dropdown.
-      const activityTs = (t: TradePosition) => {
-        const o = new Date(String(t.open_date || 0)).getTime() || 0;
-        const c = new Date(String(t.closed_date || 0)).getTime() || 0;
-        return Math.max(o, c);
-      };
-      result.sort((a, b) => activityTs(b) - activityTs(a));
-      result = result.slice(0, 10);
-      return result;
-    }
+    // Date range
     if (dateRange !== "all") {
       const now = new Date();
       let cutoff: Date;
@@ -445,7 +457,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     }
 
     return result;
-  }, [allTrades, statusFilter, sort, selectedTickers, dateRange]);
+  }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity]);
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
@@ -558,11 +570,28 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                 className="h-[34px] px-3 rounded-[10px] text-[12px]"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
           <option value="all">All Time</option>
-          <option value="recent10">Recent 10 (added or closed)</option>
           <option value="7d">Last 7 Days</option>
           <option value="30d">Last 30 Days</option>
           <option value="90d">Last 90 Days</option>
           <option value="ytd">This Year</option>
+        </select>
+
+        {/* Recent Activity — overrides status/date/sort when active. Shows
+            the N most-recently-touched trades (added, edited, scaled-in,
+            stop-changed, sold) across open + closed. */}
+        <select value={recentActivity} onChange={e => setRecentActivity(e.target.value as RecentActivity)}
+                className="h-[34px] px-3 rounded-[10px] text-[12px]"
+                style={{
+                  background: recentActivity !== "off" ? "color-mix(in oklab, #8b5cf6 12%, var(--surface))" : "var(--surface)",
+                  border: `1px solid ${recentActivity !== "off" ? "color-mix(in oklab, #8b5cf6 40%, var(--border))" : "var(--border)"}`,
+                  color: recentActivity !== "off" ? "#8b5cf6" : "var(--ink)",
+                  appearance: "none" as any,
+                  fontWeight: recentActivity !== "off" ? 600 : 400,
+                }}>
+          <option value="off">Recent Activity…</option>
+          <option value="10">Last 10 Activity</option>
+          <option value="20">Last 20 Activity</option>
+          <option value="50">Last 50 Activity</option>
         </select>
 
         <span className="text-[12px] ml-auto" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
