@@ -1005,7 +1005,7 @@ def rally_prefix(as_of_date: str = ""):
             "21 EMA > 50 SMA > 200 SMA", "8 EMA > 21 EMA > 50 SMA > 200 SMA",
             "Power-Trend ON",
         ]
-        step_exposures = [20, 60, 60, 80, 100, 120, 140, 160, 200]
+        step_exposures = [20, 40, 60, 80, 100, 120, 140, 160, 200]
         entry_ladder = []
         for s in range(9):
             entry_ladder.append({
