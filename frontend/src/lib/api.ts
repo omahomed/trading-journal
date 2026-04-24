@@ -145,6 +145,20 @@ export const api = {
   tradesRecent: (portfolio = getActivePortfolio(), limit = 20) =>
     fetchJSON<TradeDetail[]>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
 
+  updateTradeStops: (body: { portfolio?: string; trade_id: string; new_stop: number }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/update-stops`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{
+      status?: string;
+      error?: string;
+      trade_id?: string;
+      updated_lots?: number;
+      be_applied?: boolean;
+      current_price?: number;
+    }>,
+
   setTradeGrade: (body: { portfolio?: string; trade_id: string; grade: number | null }) =>
     fetchWithAuth(`${API_BASE}/api/trades/grade`, {
       method: "POST", headers: { "Content-Type": "application/json" },

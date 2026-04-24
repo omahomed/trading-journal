@@ -1180,6 +1180,70 @@ def delete_trade(portfolio_name, trade_id):
                 pass
 
 
+def update_trade_stops(portfolio_name, trade_id, new_stop,
+                       be_applied=False, be_cleared=False):
+    """
+    Apply a new stop loss to every open lot of a trade and mirror it on the
+    summary row. Optionally set or clear the BE rule flag.
+
+    Args:
+        portfolio_name: Portfolio name ('CanSlim' etc.)
+        trade_id: Trade ID to update
+        new_stop: New stop price (> 0)
+        be_applied: If True, stamp be_stop_moved_at = NOW() on the summary
+        be_cleared: If True, clear be_stop_moved_at (stop moved off BE)
+
+    Returns:
+        Number of detail rows updated
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Update all detail rows for open lots of this trade
+            cur.execute("""
+                UPDATE trades_details
+                SET stop_loss = %s
+                WHERE portfolio_id = %s AND trade_id = %s
+                  AND action = 'BUY' AND deleted_at IS NULL
+            """, (new_stop, portfolio_id, trade_id))
+            updated = cur.rowcount
+
+            # Mirror to summary + optional BE flag update
+            if be_applied:
+                cur.execute("""
+                    UPDATE trades_summary
+                    SET stop_loss = %s,
+                        be_stop_moved_at = NOW()
+                    WHERE portfolio_id = %s AND trade_id = %s
+                      AND deleted_at IS NULL
+                """, (new_stop, portfolio_id, trade_id))
+            elif be_cleared:
+                cur.execute("""
+                    UPDATE trades_summary
+                    SET stop_loss = %s,
+                        be_stop_moved_at = NULL
+                    WHERE portfolio_id = %s AND trade_id = %s
+                      AND deleted_at IS NULL
+                """, (new_stop, portfolio_id, trade_id))
+            else:
+                cur.execute("""
+                    UPDATE trades_summary
+                    SET stop_loss = %s
+                    WHERE portfolio_id = %s AND trade_id = %s
+                      AND deleted_at IS NULL
+                """, (new_stop, portfolio_id, trade_id))
+
+            conn.commit()
+            load_summary.clear()
+            load_details.clear()
+            return updated
+
+
 # ============================================
 # UTILITY: Query Cross-Portfolio
 # ============================================

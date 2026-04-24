@@ -25,6 +25,7 @@ const SELL_RULES = [
   "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
   "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
   "sr13 Earnings Exit", "sr14 Market Correction Exit",
+  "sr15 BE Stop Out (moved at +10%)",
 ];
 
 type Tab = "stops" | "edit" | "delete" | "export";
@@ -106,6 +107,8 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   // Stop Loss tab
   const [selectedStop, setSelectedStop] = useState("");
   const [newStop, setNewStop] = useState("");
+  const [stopSaving, setStopSaving] = useState(false);
+  const [stopResult, setStopResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Edit tab
   const [editTicker, setEditTicker] = useState("");
@@ -240,18 +243,69 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                          step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
                 </Field>
                 <div className="flex items-end">
-                  <button onClick={() => alert("Backend write endpoint needed: PUT /api/trades/update-stops")}
-                          className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110"
-                          style={{ background: navColor }}>
-                    Update All Lots
+                  <button
+                    disabled={stopSaving || !newStop || parseFloat(newStop) <= 0}
+                    onClick={async () => {
+                      setStopSaving(true);
+                      setStopResult(null);
+                      const r = await api.updateTradeStops({
+                        portfolio: getActivePortfolio(),
+                        trade_id: selectedStop,
+                        new_stop: parseFloat(newStop),
+                      });
+                      setStopSaving(false);
+                      if (r.error) {
+                        setStopResult({ ok: false, msg: r.error });
+                      } else {
+                        const beMsg = r.be_applied ? " · BE rule flagged" : "";
+                        setStopResult({ ok: true, msg: `Stop updated on ${r.updated_lots || 0} lot(s)${beMsg}` });
+                        setNewStop("");
+                        setSelectedStop("");
+                        // Reload so the updated stop shows on subsequent renders
+                        const [open, closed, det] = await Promise.all([
+                          api.tradesOpen(getActivePortfolio()),
+                          api.tradesClosed(getActivePortfolio(), 500),
+                          api.tradesRecent(getActivePortfolio(), 500),
+                        ]);
+                        setOpenTrades(open as TradePosition[]);
+                        setAllTrades([...(open as TradePosition[]), ...(closed as TradePosition[])]);
+                        setDetails(det as TradeDetail[]);
+                      }
+                    }}
+                    className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{ background: navColor }}>
+                    {stopSaving ? "Saving…" : "Update All Lots"}
                   </button>
                 </div>
               </div>
 
-              {newStop && parseFloat(newStop) > 0 && (
+              {/* BE rule preview: if new stop is within 0.5% of avg_entry AND
+                  the user eyeballs the stock as up 10%+, the backend will
+                  stamp be_stop_moved_at. We show the preview here. */}
+              {newStop && parseFloat(newStop) > 0 && stopTrade && (() => {
+                const avgEntry = parseFloat(String(stopTrade.avg_entry || 0));
+                const nearBe = avgEntry > 0 && Math.abs(parseFloat(newStop) - avgEntry) / avgEntry <= 0.005;
+                return (
+                  <div className="px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
+                       style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
+                    Will update stop to <strong>${parseFloat(newStop).toFixed(2)}</strong> for all {stopDetails.length} lot(s) of {stopTrade.ticker}
+                    {nearBe && (
+                      <div className="mt-1 text-[11px]" style={{ color: "#8b5cf6" }}>
+                        🎯 Near breakeven (${avgEntry.toFixed(2)}) — if stock is up ≥10% from entry, this will flag the <strong>+10% BE rule</strong>.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {stopResult && (
                 <div className="px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
-                     style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
-                  Will update stop to <strong>${parseFloat(newStop).toFixed(2)}</strong> for all {stopDetails.length} lot(s) of {stopTrade.ticker}
+                     style={{
+                       background: stopResult.ok ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                       color: stopResult.ok ? "#16a34a" : "#dc2626",
+                       border: `1px solid ${stopResult.ok ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "color-mix(in oklab, #e5484d 30%, var(--border))"}`,
+                     }}>
+                  {stopResult.ok ? "✓" : "✗"} {stopResult.msg}
                 </div>
               )}
             </>
