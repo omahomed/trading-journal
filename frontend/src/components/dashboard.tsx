@@ -61,24 +61,30 @@ export function Dashboard({ navColor }: { navColor: string }) {
     setClosedTrades(Array.isArray(closed) ? closed : []);
     setEvents(Array.isArray(ev) ? ev : []);
 
-    // Fetch live prices for open positions (for live exposure calc)
+    // Render the dashboard immediately; the two slow follow-ups below populate
+    // their UI bits when they land and must NOT block the main layout.
+    setLoading(false);
+
+    // Fetch live prices for open positions (for live exposure calc) —
+    // updates the Live Exposure tile when it resolves.
     const tickers = openArr.map(t => t.ticker).filter(Boolean);
     if (tickers.length > 0) {
-      try {
-        const prices = await api.batchPrices(tickers);
-        if (prices && !("error" in prices)) setLivePrices(prices as Record<string, number>);
-      } catch { /* fall back to EOD pct_invested */ }
+      api.batchPrices(tickers)
+        .then(prices => {
+          if (prices && !("error" in prices)) setLivePrices(prices as Record<string, number>);
+        })
+        .catch(() => { /* fall back to EOD pct_invested */ });
     }
 
-    // Shadow NLV (CanSlim only) — independent; failure doesn't block dashboard
+    // Shadow NLV (CanSlim only) — fills in the Computed/Diff footer on the
+    // NLV tile once the backend finishes its yfinance roundtrip.
     if (getActivePortfolio() === "CanSlim") {
-      try {
-        const s = await api.nlvShadow("CanSlim");
-        if (s && typeof s.computed_nlv === "number") setShadowNlv(s.computed_nlv);
-      } catch { /* quiet fail */ }
+      api.nlvShadow("CanSlim")
+        .then(s => {
+          if (s && typeof s.computed_nlv === "number") setShadowNlv(s.computed_nlv);
+        })
+        .catch(() => { /* quiet fail */ });
     }
-
-    setLoading(false);
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
