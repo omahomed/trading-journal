@@ -6,7 +6,7 @@ import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
 type StatusFilter = "all" | "open" | "closed";
-type DateRange = "all" | "7d" | "30d" | "90d" | "ytd";
+type DateRange = "all" | "7d" | "30d" | "90d" | "ytd" | "recent10";
 
 function StatusBadge({ status }: { status: string }) {
   const isOpen = status.toUpperCase() === "OPEN";
@@ -411,7 +411,19 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       result = result.filter(t => selectedTickers.includes(t.ticker || ""));
     }
 
-    // Date range
+    // Date range / Recent filter
+    if (dateRange === "recent10") {
+      // "Recently added or closed" = latest of open_date / closed_date.
+      // Sort by that desc and slice to 10. Overrides the sort dropdown.
+      const activityTs = (t: TradePosition) => {
+        const o = new Date(String(t.open_date || 0)).getTime() || 0;
+        const c = new Date(String(t.closed_date || 0)).getTime() || 0;
+        return Math.max(o, c);
+      };
+      result.sort((a, b) => activityTs(b) - activityTs(a));
+      result = result.slice(0, 10);
+      return result;
+    }
     if (dateRange !== "all") {
       const now = new Date();
       let cutoff: Date;
@@ -546,6 +558,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                 className="h-[34px] px-3 rounded-[10px] text-[12px]"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
           <option value="all">All Time</option>
+          <option value="recent10">Recent 10 (added or closed)</option>
           <option value="7d">Last 7 Days</option>
           <option value="30d">Last 30 Days</option>
           <option value="90d">Last 90 Days</option>
