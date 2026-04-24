@@ -71,12 +71,12 @@ function SearchSelect({ value, onChange, options, placeholder }: {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-[10px] overflow-hidden shadow-lg" style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: 280 }}>
+        <div className="absolute z-50 mt-1 w-full rounded-[10px] overflow-hidden shadow-lg" style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: 520 }}>
           <div className="p-2" style={{ borderBottom: "1px solid var(--border)" }}>
             <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Type to search..." autoFocus
                    className="w-full h-[34px] px-3 rounded-[8px] text-[12px] outline-none" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
           </div>
-          <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
+          <div className="overflow-y-auto" style={{ maxHeight: 460 }}>
             {filtered.map(o => (
               <button key={o} type="button" onClick={() => { onChange(o); setOpen(false); setSearch(""); }}
                       className="w-full text-left px-3 py-2 text-[12px] transition-colors hover:brightness-95 cursor-pointer"
