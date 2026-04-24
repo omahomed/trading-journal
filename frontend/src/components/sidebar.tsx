@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { NAV } from "@/lib/nav";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { NAV, getNavItemForHref } from "@/lib/nav";
 import { Icons, NAV_ICONS } from "@/components/icons";
 import { usePortfolio } from "@/lib/portfolio-context";
 import type { Portfolio } from "@/lib/api";
 
 interface SidebarProps {
-  activePage: string;
-  onNavigate: (pageId: string) => void;
   rail?: boolean;
   onToggleRail?: () => void;
   privacy?: boolean;
@@ -17,7 +17,9 @@ interface SidebarProps {
   onToggleDark?: () => void;
 }
 
-export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
+export function Sidebar({ rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
+  const pathname = usePathname();
+  const activePage = getNavItemForHref(pathname)?.id || "";
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const { portfolios, activePortfolio, setActive } = usePortfolio();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -227,12 +229,12 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                 <div className="grid transition-[grid-template-rows] duration-300 ease-out"
                      style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}>
                   <div className="min-h-0 overflow-hidden pl-5 pr-1.5 pb-1">
-                    {group.items.filter(item => !item.parentPage).map((item) => {
+                    {group.items.filter(item => !item.parentPage && item.href).map((item) => {
                       const isActive = activePage === item.id;
                       const IconFn = NAV_ICONS[item.id] || Icons.grid;
                       return (
-                        <button key={item.id}
-                                className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem"
+                        <Link key={item.id} href={item.href!}
+                                className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem no-underline"
                                 style={{
                                   background: isActive ? `color-mix(in oklab, ${group.color} 14%, transparent)` : "transparent",
                                   color: isActive ? group.color : "var(--ink-2)",
@@ -240,15 +242,14 @@ export function Sidebar({ activePage, onNavigate, rail = false, onToggleRail, pr
                                   ["--hover-color" as string]: group.color,
                                 }}
                                 onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.background = `color-mix(in oklab, ${group.color} 8%, transparent)`; e.currentTarget.style.color = group.color; }}}
-                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--ink-2)"; }}}
-                                onClick={() => onNavigate(item.id)}>
+                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--ink-2)"; }}}>
                           {isActive && (
                             <span className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full"
                                   style={{ background: group.color }} />
                           )}
                           <span className="w-4 h-4 grid place-items-center opacity-85 shrink-0">{IconFn()}</span>
                           <span>{item.label}</span>
-                        </button>
+                        </Link>
                       );
                     })}
                   </div>

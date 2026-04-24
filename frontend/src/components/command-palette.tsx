@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { getAllPages } from "@/lib/nav";
+import { useRouter } from "next/navigation";
+import { getAllPages, hrefForId } from "@/lib/nav";
 
-interface CommandPaletteProps {
-  onNavigate: (pageId: string, tab?: string) => void;
-}
-
-export function CommandPalette({ onNavigate }: CommandPaletteProps) {
+export function CommandPalette() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [idx, setIdx] = useState(0);
@@ -46,9 +44,11 @@ export function CommandPalette({ onNavigate }: CommandPaletteProps) {
   const select = (item: typeof allPages[0]) => {
     setOpen(false);
     if (item.parentPage) {
-      onNavigate(item.parentPage, item.tab);
+      const parentHref = hrefForId(item.parentPage);
+      if (parentHref) router.push(`${parentHref}?tab=${encodeURIComponent(item.tab || "")}`);
     } else {
-      onNavigate(item.id);
+      const href = hrefForId(item.id);
+      if (href) router.push(href);
     }
   };
 
