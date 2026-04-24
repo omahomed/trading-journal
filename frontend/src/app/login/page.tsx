@@ -24,6 +24,9 @@ export default function LoginPage() {
             MO <em className="italic" style={{ color: "#6366f1" }}>Trading</em>
           </div>
           <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>Trading Journal & Analytics</div>
+          <div className="text-[12px] mt-2" style={{ color: "var(--ink-5)" }}>
+            New here? Use either option below — we'll create your account automatically.
+          </div>
         </div>
 
         <div className="h-px mb-6" style={{ background: "var(--border)" }} />
