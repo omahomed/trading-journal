@@ -948,20 +948,46 @@ def rally_prefix(as_of_date: str = ""):
             else:
                 break
 
-        # Step 8 (IBD Power-Trend ON) additional gates
-        prev_row = df.iloc[-2] if len(df) >= 2 else None
-        close_up_or_flat = prev_row is not None and price >= float(prev_row['Close'])
-        sma50_uptrend_1d = (
-            prev_row is not None
-            and pd.notna(prev_row.get('50SMA')) and pd.notna(curr.get('50SMA'))
-            and float(curr['50SMA']) > float(prev_row['50SMA'])
-        )
-        power_trend_on = (
-            ema21_above_sma50_streak >= 5
-            and close_up_or_flat
-            and sma50_uptrend_1d
-            and low_above_21_streak >= 10
-        )
+        # Step 8 — IBD Power-Trend ON (stateful / sticky).
+        # ON when all four conditions fire on the same bar:
+        #   1. 21 EMA > 50 SMA for ≥ 5 consecutive bars
+        #   2. Close up or flat today (Close ≥ prior Close)
+        #   3. 50 SMA uptrending 1 bar (50 SMA[today] > 50 SMA[yesterday])
+        #   4. Low > 21 EMA for ≥ 10 consecutive bars
+        # OFF only when 21 EMA crosses below 50 SMA AND today's close is down.
+        # A down day that doesn't break the OFF rule leaves Power-Trend ON.
+        def _bool_streak(series):
+            streak, out = 0, []
+            for v in series:
+                streak = streak + 1 if bool(v) else 0
+                out.append(streak)
+            return pd.Series(out, index=series.index)
+
+        ema21_gt_sma50 = (df['21EMA'] > df['50SMA']).fillna(False)
+        low_gt_21ema = (df['Low'] > df['21EMA']).fillna(False)
+        streak_21gt50 = _bool_streak(ema21_gt_sma50)
+        streak_lowGt21 = _bool_streak(low_gt_21ema)
+        close_up_flat_series = (df['Close'] >= df['Close'].shift(1))
+        close_down_series = (df['Close'] < df['Close'].shift(1))
+        sma50_up1d_series = (df['50SMA'] > df['50SMA'].shift(1))
+
+        power_trend_on = False
+        power_trend_on_since = None
+        for i in range(len(df)):
+            row = df.iloc[i]
+            if pd.isna(row.get('50SMA')) or pd.isna(row.get('21EMA')):
+                continue
+            if not power_trend_on:
+                if (streak_21gt50.iloc[i] >= 5
+                        and bool(close_up_flat_series.iloc[i])
+                        and bool(sma50_up1d_series.iloc[i])
+                        and streak_lowGt21.iloc[i] >= 10):
+                    power_trend_on = True
+                    power_trend_on_since = df.index[i]
+            else:
+                if row['21EMA'] < row['50SMA'] and bool(close_down_series.iloc[i]):
+                    power_trend_on = False
+                    power_trend_on_since = None
 
         achieved_steps = set()
         if has_rally:
@@ -1067,6 +1093,8 @@ def rally_prefix(as_of_date: str = ""):
             "stack_50_200": stack_50_200,
             "entry_ladder": entry_ladder,
             "ftd_date": str(ftd_date)[:10] if ftd_date else None,
+            "data_as_of": str(df.index[-1])[:10] if len(df) else None,
+            "power_trend_on_since": str(power_trend_on_since)[:10] if power_trend_on_since else None,
         }
     except Exception as e:
         return {"prefix": "", "error": str(e)}
