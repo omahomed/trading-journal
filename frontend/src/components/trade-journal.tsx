@@ -174,7 +174,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
                     <label className="text-[10px] px-2 py-1 rounded-[6px] cursor-pointer transition-colors hover:brightness-95"
                            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
                       {uploading ? "..." : "+ Upload"}
-                      <input type="file" accept="image/png,image/jpeg" multiple className="hidden"
+                      <input type="file" accept="image/png,image/jpeg,application/pdf" multiple className="hidden"
                              onChange={e => e.target.files && handleUpload(e.target.files, uploadType)} />
                     </label>
                   </div>
@@ -184,16 +184,27 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
                     <div className="p-3 grid gap-3" style={{ gridTemplateColumns: imgs.length === 1 ? "1fr" : "1fr 1fr" }}>
                       {imgs.map((img, i) => {
                         const url = img.view_url || "";
+                        const isPdf = /\.pdf($|\?)/i.test(String(img.file_name || "")) || /\.pdf($|\?)/i.test(url);
                         return (
                           <div key={img.id || i} className="rounded-[8px] overflow-hidden transition-all hover:shadow-md"
                                style={{ border: "1px solid var(--border)" }}>
-                            <div className="cursor-pointer" onClick={() => url && setLightbox(url)}>
-                              {url ? (
-                                <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
-                              ) : (
-                                <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
-                              )}
-                            </div>
+                            {isPdf ? (
+                              <a href={url} target="_blank" rel="noopener noreferrer"
+                                 className="flex flex-col items-center justify-center p-8 gap-2 no-underline"
+                                 style={{ background: "var(--bg)", color: "var(--ink)", minHeight: 140 }}>
+                                <span className="text-[32px]">📄</span>
+                                <span className="text-[12px] font-semibold">Open PDF</span>
+                                <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>{img.file_name || "document.pdf"}</span>
+                              </a>
+                            ) : (
+                              <div className="cursor-pointer" onClick={() => url && setLightbox(url)}>
+                                {url ? (
+                                  <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
+                                ) : (
+                                  <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
+                                )}
+                              </div>
+                            )}
                             <div className="px-2.5 py-1.5 text-[10px] flex items-center justify-between" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
                               <span className="truncate flex-1">{img.file_name || `${label} ${i + 1}`}</span>
                               <button onClick={() => { if (confirm("Delete this image?")) handleDelete(img.id); }}
@@ -240,7 +251,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
           <label className="inline-flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-[8px] cursor-pointer transition-colors hover:brightness-95"
                  style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
             {fundamentals.length > 0 ? "Re-upload Screenshot" : "+ Upload MarketSurge Screenshot"}
-            <input type="file" accept="image/png,image/jpeg" className="hidden"
+            <input type="file" accept="image/png,image/jpeg,application/pdf" className="hidden"
                    onChange={e => e.target.files && handleMsUpload(e.target.files)} />
           </label>
         )}
@@ -249,8 +260,20 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
       {/* ── MarketSurge Fundamentals (extracted data) ── */}
       {fundamentals.length > 0 && (
         <div className="px-5 py-4" style={{ borderBottom: "1px solid var(--border)" }}>
-          <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
-            <span>🔬</span> MarketSurge Fundamentals
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[13px] font-semibold flex items-center gap-2">
+              <span>🔬</span> MarketSurge Fundamentals
+            </div>
+            <button
+              onClick={async () => {
+                if (!confirm("Delete extracted fundamentals for this trade?")) return;
+                const r = await api.deleteFundamentals(tradeId);
+                if (r.status === "ok") setFundamentals([]);
+              }}
+              className="text-[10px] px-2 py-1 rounded-[6px] cursor-pointer transition-colors hover:brightness-90"
+              style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 8%, var(--surface))", border: "1px solid color-mix(in oklab, #e5484d 20%, var(--border))" }}>
+              Delete
+            </button>
           </div>
           {fundamentals.map((f, fi) => (
             <div key={fi} className="rounded-[10px] p-4" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>

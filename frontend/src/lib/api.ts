@@ -299,6 +299,11 @@ export const api = {
   tradeFundamentals: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<any[]>(`/api/fundamentals/${tradeId}?portfolio=${portfolio}`),
 
+  deleteFundamentals: (tradeId: string, portfolio = getActivePortfolio()) =>
+    fetchWithAuth(`${API_BASE}/api/fundamentals/${encodeURIComponent(tradeId)}?portfolio=${encodeURIComponent(portfolio)}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string; deleted?: number }>,
+
   // R2 Images
   tradeImages: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<any[]>(`/api/images/${tradeId}?portfolio=${portfolio}`),
