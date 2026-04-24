@@ -145,6 +145,19 @@ export const api = {
       current_price?: number;
     }>,
 
+  flagBeRule: (body: { portfolio?: string; trade_id: string; flagged: boolean }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/flag-be`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{
+      status?: string;
+      error?: string;
+      trade_id?: string;
+      flagged?: boolean;
+      updated?: number;
+    }>,
+
   setTradeGrade: (body: { portfolio?: string; trade_id: string; grade: number | null }) =>
     fetchWithAuth(`${API_BASE}/api/trades/grade`, {
       method: "POST", headers: { "Content-Type": "application/json" },

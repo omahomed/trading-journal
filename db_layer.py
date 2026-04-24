@@ -261,6 +261,7 @@ def load_summary(portfolio_name, status=None):
                     s.sell_notes AS "Sell_Notes",
                     s.risk_budget AS "Risk_Budget",
                     s.grade AS "Grade",
+                    s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     COALESCE(
                         (SELECT d.rule
                          FROM trades_details d
