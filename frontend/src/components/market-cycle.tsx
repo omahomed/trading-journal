@@ -47,7 +47,10 @@ export function MarketCycle({ navColor }: { navColor: string }) {
           <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
             Market Cycle <em className="italic" style={{ color: navColor }}>Tracker</em>
           </h1>
-          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>NASDAQ cycle analysis · Entry & exit ladder</div>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+            NASDAQ cycle analysis · Entry & exit ladder
+            {data.data_as_of && <span className="ml-2 opacity-70">· Data as of {data.data_as_of}</span>}
+          </div>
         </div>
         <button onClick={loadData} className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
@@ -65,6 +68,9 @@ export function MarketCycle({ navColor }: { navColor: string }) {
         <div className="text-[15px] mt-2 opacity-90">{subtitles[state] || ""}</div>
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
         {data.ftd_date && <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date}</div>}
+        {state === "POWERTREND" && data.power_trend_on_since && (
+          <div className="text-[12px] mt-1 opacity-70">Power-Trend ON since {data.power_trend_on_since}</div>
+        )}
       </div>
 
       {/* ═══ Key Metrics ═══ */}
