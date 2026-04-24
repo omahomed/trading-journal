@@ -21,10 +21,15 @@ async function mintApiToken(userId: string, email: string | null | undefined) {
 // Temporary owner allowlist — blocks anyone else from signing in until Step 3
 // (multi-tenant query filtering) is complete. Remove the signIn callback and
 // this set once every API query filters by user_id.
-const ALLOWED_EMAILS = new Set([
-  "omahomed@gmail.com",
-  "omahomed@icloud.com",
-]);
+//
+// Source: AUTH_ALLOWED_EMAILS env var (comma-separated), falling back to the
+// owner pair below. Staging can add beta testers via the env var without any
+// code change; prod can stay locked down by leaving it unset or listing only
+// the owner.
+const OWNER_FALLBACK = ["omahomed@gmail.com", "omahomed@icloud.com"];
+const envList = process.env.AUTH_ALLOWED_EMAILS
+  ?.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+const ALLOWED_EMAILS = new Set(envList && envList.length > 0 ? envList : OWNER_FALLBACK);
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: PostgresAdapter(pool),

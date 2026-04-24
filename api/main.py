@@ -817,6 +817,146 @@ def batch_prices(request: Request, tickers: str = ""):
 
 
 # ============================================================
+# NLV SHADOW (read-only comparison vs manually-entered NLV)
+# ============================================================
+@app.get("/api/nlv/shadow-today")
+def nlv_shadow_today(portfolio: str = "CanSlim"):
+    """Compute today's NLV from yesterday's journal entry + current position
+    prices + today's trade cash flows. Read-only; does not write to DB.
+
+    Formula:
+        yesterday_cash = yesterday.End_NLV × (1 − yesterday.% Invested / 100)
+        today_cash     = yesterday_cash + today.Cash_Change + today_trade_flow
+                         (buys subtract, sells add)
+        computed_nlv   = today_cash + Σ(open_shares × today_price)
+
+    Returned alongside manually-entered NLV (if any) so the UI can show the
+    delta. This is a read-only shadow endpoint — rollback is just deleting it.
+    """
+    import yfinance as yf
+    from datetime import datetime
+    try:
+        import pytz
+        central = pytz.timezone('America/Chicago')
+        today = datetime.now(central).date()
+    except Exception:
+        today = datetime.now().date()
+
+    try:
+        journal = db.load_journal(portfolio)
+        if journal is None or journal.empty:
+            return {"error": "No journal entries found", "portfolio": portfolio}
+
+        journal = journal.copy()
+        journal['Day'] = pd.to_datetime(journal['Day']).dt.date
+
+        prior = journal[journal['Day'] < today].sort_values('Day')
+        if prior.empty:
+            return {"error": "No prior-day journal entry to anchor from", "portfolio": portfolio}
+        prior_row = prior.iloc[-1]
+
+        prior_day = prior_row['Day']
+        yesterday_end_nlv = float(prior_row['End NLV'] or 0)
+        yesterday_pct_invested = float(prior_row['% Invested'] or 0)
+        yesterday_cash = yesterday_end_nlv * (1 - yesterday_pct_invested / 100)
+
+        today_rows = journal[journal['Day'] == today]
+        today_cash_change = 0.0
+        manual_nlv = None
+        if not today_rows.empty:
+            today_row = today_rows.iloc[0]
+            today_cash_change = float(today_row.get('Cash -/+') or 0)
+            mv = today_row.get('End NLV')
+            if mv is not None and float(mv) > 0:
+                manual_nlv = float(mv)
+
+        # Today's trade cash flows (BUY subtracts, SELL adds)
+        details = db.load_details(portfolio)
+        today_trade_flow = 0.0
+        if details is not None and not details.empty:
+            details = details.copy()
+            details['Date'] = pd.to_datetime(details['Date']).dt.date
+            today_trades = details[details['Date'] == today]
+            for _, row in today_trades.iterrows():
+                value = float(row.get('Value') or 0)
+                action = str(row.get('Action') or '').upper()
+                if action == 'BUY':
+                    today_trade_flow -= value
+                elif action == 'SELL':
+                    today_trade_flow += value
+
+        today_cash = yesterday_cash + today_cash_change + today_trade_flow
+
+        # Value open positions at today's price
+        summary = db.load_summary(portfolio, status='OPEN')
+        holdings_value = 0.0
+        breakdown = []
+        missing_prices = []
+        if summary is not None and not summary.empty:
+            tickers = [str(t).strip() for t in summary['Ticker'].tolist() if t]
+            prices: dict = {}
+            if tickers:
+                try:
+                    data = yf.download(tickers, period='1d', progress=False, auto_adjust=False)['Close']
+                    if len(tickers) == 1:
+                        if not data.empty:
+                            prices[tickers[0]] = float(data.iloc[-1])
+                    else:
+                        last = data.iloc[-1]
+                        for t in tickers:
+                            if t in last.index and not pd.isna(last[t]):
+                                prices[t] = float(last[t])
+                except Exception:
+                    pass
+
+            for _, pos in summary.iterrows():
+                ticker = str(pos['Ticker']).strip()
+                shares = float(pos.get('Shares') or 0)
+                price = prices.get(ticker)
+                if price is None:
+                    missing_prices.append(ticker)
+                    price = 0.0
+                value = shares * price
+                holdings_value += value
+                breakdown.append({
+                    "ticker": ticker,
+                    "shares": shares,
+                    "price": round(price, 4),
+                    "value": round(value, 2),
+                })
+
+        computed_nlv = today_cash + holdings_value
+
+        diff = None
+        diff_pct = None
+        if manual_nlv is not None and manual_nlv > 0:
+            diff = manual_nlv - computed_nlv
+            diff_pct = (diff / manual_nlv) * 100
+
+        return {
+            "portfolio": portfolio,
+            "as_of": today.isoformat(),
+            "prior_day": prior_day.isoformat() if hasattr(prior_day, 'isoformat') else str(prior_day),
+            "yesterday_end_nlv": round(yesterday_end_nlv, 2),
+            "yesterday_pct_invested": round(yesterday_pct_invested, 2),
+            "yesterday_cash": round(yesterday_cash, 2),
+            "today_cash_change": round(today_cash_change, 2),
+            "today_trade_flow": round(today_trade_flow, 2),
+            "today_cash": round(today_cash, 2),
+            "today_holdings_value": round(holdings_value, 2),
+            "computed_nlv": round(computed_nlv, 2),
+            "manual_nlv": round(manual_nlv, 2) if manual_nlv is not None else None,
+            "diff": round(diff, 2) if diff is not None else None,
+            "diff_pct": round(diff_pct, 4) if diff_pct is not None else None,
+            "position_breakdown": breakdown,
+            "missing_prices": missing_prices,
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
+# ============================================================
 # MARKET ENDPOINTS
 # ============================================================
 @app.get("/api/market/rally-prefix")

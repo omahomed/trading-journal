@@ -201,6 +201,25 @@ export const api = {
 
   // Market
   rallyPrefix: () => fetchJSON<{ prefix: string; day_num?: number; state?: string }>(`/api/market/rally-prefix`),
+
+  nlvShadow: (portfolio = "CanSlim") =>
+    fetchJSON<{
+      portfolio: string;
+      as_of: string;
+      prior_day?: string;
+      yesterday_end_nlv?: number;
+      yesterday_cash?: number;
+      today_cash_change?: number;
+      today_trade_flow?: number;
+      today_cash?: number;
+      today_holdings_value?: number;
+      computed_nlv?: number;
+      manual_nlv?: number | null;
+      diff?: number | null;
+      diff_pct?: number | null;
+      missing_prices?: string[];
+      error?: string;
+    }>(`/api/nlv/shadow-today?portfolio=${encodeURIComponent(portfolio)}`),
   mfactor: () => fetchJSON<any>(`/api/market/mfactor`),
 
   // Config
