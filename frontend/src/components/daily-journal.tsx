@@ -216,7 +216,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                                 {ndxAtr > 0 ? `${ndxAtr.toFixed(2)}%` : "—"}
                               </td>
                               {/* Market Notes */}
-                              <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)", minWidth: 140, maxWidth: 320, whiteSpace: "normal", wordBreak: "break-word", verticalAlign: "top" }} title={(h as any).market_notes || ""}>
                                 {(h as any).market_notes || ""}
                               </td>
                               {/* Report card categories */}
