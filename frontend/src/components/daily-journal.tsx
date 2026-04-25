@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 
 type ViewFilter = "week" | "month" | "all";
@@ -39,6 +40,7 @@ function pctColor(v: number) {
 }
 
 export function DailyJournal({ navColor }: { navColor: string }) {
+  const router = useRouter();
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("view");
@@ -177,7 +179,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           style={{ borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none" }}
                           onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>
+                        <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)", cursor: "context-menu" }}
+                            title="Right-click to open Daily Report"
+                            onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${String(h.day).slice(0, 10)}`); }}>
                           {String(h.day).slice(0, 10)}
                         </td>
                         <td className="px-2.5 py-2">
@@ -194,7 +198,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           const gradeLabel = score >= 5 ? "A+" : score >= 4 ? "A" : score >= 3 ? "B" : score >= 2 ? "C" : score > 0 ? "D" : "";
                           return (
                             <>
-                              <td className="px-2.5 py-2 text-center">
+                              <td className="px-2.5 py-2 text-center" style={{ cursor: "context-menu" }}
+                                  title="Right-click to open Daily Report"
+                                  onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${String(h.day).slice(0, 10)}`); }}>
                                 {gradeLabel && (
                                   <span className="text-[11px] font-bold" style={{ color: scoreColor(score) }}>{gradeLabel}</span>
                                 )}

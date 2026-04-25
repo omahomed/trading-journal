@@ -66,7 +66,8 @@ function cycleBadge(state: string) {
   );
 }
 
-export function DailyReportCard({ navColor }: { navColor: string }) {
+export function DailyReportCard({ navColor, initialDate }: { navColor: string; initialDate?: string }) {
+  const dateParam = initialDate || "";
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [details, setDetails] = useState<TradeDetail[]>([]);
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
@@ -112,10 +113,13 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
       setHistory(h);
       setDetails(det as TradeDetail[]);
       setClosedTrades(closed as TradePosition[]);
-      if (h.length > 0) setSelectedDate(String(h[0].day).slice(0, 10));
+      if (h.length > 0) {
+        const match = dateParam && h.find(d => String(d.day).slice(0, 10) === dateParam);
+        setSelectedDate(match ? dateParam : String(h[0].day).slice(0, 10));
+      }
       setLoading(false);
     });
-  }, []);
+  }, [dateParam]);
 
   // Load snapshots + thoughts when selectedDate changes
   useEffect(() => {
