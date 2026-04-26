@@ -469,6 +469,21 @@ export const api = {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<CashTransaction | { status: string; delta: number; message: string } | { error: string }>,
+
+  updateCashTransaction: (portfolioId: number, txId: number, body: {
+    amount?: number;
+    date?: string | null;
+    note?: string | null;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios/${portfolioId}/cash-transactions/${txId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<CashTransaction | { error: string }>,
+
+  deleteCashTransaction: (portfolioId: number, txId: number) =>
+    fetchWithAuth(`${API_BASE}/api/portfolios/${portfolioId}/cash-transactions/${txId}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: string } | { error: string }>,
 };
 
 // Live-derived NLV snapshot (cash + Σ positions at live price)

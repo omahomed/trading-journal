@@ -1471,6 +1471,98 @@ def create_cash_transaction_endpoint(portfolio_id: int, request: Request, body: 
         return {"error": str(e)}
 
 
+_INITIAL_CAPITAL_NOTE_PREFIX = "Initial capital"
+
+
+def _is_user_editable_cash_tx(row: dict) -> tuple[bool, str | None]:
+    """Cash rows fall into three buckets re: user-driven mutation:
+      - buy/sell: managed by save_detail_row; edit the trade itself, not this row
+      - 'Initial capital' deposit: managed by _sync_initial_deposit; edit
+        starting_capital + reset_date in portfolio settings instead
+      - everything else (deposit/withdraw/reconcile, non-initial): freely editable
+    Returns (editable, reason_when_not_editable).
+    """
+    src = (row.get("source") or "").lower()
+    if src in ("buy", "sell"):
+        return False, "Buy/sell rows are managed by the trade itself — edit the trade to change them."
+    note = row.get("note") or ""
+    if src == "deposit" and note.startswith(_INITIAL_CAPITAL_NOTE_PREFIX):
+        return False, "Initial capital is managed via Starting capital + Reset date on the portfolio."
+    return True, None
+
+
+@app.patch("/api/portfolios/{portfolio_id}/cash-transactions/{tx_id}")
+@limiter.limit("30/minute")
+def update_cash_transaction_endpoint(portfolio_id: int, tx_id: int,
+                                     request: Request, body: dict = Body(...)):
+    """Patch amount / date / note on an existing deposit/withdraw/reconcile row.
+    Source is immutable. Buy/sell + initial-capital rows are protected.
+
+    Body (all optional, only present fields are written):
+        { "amount": <positive>, "date": "<ISO>", "note": "<text|null>" }
+
+    For withdraw rows, the stored amount is signed-negative — the caller passes
+    a positive number and we re-apply the sign based on the existing source.
+    """
+    try:
+        if not _ensure_user_owns_portfolio(portfolio_id):
+            return {"error": "Portfolio not found"}
+
+        existing = db.get_cash_transaction(tx_id)
+        if existing is None or existing.get("portfolio_id") != portfolio_id:
+            return {"error": "Transaction not found"}
+
+        editable, reason = _is_user_editable_cash_tx(existing)
+        if not editable:
+            return {"error": reason}
+
+        signed_amount = None
+        if "amount" in body and body["amount"] is not None:
+            try:
+                amt = float(body["amount"])
+            except (TypeError, ValueError):
+                return {"error": "amount must be numeric"}
+            if amt <= 0:
+                return {"error": "amount must be greater than zero"}
+            src = (existing.get("source") or "").lower()
+            signed_amount = -amt if src == "withdraw" else amt
+
+        date = body.get("date") if "date" in body else None
+        note = body.get("note") if "note" in body else None
+
+        row = db.update_cash_transaction(
+            tx_id, amount=signed_amount, date=date, note=note,
+        )
+        if row is None:
+            return {"error": "Transaction not found"}
+        return _serialize_cash_tx(row)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/portfolios/{portfolio_id}/cash-transactions/{tx_id}")
+@limiter.limit("30/minute")
+def delete_cash_transaction_endpoint(portfolio_id: int, tx_id: int, request: Request):
+    """Delete a deposit/withdraw/reconcile row. Buy/sell + initial-capital
+    rows are protected (same rules as PATCH)."""
+    try:
+        if not _ensure_user_owns_portfolio(portfolio_id):
+            return {"error": "Portfolio not found"}
+
+        existing = db.get_cash_transaction(tx_id)
+        if existing is None or existing.get("portfolio_id") != portfolio_id:
+            return {"error": "Transaction not found"}
+
+        editable, reason = _is_user_editable_cash_tx(existing)
+        if not editable:
+            return {"error": reason}
+
+        ok = db.delete_cash_transaction(tx_id)
+        return {"status": "ok"} if ok else {"error": "Transaction not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ============================================================
 # ADMIN — CONFIG WRITE
 # ============================================================

@@ -3261,6 +3261,63 @@ def list_cash_transactions(portfolio_id, limit=200):
             return [dict(r) for r in cur.fetchall()]
 
 
+def get_cash_transaction(tx_id):
+    """Fetch a single cash_tx row by id (RLS-scoped to current user).
+    Returns None if not found or not owned by the caller."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, portfolio_id, date, amount, source, trade_detail_id, note, created_at "
+                "FROM cash_transactions WHERE id = %s",
+                (tx_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def update_cash_transaction(tx_id, *, amount=None, date=None, note=None):
+    """Patch a cash_tx row in place. Only the fields that aren't None are
+    written. Source and signed-amount semantics are preserved by the caller —
+    the API layer flips signs for withdraw and reuses the existing source.
+    Returns the updated row, or None if the row doesn't exist (or is hidden by
+    RLS)."""
+    sets, params = [], []
+    if amount is not None:
+        sets.append("amount = %s")
+        params.append(amount)
+    if date is not None:
+        sets.append("date = %s")
+        params.append(date)
+    if note is not None:
+        sets.append("note = %s")
+        params.append(note)
+    if not sets:
+        return get_cash_transaction(tx_id)
+    params.append(tx_id)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"UPDATE cash_transactions SET {', '.join(sets)} "
+                f"WHERE id = %s "
+                f"RETURNING id, portfolio_id, date, amount, source, trade_detail_id, note, created_at",
+                params,
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+
+
+def delete_cash_transaction(tx_id):
+    """Delete a cash_tx row by id (RLS-scoped to current user). Returns True
+    when a row was deleted, False otherwise."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM cash_transactions WHERE id = %s", (tx_id,))
+            deleted = cur.rowcount
+            conn.commit()
+            return deleted > 0
+
+
 def _sync_initial_deposit(cur, portfolio_id, starting_capital, effective_date):
     """Keep exactly one 'Initial capital' deposit row in sync with a
     portfolio's starting_capital setting.

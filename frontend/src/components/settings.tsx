@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { api, type CashAction, type Portfolio } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { api, type CashAction, type CashTransaction, type Portfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 
 export function Settings({ navColor }: { navColor: string }) {
@@ -192,6 +192,7 @@ function PortfolioCard({
             onCancel={() => setCashAction(null)}
           />
         )}
+        <CashLedger portfolioId={portfolio.id} onChanged={onChanged} />
         </>
       ) : (
         <div className="space-y-3">
@@ -457,6 +458,225 @@ function CashActionForm({
         </button>
         <button onClick={onCancel} disabled={busy}
                 className="h-[34px] px-4 rounded-[8px] text-[13px] font-medium"
+                style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+function isProtectedRow(tx: CashTransaction): { protected: boolean; reason: string } {
+  if (tx.source === "buy" || tx.source === "sell") {
+    return { protected: true, reason: "Linked to a trade — edit the trade itself." };
+  }
+  if (tx.source === "deposit" && (tx.note || "").startsWith("Initial capital")) {
+    return { protected: true, reason: "Managed via Starting capital + Reset date." };
+  }
+  return { protected: false, reason: "" };
+}
+
+function sourceBadge(source: CashTransaction["source"]): { label: string; color: string; bg: string } {
+  switch (source) {
+    case "deposit":   return { label: "Deposit",   color: "#08a86b", bg: "color-mix(in oklab, #08a86b 12%, var(--surface))" };
+    case "withdraw":  return { label: "Withdraw",  color: "#f59f00", bg: "color-mix(in oklab, #f59f00 12%, var(--surface))" };
+    case "reconcile": return { label: "Reconcile", color: "#3b82f6", bg: "color-mix(in oklab, #3b82f6 12%, var(--surface))" };
+    case "buy":       return { label: "Buy",       color: "var(--ink-3)", bg: "var(--bg-2)" };
+    case "sell":      return { label: "Sell",      color: "var(--ink-3)", bg: "var(--bg-2)" };
+  }
+}
+
+function CashLedger({ portfolioId, onChanged }: { portfolioId: number; onChanged: () => Promise<void> }) {
+  const [rows, setRows] = useState<CashTransaction[] | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const refetch = useCallback(async () => {
+    const res = await api.listCashTransactions(portfolioId, 100);
+    if (Array.isArray(res)) setRows(res);
+  }, [portfolioId]);
+
+  useEffect(() => { refetch(); }, [refetch]);
+
+  if (rows === null) return null;
+
+  // Hide buy/sell from the activity list — they're a function of trades and
+  // would dwarf the cash flows the user actually manages here. Show all
+  // deposit/withdraw/reconcile rows (including the protected initial capital).
+  const userRows = rows.filter(r => r.source !== "buy" && r.source !== "sell");
+  if (userRows.length === 0) return null;
+
+  const visible = expanded ? userRows : userRows.slice(0, 5);
+
+  return (
+    <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[11px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+          Cash activity ({userRows.length})
+        </div>
+        {userRows.length > 5 && (
+          <button onClick={() => setExpanded(v => !v)}
+                  className="text-[11px] font-medium" style={{ color: "var(--ink-3)" }}>
+            {expanded ? "Show less" : `Show all`}
+          </button>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        {visible.map(tx => (
+          editingId === tx.id ? (
+            <CashRowEditor key={tx.id} tx={tx} portfolioId={portfolioId}
+                           onCancel={() => setEditingId(null)}
+                           onDone={async () => { setEditingId(null); await refetch(); await onChanged(); }} />
+          ) : (
+            <CashRowDisplay key={tx.id} tx={tx} portfolioId={portfolioId}
+                            onEdit={() => setEditingId(tx.id)}
+                            onDeleted={async () => { await refetch(); await onChanged(); }} />
+          )
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CashRowDisplay({
+  tx, portfolioId, onEdit, onDeleted,
+}: {
+  tx: CashTransaction;
+  portfolioId: number;
+  onEdit: () => void;
+  onDeleted: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const guard = isProtectedRow(tx);
+  const badge = sourceBadge(tx.source);
+  const dateOnly = (tx.date || "").slice(0, 10);
+  const amountAbs = Math.abs(tx.amount);
+  const sign = tx.amount >= 0 ? "+" : "−";
+  const amountColor = tx.amount >= 0 ? "#08a86b" : "#e5484d";
+
+  async function remove() {
+    if (!window.confirm(`Delete this ${badge.label.toLowerCase()} of $${amountAbs.toLocaleString(undefined, { maximumFractionDigits: 2 })} on ${dateOnly}?`)) return;
+    setBusy(true); setErr(null);
+    const res = await api.deleteCashTransaction(portfolioId, tx.id);
+    if ("error" in res) {
+      setErr(res.error);
+      setBusy(false);
+      return;
+    }
+    await onDeleted();
+  }
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2 rounded-[8px]"
+         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="text-[11px] privacy-mask" style={{ color: "var(--ink-3)", fontFamily: "var(--font-jetbrains), monospace", minWidth: 86 }}>
+        {dateOnly}
+      </div>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.05em] px-2 py-0.5 rounded-[6px]"
+           style={{ color: badge.color, background: badge.bg }}>
+        {badge.label}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[12px] privacy-mask"
+             style={{ color: amountColor, fontFamily: "var(--font-jetbrains), monospace", fontWeight: 600 }}>
+          {sign}${amountAbs.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+        </div>
+        {tx.note && (
+          <div className="text-[11px] truncate" style={{ color: "var(--ink-4)" }}>{tx.note}</div>
+        )}
+        {err && (
+          <div className="text-[11px]" style={{ color: "#e5484d" }}>{err}</div>
+        )}
+      </div>
+      {guard.protected ? (
+        <span className="text-[10px]" style={{ color: "var(--ink-5)" }} title={guard.reason}>locked</span>
+      ) : (
+        <div className="flex gap-1">
+          <button onClick={onEdit} disabled={busy}
+                  className="h-[26px] px-2 rounded-[6px] text-[11px]"
+                  style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+            Edit
+          </button>
+          <button onClick={remove} disabled={busy}
+                  className="h-[26px] px-2 rounded-[6px] text-[11px]"
+                  style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "#e5484d" }}>
+            {busy ? "…" : "Delete"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CashRowEditor({
+  tx, portfolioId, onDone, onCancel,
+}: {
+  tx: CashTransaction;
+  portfolioId: number;
+  onDone: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState(String(Math.abs(tx.amount)));
+  const [date, setDate] = useState((tx.date || "").slice(0, 10));
+  const [note, setNote] = useState(tx.note || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  async function save() {
+    const num = parseFloat(amount);
+    if (!isFinite(num) || num <= 0) { setErr("Amount must be positive"); return; }
+    setBusy(true); setErr(null);
+    const res = await api.updateCashTransaction(portfolioId, tx.id, {
+      amount: num,
+      date: date || null,
+      note: note.trim() || null,
+    });
+    if ("error" in res) { setErr(res.error); setBusy(false); return; }
+    await onDone();
+  }
+
+  return (
+    <div className="px-3 py-3 rounded-[8px] space-y-2"
+         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Amount</span>
+          <div className="mt-1 relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: "var(--ink-4)" }}>$</span>
+            <input type="number" min={0} step="0.01" value={amount} autoFocus
+                   onChange={(e) => setAmount(e.target.value)}
+                   className="w-full h-9 pl-7 pr-2 rounded-[6px] text-[12px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)",
+                            fontFamily: "var(--font-jetbrains), monospace" }} />
+          </div>
+        </label>
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Date</span>
+          <input type="date" value={date} max={todayIso}
+                 onChange={(e) => setDate(e.target.value)}
+                 className="mt-1 w-full h-9 px-2 rounded-[6px] text-[12px]"
+                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)",
+                          fontFamily: "var(--font-jetbrains), monospace" }} />
+        </label>
+      </div>
+      <label className="block">
+        <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Note</span>
+        <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200}
+               className="mt-1 w-full h-9 px-2 rounded-[6px] text-[12px]"
+               style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+      </label>
+      {err && <div className="text-[11px]" style={{ color: "#e5484d" }}>{err}</div>}
+      <div className="flex gap-2">
+        <button onClick={save} disabled={busy}
+                className="h-[28px] px-3 rounded-[6px] text-white text-[11px] font-medium"
+                style={{ background: "#3b82f6" }}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button onClick={onCancel} disabled={busy}
+                className="h-[28px] px-3 rounded-[6px] text-[11px] font-medium"
                 style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
           Cancel
         </button>
