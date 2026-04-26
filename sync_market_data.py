@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# DEPRECATED: Writes to V9 market_signals schema, which was dropped in migration 010.
+# Will be replaced by V11 MCT engine in Phase 2. Do not run.
 """Sync market signals data (same as clicking Sync button in app)"""
 
 import sys
