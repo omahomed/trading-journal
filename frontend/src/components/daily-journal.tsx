@@ -81,7 +81,7 @@ function exportCsv(rows: JournalHistoryPoint[]) {
   // consumers that may parse this format. The UI table displays "MCT
   // State" instead — see Phase 4 daily-journal column swap.
   const headers = [
-    "Day", "Window", "End NLV", "Score", "Daily %", "LTD %", "% Inv", "Heat",
+    "Day", "Window", "Cash Flow", "End NLV", "Score", "Daily %", "LTD %", "% Inv", "Heat",
     "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes",
     "Plan", "Stops", "Sized", "FOMO", "Grade Notes",
   ];
@@ -91,6 +91,7 @@ function exportCsv(rows: JournalHistoryPoint[]) {
     lines.push([
       String(h.day).slice(0, 10),
       (h as any).market_window || "",
+      (h as any).cash_flow ?? "",
       h.end_nlv ?? "",
       h.score ?? "",
       h.daily_pct_change ?? "",
@@ -263,7 +264,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Day", "MCT State", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
+                    {["Day", "MCT State", "Cash Flow", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
                       <th key={h} className="text-left text-[9px] uppercase tracking-[0.06em] font-semibold px-2.5 py-2 whitespace-nowrap sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
                         {h}
@@ -296,6 +297,15 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                         </td>
                         <td className="px-2.5 py-2">
                           <MctStateBadge s={mct} />
+                        </td>
+                        <td className="px-2.5 py-2 privacy-mask whitespace-nowrap" style={{ fontFamily: mono }}>
+                          {(() => {
+                            const cf = Number((h as any).cash_flow || 0);
+                            if (cf === 0) return <span style={{ color: "var(--ink-5)" }}>—</span>;
+                            const sign = cf > 0 ? "+" : "−";
+                            const color = cf > 0 ? "#08a86b" : "#e5484d";
+                            return <span style={{ color }}>{sign}${Math.abs(cf).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>;
+                          })()}
                         </td>
                         <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>${(h.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                         {/* Grade + metrics + report card */}
