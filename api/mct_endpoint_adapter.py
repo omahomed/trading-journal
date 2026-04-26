@@ -217,9 +217,13 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     # V10_FULL_INVALIDATION. Distinct from the engine's internal rally_count,
     # which freezes after STEP_4 because rally-hunt logic stops running.
     cycle_start_idx = state.get("cycle_start_idx")
+    cycle_start_date: Optional[str] = None
     if cycle_start_idx is not None and rally_active:
         latest_idx = len(bars) - 1
         cycle_day = latest_idx - int(cycle_start_idx) + 1
+        idx = int(cycle_start_idx)
+        if 0 <= idx < len(bars):
+            cycle_start_date = _isodate(bars["trade_date"].iloc[idx])
     else:
         cycle_day = 0
 
@@ -265,6 +269,10 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         # V11 surfaces consume cap_at_100 to render the "capped at 100%"
         # indicator on the tape pill and the MCT page.
         "cap_at_100": bool(state.get("cap_at_100")),
+        # cycle_start_date — the date STEP_0 fired for the current cycle.
+        # None when no rally is active. Used by the MCT page header to show
+        # "Cycle started: YYYY-MM-DD (Day N)".
+        "cycle_start_date": cycle_start_date,
     }
 
 

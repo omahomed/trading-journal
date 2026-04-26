@@ -237,6 +237,7 @@ export const api = {
     ftd_date?: string | null;
     reference_high?: number;
     reference_high_date?: string | null;
+    cycle_start_date?: string | null;
   }>(`/api/market/rally-prefix`),
 
   marketSignals: (days = 30, signal_type?: string) => {

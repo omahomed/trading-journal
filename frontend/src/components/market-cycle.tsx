@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { api } from "@/lib/api";
 
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
@@ -9,6 +9,17 @@ const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   "RALLY MODE": { bg: "#f59f00", fg: "#000" },
   CORRECTION: { bg: "#e5484d", fg: "#fff" },
 };
+
+function LockIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+         aria-label="Capped at 100%" role="img">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
 
 export function MarketCycle({ navColor }: { navColor: string }) {
   const [data, setData] = useState<any>(null);
@@ -65,11 +76,20 @@ export function MarketCycle({ navColor }: { navColor: string }) {
       <div className="rounded-[14px] p-6 text-center mb-6" style={{ background: sc.bg, color: sc.fg, boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
         <div className="text-[12px] uppercase tracking-[0.15em] opacity-80 mb-1">NASDAQ Market Cycle</div>
         <div className="text-[52px] font-extrabold tracking-tight" style={{ lineHeight: 1.1 }}>{state}</div>
+        {data.cap_at_100 && (
+          <div className="inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-[11px] font-semibold"
+               style={{ background: "rgba(0,0,0,0.2)" }}>
+            <LockIcon /> Capped at 100%
+          </div>
+        )}
         <div className="text-[15px] mt-2 opacity-90">{subtitles[state] || ""}</div>
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
         {data.ftd_date && <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date}</div>}
         {state === "POWERTREND" && data.power_trend_on_since && (
           <div className="text-[12px] mt-1 opacity-70">Power-Trend ON since {data.power_trend_on_since}</div>
+        )}
+        {data.cycle_start_date && dayNum > 0 && (
+          <div className="text-[12px] mt-1 opacity-70">Cycle started {data.cycle_start_date} (Day {dayNum})</div>
         )}
       </div>
 
@@ -268,6 +288,9 @@ export function MarketCycle({ navColor }: { navColor: string }) {
         </div>
       </div>
 
+      {/* ═══ Recent Signal Log ═══ */}
+      <SignalLog mono={mono} />
+
       {/* ═══ Methodology ═══ */}
       <details className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <summary className="px-5 py-3 cursor-pointer text-[13px] font-semibold">Cycle Tracker Methodology</summary>
@@ -303,6 +326,91 @@ export function MarketCycle({ navColor }: { navColor: string }) {
           </div>
         </div>
       </details>
+    </div>
+  );
+}
+
+type Signal = {
+  trade_date: string;
+  signal_type: string;
+  signal_label: string;
+  exposure_before: number | null;
+  exposure_after: number | null;
+};
+
+function SignalLog({ mono }: { mono: string }) {
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string>("");
+
+  useEffect(() => {
+    api.marketSignals(30)
+      .then((r) => setSignals(r.signals || []))
+      .catch(() => setSignals([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const types = useMemo(
+    () => Array.from(new Set(signals.map((s) => s.signal_type))).sort(),
+    [signals]
+  );
+
+  const filtered = filter ? signals.filter((s) => s.signal_type === filter) : signals;
+
+  return (
+    <div className="rounded-[14px] overflow-hidden mb-6"
+         style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+      <div className="px-5 py-3 flex items-center justify-between gap-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div>
+          <div className="text-[13px] font-semibold">Recent Signals</div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>Last 30 days from MCT engine</div>
+        </div>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label="Filter signal log by signal type"
+          className="text-[11px] px-2.5 py-1.5 rounded-[8px]"
+          style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+        >
+          <option value="">All types ({signals.length})</option>
+          {types.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="p-6 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>Loading…</div>
+      ) : filtered.length === 0 ? (
+        <div className="p-8 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
+          {filter ? "No signals match this filter." : "No signals fired in the last 30 days."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {["Date", "Signal", "Description", "Exposure"].map((h) => (
+                  <th key={h} className="text-left px-4 py-2 text-[10px] uppercase tracking-[0.06em] font-semibold"
+                      style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", color: "var(--ink-4)" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((s, i) => (
+                <tr key={`${s.trade_date}-${s.signal_type}-${i}`} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td className="px-4 py-2" style={{ fontFamily: mono }}>{s.trade_date}</td>
+                  <td className="px-4 py-2 font-semibold">{s.signal_type}</td>
+                  <td className="px-4 py-2" style={{ color: "var(--ink-2)" }}>{s.signal_label}</td>
+                  <td className="px-4 py-2" style={{ fontFamily: mono }}>
+                    {s.exposure_before != null && s.exposure_after != null
+                      ? `${s.exposure_before}% → ${s.exposure_after}%`
+                      : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

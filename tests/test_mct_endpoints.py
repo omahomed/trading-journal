@@ -50,7 +50,7 @@ def test_rally_prefix_response_has_legacy_fields(canonical_dependencies):
         "low_above_21_streak", "low_above_50_streak",
         "stack_8_21", "stack_21_50", "stack_50_200",
         "entry_ladder", "ftd_date", "data_as_of", "power_trend_on_since",
-        "cap_at_100",
+        "cap_at_100", "cycle_start_date",
     }
     missing = expected - set(response.keys())
     assert not missing, f"Missing fields: {missing}"
