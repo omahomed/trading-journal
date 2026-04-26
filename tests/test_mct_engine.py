@@ -189,6 +189,61 @@ def test_correction_nullification_2026_04_16(canonical_run):
 
 
 @requires_db
+def test_cycle_day_anchored_to_step0_2026_04_24(canonical_run):
+    """day_num counts trading days from the most recent STEP_0 firing.
+    Surviving cycle on the canonical run started 3/31/2026; 4/24/2026 should
+    be Day 18 (3/31=1, 4/1=2, 4/2=3, [4/3 Good Friday closed], 4/6=4, …,
+    4/24=18). Internal rally_count freezes at Step-4 (Day 9 on 4/10) — the
+    new cycle_start_idx-anchored display is what the user sees."""
+    history, result = canonical_run
+    bars = result.bars
+    last_idx = len(bars) - 1
+    cycle_start = result.final_state.get("cycle_start_idx")
+    assert cycle_start is not None, "expected an active cycle"
+    cycle_day = last_idx - int(cycle_start) + 1
+    assert cycle_day == 18, f"Expected Day 18 on 4/24/2026, got Day {cycle_day}"
+
+    # Confirm cycle_start_idx points to 3/31/2026 specifically.
+    cycle_start_date = bars.iloc[int(cycle_start)]["trade_date"]
+    assert cycle_start_date == date(2026, 3, 31), (
+        f"cycle_start_idx points to {cycle_start_date}, expected 2026-03-31"
+    )
+
+
+@requires_db
+def test_v10_soft_reset_preserves_cycle_start_idx(canonical_run):
+    """V10 soft resets at 12/15/2025, 1/2/2026, 2/4/2026 must NOT touch
+    cycle_start_idx. The 11/21/2025 STEP_0 anchors a cycle that survives
+    every soft reset until rally invalidation on 3/19/2026. On 2/24/2026
+    — well after multiple soft resets — cycle_start_idx still points at
+    the 11/21 bar, and cycle_day is in the mid-60s (calendar trading days
+    11/21 → 2/24 inclusive)."""
+    history, result = canonical_run
+    bars = result.bars
+
+    bar_2_24_rows = bars.index[bars["trade_date"] == date(2026, 2, 24)]
+    assert len(bar_2_24_rows) == 1, "2/24/2026 missing from canonical run"
+    bar_2_24_idx = int(bar_2_24_rows[0])
+
+    cycle_start_at_2_24 = bars.iloc[bar_2_24_idx]["cycle_start_idx"]
+    assert cycle_start_at_2_24 is not None, "cycle was active on 2/24/2026"
+    cycle_start_at_2_24 = int(cycle_start_at_2_24)
+
+    # Anchor must be 11/21/2025.
+    cycle_start_date = bars.iloc[cycle_start_at_2_24]["trade_date"]
+    assert cycle_start_date == date(2025, 11, 21), (
+        f"cycle_start_idx on 2/24/2026 points to {cycle_start_date}, "
+        f"expected 2025-11-21 (V10 soft reset must not have touched it)"
+    )
+
+    # Day count from 11/21 should be in the 60s (calendar trading days).
+    cycle_day_2_24 = bar_2_24_idx - cycle_start_at_2_24 + 1
+    assert 60 <= cycle_day_2_24 <= 70, (
+        f"Expected cycle_day ~65 on 2/24/2026, got Day {cycle_day_2_24}"
+    )
+
+
+@requires_db
 def test_powertrend_off_then_on(canonical_run):
     """PT-OFF on 2/5/2026, then PT-ON on 4/22/2026 — both should fire."""
     _, result = canonical_run

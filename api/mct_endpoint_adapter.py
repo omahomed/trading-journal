@@ -215,11 +215,22 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     last = bars.iloc[-1]
 
     state_name = _state_name(state)
-    rally_count = int(state.get("rally_count") or 0)
     rally_active = bool(state.get("rally_active"))
 
-    if rally_active and rally_count > 0:
-        prefix = f"Day {rally_count}: "
+    # day_num is anchored to cycle_start_idx (the bar where the current
+    # rally cycle's STEP_0 fired). Survives V10 soft resets and post-Step-4
+    # transitions — only resets on RALLY_INVALIDATED / CORRECTION_DECLARED /
+    # V10_FULL_INVALIDATION. Distinct from the engine's internal rally_count,
+    # which freezes after STEP_4 because rally-hunt logic stops running.
+    cycle_start_idx = state.get("cycle_start_idx")
+    if cycle_start_idx is not None and rally_active:
+        latest_idx = len(bars) - 1
+        cycle_day = latest_idx - int(cycle_start_idx) + 1
+    else:
+        cycle_day = 0
+
+    if rally_active and cycle_day > 0:
+        prefix = f"Day {cycle_day}: "
     else:
         prefix = "CORRECTION: "
 
@@ -234,7 +245,7 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
 
     return {
         "prefix": prefix,
-        "day_num": rally_count if rally_active else 0,
+        "day_num": cycle_day,
         "state": state_name,
         "entry_step": _highest_step(state),
         "entry_exposure": int(state.get("exposure") or 0),

@@ -192,6 +192,13 @@ class MCTEngine:
             "rally_count": 0,
             "ftd_close": None,
             "ftd_low": None,
+            # Cycle anchor for the user-facing "Day N" display. Set when STEP_0
+            # fires (cycle_start_idx = i). Cleared on RALLY_INVALIDATED,
+            # CORRECTION_DECLARED, V10_FULL_INVALIDATION. Crucially NOT touched
+            # by V10 SOFT RESET — the rally cycle continues, day count keeps
+            # ticking. Distinct from rally_count, which is internal to the
+            # rally-hunt phase and freezes when STEP_4 flips in_correction off.
+            "cycle_start_idx": None,
 
             # Step ladder flags
             "step0_done": False,
@@ -616,6 +623,10 @@ class MCTEngine:
             state["rally_day_idx"] = state["running_min_idx"]
             state["rally_day_low"] = state["running_min_low"]
             state["rally_count"] = i - state["rally_day_idx"] + 1
+            # cycle_start_idx anchors the user-facing "Day N" display to the
+            # bar where STEP_0 fired. Survives V10 soft resets so the day
+            # counter doesn't reset mid-cycle.
+            state["cycle_start_idx"] = i
 
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[0])
@@ -725,6 +736,7 @@ class MCTEngine:
         state["rally_count"] = 0
         state["ftd_close"] = None
         state["ftd_low"] = None
+        state["cycle_start_idx"] = None  # rally cycle ended; next STEP_0 anchors a new one
         state["cap_at_100"] = False  # rally invalidation clears cap
         # Make sure we're back in rally-hunt mode
         state["in_correction"] = True
@@ -951,7 +963,10 @@ class MCTEngine:
 
     def _fire_v10_soft_reset(self, i, current, state, bar_signals):
         before = state["exposure"]
-        # Re-enter rally-hunt phase but preserve rally_day_low and cap
+        # Re-enter rally-hunt phase but preserve rally_day_low, cap, and
+        # cycle_start_idx. The rally cycle is the same — only the FTD count
+        # restarts. cycle_start_idx is intentionally NOT touched here so the
+        # user-facing "Day N" display keeps ticking from the original STEP_0.
         state["in_correction"] = True
         state["exposure"] = EXPOSURE_V10_SOFT_RESET
         # Ladder reset to Step 0 done; 1-7 cleared
@@ -1000,6 +1015,7 @@ class MCTEngine:
         state["rally_count"] = 0
         state["ftd_close"] = None
         state["ftd_low"] = None
+        state["cycle_start_idx"] = None  # full invalidation ends the rally cycle
         state["cap_at_100"] = False  # full invalidation clears cap
 
         bar_signals.append(self._signal(
@@ -1068,7 +1084,12 @@ class MCTEngine:
             "in_correction": state["in_correction"],
             "correction_active": state["correction_active"],
             "power_trend": state["power_trend"],
+            "rally_active": state["rally_active"],
             "rally_count": state["rally_count"],
+            "rally_day_idx": state["rally_day_idx"],
+            "cycle_start_idx": state["cycle_start_idx"],
+            "step1_done": state["step1_done"],
+            "step4_done": state["step4_done"],
             "reference_high": state["reference_high"],
             "signals_summary": " | ".join(s.signal_type for s in bar_signals),
         }
