@@ -74,6 +74,69 @@ def write_signals(events: Iterable[SignalEvent]) -> int:
     return len(inserted)
 
 
+def rebuild_signals(events: Iterable[SignalEvent], symbol: str = "^IXIC") -> dict:
+    """Atomically DELETE existing rows and INSERT a fresh batch.
+
+    Use case: engine logic changed (e.g., a same-bar firing fix) and previously
+    persisted signals are now stale. write_signals() can't notice — its
+    ON CONFLICT DO NOTHING semantics keep stale rows in place. rebuild_signals()
+    nukes everything in one transaction, then re-inserts the new batch.
+
+    DESTRUCTIVE: callers should explicitly opt in (the script flag is named
+    --rebuild for a reason). Wraps in a single transaction so the table is
+    never empty mid-rebuild.
+
+    Returns: {"deleted", "inserted", "events_emitted"}.
+    """
+    events = list(events)
+
+    for ev in events:
+        if ev.signal_type not in ALLOWED_SIGNAL_TYPES:
+            raise ValueError(
+                f"Unknown signal_type {ev.signal_type!r} on {ev.trade_date} "
+                f"(allowed: {sorted(ALLOWED_SIGNAL_TYPES)})"
+            )
+
+    rows = [
+        (
+            ev.trade_date,
+            ev.signal_type,
+            ev.signal_label,
+            ev.exposure_before,
+            ev.exposure_after,
+            ev.state_before,
+            ev.state_after,
+            Json(ev.meta or {}),
+        )
+        for ev in events
+    ]
+
+    insert_sql = """
+        INSERT INTO market_signals (
+            trade_date, signal_type, signal_label,
+            exposure_before, exposure_after,
+            state_before, state_after, meta
+        ) VALUES %s
+        RETURNING id
+    """
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM market_signals RETURNING id")
+            deleted = len(cur.fetchall())
+            inserted = 0
+            if rows:
+                execute_values(cur, insert_sql, rows, page_size=500)
+                inserted = len(cur.fetchall())
+        conn.commit()
+
+    return {
+        "deleted": deleted,
+        "inserted": inserted,
+        "events_emitted": len(events),
+    }
+
+
 def write_signals_for_date_range(
     start_date: date,
     end_date: date,

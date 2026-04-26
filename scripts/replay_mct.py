@@ -7,6 +7,10 @@ Usage:
   python scripts/replay_mct.py --full-history --csv-out /tmp/run.csv
   python scripts/replay_mct.py --start 2024-12-16 --end 2026-04-24 \
       --initial-reference-high 20118.61 --csv-out /tmp/canonical_run.csv
+
+  # After an engine logic change, rebuild market_signals from scratch
+  # (DESTRUCTIVE: deletes all existing rows, then re-inserts):
+  python scripts/replay_mct.py --full-history --write-signals --rebuild
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ import pandas as pd  # noqa: E402
 
 from api.mct_engine import MCTEngine, EngineConfig  # noqa: E402
 from api.market_data_repo import get_history, get_latest_date  # noqa: E402
-from api.mct_signals_writer import write_signals  # noqa: E402
+from api.mct_signals_writer import write_signals, rebuild_signals  # noqa: E402
 
 
 logging.basicConfig(
@@ -48,6 +52,13 @@ def main() -> int:
                         help="Run engine over full market_data history (overrides --start/--end)")
     parser.add_argument("--write-signals", action="store_true",
                         help="Persist signals to market_signals (idempotent)")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="DESTRUCTIVE: with --write-signals, DELETE all "
+                             "existing market_signals rows then INSERT this "
+                             "run's signals (single transaction). Use after "
+                             "engine logic changes that obsolete previously "
+                             "persisted signals (ON CONFLICT DO NOTHING in the "
+                             "default --write-signals path can't notice).")
     parser.add_argument("--symbol", default="^IXIC")
     parser.add_argument("--initial-reference-high", type=float, default=None,
                         help="Override initial reference high")
@@ -116,9 +127,18 @@ def main() -> int:
         log.info("Wrote %d bar rows to %s", len(result.bars), args.csv_out)
 
     if args.write_signals:
-        inserted = write_signals(result.signals)
-        log.info("Persisted %d new signals to market_signals (skipped %d duplicates)",
-                 inserted, len(result.signals) - inserted)
+        if args.rebuild:
+            summary = rebuild_signals(result.signals)
+            log.warning(
+                "REBUILD: deleted %d stale rows; inserted %d fresh rows from %d events",
+                summary["deleted"], summary["inserted"], summary["events_emitted"]
+            )
+        else:
+            inserted = write_signals(result.signals)
+            log.info("Persisted %d new signals to market_signals (skipped %d duplicates)",
+                     inserted, len(result.signals) - inserted)
+    elif args.rebuild:
+        parser.error("--rebuild requires --write-signals")
 
     # Print final state summary
     fs = result.final_state
