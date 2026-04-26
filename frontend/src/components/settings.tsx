@@ -489,31 +489,43 @@ function sourceBadge(source: CashTransaction["source"]): { label: string; color:
 
 function CashLedger({ portfolioId, onChanged }: { portfolioId: number; onChanged: () => Promise<void> }) {
   const [rows, setRows] = useState<CashTransaction[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const refetch = useCallback(async () => {
-    const res = await api.listCashTransactions(portfolioId, 100);
-    if (Array.isArray(res)) setRows(res);
+    setError(null);
+    try {
+      const res = await api.listCashTransactions(portfolioId, 100) as unknown;
+      if (Array.isArray(res)) {
+        setRows(res as CashTransaction[]);
+      } else {
+        const errMsg = res && typeof res === "object" && "error" in res
+          ? String((res as { error: unknown }).error)
+          : "Unexpected response";
+        setError(errMsg);
+        setRows([]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setRows([]);
+    }
   }, [portfolioId]);
 
   useEffect(() => { refetch(); }, [refetch]);
 
-  if (rows === null) return null;
-
   // Hide buy/sell from the activity list — they're a function of trades and
   // would dwarf the cash flows the user actually manages here. Show all
   // deposit/withdraw/reconcile rows (including the protected initial capital).
-  const userRows = rows.filter(r => r.source !== "buy" && r.source !== "sell");
-  if (userRows.length === 0) return null;
-
+  const userRows = (rows || []).filter(r => r.source !== "buy" && r.source !== "sell");
   const visible = expanded ? userRows : userRows.slice(0, 5);
+  const isLoading = rows === null;
 
   return (
     <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--border)" }}>
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
-          Cash activity ({userRows.length})
+          Cash activity {isLoading ? "" : `(${userRows.length})`}
         </div>
         {userRows.length > 5 && (
           <button onClick={() => setExpanded(v => !v)}
@@ -522,6 +534,21 @@ function CashLedger({ portfolioId, onChanged }: { portfolioId: number; onChanged
           </button>
         )}
       </div>
+      {error && (
+        <div className="text-[11px] px-3 py-2 rounded-[6px] mb-2"
+             style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                      border: "1px solid color-mix(in oklab, #e5484d 25%, var(--border))" }}>
+          Failed to load: {error}
+        </div>
+      )}
+      {isLoading && !error && (
+        <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>Loading…</div>
+      )}
+      {!isLoading && userRows.length === 0 && !error && (
+        <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+          No deposits, withdrawals, or reconciles yet.
+        </div>
+      )}
       <div className="space-y-1.5">
         {visible.map(tx => (
           editingId === tx.id ? (
