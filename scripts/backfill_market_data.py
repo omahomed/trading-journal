@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Backfill market_data with historical OHLC + computed indicators.
 
-Default range: 2010-01-01 → yesterday. Data source: yfinance (auto_adjust=False
-to match the raw-OHLC convention used in market_school_rules.py and api/main.py).
+Default range: 2010-01-01 → yesterday. Data source: yfinance with
+auto_adjust=False to keep raw OHLC for indicator computation.
 
 Idempotent — safe to re-run. Uses INSERT ... ON CONFLICT (symbol, trade_date)
 DO UPDATE so existing rows are refreshed with the latest indicator values.
@@ -71,8 +71,7 @@ def fetch_history(symbol: str, start: date, end: date) -> pd.DataFrame:
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute ema_8, ema_21, sma_50, sma_200 using the project convention.
 
-    EMAs use ewm(span=N, adjust=False) — matches market_school_rules.py:217
-    and api/main.py rally_prefix indicator block.
+    EMAs use ewm(span=N, adjust=False); SMAs use rolling(window=N).mean().
     """
     df = df.sort_values("trade_date").reset_index(drop=True).copy()
     df["ema_8"] = df["close"].ewm(span=8, adjust=False).mean()

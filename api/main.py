@@ -1,7 +1,7 @@
 """
 MO Money — FastAPI backend
-Wraps existing db_layer.py, market_school_rules.py, and ibkr_flex.py
-so the React frontend can fetch real data via REST endpoints.
+Wraps the database layer and supporting modules so the React frontend
+can fetch real data via REST endpoints.
 """
 
 import sys
@@ -335,54 +335,6 @@ def _compute_cycle_state(as_of_date: str = "") -> str:
         if isinstance(result, dict):
             return str(result.get("state", "") or "")
         return ""
-    except Exception:
-        return ""
-
-
-def _compute_market_window(as_of_date: str = "") -> str:
-    """Compute market window using rally-prefix state logic.
-    Returns 'Powertrend' / 'Open' / 'Closed' based on IBD market state.
-    If as_of_date is provided, computes historical state for that date."""
-    try:
-        from market_school_rules import MarketSchoolRules
-        from datetime import date as _date
-        end_date = as_of_date if as_of_date else _date.today().strftime('%Y-%m-%d')
-        analyzer = MarketSchoolRules("^IXIC")
-        analyzer.fetch_data(start_date="2024-02-24", end_date=end_date)
-        if analyzer.data is None or analyzer.data.empty:
-            return ""
-        analyzer.analyze_market()
-
-        df = analyzer.data
-        market_in_correction = analyzer.market_in_correction
-        ftd_date = analyzer.ftd_date
-        buy_switch = analyzer.buy_switch
-        rally_start_date = analyzer.rally_start_date
-
-        if market_in_correction and not buy_switch and ftd_date is None:
-            return "Closed"
-
-        # Compute MAs
-        df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
-        df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
-        df['50SMA'] = df['Close'].rolling(window=50).mean()
-        df['200SMA'] = df['Close'].rolling(window=200).mean()
-
-        curr = df.iloc[-1]
-        price = float(curr['Close'])
-        ema8 = float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0
-        ema21 = float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0
-        sma50 = float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0
-        sma200 = float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0
-
-        ftd_achieved = ftd_date is not None or (not market_in_correction or buy_switch)
-
-        # Full Powertrend: 8 > 21 > 50 > 200 stack with FTD and price above 21
-        if ftd_achieved and ema8 > ema21 > sma50 > sma200 and price > ema21:
-            return "Powertrend"
-        if rally_start_date is not None or ftd_achieved:
-            return "Open"
-        return "Closed"
     except Exception:
         return ""
 

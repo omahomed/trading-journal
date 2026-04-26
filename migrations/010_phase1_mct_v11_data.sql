@@ -10,9 +10,8 @@
 -- updater, and the Phase 2 engine writer all run with elevated privileges).
 --
 -- Existing market_signals contents are discarded. The V9 schema was orphaned
--- at the API level (no readers) and the legacy writers in sync_market_data.py
--- and bootstrap_fresh_start.py have been marked deprecated. Phase 2 ships
--- the V11 writer that targets the new schema below.
+-- at the API level (no readers) and the legacy writer scripts have been marked
+-- deprecated. Phase 2 ships the V11 writer that targets the new schema below.
 
 -- ----------------------------------------------------------------------------
 -- market_data: one row per (symbol, trade_date) with OHLC + computed indicators

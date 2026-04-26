@@ -148,20 +148,9 @@ def test_ibd_history_uses_binned_exposure(canonical_dependencies):
 # market_window deprecation (static checks — don't pollute the journal table)
 # ---------------------------------------------------------------------------
 
-def test_journal_edit_does_not_call_compute_market_window():
-    """Source-level check: journal_edit no longer auto-fills market_window."""
-    from api.main import journal_edit
-    source = inspect.getsource(journal_edit)
-    assert "_compute_market_window(" not in source, (
-        "journal_edit still calls _compute_market_window — Phase 3a deprecation incomplete"
-    )
-
-
-def test_journal_backfill_metrics_does_not_call_compute_market_window():
-    """Same source-level check for journal_backfill_metrics."""
-    from api.main import journal_backfill_metrics
-    source = inspect.getsource(journal_backfill_metrics)
-    assert "_compute_market_window(" not in source
+# Phase 3b deletes the deprecated helper entirely from api/main.py — any
+# attempt to re-introduce it would require redefining the symbol, which the
+# verification grep would catch immediately.
 
 
 # ---------------------------------------------------------------------------
