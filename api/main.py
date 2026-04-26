@@ -282,8 +282,16 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
     end_date] inclusive.
 
     Response: {"states": [{trade_date, state, exposure_ceiling, cap_at_100,
-                          cycle_day, in_correction, correction_active,
-                          power_trend}, ...]}
+                          cycle_day, display_day_num, in_correction,
+                          correction_active, power_trend}, ...]}
+
+    display_day_num is what the journal UI's MCT State badge appends as
+    "D{N}" — anchored differently per state:
+      POWERTREND: bars since STEP_8_POWERTREND_ON (pt_on_idx) — owner studies
+        PT durations historically, so this maps cleanly to a separate ref DB
+      UPTREND / RALLY MODE: bars since cycle STEP_0 (cycle_start_idx) —
+        continuous count across the cycle's rally→uptrend transition
+      CORRECTION: None (no day count rendered)
     """
     try:
         from datetime import datetime as _dt
@@ -305,7 +313,8 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
 
         bars = result.bars
         # Bars index is RangeIndex(0, N) matching the engine's per-bar i — so
-        # row.name preserves the cycle_start_idx semantics after we filter.
+        # row.name preserves the cycle_start_idx / pt_on_idx semantics after
+        # we filter.
         trade_dates = pd.to_datetime(bars["trade_date"]).dt.date
         mask = (trade_dates >= start) & (trade_dates <= end)
         sliced = bars[mask]
@@ -313,20 +322,32 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
         states = []
         for orig_idx, row in sliced.iterrows():
             cycle_start_idx = row["cycle_start_idx"]
+            pt_on_idx = row.get("pt_on_idx")
             rally_active = bool(row["rally_active"])
+            state_name = row["state"]
+
             if (rally_active and cycle_start_idx is not None
                     and not pd.isna(cycle_start_idx)):
                 cycle_day = int(orig_idx) - int(cycle_start_idx) + 1
             else:
                 cycle_day = 0
 
+            display_day_num: int | None
+            if state_name == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
+                display_day_num = int(orig_idx) - int(pt_on_idx) + 1
+            elif state_name in ("UPTREND", "RALLY MODE") and cycle_day > 0:
+                display_day_num = cycle_day
+            else:
+                display_day_num = None
+
             td = row["trade_date"]
             states.append({
                 "trade_date": td.isoformat() if hasattr(td, "isoformat") else str(td)[:10],
-                "state": row["state"],
+                "state": state_name,
                 "exposure_ceiling": int(row["exposure"]),
                 "cap_at_100": bool(row["cap_at_100"]),
                 "cycle_day": cycle_day,
+                "display_day_num": display_day_num,
                 "in_correction": bool(row["in_correction"]),
                 "correction_active": bool(row["correction_active"]),
                 "power_trend": bool(row["power_trend"]),

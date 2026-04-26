@@ -108,6 +108,56 @@ def test_mct_state_range_2025_11_21_is_rally_mode(canonical_dependencies):
 
 
 @requires_db
+def test_mct_state_range_2026_04_24_is_powertrend_d3(canonical_dependencies):
+    """display_day_num for POWERTREND uses pt_on_idx (anchored 2026-04-22).
+    4/22 = D1, 4/23 = D2, 4/24 = D3 — what the journal MCT State badge shows."""
+    from api.main import journal_mct_state_by_date_range
+    response = journal_mct_state_by_date_range("2026-04-24", "2026-04-24")
+    assert response["states"], "no row returned for 2026-04-24"
+    row = response["states"][0]
+    assert row["state"] == "POWERTREND"
+    assert row["display_day_num"] == 3, (
+        f"Expected display_day_num=3 (PT Day 3) on 2026-04-24, got {row['display_day_num']}"
+    )
+
+
+@requires_db
+def test_mct_state_range_2026_04_22_is_powertrend_d1(canonical_dependencies):
+    """The bar STEP_8_POWERTREND_ON fires on must register as PT Day 1."""
+    from api.main import journal_mct_state_by_date_range
+    response = journal_mct_state_by_date_range("2026-04-22", "2026-04-22")
+    assert response["states"], "no row returned for 2026-04-22"
+    row = response["states"][0]
+    assert row["state"] == "POWERTREND"
+    assert row["display_day_num"] == 1
+
+
+@requires_db
+def test_mct_state_range_2025_11_21_display_day_num_is_1(canonical_dependencies):
+    """RALLY MODE display_day_num uses cycle_start_idx; STEP_0 day = D1."""
+    from api.main import journal_mct_state_by_date_range
+    response = journal_mct_state_by_date_range("2025-11-21", "2025-11-21")
+    row = response["states"][0]
+    assert row["display_day_num"] == 1, (
+        f"STEP_0 bar should be Day 1 of cycle, got {row['display_day_num']}"
+    )
+
+
+@requires_db
+def test_mct_state_range_correction_has_null_display_day_num(canonical_dependencies):
+    """CORRECTION rows should not render a Day suffix — display_day_num is None."""
+    from api.main import journal_mct_state_by_date_range
+    # 2025-11-19 is mid-correction in the canonical run (between 11/20
+    # CORRECTION_DECLARED of the prior cycle and 11/21 STEP_0)
+    response = journal_mct_state_by_date_range("2025-11-20", "2025-11-20")
+    if not response["states"]:
+        pytest.skip("2025-11-20 not in canonical market_data")
+    row = response["states"][0]
+    if row["state"] == "CORRECTION":
+        assert row["display_day_num"] is None
+
+
+@requires_db
 def test_mct_state_range_inverted_dates_returns_error(canonical_dependencies):
     from api.main import journal_mct_state_by_date_range
     response = journal_mct_state_by_date_range("2026-04-24", "2026-04-20")

@@ -257,6 +257,70 @@ def test_powertrend_off_then_on(canonical_run):
     assert (date(2026, 4, 22), "STEP_8_POWERTREND_ON") in types
 
 
+@requires_db
+def test_pt_on_idx_anchored_at_2026_04_22(canonical_run):
+    """STEP_8_POWERTREND_ON fires on 4/22/2026; pt_on_idx must point at that bar."""
+    _, result = canonical_run
+    bars = result.bars
+    pt_idx = result.final_state.get("pt_on_idx")
+    assert pt_idx is not None, "PT is currently ON in the canonical run; pt_on_idx must be set"
+    anchor_date = bars.iloc[int(pt_idx)]["trade_date"]
+    assert anchor_date == date(2026, 4, 22), (
+        f"pt_on_idx points to {anchor_date}, expected 2026-04-22"
+    )
+
+
+@requires_db
+def test_pt_on_idx_yields_powertrend_d3_on_2026_04_24(canonical_run):
+    """4/22 = D1, 4/23 = D2, 4/24 = D3 — what the journal MCT State badge shows."""
+    _, result = canonical_run
+    bars = result.bars
+    last_idx = len(bars) - 1
+    last_date = bars.iloc[last_idx]["trade_date"]
+    assert last_date == date(2026, 4, 24), (
+        f"Canonical run ends on {last_date}, expected 2026-04-24"
+    )
+    pt_idx = int(result.final_state["pt_on_idx"])
+    pt_day = last_idx - pt_idx + 1
+    assert pt_day == 3, f"Expected PT Day 3 on 4/24/2026, got Day {pt_day}"
+
+
+@requires_db
+def test_pt_on_idx_cleared_during_pt_off_window(canonical_run):
+    """Between 2/5/2026 (PT-OFF) and 4/22/2026 (re-PT-ON), pt_on_idx must be None.
+    Sample bar: 3/2/2026 (mid-window, plenty of bars on either side)."""
+    _, result = canonical_run
+    bars = result.bars
+    rows = bars.index[bars["trade_date"] == date(2026, 3, 2)]
+    assert len(rows) == 1, "3/2/2026 missing from canonical run"
+    sample = bars.iloc[int(rows[0])]
+    pt_idx = sample["pt_on_idx"]
+    assert pt_idx is None or pd.isna(pt_idx), (
+        f"pt_on_idx should be None on 3/2/2026 (between PT runs), got {pt_idx}"
+    )
+
+
+@requires_db
+def test_pt_on_idx_re_anchors_on_second_step8(canonical_run):
+    """STEP_8 fires twice in the canonical run (2025-05-16 then 2026-04-22).
+    After PT-OFF on 2026-02-05 cleared the anchor, the 2026-04-22 STEP_8
+    must re-anchor pt_on_idx to its own bar — NOT keep the 2025-05-16 idx."""
+    _, result = canonical_run
+    bars = result.bars
+
+    first_step8_rows = bars.index[bars["trade_date"] == date(2025, 5, 16)]
+    second_step8_rows = bars.index[bars["trade_date"] == date(2026, 4, 22)]
+    assert len(first_step8_rows) == 1
+    assert len(second_step8_rows) == 1
+    second_idx = int(second_step8_rows[0])
+
+    pt_idx_now = int(result.final_state["pt_on_idx"])
+    assert pt_idx_now == second_idx, (
+        f"pt_on_idx must re-anchor to 2026-04-22 bar ({second_idx}), "
+        f"not the 2025-05-16 bar; got {pt_idx_now}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Synthetic / isolated-mechanics tests (no DB)
 # ---------------------------------------------------------------------------

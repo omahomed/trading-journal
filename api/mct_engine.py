@@ -200,6 +200,14 @@ class MCTEngine:
             # rally-hunt phase and freezes when STEP_4 flips in_correction off.
             "cycle_start_idx": None,
 
+            # Power-Trend anchor for the user-facing "PT Day N" display in
+            # POWERTREND state. Set when STEP_8_POWERTREND_ON fires
+            # (pt_on_idx = i). Cleared on POWERTREND_OFF. Overwritten if
+            # STEP_8 re-fires in a fresh PT run. Independent of cycle bookkeeping
+            # — the user studies PT durations against a separate historical DB,
+            # so the journal display anchors here, not at cycle_start_idx.
+            "pt_on_idx": None,
+
             # Step ladder flags
             "step0_done": False,
             "step1_done": False,
@@ -926,6 +934,9 @@ class MCTEngine:
                 and float(current["close"]) >= float(prev["close"])
                 and sma_50 > float(prev["sma_50"])):
             state["power_trend"] = True
+            # Anchor the user-facing "PT Day N" display to this firing.
+            # Overwrites any prior pt_on_idx — fresh PT run, fresh anchor.
+            state["pt_on_idx"] = i
             before = state["exposure"]
             state["exposure"] = EXPOSURE_STEP_8
             bar_signals.append(self._signal(
@@ -960,6 +971,9 @@ class MCTEngine:
 
         if crossed_below and down_close:
             state["power_trend"] = False
+            # Drop the PT-Day anchor — the next PT run will re-anchor when
+            # STEP_8 fires again.
+            state["pt_on_idx"] = None
             before = state["exposure"]
             bar_signals.append(self._signal(
                 current, state, "POWERTREND_OFF",
@@ -1100,6 +1114,7 @@ class MCTEngine:
             "rally_count": state["rally_count"],
             "rally_day_idx": state["rally_day_idx"],
             "cycle_start_idx": state["cycle_start_idx"],
+            "pt_on_idx": state["pt_on_idx"],
             "step1_done": state["step1_done"],
             "step4_done": state["step4_done"],
             "reference_high": state["reference_high"],

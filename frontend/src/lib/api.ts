@@ -265,6 +265,10 @@ export const api = {
         exposure_ceiling: number;
         cap_at_100: boolean;
         cycle_day: number;
+        // display_day_num is what the journal MCT State badge appends as
+        // "D{N}" — POWERTREND counts from STEP_8 firing, UPTREND/RALLY
+        // MODE count from cycle STEP_0, CORRECTION renders no suffix.
+        display_day_num: number | null;
         in_correction: boolean;
         correction_active: boolean;
         power_trend: boolean;

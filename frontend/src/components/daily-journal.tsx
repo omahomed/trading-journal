@@ -10,7 +10,10 @@ type Tab = "view" | "manage";
 type MctState = {
   state: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
   cap_at_100: boolean;
-  cycle_day: number;
+  // display_day_num is the per-state Day count the badge renders as "D{N}".
+  // POWERTREND anchors at STEP_8 firing; UPTREND/RALLY MODE anchor at cycle
+  // STEP_0; CORRECTION returns null (no suffix).
+  display_day_num: number | null;
 };
 
 const MCT_STATE_STYLES: Record<MctState["state"], { bg: string; fg: string }> = {
@@ -47,14 +50,14 @@ function pctColor(v: number) {
 function MctStateBadge({ s }: { s: MctState | undefined }) {
   if (!s) return <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>—</span>;
   const st = MCT_STATE_STYLES[s.state] || { bg: "#888", fg: "#fff" };
-  const showDay = s.state === "RALLY MODE" && s.cycle_day > 0;
+  const showDay = typeof s.display_day_num === "number" && s.display_day_num > 0;
   return (
     <span
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold whitespace-nowrap"
       style={{ background: st.bg, color: st.fg }}
       title={s.cap_at_100 ? `${s.state} · capped at 100%` : s.state}
     >
-      <span>{s.state}{showDay ? ` D${s.cycle_day}` : ""}</span>
+      <span>{s.state}{showDay ? ` D${s.display_day_num}` : ""}</span>
       {s.cap_at_100 && (
         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
@@ -156,7 +159,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
         m.set(s.trade_date, {
           state: s.state,
           cap_at_100: s.cap_at_100,
-          cycle_day: s.cycle_day,
+          display_day_num: s.display_day_num,
         });
       }
       setMctStates(m);
