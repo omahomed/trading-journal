@@ -59,10 +59,9 @@ PT_ON_LOW_ABOVE_21_BARS = 10        # low > 21 EMA for last N bars
 
 RUNNING_MIN_LOOKBACK = 30           # while in_correction, track running min within this window
 
-# STEP_0 confirmation: requires a meaningful up-close magnitude to filter out
-# noise (e.g., 4/7/2025 with +0.099% close should not be a rally day; 4/9/2025
-# with +9.75% should). Threshold not in spec — derived from canonical signals.
-STEP_0_PCT_THRESHOLD = 0.005        # 0.5% close-up required
+# Pink rally day threshold — close <= prev close but position-in-range > 0.5
+# (close in upper half of bar's intraday range) qualifies as a rally day.
+PINK_RALLY_DAY_POS_IN_RANGE = 0.5
 
 # Step ladder exposure targets (for Steps 0–4 in rally-hunt phase)
 STEP_LADDER_EXPOSURE = {0: 20, 1: 40, 2: 60, 3: 80, 4: 100}
@@ -514,6 +513,12 @@ class MCTEngine:
             target = EXPOSURE_ON_CHARACTER_BREAK
             state["exposure"] = min(state["exposure"], target)
             state["character_break_fired"] = True
+            # Steps 5/6/7 retire on CB so they can re-fire after Recovery
+            # restores the stack (canonical 1/12/2026 STEP_7 re-fire and
+            # 2/2/2026 STEP_7 re-fire follow this pattern).
+            state["step5_done"] = False
+            state["step6_done"] = False
+            state["step7_done"] = False
             bar_signals.append(self._signal(
                 current, state, "CHARACTER_BREAK",
                 f"close < 21 EMA on transition; exposure cut to {target}%",
@@ -573,32 +578,28 @@ class MCTEngine:
                 # Same bar can fire a fresh STEP_0 if conditions met (handled below)
 
         # ----- Step 0: Rally Day -----
-        # Two firing conditions:
-        #   Rule A (cascade-cycle restart): if RALLY_INVALIDATED fired this bar,
-        #     immediately mark a new rally with rally_day_low = current low.
-        #     Canonical 3/19/2026 (-0.82%), 3/23/2026 (-0.65%), 3/25/2026
-        #     (-0.08%), 3/31/2026 (-1.55%) all fire STEP_0 on DOWN days right
-        #     after invalidation, so a magnitude/up-close gate would miss them.
-        #   Rule B (rally-hunt confirmation): otherwise, fire when close >
-        #     prev close AND % gain >= STEP_0_PCT_THRESHOLD. Filters out tiny
-        #     dead-cat moves (4/7/2025 +0.099%) that aren't real rally days.
-        rally_invalidated_this_bar = any(
-            s.signal_type == "RALLY_INVALIDATED" for s in bar_signals
-        )
+        # V11 single rule: STEP_0 fires when the bar is either
+        #   (a) an up day (close > prev close), OR
+        #   (b) a "pink rally day" — down/flat close but with close in the
+        #       upper half of the bar's intraday range (close - low) /
+        #       (high - low) > 0.5. Captures bars that opened weak, made a
+        #       new low, and closed near the top of the range.
+        # Continuation-down bars (close in lower half of range) don't qualify.
+        bar_high = float(current["high"])
+        denom = bar_high - low
+        position_in_range = (close - low) / denom if denom > 0 else 0.5
+        up_day = prev is not None and close > prev_close
+        pink_rally_day = (prev is not None
+                          and close <= prev_close
+                          and position_in_range > PINK_RALLY_DAY_POS_IN_RANGE)
 
-        rule_a = rally_invalidated_this_bar and not state["step0_done"]
-        rule_b = (not state["step0_done"]
-                  and state["running_min_idx"] is not None
-                  and prev is not None
-                  and close > prev_close
-                  and prev_close > 0
-                  and (close - prev_close) / prev_close >= STEP_0_PCT_THRESHOLD)
-
-        if rule_a or rule_b:
+        if (not state["step0_done"]
+                and state["running_min_idx"] is not None
+                and (up_day or pink_rally_day)):
             state["step0_done"] = True
             state["rally_active"] = True
-            state["rally_day_idx"] = state["running_min_idx"] if state["running_min_idx"] is not None else i
-            state["rally_day_low"] = state["running_min_low"] if state["running_min_low"] is not None else low
+            state["rally_day_idx"] = state["running_min_idx"]
+            state["rally_day_low"] = state["running_min_low"]
             state["rally_count"] = i - state["rally_day_idx"] + 1
 
             before = state["exposure"]
@@ -611,7 +612,8 @@ class MCTEngine:
                 meta={"rally_day_low": state["rally_day_low"],
                       "rally_day_idx": int(state["rally_day_idx"]),
                       "rally_count": state["rally_count"],
-                      "rule": "A" if rule_a else "B"},
+                      "trigger": "up_day" if up_day else "pink_rally_day",
+                      "position_in_range": position_in_range},
             ))
 
         # Increment rally_count for bars after STEP_0 already fired
@@ -681,13 +683,14 @@ class MCTEngine:
             # NEXT bar (in_correction flag flips at end of this bar's rally hunt).
             state["in_correction"] = False
 
-        # ----- Post-FTD soft fail: intraday low < ftd_low -----
-        # Per V11 design: the trigger is the bar's intraday LOW dipping below
-        # the FTD bar's low, not the bar's close. (Spec text "close < ftd_low"
-        # was a wording bug; canonical 4/16/2025 has close > ftd_low but
-        # low < ftd_low and fires soft-fail.)
+        # ----- Post-FTD soft fail: close < ftd_low -----
+        # Asymmetric vs. Rally Day invalidation by design (V11):
+        #   Rally Day invalidation: ANY intraday low < rally_day_low → reset
+        #     (rally is fragile, not yet confirmed)
+        #   FTD soft-fail: requires CLOSE < ftd_low (FTD is confirmed; needs
+        #     closing damage, not just intraday undercut)
         if (state["step1_done"] and state["ftd_low"] is not None
-                and low < state["ftd_low"]):
+                and close < state["ftd_low"]):
             self._fire_post_ftd_soft_fail(current, state, bar_signals)
 
     def _fire_rally_invalidation(self, i, current, state, bar_signals, *, reason: str):
@@ -801,8 +804,15 @@ class MCTEngine:
         # done at START of bar — so they wait for the bar AFTER STEP_4 fires.
         # Canonical: STEP_4 on 12/24/2025, STEP_6 on 12/26 (next trading day),
         # STEP_7 on 12/29 (when 8 EMA finally tops 21 EMA).
+        # Guard: don't re-fire on the same bar as CHARACTER_BREAK; Steps 5/6/7
+        # re-fire AFTER a recovery, not in lockstep with the break.
+        cb_fired_this_bar = any(
+            s.signal_type == "CHARACTER_BREAK" for s in bar_signals
+        )
+
         if (not state["step5_done"]
                 and start_flags["step4_done"]
+                and not cb_fired_this_bar
                 and state["consec_low_above_50"] >= 3
                 and state["correction_active"]):
             state["step5_done"] = True
@@ -820,7 +830,9 @@ class MCTEngine:
             ))
 
         # ----- Step 6: 21 EMA > 50 SMA > 200 SMA -----
-        if (not state["step6_done"] and start_flags["step4_done"] and state["correction_active"]
+        if (not state["step6_done"] and start_flags["step4_done"]
+                and not cb_fired_this_bar
+                and state["correction_active"]
                 and ema_21 is not None and sma_50 is not None and sma_200 is not None
                 and ema_21 > sma_50 > sma_200):
             state["step6_done"] = True
@@ -842,6 +854,7 @@ class MCTEngine:
         # Step 6, so it can't fire same bar as Step 6. Canonical: Step 6 on
         # 12/26/2025, Step 7 on 12/29/2025 (next trading day).
         if (not state["step7_done"] and start_flags["step6_done"]
+                and not cb_fired_this_bar
                 and state["correction_active"]
                 and ema_8 is not None and ema_21 is not None
                 and sma_50 is not None and sma_200 is not None

@@ -31,8 +31,9 @@ import pytest
 CANONICAL_EVENTS: list[tuple[date, str]] = [
     (date(2025, 2, 27), "CORRECTION_DECLARED"),
     (date(2025, 2, 28), "STEP_0_RALLY_DAY"),
+    (date(2025, 4, 7), "STEP_0_RALLY_DAY"),       # rally_day_low 14,784.03
     (date(2025, 4, 11), "STEP_1_FTD"),
-    (date(2025, 4, 16), "POST_FTD_SOFT_FAIL"),
+    (date(2025, 4, 21), "POST_FTD_SOFT_FAIL"),    # close < ftd_low
     (date(2025, 4, 22), "STEP_1_FTD"),
     (date(2025, 4, 29), "STEP_4_LOW_ABOVE_21EMA_3BARS"),
     (date(2025, 5, 5), "STEP_5_LOW_ABOVE_50SMA_3BARS"),
@@ -51,8 +52,9 @@ CANONICAL_EVENTS: list[tuple[date, str]] = [
     (date(2026, 2, 4), "V10_SOFT_RESET"),
     (date(2026, 2, 5), "POWERTREND_OFF"),
     (date(2026, 2, 24), "STEP_1_FTD"),
+    (date(2026, 3, 3), "POST_FTD_SOFT_FAIL"),
     (date(2026, 3, 4), "STEP_1_FTD"),
-    (date(2026, 3, 5), "POST_FTD_SOFT_FAIL"),
+    (date(2026, 3, 6), "POST_FTD_SOFT_FAIL"),
     (date(2026, 3, 9), "STEP_1_FTD"),
     (date(2026, 4, 8), "STEP_1_FTD"),
     (date(2026, 4, 10), "STEP_4_LOW_ABOVE_21EMA_3BARS"),
@@ -98,15 +100,16 @@ def canonical_run():
 
 @requires_db
 def test_full_run_signal_count_within_bounds(canonical_run):
-    """Loose-bound sanity check on total signal count.
+    """Tight-bound sanity check on total signal count.
 
-    Pinned to 100–180 based on the V11 first-implementation run (133 signals).
-    Adjust the upper bound as the engine is iterated to remove noise; tighten
-    to an exact equality once the canonical V11 reference is locked.
+    Locked to 115–119 (count ±2) after V11 corrections: post-FTD soft-fail
+    uses close, STEP_0 single-rule (up day or pink rally day), STEP_7
+    re-fires after CB. Any change that shifts the count outside this band
+    indicates a behavioral regression and should be investigated.
     """
     _, result = canonical_run
-    assert 100 <= len(result.signals) <= 180, (
-        f"Got {len(result.signals)} signals; expected 100–180"
+    assert 115 <= len(result.signals) <= 119, (
+        f"Got {len(result.signals)} signals; expected 115–119"
     )
 
 
@@ -124,6 +127,17 @@ def test_canonical_signal_present(canonical_run, event_date, event_type):
 # ---------------------------------------------------------------------------
 # Targeted assertions (specific values, not just presence)
 # ---------------------------------------------------------------------------
+
+@requires_db
+def test_step0_2025_04_07_rally_day_low(canonical_run):
+    """4/7/2025 STEP_0 sets rally_day_low to 14,784.03 (running-min low)."""
+    _, result = canonical_run
+    step0s = [s for s in result.signals
+              if s.signal_type == "STEP_0_RALLY_DAY" and s.trade_date == date(2025, 4, 7)]
+    assert step0s, "STEP_0_RALLY_DAY missing on 4/7/2025"
+    sig = step0s[0]
+    assert sig.meta["rally_day_low"] == pytest.approx(14784.03, abs=0.5)
+
 
 @requires_db
 def test_correction_declared_2025_02_27(canonical_run):
