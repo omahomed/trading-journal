@@ -38,20 +38,6 @@ type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
-function windowBadge(mw: string) {
-  const wl = (mw || "").toUpperCase();
-  const styles: Record<string, { bg: string; fg: string }> = {
-    POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
-    OPEN: { bg: "#08a86b", fg: "#fff" },
-    NEUTRAL: { bg: "#f59f00", fg: "#000" },
-    CLOSED: { bg: "#e5484d", fg: "#fff" },
-  };
-  const s = styles[wl] || { bg: "#888", fg: "#fff" };
-  return (
-    <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: s.bg, color: s.fg }}>{(mw || "N/A").toUpperCase()}</span>
-  );
-}
-
 function cycleBadge(state: string) {
   const s = (state || "").toUpperCase();
   const styles: Record<string, { bg: string; fg: string }> = {
@@ -130,7 +116,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
 
   // Lazy-fill market_cycle for the selected day if the entry exists but the
   // value is missing. Fires at most once per date per session via the
-  // attempted set. Same auto-compute path used by Market Window.
+  // attempted set.
   const attemptedCycleFill = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!selectedDate || history.length === 0) return;
@@ -373,7 +359,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
           </div>
 
           {/* Section 1: Header Metrics */}
-          <div className="grid grid-cols-5 gap-3 mb-5">
+          <div className="grid grid-cols-4 gap-3 mb-5">
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
               <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${(day.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
@@ -388,11 +374,7 @@ export function DailyReportCard({ navColor }: { navColor: string }) {
               </div>
             </div>
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Market Window</div>
-              {windowBadge((day as any).market_window || "")}
-            </div>
-            <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>NASDAQ Cycle</div>
+              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>MCT State</div>
               {(day as any).market_cycle
                 ? cycleBadge((day as any).market_cycle)
                 : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
