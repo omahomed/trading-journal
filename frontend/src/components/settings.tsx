@@ -496,7 +496,7 @@ function CashLedger({ portfolioId, onChanged }: { portfolioId: number; onChanged
   const refetch = useCallback(async () => {
     setError(null);
     try {
-      const res = await api.listCashTransactions(portfolioId, 100) as unknown;
+      const res = await api.listCashTransactions(portfolioId, 100, true) as unknown;
       if (Array.isArray(res)) {
         setRows(res as CashTransaction[]);
       } else {

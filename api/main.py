@@ -1398,13 +1398,21 @@ def get_portfolio_returns(portfolio_id: int, request: Request):
 
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
-def list_cash_transactions_endpoint(portfolio_id: int, request: Request, limit: int = 50):
+def list_cash_transactions_endpoint(portfolio_id: int, request: Request,
+                                    limit: int = 50,
+                                    exclude_trade_rows: bool = False):
     """Return recent cash_transactions for a portfolio, newest first. Used
-    by the Settings cash-activity view."""
+    by the Settings cash-activity view.
+
+    exclude_trade_rows=true filters buy/sell at the SQL layer so backdated
+    deposits/withdrawals can't be hidden behind hundreds of recent trades.
+    """
     try:
         if not _ensure_user_owns_portfolio(portfolio_id):
             return {"error": "Portfolio not found"}
-        rows = db.list_cash_transactions(portfolio_id, limit=limit)
+        rows = db.list_cash_transactions(
+            portfolio_id, limit=limit, exclude_trade_rows=exclude_trade_rows,
+        )
         return [_serialize_cash_tx(r) for r in rows]
     except Exception as e:
         return {"error": str(e)}

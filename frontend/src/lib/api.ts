@@ -456,8 +456,8 @@ export const api = {
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
-  listCashTransactions: (portfolioId: number, limit = 50) =>
-    fetchJSON<CashTransaction[]>(`/api/portfolios/${portfolioId}/cash-transactions?limit=${limit}`),
+  listCashTransactions: (portfolioId: number, limit = 50, excludeTradeRows = false) =>
+    fetchJSON<CashTransaction[]>(`/api/portfolios/${portfolioId}/cash-transactions?limit=${limit}&exclude_trade_rows=${excludeTradeRows}`),
 
   createCashTransaction: (portfolioId: number, body: {
     source: CashAction;

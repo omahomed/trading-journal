@@ -3247,16 +3247,27 @@ def get_net_contributions(portfolio_id):
             return float(row[0])
 
 
-def list_cash_transactions(portfolio_id, limit=200):
+def list_cash_transactions(portfolio_id, limit=200, exclude_trade_rows=False):
     """Return the most recent cash_tx rows for a portfolio, newest first.
-    Used by an Activity/Cash ledger view in the UI."""
+    Used by an Activity/Cash ledger view in the UI.
+
+    When exclude_trade_rows is True, buy/sell rows (which are auto-emitted by
+    save_detail_row and dwarf user-managed cash flows) are filtered at the SQL
+    layer so the LIMIT applies to deposit/withdraw/reconcile rows only — fixes
+    the 'I added a backdated deposit but I can't see it' bug where a couple
+    hundred recent trades pushed the deposit past the cutoff."""
+    where = ["portfolio_id = %s"]
+    params: list = [portfolio_id]
+    if exclude_trade_rows:
+        where.append("source NOT IN ('buy', 'sell')")
+    params.append(limit)
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT id, portfolio_id, date, amount, source, trade_detail_id, note, created_at "
-                "FROM cash_transactions WHERE portfolio_id = %s "
+                f"FROM cash_transactions WHERE {' AND '.join(where)} "
                 "ORDER BY date DESC, id DESC LIMIT %s",
-                (portfolio_id, limit),
+                params,
             )
             return [dict(r) for r in cur.fetchall()]
 
