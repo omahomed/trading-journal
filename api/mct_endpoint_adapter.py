@@ -262,6 +262,9 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "ftd_date": _latest_ftd_date(result.signals),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),
+        # V11 surfaces consume cap_at_100 to render the "capped at 100%"
+        # indicator on the tape pill and the MCT page.
+        "cap_at_100": bool(state.get("cap_at_100")),
     }
 
 

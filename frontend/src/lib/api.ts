@@ -227,7 +227,48 @@ export const api = {
   },
 
   // Market
-  rallyPrefix: () => fetchJSON<{ prefix: string; day_num?: number; state?: string }>(`/api/market/rally-prefix`),
+  rallyPrefix: () => fetchJSON<{
+    prefix: string;
+    day_num?: number;
+    state?: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+    cap_at_100?: boolean;
+    drawdown_pct?: number;
+    power_trend_on_since?: string | null;
+    ftd_date?: string | null;
+    reference_high?: number;
+    reference_high_date?: string | null;
+  }>(`/api/market/rally-prefix`),
+
+  marketSignals: (days = 30, signal_type?: string) => {
+    const params = new URLSearchParams({ days: String(days) });
+    if (signal_type) params.set("signal_type", signal_type);
+    return fetchJSON<{
+      signals: Array<{
+        trade_date: string;
+        signal_type: string;
+        signal_label: string;
+        exposure_before: number | null;
+        exposure_after: number | null;
+        state_before: string | null;
+        state_after: string | null;
+        meta: Record<string, unknown>;
+      }>;
+    }>(`/api/market/signals?${params.toString()}`);
+  },
+
+  mctStateByDateRange: (start_date: string, end_date: string) =>
+    fetchJSON<{
+      states: Array<{
+        trade_date: string;
+        state: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+        exposure_ceiling: number;
+        cap_at_100: boolean;
+        cycle_day: number;
+        in_correction: boolean;
+        correction_active: boolean;
+        power_trend: boolean;
+      }>;
+    }>(`/api/journal/mct-state-by-date-range?start_date=${start_date}&end_date=${end_date}`),
 
   nlvShadow: (portfolio = "CanSlim") =>
     fetchJSON<{

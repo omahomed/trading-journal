@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { Onboarding } from "@/components/onboarding";
+import { TapeStatusPill } from "@/components/tape-status-pill";
 import { PortfolioProvider, usePortfolio } from "@/lib/portfolio-context";
 import { getGroupForHref, getNavItemForHref } from "@/lib/nav";
 
@@ -85,11 +86,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             <span className="text-[var(--ink)] font-semibold">{pageLabel}</span>
           </div>
           <div className="flex-1" />
-          {/* Tape status pill */}
-          <div className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--ink-2)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#08a86b]" style={{ boxShadow: "0 0 0 3px #e5f7ee", animation: "pulse-dot 2s ease-in-out infinite" }} />
-            <span>Confirmed Uptrend · since Apr 11</span>
-          </div>
+          <TapeStatusPill />
           <button className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--ink-2)] hover:bg-[#eef0f6] transition-colors"
                   onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
