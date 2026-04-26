@@ -85,21 +85,72 @@ _STEP_LABELS = [
 ]
 _LEGACY_STEP_EXPOSURES = [20, 40, 60, 80, 100, 120, 140, 160, 200]
 
+# Step-index → canonical signal_type from market_signals_vocab. The Entry
+# Ladder UI asks "did Step N fire in the current cycle?" — answer lives
+# in the signal log, not in the engine's live step_done flags (which it
+# recycles across cycles, e.g., resets 5/6/7 on CORRECTION_NULLIFIED).
+_STEP_SIGNAL_TYPE = {
+    0: "STEP_0_RALLY_DAY",
+    1: "STEP_1_FTD",
+    2: "STEP_2_CLOSE_ABOVE_21EMA",
+    3: "STEP_3_LOW_ABOVE_21EMA",
+    4: "STEP_4_LOW_ABOVE_21EMA_3BARS",
+    5: "STEP_5_LOW_ABOVE_50SMA_3BARS",
+    6: "STEP_6_MA_STACK_SLOW",
+    7: "STEP_7_MA_STACK_FULL",
+}
 
-def _step_done_flags(state: dict) -> list[bool]:
-    return [
-        bool(state.get(f"step{i}_done", False)) for i in range(8)
-    ] + [bool(state.get("power_trend", False))]
+
+def _step_done_flags(
+    state: dict,
+    signals: Optional[list[SignalEvent]] = None,
+    cycle_start_date: Optional[date] = None,
+) -> list[bool]:
+    """Per-step achievement for the entry ladder ladder.
+
+    Steps 0-7: did STEP_N_* fire on or after the current cycle's start?
+    Reads the canonical signal log (the source of truth for "what happened
+    in this cycle") rather than the engine's live step_done flags, which
+    are intermediate bookkeeping the engine recycles across cycles.
+
+    Step 8 (Power-Trend ON): live state["power_trend"] flag. PT can flip
+    ON/OFF independently of cycle bookkeeping, so the live flag IS
+    authoritative here.
+
+    Fallback: if cycle_start_date is None (no rally cycle anchored — deep
+    correction, or signals not provided), return the live step_done flags
+    so the ladder still renders something. Old callers that pass only
+    state get the legacy state-based behavior.
+    """
+    if cycle_start_date is None or signals is None:
+        return [
+            bool(state.get(f"step{i}_done", False)) for i in range(8)
+        ] + [bool(state.get("power_trend", False))]
+
+    fired_in_cycle = {
+        sig.signal_type for sig in signals if sig.trade_date >= cycle_start_date
+    }
+    flags = [_STEP_SIGNAL_TYPE[i] in fired_in_cycle for i in range(8)]
+    flags.append(bool(state.get("power_trend", False)))
+    return flags
 
 
-def _highest_step(state: dict) -> int:
-    flags = _step_done_flags(state)
+def _highest_step(
+    state: dict,
+    signals: Optional[list[SignalEvent]] = None,
+    cycle_start_date: Optional[date] = None,
+) -> int:
+    flags = _step_done_flags(state, signals, cycle_start_date)
     achieved = [i for i, f in enumerate(flags) if f]
     return max(achieved) if achieved else -1
 
 
-def _entry_ladder(state: dict) -> list[dict]:
-    flags = _step_done_flags(state)
+def _entry_ladder(
+    state: dict,
+    signals: Optional[list[SignalEvent]] = None,
+    cycle_start_date: Optional[date] = None,
+) -> list[dict]:
+    flags = _step_done_flags(state, signals, cycle_start_date)
     return [
         {"step": i, "label": _STEP_LABELS[i], "achieved": flags[i],
          "exposure": _LEGACY_STEP_EXPOSURES[i]}
@@ -218,12 +269,15 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     # which freezes after STEP_4 because rally-hunt logic stops running.
     cycle_start_idx = state.get("cycle_start_idx")
     cycle_start_date: Optional[str] = None
+    cycle_start_date_obj: Optional[date] = None
     if cycle_start_idx is not None and rally_active:
         latest_idx = len(bars) - 1
         cycle_day = latest_idx - int(cycle_start_idx) + 1
         idx = int(cycle_start_idx)
         if 0 <= idx < len(bars):
-            cycle_start_date = _isodate(bars["trade_date"].iloc[idx])
+            raw_td = bars["trade_date"].iloc[idx]
+            cycle_start_date_obj = pd.Timestamp(raw_td).date()
+            cycle_start_date = cycle_start_date_obj.isoformat()
     else:
         cycle_day = 0
 
@@ -245,7 +299,7 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "prefix": prefix,
         "day_num": cycle_day,
         "state": state_name,
-        "entry_step": _highest_step(state),
+        "entry_step": _highest_step(state, result.signals, cycle_start_date_obj),
         "entry_exposure": int(state.get("exposure") or 0),
         "price": round(close, 2),
         "ema8": round(ema_8, 2),
@@ -262,7 +316,7 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "stack_8_21": ema_8 > ema_21,
         "stack_21_50": ema_21 > sma_50,
         "stack_50_200": sma_50 > sma_200,
-        "entry_ladder": _entry_ladder(state),
+        "entry_ladder": _entry_ladder(state, result.signals, cycle_start_date_obj),
         "ftd_date": _latest_ftd_date(result.signals),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),

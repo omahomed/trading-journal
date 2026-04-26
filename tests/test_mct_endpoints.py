@@ -114,6 +114,7 @@ def test_state_name_correction_default():
 
 
 def test_entry_ladder_has_9_steps_with_legacy_exposures():
+    """Legacy fallback (no signals/cycle_start_date passed) reads live state flags."""
     from api.mct_endpoint_adapter import _entry_ladder
     ladder = _entry_ladder({"step0_done": True, "step1_done": True, "power_trend": False})
     assert len(ladder) == 9
@@ -121,6 +122,70 @@ def test_entry_ladder_has_9_steps_with_legacy_exposures():
     assert ladder[0]["exposure"] == 20
     assert ladder[8]["achieved"] is False
     assert ladder[8]["exposure"] == 200
+
+
+def test_entry_ladder_reads_from_signal_log_for_steps_0_to_7():
+    """When signals + cycle_start_date are passed, achievement comes from the
+    signal log filtered by current cycle — not from live step_done flags.
+
+    Reproduces the post-nullification scenario where the engine has reset
+    step5/6/7_done to False but the signal log shows they fired earlier in
+    the cycle. The ladder must show them as achieved.
+    """
+    from datetime import date as _date
+    from api.mct_engine import SignalEvent
+    from api.mct_endpoint_adapter import _entry_ladder
+
+    # Synthetic state: post-nullification, only step1-4 still set as done
+    # (engine reset 5/6/7 on CORRECTION_NULLIFIED), power_trend True after
+    # STEP_8 fired. This is the exact 2026-04-22+ canonical state.
+    state = {
+        "step0_done": False, "step1_done": True, "step2_done": True,
+        "step3_done": True, "step4_done": True,
+        "step5_done": False, "step6_done": False, "step7_done": False,
+        "power_trend": True,
+    }
+
+    cycle_start = _date(2026, 3, 31)
+    signals = [
+        SignalEvent(_date(2026, 3, 31), "STEP_0_RALLY_DAY", "rally", 0, 20, "CORRECTION", "RALLY MODE"),
+        SignalEvent(_date(2026, 4, 8),  "STEP_1_FTD",                  "FTD",   20,  40, "RALLY MODE", "RALLY MODE"),
+        SignalEvent(_date(2026, 4, 8),  "STEP_2_CLOSE_ABOVE_21EMA",    "c>21",  40,  60, "RALLY MODE", "RALLY MODE"),
+        SignalEvent(_date(2026, 4, 8),  "STEP_3_LOW_ABOVE_21EMA",      "l>21",  60,  80, "RALLY MODE", "RALLY MODE"),
+        SignalEvent(_date(2026, 4, 10), "STEP_4_LOW_ABOVE_21EMA_3BARS","l>21x3",80, 100, "RALLY MODE", "UPTREND"),
+        SignalEvent(_date(2026, 4, 13), "STEP_5_LOW_ABOVE_50SMA_3BARS","l>50x3",100,120, "UPTREND",   "UPTREND"),
+        SignalEvent(_date(2026, 4, 15), "STEP_6_MA_STACK_SLOW",        "stack3",120,140, "UPTREND",   "UPTREND"),
+        SignalEvent(_date(2026, 4, 15), "STEP_7_MA_STACK_FULL",        "stack4",140,160, "UPTREND",   "UPTREND"),
+        SignalEvent(_date(2026, 4, 22), "STEP_8_POWERTREND_ON",        "PT-ON", 160,200, "UPTREND",   "POWERTREND"),
+    ]
+
+    ladder = _entry_ladder(state, signals, cycle_start)
+    # Every step that fired in the cycle should be achieved, even if the
+    # live step_done flag was reset by the engine.
+    for i in range(8):
+        assert ladder[i]["achieved"] is True, f"Step {i} should be achieved per signal log"
+    # Step 8 reads live power_trend flag (which is True here)
+    assert ladder[8]["achieved"] is True
+
+
+def test_entry_ladder_excludes_signals_before_cycle_start():
+    """A STEP_N firing in a PRIOR cycle must not count toward the current
+    cycle's ladder."""
+    from datetime import date as _date
+    from api.mct_engine import SignalEvent
+    from api.mct_endpoint_adapter import _entry_ladder
+
+    state = {"step0_done": False, "power_trend": False}
+    cycle_start = _date(2026, 3, 31)
+    signals = [
+        # Prior cycle's STEP_5 — must be excluded
+        SignalEvent(_date(2025, 5, 5), "STEP_5_LOW_ABOVE_50SMA_3BARS", "old", 100, 120, "UPTREND", "UPTREND"),
+        # Current cycle's STEP_0
+        SignalEvent(_date(2026, 3, 31), "STEP_0_RALLY_DAY", "new", 0, 20, "CORRECTION", "RALLY MODE"),
+    ]
+    ladder = _entry_ladder(state, signals, cycle_start)
+    assert ladder[0]["achieved"] is True   # current cycle STEP_0
+    assert ladder[5]["achieved"] is False  # old STEP_5 excluded
 
 
 def test_market_state_for_journal_excludes_market_window():
