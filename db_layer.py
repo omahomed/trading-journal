@@ -1379,6 +1379,50 @@ def get_latest_signal_date(symbol):
             return result[0] if result and result[0] else None
 
 
+def load_v11_market_signals(days=30, signal_type=None):
+    """Load V11 MCT engine signals from market_signals (post-migration 010 schema).
+
+    Distinct from load_market_signals() above, which targets the orphaned V10
+    schema (market_exposure, buy_switch, distribution_count, ...) — those columns
+    no longer exist on the table after migration 010 dropped + recreated it.
+    The V10 reader is dead code pending cleanup.
+
+    Returns rows ordered by trade_date desc, then id desc as a tie-break so a
+    multi-event day reads back in deterministic insertion order. Each row is a
+    dict ready to JSON-serialize except trade_date, which the caller must coerce.
+    """
+    import json as _json
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT trade_date, signal_type, signal_label,
+                       exposure_before, exposure_after,
+                       state_before, state_after, meta
+                FROM market_signals
+                WHERE trade_date >= CURRENT_DATE - (%s * INTERVAL '1 day')
+            """
+            params = [int(days)]
+            if signal_type:
+                query += " AND signal_type = %s"
+                params.append(signal_type)
+            query += " ORDER BY trade_date DESC, id DESC"
+            cur.execute(query, params)
+            cols = [d[0] for d in cur.description]
+            rows = []
+            for raw in cur.fetchall():
+                rec = dict(zip(cols, raw))
+                meta = rec.get("meta")
+                if isinstance(meta, str):
+                    try:
+                        rec["meta"] = _json.loads(meta)
+                    except (ValueError, TypeError):
+                        rec["meta"] = {}
+                elif meta is None:
+                    rec["meta"] = {}
+                rows.append(rec)
+            return rows
+
+
 # ============================================
 # JOURNAL OPERATIONS
 # ============================================

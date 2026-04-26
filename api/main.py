@@ -272,6 +272,71 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
     return _df_to_records(df[available_cols])
 
 
+@app.get("/api/journal/mct-state-by-date-range")
+def journal_mct_state_by_date_range(start_date: str, end_date: str):
+    """Per-day MCT V11 state for a journal date range.
+
+    Replays the V11 engine over full history through end_date (warmup is needed
+    so the ratchet, correction flags, and rally cycle anchors converge to their
+    structurally correct values), then slices the bar log to [start_date,
+    end_date] inclusive.
+
+    Response: {"states": [{trade_date, state, exposure_ceiling, cap_at_100,
+                          cycle_day, in_correction, correction_active,
+                          power_trend}, ...]}
+    """
+    try:
+        from datetime import datetime as _dt
+        from api.mct_endpoint_adapter import run_engine
+
+        try:
+            start = _dt.strptime(start_date.strip()[:10], "%Y-%m-%d").date()
+            end = _dt.strptime(end_date.strip()[:10], "%Y-%m-%d").date()
+        except (ValueError, AttributeError):
+            return {"error": "start_date and end_date required as YYYY-MM-DD",
+                    "states": []}
+
+        if start > end:
+            return {"error": "start_date must be <= end_date", "states": []}
+
+        result = run_engine("^IXIC", as_of=end)
+        if result.bars.empty:
+            return {"states": []}
+
+        bars = result.bars
+        # Bars index is RangeIndex(0, N) matching the engine's per-bar i — so
+        # row.name preserves the cycle_start_idx semantics after we filter.
+        trade_dates = pd.to_datetime(bars["trade_date"]).dt.date
+        mask = (trade_dates >= start) & (trade_dates <= end)
+        sliced = bars[mask]
+
+        states = []
+        for orig_idx, row in sliced.iterrows():
+            cycle_start_idx = row["cycle_start_idx"]
+            rally_active = bool(row["rally_active"])
+            if (rally_active and cycle_start_idx is not None
+                    and not pd.isna(cycle_start_idx)):
+                cycle_day = int(orig_idx) - int(cycle_start_idx) + 1
+            else:
+                cycle_day = 0
+
+            td = row["trade_date"]
+            states.append({
+                "trade_date": td.isoformat() if hasattr(td, "isoformat") else str(td)[:10],
+                "state": row["state"],
+                "exposure_ceiling": int(row["exposure"]),
+                "cap_at_100": bool(row["cap_at_100"]),
+                "cycle_day": cycle_day,
+                "in_correction": bool(row["in_correction"]),
+                "correction_active": bool(row["correction_active"]),
+                "power_trend": bool(row["power_trend"]),
+            })
+
+        return {"states": states}
+    except Exception as e:
+        return {"error": str(e), "states": []}
+
+
 def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
     """Compute 21-period ATR% = SMA(TR, 21) / SMA(Low, 21) * 100."""
     import yfinance as yf
@@ -1104,6 +1169,39 @@ def market_mfactor(request: Request):
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/market/signals")
+@limiter.limit("30/minute")
+def get_recent_market_signals(request: Request, days: int = 30, signal_type: str = ""):
+    """Last N days of V11 MCT engine signals from market_signals.
+
+    Powers the MCT page's Recent Signal Log (Section 4). Reads the V11
+    schema (trade_date, signal_type, signal_label, exposure_before,
+    exposure_after, state_before, state_after, meta) from the table
+    rebuilt by migration 010. Sorted desc by trade_date then id.
+    """
+    try:
+        rows = db.load_v11_market_signals(
+            days=days,
+            signal_type=signal_type or None,
+        )
+        signals = []
+        for r in rows:
+            td = r["trade_date"]
+            signals.append({
+                "trade_date": td.isoformat() if hasattr(td, "isoformat") else str(td)[:10],
+                "signal_type": r["signal_type"],
+                "signal_label": r["signal_label"],
+                "exposure_before": r["exposure_before"],
+                "exposure_after": r["exposure_after"],
+                "state_before": r["state_before"],
+                "state_after": r["state_after"],
+                "meta": r["meta"],
+            })
+        return {"signals": signals}
+    except Exception as e:
+        return {"error": str(e), "signals": []}
 
 
 # ============================================================
