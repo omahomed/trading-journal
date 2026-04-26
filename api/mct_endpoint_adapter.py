@@ -195,12 +195,6 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
     return exits
 
 
-def _bin_exposure_to_legacy(exposure: int) -> int:
-    """V11 emits 0–200%. Legacy ibd field is 0–6 ladder count.
-    Bin via min(6, exposure // 33). Phase 4 swaps the pyramid for 0–200%."""
-    return min(6, max(0, int(exposure) // 33))
-
-
 # ============================================================================
 # Public translators
 # ============================================================================
@@ -268,76 +262,6 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "ftd_date": _latest_ftd_date(result.signals),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),
-    }
-
-
-def to_ibd_response(result: EngineResult) -> dict[str, Any]:
-    """Translate to the legacy /api/market/ibd shape.
-
-    V11 has no concept of distribution days, B/S signal codes, or the IBD
-    ladder count. Those fields return empty / 0; Phase 4 will repurpose the
-    UI to show V11-native data.
-    """
-    if result.bars.empty:
-        return {"error": "No data"}
-
-    state = result.final_state
-    bars = result.bars
-    last = bars.iloc[-1]
-    close = float(last["close"])
-
-    daily_change = "0.00%"
-    if len(bars) >= 2:
-        prev_close = float(bars.iloc[-2]["close"])
-        if prev_close > 0:
-            daily_pct = (close - prev_close) / prev_close * 100
-            daily_change = f"{daily_pct:+.2f}%"
-
-    exposure = int(state.get("exposure") or 0)
-    ref_high = float(state.get("reference_high") or 0.0)
-    decline_pct = ((close - ref_high) / ref_high * 100) if ref_high > 0 else 0.0
-
-    cutoff = pd.Timestamp(bars.iloc[-1]["trade_date"]) - pd.Timedelta(days=30)
-    recent = []
-    for sig in result.signals:
-        if pd.Timestamp(sig.trade_date) >= cutoff:
-            recent.append({
-                "date": _isodate(sig.trade_date),
-                "signal": sig.signal_type,
-                "description": sig.signal_label,
-            })
-
-    last_30 = bars.tail(30)
-    history = [
-        {
-            "date": _isodate(row["trade_date"]),
-            "market_exposure": _bin_exposure_to_legacy(int(row["exposure"])),
-        }
-        for _, row in last_30.iterrows()
-    ]
-
-    ftd_date = _latest_ftd_date(result.signals)
-
-    return {
-        "as_of": _isodate(last["trade_date"]),
-        "close": round(close, 2),
-        "daily_change": daily_change,
-        "buy_switch": bool(state.get("step1_done")) and bool(state.get("rally_active")),
-        "market_exposure": _bin_exposure_to_legacy(exposure),
-        "allocation": f"{exposure}%",
-        "distribution_count": 0,
-        "buy_signals": [],
-        "sell_signals": [],
-        "in_correction": bool(state.get("correction_active")),
-        "ftd_date": ftd_date,
-        "nasdaq_ftd": ftd_date,
-        "spy_ftd": None,
-        "ftd_source": "NASDAQ",
-        "reference_high": round(ref_high, 2),
-        "decline_pct": round(decline_pct, 2),
-        "distribution_days": [],
-        "recent_signals": recent,
-        "history": history,
     }
 
 

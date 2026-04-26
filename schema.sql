@@ -207,8 +207,13 @@ EXECUTE FUNCTION update_journal_timestamp();
 
 
 -- ============================================
--- IBD MARKET SCHOOL: Market Signals Tracking
+-- MARKET SIGNALS (V10 schema — superseded by migration 010)
 -- ============================================
+-- The V10 table definition below is kept here for historical reference but
+-- is OUT OF DATE: migration 010 dropped + recreated market_signals with the
+-- V11 schema (trade_date, signal_type, signal_label, exposure_before,
+-- exposure_after, state_before, state_after, meta). This block should be
+-- replaced with the V11 definition in a follow-up cleanup.
 CREATE TABLE IF NOT EXISTS market_signals (
     id SERIAL PRIMARY KEY,
     symbol VARCHAR(10) NOT NULL,

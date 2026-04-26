@@ -1030,21 +1030,6 @@ def rally_prefix(as_of_date: str = ""):
         return {"prefix": "", "error": str(e)}
 
 
-@app.get("/api/market/ibd")
-@limiter.limit("30/minute")
-def ibd_market_school(request: Request):
-    """V11 implementation: replays MCTEngine over market_data history and
-    translates to the legacy response shape. Distribution days, B/S signal
-    codes, and the IBD 0-6 exposure ladder are V10 concepts; V11 maps them
-    to empty lists / binned exposure until Phase 4 redesigns the UI."""
-    try:
-        from api.mct_endpoint_adapter import run_engine, to_ibd_response
-        result = run_engine("^IXIC")
-        return to_ibd_response(result)
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @app.get("/api/market/rally-data")
 @limiter.limit("25/minute")
 def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
