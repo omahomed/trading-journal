@@ -6,6 +6,19 @@ import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 type ViewFilter = "week" | "month" | "all";
 type Tab = "view" | "manage";
 
+type MctState = {
+  state: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+  cap_at_100: boolean;
+  cycle_day: number;
+};
+
+const MCT_STATE_STYLES: Record<MctState["state"], { bg: string; fg: string }> = {
+  POWERTREND:   { bg: "#8A2BE2", fg: "#fff" },
+  UPTREND:      { bg: "#08a86b", fg: "#fff" },
+  "RALLY MODE": { bg: "#f59f00", fg: "#000" },
+  CORRECTION:   { bg: "#e5484d", fg: "#fff" },
+};
+
 function scoreColor(score: number) {
   if (score >= 4) return "#08a86b";
   if (score >= 3) return "#f59f00";
@@ -26,16 +39,31 @@ const RC_KEYS = [
   { key: "fomo", label: "FOMO" },
 ];
 
-function windowColor(w: string) {
-  const wl = (w || "").toLowerCase();
-  if (wl.includes("power")) return "#8b5cf6";
-  if (wl.includes("open") || wl.includes("confirmed") || wl.includes("grow")) return "#08a86b";
-  if (wl.includes("neutral")) return "#f59f00";
-  return "#e5484d";
-}
-
 function pctColor(v: number) {
   return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)";
+}
+
+function MctStateBadge({ s }: { s: MctState | undefined }) {
+  if (!s) return <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>—</span>;
+  const st = MCT_STATE_STYLES[s.state] || { bg: "#888", fg: "#fff" };
+  const showDay = s.state === "RALLY MODE" && s.cycle_day > 0;
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold whitespace-nowrap"
+      style={{ background: st.bg, color: st.fg }}
+      title={s.cap_at_100 ? `${s.state} · capped at 100%` : s.state}
+    >
+      <span>{s.state}{showDay ? ` D${s.cycle_day}` : ""}</span>
+      {s.cap_at_100 && (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+             aria-label="Capped at 100%" role="img">
+          <rect x="4" y="11" width="16" height="10" rx="2" />
+          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+        </svg>
+      )}
+    </span>
+  );
 }
 
 export function DailyJournal({ navColor }: { navColor: string }) {
@@ -52,6 +80,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [mctStates, setMctStates] = useState<Map<string, MctState>>(new Map());
 
   useEffect(() => {
     api.journalHistory(getActivePortfolio(), 0).then(h => {
@@ -59,6 +88,27 @@ export function DailyJournal({ navColor }: { navColor: string }) {
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
+
+  // One-shot fetch of MCT V11 state across the journal's full date span.
+  // The new column joins per-day on trade_date, so a single round trip is
+  // enough — the engine replays over full history regardless of the slice.
+  useEffect(() => {
+    if (history.length === 0) return;
+    const sorted = [...history].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    const start = String(sorted[0].day).slice(0, 10);
+    const end = String(sorted[sorted.length - 1].day).slice(0, 10);
+    api.mctStateByDateRange(start, end).then(r => {
+      const m = new Map<string, MctState>();
+      for (const s of r.states || []) {
+        m.set(s.trade_date, {
+          state: s.state,
+          cap_at_100: s.cap_at_100,
+          cycle_day: s.cycle_day,
+        });
+      }
+      setMctStates(m);
+    }).catch(() => { /* ignore — column shows em-dashes */ });
+  }, [history]);
 
   const filtered = useMemo(() => {
     if (history.length === 0) return [];
@@ -152,7 +202,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Day", "Window", "End NLV", "Grade", "Daily %", "LTD %", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
+                    {["Day", "MCT State", "End NLV", "Grade", "Daily %", "LTD %", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
                       <th key={h} className="text-left text-[9px] uppercase tracking-[0.06em] font-semibold px-2.5 py-2 whitespace-nowrap sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
                         {h}
@@ -166,7 +216,8 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                     const score = h.score || 0;
                     const heat = h.portfolio_heat || 0;
                     const mono = "var(--font-jetbrains), monospace";
-                    const mw = (h as any).market_window || "";
+                    const dateKey = String(h.day).slice(0, 10);
+                    const mct = mctStates.get(dateKey);
                     const spyAtr = (h as any).spy_atr || 0;
                     const ndxAtr = (h as any).nasdaq_atr || 0;
                     const spyPct = (h as any).spy_daily_pct || 0;
@@ -178,14 +229,10 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>
-                          {String(h.day).slice(0, 10)}
+                          {dateKey}
                         </td>
                         <td className="px-2.5 py-2">
-                          {mw && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold" style={{ background: `${windowColor(mw)}15`, color: windowColor(mw) }}>
-                              {mw}
-                            </span>
-                          )}
+                          <MctStateBadge s={mct} />
                         </td>
                         <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>${(h.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                         {/* Grade + metrics + report card */}
@@ -260,7 +307,6 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             daily_pct_change: String(h.daily_pct_change || 0),
             pct_invested: String(h.pct_invested || 0),
             score: String(h.score || 0),
-            market_window: (h as any).market_window || "",
             market_notes: (h as any).market_notes || "",
             market_action: (h as any).market_action || "",
             portfolio_heat: String(h.portfolio_heat || 0),
@@ -284,7 +330,6 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             daily_pct_change: editFields.daily_pct_change,
             pct_invested: editFields.pct_invested,
             score: editFields.score,
-            market_window: editFields.market_window,
             market_notes: editFields.market_notes,
             market_action: editFields.market_action,
             portfolio_heat: editFields.portfolio_heat,
@@ -372,11 +417,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>% Invested</label>
                         <input type="number" value={editFields.pct_invested} onChange={e => setEditFields({ ...editFields, pct_invested: e.target.value })} className={inputCls} style={inputSt} /></div>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Score (1-5)</label>
                         <input type="number" value={editFields.score} onChange={e => setEditFields({ ...editFields, score: e.target.value })} min="0" max="5" className={inputCls} style={inputSt} /></div>
-                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Market Window</label>
-                        <input type="text" value={editFields.market_window} onChange={e => setEditFields({ ...editFields, market_window: e.target.value })} className={inputCls} style={{ ...inputSt, fontFamily: "inherit" }} /></div>
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Portfolio Heat</label>
                         <input type="number" value={editFields.portfolio_heat} onChange={e => setEditFields({ ...editFields, portfolio_heat: e.target.value })} step="0.1" className={inputCls} style={inputSt} /></div>
                     </div>
