@@ -31,6 +31,7 @@ export function RiskManager({ navColor }: { navColor: string }) {
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [chartRange, setChartRange] = useState<"3M" | "6M" | "YTD" | "1Y" | "All">("6M");
+  const [heatRange, setHeatRange] = useState<"3M" | "6M" | "YTD" | "1Y" | "All">("6M");
 
   useEffect(() => {
     api.journalHistory(getActivePortfolio(), 0).then(h => {
@@ -113,13 +114,28 @@ export function RiskManager({ navColor }: { navColor: string }) {
     return filtered;
   }, [history, chartRange]);
 
-  // Heat Tape data
+  // Has any heat data ever (drives panel visibility)
+  const hasHeatData = useMemo(
+    () => history.some(h => (h.portfolio_heat || 0) > 0),
+    [history]
+  );
+
+  // Heat Tape data (filtered by selected timeframe)
   const heatTapeData = useMemo(() => {
     if (history.length === 0) return [];
-    // Find first day with heat > 0
     const firstHeatIdx = history.findIndex(h => (h.portfolio_heat || 0) > 0);
     if (firstHeatIdx < 0) return [];
-    const subset = history.slice(firstHeatIdx);
+    let subset = history.slice(firstHeatIdx);
+    if (heatRange !== "All") {
+      const now = new Date();
+      let cutoff: Date;
+      if (heatRange === "3M") cutoff = new Date(now.getTime() - 90 * 86400000);
+      else if (heatRange === "6M") cutoff = new Date(now.getTime() - 180 * 86400000);
+      else if (heatRange === "YTD") cutoff = new Date(now.getFullYear(), 0, 1);
+      else cutoff = new Date(now.getTime() - 365 * 86400000);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      subset = subset.filter(d => d.day >= cutoffStr);
+    }
     if (subset.length < 2) return [];
     const startNlv = subset[0].end_nlv || 1;
     const startSpy = subset[0].spy || 1;
@@ -129,7 +145,7 @@ export function RiskManager({ navColor }: { navColor: string }) {
       spyPct: startSpy > 0 ? parseFloat((((h.spy || startSpy) / startSpy - 1) * 100).toFixed(2)) : 0,
       heat: h.portfolio_heat || 0,
     }));
-  }, [history]);
+  }, [history, heatRange]);
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
@@ -157,7 +173,7 @@ export function RiskManager({ navColor }: { navColor: string }) {
       </div>
 
       {/* Charts: Hard Deck + Heat Tape side by side */}
-      <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: heatTapeData.length > 0 ? "1fr 1fr" : "1fr" }}>
+      <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: hasHeatData ? "1fr 1fr" : "1fr" }}>
 
         {/* Hard Deck Chart */}
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
@@ -225,11 +241,25 @@ export function RiskManager({ navColor }: { navColor: string }) {
         </div>
 
         {/* Heat Tape */}
-        {heatTapeData.length > 0 && (
+        {hasHeatData && (
           <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-            <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-              <span className="text-[13px] font-semibold">Heat Tape</span>
+            <div className="flex items-center justify-between px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">Heat Tape</span>
+              </div>
+              <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                {(["3M", "6M", "YTD", "1Y", "All"] as const).map(t => (
+                  <button key={t} onClick={() => setHeatRange(t)}
+                          className="px-2 py-0.5 rounded text-[10px] font-medium transition-all"
+                          style={{
+                            background: heatRange === t ? "var(--surface)" : "transparent",
+                            color: heatRange === t ? "var(--ink)" : "var(--ink-4)",
+                          }}>
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
             {/* Legend */}
             <div className="flex items-center gap-4 px-[18px] pt-2 pb-1" style={{ fontSize: 10 }}>
@@ -249,6 +279,7 @@ export function RiskManager({ navColor }: { navColor: string }) {
               ))}
             </div>
             <div style={{ height: 320 }} className="px-1 py-1">
+              {heatTapeData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={heatTapeData} margin={{ top: 8, right: 12, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" strokeOpacity={0.5} vertical={false} />
@@ -278,6 +309,9 @@ export function RiskManager({ navColor }: { navColor: string }) {
                   <Line yAxisId="left" dataKey="portPct" stroke="#6366f1" strokeWidth={2.2} dot={false} type="monotone" />
                 </ComposedChart>
               </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-sm" style={{ color: "var(--ink-4)" }}>No heat data in this range</div>
+              )}
             </div>
             <div className="px-[18px] pb-2 text-[10px]" style={{ color: "var(--ink-4)" }}>
               {heatTapeData.length} days · threshold editable in Admin

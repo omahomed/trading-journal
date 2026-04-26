@@ -11,16 +11,31 @@ type PillData = {
   day_num?: number;
   cap_at_100?: boolean;
   drawdown_pct?: number;
+  power_trend_on_since?: string | null;
+  ftd_date?: string | null;
 };
 
-const STATE_STYLE: Record<V11State, { dot: string; glow: string; label: string }> = {
-  POWERTREND:   { dot: "#8A2BE2", glow: "#f0e2ff", label: "Power Trend" },
-  UPTREND:      { dot: "#08a86b", glow: "#e5f7ee", label: "Uptrend" },
-  "RALLY MODE": { dot: "#f59f00", glow: "#fff4d6", label: "Rally Mode" },
-  CORRECTION:   { dot: "#e5484d", glow: "#fdeaea", label: "Correction" },
+const STATE_STYLE: Record<V11State, { dot: string; ring: string; label: string }> = {
+  POWERTREND:   { dot: "#8A2BE2", ring: "#efe4fb", label: "Power-Trend" },
+  UPTREND:      { dot: "#08a86b", ring: "#e5f7ee", label: "Confirmed Uptrend" },
+  "RALLY MODE": { dot: "#f59f00", ring: "#fdf2d8", label: "Rally Mode" },
+  CORRECTION:   { dot: "#e5484d", ring: "#fde7e8", label: "Correction" },
 };
 
 const V11_STATES = ["POWERTREND", "UPTREND", "RALLY MODE", "CORRECTION"] as const;
+
+function fmtSince(iso?: string | null): string {
+  if (!iso) return "";
+  // Parse YYYY-MM-DD as a LOCAL date — `new Date("2026-04-08")` is UTC
+  // midnight which silently shifts a day west of UTC (the staging
+  // user's CDT box would render "Apr 7" instead of "Apr 8"). Parsing
+  // by component avoids any timezone interpretation.
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "";
+  const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
 export function TapeStatusPill() {
   const [data, setData] = useState<PillData | null>(null);
@@ -37,6 +52,8 @@ export function TapeStatusPill() {
             day_num: r.day_num,
             cap_at_100: r.cap_at_100,
             drawdown_pct: r.drawdown_pct,
+            power_trend_on_since: r.power_trend_on_since,
+            ftd_date: r.ftd_date,
           });
         }
       })
@@ -68,7 +85,7 @@ export function TapeStatusPill() {
         className="w-1.5 h-1.5 rounded-full"
         style={{
           backgroundColor: style.dot,
-          boxShadow: `0 0 0 3px ${style.glow}`,
+          boxShadow: `0 0 0 3px ${style.ring}`,
           animation: "pulse-dot 2s ease-in-out infinite",
         }}
       />
@@ -82,11 +99,21 @@ export function TapeStatusPill() {
 }
 
 function formatDetail(d: PillData): string {
-  if (d.state === "POWERTREND" || d.state === "UPTREND" || d.state === "RALLY MODE") {
+  if (d.state === "POWERTREND") {
+    const since = fmtSince(d.power_trend_on_since);
+    return since ? `since ${since}` : "";
+  }
+  if (d.state === "UPTREND") {
+    const since = fmtSince(d.ftd_date);
+    return since ? `since ${since}` : "";
+  }
+  if (d.state === "RALLY MODE") {
     return d.day_num && d.day_num > 0 ? `Day ${d.day_num}` : "";
   }
   if (d.state === "CORRECTION") {
-    return typeof d.drawdown_pct === "number" ? `${d.drawdown_pct.toFixed(1)}%` : "";
+    return typeof d.drawdown_pct === "number"
+      ? `${Math.abs(d.drawdown_pct).toFixed(1)}% off high`
+      : "";
   }
   return "";
 }

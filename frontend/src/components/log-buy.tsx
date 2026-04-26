@@ -422,6 +422,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     const w: string[] = [];
     const t = actionType === "scalein" ? selectedCamp?.ticker || "" : ticker;
     if (!t.trim()) e.push("Ticker is required");
+    if (!rule.trim()) e.push("Buy Rule is required");
     if (sharesNum <= 0) e.push("Shares must be > 0");
     if (priceNum <= 0) e.push("Price must be > 0");
     if (stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
@@ -558,7 +559,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
             )}
 
             {/* Buy Rule (searchable) */}
-            <Field label="Buy Rule">
+            <Field label="Buy Rule *">
               <SearchSelect value={rule} onChange={setRule} options={BUY_RULES} placeholder="Type to search rules..." />
             </Field>
 

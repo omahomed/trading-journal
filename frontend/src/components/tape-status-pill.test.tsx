@@ -14,8 +14,8 @@ describe("TapeStatusPill — V11 state rendering", () => {
   beforeEach(() => mockedRallyPrefix.mockReset());
 
   test.each([
-    ["POWERTREND", "Power Trend"],
-    ["UPTREND", "Uptrend"],
+    ["POWERTREND", "Power-Trend"],
+    ["UPTREND", "Confirmed Uptrend"],
     ["RALLY MODE", "Rally Mode"],
     ["CORRECTION", "Correction"],
   ] as const)("renders %s with label %q", async (state, label) => {
@@ -24,24 +24,50 @@ describe("TapeStatusPill — V11 state rendering", () => {
       state,
       day_num: 5,
       drawdown_pct: -2.5,
+      power_trend_on_since: "2026-04-22",
+      ftd_date: "2026-04-08",
       cap_at_100: false,
     });
     render(<TapeStatusPill />);
     expect(await screen.findByText(new RegExp(label))).toBeInTheDocument();
   });
 
-  test("appends Day N for POWERTREND/UPTREND/RALLY MODE", async () => {
+  test("POWERTREND uses 'since {power_trend_on_since}' formatted as Mon DD", async () => {
     mockedRallyPrefix.mockResolvedValue({
       prefix: "",
       state: "POWERTREND",
       day_num: 18,
+      power_trend_on_since: "2026-04-22",
       cap_at_100: false,
     });
     render(<TapeStatusPill />);
-    expect(await screen.findByText(/Day 18/)).toBeInTheDocument();
+    expect(await screen.findByText(/since Apr 22/)).toBeInTheDocument();
   });
 
-  test("CORRECTION shows drawdown_pct, not Day N", async () => {
+  test("UPTREND uses 'since {ftd_date}' formatted as Mon DD", async () => {
+    mockedRallyPrefix.mockResolvedValue({
+      prefix: "",
+      state: "UPTREND",
+      day_num: 4,
+      ftd_date: "2026-04-08",
+      cap_at_100: false,
+    });
+    render(<TapeStatusPill />);
+    expect(await screen.findByText(/since Apr 8/)).toBeInTheDocument();
+  });
+
+  test("RALLY MODE uses 'Day N' from cycle_day (kept from staging)", async () => {
+    mockedRallyPrefix.mockResolvedValue({
+      prefix: "",
+      state: "RALLY MODE",
+      day_num: 7,
+      cap_at_100: false,
+    });
+    render(<TapeStatusPill />);
+    expect(await screen.findByText(/Day 7/)).toBeInTheDocument();
+  });
+
+  test("CORRECTION shows '{abs(drawdown_pct)}% off high'", async () => {
     mockedRallyPrefix.mockResolvedValue({
       prefix: "",
       state: "CORRECTION",
@@ -49,7 +75,7 @@ describe("TapeStatusPill — V11 state rendering", () => {
       drawdown_pct: -8.42,
     });
     render(<TapeStatusPill />);
-    expect(await screen.findByText(/-8\.4%/)).toBeInTheDocument();
+    expect(await screen.findByText(/8\.4% off high/)).toBeInTheDocument();
   });
 
   test("renders lock icon when cap_at_100 is true", async () => {
@@ -57,6 +83,7 @@ describe("TapeStatusPill — V11 state rendering", () => {
       prefix: "",
       state: "POWERTREND",
       day_num: 18,
+      power_trend_on_since: "2026-04-22",
       cap_at_100: true,
     });
     render(<TapeStatusPill />);
@@ -68,10 +95,11 @@ describe("TapeStatusPill — V11 state rendering", () => {
       prefix: "",
       state: "POWERTREND",
       day_num: 18,
+      power_trend_on_since: "2026-04-22",
       cap_at_100: false,
     });
     render(<TapeStatusPill />);
-    await screen.findByText(/Power Trend/);
+    await screen.findByText(/Power-Trend/);
     expect(screen.queryByLabelText("Capped at 100%")).not.toBeInTheDocument();
   });
 
@@ -80,6 +108,7 @@ describe("TapeStatusPill — V11 state rendering", () => {
       prefix: "",
       state: "UPTREND",
       day_num: 4,
+      ftd_date: "2026-04-08",
     });
     render(<TapeStatusPill />);
     const link = await screen.findByRole("link");

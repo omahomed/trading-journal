@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 
 type ViewFilter = "week" | "month" | "all";
@@ -66,7 +67,59 @@ function MctStateBadge({ s }: { s: MctState | undefined }) {
   );
 }
 
+function csvEscape(v: any): string {
+  if (v == null) return "";
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportCsv(rows: JournalHistoryPoint[]) {
+  // Note: "Window" column kept in CSV header for downstream/legacy
+  // consumers that may parse this format. The UI table displays "MCT
+  // State" instead — see Phase 4 daily-journal column swap.
+  const headers = [
+    "Day", "Window", "End NLV", "Score", "Daily %", "LTD %", "% Inv", "Heat",
+    "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes",
+    "Plan", "Stops", "Sized", "FOMO", "Grade Notes",
+  ];
+  const lines: string[] = [headers.join(",")];
+  for (const h of rows) {
+    const rc = parseReportCard((h as any).highlights || "") || {};
+    lines.push([
+      String(h.day).slice(0, 10),
+      (h as any).market_window || "",
+      h.end_nlv ?? "",
+      h.score ?? "",
+      h.daily_pct_change ?? "",
+      h.portfolio_ltd ?? "",
+      h.pct_invested ?? "",
+      h.portfolio_heat ?? "",
+      (h as any).spy_daily_pct ?? "",
+      (h as any).spy_atr ?? "",
+      (h as any).ndx_daily_pct ?? "",
+      (h as any).nasdaq_atr ?? "",
+      (h as any).market_notes || "",
+      rc.plan ?? "",
+      rc.stops ?? "",
+      rc.sized ?? "",
+      rc.fomo ?? "",
+      (h as any).mistakes || "",
+    ].map(csvEscape).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `daily-journal-${getActivePortfolio()}-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function DailyJournal({ navColor }: { navColor: string }) {
+  const router = useRouter();
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("view");
@@ -194,6 +247,11 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             )}
 
             <span className="text-[12px] ml-auto" style={{ color: "var(--ink-4)" }}>{filtered.length} entries</span>
+            <button onClick={() => exportCsv(filtered)}
+                    className="h-[34px] px-3 rounded-[10px] text-[12px] font-medium transition-colors"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+              Export CSV
+            </button>
           </div>
 
           {/* Journal table */}
@@ -202,7 +260,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Day", "MCT State", "End NLV", "Grade", "Daily %", "LTD %", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
+                    {["Day", "MCT State", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
                       <th key={h} className="text-left text-[9px] uppercase tracking-[0.06em] font-semibold px-2.5 py-2 whitespace-nowrap sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
                         {h}
@@ -228,7 +286,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           style={{ borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none" }}
                           onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>
+                        <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)", cursor: "context-menu" }}
+                            title="Right-click to open Daily Report"
+                            onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${dateKey}`); }}>
                           {dateKey}
                         </td>
                         <td className="px-2.5 py-2">
@@ -241,7 +301,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           const gradeLabel = score >= 5 ? "A+" : score >= 4 ? "A" : score >= 3 ? "B" : score >= 2 ? "C" : score > 0 ? "D" : "";
                           return (
                             <>
-                              <td className="px-2.5 py-2 text-center">
+                              <td className="px-2.5 py-2 text-center" style={{ cursor: "context-menu" }}
+                                  title="Right-click to open Daily Report"
+                                  onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${String(h.day).slice(0, 10)}`); }}>
                                 {gradeLabel && (
                                   <span className="text-[11px] font-bold" style={{ color: scoreColor(score) }}>{gradeLabel}</span>
                                 )}
@@ -250,6 +312,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                                 {dailyPct >= 0 ? "+" : ""}{dailyPct.toFixed(2)}%
                               </td>
                               <td className="px-2.5 py-2" style={{ fontFamily: mono }}>{(h.portfolio_ltd || 0).toFixed(2)}%</td>
+                              <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                                {(h.pct_invested || 0).toFixed(1)}%
+                              </td>
                               <td className="px-2.5 py-2" style={{ fontFamily: mono, color: heat > 20 ? "#e5484d" : heat > 10 ? "#f59f00" : "var(--ink-3)" }}>
                                 {heat.toFixed(1)}%
                               </td>
@@ -263,7 +328,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                                 {ndxAtr > 0 ? `${ndxAtr.toFixed(2)}%` : "—"}
                               </td>
                               {/* Market Notes */}
-                              <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)", minWidth: 140, maxWidth: 320, whiteSpace: "normal", wordBreak: "break-word", verticalAlign: "top" }} title={(h as any).market_notes || ""}>
                                 {(h as any).market_notes || ""}
                               </td>
                               {/* Report card categories */}
