@@ -680,8 +680,17 @@ class MCTEngine:
                 meta={"close": close, "ema_21": ema_21},
             ))
 
-        # ----- Step 3: low > 21 EMA (gated on step2_done at START of bar) -----
-        if (start_flags["step2_done"] and not state["step3_done"]
+        # ----- Step 3: low > 21 EMA -----
+        # Gates on live state["step1_done"] (FTD), NOT on step2_done. Step 3's
+        # condition (low > 21 EMA) is strictly stronger than Step 2's (close >
+        # 21 EMA) since low ≤ close — so step2_done as a precondition would be
+        # redundant. Per V11 multi-signal same-bar rule: Step 3 may fire same
+        # bar as Step 1 and Step 2 when its own condition is met. Using the
+        # live state["step1_done"] (not a start_flags snapshot) keeps the same
+        # chaining pattern Step 2 uses for state["step1_done"] above.
+        # Canonical fix bar: 2026-04-08 fires STEP_1 + STEP_2 + STEP_3 same bar
+        # (verified: low 22,501.28 > 21 EMA 22,020.46).
+        if (state["step1_done"] and not state["step3_done"]
                 and ema_21 is not None and low > ema_21):
             state["step3_done"] = True
             before = state["exposure"]
@@ -877,10 +886,13 @@ class MCTEngine:
             ))
 
         # ----- Step 7: 8 EMA > 21 EMA > 50 SMA > 200 SMA (full stack) -----
-        # Gates on step6_done at START of bar — Step 7 is the strict version of
-        # Step 6, so it can't fire same bar as Step 6. Canonical: Step 6 on
-        # 12/26/2025, Step 7 on 12/29/2025 (next trading day).
-        if (not state["step7_done"] and start_flags["step6_done"]
+        # Gates on step4_done at START of bar (same as Steps 5/6) — NOT on
+        # step6_done, so Step 7 can fire same bar as Step 6 when the full
+        # stack ripens together. Step 7's condition (8 EMA > 21 EMA > 50 SMA
+        # > 200 SMA) is strictly stronger than Step 6's (21 EMA > 50 SMA >
+        # 200 SMA), so step6_done as a precondition would be redundant.
+        # Canonical fix bar: 2026-04-15 fires both STEP_6 and STEP_7 same bar.
+        if (not state["step7_done"] and start_flags["step4_done"]
                 and not cb_fired_this_bar
                 and state["correction_active"]
                 and ema_8 is not None and ema_21 is not None

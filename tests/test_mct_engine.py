@@ -57,7 +57,9 @@ CANONICAL_EVENTS: list[tuple[date, str]] = [
     (date(2026, 3, 6), "POST_FTD_SOFT_FAIL"),
     (date(2026, 3, 9), "STEP_1_FTD"),
     (date(2026, 4, 8), "STEP_1_FTD"),
+    (date(2026, 4, 8), "STEP_3_LOW_ABOVE_21EMA"),
     (date(2026, 4, 10), "STEP_4_LOW_ABOVE_21EMA_3BARS"),
+    (date(2026, 4, 15), "STEP_7_MA_STACK_FULL"),
     (date(2026, 4, 16), "CORRECTION_NULLIFIED"),
     (date(2026, 4, 22), "STEP_8_POWERTREND_ON"),
 ]
@@ -102,14 +104,17 @@ def canonical_run():
 def test_full_run_signal_count_within_bounds(canonical_run):
     """Tight-bound sanity check on total signal count.
 
-    Locked to 115–119 (count ±2) after V11 corrections: post-FTD soft-fail
+    Locked to 118–122 (count ±2) after V11 corrections: post-FTD soft-fail
     uses close, STEP_0 single-rule (up day or pink rally day), STEP_7
-    re-fires after CB. Any change that shifts the count outside this band
-    indicates a behavioral regression and should be investigated.
+    re-fires after CB, and the V11 multi-signal same-bar rule allows
+    STEP_3 to fire same bar as STEP_1+STEP_2 and STEP_7 to fire same bar
+    as STEP_6 when conditions are structurally met. Any change that
+    shifts the count outside this band indicates a behavioral regression
+    and should be investigated.
     """
     _, result = canonical_run
-    assert 115 <= len(result.signals) <= 119, (
-        f"Got {len(result.signals)} signals; expected 115–119"
+    assert 118 <= len(result.signals) <= 122, (
+        f"Got {len(result.signals)} signals; expected 118–122"
     )
 
 
