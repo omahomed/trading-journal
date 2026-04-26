@@ -30,7 +30,12 @@ log = logging.getLogger(__name__)
 def update_latest_bar(symbol: str = SYMBOL) -> dict:
     """Fetch a recent window from yfinance, recompute indicators, upsert.
 
-    Returns: {"symbol", "trade_date", "rows_upserted", "action"}.
+    After a successful upsert, runs the V11 MCT engine over the most recent
+    window and persists any new signals to market_signals (idempotent via
+    ON CONFLICT). On the first run this replays the full history; subsequent
+    runs only emit signals for newly added bars.
+
+    Returns: {"symbol", "trade_date", "rows_upserted", "action", "mct_signals"}.
         action is one of: "upsert" | "no-data".
     """
     df = _fetch_window(symbol, days=int(RECENT_WINDOW * 1.6))  # slack for weekends/holidays
@@ -41,15 +46,20 @@ def update_latest_bar(symbol: str = SYMBOL) -> dict:
             "trade_date": None,
             "rows_upserted": 0,
             "action": "no-data",
+            "mct_signals": None,
         }
     df = _compute_indicators(df).tail(RECENT_WINDOW)
     with get_db_connection() as conn:
         n = _upsert_rows(symbol, df, conn)
+
+    mct_summary = _run_engine_and_write_signals(symbol)
+
     return {
         "symbol": symbol,
         "trade_date": df["trade_date"].iloc[-1],
         "rows_upserted": n,
         "action": "upsert",
+        "mct_signals": mct_summary,
     }
 
 
@@ -150,3 +160,43 @@ def _last_business_day(today: Optional[date] = None) -> date:
     while d.weekday() >= 5:  # Sat=5, Sun=6
         d -= timedelta(days=1)
     return d
+
+
+def _run_engine_and_write_signals(symbol: str = SYMBOL) -> dict:
+    """Run the MCT engine over the full market_data history and persist signals.
+
+    Idempotent — the unique constraint on (trade_date, signal_type) means
+    re-runs over previously processed bars are no-ops in the database.
+    First-run cost: replay the full history once. Subsequent runs only emit
+    new signals for bars added since the last upsert.
+    """
+    from api.mct_engine import MCTEngine, EngineConfig
+    from api.market_data_repo import get_history, get_latest_date
+    from api.mct_signals_writer import write_signals
+
+    latest = get_latest_date(symbol)
+    if latest is None:
+        return {"events_emitted": 0, "rows_inserted": 0, "reason": "no market_data"}
+
+    history = get_history(symbol, date(2010, 1, 1), latest)
+    if history.empty:
+        return {"events_emitted": 0, "rows_inserted": 0, "reason": "empty history"}
+
+    # Default config: seed reference at start of history (engine ratchets after
+    # first nullification). For production use, callers may want to override
+    # initial_reference_high based on a known prior cycle high.
+    config = EngineConfig(
+        initial_reference_high=float(history["high"].iloc[0]),
+        initial_power_trend=False,
+        initial_exposure=100,
+        correction_ever_declared=True,
+    )
+    engine = MCTEngine(config)
+    result = engine.run(history)
+    inserted = write_signals(result.signals)
+    return {
+        "events_emitted": len(result.signals),
+        "rows_inserted": inserted,
+        "first_date": history["trade_date"].iloc[0],
+        "last_date": history["trade_date"].iloc[-1],
+    }
