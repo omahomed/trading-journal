@@ -330,10 +330,12 @@ function CashActionForm({
   onCancel: () => void;
 }) {
   const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const todayIso = new Date().toISOString().slice(0, 10);
 
   const titles: Record<CashAction, { title: string; subtitle: string; button: string; color: string }> = {
     deposit: {
@@ -369,6 +371,7 @@ function CashActionForm({
     const res = await api.createCashTransaction(portfolioId, {
       source: action,
       amount: num,
+      date: date || null,
       note: note.trim() || null,
     });
     if ("error" in res) {
@@ -414,14 +417,24 @@ function CashActionForm({
         </label>
         <label className="block">
           <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
-            Note <span className="normal-case font-normal" style={{ color: "var(--ink-5)" }}>(optional)</span>
+            Date
           </span>
-          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200}
-                 placeholder="e.g. ACH transfer"
+          <input type="date" value={date} max={todayIso}
+                 onChange={(e) => setDate(e.target.value)}
                  className="mt-1 w-full h-10 px-3 rounded-[8px] text-[13px]"
-                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                          fontFamily: "var(--font-jetbrains), monospace" }} />
         </label>
       </div>
+      <label className="block">
+        <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+          Note <span className="normal-case font-normal" style={{ color: "var(--ink-5)" }}>(optional)</span>
+        </span>
+        <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200}
+               placeholder="e.g. ACH transfer"
+               className="mt-1 w-full h-10 px-3 rounded-[8px] text-[13px]"
+               style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+      </label>
       {err && (
         <div className="text-[12px] px-3 py-2 rounded-[8px]"
              style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
