@@ -462,10 +462,10 @@ def journal_edit(entry: dict):
             "top_lesson": _s("top_lesson", "top_lesson"),
         }
 
-        # Auto-compute missing market/risk metrics
+        # Auto-compute missing market/risk metrics.
+        # market_window is deprecated as of MCT V11 Phase 3a — no longer auto-filled.
+        # Existing values are preserved if the caller sends them; new entries get NULL.
         day_str = str(day).strip()[:10]
-        if not journal_entry["market_window"]:
-            journal_entry["market_window"] = _compute_market_window(day_str)
         if not journal_entry["market_cycle"]:
             journal_entry["market_cycle"] = _compute_cycle_state(day_str)
         if not journal_entry["spy_atr"]:
@@ -533,13 +533,13 @@ def journal_backfill_metrics(request: Request, body: dict = Body(...)):
             existing_spy_atr = float(row.get("spy_atr", 0) or 0)
             existing_ndx_atr = float(row.get("nasdaq_atr", 0) or 0)
 
-            need_mw = force or not existing_mw
+            # market_window deprecated as of Phase 3a — backfill no longer touches it.
             need_cycle = force or not existing_cycle
             need_heat = force or existing_heat == 0
             need_spy_atr = force or existing_spy_atr == 0
             need_ndx_atr = force or existing_ndx_atr == 0
 
-            if not any([need_mw, need_cycle, need_heat, need_spy_atr, need_ndx_atr]):
+            if not any([need_cycle, need_heat, need_spy_atr, need_ndx_atr]):
                 continue
 
             try:
@@ -554,7 +554,7 @@ def journal_backfill_metrics(request: Request, body: dict = Body(...)):
                     "percent_invested": float(row.get("pct_invested", 0) or 0),
                     "spy_close": float(row.get("spy", 0) or 0),
                     "nasdaq_close": float(row.get("nasdaq", 0) or 0),
-                    "market_window": _compute_market_window(day_str) if need_mw else existing_mw,
+                    "market_window": existing_mw,  # deprecated; preserved as-is
                     "market_cycle": _compute_cycle_state(day_str) if need_cycle else existing_cycle,
                     "market_notes": str(row.get("market_notes", "") or ""),
                     "market_action": str(row.get("market_action", "") or ""),
@@ -991,276 +991,24 @@ def nlv_shadow_today(portfolio: str = "CanSlim"):
 @app.get("/api/market/rally-prefix")
 def rally_prefix(as_of_date: str = ""):
     """Get rally day prefix for Market/Global Notes (e.g., 'Day 14 POWERTREND:').
-    Uses the same compute_cycle_state() logic as the Streamlit Daily Routine.
 
-    If as_of_date is provided (YYYY-MM-DD), computes the cycle state as it
-    was on that historical date (data up to and including that date only).
-    Otherwise computes live state through today.
+    V11 implementation: replays the MCT engine over market_data history and
+    translates the result into the legacy response shape. If as_of_date is
+    provided (YYYY-MM-DD), slices history to bars on or before that date.
     """
     try:
-        # Import the app's compute_cycle_state function
-        # It lives in the parent directory's app.py — but it's complex.
-        # Instead, replicate the core logic here using the same entry ladder.
-        import yfinance as yf
-        from market_school_rules import MarketSchoolRules
-        from datetime import date as _date
+        from datetime import date as _date, datetime as _dt
+        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
 
-        eff_end = as_of_date.strip()[:10] if as_of_date else _date.today().strftime('%Y-%m-%d')
-        is_historical = bool(as_of_date)
+        as_of: _date | None = None
+        if as_of_date:
+            try:
+                as_of = _dt.strptime(as_of_date.strip()[:10], "%Y-%m-%d").date()
+            except ValueError:
+                as_of = None
 
-        analyzer = MarketSchoolRules("^IXIC")
-        analyzer.fetch_data(start_date="2024-02-24", end_date=eff_end)
-        if analyzer.data is None or analyzer.data.empty:
-            return {"prefix": ""}
-        analyzer.analyze_market()
-
-        df = analyzer.data
-        rally_low_idx = analyzer.rally_low_idx
-        rally_start_date = analyzer.rally_start_date
-        market_in_correction = analyzer.market_in_correction
-        ftd_date = analyzer.ftd_date
-        buy_switch = analyzer.buy_switch
-
-        # Also check SPY for dual-index FTD
-        nasdaq_ftd_date = ftd_date
-        try:
-            spy_analyzer = MarketSchoolRules("SPY")
-            spy_analyzer.fetch_data(start_date="2024-02-24", end_date=eff_end)
-            if spy_analyzer.data is not None and not spy_analyzer.data.empty:
-                spy_analyzer.analyze_market(
-                    external_ftd_date=nasdaq_ftd_date,
-                    external_ftd_source='NASDAQ',
-                )
-                spy_ftd = spy_analyzer.ftd_date
-                if spy_ftd is not None:
-                    if nasdaq_ftd_date is None or pd.Timestamp(spy_ftd) < pd.Timestamp(nasdaq_ftd_date):
-                        analyzer.analyze_market(external_ftd_date=spy_ftd, external_ftd_source='SPY')
-                        ftd_date = analyzer.ftd_date
-                        buy_switch = analyzer.buy_switch
-        except Exception:
-            pass
-
-        # Compute MAs
-        df['8EMA'] = df['Close'].ewm(span=8, adjust=False).mean()
-        df['21EMA'] = df['Close'].ewm(span=21, adjust=False).mean()
-        df['50SMA'] = df['Close'].rolling(window=50).mean()
-        df['200SMA'] = df['Close'].rolling(window=200).mean()
-
-        curr = df.iloc[-1]
-        price = float(curr['Close'])
-        ema8 = float(curr['8EMA']) if pd.notna(curr['8EMA']) else 0
-        ema21 = float(curr['21EMA']) if pd.notna(curr['21EMA']) else 0
-        sma50 = float(curr['50SMA']) if pd.notna(curr['50SMA']) else 0
-        sma200 = float(curr['200SMA']) if pd.notna(curr['200SMA']) else 0
-
-        # Rally day determination (same as compute_cycle_state)
-        rally_day_idx = rally_low_idx
-        if rally_low_idx is not None and rally_low_idx > 0:
-            rd_row = df.iloc[rally_low_idx]
-            prev_row = df.iloc[rally_low_idx - 1]
-            if rd_row['Close'] <= prev_row['Close']:
-                day_mid = (rd_row['High'] + rd_row['Low']) / 2
-                if rd_row['Close'] < day_mid:
-                    for next_i in range(rally_low_idx + 1, len(df)):
-                        next_row = df.iloc[next_i]
-                        next_prev = df.iloc[next_i - 1]
-                        if next_row['Close'] > next_prev['Close']:
-                            rally_day_idx = next_i
-                            break
-                        next_mid = (next_row['High'] + next_row['Low']) / 2
-                        if next_row['Close'] >= next_mid:
-                            rally_day_idx = next_i
-                            break
-
-        days_since_rally = len(df) - rally_day_idx if rally_day_idx is not None else None
-
-        if days_since_rally is None or (market_in_correction and not buy_switch and ftd_date is None):
-            return {"prefix": "CORRECTION: ", "day_num": 0, "state": "CORRECTION"}
-
-        # Add 1 if today is after last data bar (live mode only — skip for
-        # historical backfill, where we should measure from the actual bars).
-        if not is_historical:
-            _today = _date.today()
-            _last_d = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
-            if _today.weekday() < 5 and _today > _last_d:
-                days_since_rally += 1
-
-        # Entry ladder steps (same as compute_cycle_state)
-        ftd_achieved = ftd_date is not None or (not market_in_correction or buy_switch)
-        has_rally = rally_start_date is not None or ftd_achieved
-
-        # Streak checks
-        low_above_21_streak = 0
-        low_above_50_streak = 0
-        ema21_above_sma50_streak = 0
-        for i in range(len(df) - 1, -1, -1):
-            row = df.iloc[i]
-            if pd.notna(row.get('21EMA')) and row['Low'] > row['21EMA']:
-                low_above_21_streak += 1
-            else:
-                break
-        for i in range(len(df) - 1, -1, -1):
-            row = df.iloc[i]
-            if pd.notna(row.get('50SMA')) and row['Low'] > row['50SMA']:
-                low_above_50_streak += 1
-            else:
-                break
-        for i in range(len(df) - 1, -1, -1):
-            row = df.iloc[i]
-            if (pd.notna(row.get('21EMA')) and pd.notna(row.get('50SMA'))
-                    and row['21EMA'] > row['50SMA']):
-                ema21_above_sma50_streak += 1
-            else:
-                break
-
-        # Step 8 — IBD Power-Trend ON (stateful / sticky).
-        # ON when all four conditions fire on the same bar:
-        #   1. 21 EMA > 50 SMA for ≥ 5 consecutive bars
-        #   2. Close up or flat today (Close ≥ prior Close)
-        #   3. 50 SMA uptrending 1 bar (50 SMA[today] > 50 SMA[yesterday])
-        #   4. Low > 21 EMA for ≥ 10 consecutive bars
-        # OFF only when 21 EMA crosses below 50 SMA AND today's close is down.
-        # A down day that doesn't break the OFF rule leaves Power-Trend ON.
-        def _bool_streak(series):
-            streak, out = 0, []
-            for v in series:
-                streak = streak + 1 if bool(v) else 0
-                out.append(streak)
-            return pd.Series(out, index=series.index)
-
-        ema21_gt_sma50 = (df['21EMA'] > df['50SMA']).fillna(False)
-        low_gt_21ema = (df['Low'] > df['21EMA']).fillna(False)
-        streak_21gt50 = _bool_streak(ema21_gt_sma50)
-        streak_lowGt21 = _bool_streak(low_gt_21ema)
-        close_up_flat_series = (df['Close'] >= df['Close'].shift(1))
-        close_down_series = (df['Close'] < df['Close'].shift(1))
-        sma50_up1d_series = (df['50SMA'] > df['50SMA'].shift(1))
-
-        power_trend_on = False
-        power_trend_on_since = None
-        for i in range(len(df)):
-            row = df.iloc[i]
-            if pd.isna(row.get('50SMA')) or pd.isna(row.get('21EMA')):
-                continue
-            if not power_trend_on:
-                if (streak_21gt50.iloc[i] >= 5
-                        and bool(close_up_flat_series.iloc[i])
-                        and bool(sma50_up1d_series.iloc[i])
-                        and streak_lowGt21.iloc[i] >= 10):
-                    power_trend_on = True
-                    power_trend_on_since = df.index[i]
-            else:
-                if row['21EMA'] < row['50SMA'] and bool(close_down_series.iloc[i]):
-                    power_trend_on = False
-                    power_trend_on_since = None
-
-        achieved_steps = set()
-        if has_rally:
-            if rally_start_date is not None:
-                achieved_steps.add(0)
-            if ftd_achieved:
-                achieved_steps.add(1)
-            if price > ema21:
-                achieved_steps.add(2)
-            if ftd_achieved:
-                if curr['Low'] > ema21:
-                    achieved_steps.add(3)
-                if 3 in achieved_steps and low_above_21_streak >= 3:
-                    achieved_steps.add(4)
-                if 4 in achieved_steps and low_above_50_streak >= 3:
-                    achieved_steps.add(5)
-                if 5 in achieved_steps and ema21 > sma50 and ema21 > sma200 and sma50 > sma200:
-                    achieved_steps.add(6)
-                if 6 in achieved_steps and ema8 > ema21 > sma50 > sma200:
-                    achieved_steps.add(7)
-        # Step 8 stands alone — fires on IBD Power-Trend ON conditions
-        # regardless of step 7's MA stack, so POWERTREND lights up in sync
-        # with IBD's rule even when 50 SMA has not yet crossed 200 SMA.
-        if has_rally and power_trend_on:
-            achieved_steps.add(8)
-
-        entry_step = max(achieved_steps) if achieved_steps else -1
-        if 8 in achieved_steps:
-            state = "POWERTREND"
-        elif entry_step >= 4:
-            state = "UPTREND"
-        elif entry_step >= 0:
-            state = "RALLY MODE"
-        else:
-            state = "CORRECTION"
-
-        # Entry ladder details
-        step_labels = [
-            "Rally Day", "Follow-Through Day", "Close > 21 EMA",
-            "Low > 21 EMA", "Low > 21 EMA (3 days)", "Low > 50 SMA (3 days)",
-            "21 EMA > 50 SMA > 200 SMA", "8 EMA > 21 EMA > 50 SMA > 200 SMA",
-            "Power-Trend ON",
-        ]
-        step_exposures = [20, 40, 60, 80, 100, 120, 140, 160, 200]
-        entry_ladder = []
-        for s in range(9):
-            entry_ladder.append({
-                "step": s, "label": step_labels[s],
-                "achieved": s in achieved_steps,
-                "exposure": step_exposures[s],
-            })
-
-        # MA stack checks
-        stack_8_21 = ema8 > ema21
-        stack_21_50 = ema21 > sma50
-        stack_50_200 = sma50 > sma200
-
-        # Drawdown + reference high date. Reference high is derived in the
-        # analyzer as max(latest ±9 pivot marked high, rolling 52w high); its
-        # date is tracked alongside so we don't need to re-scan.
-        reference_high = analyzer.reference_high or 0
-        drawdown_pct = ((price - reference_high) / reference_high * 100) if reference_high > 0 else 0
-        ref_high_date = str(analyzer.reference_high_date)[:10] if analyzer.reference_high_date is not None else None
-
-        # Consecutive closes below 21 EMA
-        consecutive_below_21 = 0
-        for i in range(len(df) - 1, -1, -1):
-            row = df.iloc[i]
-            if pd.notna(row.get('21EMA')) and row['Close'] < row['21EMA']:
-                consecutive_below_21 += 1
-            else:
-                break
-
-        # Exit alerts
-        active_exits = []
-        if consecutive_below_21 >= 2:
-            active_exits.append({"signal": "21 EMA Confirmed Break", "detail": f"{consecutive_below_21} consecutive closes below 21 EMA", "target": "30%", "severity": "SERIOUS"})
-        elif consecutive_below_21 == 1:
-            active_exits.append({"signal": "21 EMA Watch", "detail": "1 close below 21 EMA — watching for confirmation", "target": "50%", "severity": "WARNING"})
-        if price < sma50:
-            active_exits.append({"signal": "50 SMA Violation", "detail": "Price below 50 SMA", "target": "0%", "severity": "CRITICAL"})
-
-        return {
-            "prefix": f"Day {days_since_rally}: ",
-            "day_num": days_since_rally,
-            "state": state,
-            "entry_step": entry_step,
-            "entry_exposure": step_exposures[entry_step] if entry_step >= 0 else 0,
-            "price": round(price, 2),
-            "ema8": round(ema8, 2),
-            "ema21": round(ema21, 2),
-            "sma50": round(sma50, 2),
-            "sma200": round(sma200, 2),
-            "reference_high": round(reference_high, 2) if reference_high else 0,
-            "reference_high_date": ref_high_date,
-            "drawdown_pct": round(drawdown_pct, 2),
-            "consecutive_below_21": consecutive_below_21,
-            "active_exits": active_exits,
-            "low_above_21_streak": low_above_21_streak,
-            "low_above_50_streak": low_above_50_streak,
-            "stack_8_21": stack_8_21,
-            "stack_21_50": stack_21_50,
-            "stack_50_200": stack_50_200,
-            "entry_ladder": entry_ladder,
-            "ftd_date": str(ftd_date)[:10] if ftd_date else None,
-            "data_as_of": str(df.index[-1])[:10] if len(df) else None,
-            "power_trend_on_since": str(power_trend_on_since)[:10] if power_trend_on_since else None,
-        }
+        result = run_engine("^IXIC", as_of=as_of)
+        return to_rally_prefix_response(result)
     except Exception as e:
         return {"prefix": "", "error": str(e)}
 
@@ -1268,100 +1016,14 @@ def rally_prefix(as_of_date: str = ""):
 @app.get("/api/market/ibd")
 @limiter.limit("30/minute")
 def ibd_market_school(request: Request):
-    """Get IBD Market School current status for NASDAQ — exposure, distribution days, signals."""
+    """V11 implementation: replays MCTEngine over market_data history and
+    translates to the legacy response shape. Distribution days, B/S signal
+    codes, and the IBD 0-6 exposure ladder are V10 concepts; V11 maps them
+    to empty lists / binned exposure until Phase 4 redesigns the UI."""
     try:
-        from market_school_rules import MarketSchoolRules
-        from datetime import date as _date
-
-        # Run full analysis
-        analyzer = MarketSchoolRules("^IXIC")
-        analyzer.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
-        if analyzer.data is None or analyzer.data.empty:
-            return {"error": "No data"}
-
-        # Dual-index FTD
-        ext_ftd = None
-        ext_src = None
-        try:
-            spy_a = MarketSchoolRules("SPY")
-            spy_a.fetch_data(start_date="2024-02-24", end_date=_date.today().strftime('%Y-%m-%d'))
-            if spy_a.data is not None and not spy_a.data.empty:
-                spy_a.analyze_market()
-                if spy_a.ftd_date:
-                    ext_ftd = spy_a.ftd_date
-                    ext_src = "SPY"
-        except Exception:
-            pass
-
-        analyzer.analyze_market(external_ftd_date=ext_ftd, external_ftd_source=ext_src)
-
-        df = analyzer.data
-        curr = df.iloc[-1]
-        last_date = df.index[-1]
-        price = float(curr['Close'])
-
-        # Latest daily summary
-        summary = analyzer.get_daily_summary(last_date.strftime('%Y-%m-%d'))
-
-        # Active distribution days
-        active_dd = [dd for dd in analyzer.distribution_days if dd.removed_date is None]
-
-        # Signals on last day
-        last_norm = pd.Timestamp(last_date).normalize()
-        day_signals = [s for s in analyzer.signals if pd.Timestamp(s.date).normalize() == last_norm]
-        buy_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('B')]
-        sell_sigs = [s.signal_type.name for s in day_signals if s.signal_type.name.startswith('S')]
-
-        # Recent signals (last 30 days)
-        cutoff = last_date - pd.Timedelta(days=30)
-        recent_signals = []
-        for s in analyzer.signals:
-            if pd.Timestamp(s.date) >= cutoff:
-                recent_signals.append({
-                    "date": pd.Timestamp(s.date).strftime('%Y-%m-%d'),
-                    "signal": s.signal_type.name,
-                    "description": s.description if hasattr(s, 'description') else "",
-                })
-
-        # Correction state
-        ref_high = analyzer.reference_high or 0
-        decline_pct = ((price - ref_high) / ref_high * 100) if ref_high > 0 else 0
-
-        # Exposure pyramid labels
-        exp_level = int(summary.get('market_exposure', 0))
-        allocation = summary.get('position_allocation', '0%')
-
-        return {
-            "as_of": last_date.strftime('%Y-%m-%d'),
-            "close": round(price, 2),
-            "daily_change": summary.get('daily_change', '0%'),
-            "buy_switch": analyzer.buy_switch,
-            "market_exposure": exp_level,
-            "allocation": allocation,
-            "distribution_count": len(active_dd),
-            "buy_signals": buy_sigs,
-            "sell_signals": sell_sigs,
-            "in_correction": analyzer.market_in_correction,
-            "ftd_date": analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
-            "nasdaq_ftd": analyzer.ftd_date.strftime('%Y-%m-%d') if analyzer.ftd_date else None,
-            "spy_ftd": ext_ftd.strftime('%Y-%m-%d') if ext_ftd and hasattr(ext_ftd, 'strftime') else (str(ext_ftd)[:10] if ext_ftd else None),
-            "ftd_source": ext_src if ext_ftd else "NASDAQ",
-            "reference_high": round(ref_high, 2),
-            "decline_pct": round(decline_pct, 2),
-            "distribution_days": [
-                {"date": dd.date.strftime('%Y-%m-%d'), "type": dd.type, "loss": round(dd.loss_percent, 2)}
-                for dd in sorted(active_dd, key=lambda x: x.date, reverse=True)
-            ],
-            "recent_signals": recent_signals,
-            # Historical exposure (last 30 days)
-            "history": [
-                {
-                    "date": analyzer.data.index[i].strftime('%Y-%m-%d'),
-                    "market_exposure": int(analyzer.get_daily_summary(analyzer.data.index[i].strftime('%Y-%m-%d')).get('market_exposure', 0)),
-                }
-                for i in range(max(0, len(analyzer.data) - 30), len(analyzer.data))
-            ],
-        }
+        from api.mct_endpoint_adapter import run_engine, to_ibd_response
+        result = run_engine("^IXIC")
+        return to_ibd_response(result)
     except Exception as e:
         return {"error": str(e)}
 

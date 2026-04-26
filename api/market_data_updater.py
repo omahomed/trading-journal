@@ -182,15 +182,10 @@ def _run_engine_and_write_signals(symbol: str = SYMBOL) -> dict:
     if history.empty:
         return {"events_emitted": 0, "rows_inserted": 0, "reason": "empty history"}
 
-    # Default config: seed reference at start of history (engine ratchets after
-    # first nullification). For production use, callers may want to override
-    # initial_reference_high based on a known prior cycle high.
-    config = EngineConfig(
-        initial_reference_high=float(history["high"].iloc[0]),
-        initial_power_trend=False,
-        initial_exposure=100,
-        correction_ever_declared=True,
-    )
+    # Use the same config as the production endpoint adapter — single source
+    # of truth for engine behavior across endpoints + daily updater.
+    from api.mct_endpoint_adapter import _default_config
+    config = _default_config(float(history["high"].iloc[0]))
     engine = MCTEngine(config)
     result = engine.run(history)
     inserted = write_signals(result.signals)

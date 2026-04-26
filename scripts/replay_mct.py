@@ -77,16 +77,25 @@ def main() -> int:
         return 1
     log.info("Loaded %d bars", len(history))
 
+    # For --full-history runs the seed is an ancient bar's high; the ratchet
+    # must be armed up front so it can climb to a contemporaneous reference.
+    # For stress-test runs with a contemporaneous --initial-reference-high
+    # seed (Phase 2 canonical), keep the ratchet disarmed until first
+    # nullification (matching the Phase 2 design semantics).
+    ratchet_armed = bool(args.full_history)
+
     config = EngineConfig(
         initial_reference_high=args.initial_reference_high,
         initial_state=args.initial_state,
         initial_exposure=args.initial_exposure,
         initial_power_trend=not args.no_power_trend,
         correction_ever_declared=True,
+        initial_ratchet_armed=ratchet_armed,
     )
-    log.info("Engine config: ref_high=%s, state=%s, exposure=%d, PT=%s",
+    log.info("Engine config: ref_high=%s, state=%s, exposure=%d, PT=%s, ratchet_armed=%s",
              config.initial_reference_high, config.initial_state,
-             config.initial_exposure, config.initial_power_trend)
+             config.initial_exposure, config.initial_power_trend,
+             config.initial_ratchet_armed)
 
     engine = MCTEngine(config)
     result = engine.run(history)

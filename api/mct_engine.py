@@ -99,6 +99,14 @@ class EngineConfig:
     initial_exposure: int = 200
     initial_power_trend: bool = True
     correction_ever_declared: bool = True
+    # If True, the reference-high ratchet runs from bar 0 instead of waiting
+    # for the first nullification. Use this for full-history replays from
+    # 2010 (where the seed is an ancient bar's high — without ratchet, the
+    # 7% threshold stays anchored to that ancient value and no correction
+    # ever declares). Leave False for stress-test configs that pass a
+    # contemporaneous initial_reference_high (e.g., the Phase 2 canonical run
+    # with seed 20,118.61).
+    initial_ratchet_armed: bool = False
 
 
 @dataclass
@@ -163,13 +171,14 @@ class MCTEngine:
             "reference_high": self.config.initial_reference_high,
             "correction_ever_declared": self.config.correction_ever_declared,
 
-            # Ratchet gate: the seeded reference_high stays fixed until the engine
-            # observes a complete correction cycle in this run (declaration →
-            # nullification). After first nullification this flips True and the
-            # ratchet starts updating reference_high on new highs. Without this,
-            # ratchet would push reference past the seed during pre-correction
-            # bars and corrupt the 7% threshold for the first declaration.
-            "ratchet_armed": False,
+            # Ratchet gate: by default the seeded reference_high stays fixed
+            # until the engine observes a complete correction cycle in this run
+            # (declaration → nullification). After first nullification this
+            # flips True and the ratchet starts updating reference_high on new
+            # highs. For full-history replays the caller arms the ratchet up
+            # front via EngineConfig.initial_ratchet_armed=True so the reference
+            # climbs naturally from the 2010 seed.
+            "ratchet_armed": self.config.initial_ratchet_armed,
 
             "in_correction": False,
             "correction_active": False,
@@ -307,6 +316,12 @@ class MCTEngine:
         if close > state["reference_high"]:
             before = state["exposure"]
             state["correction_active"] = False
+            # Nullification also forces in_correction=False so the (in_correction=True,
+            # correction_active=False) "illegal" state can never persist. Edge case:
+            # nullification fires before STEP_4 (rally hunt didn't fully resolve).
+            # Without this, the engine wedges in rally-hunt state forever and the
+            # ratchet stays disabled (gated on both flags being False).
+            state["in_correction"] = False
             state["ratchet_armed"] = True  # ratchet starts after first nullification
             had_cap = state["cap_at_100"]
             # Steps 5/6/7 retire so a future correction can re-fire them
@@ -1037,6 +1052,9 @@ class MCTEngine:
         close = float(current["close"])
         return {
             "trade_date": current["trade_date"],
+            "open": float(current["open"]),
+            "high": float(current["high"]),
+            "low": float(current["low"]),
             "close": close,
             "vs21": (close - ema_21) / ema_21 if ema_21 else None,
             "vs50": (close - sma_50) / sma_50 if sma_50 else None,
