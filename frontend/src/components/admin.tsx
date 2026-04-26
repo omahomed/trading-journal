@@ -96,6 +96,29 @@ export function Admin({ navColor }: { navColor: string }) {
   const [backfillRunning, setBackfillRunning] = useState(false);
   const [backfillResult, setBackfillResult] = useState<{ checked: number; updated: number; errors: string[] } | null>(null);
 
+  // MCT signal rebuild
+  const [rebuildRunning, setRebuildRunning] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState<Awaited<ReturnType<typeof api.rebuildMctSignals>> | null>(null);
+
+  const runRebuildSignals = async () => {
+    if (!confirm("This will DELETE every row in market_signals and re-insert from a fresh engine run. Proceed?")) return;
+    setRebuildRunning(true);
+    setRebuildResult(null);
+    try {
+      const res = await api.rebuildMctSignals();
+      setRebuildResult(res);
+      if (res.error) {
+        flash(res.error, "err");
+      } else {
+        flash(`Rebuilt: deleted ${res.deleted}, inserted ${res.inserted}`, "ok");
+      }
+    } catch (err: any) {
+      flash(err.message || "Rebuild failed", "err");
+      setRebuildResult({ error: err.message || "Rebuild failed" });
+    }
+    setRebuildRunning(false);
+  };
+
   const runBackfill = async () => {
     setBackfillRunning(true);
     setBackfillResult(null);
@@ -445,6 +468,36 @@ export function Admin({ navColor }: { navColor: string }) {
           </div>
         ) : (
           <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>Click Load to fetch audit entries.</div>
+        )}
+      </Section>
+
+      {/* ── 6.5 Rebuild MCT Signals ── */}
+      <Section title="Rebuild MCT Signals" icon="R">
+        <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Atomically <strong>DELETE</strong> all rows from <code>market_signals</code> and re-insert from a fresh full-history MCT engine run. Use after engine logic changes (e.g., a same-bar firing fix) where previously persisted signals are stale and the daily updater&apos;s ON&nbsp;CONFLICT&nbsp;DO&nbsp;NOTHING semantics can&apos;t notice. One transaction — table is never empty mid-rebuild.
+        </div>
+        <SaveBtn
+          label={rebuildRunning ? "Rebuilding..." : "Rebuild Now"}
+          loading={rebuildRunning}
+          onClick={runRebuildSignals}
+        />
+        {rebuildResult && !rebuildResult.error && (
+          <div className="mt-3 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+            Deleted <strong style={{ color: "#e5484d" }}>{rebuildResult.deleted ?? 0}</strong> stale rows;
+            inserted <strong style={{ color: "#08a86b" }}>{rebuildResult.inserted ?? 0}</strong> fresh signals
+            from <strong style={{ color: "var(--ink)" }}>{rebuildResult.events_emitted ?? 0}</strong> engine events
+            across <strong style={{ color: "var(--ink)" }}>{rebuildResult.bars_processed ?? 0}</strong> bars.
+            {rebuildResult.first_signal_date && rebuildResult.last_signal_date && (
+              <div className="mt-1 text-[11px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+                Range: {rebuildResult.first_signal_date} → {rebuildResult.last_signal_date}
+              </div>
+            )}
+          </div>
+        )}
+        {rebuildResult?.error && (
+          <div className="mt-3 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))", color: "#dc2626", fontFamily: mono }}>
+            {rebuildResult.error}
+          </div>
         )}
       </Section>
 

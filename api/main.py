@@ -1579,6 +1579,51 @@ def cleanup_marketsurge(request: Request, body: dict):
         return {"error": str(e)}
 
 
+@app.post("/api/admin/rebuild-mct-signals")
+@limiter.limit("3/minute")
+def rebuild_mct_signals(request: Request):
+    """Atomically DELETE + re-INSERT all market_signals rows from a fresh
+    full-history engine run.
+
+    Use after engine logic changes that obsolete previously persisted signals
+    (write_signals' ON CONFLICT DO NOTHING semantics can't notice when a
+    signal's date shifts). One transaction — table is never empty mid-rebuild.
+    """
+    try:
+        from datetime import date as _date
+        from api.mct_engine import MCTEngine
+        from api.market_data_repo import get_history, get_latest_date
+        from api.mct_endpoint_adapter import _default_config
+        from api.mct_signals_writer import rebuild_signals
+
+        symbol = "^IXIC"
+        latest = get_latest_date(symbol)
+        if latest is None:
+            return {"error": "no market_data rows for symbol"}
+
+        history = get_history(symbol, _date(2010, 1, 1), latest)
+        if history.empty:
+            return {"error": "empty history"}
+
+        config = _default_config(float(history["high"].iloc[0]))
+        result = MCTEngine(config).run(history)
+        summary = rebuild_signals(result.signals)
+
+        first = result.signals[0].trade_date if result.signals else None
+        last = result.signals[-1].trade_date if result.signals else None
+        return {
+            "deleted": summary["deleted"],
+            "inserted": summary["inserted"],
+            "events_emitted": summary["events_emitted"],
+            "first_signal_date": first.isoformat() if first else None,
+            "last_signal_date": last.isoformat() if last else None,
+            "bars_processed": len(result.bars),
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 # ============================================================
 # AI COACH — STREAMING CHAT
 # ============================================================

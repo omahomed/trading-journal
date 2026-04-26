@@ -321,6 +321,19 @@ export const api = {
       body: JSON.stringify({ dry_run: dryRun }),
     }).then(r => r.json()),
 
+  rebuildMctSignals: () =>
+    fetchWithAuth(`${API_BASE}/api/admin/rebuild-mct-signals`, {
+      method: "POST",
+    }).then(r => r.json()) as Promise<{
+      deleted?: number;
+      inserted?: number;
+      events_emitted?: number;
+      first_signal_date?: string | null;
+      last_signal_date?: string | null;
+      bars_processed?: number;
+      error?: string;
+    }>,
+
   // AI Coach
   coachChat: (message: string, preset?: string, portfolio = getActivePortfolio()) => {
     return fetchWithAuth(`${API_BASE}/api/coach/chat`, {
