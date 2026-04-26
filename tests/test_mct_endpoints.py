@@ -4,7 +4,7 @@ Calls the FastAPI endpoint functions directly (skipping the HTTP layer +
 JWT middleware). Verifies the V11 response shape for /api/market/rally-prefix
 plus pure adapter helpers.
 
-The /api/market/ibd endpoint and the IBDMarketSchool frontend component were
+The legacy IBD-style market-school endpoint and its frontend component were
 deleted in Phase 4; the V11 frontend consumes /api/market/rally-prefix and
 /api/market/signals directly. See tests/test_mct_state_by_date_range.py for
 the Phase 4 endpoint tests.
