@@ -244,8 +244,11 @@ export const api = {
     );
   },
 
-  // Market
-  rallyPrefix: () => fetchJSON<{
+  // Market — `as_of_date` is optional. Pass it on Daily Routine so the
+  // prefix reflects the routine's date rather than the latest ingested
+  // market_data bar (which can lag by a trading day around market open /
+  // overnight cron windows).
+  rallyPrefix: (as_of_date?: string) => fetchJSON<{
     prefix: string;
     day_num?: number;
     state?: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
@@ -256,7 +259,9 @@ export const api = {
     reference_high?: number;
     reference_high_date?: string | null;
     cycle_start_date?: string | null;
-  }>(`/api/market/rally-prefix`),
+    day_num_projected?: boolean;
+    day_num_projection_offset?: number;
+  }>(`/api/market/rally-prefix${as_of_date ? `?as_of_date=${encodeURIComponent(as_of_date)}` : ""}`),
 
   marketSignals: (days = 30, signal_type?: string) => {
     const params = new URLSearchParams({ days: String(days) });

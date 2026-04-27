@@ -90,17 +90,30 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     Promise.all([
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 0 })),
       api.batchPrices(["SPY", "^IXIC"]).catch(() => ({})),
-      api.rallyPrefix().catch(() => ({ prefix: "" })),
-    ]).then(([latestJ, prices, rally]) => {
+    ]).then(([latestJ, prices]) => {
       setPortPrev(parseFloat(String((latestJ as any).end_nlv || 0)));
       const p = prices as Record<string, number>;
       if (p["SPY"]) setSpyClose(p["SPY"].toFixed(2));
       if (p["^IXIC"]) setNdxClose(p["^IXIC"].toFixed(2));
-      const prefix = (rally as any).prefix || "";
-      if (prefix) setMarketNotes(prefix);
       setLoading(false);
     });
   }, []);
+
+  // Rally prefix lives in its own date-keyed effect so changing the date
+  // picker refetches it. Also passes the entry date as `as_of_date` so the
+  // prefix reflects the routine's date — not the latest ingested bar, which
+  // can lag by a day. Backend projects forward when our date is past the
+  // latest bar (see _project_rally_prefix_for_data_lag in api/main.py).
+  // Cancellation guard mirrors the IBKR effect's contract.
+  useEffect(() => {
+    let cancelled = false;
+    api.rallyPrefix(entryDate).catch(() => ({ prefix: "" })).then(rally => {
+      if (cancelled) return;
+      const prefix = (rally as any).prefix || "";
+      if (prefix) setMarketNotes(prefix);
+    });
+    return () => { cancelled = true; };
+  }, [entryDate]);
 
   // Auto-fill End NLV + Total Holdings from IBKR Flex Query. Runs on mount
   // and on date change. Decoupled from the rest of the load — failures
@@ -260,7 +273,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
           </div>
           <div className="p-4 flex flex-col gap-3">
             <Field label="Date">
-              <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} className={inputCls} style={inputStyle} />
+              <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} className={inputCls} style={inputStyle} aria-label="Entry date" />
             </Field>
             <Field label="SPY Close">
               <input type="number" value={spyClose} onChange={e => setSpyClose(e.target.value)} step="0.01" className={inputCls} style={inputStyle} />

@@ -388,3 +388,47 @@ describe("DailyRoutine — IBKR Total Holdings auto-fill", () => {
     expect(payload.holdings_source).toBe("manual");
   });
 });
+
+
+describe("DailyRoutine — rally prefix re-fetches on date change", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  test("calls rallyPrefix with the entry date and re-calls when the date changes", async () => {
+    // The data-lag bug fix: prefix must reflect the date the user picks,
+    // not the latest ingested bar. Verifies (a) entryDate is passed on
+    // mount and (b) the call refires when the date changes.
+    let prefixCount = 18;
+    mockedRallyPrefix.mockImplementation((async (asOf?: string) => {
+      // Return a different prefix per call so the component-side state
+      // change is observable. asOf is whatever the component passed —
+      // checked below.
+      return { prefix: `Day ${prefixCount++}: ` } as any;
+    }) as any);
+    mockedIbkrNav.mockResolvedValue({
+      success: false,
+      error: "ibkr_not_configured",
+      message: "IBKR not configured.",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    // First call should have used today's calendar date (whatever
+    // entryDate defaulted to). Wait for it to land.
+    await waitFor(() => expect(mockedRallyPrefix).toHaveBeenCalled());
+    const firstAsOf = mockedRallyPrefix.mock.calls[0][0];
+    expect(firstAsOf).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    // User changes the date input — second call should fire with the new value.
+    const dateInput = screen.getByLabelText("Entry date") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2026-04-20" } });
+    });
+
+    await waitFor(() => expect(mockedRallyPrefix.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const lastCall = mockedRallyPrefix.mock.calls[mockedRallyPrefix.mock.calls.length - 1];
+    expect(lastCall[0]).toBe("2026-04-20");
+  });
+});

@@ -931,6 +931,79 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
 # ============================================================
 # MARKET ENDPOINTS
 # ============================================================
+
+# How far past the latest ingested bar we'll project day_num forward when
+# the caller asks for a date the data feed hasn't caught up to. Bounded so a
+# stuck cron can't silently inflate the count by weeks. 5 trading days = one
+# week, which covers the realistic data-lag window (Mon morning before the
+# overnight ingest runs, weekend-only outage, etc.) without being absurd.
+_RALLY_PREFIX_MAX_PROJECTION_DAYS = 5
+
+
+def _project_rally_prefix_for_data_lag(response: dict, requested_as_of) -> dict:
+    """Project day_num forward when the requested date is past the latest
+    ingested bar. The MCT engine reads from market_data; if today's bar
+    hasn't ingested yet (cron lag, market still open, etc.), the engine
+    reports yesterday's day_num and the Daily Routine prefix lags by one
+    trading day.
+
+    Pure function — takes the rally-prefix response dict + the user's
+    requested date and returns either the original dict or a mutated copy
+    with day_num + prefix bumped forward. Skipped during corrections /
+    inactive cycles since day_num is meaningless there.
+
+    Caps offset at _RALLY_PREFIX_MAX_PROJECTION_DAYS. Counts Mon-Fri only —
+    market holidays aren't tracked here, accept the rare ±1 error around
+    them rather than maintain a holiday calendar in the endpoint layer.
+    """
+    if requested_as_of is None:
+        return response
+    if response.get("state") not in ("UPTREND", "POWERTREND", "RALLY MODE"):
+        return response
+    if (response.get("day_num") or 0) <= 0:
+        return response
+    data_as_of_iso = response.get("data_as_of")
+    if not data_as_of_iso:
+        return response
+
+    try:
+        from datetime import date as _date, timedelta as _td
+        data_dt = _date.fromisoformat(data_as_of_iso)
+    except ValueError:
+        return response
+
+    if requested_as_of <= data_dt:
+        return response
+
+    offset = 0
+    cursor = data_dt + _td(days=1)
+    while cursor <= requested_as_of and offset < _RALLY_PREFIX_MAX_PROJECTION_DAYS:
+        if cursor.weekday() < 5:  # Mon-Fri
+            offset += 1
+        cursor += _td(days=1)
+
+    if offset == 0:
+        return response
+
+    new_day_num = response["day_num"] + offset
+    # Preserve the prefix shape — only rebuild it if it was the standard
+    # "Day N: " form. Custom or empty prefixes pass through untouched.
+    new_prefix = response.get("prefix", "")
+    if new_prefix.startswith("Day "):
+        new_prefix = f"Day {new_day_num}: "
+
+    return {
+        **response,
+        "day_num": new_day_num,
+        "prefix": new_prefix,
+        # Diagnostic flags so callers / future debugging can tell a projected
+        # number from a real one. Not consumed by the routine UI; surfaced
+        # for inspection in /api/admin/* paths and tests.
+        "day_num_projected": True,
+        "day_num_projection_offset": offset,
+    }
+
+
 @app.get("/api/market/rally-prefix")
 def rally_prefix(as_of_date: str = ""):
     """Get rally day prefix for Market/Global Notes (e.g., 'Day 14 POWERTREND:').
@@ -938,6 +1011,12 @@ def rally_prefix(as_of_date: str = ""):
     V11 implementation: replays the MCT engine over market_data history and
     translates the result into the legacy response shape. If as_of_date is
     provided (YYYY-MM-DD), slices history to bars on or before that date.
+
+    When as_of_date sits past the latest ingested market_data bar (typical
+    case: opening Daily Routine before today's bar ingests), the response
+    is projected forward — day_num is bumped by the trading-day delta,
+    prefix is rebuilt accordingly, and `day_num_projected: true` flags the
+    synthesis. See _project_rally_prefix_for_data_lag for the exact rule.
     """
     try:
         from datetime import date as _date, datetime as _dt
@@ -951,7 +1030,8 @@ def rally_prefix(as_of_date: str = ""):
                 as_of = None
 
         result = run_engine("^IXIC", as_of=as_of)
-        return to_rally_prefix_response(result)
+        response = to_rally_prefix_response(result)
+        return _project_rally_prefix_for_data_lag(response, as_of)
     except Exception as e:
         return {"prefix": "", "error": str(e)}
 
