@@ -9,7 +9,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { api } from "@/lib/api";
-import { MarketCycle } from "./market-cycle";
+import { MFactor } from "./m-factor";
 
 const mockedRallyPrefix = vi.mocked(api.rallyPrefix);
 const mockedMarketSignals = vi.mocked(api.marketSignals);
@@ -53,7 +53,7 @@ const baseRallyPayload = {
   cycle_start_date: "2026-03-31",
 };
 
-describe("MarketCycle — V11 augmented surface", () => {
+describe("MFactor — V11 augmented surface", () => {
   beforeEach(() => {
     mockedRallyPrefix.mockReset();
     mockedMarketSignals.mockReset();
@@ -62,7 +62,7 @@ describe("MarketCycle — V11 augmented surface", () => {
 
   test("renders POWERTREND state in the banner", async () => {
     mockedRallyPrefix.mockResolvedValue(baseRallyPayload);
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     // POWERTREND appears in both the state banner and the methodology table,
     // so findAllByText is used instead of findByText.
     const matches = await screen.findAllByText("POWERTREND");
@@ -72,26 +72,26 @@ describe("MarketCycle — V11 augmented surface", () => {
 
   test("renders cap_at_100 indicator when active", async () => {
     mockedRallyPrefix.mockResolvedValue({ ...baseRallyPayload, cap_at_100: true });
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     expect(await screen.findByText("Capped at 100%")).toBeInTheDocument();
   });
 
   test("hides cap_at_100 indicator when not active", async () => {
     mockedRallyPrefix.mockResolvedValue({ ...baseRallyPayload, cap_at_100: false });
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     await screen.findAllByText("POWERTREND");
     expect(screen.queryByText("Capped at 100%")).not.toBeInTheDocument();
   });
 
   test("renders cycle_start_date line when present and day_num > 0", async () => {
     mockedRallyPrefix.mockResolvedValue(baseRallyPayload);
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     expect(await screen.findByText(/Cycle started 2026-03-31 \(Day 18\)/)).toBeInTheDocument();
   });
 
   test("renders Recent Signals section header", async () => {
     mockedRallyPrefix.mockResolvedValue(baseRallyPayload);
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     expect(await screen.findByText("Recent Signals")).toBeInTheDocument();
   });
 
@@ -111,7 +111,7 @@ describe("MarketCycle — V11 augmented surface", () => {
         },
       ],
     });
-    render(<MarketCycle navColor="#8b5cf6" />);
+    render(<MFactor navColor="#8b5cf6" />);
     // Wait for the table cell to mount. The signal type also appears in the
     // filter <option>, so findAllByText is used.
     const matches = await screen.findAllByText("STEP_8_POWERTREND_ON");

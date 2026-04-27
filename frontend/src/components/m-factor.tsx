@@ -21,7 +21,7 @@ function LockIcon({ size = 11 }: { size?: number }) {
   );
 }
 
-export function MarketCycle({ navColor }: { navColor: string }) {
+export function MFactor({ navColor }: { navColor: string }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -56,7 +56,7 @@ export function MarketCycle({ navColor }: { navColor: string }) {
       <div className="mb-[22px] pb-[14px] flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
         <div>
           <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-            Market Cycle <em className="italic" style={{ color: navColor }}>Tracker</em>
+            M <em className="italic" style={{ color: navColor }}>Factor</em>
           </h1>
           <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
             NASDAQ cycle analysis · Entry & exit ladder
@@ -74,7 +74,7 @@ export function MarketCycle({ navColor }: { navColor: string }) {
 
       {/* ═══ State Banner ═══ */}
       <div className="rounded-[14px] p-6 text-center mb-6" style={{ background: sc.bg, color: sc.fg, boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
-        <div className="text-[12px] uppercase tracking-[0.15em] opacity-80 mb-1">NASDAQ Market Cycle</div>
+        <div className="text-[12px] uppercase tracking-[0.15em] opacity-80 mb-1">NASDAQ M Factor</div>
         <div className="text-[52px] font-extrabold tracking-tight" style={{ lineHeight: 1.1 }}>{state}</div>
         {data.cap_at_100 && (
           <div className="inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-[11px] font-semibold"
@@ -363,7 +363,7 @@ function SignalLog({ mono }: { mono: string }) {
       <div className="px-5 py-3 flex items-center justify-between gap-3" style={{ borderBottom: "1px solid var(--border)" }}>
         <div>
           <div className="text-[13px] font-semibold">Recent Signals</div>
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>Last 30 days from MCT engine</div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>Last 30 days from M Factor engine</div>
         </div>
         <select
           value={filter}

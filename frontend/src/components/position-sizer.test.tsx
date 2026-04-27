@@ -46,7 +46,7 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     setupDefaults();
   });
 
-  test("renders 'Auto: Offense (from MCT POWERTREND)' when MCT state is POWERTREND", async () => {
+  test("renders 'Auto: Offense (from M Factor POWERTREND)' when MCT state is POWERTREND", async () => {
     mRally.mockResolvedValue({ prefix: "Day 18: ", state: "POWERTREND" } as any);
 
     render(<PositionSizer navColor="#6366f1" />);
@@ -55,7 +55,7 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
       expect(indicator.textContent).toMatch(/Offense \(1\.00%\)/);
-      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
     // No reset button while in auto mode
     expect(screen.queryByTestId("sizer-reset-to-auto")).not.toBeInTheDocument();
@@ -77,7 +77,7 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
       const indicator = await screen.findByTestId("sizer-mode-indicator");
       await waitFor(() => {
         expect(indicator.textContent).toContain(label);
-        expect(indicator.textContent).toContain(`from MCT ${state}`);
+        expect(indicator.textContent).toContain(`from M Factor ${state}`);
       });
       unmount();
     }
@@ -104,8 +104,8 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Manual:/);
       expect(indicator.textContent).toMatch(/Defense \(0\.50%\)/);
-      // No "from MCT …" hint while in manual mode (the source is the user)
-      expect(indicator.textContent).not.toMatch(/from MCT/);
+      // No "from M Factor …" hint while in manual mode (the source is the user)
+      expect(indicator.textContent).not.toMatch(/from M Factor/);
     });
     // Reset button appears
     expect(screen.getByTestId("sizer-reset-to-auto")).toBeInTheDocument();
@@ -128,12 +128,12 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
       expect(indicator.textContent).toMatch(/Offense \(1\.00%\)/);
-      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
     expect(screen.queryByTestId("sizer-reset-to-auto")).not.toBeInTheDocument();
   });
 
-  test("rally-prefix returning no state defaults to Normal + 'MCT state unknown'", async () => {
+  test("rally-prefix returning no state defaults to Normal + 'M Factor state unknown'", async () => {
     // Failure mode: rallyPrefix's catch landed an empty {prefix: ""}
     // (no `state` field). Spec: safe-middle Normal, no fake-source label.
     mRally.mockResolvedValue({ prefix: "" } as any);
@@ -144,7 +144,7 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
       expect(indicator.textContent).toMatch(/Normal \(0\.75%\)/);
-      expect(indicator.textContent).toMatch(/MCT state unknown/);
+      expect(indicator.textContent).toMatch(/M Factor state unknown/);
     });
   });
 });

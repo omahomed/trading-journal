@@ -67,7 +67,7 @@ export const NAV: NavGroup[] = [
   {
     id: "market", label: "Market Intel", color: "#8b5cf6", softColor: "#f1ecfe",
     items: [
-      { id: "cycle", label: "Market Cycle Tracker", href: "/market-cycle" },
+      { id: "cycle", label: "M Factor", href: "/m-factor" },
       { id: "rally", label: "Rally Context", href: "/rally-context" },
     ],
   },

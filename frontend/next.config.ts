@@ -13,6 +13,16 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BUILD_ID: BUILD_ID,
   },
+  // /market-cycle → /m-factor permanent redirect. The page was renamed
+  // from "Market Cycle Tracker" to "M Factor"; Next.js's `permanent: true`
+  // emits HTTP 308, the modern permanent-redirect status that's
+  // functionally interchangeable with 301 for browsers and SEO. The
+  // redirect preserves query strings (Next.js default behavior).
+  async redirects() {
+    return [
+      { source: "/market-cycle", destination: "/m-factor", permanent: true },
+    ];
+  },
 };
 
 export default withSentryConfig(nextConfig, {

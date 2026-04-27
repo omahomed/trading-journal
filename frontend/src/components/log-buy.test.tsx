@@ -56,7 +56,7 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
       expect(indicator.textContent).toMatch(/Sizing:/);
       expect(indicator.textContent).toMatch(/Offense/);
       expect(indicator.textContent).toMatch(/1\.00% risk/);
-      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
   });
 
@@ -92,8 +92,8 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
       expect(indicator.textContent).toMatch(/Defense/);
       expect(indicator.textContent).toMatch(/0\.50% risk/);
       expect(indicator.textContent).toMatch(/manual override/);
-      // No "from MCT …" label while in manual mode (the source is the user)
-      expect(indicator.textContent).not.toMatch(/from MCT/);
+      // No "from M Factor …" label while in manual mode (the source is the user)
+      expect(indicator.textContent).not.toMatch(/from M Factor/);
     });
     expect(screen.getByTestId("logbuy-reset-to-mct")).toBeInTheDocument();
   });
@@ -114,13 +114,13 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Offense/);
       expect(indicator.textContent).toMatch(/1\.00% risk/);
-      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
       expect(indicator.textContent).not.toMatch(/manual override/);
     });
     expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
   });
 
-  test("override does not persist across remount — fresh render re-derives from MCT", async () => {
+  test("override does not persist across remount — fresh render re-derives from M Factor", async () => {
     // Page-reload analogue: unmount + remount the component. State is
     // local to the React tree, so a remount drops sizingModeManual and
     // re-runs the mount effect, which re-applies the MCT auto pick.
@@ -137,7 +137,7 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Offense/);
-      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
     expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
   });
@@ -151,11 +151,11 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Defense/);
       expect(indicator.textContent).toMatch(/0\.50% risk/);
-      expect(indicator.textContent).toMatch(/from MCT CORRECTION/);
+      expect(indicator.textContent).toMatch(/from M Factor CORRECTION/);
     });
   });
 
-  test("rally-prefix returning no state defaults to Normal + 'MCT state unknown'", async () => {
+  test("rally-prefix returning no state defaults to Normal + 'M Factor state unknown'", async () => {
     mRally.mockResolvedValue({ prefix: "" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
@@ -164,7 +164,7 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Normal/);
       expect(indicator.textContent).toMatch(/0\.75% risk/);
-      expect(indicator.textContent).toMatch(/MCT state unknown/);
+      expect(indicator.textContent).toMatch(/M Factor state unknown/);
     });
   });
 });

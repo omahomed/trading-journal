@@ -59,16 +59,18 @@ export function mctStateToSizingMode(state: string | null | undefined): 0 | 1 | 
 }
 
 /** Human-readable label for the source of a sizing-mode pick. Used by
- *  Position Sizer's "Auto: Offense (from MCT POWERTREND)" / "Manual:
- *  Defense" indicator. */
+ *  Position Sizer's "Auto: Offense (from M Factor POWERTREND)" /
+ *  "Manual: Defense" indicator. The function NAME stays as
+ *  describeMctSource — the engine internals are still called MCT —
+ *  but the user-visible string says "M Factor". */
 export function describeMctSource(state: string | null | undefined): string {
   switch (state) {
     case "POWERTREND":
     case "UPTREND":
     case "RALLY MODE":
     case "CORRECTION":
-      return `from MCT ${state}`;
+      return `from M Factor ${state}`;
     default:
-      return "MCT state unknown";
+      return "M Factor state unknown";
   }
 }

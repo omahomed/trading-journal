@@ -77,9 +77,9 @@ export function TapeStatusPill() {
 
   return (
     <Link
-      href="/market-cycle"
+      href="/m-factor"
       className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--ink-2)] hover:bg-[#eef0f6] transition-colors"
-      title="Open Market Cycle Tracker"
+      title="Open M Factor"
     >
       <span
         className="w-1.5 h-1.5 rounded-full"

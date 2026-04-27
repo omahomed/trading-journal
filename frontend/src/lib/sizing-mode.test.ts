@@ -62,18 +62,21 @@ describe("sizing-mode lib", () => {
   });
 
   describe("describeMctSource", () => {
-    test("formats the four MCT states verbatim", () => {
-      expect(describeMctSource("POWERTREND")).toBe("from MCT POWERTREND");
-      expect(describeMctSource("UPTREND")).toBe("from MCT UPTREND");
-      expect(describeMctSource("RALLY MODE")).toBe("from MCT RALLY MODE");
-      expect(describeMctSource("CORRECTION")).toBe("from MCT CORRECTION");
+    // Function is still NAMED describeMctSource (engine internals are
+    // still MCT) but the user-visible output says "M Factor" — that's
+    // the entire user-facing rename in this lib.
+    test("formats the four states with 'M Factor' as user-facing label", () => {
+      expect(describeMctSource("POWERTREND")).toBe("from M Factor POWERTREND");
+      expect(describeMctSource("UPTREND")).toBe("from M Factor UPTREND");
+      expect(describeMctSource("RALLY MODE")).toBe("from M Factor RALLY MODE");
+      expect(describeMctSource("CORRECTION")).toBe("from M Factor CORRECTION");
     });
 
-    test("unknown / null state surfaces 'state unknown' instead of guessing", () => {
-      expect(describeMctSource(null)).toBe("MCT state unknown");
-      expect(describeMctSource(undefined)).toBe("MCT state unknown");
-      expect(describeMctSource("")).toBe("MCT state unknown");
-      expect(describeMctSource("POWERTREND ON")).toBe("MCT state unknown");
+    test("unknown / null state surfaces 'M Factor state unknown' instead of guessing", () => {
+      expect(describeMctSource(null)).toBe("M Factor state unknown");
+      expect(describeMctSource(undefined)).toBe("M Factor state unknown");
+      expect(describeMctSource("")).toBe("M Factor state unknown");
+      expect(describeMctSource("POWERTREND ON")).toBe("M Factor state unknown");
     });
   });
 });

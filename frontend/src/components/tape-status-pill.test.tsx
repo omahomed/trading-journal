@@ -103,7 +103,7 @@ describe("TapeStatusPill — V11 state rendering", () => {
     expect(screen.queryByLabelText("Capped at 100%")).not.toBeInTheDocument();
   });
 
-  test("links to /market-cycle", async () => {
+  test("links to /m-factor", async () => {
     mockedRallyPrefix.mockResolvedValue({
       prefix: "",
       state: "UPTREND",
@@ -112,6 +112,6 @@ describe("TapeStatusPill — V11 state rendering", () => {
     });
     render(<TapeStatusPill />);
     const link = await screen.findByRole("link");
-    expect(link).toHaveAttribute("href", "/market-cycle");
+    expect(link).toHaveAttribute("href", "/m-factor");
   });
 });
