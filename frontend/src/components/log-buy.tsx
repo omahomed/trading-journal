@@ -198,9 +198,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [selectedCampaign, setSelectedCampaign] = useState("");
   // sizingMode default Normal (1) — overwritten on mount by the MCT
   // state read. Stays Normal if the read fails (mctStateToSizingMode
-  // falls back to safe middle ground). No user-facing override on
-  // Log Buy: per spec, "it's an action, not a calculator."
+  // falls back to safe middle ground). sizingModeManual flips true the
+  // moment the user picks a different mode for this Log Buy submission;
+  // the risk-per-trade math (riskPctInput below) reads from sizingMode
+  // either way, so the override flows naturally into the saved buy.
+  // Override is form-local: refresh / navigate-away / submit all reset
+  // it (the component remounts and the auto pick takes over again).
   const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
   const [stopMode, setStopMode] = useState<"price" | "pct">("pct");
@@ -845,22 +850,56 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </div>
               <div className="p-5 flex flex-col gap-4">
 
-                {/* Sizing mode — read-only, MCT-driven. Manual radio
-                    override lives on Position Sizer; this surface is for
-                    actually logging a buy, not for what-if analysis. */}
-                <div className="px-3 py-2 rounded-[8px] text-[12px]"
+                {/* Sizing mode — MCT-driven by default; user can override
+                    for this Log Buy submission. Override is form-local
+                    (component remount on submit / refresh re-applies the
+                    auto pick). riskPctInput below reads from sizingMode
+                    either way, so the override flows into the saved buy. */}
+                <div className="px-3 py-2 rounded-[8px] text-[12px] flex items-center justify-between gap-3 flex-wrap"
                      data-testid="logbuy-sizing-mode-indicator"
                      style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                  <span style={{ color: "var(--ink-4)" }}>Sizing:</span>{" "}
-                  <span className="font-semibold">
-                    {SIZING_MODES[sizingMode].icon}{" "}
-                    {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}{" "}
-                    ({SIZING_MODES[sizingMode].pct.toFixed(2)}% risk)
-                  </span>
-                  <span style={{ color: "var(--ink-4)" }}>
-                    {" "}{describeMctSource(mctState)}
-                  </span>
+                  <div>
+                    <span style={{ color: "var(--ink-4)" }}>Sizing:</span>{" "}
+                    <span className="font-semibold">
+                      {SIZING_MODES[sizingMode].icon}{" "}
+                      {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}{" "}
+                      ({SIZING_MODES[sizingMode].pct.toFixed(2)}% risk)
+                    </span>
+                    <span style={{ color: "var(--ink-4)" }}>
+                      {" "}{sizingModeManual ? "— manual override" : describeMctSource(mctState)}
+                    </span>
+                  </div>
+                  {sizingModeManual && (
+                    <button type="button"
+                            data-testid="logbuy-reset-to-mct"
+                            onClick={() => {
+                              setSizingMode(mctStateToSizingMode(mctState));
+                              setSizingModeManual(false);
+                            }}
+                            className="text-[11px] px-2 py-0.5 rounded-[6px] underline"
+                            style={{ color: "var(--ink-3)" }}>
+                      Reset to MCT
+                    </button>
+                  )}
                 </div>
+
+                {/* Sizing mode override radios. Same SIZING_MODES + index
+                    contract as Position Sizer (defense=0, normal=1,
+                    offense=2). Clicking any radio flips sizingModeManual
+                    so the indicator copy + Reset button surface above. */}
+                <Field label="Override Sizing Mode">
+                  <div className="flex flex-col gap-1.5 mt-1">
+                    {SIZING_MODES.map((m, i) => (
+                      <Radio key={m.key}
+                             checked={sizingMode === i}
+                             onClick={() => {
+                               setSizingMode(i as 0 | 1 | 2);
+                               setSizingModeManual(true);
+                             }}
+                             label={`${m.icon} ${m.label}`} />
+                    ))}
+                  </div>
+                </Field>
 
                 {/* Account Equity */}
                 <Field label="Account Equity">

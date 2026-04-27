@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
 class ResizeObserverStub {
@@ -60,18 +60,86 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     });
   });
 
-  test("no manual override radios — sizing is read-only on this surface", async () => {
-    // Spec: "No manual override needed in Log Buy (it's an action, not a
-    // calculator)." The Position Sizer is the override surface; Log Buy
-    // surfaces the result.
+  test("manual override radios are present (Override Sizing Mode field)", async () => {
+    // The user can toggle defense/normal/offense for THIS Log Buy
+    // submission. Override is form-local — refresh / submit / unmount
+    // resets back to the MCT-driven auto pick (verified separately by
+    // the post-remount-resets-to-MCT test below).
     mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
 
     await screen.findByTestId("logbuy-sizing-mode-indicator");
-    // No "Sizing Mode" form field with radios — pre-refactor it was
-    // labelled "Sizing Mode" with three radios for defense/normal/offense.
-    expect(screen.queryByText(/^Sizing Mode$/)).not.toBeInTheDocument();
+    expect(screen.getByText("Override Sizing Mode")).toBeInTheDocument();
+  });
+
+  test("clicking a different mode flips indicator to '— manual override' and shows Reset", async () => {
+    // Auto: Offense (POWERTREND). User toggles to Defense → indicator
+    // copy switches; Reset button appears.
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+
+    render(<LogBuy navColor="#6366f1" />);
+
+    const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
+    expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
+
+    // Click the Defense radio. Mode label includes "Defense (0.50%)".
+    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
+    await act(async () => { fireEvent.click(defenseRadio); });
+
+    await waitFor(() => {
+      expect(indicator.textContent).toMatch(/Defense/);
+      expect(indicator.textContent).toMatch(/0\.50% risk/);
+      expect(indicator.textContent).toMatch(/manual override/);
+      // No "from MCT …" label while in manual mode (the source is the user)
+      expect(indicator.textContent).not.toMatch(/from MCT/);
+    });
+    expect(screen.getByTestId("logbuy-reset-to-mct")).toBeInTheDocument();
+  });
+
+  test("'Reset to MCT' restores the auto-derived mode", async () => {
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+
+    render(<LogBuy navColor="#6366f1" />);
+
+    // Override to Defense first
+    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
+    await act(async () => { fireEvent.click(defenseRadio); });
+
+    const reset = await screen.findByTestId("logbuy-reset-to-mct");
+    await act(async () => { fireEvent.click(reset); });
+
+    const indicator = screen.getByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => {
+      expect(indicator.textContent).toMatch(/Offense/);
+      expect(indicator.textContent).toMatch(/1\.00% risk/);
+      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+      expect(indicator.textContent).not.toMatch(/manual override/);
+    });
+    expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
+  });
+
+  test("override does not persist across remount — fresh render re-derives from MCT", async () => {
+    // Page-reload analogue: unmount + remount the component. State is
+    // local to the React tree, so a remount drops sizingModeManual and
+    // re-runs the mount effect, which re-applies the MCT auto pick.
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+
+    const { unmount } = render(<LogBuy navColor="#6366f1" />);
+    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
+    await act(async () => { fireEvent.click(defenseRadio); });
+    await screen.findByTestId("logbuy-reset-to-mct");
+    unmount();
+
+    // Remount with the same MCT mock — should land back on Offense auto.
+    render(<LogBuy navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => {
+      expect(indicator.textContent).toMatch(/Offense/);
+      expect(indicator.textContent).toMatch(/from MCT POWERTREND/);
+    });
+    expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
   });
 
   test("CORRECTION → Defense (0.50% risk)", async () => {
