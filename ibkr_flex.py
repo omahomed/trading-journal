@@ -684,47 +684,100 @@ def fetch_nav_for_date(query_id: str = None, target_date=None, token: str = None
 def _parse_nav_report(xml_root, target_yyyymmdd: str) -> dict:
     """Extract a single day's NAV row from the EquitySummary section.
 
-    IBKR Flex Queries with the "Net Asset Value (NAV)" section enabled emit
-    EquitySummaryByReportDateInBase rows — one per report date. We match on
-    reportDate, with a fallback to the parent FlexStatement's toDate when the
-    summary is rolled up rather than per-day.
+    Real IBKR shape (verified against MO_NAV_Daily, period=LastBusinessDay):
+
+        <FlexStatement fromDate="20260424" toDate="20260424"
+                       period="LastBusinessDay" whenGenerated="..." accountId="...">
+          <AccountInformation accountId="..." />
+          <EquitySummaryInBase>
+            <EquitySummaryByReportDateInBase cash=".." stock=".." total=".." ... />
+            <EquitySummaryByReportDateInBase cash=".." stock=".." total=".." ... />
+          </EquitySummaryInBase>
+        </FlexStatement>
+
+    Two facts the original parser had wrong, both surfaced by the admin
+    debug endpoint:
+      1. The data date lives on the *parent* `FlexStatement.toDate` —
+         the EquitySummary rows themselves carry no date attribute.
+      2. Period=LastBusinessDay produces *two* rows: opening + closing.
+         The closing one (last in document order) is what NLV semantics
+         demand. Earlier output `total=471004.89` was the open; correct
+         EOD value is `total=486630.39` (the second row).
     """
-    rows = list(xml_root.iter("EquitySummaryByReportDateInBase"))
+    all_rows = list(xml_root.iter("EquitySummaryByReportDateInBase"))
+    matched_row = None
+    matched_iso_date = None
 
-    matched = None
-    for row in rows:
-        report_date = _read_field(row, "reportDate")
-        if report_date == target_yyyymmdd:
-            matched = row
-            break
+    # Two distinct schemas — pick the matching strategy from the data shape:
+    #
+    # (A) Rows carry their own reportDate (custom Flex Query configurations,
+    #     range queries, or legacy setups). Row-level dates are
+    #     authoritative — we don't fall back to FlexStatement matching when
+    #     they're present, because mixing the two could silently return a
+    #     row tagged "4/25" when the wrapper says "4/27" — that's a config
+    #     mismatch, not data we should claim is the requested day's NAV.
+    # (B) Rows have no date attribute; date lives on the parent
+    #     <FlexStatement toDate=...>. This is the *real* shape for the
+    #     standard Net Asset Value (NAV) section with period=LastBusinessDay
+    #     and similar single-day periods. Two rows (open + close) appear
+    #     inside one FlexStatement; take the last (EOD).
+    rows_have_report_date = any(_read_field(r, "reportDate") for r in all_rows)
+    if rows_have_report_date:
+        for row in all_rows:
+            if _read_field(row, "reportDate") == target_yyyymmdd:
+                matched_row = row
+                matched_iso_date = _to_iso_date(target_yyyymmdd)
+                break
+    else:
+        for fs in xml_root.iter("FlexStatement"):
+            fs_to = (fs.attrib.get("toDate") or "").strip()
+            fs_from = (fs.attrib.get("fromDate") or "").strip()
+            if target_yyyymmdd in (fs_to, fs_from):
+                inner = list(fs.iter("EquitySummaryByReportDateInBase"))
+                if inner:
+                    matched_row = inner[-1]
+                    matched_iso_date = _to_iso_date(fs_to or fs_from)
+                    break
+        # Single-row rollup fallback — toDate lives on the row itself
+        # (rare configuration). Only triggered when rows have no reportDate.
+        if matched_row is None and len(all_rows) == 1:
+            only = all_rows[0]
+            row_to_date = _read_field(only, "toDate", "fromDate", "reportDate")
+            if row_to_date == target_yyyymmdd:
+                matched_row = only
+                matched_iso_date = _to_iso_date(row_to_date)
 
-    # Fallback: some Flex Queries emit a single rollup row (no reportDate or
-    # only fromDate/toDate). If exactly one row exists and its toDate matches
-    # the requested day, accept it.
-    if matched is None and len(rows) == 1:
-        only = rows[0]
-        to_date = _read_field(only, "toDate", "fromDate", "reportDate")
-        if to_date == target_yyyymmdd:
-            matched = only
-
-    if matched is None:
-        avail = [_read_field(r, "reportDate") for r in rows]
-        avail = [a for a in avail if a]
-        msg = (
-            f"No NAV data for {_to_iso_date(target_yyyymmdd)} — possibly "
-            f"market not yet closed or IBKR not yet finalised."
-        )
-        if avail:
-            msg += f" Available dates in report: {', '.join(avail[:5])}"
-        # If the report parsed but had zero rows of the expected element, that's
-        # a parse-shape mismatch, not a missing-data error.
-        if not rows:
+    if matched_row is None:
+        all_rows = list(xml_root.iter("EquitySummaryByReportDateInBase"))
+        if not all_rows:
             raise FlexQueryError(
                 "parse_error",
                 "Flex Query response did not contain EquitySummaryByReportDateInBase "
                 "rows. Make sure 'Net Asset Value (NAV)' is enabled in the query "
                 "configuration.",
             )
+        # Build the available-dates suffix from BOTH FlexStatement toDates
+        # (the real IBKR shape) and any reportDate on rows (for compat
+        # configurations). De-dup, preserve insertion order.
+        avail = []
+        seen = set()
+        for fs in xml_root.iter("FlexStatement"):
+            d = (fs.attrib.get("toDate") or "").strip()
+            if d and d not in seen:
+                seen.add(d)
+                avail.append(d)
+        for row in all_rows:
+            d = _read_field(row, "reportDate")
+            if d and d not in seen:
+                seen.add(d)
+                avail.append(d)
+
+        msg = (
+            f"No NAV data for {_to_iso_date(target_yyyymmdd)} — possibly "
+            f"market not yet closed or IBKR not yet finalised."
+        )
+        if avail:
+            msg += f" Available dates in report: {', '.join(avail[:5])}"
         raise FlexQueryError("no_data_for_date", msg)
 
     def _num(v) -> float:
@@ -733,14 +786,17 @@ def _parse_nav_report(xml_root, target_yyyymmdd: str) -> dict:
         except ValueError:
             return 0.0
 
-    nav = _num(_read_field(matched, "total"))
-    cash = _num(_read_field(matched, "cash"))
-    stock = _num(_read_field(matched, "stock"))
-    # Some account configurations split stock value across stock + bond +
-    # options + commodities. If we have those, total them as position_value.
+    nav = _num(_read_field(matched_row, "total"))
+    cash = _num(_read_field(matched_row, "cash"))
+    stock = _num(_read_field(matched_row, "stock"))
+    # Sum non-stock position categories. Field names are PLURAL in IBKR's
+    # actual responses (bonds/options/commodities/notes) — earlier code
+    # used singular forms and silently summed to zero. interestAccruals is
+    # the field on the row; older guess was just "interest".
     extras = sum(
-        _num(_read_field(matched, f))
-        for f in ("bond", "option", "commodity", "fund", "notes", "warrant", "interest")
+        _num(_read_field(matched_row, f))
+        for f in ("bonds", "options", "commodities", "notes",
+                  "crypto", "interestAccruals", "marginFinancingChargeAccruals")
     )
     position_value = stock + extras
     if position_value == 0 and nav != 0:
@@ -757,18 +813,17 @@ def _parse_nav_report(xml_root, target_yyyymmdd: str) -> dict:
     # Account ID — pull from the row, fall back to the surrounding
     # FlexStatement element. Currency defaults to USD if the report uses base
     # currency without explicit tagging.
-    account = _read_field(matched, "accountId")
+    account = _read_field(matched_row, "accountId")
     if not account:
         for fs in xml_root.iter("FlexStatement"):
             account = fs.attrib.get("accountId", "")
             if account:
                 break
 
-    currency = _read_field(matched, "currency") or "USD"
-    report_date_iso = _to_iso_date(_read_field(matched, "reportDate", "toDate") or target_yyyymmdd)
+    currency = _read_field(matched_row, "currency") or "USD"
 
     return {
-        "date": report_date_iso,
+        "date": matched_iso_date or _to_iso_date(target_yyyymmdd),
         "nav": round(nav, 2),
         "cash_balance": round(cash, 2),
         "position_value": round(position_value, 2),
@@ -858,12 +913,26 @@ def inspect_nav_xml(xml_root) -> dict:
                 if tag not in candidate_tags:
                     candidate_tags.append(tag)
 
+    # FlexStatement-level date attrs — the real IBKR shape stores the data
+    # date on the parent <FlexStatement>, not on the rows. Reporting both
+    # is what made the original bug visible at a glance.
+    flex_statement_dates = []
+    fs_seen = set()
+    for fs in xml_root.iter("FlexStatement"):
+        for k in ("fromDate", "toDate", "period"):
+            v = (fs.attrib.get(k) or "").strip()
+            if v:
+                pair = f"{k}={v}"
+                if pair not in fs_seen:
+                    fs_seen.add(pair)
+                    flex_statement_dates.append(pair)
+
     return {
         "row_count": len(rows),
         "all_attrs_on_nav_row": sorted(all_attrs),
         "all_date_attrs_found": date_pairs,
-        "parser_searches_for_attr": "reportDate",
-        "parser_fallback_attrs": list(("toDate", "fromDate", "reportDate")),
+        "flex_statement_attrs": flex_statement_dates,
+        "parser_searches_for_attr": "FlexStatement.toDate (primary), reportDate on row (legacy)",
         "alternate_top_level_tags": sorted(top_tags),
         "candidate_nav_tags_when_zero_rows": candidate_tags,
     }

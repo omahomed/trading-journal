@@ -45,8 +45,15 @@ def _send_error_xml(code: str, msg: str) -> str:
     )
 
 
-def _nav_report_xml(rows: list[dict]) -> str:
-    """Build a Flex Query NAV report with one or more EquitySummary rows."""
+def _nav_report_xml(rows: list[dict],
+                    fs_from: str = "20260427",
+                    fs_to: str = "20260427") -> str:
+    """Build a Flex Query NAV report with one or more EquitySummary rows.
+
+    Default FlexStatement dates are 20260427/20260427 — older tests rely on
+    that. Real-shape tests should override fs_from/fs_to to match the date
+    they're asserting against, since the parser now reads from these.
+    """
     body = "".join(
         "<EquitySummaryByReportDateInBase "
         + " ".join(f'{k}="{v}"' for k, v in r.items())
@@ -57,7 +64,8 @@ def _nav_report_xml(rows: list[dict]) -> str:
         "<?xml version='1.0'?>"
         "<FlexQueryResponse>"
         "<FlexStatements count='1'>"
-        "<FlexStatement accountId='U1234567' fromDate='20260427' toDate='20260427'>"
+        f"<FlexStatement accountId='U1234567' fromDate='{fs_from}' toDate='{fs_to}'"
+        " period='LastBusinessDay'>"
         f"<EquitySummaryInBase>{body}</EquitySummaryInBase>"
         "</FlexStatement>"
         "</FlexStatements>"
@@ -427,7 +435,8 @@ def test_inspect_nav_xml_reports_attrs_and_dates():
     assert "toDate=20260424" in info["all_date_attrs_found"]
     assert "fromDate=20260424" in info["all_date_attrs_found"]
     # Caller can compare what the parser looks for against what's available
-    assert info["parser_searches_for_attr"] == "reportDate"
+    assert "FlexStatement.toDate" in info["parser_searches_for_attr"]
+    assert "reportDate on row" in info["parser_searches_for_attr"]
 
 
 def test_inspect_nav_xml_handles_zero_rows_with_candidate_tags():
@@ -523,7 +532,7 @@ def test_admin_debug_returns_diagnostic_shape_for_founder(client, monkeypatch):
     assert "toDate" in body["all_attrs_on_nav_row"]
     assert "reportDate" not in body["all_attrs_on_nav_row"]
     assert "toDate=20260424" in body["all_date_attrs_found"]
-    assert body["parser_searches_for_attr"] == "reportDate"
+    assert "FlexStatement.toDate" in body["parser_searches_for_attr"]
     assert body["row_count"] == 1
 
     # Account ID is scrubbed from the raw snippet
@@ -563,3 +572,135 @@ def test_admin_debug_surfaces_ibkr_auth_failure(client, monkeypatch):
     body = r.json()
     assert body["success"] is False
     assert body["error"] == "ibkr_auth_failed"
+
+
+# ---------------------------------------------------------------------------
+# Real-shape regression — the bug the debug endpoint surfaced.
+#
+# Verbatim shape from the user's MO_NAV_Daily query (period=LastBusinessDay):
+#   - Date is on parent <FlexStatement toDate="20260424">, NOT on rows
+#   - Two <EquitySummaryByReportDateInBase> rows: opening NAV + closing NAV
+#   - Rows carry no reportDate / toDate / fromDate attributes
+# Expected: target=2026-04-24 → matches; nav comes from the LAST row
+# (the EOD/closing snapshot), not the first.
+# ---------------------------------------------------------------------------
+
+
+# These are the exact financial fields IBKR sent in the user's prod response,
+# pared down to the ones the parser reads. Two rows with different totals so
+# we can prove we picked the closing one (last in document order).
+_OPENING_ROW = {
+    "cash": "-433440.862681024",
+    "stock": "883239.55",
+    "options": "21454.09",
+    "bonds": "0", "commodities": "0", "notes": "0", "crypto": "0",
+    "interestAccruals": "-383.34",
+    "marginFinancingChargeAccruals": "0",
+    "total": "471004.887318976",
+}
+_CLOSING_ROW = {
+    "cash": "-431003.845697582",
+    "stock": "891474.61",
+    "options": "26466.59",
+    "bonds": "0", "commodities": "0", "notes": "0", "crypto": "0",
+    "interestAccruals": "-442.41",
+    "marginFinancingChargeAccruals": "0",
+    "total": "486630.394302418",
+}
+
+
+def test_real_ibkr_shape_matches_via_flex_statement_date(monkeypatch):
+    """The bug fix: rows have NO date attributes, date lives on the parent
+    <FlexStatement toDate="20260424">. Old parser searched rows for
+    reportDate, found nothing, raised no_data_for_date even when the report
+    contained the requested day. New parser walks FlexStatements first."""
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_success_xml(),
+        get_xml=_nav_report_xml(
+            [_OPENING_ROW, _CLOSING_ROW],
+            fs_from="20260424", fs_to="20260424",
+        ),
+    )
+
+    result = fetch_nav_for_date(query_id="QID", target_date="2026-04-24", token="TOK")
+    # nav must be the CLOSING value (486630.39) — not the opening (471004.89).
+    # If we picked the wrong row, this assert is the canary.
+    assert result["nav"] == 486630.39
+    assert result["cash_balance"] == -431003.85
+    assert result["date"] == "2026-04-24"
+
+
+def test_real_ibkr_shape_picks_last_row_not_first(monkeypatch):
+    """Defensive variant: even if the rows arrive in non-monotonic order,
+    we always return the LAST one (matching IBKR's documented chronological
+    order: opening first, closing last)."""
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_success_xml(),
+        get_xml=_nav_report_xml(
+            [_OPENING_ROW, _CLOSING_ROW],
+            fs_from="20260424", fs_to="20260424",
+        ),
+    )
+
+    result = fetch_nav_for_date(query_id="QID", target_date="2026-04-24", token="TOK")
+    assert result["nav"] != 471004.89, "picked the opening row instead of closing"
+
+
+def test_real_ibkr_shape_no_match_surfaces_flex_statement_date(monkeypatch):
+    """When the target date doesn't match the report's FlexStatement, the
+    error message must surface the report's actual date so the user can
+    adjust the date input. Old code missed this because the avail-dates
+    collector only looked at row.reportDate (which is empty in real shape)."""
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_success_xml(),
+        get_xml=_nav_report_xml(
+            [_OPENING_ROW, _CLOSING_ROW],
+            fs_from="20260424", fs_to="20260424",
+        ),
+    )
+
+    with pytest.raises(FlexQueryError) as exc:
+        # Monday — the report only has Friday
+        fetch_nav_for_date(query_id="QID", target_date="2026-04-27", token="TOK")
+
+    assert exc.value.code == "no_data_for_date"
+    # Available date suffix is the diagnostic the user needs to see
+    assert "20260424" in str(exc.value)
+
+
+def test_real_ibkr_shape_position_value_sums_stock_and_options(monkeypatch):
+    """Position-value computation: with the corrected plural field names
+    (`options` not `option`, `bonds` not `bond`), we sum everything
+    correctly. User's data: stock 891474.61 + options 26466.59 +
+    interestAccruals -442.41 = 917498.79 (rounding to cents)."""
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_success_xml(),
+        get_xml=_nav_report_xml(
+            [_CLOSING_ROW],
+            fs_from="20260424", fs_to="20260424",
+        ),
+    )
+
+    result = fetch_nav_for_date(query_id="QID", target_date="2026-04-24", token="TOK")
+    # 891474.61 + 26466.59 + (-442.41) = 917498.79
+    assert abs(result["position_value"] - 917498.79) < 0.01
+
+
+def test_inspect_nav_xml_surfaces_flex_statement_dates():
+    """The inspector must report FlexStatement-level dates too, since that's
+    where they actually live in the standard NAV section. Without this, the
+    debug endpoint would have no way to surface the data date."""
+    xml = _nav_report_xml(
+        [_CLOSING_ROW],
+        fs_from="20260424", fs_to="20260424",
+    )
+    info = ibkr_flex.inspect_nav_xml(_root(xml))
+    # The exact pair shape lets the user verify the date attr name + value
+    assert "toDate=20260424" in info["flex_statement_attrs"]
+    assert "fromDate=20260424" in info["flex_statement_attrs"]
+    # period stays surfaced — useful for diagnosing config drift
+    assert any(p.startswith("period=") for p in info["flex_statement_attrs"])
