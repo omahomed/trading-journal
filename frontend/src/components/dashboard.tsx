@@ -9,6 +9,15 @@ import {
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
 
+// "$+339,829" / "$-50,000" — explicit sign, whole-dollar precision. Matches
+// the visual treatment of the NLV tile's daily-delta line so the dollar
+// P&L sub-labels on LTD/YTD read as native to the same family.
+function formatSignedDollars(n: number): string {
+  const sign = n >= 0 ? "+" : "-";
+  const abs = Math.abs(n);
+  return `$${sign}${abs.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
 // KPI tile renders one or two subtext lines. The NLV tile uses `extraSub`
 // for the small grey "Live estimate: $X" diagnostic — visually subordinate
 // to the main `sub` so the user immediately sees which is "the number"
@@ -236,15 +245,30 @@ export function Dashboard({ navColor }: { navColor: string }) {
     {
       label: "LTD RETURN",
       value: journalAvailable ? `${ltdPct.toFixed(2)}%` : "—",
-      sub: journalAvailable ? "Time-weighted, since reset" : "Save your first daily routine",
+      // Sub: dollar P&L when the cash ledger answers; falls back to a
+      // descriptive label otherwise (avoids showing "$+0" which would
+      // imply break-even when really we just couldn't compute).
+      sub: !journalAvailable
+        ? "Save your first daily routine"
+        : metrics?.ltd_pl_dollar != null
+          ? formatSignedDollars(metrics.ltd_pl_dollar)
+          : "Time-weighted, since reset",
       gradient: "linear-gradient(135deg, #ec4899, #f472b6)",
     },
     {
       label: "YTD RETURN",
       value: ytdAvailable && ytdPct != null ? `${ytdPct.toFixed(2)}%` : "—",
-      sub: ytdAvailable
-        ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`
-        : "Available once current-year EOD entries exist",
+      // Two-line sub when both YTD dollar P&L and SPY/NDX are available:
+      //   primary sub  → "$+124,363" (most informative; matches LTD style)
+      //   extraSub     → "SPY +4.50% | NDX +6.89%" (benchmark context)
+      sub: !ytdAvailable
+        ? "Available once current-year EOD entries exist"
+        : metrics?.ytd_pl_dollar != null
+          ? formatSignedDollars(metrics.ytd_pl_dollar)
+          : `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`,
+      extraSub: ytdAvailable && metrics?.ytd_pl_dollar != null
+        ? `SPY ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`
+        : undefined,
       gradient: "linear-gradient(135deg, #10b981, #34d399)",
     },
     {

@@ -47,7 +47,10 @@ def stubbed(monkeypatch):
     """Yield (configure, run) — configure stubs, then run dashboard_metrics."""
     import nlv_service
 
-    state: dict[str, Any] = {"journal": None, "live": None, "live_raises": False}
+    state: dict[str, Any] = {
+        "journal": None, "live": None, "live_raises": False,
+        "net_contributions": 0.0, "net_contrib_raises": False,
+    }
 
     monkeypatch.setattr(nlv_service.db, "load_journal",
                         lambda name: state["journal"])
@@ -58,10 +61,20 @@ def stubbed(monkeypatch):
         return state["live"]
     monkeypatch.setattr(nlv_service, "compute_nlv", fake_compute_nlv)
 
-    def configure(*, journal=None, live=None, live_raises: bool = False):
+    def fake_net_contrib(pid):
+        if state["net_contrib_raises"]:
+            raise RuntimeError("ledger unreachable")
+        return state["net_contributions"]
+    monkeypatch.setattr(nlv_service.db, "get_net_contributions", fake_net_contrib)
+
+    def configure(*, journal=None, live=None, live_raises: bool = False,
+                  net_contributions: float = 0.0,
+                  net_contrib_raises: bool = False):
         state["journal"] = journal
         state["live"] = live
         state["live_raises"] = live_raises
+        state["net_contributions"] = net_contributions
+        state["net_contrib_raises"] = net_contrib_raises
 
     return configure, lambda: nlv_service.dashboard_metrics(1, "CanSlim")
 
@@ -332,3 +345,179 @@ def test_drawdown_peak_date_uses_first_occurrence(stubbed):
     assert out["drawdown_peak_date"] == "2026-04-22"
     # Current matches peak so drawdown is 0
     assert out["drawdown_current_pct"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Dollar P&L (LTD + YTD) — sub-label values for the LTD/YTD tiles
+# ---------------------------------------------------------------------------
+
+
+def test_ltd_pl_dollar_uses_journal_nlv_minus_net_contributions(stubbed):
+    """LTD P&L dollar = current journal NLV − cash-ledger net contributions.
+    Spec: '$+339,829'. Anchored on journal NLV (the dashboard headline)
+    not live NLV — keeps the tile internally consistent."""
+    configure, run = stubbed
+    configure(
+        journal=_journal_df([
+            {"day": "2026-04-24", "end_nlv": 486630.39, "beg_nlv": 0,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+        ]),
+        live=_live_snapshot(),
+        net_contributions=146801.39,  # so ltd_pl_dollar = 339,829.00
+    )
+
+    out = run()
+
+    assert out["ltd_pl_dollar"] == 339829.00
+
+
+def test_ltd_pl_dollar_none_when_ledger_lookup_fails(stubbed):
+    """db.get_net_contributions raising shouldn't break the dashboard.
+    Surface the journal/TWR fields as normal, set ltd_pl_dollar=None,
+    and the frontend falls back to a static sub-label."""
+    configure, run = stubbed
+    configure(
+        journal=_journal_df([
+            {"day": "2026-04-24", "end_nlv": 486630.39, "beg_nlv": 0,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+        ]),
+        live=_live_snapshot(),
+        net_contrib_raises=True,
+    )
+
+    out = run()
+
+    assert out["ltd_pl_dollar"] is None
+    # Other journal fields still present
+    assert out["nlv"] == 486630.39
+    assert out["ltd_pct"] is not None
+
+
+def test_ytd_pl_dollar_uses_prior_year_end_baseline(stubbed):
+    """YTD baseline preference #1: end_nlv of the last journal entry of
+    the prior year. Captures the broker-confirmed Dec 31 close cleanly."""
+    configure, run = stubbed
+    # Use the actual current year so the YTD filter inside dashboard_metrics
+    # picks up the rows we expect — relative dates would mis-match in 2027+.
+    from datetime import datetime as _dt
+    yr = _dt.now().year
+    configure(
+        journal=_journal_df([
+            # Prior year — last row is the YTD baseline
+            {"day": f"{yr-1}-12-30", "end_nlv": 350000, "beg_nlv": 348000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 2000, "daily_pct_change": 0.57},
+            {"day": f"{yr-1}-12-31", "end_nlv": 362267.39, "beg_nlv": 350000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 12267.39, "daily_pct_change": 3.5},
+            # Current year — current NLV plus the cash flows we paid in
+            {"day": f"{yr}-04-24", "end_nlv": 486630.39, "beg_nlv": 482000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 4630.39, "daily_pct_change": 0.96},
+        ]),
+        live=_live_snapshot(),
+        net_contributions=146801.39,
+    )
+
+    out = run()
+
+    # 486630.39 - 362267.39 - 0 = 124,363.00
+    assert out["ytd_pl_dollar"] == 124363.00
+    assert out["ytd_available"] is True
+
+
+def test_ytd_pl_dollar_subtracts_intra_year_cash_flows(stubbed):
+    """If the user deposited or withdrew during the year, YTD P&L must
+    net those out — otherwise a $50k mid-year deposit would inflate
+    YTD P&L by $50k. cash_change column is summed across year rows."""
+    from datetime import datetime as _dt
+    yr = _dt.now().year
+    configure, run = stubbed
+    configure(
+        journal=_journal_df([
+            {"day": f"{yr-1}-12-31", "end_nlv": 400000, "beg_nlv": 0,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+            {"day": f"{yr}-02-01", "end_nlv": 460000, "beg_nlv": 410000,
+             "cash_change": 50000,  # $50k deposit
+             "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+            {"day": f"{yr}-04-24", "end_nlv": 540000, "beg_nlv": 500000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+        ]),
+        live=_live_snapshot(),
+        net_contributions=450000,
+    )
+
+    out = run()
+
+    # 540000 - 400000 (baseline) - 50000 (cash flow) = 90000 of true gain
+    assert out["ytd_pl_dollar"] == 90000.00
+
+
+def test_ytd_pl_dollar_falls_back_to_first_current_year_beg_nlv(stubbed):
+    """Portfolio that opened mid-year has no prior-year row. Use the
+    first current-year row's beg_nlv as the baseline (yesterday's close,
+    since beg_nlv is yesterday's end_nlv)."""
+    from datetime import datetime as _dt
+    yr = _dt.now().year
+    configure, run = stubbed
+    configure(
+        journal=_journal_df([
+            # Only current-year rows — opened this year
+            {"day": f"{yr}-03-15", "end_nlv": 100000, "beg_nlv": 95000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 5000, "daily_pct_change": 5.26},
+            {"day": f"{yr}-04-24", "end_nlv": 150000, "beg_nlv": 145000,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 5000, "daily_pct_change": 3.45},
+        ]),
+        live=_live_snapshot(),
+        net_contributions=95000,
+    )
+
+    out = run()
+
+    # baseline = first row's beg_nlv = 95000; current = 150000
+    # 150000 - 95000 - 0 = 55000
+    assert out["ytd_pl_dollar"] == 55000.00
+
+
+def test_ytd_pl_dollar_none_when_no_current_year_rows(stubbed):
+    """Defensive — if every journal row predates the current year, YTD
+    isn't meaningful. dashboard_metrics already gates on twr_ytd_available
+    but let the helper prove it independently for unit-test confidence."""
+    from datetime import datetime as _dt
+    yr = _dt.now().year
+    configure, run = stubbed
+    configure(
+        journal=_journal_df([
+            {"day": f"{yr-1}-06-15", "end_nlv": 100000, "beg_nlv": 0,
+             "cash_change": 0, "pct_invested": 100.0,
+             "daily_dollar_change": 0, "daily_pct_change": 0},
+        ]),
+        live=_live_snapshot(),
+        net_contributions=100000,
+    )
+
+    out = run()
+
+    # ytd_available is False, so the helper short-circuits to None.
+    assert out["ytd_available"] is False
+    assert out["ytd_pl_dollar"] is None
+
+
+def test_empty_journal_dollar_pl_fields_are_null(stubbed):
+    """No-journal case: confirm the new fields appear in the empty
+    response shape (frontend reads with optional chains; the keys must
+    exist or we'd get TS narrowing surprises)."""
+    configure, run = stubbed
+    configure(journal=pd.DataFrame(), live=_live_snapshot())
+
+    out = run()
+
+    assert "ltd_pl_dollar" in out and out["ltd_pl_dollar"] is None
+    assert "ytd_pl_dollar" in out and out["ytd_pl_dollar"] is None

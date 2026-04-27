@@ -573,7 +573,9 @@ export interface DashboardMetrics {
   drawdown_peak_nlv: number | null;
   drawdown_peak_date: string | null;
   ltd_pct: number | null;
+  ltd_pl_dollar: number | null;
   ytd_pct: number | null;
+  ytd_pl_dollar: number | null;
   ytd_available: boolean;
   live_estimate_nlv: number | null;
   live_estimate_diff: number | null;

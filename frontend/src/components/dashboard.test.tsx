@@ -77,7 +77,9 @@ function fullMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetric
     drawdown_peak_nlv: 486630.39,
     drawdown_peak_date: "2026-04-24",
     ltd_pct: 286.51,
+    ltd_pl_dollar: 339829.00,
     ytd_pct: 57.16,
+    ytd_pl_dollar: 124363.00,
     ytd_available: true,
     live_estimate_nlv: 487291.22,
     live_estimate_diff: 660.83,
@@ -246,7 +248,9 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
       drawdown_peak_nlv: null,
       drawdown_peak_date: null,
       ltd_pct: null,
+      ltd_pl_dollar: null,
       ytd_pct: null,
+      ytd_pl_dollar: null,
       ytd_available: false,
       live_estimate_nlv: null,
       live_estimate_diff: null,
@@ -267,5 +271,77 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     expect(screen.queryByTestId("dashboard-as-of-badge")).not.toBeInTheDocument();
     // Cash + positions sub-row is hidden too
     expect(screen.queryByTestId("dashboard-cash-positions-row")).not.toBeInTheDocument();
+  });
+
+  test("LTD tile sub renders dollar P&L when available", async () => {
+    // Replaces the prior "Time-weighted, since reset" copy. Anchored on
+    // the user's expected $339,829 LTD P&L. Format: leading +, comma
+    // separators, whole dollars.
+    mDash.mockResolvedValue(fullMetrics());
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("286.51%")).toBeInTheDocument();
+    // The "$+339,829" copy must be present somewhere in the LTD tile area.
+    expect(await screen.findByText("$+339,829")).toBeInTheDocument();
+    // Old copy is gone
+    expect(screen.queryByText(/Time-weighted, since reset/)).not.toBeInTheDocument();
+  });
+
+  test("LTD tile sub falls back to descriptive text when ledger lookup fails", async () => {
+    // Edge: db.get_net_contributions blew up → backend sets
+    // ltd_pl_dollar=null. Tile renders the static fallback rather than
+    // an inaccurate "$+0".
+    mDash.mockResolvedValue(fullMetrics({ ltd_pl_dollar: null }));
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("286.51%")).toBeInTheDocument();
+    expect(await screen.findByText(/Time-weighted, since reset/i)).toBeInTheDocument();
+    expect(screen.queryByText("$+339,829")).not.toBeInTheDocument();
+  });
+
+  test("YTD tile renders two-line sub: dollar P&L primary + SPY/NDX as extraSub", async () => {
+    // Spec: "Two-line sub-label: $+124,363 / SPY +4.50% | NDX +6.89%".
+    // The benchmarks need history data to compute — provide a minimal
+    // pair with prior-year + current-year SPY/NDX values.
+    const yr = new Date().getFullYear();
+    mHistory.mockResolvedValue([
+      { day: `${yr}-01-02`, spy: 600, nasdaq: 21000, end_nlv: 0,
+        daily_pct_change: 0, portfolio_ltd: 0, spy_ltd: 0, ndx_ltd: 0,
+        pct_invested: 0, portfolio_heat: 0 },
+      { day: `${yr}-04-24`, spy: 627, nasdaq: 22446.9, end_nlv: 0,
+        daily_pct_change: 0, portfolio_ltd: 0, spy_ltd: 0, ndx_ltd: 0,
+        pct_invested: 0, portfolio_heat: 0 },
+    ] as any);
+    mDash.mockResolvedValue(fullMetrics());
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    // Headline + dollar primary sub
+    expect(await screen.findByText("57.16%")).toBeInTheDocument();
+    expect(await screen.findByText("$+124,363")).toBeInTheDocument();
+    // SPY/NDX line lives in the extraSub slot. It says "SPY +X.XX% | NDX +X.XX%"
+    // (without the colon now). Lookup by partial regex so we don't depend on
+    // exact percentages.
+    const extraSubs = await screen.findAllByTestId("kpi-extra-sub");
+    const benchmarkLine = extraSubs.find(el => /SPY .* \| NDX /.test(el.textContent || ""));
+    expect(benchmarkLine).toBeDefined();
+    expect(benchmarkLine).toHaveTextContent(/SPY \+4\.50%/);
+    expect(benchmarkLine).toHaveTextContent(/NDX \+6\.89%/);
+  });
+
+  test("YTD tile falls back to SPY/NDX as primary sub when ytd_pl_dollar is null", async () => {
+    // No prior-year journal → backend can't anchor YTD baseline → null.
+    // SPY/NDX line then takes the primary slot (don't lose the info).
+    mDash.mockResolvedValue(fullMetrics({ ytd_pl_dollar: null }));
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("57.16%")).toBeInTheDocument();
+    expect(screen.queryByText("$+124,363")).not.toBeInTheDocument();
+    // No extraSub row on the YTD tile in this case
+    const benchmarkText = await screen.findByText(/SPY:.*NDX:/);
+    expect(benchmarkText).toBeInTheDocument();
   });
 });

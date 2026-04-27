@@ -354,7 +354,9 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         "drawdown_peak_nlv": None,
         "drawdown_peak_date": None,
         "ltd_pct": None,
+        "ltd_pl_dollar": None,
         "ytd_pct": None,
+        "ytd_pl_dollar": None,
         "ytd_available": False,
         "live_estimate_nlv": None,
         "live_estimate_diff": None,
@@ -413,6 +415,13 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
     # TWR LTD/YTD straight from the same journal frame (no second DB load).
     twr = _compute_twr_from_journal_df(work)
 
+    # Dollar P&L versions of LTD/YTD — distinct from the TWR percent.
+    # LTD uses the cash_transactions ledger so it agrees with what the
+    # snapshot-style /returns endpoint reports. YTD reads the journal's
+    # year boundary directly (no equivalent ledger view yet).
+    ltd_pl_dollar = _compute_ltd_pl_dollar(portfolio_id, journal_nlv)
+    ytd_pl_dollar = _compute_ytd_pl_dollar(work, journal_nlv) if twr["twr_ytd_available"] else None
+
     # Live estimate — best-effort, doesn't affect any other field.
     live_fields = _compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=journal_nlv)
 
@@ -431,11 +440,64 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         "drawdown_peak_nlv": round(peak_nlv, 2),
         "drawdown_peak_date": peak_date,
         "ltd_pct": twr["twr_ltd_pct"],
+        "ltd_pl_dollar": ltd_pl_dollar,
         "ytd_pct": twr["twr_ytd_pct"],
+        "ytd_pl_dollar": ytd_pl_dollar,
         "ytd_available": twr["twr_ytd_available"],
         **live_fields,
         "as_of": now_iso,
     }
+
+
+def _compute_ltd_pl_dollar(portfolio_id: int, journal_nlv: float) -> float | None:
+    """Dollar version of LTD return: journal NLV minus net contributions.
+
+    Distinct from `ltd_pct` (TWR — accounts for cash-flow timing). The
+    dollar answer is the simpler "how much did I make vs. what I put in"
+    snapshot. Uses cash_transactions ledger so the result agrees with
+    /returns. Returns None if the ledger lookup fails — the dashboard
+    renders a fallback sub-label in that case.
+    """
+    try:
+        net_contrib = db.get_net_contributions(portfolio_id)
+        return round(journal_nlv - float(net_contrib), 2)
+    except Exception:
+        return None
+
+
+def _compute_ytd_pl_dollar(journal_df: pd.DataFrame, journal_nlv: float) -> float | None:
+    """Dollar version of YTD return: current NLV − YTD baseline − YTD cash flows.
+
+    Baseline rule:
+      1. Last journal entry of prior year → its end_nlv (preferred —
+         that's the broker-confirmed value at year-end).
+      2. Else first entry of current year → its beg_nlv (the routine
+         records yesterday's close as today's beg, so this is the
+         year-start baseline for portfolios that opened mid-year).
+      3. Else None — can't anchor YTD without a baseline.
+
+    Cash flows: sum of cash_change across current-year journal rows.
+    Cash_change is the user-entered Cash +/- on Daily Routine, capturing
+    deposits / withdrawals between days.
+    """
+    this_year = datetime.now().year
+    year_mask = journal_df["day"].dt.year == this_year
+    year_rows = journal_df[year_mask]
+    if year_rows.empty:
+        return None
+
+    prior_rows = journal_df[journal_df["day"].dt.year < this_year]
+    if not prior_rows.empty:
+        baseline = float(prior_rows.iloc[-1]["end_nlv"])
+    else:
+        first_year_row = year_rows.iloc[0]
+        baseline = float(first_year_row.get("beg_nlv") or first_year_row.get("end_nlv") or 0.0)
+
+    if baseline <= 0:
+        return None
+
+    cash_flows = float(year_rows.get("cash_change", pd.Series(dtype=float)).sum())
+    return round(journal_nlv - baseline - cash_flows, 2)
 
 
 def _compute_live_estimate_fields(
