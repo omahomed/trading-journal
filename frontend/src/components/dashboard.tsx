@@ -9,7 +9,7 @@ import {
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
 
-function KPITile({ label, value, sub, gradient, footer }: { label: string; value: string; sub: string; gradient: string; footer?: React.ReactNode }) {
+function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
   return (
     <div className="relative overflow-hidden rounded-[14px] p-[14px_16px] text-white flex flex-col justify-between min-h-[90px] transition-transform duration-150 hover:scale-[1.01]"
          style={{ background: gradient, boxShadow: "var(--kpi-shadow)" }}>
@@ -21,12 +21,6 @@ function KPITile({ label, value, sub, gradient, footer }: { label: string; value
              style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
       </div>
       <div className="relative z-10 text-[10px] font-medium opacity-80 privacy-mask">{sub}</div>
-      {footer && (
-        <div className="relative z-10 mt-1 pt-1 text-[9.5px] font-medium privacy-mask"
-             style={{ borderTop: "1px solid rgba(255,255,255,0.2)", opacity: 0.85 }}>
-          {footer}
-        </div>
-      )}
     </div>
   );
 }
@@ -48,7 +42,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
 
   const [openTrades, setOpenTrades] = useState<any[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [shadowNlv, setShadowNlv] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
@@ -99,15 +92,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
         .catch(() => { /* fall back to EOD pct_invested */ });
     }
 
-    // Shadow NLV (CanSlim only) — fills in the Computed/Diff footer on the
-    // NLV tile once the backend finishes its yfinance roundtrip.
-    if (getActivePortfolio() === "CanSlim") {
-      api.nlvShadow("CanSlim")
-        .then(s => {
-          if (s && typeof s.computed_nlv === "number") setShadowNlv(s.computed_nlv);
-        })
-        .catch(() => { /* quiet fail */ });
-    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
@@ -250,21 +234,8 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const peakNlv = Math.max(...history.map(h => h.end_nlv || 0));
   const ddPct = peakNlv > 0 ? ((nlv - peakNlv) / peakNlv) * 100 : 0;
 
-  const nlvShadowFooter = (shadowNlv !== null && nlv > 0) ? (() => {
-    const diff = nlv - shadowNlv;
-    const diffPct = shadowNlv > 0 ? (diff / nlv) * 100 : 0;
-    const sign = diff >= 0 ? "+" : "-";
-    return (
-      <span>
-        Computed: ${shadowNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-        {" · "}
-        Diff: {sign}${Math.abs(diff).toLocaleString(undefined, { maximumFractionDigits: 0 })} ({diff >= 0 ? "+" : "-"}{Math.abs(diffPct).toFixed(2)}%)
-      </span>
-    );
-  })() : undefined;
-
   const kpis = [
-    { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)", footer: nlvShadowFooter },
+    { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
     { label: "LTD RETURN", value: `${ltdPct.toFixed(2)}%`, sub: `$${ltdDol >= 0 ? "+" : ""}${ltdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #ec4899, #f472b6)" },
     { label: "YTD RETURN", value: ytdAvailable ? `${ytdPct.toFixed(2)}%` : "—", sub: ytdAvailable ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%` : "Available once EOD snapshots exist", gradient: "linear-gradient(135deg, #10b981, #34d399)" },
     { label: "LIVE EXPOSURE", value: `${exposure.toFixed(1)}%`, sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`, gradient: "linear-gradient(135deg, #f97316, #fb923c)" },
