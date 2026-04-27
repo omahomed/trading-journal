@@ -208,6 +208,15 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status: string; checked?: number; updated?: number; errors?: string[]; detail?: string }>,
 
+  // IBKR — broker NAV pull for Daily Routine auto-fill. The endpoint always
+  // returns 200 OK; success/error is read from the body, never the HTTP code.
+  ibkrNavForDate: (date: string) =>
+    fetchJSON<
+      | { success: true; nav: number; cash_balance: number; position_value: number;
+          report_date: string; currency: string; account: string; source: string }
+      | { success: false; error: string; message: string }
+    >(`/api/ibkr/nav-for-date?date=${encodeURIComponent(date)}`),
+
   // Prices
   priceLookup: (ticker: string) =>
     fetchJSON<{ ticker: string; price: number; atr: number; atr_pct: number }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),

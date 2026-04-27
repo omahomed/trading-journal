@@ -148,10 +148,13 @@ CREATE TABLE IF NOT EXISTS trading_journal (
     lowlights TEXT,
     mistakes TEXT,
     top_lesson TEXT,
+    nlv_source VARCHAR(20) NOT NULL DEFAULT 'manual',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT unique_journal_day UNIQUE (portfolio_id, day)
+    CONSTRAINT unique_journal_day UNIQUE (portfolio_id, day),
+    CONSTRAINT trading_journal_nlv_source_check
+        CHECK (nlv_source IN ('manual', 'ibkr_auto', 'ibkr_override'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_journal_date ON trading_journal (portfolio_id, day DESC);

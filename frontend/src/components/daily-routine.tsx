@@ -67,6 +67,16 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [portAction, setPortAction] = useState("");
   const [portPrev, setPortPrev] = useState(0);
 
+  // IBKR auto-fill state for End NLV. `nlvSource` flips manual → ibkr_auto on
+  // a successful pull and to ibkr_override the moment the user types over the
+  // auto-filled value. We send it with the save payload so the row records
+  // where the number came from (diagnostic-only — not displayed on dashboard).
+  type NlvSource = "manual" | "ibkr_auto" | "ibkr_override";
+  const [nlvSource, setNlvSource] = useState<NlvSource>("manual");
+  const [nlvLoading, setNlvLoading] = useState(true);
+  const [ibkrError, setIbkrError] = useState<string>("");
+  const [ibkrAutoFilledValue, setIbkrAutoFilledValue] = useState<string>("");
+
   // Report Card
   const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
   const [gradeNotes, setGradeNotes] = useState("");
@@ -101,6 +111,51 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       }).catch(() => {});
     }
   }, []);
+
+  // Auto-fill End NLV from IBKR Flex Query. Runs on mount and on date change.
+  // Decoupled from the rest of the load — failures surface as a banner above
+  // the form, never block the user from typing manually. Cancellation guard
+  // protects against the user changing the date while a pull is in flight.
+  useEffect(() => {
+    let cancelled = false;
+    setNlvLoading(true);
+    setIbkrError("");
+    api.ibkrNavForDate(entryDate).then(res => {
+      if (cancelled) return;
+      if (res.success) {
+        const navStr = String(res.nav);
+        setPortNlv(navStr);
+        setIbkrAutoFilledValue(navStr);
+        setNlvSource("ibkr_auto");
+        setIbkrError("");
+      } else {
+        // Soft failure (no_data_for_date, ibkr_not_configured, etc.) — leave
+        // the field empty and surface the human-readable reason. The user can
+        // still type a value and save normally.
+        setIbkrAutoFilledValue("");
+        setNlvSource("manual");
+        setIbkrError(res.message || res.error || "IBKR pull failed");
+      }
+      setNlvLoading(false);
+    }).catch((e: unknown) => {
+      if (cancelled) return;
+      setIbkrAutoFilledValue("");
+      setNlvSource("manual");
+      setIbkrError(e instanceof Error ? e.message : "IBKR pull failed");
+      setNlvLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [entryDate]);
+
+  // Track override: any user edit to an auto-filled NLV flips the source tag.
+  // Compare strings so re-typing the same number still counts (the act of
+  // editing is what we record, not just numeric divergence).
+  const handleNlvChange = (v: string) => {
+    setPortNlv(v);
+    if (nlvSource === "ibkr_auto" && v !== ibkrAutoFilledValue) {
+      setNlvSource("ibkr_override");
+    }
+  };
 
   // Auto-populate Actions from today's detail rows.
   // Format: "SELL: GOOG, AAPL | BUY: NVDA".
@@ -157,6 +212,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       pct_invested: portInvPct, spy: parseFloat(spyClose) || 0, nasdaq: parseFloat(ndxClose) || 0,
       market_notes: marketNotes, market_action: portAction, score: overallScore,
       highlights: JSON.stringify(scores), mistakes: gradeNotes, market_window: "",
+      nlv_source: nlvSource,
     });
     setSaving(false);
     setSaveMsg(r.status === "ok" ? "Saved" : `Error: ${r.detail || "Failed to save"}`);
@@ -172,6 +228,20 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Master Blotter · End-of-Day</div>
       </div>
+
+      {/* IBKR fallback banner — visible only when the auto-pull failed and the
+          user hasn't yet typed an NLV. Once they fill the field, the
+          remediation is implicit (they're doing it manually) so we hide it. */}
+      {ibkrError && !nlvLoading && !portNlv && (
+        <div className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]" role="alert" data-testid="ibkr-warning-banner"
+             style={{
+               background: "color-mix(in oklab, #f59f00 10%, var(--surface))",
+               color: "#b45309",
+               border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))",
+             }}>
+          ⚠ Could not auto-fill NLV from IBKR — please enter manually. Reason: {ibkrError}
+        </div>
+      )}
 
       {/* 3 columns: Market | Portfolio | Report Card */}
       <div className="grid grid-cols-3 gap-4 mb-6" style={{ alignItems: "start" }}>
@@ -207,7 +277,33 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
           </div>
           <div className="p-4 flex flex-col gap-3">
             <Field label="Closing NLV">
-              <input type="number" value={portNlv} onChange={e => setPortNlv(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
+              <div className="relative">
+                <input type="number" value={portNlv} onChange={e => handleNlvChange(e.target.value)} step="100"
+                       placeholder={nlvLoading ? "Pulling NLV from IBKR…" : "0.00"}
+                       className={inputCls} style={inputStyle} aria-label="Closing NLV" />
+                {/* Status badge: live spinner while loading, ✓ once auto-filled
+                    (and unchanged by the user), nothing once they override. */}
+                {nlvLoading && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px]"
+                        style={{ color: "var(--ink-4)" }} aria-label="Pulling NLV from IBKR">
+                    Pulling…
+                  </span>
+                )}
+                {!nlvLoading && nlvSource === "ibkr_auto" && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold px-1.5 py-0.5 rounded-[4px]"
+                        style={{ background: "color-mix(in oklab, #08a86b 14%, var(--surface))", color: "#08a86b", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}
+                        aria-label="Auto-filled from IBKR" data-testid="nlv-auto-badge">
+                    ✓ IBKR
+                  </span>
+                )}
+                {!nlvLoading && nlvSource === "ibkr_override" && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold px-1.5 py-0.5 rounded-[4px]"
+                        style={{ background: "color-mix(in oklab, #f59f00 14%, var(--surface))", color: "#f59f00", border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))" }}
+                        aria-label="Overrode IBKR auto-fill" data-testid="nlv-override-badge">
+                    Override
+                  </span>
+                )}
+              </div>
               {shadowNlv !== null && activePortfolio?.name === "CanSlim" && (() => {
                 const computed = shadowNlv;
                 const diff = portNlvN > 0 ? portNlvN - computed : null;

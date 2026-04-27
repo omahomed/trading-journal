@@ -462,6 +462,7 @@ def journal_edit(entry: dict):
                     "lowlights": str(row.get("lowlights", "") or ""),
                     "mistakes": str(row.get("mistakes", "") or ""),
                     "top_lesson": str(row.get("top_lesson", "") or ""),
+                    "nlv_source": str(row.get("nlv_source", "") or "manual"),
                 }
 
         # Merge: use sent values, fall back to existing
@@ -474,6 +475,12 @@ def journal_edit(entry: dict):
             if key in entry and entry[key] is not None:
                 return str(entry[key])
             return existing.get(db_key, default)
+
+        # Constrain nlv_source to the allowed enum-equivalent values; anything
+        # else (including empty/None from older clients) collapses to 'manual'.
+        nlv_source_in = str(entry.get("nlv_source") or existing.get("nlv_source", "manual")).strip()
+        if nlv_source_in not in ("manual", "ibkr_auto", "ibkr_override"):
+            nlv_source_in = "manual"
 
         journal_entry = {
             "portfolio_id": portfolio,
@@ -498,6 +505,7 @@ def journal_edit(entry: dict):
             "lowlights": _s("lowlights", "lowlights"),
             "mistakes": _s("mistakes", "mistakes"),
             "top_lesson": _s("top_lesson", "top_lesson"),
+            "nlv_source": nlv_source_in,
         }
 
         # Auto-compute missing market/risk metrics.
@@ -2044,15 +2052,54 @@ def ibkr_status():
     """Check if IBKR credentials are configured."""
     token = os.environ.get("IBKR_FLEX_TOKEN", "")
     query_id = os.environ.get("IBKR_FLEX_QUERY_ID", "")
+    nav_query_id = os.environ.get("IBKR_NAV_FLEX_QUERY_ID", "")
     # Also check all env var keys that contain IBKR (case-insensitive)
     ibkr_vars = {k: f"{v[:4]}..." for k, v in os.environ.items() if "IBKR" in k.upper() or "FLEX" in k.upper()}
     return {
         "token_set": bool(token),
         "query_id_set": bool(query_id),
+        "nav_query_id_set": bool(nav_query_id),
         "token_preview": f"{token[:4]}...{token[-4:]}" if len(token) > 8 else "(empty)",
         "env_keys_found": ibkr_vars,
         "total_env_vars": len(os.environ),
     }
+
+
+@app.get("/api/ibkr/nav-for-date")
+@limiter.limit("12/minute")
+def ibkr_nav_for_date(request: Request, date: str = ""):
+    """Pull broker-reported NAV for a single day from IBKR Flex Query.
+
+    Powers Daily Routine's auto-fill of End NLV. Always returns 200 OK; on
+    failure the body has {success: false, error, message} so the frontend can
+    render a fallback banner without HTTP-error parsing. The frontend
+    discriminates on `error` (e.g. ibkr_not_configured vs no_data_for_date)
+    and shows `message` to the user verbatim.
+
+    Query: ?date=YYYY-MM-DD (optional). If omitted, defaults to the last
+    completed trading day per ibkr_flex._last_completed_trading_day().
+    """
+    try:
+        import ibkr_flex
+        target = date.strip() or None
+        result = ibkr_flex.fetch_nav_for_date(target_date=target)
+        return {
+            "success": True,
+            "nav": result["nav"],
+            "cash_balance": result["cash_balance"],
+            "position_value": result["position_value"],
+            "currency": result.get("currency", "USD"),
+            "account": result.get("account", ""),
+            "report_date": result["date"],
+            "source": "ibkr_flex_query",
+        }
+    except Exception as e:
+        # ibkr_flex.FlexQueryError carries a stable code + human message;
+        # anything else gets bucketed as 'unknown_error' so the frontend
+        # always has both fields to surface.
+        code = getattr(e, "code", "unknown_error")
+        msg = getattr(e, "message", str(e)) or str(e)
+        return {"success": False, "error": code, "message": msg}
 
 
 @app.post("/api/trades/import")

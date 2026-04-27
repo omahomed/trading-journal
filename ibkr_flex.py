@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import time
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
 try:
     from zoneinfo import ZoneInfo
     _TZ_ET = ZoneInfo("America/New_York")
@@ -21,6 +21,19 @@ try:
 except ImportError:
     _TZ_ET = None
     _TZ_CT = None
+
+
+class FlexQueryError(Exception):
+    """Raised by NAV-pull helpers. `code` is a stable machine identifier the
+    HTTP layer maps to the response body's `error` field; `message` is human-
+    readable. The endpoint always returns 200 OK and embeds these in the JSON
+    so the frontend can render a fallback banner without parsing HTTP errors.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def _et_to_ct(date_str: str, time_str: str):
@@ -445,6 +458,313 @@ def group_same_day_orders(df):
     grouped = grouped.drop(columns=['_value'], errors='ignore')
     grouped = grouped.sort_values(['trade_date', 'order_time'], ascending=[False, False])
     return grouped
+
+
+def _format_date_yyyymmdd(d) -> str:
+    """Accepts date | str(YYYY-MM-DD) | str(YYYYMMDD). Returns YYYYMMDD."""
+    if isinstance(d, date):
+        return d.strftime("%Y%m%d")
+    s = str(d).strip()
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s.replace("-", "")
+    return s
+
+
+def _to_iso_date(s: str) -> str:
+    """YYYYMMDD → YYYY-MM-DD. Returns the input untouched if it doesn't match."""
+    s = (s or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return s
+
+
+def _read_field(elem, *names) -> str:
+    """Read a value from either an element attribute or a child element. IBKR
+    Flex Queries serialise NAV data as XML attributes (e.g. <EquitySummaryByReportDateInBase
+    reportDate="20260427" total="..." />), but custom queries can also produce
+    child-element form. Try attributes first (the common case), then children.
+    """
+    for n in names:
+        if n in elem.attrib:
+            v = elem.attrib.get(n, "").strip()
+            if v:
+                return v
+    for n in names:
+        child = elem.find(n)
+        if child is not None and child.text:
+            v = child.text.strip()
+            if v:
+                return v
+    return ""
+
+
+def _last_completed_trading_day(now_et: datetime = None) -> date:
+    """Default for the endpoint when no `date` param is supplied.
+
+    Rule: if it's a weekday and past 6 PM ET, IBKR has likely finalised today's
+    NAV — return today. Otherwise step back to the most recent weekday. Doesn't
+    know about market holidays; the puller will raise no_data_for_date if IBKR
+    hasn't closed the books for the requested day, which is the right signal.
+    """
+    if _TZ_ET is None:
+        now_et = now_et or datetime.now()
+    else:
+        now_et = now_et or datetime.now(_TZ_ET)
+
+    d = now_et.date()
+    is_weekday = d.weekday() < 5
+    if is_weekday and now_et.hour >= 18:
+        return d
+    # Step back to previous weekday
+    d = d - timedelta(days=1)
+    while d.weekday() >= 5:
+        d = d - timedelta(days=1)
+    return d
+
+
+def fetch_nav_for_date(query_id: str = None, target_date=None, token: str = None) -> dict:
+    """Pull NAV from IBKR Flex Query for a single trading day.
+
+    The NAV puller is a *separate* Flex Query from the trade-confirms one — it
+    has its own query_id (env var IBKR_NAV_FLEX_QUERY_ID) and reports
+    EquitySummaryByReportDateInBase rows. Token is shared with the trade puller
+    (IBKR_FLEX_TOKEN).
+
+    Args:
+        query_id: NAV Flex Query ID (defaults to IBKR_NAV_FLEX_QUERY_ID env var)
+        target_date: date | str. Defaults to last completed trading day.
+        token: Flex token (defaults to IBKR_FLEX_TOKEN env var)
+
+    Returns: dict with keys: date (YYYY-MM-DD str), nav (float), cash_balance
+        (float), position_value (float), currency (str), account (str).
+
+    Raises FlexQueryError with one of these `code`s:
+        - ibkr_not_configured: missing token or query_id env vars
+        - ibkr_auth_failed: IBKR rejected the request (bad token / query_id)
+        - network_timeout: connection / timeout error reaching IBKR
+        - ibkr_report_error: IBKR returned a Status=Error or unexpected XML
+        - report_generation_timeout: report still generating after retries
+        - no_data_for_date: report parsed but no NAV row matches target_date
+        - parse_error: XML didn't contain expected EquitySummary structure
+    """
+    # Resolve credentials — env-var defaults are intentional so callers don't
+    # have to plumb them through; explicit args are the test-injection seam.
+    if token is None:
+        token = os.environ.get("IBKR_FLEX_TOKEN", "").strip()
+    if query_id is None:
+        query_id = os.environ.get("IBKR_NAV_FLEX_QUERY_ID", "").strip()
+
+    if not token or not query_id:
+        raise FlexQueryError(
+            "ibkr_not_configured",
+            "IBKR NAV puller not configured. Set IBKR_FLEX_TOKEN and "
+            "IBKR_NAV_FLEX_QUERY_ID env vars.",
+        )
+
+    # Resolve target date
+    if target_date is None:
+        target_date = _last_completed_trading_day()
+    if isinstance(target_date, str):
+        try:
+            target_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise FlexQueryError(
+                "invalid_date",
+                f"target_date must be YYYY-MM-DD, got: {target_date!r}",
+            )
+    target_yyyymmdd = _format_date_yyyymmdd(target_date)
+
+    # ── Step 1: request the report ────────────────────────────────────────
+    try:
+        resp = requests.get(
+            _SEND_URL,
+            params={"t": token, "q": query_id, "v": "3"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.Timeout as e:
+        raise FlexQueryError("network_timeout", f"Timed out reaching IBKR: {e}")
+    except requests.RequestException as e:
+        raise FlexQueryError("network_timeout", f"Network error reaching IBKR: {e}")
+
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError:
+        raise FlexQueryError(
+            "ibkr_report_error",
+            f"IBKR returned invalid XML: {resp.text[:300]}",
+        )
+
+    status = root.findtext("Status", "")
+    if status != "Success":
+        code = root.findtext("ErrorCode", "")
+        msg = root.findtext("ErrorMessage", "Unknown error")
+        # Auth-style errors: bad token, invalid query ID, account not enabled
+        if code in ("1003", "1004", "1005", "1011", "1012"):
+            raise FlexQueryError(
+                "ibkr_auth_failed",
+                f"IBKR rejected the request ({code}): {msg}",
+            )
+        raise FlexQueryError(
+            "ibkr_report_error",
+            f"IBKR request error ({code}): {msg}",
+        )
+
+    ref_code = root.findtext("ReferenceCode", "")
+    if not ref_code:
+        raise FlexQueryError(
+            "ibkr_report_error",
+            "IBKR returned success but no reference code",
+        )
+
+    # ── Step 2: download the report (with retry for generation delay) ─────
+    max_retries = 5
+    retry_delay = 3
+    report_xml = None
+    for attempt in range(max_retries):
+        try:
+            resp2 = requests.get(
+                _GET_URL,
+                params={"q": ref_code, "t": token, "v": "3"},
+                timeout=30,
+            )
+            resp2.raise_for_status()
+        except requests.Timeout as e:
+            raise FlexQueryError("network_timeout", f"Timed out downloading report: {e}")
+        except requests.RequestException as e:
+            raise FlexQueryError("network_timeout", f"Network error downloading report: {e}")
+
+        # Check for "still generating" warning vs the actual report
+        try:
+            check_root = ET.fromstring(resp2.text)
+            check_status = check_root.findtext("Status", "")
+            if check_status == "Warn":
+                error_code = check_root.findtext("ErrorCode", "")
+                if error_code == "1019":
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    raise FlexQueryError(
+                        "report_generation_timeout",
+                        "IBKR report is still generating after retries — try again in a few seconds",
+                    )
+                msg = check_root.findtext("ErrorMessage", "Unknown warning")
+                raise FlexQueryError(
+                    "ibkr_report_error",
+                    f"IBKR warning ({error_code}): {msg}",
+                )
+            # Real report — Status will be empty or absent for the data XML
+            report_xml = check_root
+            break
+        except ET.ParseError:
+            raise FlexQueryError(
+                "ibkr_report_error",
+                f"IBKR returned unparseable report: {resp2.text[:300]}",
+            )
+
+    if report_xml is None:
+        raise FlexQueryError(
+            "report_generation_timeout",
+            "IBKR report download failed after retries",
+        )
+
+    return _parse_nav_report(report_xml, target_yyyymmdd)
+
+
+def _parse_nav_report(xml_root, target_yyyymmdd: str) -> dict:
+    """Extract a single day's NAV row from the EquitySummary section.
+
+    IBKR Flex Queries with the "Net Asset Value (NAV)" section enabled emit
+    EquitySummaryByReportDateInBase rows — one per report date. We match on
+    reportDate, with a fallback to the parent FlexStatement's toDate when the
+    summary is rolled up rather than per-day.
+    """
+    rows = list(xml_root.iter("EquitySummaryByReportDateInBase"))
+
+    matched = None
+    for row in rows:
+        report_date = _read_field(row, "reportDate")
+        if report_date == target_yyyymmdd:
+            matched = row
+            break
+
+    # Fallback: some Flex Queries emit a single rollup row (no reportDate or
+    # only fromDate/toDate). If exactly one row exists and its toDate matches
+    # the requested day, accept it.
+    if matched is None and len(rows) == 1:
+        only = rows[0]
+        to_date = _read_field(only, "toDate", "fromDate", "reportDate")
+        if to_date == target_yyyymmdd:
+            matched = only
+
+    if matched is None:
+        avail = [_read_field(r, "reportDate") for r in rows]
+        avail = [a for a in avail if a]
+        msg = (
+            f"No NAV data for {_to_iso_date(target_yyyymmdd)} — possibly "
+            f"market not yet closed or IBKR not yet finalised."
+        )
+        if avail:
+            msg += f" Available dates in report: {', '.join(avail[:5])}"
+        # If the report parsed but had zero rows of the expected element, that's
+        # a parse-shape mismatch, not a missing-data error.
+        if not rows:
+            raise FlexQueryError(
+                "parse_error",
+                "Flex Query response did not contain EquitySummaryByReportDateInBase "
+                "rows. Make sure 'Net Asset Value (NAV)' is enabled in the query "
+                "configuration.",
+            )
+        raise FlexQueryError("no_data_for_date", msg)
+
+    def _num(v) -> float:
+        try:
+            return float(v) if v not in (None, "", "null") else 0.0
+        except ValueError:
+            return 0.0
+
+    nav = _num(_read_field(matched, "total"))
+    cash = _num(_read_field(matched, "cash"))
+    stock = _num(_read_field(matched, "stock"))
+    # Some account configurations split stock value across stock + bond +
+    # options + commodities. If we have those, total them as position_value.
+    extras = sum(
+        _num(_read_field(matched, f))
+        for f in ("bond", "option", "commodity", "fund", "notes", "warrant", "interest")
+    )
+    position_value = stock + extras
+    if position_value == 0 and nav != 0:
+        # Final fallback: if we couldn't parse positions, derive from nav-cash
+        position_value = nav - cash
+
+    if nav == 0:
+        raise FlexQueryError(
+            "parse_error",
+            "Matched NAV row had total=0 — unexpected. Check Flex Query "
+            "configuration includes the NAV section.",
+        )
+
+    # Account ID — pull from the row, fall back to the surrounding
+    # FlexStatement element. Currency defaults to USD if the report uses base
+    # currency without explicit tagging.
+    account = _read_field(matched, "accountId")
+    if not account:
+        for fs in xml_root.iter("FlexStatement"):
+            account = fs.attrib.get("accountId", "")
+            if account:
+                break
+
+    currency = _read_field(matched, "currency") or "USD"
+    report_date_iso = _to_iso_date(_read_field(matched, "reportDate", "toDate") or target_yyyymmdd)
+
+    return {
+        "date": report_date_iso,
+        "nav": round(nav, 2),
+        "cash_balance": round(cash, 2),
+        "position_value": round(position_value, 2),
+        "currency": currency,
+        "account": account,
+    }
 
 
 def pull_ibkr_trades(consolidate=True, group_same_day=True):

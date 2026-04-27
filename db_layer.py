@@ -1549,6 +1549,12 @@ def save_journal_entry(journal_entry):
             lowlights = journal_entry.get('lowlights', '')
             mistakes = journal_entry.get('mistakes', '')
             top_lesson = journal_entry.get('top_lesson', '')
+            # Provenance for the End NLV value (migration 013). Defaulted to
+            # 'manual' so pre-migration callers keep working; constrained to
+            # the three known values (anything else collapses to 'manual').
+            nlv_source = journal_entry.get('nlv_source', 'manual')
+            if nlv_source not in ('manual', 'ibkr_auto', 'ibkr_override'):
+                nlv_source = 'manual'
 
             # Check if entry exists for this portfolio and day
             cur.execute(
@@ -1561,6 +1567,9 @@ def save_journal_entry(journal_entry):
                 # UPDATE existing entry — try with all columns incl. market_cycle,
                 # fall back progressively if newer columns are missing.
                 try:
+                    # Primary path — includes nlv_source (migration 013) and
+                    # market_cycle (migration 010). Falls back below if either
+                    # column is missing on this database.
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, market_cycle = %s,
@@ -1572,7 +1581,7 @@ def save_journal_entry(journal_entry):
                             portfolio_heat = %s, spy_atr = %s, nasdaq_atr = %s,
                             score = %s,
                             highlights = %s, lowlights = %s, mistakes = %s,
-                            top_lesson = %s
+                            top_lesson = %s, nlv_source = %s
                         WHERE id = %s
                         RETURNING id
                     """
@@ -1585,7 +1594,7 @@ def save_journal_entry(journal_entry):
                         portfolio_heat, spy_atr, nasdaq_atr,
                         score,
                         highlights, lowlights, mistakes,
-                        top_lesson,
+                        top_lesson, nlv_source,
                         existing[0]
                     ))
                 except Exception:
@@ -1645,6 +1654,9 @@ def save_journal_entry(journal_entry):
                 # INSERT new entry — try with all columns incl. market_cycle,
                 # fall back progressively if newer columns are missing.
                 try:
+                    # Primary path — includes nlv_source (migration 013) and
+                    # market_cycle (migration 010). Falls back below if either
+                    # column is missing on this database.
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, market_cycle,
@@ -1653,11 +1665,11 @@ def save_journal_entry(journal_entry):
                             daily_pct_change, pct_invested, spy, nasdaq,
                             market_notes, market_action, portfolio_heat,
                             spy_atr, nasdaq_atr, score,
-                            highlights, lowlights, mistakes, top_lesson
+                            highlights, lowlights, mistakes, top_lesson, nlv_source
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s
+                            %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
@@ -1668,7 +1680,7 @@ def save_journal_entry(journal_entry):
                         daily_pct_change, pct_invested, spy, nasdaq,
                         market_notes, market_action, portfolio_heat,
                         spy_atr, nasdaq_atr, score,
-                        highlights, lowlights, mistakes, top_lesson
+                        highlights, lowlights, mistakes, top_lesson, nlv_source
                     ))
                 except Exception:
                     conn.rollback()
