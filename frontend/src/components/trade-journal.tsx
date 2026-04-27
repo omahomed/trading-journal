@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { InteractiveChart } from "./interactive-chart";
 
@@ -346,8 +346,22 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
 }
 
 export function TradeJournal({ navColor }: { navColor: string }) {
-  const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
-  const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
+  // Cohort-split storage so the page can fetch open trades on mount without
+  // waiting on the closed-trade payload. tradesClosed(500) + tradesRecent(5000)
+  // were the page's slowest fetches and most users only need them when they
+  // explicitly switch the status filter or turn on Recent Activity.
+  const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
+  const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
+  const [openDetails, setOpenDetails] = useState<TradeDetail[]>([]);
+  const [closedDetails, setClosedDetails] = useState<TradeDetail[]>([]);
+  const [openLoaded, setOpenLoaded] = useState(false);
+  const [closedLoaded, setClosedLoaded] = useState(false);
+  const [filterLoading, setFilterLoading] = useState(false);
+
+  // Derived combined views — keep the rest of the component code unchanged.
+  const allTrades = useMemo(() => [...openTrades, ...closedTrades], [openTrades, closedTrades]);
+  const allDetails = useMemo(() => [...openDetails, ...closedDetails], [openDetails, closedDetails]);
+
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -357,48 +371,96 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
   const [tickerQuery, setTickerQuery] = useState("");
   const [dateRange, setDateRange] = useState<DateRange>("all");
-  const [recentActivity, setRecentActivity] = useState<RecentActivity>("10");
+  // Default 'off' so a fresh page load doesn't have to fetch closed-trade
+  // data just to render. Users who want the "show me what I just worked on"
+  // mixed-status view click into 10/30/all explicitly, which lazy-fetches
+  // closed cohort on demand.
+  const [recentActivity, setRecentActivity] = useState<RecentActivity>("off");
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
   const [analysisOpen, setAnalysisOpen] = useState<string | null>(null);
   const [liveChartOpen, setLiveChartOpen] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
+  const loadOpen = useCallback(async () => {
+    const [open, openDet, journal] = await Promise.all([
       api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+    ]);
+    const openArr = open as TradePosition[];
+    setOpenTrades(openArr);
+    setOpenDetails(openDet as TradeDetail[]);
+    setEquity(parseFloat(String((journal as any).end_nlv || 100000)));
+    setOpenLoaded(true);
+
+    // Live prices for open trades — fire-and-forget so it doesn't block the
+    // page from rendering. The price provider's per-ticker cache means
+    // subsequent navigations between Dashboard/ACS/Journal share the result.
+    const tickers = openArr.map(t => t.ticker).filter(Boolean);
+    if (tickers.length > 0) {
+      api.batchPrices(tickers, getActivePortfolio()).then(prices => {
+        if (prices && !("error" in prices)) setLivePrices(prices as Record<string, number>);
+      }).catch(() => { /* fall back to entry prices */ });
+    }
+  }, []);
+
+  const loadClosed = useCallback(async () => {
+    const [closed, recent] = await Promise.all([
       api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
       api.tradesRecent(getActivePortfolio(), 5000).catch(() => []),
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
-    ]).then(async ([open, closed, details, journal]) => {
-      const openArr = open as TradePosition[];
-      setAllTrades([...openArr, ...closed as TradePosition[]]);
-      setAllDetails(details as TradeDetail[]);
-      setEquity(parseFloat(String((journal as any).end_nlv || 100000)));
-
-      // Fetch live prices for open trades
-      const tickers = openArr.map(t => t.ticker).filter(Boolean);
-      if (tickers.length > 0) {
-        try {
-          const prices = await api.batchPrices(tickers);
-          if (prices && !("error" in prices)) setLivePrices(prices);
-        } catch { /* fall back */ }
-      }
-      setLoading(false);
-
-      // Prefill from Active Campaign right-click (via localStorage)
-      try {
-        const raw = localStorage.getItem("journal_prefill");
-        if (raw) {
-          localStorage.removeItem("journal_prefill");
-          const data = JSON.parse(raw);
-          if (data.ticker) setSelectedTickers([data.ticker]);
-          if (data.trade_id) setExpandedCard(data.trade_id);
-          setStatusFilter("open");
-        }
-      } catch { /* ignore */ }
-    });
+    ]);
+    const closedArr = closed as TradePosition[];
+    // tradesRecent returns details for ALL trades (open + closed) sorted by
+    // recency. We already loaded open details via tradesOpenDetails, so keep
+    // only the closed-trade details here to avoid duplicating rows when the
+    // two cohorts merge into allDetails.
+    const closedIds = new Set(closedArr.map(t => t.trade_id));
+    const closedDet = (recent as TradeDetail[]).filter(d => closedIds.has(d.trade_id));
+    setClosedTrades(closedArr);
+    setClosedDetails(closedDet);
+    setClosedLoaded(true);
   }, []);
+
+  // Filter-driven loader. Runs on mount (default filter triggers initial
+  // fetch) and on every filter change. Caches per-cohort so re-toggling
+  // back to a previously-loaded view is instant.
+  useEffect(() => {
+    const needsOpen = statusFilter === "open" || statusFilter === "all" || recentActivity !== "off";
+    const needsClosed = statusFilter === "closed" || statusFilter === "all" || recentActivity !== "off";
+
+    const fetches: Promise<void>[] = [];
+    if (needsOpen && !openLoaded) fetches.push(loadOpen());
+    if (needsClosed && !closedLoaded) fetches.push(loadClosed());
+
+    if (fetches.length === 0) {
+      if (loading) setLoading(false);
+      return;
+    }
+
+    if (!loading) setFilterLoading(true);
+    Promise.all(fetches).finally(() => {
+      setFilterLoading(false);
+      if (loading) setLoading(false);
+    });
+  }, [statusFilter, recentActivity, openLoaded, closedLoaded, loadOpen, loadClosed, loading]);
+
+  // Prefill from Active Campaign right-click runs once after the initial
+  // load completes. setStatusFilter("open") here is safe — it's the current
+  // default, so it won't trigger an unnecessary fetch.
+  useEffect(() => {
+    if (loading) return;
+    try {
+      const raw = localStorage.getItem("journal_prefill");
+      if (raw) {
+        localStorage.removeItem("journal_prefill");
+        const data = JSON.parse(raw);
+        if (data.ticker) setSelectedTickers([data.ticker]);
+        if (data.trade_id) setExpandedCard(data.trade_id);
+        setStatusFilter("open");
+      }
+    } catch { /* ignore */ }
+  }, [loading]);
 
   const filtered = useMemo(() => {
     let result = [...allTrades];
@@ -472,8 +534,13 @@ export function TradeJournal({ navColor }: { navColor: string }) {
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Trade <em className="italic" style={{ color: navColor }}>Journal</em>
         </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          {allTrades.length} campaigns ({openCount} open, {closedCount} closed)
+        <div className="text-[13px] mt-1.5 flex items-center gap-2" style={{ color: "var(--ink-3)" }}>
+          <span>{allTrades.length} campaigns ({openCount} open, {closedCount} closed)</span>
+          {filterLoading && (
+            <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+              · loading…
+            </span>
+          )}
         </div>
       </div>
 
@@ -684,12 +751,18 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     <GradeStars
                       value={typeof (trade as any).grade === "number" ? (trade as any).grade : null}
                       onChange={(v) => {
-                        // optimistic local update
-                        setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: v } as any : t));
+                        // Optimistic local update — patch whichever cohort the
+                        // trade lives in. The .map is a no-op for the cohort
+                        // that doesn't contain it.
+                        const patch = (g: number | null) => {
+                          setOpenTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: g } as any : t));
+                          setClosedTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: g } as any : t));
+                        };
+                        patch(v);
                         api.setTradeGrade({ portfolio: getActivePortfolio(), trade_id: trade.trade_id, grade: v })
                           .catch(() => {
                             // revert on failure
-                            setAllTrades(prev => prev.map(t => t.trade_id === trade.trade_id ? { ...t, grade: (trade as any).grade ?? null } as any : t));
+                            patch((trade as any).grade ?? null);
                           });
                       }}
                     />
