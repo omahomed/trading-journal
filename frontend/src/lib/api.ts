@@ -367,6 +367,18 @@ export const api = {
       body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
 
+  deleteTransaction: (detail_id: number, trade_id: string, ticker: string, portfolio = getActivePortfolio()) => {
+    const qs = new URLSearchParams({
+      detail_id: String(detail_id),
+      trade_id: trade_id,
+      ticker: ticker,
+      portfolio: portfolio,
+    });
+    return fetchWithAuth(`${API_BASE}/api/trades/transaction?${qs.toString()}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string }>;
+  },
+
   deleteTrade: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {
       method: "DELETE",

@@ -2282,6 +2282,46 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         return {"error": str(e)}
 
 
+@app.delete("/api/trades/transaction")
+@limiter.limit("15/minute")
+def delete_transaction_endpoint(request: Request,
+                                detail_id: int = Query(...),
+                                trade_id: str = Query(""),
+                                ticker: str = Query(""),
+                                portfolio: str = Query("CanSlim")):
+    """Soft-delete a single transaction detail row, then recompute its
+    campaign's LIFO summary so avg_entry / realized_pl / status reflect
+    the removal. If the deletion empties the campaign, the summary is
+    cleaned up by _recompute_summary_lifo."""
+    try:
+        if not detail_id:
+            return {"error": "detail_id is required"}
+
+        try:
+            db.delete_detail_row(portfolio, int(detail_id))
+        except ValueError as e:
+            return {"error": str(e)}
+
+        if trade_id:
+            try:
+                _recompute_summary_lifo(portfolio, trade_id, ticker)
+            except Exception:
+                # Summary recompute failure shouldn't roll back the delete —
+                # the row is gone; the worst case is a stale summary that
+                # the next edit/recompute will heal.
+                pass
+
+        try:
+            db.log_audit(portfolio, "DELETE_TXN", trade_id, "",
+                         f"Transaction {detail_id} deleted", username="web")
+        except Exception:
+            pass
+
+        return {"status": "ok", "detail_id": detail_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback_open_date: str = "") -> None:
     """Recompute a trade campaign's summary from its remaining detail rows
     using LIFO. If no details remain, deletes the summary entirely. Shared
