@@ -1517,11 +1517,21 @@ def create_cash_transaction_endpoint(portfolio_id: int, request: Request, body: 
         if source not in ("deposit", "withdraw", "reconcile"):
             return {"error": "source must be deposit, withdraw, or reconcile"}
 
+        # body.get("amount") could be 0 — using `or 0` would mask it. Read raw
+        # and reject only None/non-numeric so reconcile with broker_balance=0
+        # is accepted (rare but legal: just-funded margin account).
+        raw_amount = body.get("amount")
+        if raw_amount is None:
+            return {"error": "amount is required"}
         try:
-            amount = float(body.get("amount") or 0)
+            amount = float(raw_amount)
         except (TypeError, ValueError):
             return {"error": "amount must be numeric"}
-        if amount <= 0:
+        # Deposit/withdraw amounts must be positive (the source determines the
+        # sign). Reconcile takes the user's actual broker cash balance, which
+        # can be negative (margin) or zero — must not be filtered here or
+        # users with margin debits can never reconcile.
+        if source != "reconcile" and amount <= 0:
             return {"error": "amount must be greater than zero"}
 
         note = body.get("note") or None

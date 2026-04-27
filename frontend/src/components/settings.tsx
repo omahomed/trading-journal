@@ -320,7 +320,7 @@ function NewPortfolioCard({
 }
 
 
-function CashActionForm({
+export function CashActionForm({
   portfolioId, cashBalance, action, navColor, onDone, onCancel,
 }: {
   portfolioId: number;
@@ -364,7 +364,13 @@ function CashActionForm({
     setErr(null);
     setInfo(null);
     const num = parseFloat(amount);
-    if (!isFinite(num) || num <= 0) {
+    if (!isFinite(num)) {
+      setErr("Amount must be a number");
+      return;
+    }
+    // Reconcile takes the user's actual broker cash balance, which can be
+    // negative (margin) or zero — only deposit/withdraw must be positive.
+    if (action !== "reconcile" && num <= 0) {
       setErr("Amount must be a positive number");
       return;
     }
@@ -401,7 +407,9 @@ function CashActionForm({
           </span>
           <div className="mt-1 relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: "var(--ink-4)" }}>$</span>
-            <input type="number" min={0} step="0.01" value={amount} autoFocus
+            <input type="number" step="0.01"
+                   {...(action === "reconcile" ? {} : { min: 0 })}
+                   value={amount} autoFocus
                    onChange={(e) => setAmount(e.target.value)}
                    className="w-full h-10 pl-7 pr-3 rounded-[8px] text-[13px]"
                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
