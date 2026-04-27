@@ -65,6 +65,22 @@ class YFinanceProvider(PriceProvider):
     _CACHE_TTL_SECONDS = 30.0
     _CACHE_LOCK = threading.Lock()
 
+    # Per-ticker fetch lock. Coalesces concurrent yfinance requests for the
+    # same symbol so the dashboard's parallel /nlv + /returns + /prices/batch
+    # don't all fire 24 yfinance round-trips simultaneously: the first
+    # request fills the cache while the others wait, then read from memory.
+    _FETCH_LOCKS: dict[str, threading.Lock] = {}
+    _FETCH_LOCKS_GUARD = threading.Lock()
+
+    @classmethod
+    def _get_fetch_lock(cls, symbol: str) -> threading.Lock:
+        with cls._FETCH_LOCKS_GUARD:
+            lock = cls._FETCH_LOCKS.get(symbol)
+            if lock is None:
+                lock = threading.Lock()
+                cls._FETCH_LOCKS[symbol] = lock
+            return lock
+
     def get_current_prices(self, tickers: list[str]) -> dict[str, float]:
         if not tickers:
             return {}
@@ -92,37 +108,48 @@ class YFinanceProvider(PriceProvider):
                 else:
                     to_fetch.append(sym)
 
-        def _extract(symbol: str) -> None:
-            """Fetch a single symbol via yf.Ticker.history — works uniformly
-            for any number of tickers. Called in a loop; yf.download with a
-            list behaves inconsistently across versions (MultiIndex vs flat
-            columns) so we pay the per-ticker cost for predictable output."""
-            try:
-                tk = yf.Ticker(symbol)
-                hist = tk.history(period="1d", auto_adjust=False)
-                if hist is None or hist.empty:
+        def _fetch_one(symbol: str) -> None:
+            """Fetch a single symbol via yf.Ticker.history. Wrapped in a
+            per-ticker lock so two parallel requests for the same symbol
+            don't both hit yfinance — the second one waits on the first
+            and reads its result from the cache."""
+            lock = self._get_fetch_lock(symbol)
+            with lock:
+                # Re-check cache after acquiring the lock: while we waited
+                # another thread may have already fetched and populated it.
+                with self._CACHE_LOCK:
+                    cached = self._PRICE_CACHE.get(symbol)
+                    if cached and (time.time() - cached[0]) < self._CACHE_TTL_SECONDS:
+                        result[symbol] = cached[1]
+                        return
+                try:
+                    tk = yf.Ticker(symbol)
+                    hist = tk.history(period="1d", auto_adjust=False)
+                    if hist is None or hist.empty:
+                        return
+                    val = hist["Close"].iloc[-1]
+                    if pd.isna(val):
+                        return
+                    price = float(val)
+                    if price > 0:
+                        result[symbol] = price
+                        with self._CACHE_LOCK:
+                            self._PRICE_CACHE[symbol] = (time.time(), price)
+                except Exception:
+                    # Drop on any error — caller falls back to cost basis
                     return
-                val = hist["Close"].iloc[-1]
-                if pd.isna(val):
-                    return
-                price = float(val)
-                if price > 0:
-                    result[symbol] = price
-                    with self._CACHE_LOCK:
-                        self._PRICE_CACHE[symbol] = (time.time(), price)
-            except Exception:
-                # Drop on any error — caller falls back to cost basis
-                return
 
         for sym in to_fetch:
-            _extract(sym)
+            _fetch_one(sym)
         return result
 
     @classmethod
     def clear_cache(cls) -> None:
-        """Test hook — drop everything in the price cache."""
+        """Test hook — drop everything in the price cache and locks."""
         with cls._CACHE_LOCK:
             cls._PRICE_CACHE.clear()
+        with cls._FETCH_LOCKS_GUARD:
+            cls._FETCH_LOCKS.clear()
 
 
 # Module-level default. Swapping providers later is a one-line change here,
