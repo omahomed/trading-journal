@@ -394,3 +394,172 @@ def test_endpoint_no_date_param_uses_default(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["success"] is True
     assert captured.get("target_date") is None
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic helpers — inspect_nav_xml + redact_nav_xml
+# ---------------------------------------------------------------------------
+
+
+def _root(xml_str: str):
+    """Parse an XML string and return the root element."""
+    import xml.etree.ElementTree as _ET
+    return _ET.fromstring(xml_str)
+
+
+def test_inspect_nav_xml_reports_attrs_and_dates():
+    """The whole point of the debug endpoint: surface every attr key on the
+    NAV rows + every date-shaped value, so we can spot a key mismatch
+    (e.g. parser keys on `reportDate` but report uses `toDate`)."""
+    xml = _nav_report_xml([
+        {"toDate": "20260424", "fromDate": "20260424", "total": "100",
+         "cash": "20", "stock": "80", "currency": "USD"},
+    ])
+    info = ibkr_flex.inspect_nav_xml(_root(xml))
+
+    assert info["row_count"] == 1
+    # Every attribute key should be reported, sorted
+    assert "toDate" in info["all_attrs_on_nav_row"]
+    assert "fromDate" in info["all_attrs_on_nav_row"]
+    assert "total" in info["all_attrs_on_nav_row"]
+    # Date-shaped values surface as key=value pairs — this is what answers
+    # "what date attribute is the report actually using?"
+    assert "toDate=20260424" in info["all_date_attrs_found"]
+    assert "fromDate=20260424" in info["all_date_attrs_found"]
+    # Caller can compare what the parser looks for against what's available
+    assert info["parser_searches_for_attr"] == "reportDate"
+
+
+def test_inspect_nav_xml_handles_zero_rows_with_candidate_tags():
+    """When the NAV section is missing entirely, surface any tag that *might*
+    be the renamed equivalent (Equity*, NAV*, NetAsset*) so debugging can
+    follow the trail without a second round trip."""
+    xml = (
+        "<?xml version='1.0'?>"
+        "<FlexQueryResponse><FlexStatements count='1'>"
+        "<FlexStatement accountId='U1' fromDate='20260427' toDate='20260427'>"
+        "<EquitySummaryByReportDate reportDate='20260427' total='100'/>"
+        "</FlexStatement></FlexStatements></FlexQueryResponse>"
+    )
+    info = ibkr_flex.inspect_nav_xml(_root(xml))
+
+    assert info["row_count"] == 0
+    assert "EquitySummaryByReportDate" in info["candidate_nav_tags_when_zero_rows"]
+
+
+def test_inspect_nav_xml_dedupes_date_pairs_across_rows():
+    """A multi-row report shouldn't list the same key=value pair twice."""
+    xml = _nav_report_xml([
+        {"reportDate": "20260424", "total": "100", "cash": "0", "stock": "100"},
+        {"reportDate": "20260425", "total": "101", "cash": "0", "stock": "101"},
+        {"reportDate": "20260424", "total": "100", "cash": "0", "stock": "100"},  # dup
+    ])
+    info = ibkr_flex.inspect_nav_xml(_root(xml))
+
+    # Two unique dates despite three rows
+    date_pairs = [p for p in info["all_date_attrs_found"] if p.startswith("reportDate=")]
+    assert sorted(date_pairs) == ["reportDate=20260424", "reportDate=20260425"]
+
+
+def test_redact_nav_xml_masks_account_id():
+    """accountId in attribute form (both quote styles) must not leak."""
+    xml = '<FlexStatement accountId="U1234567" fromDate="20260427"><Foo masterAccountId=\'U7654321\'/></FlexStatement>'
+    out = ibkr_flex.redact_nav_xml(xml)
+    assert "U1234567" not in out
+    assert "U7654321" not in out
+    assert 'accountId="<REDACTED>"' in out
+    assert "masterAccountId='<REDACTED>'" in out
+    # Non-sensitive attributes are preserved verbatim
+    assert 'fromDate="20260427"' in out
+
+
+def test_redact_nav_xml_handles_empty_input():
+    """Defensive: no crash on empty / None-equivalent input."""
+    assert ibkr_flex.redact_nav_xml("") == ""
+
+
+# ---------------------------------------------------------------------------
+# /api/admin/ibkr/raw-nav-debug — founder gate + diagnostic shape
+# ---------------------------------------------------------------------------
+
+
+def test_admin_debug_blocks_non_founder(client):
+    """Bearer auth alone isn't enough — the user must be the founder.
+    Returns 200 OK + forbidden_not_admin so the response shape is uniform."""
+    r = client.get("/api/admin/ibkr/raw-nav-debug")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "forbidden_not_admin"
+
+
+def test_admin_debug_returns_diagnostic_shape_for_founder(client, monkeypatch):
+    """Founder access: success=true, redacted XML snippet, attribute dump,
+    date pairs. This is the response the user inspects in the browser."""
+    import api.main as main
+    # Make the test JWT count as founder for this scenario
+    monkeypatch.setattr(main, "FOUNDER_USER_ID", _TEST_USER_ID)
+    monkeypatch.setenv("IBKR_FLEX_TOKEN", "TOK")
+    monkeypatch.setenv("IBKR_NAV_FLEX_QUERY_ID", "QID")
+
+    # Mirror the real "Last Business Day" rollup case the user is hitting:
+    # one row with toDate (no reportDate) — exactly the bug they're chasing.
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_success_xml(),
+        get_xml=_nav_report_xml([
+            {"toDate": "20260424", "fromDate": "20260424",
+             "accountId": "U1234567", "total": "487264.50",
+             "cash": "-431003.85", "stock": "918268.35", "currency": "USD"},
+        ]),
+    )
+
+    r = client.get("/api/admin/ibkr/raw-nav-debug")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is True
+
+    # The exact diagnostic that answers "why does no_data_for_date keep firing?"
+    assert "toDate" in body["all_attrs_on_nav_row"]
+    assert "reportDate" not in body["all_attrs_on_nav_row"]
+    assert "toDate=20260424" in body["all_date_attrs_found"]
+    assert body["parser_searches_for_attr"] == "reportDate"
+    assert body["row_count"] == 1
+
+    # Account ID is scrubbed from the raw snippet
+    assert "U1234567" not in body["raw_xml_first_2000_chars"]
+    assert "<REDACTED>" in body["raw_xml_first_2000_chars"]
+
+
+def test_admin_debug_reports_missing_creds_for_founder(client, monkeypatch):
+    """No env vars set → ibkr_not_configured (does not 500). Same shape."""
+    import api.main as main
+    monkeypatch.setattr(main, "FOUNDER_USER_ID", _TEST_USER_ID)
+    # creds intentionally absent
+
+    r = client.get("/api/admin/ibkr/raw-nav-debug")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "ibkr_not_configured"
+
+
+def test_admin_debug_surfaces_ibkr_auth_failure(client, monkeypatch):
+    """When IBKR rejects the credentials, the debug endpoint surfaces the
+    same FlexQueryError code as the user-facing endpoint — but at 200 OK."""
+    import api.main as main
+    monkeypatch.setattr(main, "FOUNDER_USER_ID", _TEST_USER_ID)
+    monkeypatch.setenv("IBKR_FLEX_TOKEN", "TOK")
+    monkeypatch.setenv("IBKR_NAV_FLEX_QUERY_ID", "QID")
+
+    _stub_requests(
+        monkeypatch,
+        send_xml=_send_error_xml("1003", "Invalid token"),
+        get_xml="<unused/>",
+    )
+
+    r = client.get("/api/admin/ibkr/raw-nav-debug")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "ibkr_auth_failed"

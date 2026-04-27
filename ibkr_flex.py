@@ -8,6 +8,7 @@
 # Requires: IBKR_FLEX_TOKEN + IBKR_FLEX_QUERY_ID env vars
 # (set on Railway in production; export locally for dev).
 
+import re
 import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -522,6 +523,108 @@ def _last_completed_trading_day(now_et: datetime = None) -> date:
     return d
 
 
+def _fetch_nav_xml(query_id: str, token: str):
+    """Run the IBKR Flex Query Send → Get → retry protocol for the NAV query
+    and return the raw report XML root. Pure transport — no parsing of the
+    report's payload schema. Raises FlexQueryError on any failure with the
+    same machine-readable codes documented on fetch_nav_for_date().
+
+    Extracted so the admin debug endpoint can introspect the raw XML without
+    going through schema-specific parsing.
+    """
+    # ── Step 1: request the report ────────────────────────────────────────
+    try:
+        resp = requests.get(
+            _SEND_URL,
+            params={"t": token, "q": query_id, "v": "3"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.Timeout as e:
+        raise FlexQueryError("network_timeout", f"Timed out reaching IBKR: {e}")
+    except requests.RequestException as e:
+        raise FlexQueryError("network_timeout", f"Network error reaching IBKR: {e}")
+
+    try:
+        root = ET.fromstring(resp.text)
+    except ET.ParseError:
+        raise FlexQueryError(
+            "ibkr_report_error",
+            f"IBKR returned invalid XML: {resp.text[:300]}",
+        )
+
+    status = root.findtext("Status", "")
+    if status != "Success":
+        code = root.findtext("ErrorCode", "")
+        msg = root.findtext("ErrorMessage", "Unknown error")
+        # Auth-style errors: bad token, invalid query ID, account not enabled
+        if code in ("1003", "1004", "1005", "1011", "1012"):
+            raise FlexQueryError(
+                "ibkr_auth_failed",
+                f"IBKR rejected the request ({code}): {msg}",
+            )
+        raise FlexQueryError(
+            "ibkr_report_error",
+            f"IBKR request error ({code}): {msg}",
+        )
+
+    ref_code = root.findtext("ReferenceCode", "")
+    if not ref_code:
+        raise FlexQueryError(
+            "ibkr_report_error",
+            "IBKR returned success but no reference code",
+        )
+
+    # ── Step 2: download the report (with retry for generation delay) ─────
+    max_retries = 5
+    retry_delay = 3
+    for attempt in range(max_retries):
+        try:
+            resp2 = requests.get(
+                _GET_URL,
+                params={"q": ref_code, "t": token, "v": "3"},
+                timeout=30,
+            )
+            resp2.raise_for_status()
+        except requests.Timeout as e:
+            raise FlexQueryError("network_timeout", f"Timed out downloading report: {e}")
+        except requests.RequestException as e:
+            raise FlexQueryError("network_timeout", f"Network error downloading report: {e}")
+
+        try:
+            check_root = ET.fromstring(resp2.text)
+        except ET.ParseError:
+            raise FlexQueryError(
+                "ibkr_report_error",
+                f"IBKR returned unparseable report: {resp2.text[:300]}",
+            )
+
+        # "Still generating" warning vs the actual report
+        check_status = check_root.findtext("Status", "")
+        if check_status == "Warn":
+            error_code = check_root.findtext("ErrorCode", "")
+            if error_code == "1019":
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                raise FlexQueryError(
+                    "report_generation_timeout",
+                    "IBKR report is still generating after retries — try again in a few seconds",
+                )
+            msg = check_root.findtext("ErrorMessage", "Unknown warning")
+            raise FlexQueryError(
+                "ibkr_report_error",
+                f"IBKR warning ({error_code}): {msg}",
+            )
+        # Status empty/absent means this is the actual data payload.
+        return check_root
+
+    raise FlexQueryError(
+        "report_generation_timeout",
+        "IBKR report download failed after retries",
+    )
+
+
 def fetch_nav_for_date(query_id: str = None, target_date=None, token: str = None) -> dict:
     """Pull NAV from IBKR Flex Query for a single trading day.
 
@@ -574,100 +677,7 @@ def fetch_nav_for_date(query_id: str = None, target_date=None, token: str = None
             )
     target_yyyymmdd = _format_date_yyyymmdd(target_date)
 
-    # ── Step 1: request the report ────────────────────────────────────────
-    try:
-        resp = requests.get(
-            _SEND_URL,
-            params={"t": token, "q": query_id, "v": "3"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except requests.Timeout as e:
-        raise FlexQueryError("network_timeout", f"Timed out reaching IBKR: {e}")
-    except requests.RequestException as e:
-        raise FlexQueryError("network_timeout", f"Network error reaching IBKR: {e}")
-
-    try:
-        root = ET.fromstring(resp.text)
-    except ET.ParseError:
-        raise FlexQueryError(
-            "ibkr_report_error",
-            f"IBKR returned invalid XML: {resp.text[:300]}",
-        )
-
-    status = root.findtext("Status", "")
-    if status != "Success":
-        code = root.findtext("ErrorCode", "")
-        msg = root.findtext("ErrorMessage", "Unknown error")
-        # Auth-style errors: bad token, invalid query ID, account not enabled
-        if code in ("1003", "1004", "1005", "1011", "1012"):
-            raise FlexQueryError(
-                "ibkr_auth_failed",
-                f"IBKR rejected the request ({code}): {msg}",
-            )
-        raise FlexQueryError(
-            "ibkr_report_error",
-            f"IBKR request error ({code}): {msg}",
-        )
-
-    ref_code = root.findtext("ReferenceCode", "")
-    if not ref_code:
-        raise FlexQueryError(
-            "ibkr_report_error",
-            "IBKR returned success but no reference code",
-        )
-
-    # ── Step 2: download the report (with retry for generation delay) ─────
-    max_retries = 5
-    retry_delay = 3
-    report_xml = None
-    for attempt in range(max_retries):
-        try:
-            resp2 = requests.get(
-                _GET_URL,
-                params={"q": ref_code, "t": token, "v": "3"},
-                timeout=30,
-            )
-            resp2.raise_for_status()
-        except requests.Timeout as e:
-            raise FlexQueryError("network_timeout", f"Timed out downloading report: {e}")
-        except requests.RequestException as e:
-            raise FlexQueryError("network_timeout", f"Network error downloading report: {e}")
-
-        # Check for "still generating" warning vs the actual report
-        try:
-            check_root = ET.fromstring(resp2.text)
-            check_status = check_root.findtext("Status", "")
-            if check_status == "Warn":
-                error_code = check_root.findtext("ErrorCode", "")
-                if error_code == "1019":
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        continue
-                    raise FlexQueryError(
-                        "report_generation_timeout",
-                        "IBKR report is still generating after retries — try again in a few seconds",
-                    )
-                msg = check_root.findtext("ErrorMessage", "Unknown warning")
-                raise FlexQueryError(
-                    "ibkr_report_error",
-                    f"IBKR warning ({error_code}): {msg}",
-                )
-            # Real report — Status will be empty or absent for the data XML
-            report_xml = check_root
-            break
-        except ET.ParseError:
-            raise FlexQueryError(
-                "ibkr_report_error",
-                f"IBKR returned unparseable report: {resp2.text[:300]}",
-            )
-
-    if report_xml is None:
-        raise FlexQueryError(
-            "report_generation_timeout",
-            "IBKR report download failed after retries",
-        )
-
+    report_xml = _fetch_nav_xml(query_id, token)
     return _parse_nav_report(report_xml, target_yyyymmdd)
 
 
@@ -765,6 +775,126 @@ def _parse_nav_report(xml_root, target_yyyymmdd: str) -> dict:
         "currency": currency,
         "account": account,
     }
+
+
+# ── NAV diagnostic helpers ─────────────────────────────────────────────────
+# Powering /api/admin/ibkr/raw-nav-debug. The parser keys off `reportDate`
+# but real IBKR Flex Queries can use other date attribute names depending
+# on the configured period (Last Business Day vs Range vs Today). When the
+# parser raises no_data_for_date and the user can't see why, these helpers
+# expose the raw shape so we can identify the mismatch.
+
+# Attribute names that have ever surfaced in Flex Query NAV responses across
+# the period configurations IBKR offers. The inspector reports any of these
+# that are present so we can update the parser if a new one shows up.
+_KNOWN_DATE_ATTR_NAMES = (
+    "reportDate", "toDate", "fromDate", "asOfDate", "date", "statementDate",
+    "periodEnd", "periodStart", "tradeDate", "settleDate",
+)
+
+
+def _yyyymmdd_shape(s: str) -> bool:
+    """True if `s` looks like an IBKR YYYYMMDD date stamp."""
+    return bool(s) and len(s) == 8 and s.isdigit()
+
+
+def inspect_nav_xml(xml_root) -> dict:
+    """Extract structural info from a NAV Flex Query XML root for diagnostics.
+
+    Returns a dict with the shape the admin debug endpoint serves. No PII
+    in the output — account IDs are reported as a presence flag, not the
+    actual value (the redacted XML snippet handles them separately).
+
+    Reports:
+      - row_count: number of EquitySummaryByReportDateInBase rows
+      - all_attrs_on_nav_row: union of attribute keys across all rows (sorted)
+      - all_date_attrs_found: every (key, value) pair across rows where the
+        value is YYYYMMDD-shaped — discriminates `toDate=20260424` from
+        `reportDate=20260424`, which is the whole point of this endpoint
+      - parser_searches_for_attr: what the parser currently keys on (so the
+        user can confirm the mismatch at a glance)
+      - alternate_top_level_tags: other tag names that appear at the top
+        level under FlexStatement (helps identify if NAV section name has
+        drifted, e.g. EquitySummaryByReportDate vs EquitySummaryInBase)
+    """
+    rows = list(xml_root.iter("EquitySummaryByReportDateInBase"))
+
+    # Union of all attribute keys
+    all_attrs = set()
+    for r in rows:
+        all_attrs.update(r.attrib.keys())
+
+    # Date-shaped attribute values, dedup on (k, v) so the same date appearing
+    # under multiple keys gets surfaced under each one.
+    date_pairs = []
+    seen = set()
+    for r in rows:
+        for k, v in r.attrib.items():
+            v_stripped = (v or "").strip()
+            if _yyyymmdd_shape(v_stripped):
+                pair = f"{k}={v_stripped}"
+                if pair not in seen:
+                    seen.add(pair)
+                    date_pairs.append(pair)
+
+    # Top-level structural breadcrumbs — what tags are inside FlexStatement?
+    top_tags = set()
+    for fs in xml_root.iter("FlexStatement"):
+        for child in list(fs):
+            top_tags.add(child.tag)
+        # Some configurations nest the data directly under FlexStatement
+        # without an intermediate wrapper; in that case top_tags will already
+        # show the wrapper-or-data tag mix.
+        break  # FlexStatement is single-account; first one is enough
+
+    # If there are zero EquitySummaryByReportDateInBase rows, surface any
+    # close-name candidates (e.g. EquitySummaryByReportDate, NetAssetValue)
+    # so the user can spot a renaming.
+    candidate_tags = []
+    if not rows:
+        for elem in xml_root.iter():
+            tag = elem.tag
+            if "Equity" in tag or "NAV" in tag.upper() or "NetAsset" in tag:
+                if tag not in candidate_tags:
+                    candidate_tags.append(tag)
+
+    return {
+        "row_count": len(rows),
+        "all_attrs_on_nav_row": sorted(all_attrs),
+        "all_date_attrs_found": date_pairs,
+        "parser_searches_for_attr": "reportDate",
+        "parser_fallback_attrs": list(("toDate", "fromDate", "reportDate")),
+        "alternate_top_level_tags": sorted(top_tags),
+        "candidate_nav_tags_when_zero_rows": candidate_tags,
+    }
+
+
+def redact_nav_xml(text: str) -> str:
+    """Strip account-identifying values from raw IBKR XML before showing it
+    in a JSON response. Three classes of redaction:
+
+    1. accountId attributes — anywhere they appear (FlexStatement,
+       EquitySummary rows, etc.). Replaced with "<REDACTED>".
+    2. Other id-shaped attributes that could leak account scope:
+       masterAccountId, custodianAccountId, brokerageAccountId.
+    3. Bare account-number-shaped values inside element text (defence-in-depth).
+
+    The token never appears in the response body (it's only a query parameter
+    on the request), but we'd add token redaction here if that ever changes.
+    """
+    if not text:
+        return text
+    out = text
+    # Attribute redactions — match k="..." or k='...'
+    for attr in ("accountId", "masterAccountId", "custodianAccountId",
+                 "brokerageAccountId", "ibAccount"):
+        out = re.sub(
+            rf'{attr}="[^"]*"', f'{attr}="<REDACTED>"', out,
+        )
+        out = re.sub(
+            rf"{attr}='[^']*'", f"{attr}='<REDACTED>'", out,
+        )
+    return out
 
 
 def pull_ibkr_trades(consolidate=True, group_same_day=True):

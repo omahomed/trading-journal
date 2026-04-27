@@ -79,6 +79,15 @@ AUTH_SECRET = os.environ.get("AUTH_SECRET")
 if not AUTH_SECRET:
     print("[AUTH] AUTH_SECRET not set — every /api/* call will be rejected (except /api/health).")
 
+# Owner / founder UUID. Single-tenant app (Tier 1 multi-tenancy is the future
+# state, not current). Endpoints under /api/admin/* additionally require the
+# authenticated user_id to match this UUID — bearer auth alone isn't enough.
+# Sourced from migration 002's seed; kept in code so the gate works even when
+# the DB layer is unreachable. Override via env var for staging-as-non-owner.
+FOUNDER_USER_ID = os.environ.get(
+    "FOUNDER_USER_ID", "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a"
+)
+
 # Paths that remain reachable without a bearer token.
 _PUBLIC_PATHS = {"/api/health", "/"}
 
@@ -1946,6 +1955,69 @@ def ibkr_nav_for_date(request: Request, date: str = ""):
         # ibkr_flex.FlexQueryError carries a stable code + human message;
         # anything else gets bucketed as 'unknown_error' so the frontend
         # always has both fields to surface.
+        code = getattr(e, "code", "unknown_error")
+        msg = getattr(e, "message", str(e)) or str(e)
+        return {"success": False, "error": code, "message": msg}
+
+
+@app.get("/api/admin/ibkr/raw-nav-debug")
+@limiter.limit("6/minute")
+def ibkr_raw_nav_debug(request: Request):
+    """ADMIN diagnostic — return the raw IBKR NAV report structure.
+
+    Use this when /api/ibkr/nav-for-date returns no_data_for_date for what
+    looks like a valid date and we need to see what the report actually
+    contains. The response surfaces every attribute on the EquitySummary
+    rows so we can identify field-name drift (e.g. the parser keys on
+    `reportDate` but the report uses `toDate`).
+
+    Founder-gated: bearer auth alone isn't enough — request.state.user_id
+    must equal FOUNDER_USER_ID. Returns 200 OK + {success: false, error}
+    on every failure mode (config / auth / network / parse) so a single
+    response shape covers all cases.
+
+    Output redactions:
+      - accountId attributes are masked in raw_xml_first_2000_chars
+      - the inspector reports presence of attrs, not their values
+      - the IBKR token is never echoed (it's a query param, not response)
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id != FOUNDER_USER_ID:
+        # Distinct error code so a logged-in non-owner sees a clear reason
+        # rather than a generic 401 (the bearer auth already passed).
+        return {
+            "success": False,
+            "error": "forbidden_not_admin",
+            "message": "This endpoint is owner-only.",
+        }
+
+    try:
+        import ibkr_flex
+        import xml.etree.ElementTree as _ET
+        token = os.environ.get("IBKR_FLEX_TOKEN", "").strip()
+        query_id = os.environ.get("IBKR_NAV_FLEX_QUERY_ID", "").strip()
+        if not token or not query_id:
+            return {
+                "success": False,
+                "error": "ibkr_not_configured",
+                "message": "Set IBKR_FLEX_TOKEN and IBKR_NAV_FLEX_QUERY_ID.",
+            }
+
+        xml_root = ibkr_flex._fetch_nav_xml(query_id, token)
+        # Re-serialise the parsed tree (rather than echoing the raw HTTP body)
+        # so we can guarantee the redaction pass runs on a stable canonical
+        # form. ET.tostring keeps attribute order in CPython 3.8+.
+        raw_xml = _ET.tostring(xml_root, encoding="unicode")
+        redacted = ibkr_flex.redact_nav_xml(raw_xml)
+
+        info = ibkr_flex.inspect_nav_xml(xml_root)
+        return {
+            "success": True,
+            "raw_xml_first_2000_chars": redacted[:2000],
+            "raw_xml_total_chars": len(redacted),
+            **info,
+        }
+    except Exception as e:
         code = getattr(e, "code", "unknown_error")
         msg = getattr(e, "message", str(e)) or str(e)
         return {"success": False, "error": code, "message": msg}
