@@ -10,10 +10,18 @@ touching the callers. A PriceProvider is responsible for:
 
 Providers should NOT raise on missing tickers — they should return a dict
 that simply omits the failed ones. The caller handles gaps.
+
+A short-TTL per-ticker cache lives in front of the yfinance impl so that
+the 3 endpoints a single dashboard load triggers (/nlv, /returns,
+/prices/batch — all of which independently resolve current prices) share
+a single round-trip's worth of work. Without it, a 24-position portfolio
+pays 72 sequential yfinance fetches per page render.
 """
 from __future__ import annotations
 
 import os
+import threading
+import time
 from abc import ABC, abstractmethod
 
 
@@ -42,7 +50,20 @@ class YFinanceProvider(PriceProvider):
 
     Silently drops tickers that error — the NLV service handles missing
     entries by falling back to cost basis.
+
+    A short per-ticker memo lives at module scope: yfinance fetches one
+    symbol at a time (yf.download with a list is inconsistent across
+    versions), so a 24-position basket is 24 round-trips. The dashboard
+    fans those across 3 endpoints. Without caching, that's 72 round-trips
+    per page render — observed at 12-20s on prod. With a 30s TTL, the
+    second and third endpoint calls hit memory.
     """
+
+    # (timestamp_seconds, price). Module-level so the cache is shared
+    # across requests in the same process. Thread-safe via the lock below.
+    _PRICE_CACHE: dict[str, tuple[float, float]] = {}
+    _CACHE_TTL_SECONDS = 30.0
+    _CACHE_LOCK = threading.Lock()
 
     def get_current_prices(self, tickers: list[str]) -> dict[str, float]:
         if not tickers:
@@ -58,7 +79,18 @@ class YFinanceProvider(PriceProvider):
         if not clean:
             return {}
 
+        now = time.time()
         result: dict[str, float] = {}
+        to_fetch: list[str] = []
+
+        # Cache check — copy hits into result, mark misses for fetch.
+        with self._CACHE_LOCK:
+            for sym in clean:
+                cached = self._PRICE_CACHE.get(sym)
+                if cached and (now - cached[0]) < self._CACHE_TTL_SECONDS:
+                    result[sym] = cached[1]
+                else:
+                    to_fetch.append(sym)
 
         def _extract(symbol: str) -> None:
             """Fetch a single symbol via yf.Ticker.history — works uniformly
@@ -76,13 +108,21 @@ class YFinanceProvider(PriceProvider):
                 price = float(val)
                 if price > 0:
                     result[symbol] = price
+                    with self._CACHE_LOCK:
+                        self._PRICE_CACHE[symbol] = (time.time(), price)
             except Exception:
                 # Drop on any error — caller falls back to cost basis
                 return
 
-        for sym in clean:
+        for sym in to_fetch:
             _extract(sym)
         return result
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Test hook — drop everything in the price cache."""
+        with cls._CACHE_LOCK:
+            cls._PRICE_CACHE.clear()
 
 
 # Module-level default. Swapping providers later is a one-line change here,
