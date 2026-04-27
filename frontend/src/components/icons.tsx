@@ -54,7 +54,6 @@ export const NAV_ICONS: Record<string, (p?: any) => React.ReactElement> = {
   routine: Icons.check,
   retro: Icons.repeat,
   ibd: Icons.school,
-  mfactor: Icons.gauge,
   cycle: Icons.orbit,
   rally: Icons.trending,
   coach: Icons.sparkle,

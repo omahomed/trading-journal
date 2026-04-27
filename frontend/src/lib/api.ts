@@ -51,7 +51,11 @@ export interface JournalEntry {
   nasdaq: number;
   portfolio_heat: number;
   score: number;
-  market_window: string;
+  // market_window (V10 vocabulary) was removed from this interface when
+  // the M Factor page was deleted; the column still exists in the
+  // trading_journal table for historical preservation, and CSV export
+  // still emits a "Window" column via untyped (h as any).market_window
+  // access. The [key: string]: any below covers that legacy access.
   [key: string]: any;
 }
 

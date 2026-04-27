@@ -328,13 +328,14 @@ export function Dashboard({ navColor }: { navColor: string }) {
         </div>
       </div>
 
-      {/* Tape pill */}
-      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium mb-5"
-           style={{ background: "color-mix(in oklab, #8b5cf6 12%, var(--surface))", color: "#8b5cf6" }}>
-        <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6]"
-              style={{ animation: "pulse-dot 2s ease-in-out infinite", boxShadow: "0 0 0 3px color-mix(in oklab, #8b5cf6 12%, var(--surface))" }} />
-        Tape: {latest?.market_window || "—"} · {latest?.day || ""}
-      </div>
+      {/* The page-local tape pill that lived here (showing V10's
+          journal.market_window) was a duplicate of the V11
+          <TapeStatusPill /> already rendered in the app shell at
+          frontend/src/app/(app)/layout.tsx. The V11 pill consumes
+          /api/market/rally-prefix's state (POWERTREND / UPTREND / RALLY
+          MODE / CORRECTION) and is the canonical surface — no need for
+          a second one on the dashboard reading the deprecated V10
+          vocabulary. */}
 
       {/* Empty-state nudge — when the journal has no rows, every KPI value
           renders as "—" and we explicitly point the user at the action that

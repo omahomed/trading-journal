@@ -229,7 +229,11 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       cash_change: portCashN, daily_dollar_change: portDailyChg, daily_pct_change: portDailyPct,
       pct_invested: portInvPct, spy: parseFloat(spyClose) || 0, nasdaq: parseFloat(ndxClose) || 0,
       market_notes: marketNotes, market_action: portAction, score: overallScore,
-      highlights: JSON.stringify(scores), mistakes: gradeNotes, market_window: "",
+      // market_window: "" was sent here in the V10 era, overwriting the
+      // column with empty string on every save. Phase 3a stopped reading
+      // the field; the backend defaults a missing market_window to 'Open'
+      // when persisting (historical preservation). No payload entry needed.
+      highlights: JSON.stringify(scores), mistakes: gradeNotes,
       nlv_source: nlvSource,
       holdings_source: holdingsSource,
     });
