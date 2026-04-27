@@ -16,6 +16,7 @@ Also exposes:
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, date
 from typing import Any
 
@@ -97,13 +98,16 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
     if manual_col is not None:
         for _, row in summary_df.iterrows():
             mp = row.get(manual_col)
-            if mp is None:
+            # load_summary's Decimal-to-numeric conversion turns DB NULLs
+            # into NaN, which slips past `mp is None` and survives both
+            # float() and `<= 0`. Use pd.isna to filter both shapes.
+            if pd.isna(mp):
                 continue
             try:
                 mp_f = float(mp)
             except (TypeError, ValueError):
                 continue
-            if mp_f <= 0:
+            if not math.isfinite(mp_f) or mp_f <= 0:
                 continue
             tkr = str(row.get(ticker_col, "") or "").upper()
             if tkr:

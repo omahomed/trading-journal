@@ -23,6 +23,7 @@ sentry_sdk.init(
 
 from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
+import math
 import re
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
@@ -881,13 +882,18 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
                     requested_upper = {t.upper(): t for t in ticker_list}
                     for _, row in summary_df.iterrows():
                         mp = row.get(manual_col)
-                        if mp is None:
+                        # Filter None AND pandas NaN — load_summary's
+                        # Decimal-to-numeric conversion turns DB NULLs into
+                        # NaN, which slips past `mp is None` and survives
+                        # `float()` + `<= 0`, then crashes the response on
+                        # starlette's allow_nan=False JSON encoder.
+                        if pd.isna(mp):
                             continue
                         try:
                             mp_f = float(mp)
                         except (TypeError, ValueError):
                             continue
-                        if mp_f <= 0:
+                        if not math.isfinite(mp_f) or mp_f <= 0:
                             continue
                         tkr = str(row.get(ticker_col, "") or "").upper()
                         if tkr in requested_upper:
