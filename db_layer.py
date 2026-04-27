@@ -1555,6 +1555,12 @@ def save_journal_entry(journal_entry):
             nlv_source = journal_entry.get('nlv_source', 'manual')
             if nlv_source not in ('manual', 'ibkr_auto', 'ibkr_override'):
                 nlv_source = 'manual'
+            # Same shape for Total Holdings provenance (migration 014). Tracked
+            # independently — user can accept IBKR's NLV but override Holdings
+            # (or vice versa), so the two flags don't have to agree.
+            holdings_source = journal_entry.get('holdings_source', 'manual')
+            if holdings_source not in ('manual', 'ibkr_auto', 'ibkr_override'):
+                holdings_source = 'manual'
 
             # Check if entry exists for this portfolio and day
             cur.execute(
@@ -1567,9 +1573,9 @@ def save_journal_entry(journal_entry):
                 # UPDATE existing entry — try with all columns incl. market_cycle,
                 # fall back progressively if newer columns are missing.
                 try:
-                    # Primary path — includes nlv_source (migration 013) and
-                    # market_cycle (migration 010). Falls back below if either
-                    # column is missing on this database.
+                    # Primary path — includes nlv_source + holdings_source
+                    # (migrations 013, 014) and market_cycle (migration 010).
+                    # Falls back below if any of those columns is missing.
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, market_cycle = %s,
@@ -1581,7 +1587,8 @@ def save_journal_entry(journal_entry):
                             portfolio_heat = %s, spy_atr = %s, nasdaq_atr = %s,
                             score = %s,
                             highlights = %s, lowlights = %s, mistakes = %s,
-                            top_lesson = %s, nlv_source = %s
+                            top_lesson = %s,
+                            nlv_source = %s, holdings_source = %s
                         WHERE id = %s
                         RETURNING id
                     """
@@ -1594,7 +1601,8 @@ def save_journal_entry(journal_entry):
                         portfolio_heat, spy_atr, nasdaq_atr,
                         score,
                         highlights, lowlights, mistakes,
-                        top_lesson, nlv_source,
+                        top_lesson,
+                        nlv_source, holdings_source,
                         existing[0]
                     ))
                 except Exception:
@@ -1654,9 +1662,9 @@ def save_journal_entry(journal_entry):
                 # INSERT new entry — try with all columns incl. market_cycle,
                 # fall back progressively if newer columns are missing.
                 try:
-                    # Primary path — includes nlv_source (migration 013) and
-                    # market_cycle (migration 010). Falls back below if either
-                    # column is missing on this database.
+                    # Primary path — includes nlv_source + holdings_source
+                    # (migrations 013, 014) and market_cycle (migration 010).
+                    # Falls back below if any of those columns is missing.
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, market_cycle,
@@ -1665,11 +1673,12 @@ def save_journal_entry(journal_entry):
                             daily_pct_change, pct_invested, spy, nasdaq,
                             market_notes, market_action, portfolio_heat,
                             spy_atr, nasdaq_atr, score,
-                            highlights, lowlights, mistakes, top_lesson, nlv_source
+                            highlights, lowlights, mistakes, top_lesson,
+                            nlv_source, holdings_source
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
@@ -1680,7 +1689,8 @@ def save_journal_entry(journal_entry):
                         daily_pct_change, pct_invested, spy, nasdaq,
                         market_notes, market_action, portfolio_heat,
                         spy_atr, nasdaq_atr, score,
-                        highlights, lowlights, mistakes, top_lesson, nlv_source
+                        highlights, lowlights, mistakes, top_lesson,
+                        nlv_source, holdings_source
                     ))
                 except Exception:
                     conn.rollback()

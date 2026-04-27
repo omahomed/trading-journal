@@ -473,6 +473,7 @@ def journal_edit(entry: dict):
                     "mistakes": str(row.get("mistakes", "") or ""),
                     "top_lesson": str(row.get("top_lesson", "") or ""),
                     "nlv_source": str(row.get("nlv_source", "") or "manual"),
+                    "holdings_source": str(row.get("holdings_source", "") or "manual"),
                 }
 
         # Merge: use sent values, fall back to existing
@@ -486,11 +487,16 @@ def journal_edit(entry: dict):
                 return str(entry[key])
             return existing.get(db_key, default)
 
-        # Constrain nlv_source to the allowed enum-equivalent values; anything
-        # else (including empty/None from older clients) collapses to 'manual'.
+        # Constrain nlv_source / holdings_source to the allowed enum-equivalent
+        # values; anything else (including empty/None from older clients)
+        # collapses to 'manual'. Tracked independently — a row can be
+        # ibkr_auto for NLV and ibkr_override for Holdings (or vice versa).
         nlv_source_in = str(entry.get("nlv_source") or existing.get("nlv_source", "manual")).strip()
         if nlv_source_in not in ("manual", "ibkr_auto", "ibkr_override"):
             nlv_source_in = "manual"
+        holdings_source_in = str(entry.get("holdings_source") or existing.get("holdings_source", "manual")).strip()
+        if holdings_source_in not in ("manual", "ibkr_auto", "ibkr_override"):
+            holdings_source_in = "manual"
 
         journal_entry = {
             "portfolio_id": portfolio,
@@ -516,6 +522,7 @@ def journal_edit(entry: dict):
             "mistakes": _s("mistakes", "mistakes"),
             "top_lesson": _s("top_lesson", "top_lesson"),
             "nlv_source": nlv_source_in,
+            "holdings_source": holdings_source_in,
         }
 
         # Auto-compute missing market/risk metrics.

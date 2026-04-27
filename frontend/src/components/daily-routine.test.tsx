@@ -214,3 +214,177 @@ describe("DailyRoutine — IBKR auto-fill", () => {
     expect(mockedJournalEdit.mock.calls[0][0].nlv_source).toBe("manual");
   });
 });
+
+
+describe("DailyRoutine — IBKR Total Holdings auto-fill", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  test("populates both NLV and Total Holdings on a clean IBKR pull, each with a ✓ IBKR badge", async () => {
+    mockedIbkrNav.mockResolvedValue({
+      success: true,
+      nav: 486630.39,
+      cash_balance: -431003.85,
+      position_value: 917498.79,
+      report_date: "2026-04-24",
+      currency: "USD",
+      account: "U1234567",
+      source: "ibkr_flex_query",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    const nlvInput = await screen.findByLabelText("Closing NLV") as HTMLInputElement;
+    const holdInput = await screen.findByLabelText("Total Holdings") as HTMLInputElement;
+
+    await waitFor(() => {
+      expect(nlvInput.value).toBe("486630.39");
+      expect(holdInput.value).toBe("917498.79");
+    });
+
+    // Both badges visible — not just one
+    expect(await screen.findByTestId("nlv-auto-badge")).toBeInTheDocument();
+    expect(await screen.findByTestId("holdings-auto-badge")).toBeInTheDocument();
+    // Both fields editable
+    expect(nlvInput).not.toBeDisabled();
+    expect(holdInput).not.toBeDisabled();
+  });
+
+  test("save payload includes holdings_source='ibkr_auto' on a clean accept", async () => {
+    mockedIbkrNav.mockResolvedValue({
+      success: true,
+      nav: 486630.39,
+      cash_balance: -431003.85,
+      position_value: 917498.79,
+      report_date: "2026-04-24",
+      currency: "USD",
+      account: "U1234567",
+      source: "ibkr_flex_query",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    const holdInput = await screen.findByLabelText("Total Holdings") as HTMLInputElement;
+    await waitFor(() => expect(holdInput.value).toBe("917498.79"));
+
+    const saveBtn = screen.getByRole("button", { name: /Save Daily Routine/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+
+    await waitFor(() => expect(mockedJournalEdit).toHaveBeenCalled());
+    const payload = mockedJournalEdit.mock.calls[0][0];
+    expect(payload.nlv_source).toBe("ibkr_auto");
+    expect(payload.holdings_source).toBe("ibkr_auto");
+  });
+
+  test("override only Holdings → nlv_source stays 'ibkr_auto', holdings_source flips to 'ibkr_override'", async () => {
+    // The independence guarantee: each field's source tag tracks itself,
+    // so accepting one number while adjusting the other is captured exactly.
+    mockedIbkrNav.mockResolvedValue({
+      success: true,
+      nav: 486630.39,
+      cash_balance: -431003.85,
+      position_value: 917498.79,
+      report_date: "2026-04-24",
+      currency: "USD",
+      account: "U1234567",
+      source: "ibkr_flex_query",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    const holdInput = await screen.findByLabelText("Total Holdings") as HTMLInputElement;
+    await waitFor(() => expect(holdInput.value).toBe("917498.79"));
+
+    // User edits Holdings only — leave NLV alone
+    await act(async () => {
+      fireEvent.change(holdInput, { target: { value: "920000" } });
+    });
+
+    // Holdings badge flips, NLV badge stays unchanged
+    expect(await screen.findByTestId("holdings-override-badge")).toBeInTheDocument();
+    expect(screen.queryByTestId("holdings-auto-badge")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("nlv-auto-badge")).toBeInTheDocument();
+
+    const saveBtn = screen.getByRole("button", { name: /Save Daily Routine/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+
+    await waitFor(() => expect(mockedJournalEdit).toHaveBeenCalled());
+    const payload = mockedJournalEdit.mock.calls[0][0];
+    expect(payload.nlv_source).toBe("ibkr_auto");
+    expect(payload.holdings_source).toBe("ibkr_override");
+  });
+
+  test("override only NLV → nlv_source flips to 'ibkr_override', holdings_source stays 'ibkr_auto'", async () => {
+    mockedIbkrNav.mockResolvedValue({
+      success: true,
+      nav: 486630.39,
+      cash_balance: -431003.85,
+      position_value: 917498.79,
+      report_date: "2026-04-24",
+      currency: "USD",
+      account: "U1234567",
+      source: "ibkr_flex_query",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    const nlvInput = await screen.findByLabelText("Closing NLV") as HTMLInputElement;
+    await waitFor(() => expect(nlvInput.value).toBe("486630.39"));
+
+    await act(async () => {
+      fireEvent.change(nlvInput, { target: { value: "490000" } });
+    });
+
+    // Mirror image of the previous test
+    expect(await screen.findByTestId("nlv-override-badge")).toBeInTheDocument();
+    expect(screen.queryByTestId("nlv-auto-badge")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("holdings-auto-badge")).toBeInTheDocument();
+
+    const saveBtn = screen.getByRole("button", { name: /Save Daily Routine/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+
+    await waitFor(() => expect(mockedJournalEdit).toHaveBeenCalled());
+    const payload = mockedJournalEdit.mock.calls[0][0];
+    expect(payload.nlv_source).toBe("ibkr_override");
+    expect(payload.holdings_source).toBe("ibkr_auto");
+  });
+
+  test("IBKR failure leaves both fields empty, both source tags 'manual', exactly ONE warning banner", async () => {
+    // The single-banner guarantee: a shared failure mode shouldn't yield
+    // two banners. The existing one is sufficient since both fields share
+    // the same failure root cause (one HTTP call).
+    mockedIbkrNav.mockResolvedValue({
+      success: false,
+      error: "ibkr_not_configured",
+      message: "IBKR NAV puller not configured.",
+    });
+
+    render(<DailyRoutine navColor="#f59f00" />);
+
+    const banners = await screen.findAllByTestId("ibkr-warning-banner");
+    expect(banners).toHaveLength(1);
+
+    const nlvInput = await screen.findByLabelText("Closing NLV") as HTMLInputElement;
+    const holdInput = await screen.findByLabelText("Total Holdings") as HTMLInputElement;
+    expect(nlvInput.value).toBe("");
+    expect(holdInput.value).toBe("");
+    expect(screen.queryByTestId("nlv-auto-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("holdings-auto-badge")).not.toBeInTheDocument();
+
+    // User types in both — save payload should mark both 'manual'
+    await act(async () => {
+      fireEvent.change(nlvInput, { target: { value: "100000" } });
+      fireEvent.change(holdInput, { target: { value: "80000" } });
+    });
+
+    const saveBtn = screen.getByRole("button", { name: /Save Daily Routine/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+
+    await waitFor(() => expect(mockedJournalEdit).toHaveBeenCalled());
+    const payload = mockedJournalEdit.mock.calls[0][0];
+    expect(payload.nlv_source).toBe("manual");
+    expect(payload.holdings_source).toBe("manual");
+  });
+});

@@ -67,15 +67,19 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [portAction, setPortAction] = useState("");
   const [portPrev, setPortPrev] = useState(0);
 
-  // IBKR auto-fill state for End NLV. `nlvSource` flips manual → ibkr_auto on
-  // a successful pull and to ibkr_override the moment the user types over the
-  // auto-filled value. We send it with the save payload so the row records
-  // where the number came from (diagnostic-only — not displayed on dashboard).
-  type NlvSource = "manual" | "ibkr_auto" | "ibkr_override";
-  const [nlvSource, setNlvSource] = useState<NlvSource>("manual");
+  // IBKR auto-fill state. `nlvSource` and `holdingsSource` flip manual →
+  // ibkr_auto on a successful pull and to ibkr_override the moment the user
+  // types over the auto-filled value. They're tracked independently — user
+  // can accept IBKR's NLV but override Holdings (or vice versa). Both go
+  // into the save payload (diagnostic-only, not displayed on dashboard).
+  // Single banner / loading flag covers both fields since they fail together.
+  type IbkrSource = "manual" | "ibkr_auto" | "ibkr_override";
+  const [nlvSource, setNlvSource] = useState<IbkrSource>("manual");
+  const [holdingsSource, setHoldingsSource] = useState<IbkrSource>("manual");
   const [nlvLoading, setNlvLoading] = useState(true);
   const [ibkrError, setIbkrError] = useState<string>("");
-  const [ibkrAutoFilledValue, setIbkrAutoFilledValue] = useState<string>("");
+  const [ibkrAutoFilledNlv, setIbkrAutoFilledNlv] = useState<string>("");
+  const [ibkrAutoFilledHoldings, setIbkrAutoFilledHoldings] = useState<string>("");
 
   // Report Card
   const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
@@ -98,10 +102,11 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     });
   }, []);
 
-  // Auto-fill End NLV from IBKR Flex Query. Runs on mount and on date change.
-  // Decoupled from the rest of the load — failures surface as a banner above
-  // the form, never block the user from typing manually. Cancellation guard
-  // protects against the user changing the date while a pull is in flight.
+  // Auto-fill End NLV + Total Holdings from IBKR Flex Query. Runs on mount
+  // and on date change. Decoupled from the rest of the load — failures
+  // surface as one banner above the form (NLV and Holdings always succeed
+  // or fail together since they share the same response). Cancellation
+  // guard protects against the user changing the date mid-pull.
   useEffect(() => {
     let cancelled = false;
     setNlvLoading(true);
@@ -110,36 +115,50 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       if (cancelled) return;
       if (res.success) {
         const navStr = String(res.nav);
+        const holdStr = String(res.position_value);
         setPortNlv(navStr);
-        setIbkrAutoFilledValue(navStr);
+        setPortHold(holdStr);
+        setIbkrAutoFilledNlv(navStr);
+        setIbkrAutoFilledHoldings(holdStr);
         setNlvSource("ibkr_auto");
+        setHoldingsSource("ibkr_auto");
         setIbkrError("");
       } else {
-        // Soft failure (no_data_for_date, ibkr_not_configured, etc.) — leave
-        // the field empty and surface the human-readable reason. The user can
-        // still type a value and save normally.
-        setIbkrAutoFilledValue("");
+        // Soft failure (no_data_for_date, ibkr_not_configured, etc.) —
+        // both fields stay empty/editable, both source tags stay 'manual'.
+        // One banner covers the whole pull; we don't render it twice.
+        setIbkrAutoFilledNlv("");
+        setIbkrAutoFilledHoldings("");
         setNlvSource("manual");
+        setHoldingsSource("manual");
         setIbkrError(res.message || res.error || "IBKR pull failed");
       }
       setNlvLoading(false);
     }).catch((e: unknown) => {
       if (cancelled) return;
-      setIbkrAutoFilledValue("");
+      setIbkrAutoFilledNlv("");
+      setIbkrAutoFilledHoldings("");
       setNlvSource("manual");
+      setHoldingsSource("manual");
       setIbkrError(e instanceof Error ? e.message : "IBKR pull failed");
       setNlvLoading(false);
     });
     return () => { cancelled = true; };
   }, [entryDate]);
 
-  // Track override: any user edit to an auto-filled NLV flips the source tag.
-  // Compare strings so re-typing the same number still counts (the act of
-  // editing is what we record, not just numeric divergence).
+  // Track override per field: any user edit to an auto-filled value flips
+  // its source tag. Compare strings so re-typing the same number still
+  // counts (the act of editing is what we record, not numeric divergence).
   const handleNlvChange = (v: string) => {
     setPortNlv(v);
-    if (nlvSource === "ibkr_auto" && v !== ibkrAutoFilledValue) {
+    if (nlvSource === "ibkr_auto" && v !== ibkrAutoFilledNlv) {
       setNlvSource("ibkr_override");
+    }
+  };
+  const handleHoldingsChange = (v: string) => {
+    setPortHold(v);
+    if (holdingsSource === "ibkr_auto" && v !== ibkrAutoFilledHoldings) {
+      setHoldingsSource("ibkr_override");
     }
   };
 
@@ -199,6 +218,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       market_notes: marketNotes, market_action: portAction, score: overallScore,
       highlights: JSON.stringify(scores), mistakes: gradeNotes, market_window: "",
       nlv_source: nlvSource,
+      holdings_source: holdingsSource,
     });
     setSaving(false);
     setSaveMsg(r.status === "ok" ? "Saved" : `Error: ${r.detail || "Failed to save"}`);
@@ -292,7 +312,31 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
               </div>
             </Field>
             <Field label="Total Holdings">
-              <input type="number" value={portHold} onChange={e => setPortHold(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />
+              <div className="relative">
+                <input type="number" value={portHold} onChange={e => handleHoldingsChange(e.target.value)} step="100"
+                       placeholder={nlvLoading ? "Pulling Holdings from IBKR…" : "0.00"}
+                       className={inputCls} style={inputStyle} aria-label="Total Holdings" />
+                {nlvLoading && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px]"
+                        style={{ color: "var(--ink-4)" }} aria-label="Pulling Holdings from IBKR">
+                    Pulling…
+                  </span>
+                )}
+                {!nlvLoading && holdingsSource === "ibkr_auto" && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold px-1.5 py-0.5 rounded-[4px]"
+                        style={{ background: "color-mix(in oklab, #08a86b 14%, var(--surface))", color: "#08a86b", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}
+                        aria-label="Auto-filled from IBKR" data-testid="holdings-auto-badge">
+                    ✓ IBKR
+                  </span>
+                )}
+                {!nlvLoading && holdingsSource === "ibkr_override" && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold px-1.5 py-0.5 rounded-[4px]"
+                        style={{ background: "color-mix(in oklab, #f59f00 14%, var(--surface))", color: "#f59f00", border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))" }}
+                        aria-label="Overrode IBKR auto-fill" data-testid="holdings-override-badge">
+                    Override
+                  </span>
+                )}
+              </div>
             </Field>
             <Field label="Cash +/-">
               <input type="number" value={portCash} onChange={e => setPortCash(e.target.value)} step="100" className={inputCls} style={inputStyle} />
