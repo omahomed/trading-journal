@@ -302,7 +302,9 @@ export const api = {
       }>;
     }>(`/api/journal/mct-state-by-date-range?start_date=${start_date}&end_date=${end_date}`),
 
-  mfactor: () => fetchJSON<any>(`/api/market/mfactor`),
+  // api.mfactor() / /api/market/mfactor was the V10 MA-stack snapshot
+  // that fed Position Sizer + Log Buy's sizing-mode picker. Both surfaces
+  // now derive sizing mode from V11 MCT state via @/lib/sizing-mode.
 
   // Config
   config: (key: string) => fetchJSON<{ key: string; value: any }>(`/api/config/${key}`),

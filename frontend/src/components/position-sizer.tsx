@@ -14,11 +14,24 @@ const TABS: { key: SizerTab; label: string; icon: string }[] = [
   { key: "options", label: "Options Sizer", icon: "🎰" },
 ];
 
-const SIZING_MODES = [
-  { key: "defense", label: "🛡️ Defense (0.50%)", pct: 0.5 },
-  { key: "normal", label: "⚖️ Normal (0.75%)", pct: 0.75 },
-  { key: "offense", label: "⚔️ Offense (1.00%)", pct: 1.0 },
-];
+// SIZING_MODES + the MCT-state → mode mapping live in @/lib/sizing-mode
+// so Position Sizer and Log Buy stay in lockstep — no chance of one
+// drifting to a different risk percentage than the other.
+import {
+  SIZING_MODES as SIZING_MODES_BASE,
+  mctStateToSizingMode,
+  describeMctSource,
+} from "@/lib/sizing-mode";
+
+// Local view shape — keeps the component-internal usage of
+// `SIZING_MODES[i].label` untouched. The labels here include the leading
+// emoji (Position Sizer's old style); the shared lib stores icon
+// separately so Log Buy can render its own layout.
+const SIZING_MODES = SIZING_MODES_BASE.map(m => ({
+  key: m.key,
+  label: `${m.icon} ${m.label}`,
+  pct: m.pct,
+}));
 
 const VOL_PROFILES = [
   { key: "tight", label: "Tight (1.0x)", mult: 1.0 },
@@ -147,7 +160,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
   const [equity, setEquity] = useState(0);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
-  const [mfSuggestion, setMfSuggestion] = useState("Unknown");
+  // mfSuggestion (V10 MA-stack heuristic) is gone — sizing mode now reads
+  // from MCT state directly. See mctState + sizingModeManual below.
   const [calculated, setCalculated] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -162,7 +176,16 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
   };
 
   // Shared inputs
-  const [sizingMode, setSizingMode] = useState(1);
+  // sizingMode default is Normal (1) — overwritten on mount by the MCT
+  // state read in the load-effect below. Stays Normal if the read fails
+  // (mctStateToSizingMode falls back to safe middle ground).
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  // mctState + sizingModeManual track WHY the current mode is what it is.
+  // - sizingModeManual=false → set by MCT state read (auto)
+  // - sizingModeManual=true  → user clicked a Radio (override). Reset by
+  //   the "Reset to auto" button, which re-applies the MCT mapping.
+  const [mctState, setMctState] = useState<string | null>(null);
+  const [sizingModeManual, setSizingModeManual] = useState(false);
   const [entryPrice, setEntryPrice] = useState("");
   const [maLevel, setMaLevel] = useState("");
   const [buffer, setBuffer] = useState("1.00");
@@ -202,18 +225,24 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
       api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
-      api.mfactor().catch(() => ({})),
+      // V11 MCT state drives default sizing mode. Replaces the legacy
+      // /api/market/mfactor MA-stack heuristic. rallyPrefix returns
+      // {state: POWERTREND|UPTREND|RALLY MODE|CORRECTION, ...}; we
+      // discard everything except `state` here.
+      api.rallyPrefix().catch(() => ({ prefix: "" })),
       api.config("pyramid_rules").catch(() => ({ value: { trigger_pct: 5, alloc_pct: 20 } })),
-    ]).then(([j, open, details, mf, pyrCfg]) => {
+    ]).then(([j, open, details, rally, pyrCfg]) => {
       setEquity(parseFloat(String((j as any).end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
       setAllDetails(details as TradeDetail[]);
-      const nasdaq = (mf as any)?.nasdaq;
-      if (nasdaq) {
-        if (nasdaq.above_21ema && nasdaq.above_50sma) { setMfSuggestion("Powertrend"); setSizingMode(2); }
-        else if (nasdaq.above_21ema) { setMfSuggestion("Open"); setSizingMode(1); }
-        else { setMfSuggestion("Closed"); setSizingMode(0); }
-      }
+      const stateStr = (rally as { state?: string } | null)?.state ?? null;
+      setMctState(stateStr);
+      // Only auto-apply when the user hasn't manually overridden — but on
+      // mount the user can't have, so this is effectively unconditional.
+      // The guard becomes meaningful when this effect re-runs (it doesn't
+      // today, but defending against a future deps change).
+      setSizingMode(mctStateToSizingMode(stateStr));
+      setSizingModeManual(false);
       if (pyrCfg && (pyrCfg as any).value) {
         setPyramidRules((pyrCfg as any).value);
       }
@@ -808,16 +837,44 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
         {/* Sizing Mode + Vol Profile (new trade tabs) */}
         {(tab === "normal" || (tab === "volatility" && volSizerMode === "new") || tab === "scalein" || tab === "options") && (
           <>
-            <div className="px-4 py-2.5 rounded-[10px] text-[12px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-              <span style={{ color: "var(--ink-4)" }}>M Factor:</span>{" "}
-              <strong>{mfSuggestion}</strong>
-              <span style={{ color: "var(--ink-4)" }}> → suggesting </span>
-              <strong>{SIZING_MODES[sizingMode].label}</strong>
+            <div className="px-4 py-2.5 rounded-[10px] text-[12px] flex items-center justify-between gap-3 flex-wrap"
+                 data-testid="sizer-mode-indicator"
+                 style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+              <div>
+                <span style={{ color: "var(--ink-4)" }}>
+                  {sizingModeManual ? "Manual:" : "Auto:"}
+                </span>{" "}
+                <strong>{SIZING_MODES[sizingMode].label}</strong>
+                {!sizingModeManual && (
+                  <span style={{ color: "var(--ink-4)" }}>
+                    {" "}({describeMctSource(mctState)})
+                  </span>
+                )}
+              </div>
+              {sizingModeManual && (
+                <button type="button"
+                        data-testid="sizer-reset-to-auto"
+                        onClick={() => {
+                          setSizingMode(mctStateToSizingMode(mctState));
+                          setSizingModeManual(false);
+                          resetCalc();
+                        }}
+                        className="text-[11px] px-2 py-0.5 rounded-[6px] underline"
+                        style={{ color: "var(--ink-3)" }}>
+                  Reset to auto
+                </button>
+              )}
             </div>
             <Field label="Sizing Mode">
               <div className="flex gap-4 mt-1">
                 {SIZING_MODES.map((m, i) => (
-                  <Radio key={m.key} checked={sizingMode === i} onClick={() => { setSizingMode(i); resetCalc(); }} label={m.label} />
+                  <Radio key={m.key} checked={sizingMode === i}
+                         onClick={() => {
+                           setSizingMode(i as 0 | 1 | 2);
+                           setSizingModeManual(true);
+                           resetCalc();
+                         }}
+                         label={m.label} />
                 ))}
               </div>
             </Field>

@@ -19,11 +19,15 @@ const BUY_RULES = [
   "br12.1 Option Play",
 ];
 
-const SIZING_MODES = [
-  { key: "defense", label: "Defense (0.50%)", pct: 0.5, icon: "🛡️" },
-  { key: "normal", label: "Normal (0.75%)", pct: 0.75, icon: "⚖️" },
-  { key: "offense", label: "Offense (1.00%)", pct: 1.0, icon: "⚔️" },
-];
+// SIZING_MODES + the MCT-state → mode mapping live in @/lib/sizing-mode
+// so Log Buy stays in lockstep with Position Sizer. Local re-export
+// keeps existing call sites (SIZING_MODES[i].label / .pct / .icon)
+// untouched.
+import {
+  SIZING_MODES,
+  mctStateToSizingMode,
+  describeMctSource,
+} from "@/lib/sizing-mode";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -171,7 +175,10 @@ function Radio({ checked, onClick, label }: { checked: boolean; onClick: () => v
 export function LogBuy({ navColor }: { navColor: string }) {
   const [equity, setEquity] = useState(0);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
-  const [mFactorSuggestion, setMFactorSuggestion] = useState("Unknown");
+  // mctState drives the read-only sizing-mode display below. Replaces
+  // the V10 mFactorSuggestion / radio buttons. No manual override on
+  // Log Buy by design — Position Sizer is the override surface.
+  const [mctState, setMctState] = useState<string | null>(null);
 
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [campPrice, setCampPrice] = useState(0);
@@ -189,7 +196,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [tradeId, setTradeId] = useState("");
   const [rule, setRule] = useState("");
   const [selectedCampaign, setSelectedCampaign] = useState("");
-  const [sizingMode, setSizingMode] = useState(1);
+  // sizingMode default Normal (1) — overwritten on mount by the MCT
+  // state read. Stays Normal if the read fails (mctStateToSizingMode
+  // falls back to safe middle ground). No user-facing override on
+  // Log Buy: per spec, "it's an action, not a calculator."
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
   const [stopMode, setStopMode] = useState<"price" | "pct">("pct");
@@ -206,22 +217,17 @@ export function LogBuy({ navColor }: { navColor: string }) {
     Promise.all([
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.mfactor().catch(() => ({})),
+      // V11 MCT state drives sizing mode. Replaces the legacy
+      // /api/market/mfactor MA-stack heuristic. We only read `state`.
+      api.rallyPrefix().catch(() => ({ prefix: "" })),
       api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
-    ]).then(([j, open, mf, det]) => {
+    ]).then(([j, open, rally, det]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
       setAllDetails(det as TradeDetail[]);
-      const nasdaq = (mf as any)?.nasdaq;
-      if (nasdaq) {
-        if (nasdaq.above_21ema && nasdaq.above_50sma) {
-          setMFactorSuggestion("Powertrend"); setSizingMode(2);
-        } else if (nasdaq.above_21ema) {
-          setMFactorSuggestion("Open"); setSizingMode(1);
-        } else {
-          setMFactorSuggestion("Closed"); setSizingMode(0);
-        }
-      }
+      const stateStr = (rally as { state?: string } | null)?.state ?? null;
+      setMctState(stateStr);
+      setSizingMode(mctStateToSizingMode(stateStr));
     });
   }, []);
 
@@ -839,22 +845,22 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </div>
               <div className="p-5 flex flex-col gap-4">
 
-                {/* M Factor suggestion */}
-                <div className="px-3 py-2 rounded-[8px] text-[12px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                  <span style={{ color: "var(--ink-4)" }}>M Factor:</span>{" "}
-                  <span className="font-semibold">{mFactorSuggestion}</span>
-                  <span style={{ color: "var(--ink-4)" }}> → </span>
-                  <span className="font-semibold">{SIZING_MODES[sizingMode].icon} {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}</span>
+                {/* Sizing mode — read-only, MCT-driven. Manual radio
+                    override lives on Position Sizer; this surface is for
+                    actually logging a buy, not for what-if analysis. */}
+                <div className="px-3 py-2 rounded-[8px] text-[12px]"
+                     data-testid="logbuy-sizing-mode-indicator"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  <span style={{ color: "var(--ink-4)" }}>Sizing:</span>{" "}
+                  <span className="font-semibold">
+                    {SIZING_MODES[sizingMode].icon}{" "}
+                    {SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)}{" "}
+                    ({SIZING_MODES[sizingMode].pct.toFixed(2)}% risk)
+                  </span>
+                  <span style={{ color: "var(--ink-4)" }}>
+                    {" "}{describeMctSource(mctState)}
+                  </span>
                 </div>
-
-                {/* Sizing mode radios */}
-                <Field label="Sizing Mode">
-                  <div className="flex flex-col gap-1.5 mt-1">
-                    {SIZING_MODES.map((m, i) => (
-                      <Radio key={m.key} checked={sizingMode === i} onClick={() => setSizingMode(i)} label={`${m.icon} ${m.label}`} />
-                    ))}
-                  </div>
-                </Field>
 
                 {/* Account Equity */}
                 <Field label="Account Equity">

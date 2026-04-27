@@ -98,11 +98,6 @@ def test_next_trade_id():
     assert "trade_id" in data, f"missing trade_id: {data}"
 
 
-def test_market_mfactor():
-    r = requests.get(f"{BASE}/api/market/mfactor")
-    assert r.status_code == 200, f"status {r.status_code}"
-
-
 def test_r2_status():
     r = requests.get(f"{BASE}/api/r2/status")
     assert r.status_code == 200, f"status {r.status_code}"
@@ -114,7 +109,6 @@ test("Trades closed", test_trades_closed)
 test("Trades recent", test_trades_recent)
 test("Journal latest", test_journal_latest)
 test("Next trade ID", test_next_trade_id)
-test("Market M-Factor", test_market_mfactor)
 test("R2 status", test_r2_status)
 
 

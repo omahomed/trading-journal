@@ -1078,88 +1078,10 @@ def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
         return {"error": str(e)}
 
 
-@app.get("/api/market/mfactor")
-@limiter.limit("30/minute")
-def market_mfactor(request: Request):
-    """Get current M Factor state for NASDAQ + SPY with full MA stack."""
-    try:
-        import yfinance as yf
-
-        result = {}
-        for ticker, label in [("^IXIC", "nasdaq"), ("SPY", "spy")]:
-            df = yf.Ticker(ticker).history(period="1y")
-            if df.empty:
-                continue
-            df["21EMA"] = df["Close"].ewm(span=21, adjust=False).mean()
-            df["50SMA"] = df["Close"].rolling(window=50).mean()
-            df["200SMA"] = df["Close"].rolling(window=200).mean()
-            curr = df.iloc[-1]
-
-            price = float(curr["Close"])
-            ema21 = float(curr["21EMA"]) if pd.notna(curr["21EMA"]) else 0
-            sma50 = float(curr["50SMA"]) if pd.notna(curr["50SMA"]) else 0
-            sma200 = float(curr["200SMA"]) if pd.notna(curr["200SMA"]) else 0
-
-            above_21 = bool(price > ema21) if ema21 > 0 else False
-            above_50 = bool(price > sma50) if sma50 > 0 else False
-            above_200 = bool(price > sma200) if sma200 > 0 else False
-
-            # Powertrend: Low > 21 EMA for 3+ consecutive days
-            low_above_21_streak = 0
-            for i in range(len(df) - 1, -1, -1):
-                row = df.iloc[i]
-                if pd.notna(row.get("21EMA")) and row["Low"] > row["21EMA"]:
-                    low_above_21_streak += 1
-                else:
-                    break
-            is_powertrend = low_above_21_streak >= 3 and above_21 and above_50
-
-            # Individual state
-            if is_powertrend:
-                state = "POWERTREND"
-            elif above_21:
-                state = "OPEN"
-            elif above_50:
-                state = "NEUTRAL"
-            else:
-                state = "CLOSED"
-
-            # % distance from MAs
-            d21 = ((price - ema21) / ema21 * 100) if ema21 > 0 else 0
-            d50 = ((price - sma50) / sma50 * 100) if sma50 > 0 else 0
-            d200 = ((price - sma200) / sma200 * 100) if sma200 > 0 else 0
-
-            result[label] = {
-                "price": round(price, 2),
-                "ema21": round(ema21, 2),
-                "sma50": round(sma50, 2),
-                "sma200": round(sma200, 2),
-                "above_21ema": above_21,
-                "above_50sma": above_50,
-                "above_200sma": above_200,
-                "d21": round(d21, 2),
-                "d50": round(d50, 2),
-                "d200": round(d200, 2),
-                "state": state,
-                "powertrend_streak": low_above_21_streak,
-            }
-
-        # Combined state
-        ns = result.get("nasdaq", {}).get("state", "CLOSED")
-        ss = result.get("spy", {}).get("state", "CLOSED")
-        if ns == "POWERTREND" or ss == "POWERTREND":
-            combined = "POWERTREND"
-        elif ns == "CLOSED" and ss == "CLOSED":
-            combined = "CLOSED"
-        elif ns in ["NEUTRAL", "CLOSED"] or ss in ["NEUTRAL", "CLOSED"]:
-            combined = "NEUTRAL"
-        else:
-            combined = "OPEN"
-
-        result["combined_state"] = combined
-        return result
-    except Exception as e:
-        return {"error": str(e)}
+# /api/market/mfactor was the V10 MA-stack snapshot endpoint that fed
+# Position Sizer + Log Buy's sizing-mode picker. Both surfaces now derive
+# their sizing mode from V11 MCT state (rallyPrefix.state) via the
+# mctStateToSizingMode helper in @/lib/sizing-mode. Endpoint deleted.
 
 
 @app.get("/api/market/signals")
