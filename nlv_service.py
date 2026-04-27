@@ -309,3 +309,172 @@ def compute_twr_returns(portfolio_name: str) -> dict[str, Any]:
     if df is None or df.empty:
         return _compute_twr_from_journal_df(pd.DataFrame())
     return _compute_twr_from_journal_df(normalize_journal_columns(df))
+
+
+def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
+    """Aggregated read view for the dashboard. Single source of truth: every
+    journal-derived field comes from the latest saved trading_journal row.
+
+    Architecturally this is the user-facing flip from "live computed NLV
+    drives the dashboard" to "the broker-pulled, EOD-saved journal value
+    drives the dashboard". `compute_nlv()` survives only as the source of a
+    small "Live estimate: $X" sub-label on the NLV tile — its values never
+    feed exposure, drawdown, position sizing, or risk math.
+
+    Three classes of field in the response:
+
+    1. Journal-derived (always present when `journal_available: true`):
+       nlv, total_holdings, exposure_pct, cash, drawdown_*, ltd_pct, ytd_pct,
+       nlv_delta_*, as_of_date.
+
+    2. Live-estimate fields (best-effort): live_estimate_nlv,
+       live_estimate_diff, live_estimate_diff_pct. All None and
+       `live_estimate_unavailable: true` when compute_nlv() raises.
+       Per-position price gaps don't count as unavailable — compute_nlv
+       handles them via the cost-basis fallback.
+
+    3. State flags: journal_available, live_estimate_unavailable.
+
+    Total Holdings is computed on read as `pct_invested × end_nlv / 100`.
+    There's no `total_holdings` column; pct_invested is NUMERIC(10,4),
+    which round-trips real prod values to within $0.01 (verified for
+    end_nlv=486630.39 / pct_invested=188.5413 → total_holdings=917498.79).
+    """
+    now_iso = datetime.now().isoformat()
+    empty: dict[str, Any] = {
+        "journal_available": False,
+        "as_of_date": None,
+        "nlv": None,
+        "nlv_delta_dollar": None,
+        "nlv_delta_pct": None,
+        "total_holdings": None,
+        "exposure_pct": None,
+        "cash": None,
+        "drawdown_current_pct": None,
+        "drawdown_peak_nlv": None,
+        "drawdown_peak_date": None,
+        "ltd_pct": None,
+        "ytd_pct": None,
+        "ytd_available": False,
+        "live_estimate_nlv": None,
+        "live_estimate_diff": None,
+        "live_estimate_diff_pct": None,
+        "live_estimate_unavailable": True,
+        "as_of": now_iso,
+    }
+
+    journal_df = db.load_journal(portfolio_name)
+    if journal_df is None or journal_df.empty:
+        # Compute the live estimate anyway — even with no journal we can
+        # surface "Live estimate: $X" so a brand-new account isn't a
+        # completely blank dashboard.
+        return {**empty, **_compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=None)}
+
+    work = normalize_journal_columns(journal_df).copy()
+    work["day"] = pd.to_datetime(work["day"], errors="coerce")
+    work = work.dropna(subset=["day"]).sort_values("day").reset_index(drop=True)
+    if work.empty:
+        return {**empty, **_compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=None)}
+
+    for col in ("end_nlv", "pct_invested", "daily_dollar_change", "daily_pct_change"):
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        else:
+            work[col] = 0.0
+
+    latest = work.iloc[-1]
+    journal_nlv = float(latest["end_nlv"])
+    pct_invested = float(latest["pct_invested"])
+    total_holdings = round(journal_nlv * pct_invested / 100.0, 2)
+    cash = round(journal_nlv - total_holdings, 2)
+
+    # Deltas: only meaningful from the second journal entry onward. The
+    # frontend renders no subtext for the first entry rather than showing
+    # "+$0.00 (+0.00%)" which would imply no movement when really we just
+    # have nothing to compare against.
+    if len(work) >= 2:
+        nlv_delta_dollar: float | None = round(float(latest["daily_dollar_change"]), 2)
+        nlv_delta_pct: float | None = round(float(latest["daily_pct_change"]), 4)
+    else:
+        nlv_delta_dollar = None
+        nlv_delta_pct = None
+
+    # Drawdown: peak across the entire journal window, current = latest NLV.
+    # Uses argmax-style "first occurrence of the running max" so if the
+    # peak is hit twice we report the earlier date (more conservative —
+    # makes "days since peak" longer).
+    end_nlvs = work["end_nlv"]
+    peak_nlv = float(end_nlvs.max())
+    peak_idx = int(end_nlvs.idxmax())
+    peak_row = work.iloc[peak_idx]
+    peak_date = peak_row["day"].date().isoformat() if pd.notna(peak_row["day"]) else None
+    drawdown_current_pct = round(((journal_nlv - peak_nlv) / peak_nlv) * 100.0, 4) if peak_nlv > 0 else 0.0
+
+    # TWR LTD/YTD straight from the same journal frame (no second DB load).
+    twr = _compute_twr_from_journal_df(work)
+
+    # Live estimate — best-effort, doesn't affect any other field.
+    live_fields = _compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=journal_nlv)
+
+    as_of_date = latest["day"].date().isoformat() if pd.notna(latest["day"]) else None
+
+    return {
+        "journal_available": True,
+        "as_of_date": as_of_date,
+        "nlv": round(journal_nlv, 2),
+        "nlv_delta_dollar": nlv_delta_dollar,
+        "nlv_delta_pct": nlv_delta_pct,
+        "total_holdings": total_holdings,
+        "exposure_pct": round(pct_invested, 4),
+        "cash": cash,
+        "drawdown_current_pct": drawdown_current_pct,
+        "drawdown_peak_nlv": round(peak_nlv, 2),
+        "drawdown_peak_date": peak_date,
+        "ltd_pct": twr["twr_ltd_pct"],
+        "ytd_pct": twr["twr_ytd_pct"],
+        "ytd_available": twr["twr_ytd_available"],
+        **live_fields,
+        "as_of": now_iso,
+    }
+
+
+def _compute_live_estimate_fields(
+    portfolio_id: int, portfolio_name: str, *, journal_nlv: float | None,
+) -> dict[str, Any]:
+    """Best-effort `live_estimate_*` fields for the dashboard-metrics
+    response. Catches every exception compute_nlv can raise (DB errors,
+    yfinance outages, malformed positions) — failure here must NEVER
+    break the journal-driven part of the response. Per-position price
+    gaps inside compute_nlv are normal degraded mode (cost-basis
+    fallback) and don't count as unavailable.
+    """
+    try:
+        snapshot = compute_nlv(portfolio_id, portfolio_name)
+        live_nlv = float(snapshot.get("nlv") or 0.0)
+        if not math.isfinite(live_nlv):
+            raise ValueError("compute_nlv returned non-finite NLV")
+    except Exception:
+        return {
+            "live_estimate_nlv": None,
+            "live_estimate_diff": None,
+            "live_estimate_diff_pct": None,
+            "live_estimate_unavailable": True,
+        }
+
+    if journal_nlv is None or journal_nlv == 0:
+        # No anchor for diff; surface the live number alone, no diff %.
+        return {
+            "live_estimate_nlv": round(live_nlv, 2),
+            "live_estimate_diff": None,
+            "live_estimate_diff_pct": None,
+            "live_estimate_unavailable": False,
+        }
+
+    diff = live_nlv - journal_nlv
+    diff_pct = (diff / journal_nlv) * 100.0
+    return {
+        "live_estimate_nlv": round(live_nlv, 2),
+        "live_estimate_diff": round(diff, 2),
+        "live_estimate_diff_pct": round(diff_pct, 4),
+        "live_estimate_unavailable": False,
+    }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -9,7 +9,17 @@ import {
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
 
-function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
+// KPI tile renders one or two subtext lines. The NLV tile uses `extraSub`
+// for the small grey "Live estimate: $X" diagnostic — visually subordinate
+// to the main `sub` so the user immediately sees which is "the number"
+// (journal/broker) and which is "the estimate" (live yfinance).
+function KPITile({ label, value, sub, extraSub, gradient }: {
+  label: string;
+  value: string;
+  sub: string;
+  extraSub?: string;
+  gradient: string;
+}) {
   return (
     <div className="relative overflow-hidden rounded-[14px] p-[14px_16px] text-white flex flex-col justify-between min-h-[90px] transition-transform duration-150 hover:scale-[1.01]"
          style={{ background: gradient, boxShadow: "var(--kpi-shadow)" }}>
@@ -20,7 +30,14 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
         <div className="text-[22px] font-semibold tracking-tight mt-0.5 privacy-mask"
              style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
       </div>
-      <div className="relative z-10 text-[10px] font-medium opacity-80 privacy-mask">{sub}</div>
+      <div className="relative z-10 privacy-mask">
+        <div className="text-[10px] font-medium opacity-80">{sub}</div>
+        {extraSub && (
+          <div className="text-[9px] font-medium opacity-65 mt-0.5" data-testid="kpi-extra-sub">
+            {extraSub}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -36,56 +53,31 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("1Y");
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
-  const [nlvSnapshot, setNlvSnapshot] = useState<PortfolioNlv | null>(null);
-  const [returns, setReturns] = useState<PortfolioReturns | null>(null);
-
-  const [openTrades, setOpenTrades] = useState<any[]>([]);
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, nlv, rets] = await Promise.all([
+    const [lat, hist, open, closed, ev, dash] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
       api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
       api.events().catch(() => []),
-      activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
-      activeId != null ? api.portfolioReturns(activeId).catch(() => null) : Promise.resolve(null),
+      activeId != null ? api.dashboardMetrics(activeId).catch(() => null) : Promise.resolve(null),
     ]);
     // Guard: backend can return {error: "..."} at HTTP 200 when something
     // goes wrong server-side. Don't let that poison the render.
-    const safeNlv = (nlv && typeof nlv === "object" && !("error" in nlv))
-      ? (nlv as PortfolioNlv)
+    const safeMetrics = (dash && typeof dash === "object" && !("error" in dash))
+      ? (dash as DashboardMetrics)
       : null;
-    setNlvSnapshot(safeNlv);
-    const safeReturns = (rets && typeof rets === "object" && !("error" in rets))
-      ? (rets as PortfolioReturns)
-      : null;
-    setReturns(safeReturns);
+    setMetrics(safeMetrics);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
-    setOpenTrades(openArr);
     setOpenCount(openArr.length);
     setClosedTrades(Array.isArray(closed) ? closed : []);
     setEvents(Array.isArray(ev) ? ev : []);
-
-    // Render the dashboard immediately; the two slow follow-ups below populate
-    // their UI bits when they land and must NOT block the main layout.
     setLoading(false);
-
-    // Fetch live prices for open positions (for live exposure calc) —
-    // updates the Live Exposure tile when it resolves.
-    const tickers = openArr.map(t => t.ticker).filter(Boolean);
-    if (tickers.length > 0) {
-      api.batchPrices(tickers)
-        .then(prices => {
-          if (prices && !("error" in prices)) setLivePrices(prices as Record<string, number>);
-        })
-        .catch(() => { /* fall back to EOD pct_invested */ });
-    }
-
   }, []);
 
   useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
@@ -178,51 +170,26 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
-  // Compute KPI values from real data. NLV prefers the derived snapshot
-  // (cash + Σ positions × live price) — falls back to the most recent
-  // journal entry's end_nlv if the derivation is unavailable.
-  const nlv = nlvSnapshot?.nlv ?? latest?.end_nlv ?? 0;
-  const dailyDol = latest?.daily_dollar_change || 0;
-  const dailyPct = latest?.daily_pct_change || 0;
-  // LTD% is the time-weighted return — the cumulative product of (1 +
-  // daily_return). The journal-history endpoint already runs that cumprod
-  // and surfaces it as portfolio_ltd per row, so we just read the last
-  // row's value instead of round-tripping a dedicated TWR endpoint that
-  // duplicates the same full-journal load. Falls back to the snapshot
-  // ratio if history hasn't loaded yet. LTD$ stays on the snapshot ratio's
-  // ltd_pl — that's the honest 'dollar amount made' = NLV − net_contributions.
-  const ltdFromHistory = history.length > 0
-    ? (history[history.length - 1] as any).portfolio_ltd
-    : null;
-  const ltdPct = (typeof ltdFromHistory === "number" ? ltdFromHistory : null)
-    ?? returns?.ltd_pct ?? 0;
-  const ltdDol = returns?.ltd_pl ?? 0;
-  // Live exposure — match Active Campaign Summary: sum(shares × live price) / NLV
-  const liveMarketValue = openTrades.reduce((sum, t) => {
-    const ticker = t.ticker || "";
-    const shares = parseFloat(String(t.shares || 0));
-    const isOpt = /\d{6}/.test(ticker) || (t.buy_notes || "").startsWith("OPT:");
-    const mult = isOpt ? 100 : 1;
-    const price = livePrices[ticker] || parseFloat(String(t.avg_entry || 0));
-    return sum + shares * price * mult;
-  }, 0);
-  const exposure = nlv > 0 && liveMarketValue > 0 ? (liveMarketValue / nlv) * 100 : (latest?.pct_invested || 0);
+  // After this refactor: every KPI value below is sourced from the dashboard-
+  // metrics endpoint, which itself reads journal.end_nlv as the single
+  // source of truth. The live compute_nlv() result appears ONLY as the NLV
+  // tile's "Live estimate: $X" subordinate sub-label — it doesn't feed
+  // exposure / drawdown / position sizing / risk math.
+  const journalAvailable = metrics?.journal_available ?? false;
+  const nlv = metrics?.nlv ?? 0;
+  const dailyDol = metrics?.nlv_delta_dollar;
+  const dailyPct = metrics?.nlv_delta_pct;
+  const ltdPct = metrics?.ltd_pct ?? 0;
+  const ytdPct = metrics?.ytd_pct;
+  const ytdAvailable = metrics?.ytd_available ?? false;
+  const exposure = metrics?.exposure_pct ?? 0;
+  const ddPct = metrics?.drawdown_current_pct ?? 0;
+  const peakNlv = metrics?.drawdown_peak_nlv ?? 0;
   const portfolioHeat = latest?.portfolio_heat || 0;
+
+  // SPY/NDX YTD benchmarks still come from the journal history (they're
+  // index-level, not portfolio-level — no equivalent on dashboard-metrics).
   const lastH = history.length > 0 ? history[history.length - 1] : null;
-
-  // YTD% is the same TWR cumprod, restricted to current-year rows.
-  // Computed client-side over the journal-history daily returns so the
-  // dashboard never needs a separate endpoint round-trip.
-  const ytdYear = new Date().getFullYear();
-  const ytdYearPrefix = `${ytdYear}-`;
-  const ytdRows = history.filter(h => String(h.day).slice(0, 5) === ytdYearPrefix);
-  const ytdAvailable = ytdRows.length > 0;
-  const ytdPct = ytdAvailable
-    ? (ytdRows.reduce((curve, r) => curve * (1 + ((r as any).daily_return ?? 0)), 1) - 1) * 100
-    : (returns?.ytd_pct ?? 0);
-
-  // SPY/NDX YTD benchmarks still come from the journal history. If no
-  // history, both are 0.
   const currYear = new Date().getFullYear();
   const currYearStr = `${currYear}`;
   const ytdHistory = history.filter(h => String(h.day).slice(0, 4) === currYearStr);
@@ -234,16 +201,68 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const ndxCurr = lastH?.nasdaq || 0;
   const ytdNdx = ndxSt > 0 ? ((ndxCurr / ndxSt) - 1) * 100 : 0;
 
-  // Drawdown from peak
-  const peakNlv = Math.max(...history.map(h => h.end_nlv || 0));
-  const ddPct = peakNlv > 0 ? ((nlv - peakNlv) / peakNlv) * 100 : 0;
+  // NLV tile sub: daily delta when available; first-entry / no-journal cases
+  // yield no sub-line (don't fake "+$0" — the spec's "no comparison" rule).
+  const nlvSub = (dailyDol != null && dailyPct != null)
+    ? `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`
+    : (journalAvailable ? "First entry — no prior day" : "Save your first daily routine");
+
+  // NLV tile extraSub — small grey "Live estimate" diagnostic. Three states:
+  //   1. compute_nlv unavailable → "Live estimate: unavailable"
+  //   2. available but no journal anchor → just the dollar value
+  //   3. available with anchor → value + diff in $ and %
+  let liveEstimateSub: string | undefined;
+  if (metrics?.live_estimate_unavailable) {
+    liveEstimateSub = "Live estimate: unavailable";
+  } else if (metrics?.live_estimate_nlv != null) {
+    const liveStr = `$${metrics.live_estimate_nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    if (metrics.live_estimate_diff != null && metrics.live_estimate_diff_pct != null) {
+      const d = metrics.live_estimate_diff;
+      const dPct = metrics.live_estimate_diff_pct;
+      liveEstimateSub = `Live estimate: ${liveStr} (${d >= 0 ? "+" : ""}$${d.toLocaleString(undefined, { maximumFractionDigits: 0 })}, ${dPct >= 0 ? "+" : ""}${dPct.toFixed(2)}%)`;
+    } else {
+      liveEstimateSub = `Live estimate: ${liveStr}`;
+    }
+  }
 
   const kpis = [
-    { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
-    { label: "LTD RETURN", value: `${ltdPct.toFixed(2)}%`, sub: `$${ltdDol >= 0 ? "+" : ""}${ltdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #ec4899, #f472b6)" },
-    { label: "YTD RETURN", value: ytdAvailable ? `${ytdPct.toFixed(2)}%` : "—", sub: ytdAvailable ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%` : "Available once EOD snapshots exist", gradient: "linear-gradient(135deg, #10b981, #34d399)" },
-    { label: "LIVE EXPOSURE", value: `${exposure.toFixed(1)}%`, sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`, gradient: "linear-gradient(135deg, #f97316, #fb923c)" },
-    { label: "DRAWDOWN", value: `${ddPct.toFixed(2)}%`, sub: ddPct >= -0.01 ? "Clear" : `from peak $${peakNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #1e40af, #3b82f6)" },
+    {
+      label: "NET LIQ VALUE",
+      value: journalAvailable ? `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—",
+      sub: nlvSub,
+      extraSub: liveEstimateSub,
+      gradient: "linear-gradient(135deg, #6366f1, #818cf8)",
+    },
+    {
+      label: "LTD RETURN",
+      value: journalAvailable ? `${ltdPct.toFixed(2)}%` : "—",
+      sub: journalAvailable ? "Time-weighted, since reset" : "Save your first daily routine",
+      gradient: "linear-gradient(135deg, #ec4899, #f472b6)",
+    },
+    {
+      label: "YTD RETURN",
+      value: ytdAvailable && ytdPct != null ? `${ytdPct.toFixed(2)}%` : "—",
+      sub: ytdAvailable
+        ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`
+        : "Available once current-year EOD entries exist",
+      gradient: "linear-gradient(135deg, #10b981, #34d399)",
+    },
+    {
+      label: "LIVE EXPOSURE",
+      value: journalAvailable ? `${exposure.toFixed(1)}%` : "—",
+      sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`,
+      gradient: "linear-gradient(135deg, #f97316, #fb923c)",
+    },
+    {
+      label: "DRAWDOWN",
+      value: journalAvailable ? `${ddPct.toFixed(2)}%` : "—",
+      sub: !journalAvailable
+        ? "Save your first daily routine"
+        : ddPct >= -0.01
+          ? "Clear"
+          : `from peak $${peakNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
+    },
   ];
 
   // Recent history for mini bar chart
@@ -258,9 +277,27 @@ export function Dashboard({ navColor }: { navColor: string }) {
             <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
               {greeting}, <em className="italic" style={{ color: navColor }}>MO</em>
             </h1>
-            <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-              {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-              {activePortfolio ? ` · ${activePortfolio.name}` : ""}
+            <div className="text-[13px] mt-1.5 flex items-center gap-2 flex-wrap" style={{ color: "var(--ink-3)" }}>
+              <span>
+                {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+                {activePortfolio ? ` · ${activePortfolio.name}` : ""}
+              </span>
+              {/* "As of [date]" badge — clarifies the dashboard reflects
+                  the most recent SAVED journal entry, which may lag today
+                  if Daily Routine hasn't been submitted yet. Hidden when
+                  the journal is empty (the empty-state copy below
+                  carries the same signal more loudly). */}
+              {metrics?.as_of_date && (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-[4px]"
+                      data-testid="dashboard-as-of-badge"
+                      style={{
+                        background: "var(--bg-2)",
+                        color: "var(--ink-4)",
+                        border: "1px solid var(--border)",
+                      }}>
+                  As of {metrics.as_of_date}
+                </span>
+              )}
             </div>
           </div>
           <CaptureSnapshotButton targetSelector="#dashboard-capture-root" snapshotType="dashboard" label="Capture EOD Snapshot" />
@@ -275,37 +312,53 @@ export function Dashboard({ navColor }: { navColor: string }) {
         Tape: {latest?.market_window || "—"} · {latest?.day || ""}
       </div>
 
+      {/* Empty-state nudge — when the journal has no rows, every KPI value
+          renders as "—" and we explicitly point the user at the action that
+          unblocks the dashboard. Spec: "Frontend shows '—' for all journal-
+          derived values plus a help message 'Save your first daily routine
+          to see metrics'." */}
+      {!loading && metrics != null && !metrics.journal_available && (
+        <div className="mb-4 px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
+             data-testid="dashboard-empty-state"
+             style={{
+               background: "color-mix(in oklab, #6366f1 10%, var(--surface))",
+               color: "#4f46e5",
+               border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
+             }}>
+          Save your first daily routine to see dashboard metrics. Until then, every
+          tile shows &ldquo;—&rdquo;.
+        </div>
+      )}
+
       {/* KPI Strip — REAL DATA */}
       <div className="grid grid-cols-5 gap-3.5 mb-3">
         {kpis.map((kpi) => <KPITile key={kpi.label} {...kpi} />)}
       </div>
 
-      {/* NLV breakdown: cash + positions, with a "journal not ledger" disclaimer */}
-      {nlvSnapshot && (
-        <div className="flex items-center gap-4 mb-6 text-[11px] flex-wrap" style={{ color: "var(--ink-4)" }}>
+      {/* NLV breakdown: cash + positions, both sourced from the latest
+          journal entry (cash = nlv - total_holdings, total_holdings =
+          pct_invested × end_nlv / 100). The pre-refactor disclaimer
+          ("NLV excludes commissions & margin interest. Reconcile in
+          Settings to match your broker.") is gone — journal NLV now
+          comes from the broker via IBKR auto-fill, so it already
+          includes those. The "Some prices unavailable" warning is also
+          gone here (it was a live-snapshot concern; live NLV is now
+          only a sub-label on the NLV tile). */}
+      {metrics?.journal_available && (
+        <div className="flex items-center gap-4 mb-6 text-[11px] flex-wrap"
+             data-testid="dashboard-cash-positions-row"
+             style={{ color: "var(--ink-4)" }}>
           <div>
             <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${(nlvSnapshot.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${(metrics.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span> cash
           </div>
           <span>·</span>
           <div>
             <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${(nlvSnapshot.market_value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${(metrics.total_holdings ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span> positions
           </div>
-          {Array.isArray(nlvSnapshot.positions) && nlvSnapshot.positions.some((p) => p.price_unavailable) && (
-            <>
-              <span>·</span>
-              <div style={{ color: "#f59f00" }}>
-                Some prices unavailable — using cost basis
-              </div>
-            </>
-          )}
-          <span className="ml-auto">
-            NLV excludes commissions &amp; margin interest.{" "}
-            <span className="italic">Reconcile in Settings to match your broker.</span>
-          </span>
         </div>
       )}
 

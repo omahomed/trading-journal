@@ -1403,6 +1403,24 @@ def get_portfolio_twr_returns(portfolio_id: int, request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/portfolios/{portfolio_id}/dashboard-metrics")
+@limiter.limit("30/minute")
+def get_dashboard_metrics(portfolio_id: int, request: Request):
+    """Aggregated read view powering the dashboard. journal.end_nlv is
+    the single source of truth for nlv / drawdown / exposure / cash; the
+    live compute_nlv() result appears only as best-effort live_estimate_*
+    sub-label fields. See nlv_service.dashboard_metrics for field-level
+    docs and the journal-vs-live source contract."""
+    try:
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["id"] == portfolio_id), None)
+        if match is None:
+            return {"error": "Portfolio not found"}
+        return nlv_service.dashboard_metrics(portfolio_id, match["name"])
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
 def list_cash_transactions_endpoint(portfolio_id: int, request: Request,
