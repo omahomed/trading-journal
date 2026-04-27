@@ -1396,6 +1396,28 @@ def get_portfolio_returns(portfolio_id: int, request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/portfolios/{portfolio_id}/twr-returns")
+@limiter.limit("30/minute")
+def get_portfolio_twr_returns(portfolio_id: int, request: Request):
+    """Time-weighted LTD + YTD chained from daily journal returns.
+
+    Complements /returns: that endpoint answers 'total profit as a % of
+    contributions' (snapshot, ignores cash-flow timing); this one answers
+    'what compound return did the strategy produce' by chaining daily
+    returns with the flow-at-start-of-day Modified Dietz formula. Both
+    coexist so the dashboard headline can show TWR while a future tile
+    can still surface the snapshot ratio if needed.
+    """
+    try:
+        rows = db.list_portfolios()
+        match = next((r for r in rows if r["id"] == portfolio_id), None)
+        if match is None:
+            return {"error": "Portfolio not found"}
+        return nlv_service.compute_twr_returns(match["name"])
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
 def list_cash_transactions_endpoint(portfolio_id: int, request: Request,

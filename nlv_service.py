@@ -10,16 +10,21 @@ Prices that can't be resolved don't crash the calculation — we fall back to
 the position's cost basis so the NLV remains monotonically meaningful, and
 we flag the position as price_unavailable so the UI can show a warning.
 
-Also exposes compute_returns() — LTD and YTD P&L in both dollars and %.
+Also exposes:
+  - compute_returns()     — money-snapshot LTD/YTD: (NLV − net_contributions)/net_contributions
+  - compute_twr_returns() — time-weighted LTD/YTD chained from daily journal returns
 """
 from __future__ import annotations
 
 from datetime import datetime, date
 from typing import Any
 
+import pandas as pd
+
 import db_layer as db
 from price_providers import get_price_provider
 from tickers import is_option_ticker, to_occ_symbol
+from trade_calc import normalize_journal_columns
 
 # Options positions at 100x multiplier (1 contract = 100 shares of underlying).
 # Mirrors the convention in active-campaign.tsx so NLV matches the React UI.
@@ -186,3 +191,88 @@ def compute_returns(portfolio_id: int, portfolio_name: str,
         "ytd_available": ytd_available,
         "as_of": datetime.now().isoformat(),
     }
+
+
+def _compute_twr_from_journal_df(df: pd.DataFrame) -> dict[str, Any]:
+    """Pure: given a normalized journal DataFrame with day/beg_nlv/end_nlv/cash_change,
+    return TWR LTD + YTD percentages.
+
+    Daily TWR uses the flow-at-start-of-day convention (Modified Dietz daily):
+
+        adjusted_beg = beg_nlv + cash_change
+        daily_return = (end_nlv − adjusted_beg) / adjusted_beg
+
+    LTD = (∏(1 + daily_return) − 1) × 100 over the entire history.
+    YTD = (∏(1 + daily_return) − 1) × 100 over rows with day >= Jan 1 of
+          the current year. Available only when at least one row falls in
+          the current year.
+
+    Rows where adjusted_beg <= 0 (typo'd or pre-funding entries) contribute a
+    daily_return of 0 — they pass through the cumprod without distorting it.
+    """
+    empty_result = {
+        "twr_ltd_pct": 0.0,
+        "twr_ytd_pct": None,
+        "twr_ytd_available": False,
+        "as_of": datetime.now().isoformat(),
+    }
+    if df is None or df.empty:
+        return empty_result
+
+    work = df.copy()
+    work["day"] = pd.to_datetime(work["day"], errors="coerce")
+    work = work.dropna(subset=["day"]).sort_values("day").reset_index(drop=True)
+    if work.empty:
+        return empty_result
+
+    for col in ("beg_nlv", "end_nlv", "cash_change"):
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        else:
+            work[col] = 0.0
+
+    work["adjusted_beg"] = work["beg_nlv"] + work["cash_change"]
+    work["daily_return"] = 0.0
+    mask = work["adjusted_beg"] > 0
+    work.loc[mask, "daily_return"] = (
+        (work.loc[mask, "end_nlv"] - work.loc[mask, "adjusted_beg"])
+        / work.loc[mask, "adjusted_beg"]
+    )
+
+    ltd_curve = (1.0 + work["daily_return"]).cumprod()
+    twr_ltd_pct = float((ltd_curve.iloc[-1] - 1.0) * 100.0)
+
+    this_year = datetime.now().year
+    jan1 = pd.Timestamp(year=this_year, month=1, day=1)
+    ytd = work[work["day"] >= jan1]
+    if ytd.empty:
+        twr_ytd_pct: float | None = None
+        twr_ytd_available = False
+    else:
+        ytd_curve = (1.0 + ytd["daily_return"]).cumprod()
+        twr_ytd_pct = float((ytd_curve.iloc[-1] - 1.0) * 100.0)
+        twr_ytd_available = True
+
+    return {
+        "twr_ltd_pct": round(twr_ltd_pct, 4),
+        "twr_ytd_pct": round(twr_ytd_pct, 4) if twr_ytd_pct is not None else None,
+        "twr_ytd_available": twr_ytd_available,
+        "as_of": datetime.now().isoformat(),
+    }
+
+
+def compute_twr_returns(portfolio_name: str) -> dict[str, Any]:
+    """Time-weighted LTD + YTD for a portfolio, chained from journal daily returns.
+
+    This is the answer to 'what compound return did the strategy produce,
+    independent of when I deposited?'. Unlike compute_returns()'s snapshot
+    ratio, it correctly accounts for cash-flow timing.
+
+    Returns the same shape as _compute_twr_from_journal_df. Empty journal
+    yields zeros / unavailable YTD rather than an error so the UI can render
+    a stable tile state.
+    """
+    df = db.load_journal(portfolio_name)
+    if df is None or df.empty:
+        return _compute_twr_from_journal_df(pd.DataFrame())
+    return _compute_twr_from_journal_df(normalize_journal_columns(df))

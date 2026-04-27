@@ -453,6 +453,9 @@ export const api = {
   portfolioReturns: (id: number) =>
     fetchJSON<PortfolioReturns>(`/api/portfolios/${id}/returns`),
 
+  portfolioTwrReturns: (id: number) =>
+    fetchJSON<PortfolioTwrReturns>(`/api/portfolios/${id}/twr-returns`),
+
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
@@ -514,5 +517,16 @@ export interface PortfolioReturns {
   ytd_pl: number | null;
   ytd_pct: number | null;
   ytd_available: boolean;
+  as_of: string;
+}
+
+// Time-weighted LTD / YTD chained from daily journal returns.
+// Answers 'what compound return did the strategy produce' independent
+// of when capital was added/withdrawn — the headline LTD tile reads from
+// here, not from PortfolioReturns.ltd_pct (which is the snapshot ratio).
+export interface PortfolioTwrReturns {
+  twr_ltd_pct: number;
+  twr_ytd_pct: number | null;
+  twr_ytd_available: boolean;
   as_of: string;
 }

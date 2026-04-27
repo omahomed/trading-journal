@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns, type PortfolioTwrReturns } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -44,6 +44,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [showEvents, setShowEvents] = useState(true);
   const [nlvSnapshot, setNlvSnapshot] = useState<PortfolioNlv | null>(null);
   const [returns, setReturns] = useState<PortfolioReturns | null>(null);
+  const [twrReturns, setTwrReturns] = useState<PortfolioTwrReturns | null>(null);
 
   const [openTrades, setOpenTrades] = useState<any[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -51,7 +52,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
 
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, nlv, rets] = await Promise.all([
+    const [lat, hist, open, closed, ev, nlv, rets, twr] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
@@ -59,6 +60,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       api.events().catch(() => []),
       activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
       activeId != null ? api.portfolioReturns(activeId).catch(() => null) : Promise.resolve(null),
+      activeId != null ? api.portfolioTwrReturns(activeId).catch(() => null) : Promise.resolve(null),
     ]);
     // Guard: backend can return {error: "..."} at HTTP 200 when something
     // goes wrong server-side. Don't let that poison the render.
@@ -70,6 +72,10 @@ export function Dashboard({ navColor }: { navColor: string }) {
       ? (rets as PortfolioReturns)
       : null;
     setReturns(safeReturns);
+    const safeTwr = (twr && typeof twr === "object" && !("error" in twr))
+      ? (twr as PortfolioTwrReturns)
+      : null;
+    setTwrReturns(safeTwr);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
@@ -200,10 +206,11 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const nlv = nlvSnapshot?.nlv ?? latest?.end_nlv ?? 0;
   const dailyDol = latest?.daily_dollar_change || 0;
   const dailyPct = latest?.daily_pct_change || 0;
-  // LTD now comes from the returns endpoint (NLV − net_contributions) —
-  // no more daily-sum from journal. Fall back to 0 when we haven't loaded
-  // a portfolio yet.
-  const ltdPct = returns?.ltd_pct ?? 0;
+  // LTD% comes from the TWR endpoint (chained daily returns, accounts for
+  // cash-flow timing). LTD$ stays on the snapshot ratio's ltd_pl, which is
+  // the honest 'dollar amount made' = NLV − net_contributions. Both fall
+  // back to 0 until a portfolio is loaded.
+  const ltdPct = twrReturns?.twr_ltd_pct ?? returns?.ltd_pct ?? 0;
   const ltdDol = returns?.ltd_pl ?? 0;
   // Live exposure — match Active Campaign Summary: sum(shares × live price) / NLV
   const liveMarketValue = openTrades.reduce((sum, t) => {
@@ -218,12 +225,13 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const portfolioHeat = latest?.portfolio_heat || 0;
   const lastH = history.length > 0 ? history[history.length - 1] : null;
 
-  // YTD comes from the returns endpoint. ytd_available is false when the
-  // portfolio started before the current year and we don't yet have a
-  // start-of-year NLV snapshot (Phase 4 EOD cron). In that case we surface
-  // '—' instead of a misleading number.
-  const ytdAvailable = returns?.ytd_available ?? false;
-  const ytdPct = returns?.ytd_pct ?? 0;
+  // YTD% also comes from TWR — chained daily returns from Jan 1 of the
+  // current year. The ledger-based snapshot ratio's YTD only fires for
+  // portfolios born this year (no start-of-year NLV snapshot exists for
+  // older portfolios pre-Phase-4). TWR doesn't need a snapshot since it
+  // chains from the journal's first current-year row directly.
+  const ytdAvailable = twrReturns?.twr_ytd_available ?? returns?.ytd_available ?? false;
+  const ytdPct = twrReturns?.twr_ytd_pct ?? returns?.ytd_pct ?? 0;
 
   // SPY/NDX YTD benchmarks still come from the journal history. If no
   // history, both are 0.
