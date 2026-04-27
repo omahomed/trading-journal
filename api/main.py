@@ -23,6 +23,7 @@ sentry_sdk.init(
 
 from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
+import math
 import re
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
@@ -889,13 +890,18 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
                     requested_upper = {t.upper(): t for t in ticker_list}
                     for _, row in summary_df.iterrows():
                         mp = row.get(manual_col)
-                        if mp is None:
+                        # Filter None AND pandas NaN — load_summary's
+                        # Decimal-to-numeric conversion turns DB NULLs into
+                        # NaN, which slips past `mp is None` and survives
+                        # `float()` + `<= 0`, then crashes the response on
+                        # starlette's allow_nan=False JSON encoder.
+                        if pd.isna(mp):
                             continue
                         try:
                             mp_f = float(mp)
                         except (TypeError, ValueError):
                             continue
-                        if mp_f <= 0:
+                        if not math.isfinite(mp_f) or mp_f <= 0:
                             continue
                         tkr = str(row.get(ticker_col, "") or "").upper()
                         if tkr in requested_upper:
@@ -904,173 +910,6 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
         return result
     except Exception as e:
         return {"error": str(e)}
-
-
-# ============================================================
-# NLV SHADOW (read-only comparison vs manually-entered NLV)
-# ============================================================
-@app.get("/api/nlv/shadow-today")
-def nlv_shadow_today(portfolio: str = "CanSlim"):
-    """Compute today's NLV from yesterday's journal entry + current position
-    prices + today's trade cash flows. Read-only; does not write to DB.
-
-    Formula:
-        yesterday_cash = yesterday.End_NLV × (1 − yesterday.% Invested / 100)
-        today_cash     = yesterday_cash + today.Cash_Change + today_trade_flow
-                         (buys subtract, sells add)
-        computed_nlv   = today_cash + Σ(open_shares × today_price)
-
-    Returned alongside manually-entered NLV (if any) so the UI can show the
-    delta. This is a read-only shadow endpoint — rollback is just deleting it.
-    """
-    import yfinance as yf
-    from datetime import datetime
-    try:
-        import pytz
-        central = pytz.timezone('America/Chicago')
-        today = datetime.now(central).date()
-    except Exception:
-        today = datetime.now().date()
-
-    try:
-        journal = db.load_journal(portfolio)
-        if journal is None or journal.empty:
-            return {"error": "No journal entries found", "portfolio": portfolio}
-
-        journal = journal.copy()
-        journal['Day'] = pd.to_datetime(journal['Day']).dt.date
-
-        prior = journal[journal['Day'] < today].sort_values('Day')
-        if prior.empty:
-            return {"error": "No prior-day journal entry to anchor from", "portfolio": portfolio}
-        prior_row = prior.iloc[-1]
-
-        prior_day = prior_row['Day']
-        yesterday_end_nlv = float(prior_row['End NLV'] or 0)
-        yesterday_pct_invested = float(prior_row['% Invested'] or 0)
-        yesterday_cash = yesterday_end_nlv * (1 - yesterday_pct_invested / 100)
-
-        today_rows = journal[journal['Day'] == today]
-        today_cash_change = 0.0
-        manual_nlv = None
-        if not today_rows.empty:
-            today_row = today_rows.iloc[0]
-            today_cash_change = float(today_row.get('Cash -/+') or 0)
-            mv = today_row.get('End NLV')
-            if mv is not None and float(mv) > 0:
-                manual_nlv = float(mv)
-
-        # Today's trade cash flows (BUY subtracts, SELL adds). For options,
-        # trades_details.Value is shares*amount (no 100x), so we recompute
-        # with the contract multiplier to match actual broker cash impact.
-        details = db.load_details(portfolio)
-        today_trade_flow = 0.0
-        if details is not None and not details.empty:
-            details = details.copy()
-            details['Date'] = pd.to_datetime(details['Date']).dt.date
-            today_trades = details[details['Date'] == today]
-            for _, row in today_trades.iterrows():
-                t_ticker = str(row.get('Ticker') or '').strip()
-                shares_d = float(row.get('Shares') or 0)
-                amount_d = float(row.get('Amount') or 0)
-                mult_d = 100.0 if _is_option_ticker(t_ticker) else 1.0
-                value = shares_d * amount_d * mult_d
-                action = str(row.get('Action') or '').upper()
-                if action == 'BUY':
-                    today_trade_flow -= value
-                elif action == 'SELL':
-                    today_trade_flow += value
-
-        today_cash = yesterday_cash + today_cash_change + today_trade_flow
-
-        # Value open positions at today's price. Options need OCC conversion
-        # (yfinance can't resolve "LUMN 260717 $8C") plus the 100x contract
-        # multiplier — same logic Active Campaign Summary uses via batch_prices.
-        summary = db.load_summary(portfolio, status='OPEN')
-        holdings_value = 0.0
-        breakdown = []
-        missing_prices = []
-        if summary is not None and not summary.empty:
-            tickers = [str(t).strip() for t in summary['Ticker'].tolist() if t]
-            yf_symbols = []
-            yf_to_readable = {}
-            for t in tickers:
-                if _is_option_ticker(t):
-                    occ = _to_occ_symbol(t)
-                    if occ:
-                        yf_symbols.append(occ)
-                        yf_to_readable[occ] = t
-                else:
-                    yf_symbols.append(t)
-                    yf_to_readable[t] = t
-
-            prices: dict = {}
-            if yf_symbols:
-                try:
-                    data = yf.download(yf_symbols, period='1d', progress=False, auto_adjust=False)['Close']
-                    if len(yf_symbols) == 1:
-                        if not data.empty:
-                            readable = yf_to_readable.get(yf_symbols[0], yf_symbols[0])
-                            prices[readable] = float(data.iloc[-1])
-                    else:
-                        last = data.iloc[-1]
-                        for yf_sym in yf_symbols:
-                            if yf_sym in last.index and not pd.isna(last[yf_sym]):
-                                readable = yf_to_readable.get(yf_sym, yf_sym)
-                                prices[readable] = float(last[yf_sym])
-                except Exception:
-                    pass
-
-            for _, pos in summary.iterrows():
-                ticker = str(pos['Ticker']).strip()
-                shares = float(pos.get('Shares') or 0)
-                price = prices.get(ticker)
-                if price is None:
-                    missing_prices.append(ticker)
-                    price = 0.0
-                # Options trade per-share but each contract represents 100
-                # underlying shares — apply the 100x multiplier so the shadow
-                # matches how brokers/Active Campaign Summary report value.
-                multiplier = 100.0 if _is_option_ticker(ticker) else 1.0
-                value = shares * price * multiplier
-                holdings_value += value
-                breakdown.append({
-                    "ticker": ticker,
-                    "shares": shares,
-                    "price": round(price, 4),
-                    "multiplier": multiplier,
-                    "value": round(value, 2),
-                })
-
-        computed_nlv = today_cash + holdings_value
-
-        diff = None
-        diff_pct = None
-        if manual_nlv is not None and manual_nlv > 0:
-            diff = manual_nlv - computed_nlv
-            diff_pct = (diff / manual_nlv) * 100
-
-        return {
-            "portfolio": portfolio,
-            "as_of": today.isoformat(),
-            "prior_day": prior_day.isoformat() if hasattr(prior_day, 'isoformat') else str(prior_day),
-            "yesterday_end_nlv": round(yesterday_end_nlv, 2),
-            "yesterday_pct_invested": round(yesterday_pct_invested, 2),
-            "yesterday_cash": round(yesterday_cash, 2),
-            "today_cash_change": round(today_cash_change, 2),
-            "today_trade_flow": round(today_trade_flow, 2),
-            "today_cash": round(today_cash, 2),
-            "today_holdings_value": round(holdings_value, 2),
-            "computed_nlv": round(computed_nlv, 2),
-            "manual_nlv": round(manual_nlv, 2) if manual_nlv is not None else None,
-            "diff": round(diff, 2) if diff is not None else None,
-            "diff_pct": round(diff_pct, 4) if diff_pct is not None else None,
-            "position_breakdown": breakdown,
-            "missing_prices": missing_prices,
-        }
-    except Exception as e:
-        import traceback
-        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 # ============================================================
@@ -1519,11 +1358,21 @@ def create_cash_transaction_endpoint(portfolio_id: int, request: Request, body: 
         if source not in ("deposit", "withdraw", "reconcile"):
             return {"error": "source must be deposit, withdraw, or reconcile"}
 
+        # body.get("amount") could be 0 — using `or 0` would mask it. Read raw
+        # and reject only None/non-numeric so reconcile with broker_balance=0
+        # is accepted (rare but legal: just-funded margin account).
+        raw_amount = body.get("amount")
+        if raw_amount is None:
+            return {"error": "amount is required"}
         try:
-            amount = float(body.get("amount") or 0)
+            amount = float(raw_amount)
         except (TypeError, ValueError):
             return {"error": "amount must be numeric"}
-        if amount <= 0:
+        # Deposit/withdraw amounts must be positive (the source determines the
+        # sign). Reconcile takes the user's actual broker cash balance, which
+        # can be negative (margin) or zero — must not be filtered here or
+        # users with margin debits can never reconcile.
+        if source != "reconcile" and amount <= 0:
             return {"error": "amount must be greater than zero"}
 
         note = body.get("note") or None
@@ -2472,6 +2321,46 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         try:
             db.log_audit(portfolio, "EDIT", trade_id, row_dict.get("Trx_ID", ""),
                          f"Transaction {detail_id} edited", username="web")
+        except Exception:
+            pass
+
+        return {"status": "ok", "detail_id": detail_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/trades/transaction")
+@limiter.limit("15/minute")
+def delete_transaction_endpoint(request: Request,
+                                detail_id: int = Query(...),
+                                trade_id: str = Query(""),
+                                ticker: str = Query(""),
+                                portfolio: str = Query("CanSlim")):
+    """Soft-delete a single transaction detail row, then recompute its
+    campaign's LIFO summary so avg_entry / realized_pl / status reflect
+    the removal. If the deletion empties the campaign, the summary is
+    cleaned up by _recompute_summary_lifo."""
+    try:
+        if not detail_id:
+            return {"error": "detail_id is required"}
+
+        try:
+            db.delete_detail_row(portfolio, int(detail_id))
+        except ValueError as e:
+            return {"error": str(e)}
+
+        if trade_id:
+            try:
+                _recompute_summary_lifo(portfolio, trade_id, ticker)
+            except Exception:
+                # Summary recompute failure shouldn't roll back the delete —
+                # the row is gone; the worst case is a stale summary that
+                # the next edit/recompute will heal.
+                pass
+
+        try:
+            db.log_audit(portfolio, "DELETE_TXN", trade_id, "",
+                         f"Transaction {detail_id} deleted", username="web")
         except Exception:
             pass
 

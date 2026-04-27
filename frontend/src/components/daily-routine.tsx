@@ -82,10 +82,6 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [gradeNotes, setGradeNotes] = useState("");
   const [forceOverwrite, setForceOverwrite] = useState(false);
 
-  // Shadow NLV (computed comparison — CanSlim only, read-only)
-  const [shadowNlv, setShadowNlv] = useState<number | null>(null);
-  const [shadowAsOf, setShadowAsOf] = useState<string>("");
-
   useEffect(() => {
     Promise.all([
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 0 })),
@@ -100,16 +96,6 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       if (prefix) setMarketNotes(prefix);
       setLoading(false);
     });
-    // Shadow NLV (CanSlim only) — independent fetch so a failure doesn't
-    // block the rest of the page from loading.
-    if (getActivePortfolio() === "CanSlim") {
-      api.nlvShadow("CanSlim").then(s => {
-        if (s && typeof s.computed_nlv === "number") {
-          setShadowNlv(s.computed_nlv);
-          setShadowAsOf(s.as_of || "");
-        }
-      }).catch(() => {});
-    }
   }, []);
 
   // Auto-fill End NLV from IBKR Flex Query. Runs on mount and on date change.
@@ -304,27 +290,6 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
                   </span>
                 )}
               </div>
-              {shadowNlv !== null && activePortfolio?.name === "CanSlim" && (() => {
-                const computed = shadowNlv;
-                const diff = portNlvN > 0 ? portNlvN - computed : null;
-                const diffPct = (portNlvN > 0 && computed > 0) ? ((portNlvN - computed) / portNlvN) * 100 : null;
-                const diffColor = diff === null ? "var(--ink-4)" : Math.abs(diffPct || 0) < 0.1 ? "#08a86b" : Math.abs(diffPct || 0) < 0.5 ? "#f59f00" : "#e5484d";
-                return (
-                  <div className="mt-1.5 px-2.5 py-1.5 rounded-[8px] flex items-center justify-between" style={{ background: "var(--bg)", border: "1px dashed var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.06em] font-semibold" style={{ color: "var(--ink-4)" }}>
-                      Computed <span className="opacity-70">({shadowAsOf})</span>
-                    </div>
-                    <div className="flex items-center gap-2 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                      <span className="text-[12px] font-semibold">${computed.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                      {diff !== null && (
-                        <span className="text-[11px] font-semibold" style={{ color: diffColor }}>
-                          {diff >= 0 ? "+" : ""}${Math.abs(diff).toLocaleString(undefined, { maximumFractionDigits: 0 })} ({diff >= 0 ? "+" : "-"}{Math.abs(diffPct || 0).toFixed(2)}%)
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
             </Field>
             <Field label="Total Holdings">
               <input type="number" value={portHold} onChange={e => setPortHold(e.target.value)} step="100" placeholder="0.00" className={inputCls} style={inputStyle} />

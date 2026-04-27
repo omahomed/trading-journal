@@ -242,6 +242,36 @@ export function LogSell({ navColor }: { navColor: string }) {
               </select>
             </FormField>
 
+            {(() => {
+              const beStamp = (selected as any)?.be_stop_moved_at;
+              if (!beStamp) return null;
+              const beDate = String(beStamp).slice(0, 10);
+              const isSr15 = rule.startsWith("sr15");
+              return (
+                <div className="-mt-1 px-3 py-2 rounded-[10px] flex items-center justify-between gap-3"
+                     style={{
+                       background: "color-mix(in oklab, #f59f00 12%, var(--surface))",
+                       border: "1px solid color-mix(in oklab, #f59f00 35%, var(--border))",
+                     }}>
+                  <div className="text-[12px]" style={{ color: "var(--ink-2)" }}>
+                    <span className="font-semibold">BE rule flagged</span>
+                    {" "}
+                    <span style={{ color: "var(--ink-4)" }}>
+                      on {beDate} — pick <span style={{ fontFamily: "var(--font-jetbrains), monospace" }}>sr15</span> if this exit is the BE stop hitting.
+                    </span>
+                  </div>
+                  {!isSr15 && (
+                    <button type="button"
+                            onClick={() => setRule("sr15 BE Stop Out (moved at +10%)")}
+                            className="text-[11px] font-semibold px-2.5 py-1 rounded-[6px] whitespace-nowrap"
+                            style={{ background: "#f59f00", color: "white", border: "none", cursor: "pointer" }}>
+                      Use sr15
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
             <FormField label="Sell Rule">
               <select value={rule} onChange={e => setRule(e.target.value)}
                       className="w-full h-[38px] px-3 rounded-[10px] text-[13px] appearance-none" style={inputStyle}>

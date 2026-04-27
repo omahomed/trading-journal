@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns, type PortfolioTwrReturns } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type PortfolioNlv, type PortfolioReturns } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -9,7 +9,7 @@ import {
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
 
-function KPITile({ label, value, sub, gradient, footer }: { label: string; value: string; sub: string; gradient: string; footer?: React.ReactNode }) {
+function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
   return (
     <div className="relative overflow-hidden rounded-[14px] p-[14px_16px] text-white flex flex-col justify-between min-h-[90px] transition-transform duration-150 hover:scale-[1.01]"
          style={{ background: gradient, boxShadow: "var(--kpi-shadow)" }}>
@@ -21,12 +21,6 @@ function KPITile({ label, value, sub, gradient, footer }: { label: string; value
              style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{value}</div>
       </div>
       <div className="relative z-10 text-[10px] font-medium opacity-80 privacy-mask">{sub}</div>
-      {footer && (
-        <div className="relative z-10 mt-1 pt-1 text-[9.5px] font-medium privacy-mask"
-             style={{ borderTop: "1px solid rgba(255,255,255,0.2)", opacity: 0.85 }}>
-          {footer}
-        </div>
-      )}
     </div>
   );
 }
@@ -44,15 +38,13 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [showEvents, setShowEvents] = useState(true);
   const [nlvSnapshot, setNlvSnapshot] = useState<PortfolioNlv | null>(null);
   const [returns, setReturns] = useState<PortfolioReturns | null>(null);
-  const [twrReturns, setTwrReturns] = useState<PortfolioTwrReturns | null>(null);
 
   const [openTrades, setOpenTrades] = useState<any[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [shadowNlv, setShadowNlv] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, nlv, rets, twr] = await Promise.all([
+    const [lat, hist, open, closed, ev, nlv, rets] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
@@ -60,7 +52,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
       api.events().catch(() => []),
       activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
       activeId != null ? api.portfolioReturns(activeId).catch(() => null) : Promise.resolve(null),
-      activeId != null ? api.portfolioTwrReturns(activeId).catch(() => null) : Promise.resolve(null),
     ]);
     // Guard: backend can return {error: "..."} at HTTP 200 when something
     // goes wrong server-side. Don't let that poison the render.
@@ -72,10 +63,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
       ? (rets as PortfolioReturns)
       : null;
     setReturns(safeReturns);
-    const safeTwr = (twr && typeof twr === "object" && !("error" in twr))
-      ? (twr as PortfolioTwrReturns)
-      : null;
-    setTwrReturns(safeTwr);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
     const openArr = (open as any[]) || [];
@@ -99,15 +86,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
         .catch(() => { /* fall back to EOD pct_invested */ });
     }
 
-    // Shadow NLV (CanSlim only) — fills in the Computed/Diff footer on the
-    // NLV tile once the backend finishes its yfinance roundtrip.
-    if (getActivePortfolio() === "CanSlim") {
-      api.nlvShadow("CanSlim")
-        .then(s => {
-          if (s && typeof s.computed_nlv === "number") setShadowNlv(s.computed_nlv);
-        })
-        .catch(() => { /* quiet fail */ });
-    }
   }, []);
 
   useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
@@ -206,11 +184,18 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const nlv = nlvSnapshot?.nlv ?? latest?.end_nlv ?? 0;
   const dailyDol = latest?.daily_dollar_change || 0;
   const dailyPct = latest?.daily_pct_change || 0;
-  // LTD% comes from the TWR endpoint (chained daily returns, accounts for
-  // cash-flow timing). LTD$ stays on the snapshot ratio's ltd_pl, which is
-  // the honest 'dollar amount made' = NLV − net_contributions. Both fall
-  // back to 0 until a portfolio is loaded.
-  const ltdPct = twrReturns?.twr_ltd_pct ?? returns?.ltd_pct ?? 0;
+  // LTD% is the time-weighted return — the cumulative product of (1 +
+  // daily_return). The journal-history endpoint already runs that cumprod
+  // and surfaces it as portfolio_ltd per row, so we just read the last
+  // row's value instead of round-tripping a dedicated TWR endpoint that
+  // duplicates the same full-journal load. Falls back to the snapshot
+  // ratio if history hasn't loaded yet. LTD$ stays on the snapshot ratio's
+  // ltd_pl — that's the honest 'dollar amount made' = NLV − net_contributions.
+  const ltdFromHistory = history.length > 0
+    ? (history[history.length - 1] as any).portfolio_ltd
+    : null;
+  const ltdPct = (typeof ltdFromHistory === "number" ? ltdFromHistory : null)
+    ?? returns?.ltd_pct ?? 0;
   const ltdDol = returns?.ltd_pl ?? 0;
   // Live exposure — match Active Campaign Summary: sum(shares × live price) / NLV
   const liveMarketValue = openTrades.reduce((sum, t) => {
@@ -225,13 +210,16 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const portfolioHeat = latest?.portfolio_heat || 0;
   const lastH = history.length > 0 ? history[history.length - 1] : null;
 
-  // YTD% also comes from TWR — chained daily returns from Jan 1 of the
-  // current year. The ledger-based snapshot ratio's YTD only fires for
-  // portfolios born this year (no start-of-year NLV snapshot exists for
-  // older portfolios pre-Phase-4). TWR doesn't need a snapshot since it
-  // chains from the journal's first current-year row directly.
-  const ytdAvailable = twrReturns?.twr_ytd_available ?? returns?.ytd_available ?? false;
-  const ytdPct = twrReturns?.twr_ytd_pct ?? returns?.ytd_pct ?? 0;
+  // YTD% is the same TWR cumprod, restricted to current-year rows.
+  // Computed client-side over the journal-history daily returns so the
+  // dashboard never needs a separate endpoint round-trip.
+  const ytdYear = new Date().getFullYear();
+  const ytdYearPrefix = `${ytdYear}-`;
+  const ytdRows = history.filter(h => String(h.day).slice(0, 5) === ytdYearPrefix);
+  const ytdAvailable = ytdRows.length > 0;
+  const ytdPct = ytdAvailable
+    ? (ytdRows.reduce((curve, r) => curve * (1 + ((r as any).daily_return ?? 0)), 1) - 1) * 100
+    : (returns?.ytd_pct ?? 0);
 
   // SPY/NDX YTD benchmarks still come from the journal history. If no
   // history, both are 0.
@@ -250,21 +238,8 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const peakNlv = Math.max(...history.map(h => h.end_nlv || 0));
   const ddPct = peakNlv > 0 ? ((nlv - peakNlv) / peakNlv) * 100 : 0;
 
-  const nlvShadowFooter = (shadowNlv !== null && nlv > 0) ? (() => {
-    const diff = nlv - shadowNlv;
-    const diffPct = shadowNlv > 0 ? (diff / nlv) * 100 : 0;
-    const sign = diff >= 0 ? "+" : "-";
-    return (
-      <span>
-        Computed: ${shadowNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-        {" · "}
-        Diff: {sign}${Math.abs(diff).toLocaleString(undefined, { maximumFractionDigits: 0 })} ({diff >= 0 ? "+" : "-"}{Math.abs(diffPct).toFixed(2)}%)
-      </span>
-    );
-  })() : undefined;
-
   const kpis = [
-    { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)", footer: nlvShadowFooter },
+    { label: "NET LIQ VALUE", value: `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
     { label: "LTD RETURN", value: `${ltdPct.toFixed(2)}%`, sub: `$${ltdDol >= 0 ? "+" : ""}${ltdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, gradient: "linear-gradient(135deg, #ec4899, #f472b6)" },
     { label: "YTD RETURN", value: ytdAvailable ? `${ytdPct.toFixed(2)}%` : "—", sub: ytdAvailable ? `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%` : "Available once EOD snapshots exist", gradient: "linear-gradient(135deg, #10b981, #34d399)" },
     { label: "LIVE EXPOSURE", value: `${exposure.toFixed(1)}%`, sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`, gradient: "linear-gradient(135deg, #f97316, #fb923c)" },

@@ -10,10 +10,18 @@ touching the callers. A PriceProvider is responsible for:
 
 Providers should NOT raise on missing tickers — they should return a dict
 that simply omits the failed ones. The caller handles gaps.
+
+A short-TTL per-ticker cache lives in front of the yfinance impl so that
+the 3 endpoints a single dashboard load triggers (/nlv, /returns,
+/prices/batch — all of which independently resolve current prices) share
+a single round-trip's worth of work. Without it, a 24-position portfolio
+pays 72 sequential yfinance fetches per page render.
 """
 from __future__ import annotations
 
 import os
+import threading
+import time
 from abc import ABC, abstractmethod
 
 
@@ -42,7 +50,36 @@ class YFinanceProvider(PriceProvider):
 
     Silently drops tickers that error — the NLV service handles missing
     entries by falling back to cost basis.
+
+    A short per-ticker memo lives at module scope: yfinance fetches one
+    symbol at a time (yf.download with a list is inconsistent across
+    versions), so a 24-position basket is 24 round-trips. The dashboard
+    fans those across 3 endpoints. Without caching, that's 72 round-trips
+    per page render — observed at 12-20s on prod. With a 30s TTL, the
+    second and third endpoint calls hit memory.
     """
+
+    # (timestamp_seconds, price). Module-level so the cache is shared
+    # across requests in the same process. Thread-safe via the lock below.
+    _PRICE_CACHE: dict[str, tuple[float, float]] = {}
+    _CACHE_TTL_SECONDS = 30.0
+    _CACHE_LOCK = threading.Lock()
+
+    # Per-ticker fetch lock. Coalesces concurrent yfinance requests for the
+    # same symbol so the dashboard's parallel /nlv + /returns + /prices/batch
+    # don't all fire 24 yfinance round-trips simultaneously: the first
+    # request fills the cache while the others wait, then read from memory.
+    _FETCH_LOCKS: dict[str, threading.Lock] = {}
+    _FETCH_LOCKS_GUARD = threading.Lock()
+
+    @classmethod
+    def _get_fetch_lock(cls, symbol: str) -> threading.Lock:
+        with cls._FETCH_LOCKS_GUARD:
+            lock = cls._FETCH_LOCKS.get(symbol)
+            if lock is None:
+                lock = threading.Lock()
+                cls._FETCH_LOCKS[symbol] = lock
+            return lock
 
     def get_current_prices(self, tickers: list[str]) -> dict[str, float]:
         if not tickers:
@@ -58,31 +95,61 @@ class YFinanceProvider(PriceProvider):
         if not clean:
             return {}
 
+        now = time.time()
         result: dict[str, float] = {}
+        to_fetch: list[str] = []
 
-        def _extract(symbol: str) -> None:
-            """Fetch a single symbol via yf.Ticker.history — works uniformly
-            for any number of tickers. Called in a loop; yf.download with a
-            list behaves inconsistently across versions (MultiIndex vs flat
-            columns) so we pay the per-ticker cost for predictable output."""
-            try:
-                tk = yf.Ticker(symbol)
-                hist = tk.history(period="1d", auto_adjust=False)
-                if hist is None or hist.empty:
-                    return
-                val = hist["Close"].iloc[-1]
-                if pd.isna(val):
-                    return
-                price = float(val)
-                if price > 0:
-                    result[symbol] = price
-            except Exception:
-                # Drop on any error — caller falls back to cost basis
-                return
+        # Cache check — copy hits into result, mark misses for fetch.
+        with self._CACHE_LOCK:
+            for sym in clean:
+                cached = self._PRICE_CACHE.get(sym)
+                if cached and (now - cached[0]) < self._CACHE_TTL_SECONDS:
+                    result[sym] = cached[1]
+                else:
+                    to_fetch.append(sym)
 
-        for sym in clean:
-            _extract(sym)
+        def _fetch_one(symbol: str) -> None:
+            """Fetch a single symbol via yf.Ticker.history. Wrapped in a
+            per-ticker lock so two parallel requests for the same symbol
+            don't both hit yfinance — the second one waits on the first
+            and reads its result from the cache."""
+            lock = self._get_fetch_lock(symbol)
+            with lock:
+                # Re-check cache after acquiring the lock: while we waited
+                # another thread may have already fetched and populated it.
+                with self._CACHE_LOCK:
+                    cached = self._PRICE_CACHE.get(symbol)
+                    if cached and (time.time() - cached[0]) < self._CACHE_TTL_SECONDS:
+                        result[symbol] = cached[1]
+                        return
+                try:
+                    tk = yf.Ticker(symbol)
+                    hist = tk.history(period="1d", auto_adjust=False)
+                    if hist is None or hist.empty:
+                        return
+                    val = hist["Close"].iloc[-1]
+                    if pd.isna(val):
+                        return
+                    price = float(val)
+                    if price > 0:
+                        result[symbol] = price
+                        with self._CACHE_LOCK:
+                            self._PRICE_CACHE[symbol] = (time.time(), price)
+                except Exception:
+                    # Drop on any error — caller falls back to cost basis
+                    return
+
+        for sym in to_fetch:
+            _fetch_one(sym)
         return result
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Test hook — drop everything in the price cache and locks."""
+        with cls._CACHE_LOCK:
+            cls._PRICE_CACHE.clear()
+        with cls._FETCH_LOCKS_GUARD:
+            cls._FETCH_LOCKS.clear()
 
 
 # Module-level default. Swapping providers later is a one-line change here,

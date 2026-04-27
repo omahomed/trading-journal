@@ -293,24 +293,6 @@ export const api = {
       }>;
     }>(`/api/journal/mct-state-by-date-range?start_date=${start_date}&end_date=${end_date}`),
 
-  nlvShadow: (portfolio = "CanSlim") =>
-    fetchJSON<{
-      portfolio: string;
-      as_of: string;
-      prior_day?: string;
-      yesterday_end_nlv?: number;
-      yesterday_cash?: number;
-      today_cash_change?: number;
-      today_trade_flow?: number;
-      today_cash?: number;
-      today_holdings_value?: number;
-      computed_nlv?: number;
-      manual_nlv?: number | null;
-      diff?: number | null;
-      diff_pct?: number | null;
-      missing_prices?: string[];
-      error?: string;
-    }>(`/api/nlv/shadow-today?portfolio=${encodeURIComponent(portfolio)}`),
   mfactor: () => fetchJSON<any>(`/api/market/mfactor`),
 
   // Config
@@ -393,6 +375,18 @@ export const api = {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string }>,
+
+  deleteTransaction: (detail_id: number, trade_id: string, ticker: string, portfolio = getActivePortfolio()) => {
+    const qs = new URLSearchParams({
+      detail_id: String(detail_id),
+      trade_id: trade_id,
+      ticker: ticker,
+      portfolio: portfolio,
+    });
+    return fetchWithAuth(`${API_BASE}/api/trades/transaction?${qs.toString()}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status?: string; error?: string }>;
+  },
 
   deleteTrade: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/trades/delete?trade_id=${encodeURIComponent(tradeId)}&portfolio=${portfolio}`, {

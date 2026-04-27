@@ -496,6 +496,46 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                           style={{ background: navColor }}>
                     {editSaving ? "Saving..." : "Save Changes"}
                   </button>
+                  <button disabled={editSaving}
+                          onClick={async () => {
+                            if (!editTx) return;
+                            const label = `${editTx.action} ${editTx.shares} ${editTx.ticker} @ $${parseFloat(String(editTx.amount || 0)).toFixed(2)}`;
+                            const confirmed = window.confirm(
+                              `Delete this transaction?\n\n${label}\n${editTx.trx_id ? `Trx ID: ${editTx.trx_id}` : ""}\n\nThe campaign's avg entry / realized P&L / status will be recomputed from the remaining transactions. If this is the only transaction, the entire campaign is removed. Soft-delete — recoverable from the DB by clearing deleted_at.`
+                            );
+                            if (!confirmed) return;
+                            setEditSaving(true);
+                            setEditResult(null);
+                            try {
+                              const res = await api.deleteTransaction(
+                                editTx.detail_id,
+                                editTx.trade_id,
+                                editTx.ticker,
+                              );
+                              if (res.error) {
+                                setEditResult({ ok: false, msg: res.error });
+                              } else {
+                                setEditResult({ ok: true, msg: "Transaction deleted" });
+                                // Reset selection so the now-stale row clears.
+                                setEditTxIdx(-1);
+                                setEditFields({});
+                                const [open, closed, det] = await Promise.all([
+                                  api.tradesOpen(getActivePortfolio()),
+                                  api.tradesClosed(getActivePortfolio(), 500),
+                                  api.tradesRecent(getActivePortfolio(), 500),
+                                ]);
+                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det as TradeDetail[]);
+                              }
+                            } catch (err: any) {
+                              setEditResult({ ok: false, msg: err.message || "Failed to delete" });
+                            } finally {
+                              setEditSaving(false);
+                            }
+                          }}
+                          className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 w-fit disabled:opacity-50"
+                          style={{ background: "var(--bg)", color: "#e5484d", border: "1px solid color-mix(in oklab, #e5484d 35%, var(--border))" }}>
+                    Delete Transaction
+                  </button>
                   {editResult && (
                     <span className="text-[12px] font-medium" style={{ color: editResult.ok ? "#16a34a" : "#e5484d" }}>
                       {editResult.msg}

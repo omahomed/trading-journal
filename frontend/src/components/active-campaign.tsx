@@ -4,7 +4,20 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { readCache, writeCache, clearCache } from "@/lib/session-cache";
 import { CaptureSnapshotButton } from "./capture-snapshot";
+
+// Bump whenever the cached payload shape changes — old caches with a stale
+// shape will be ignored and refetched. Keep this dumb-simple: increment by 1.
+const ACS_CACHE_VERSION = 1;
+const acsCacheName = (portfolioId: number) => `active-campaign::${portfolioId}`;
+
+interface ACSCache {
+  openTrades: TradePosition[];
+  details: TradeDetail[];
+  equity: number;
+  livePrices: Record<string, number>;
+}
 
 interface EnrichedPosition {
   trade_id: string;
@@ -192,7 +205,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [positions, setPositions] = useState<EnrichedPosition[]>([]);
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState<string>("");
+  // Epoch ms of when the currently-rendered data was loaded — used by the
+  // 'Updated X min ago' label. setLastUpdateMs is called both when a cache
+  // hit hydrates state and when a fresh fetch completes.
+  const [lastUpdateMs, setLastUpdateMs] = useState<number | null>(null);
+  // Tick state forces the 'Updated X min ago' label to re-render every 30s
+  // even when the user isn't interacting. Cheap, just incrementing an int.
+  const [, setFreshnessTick] = useState(0);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
@@ -207,9 +226,36 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [editPriceValue, setEditPriceValue] = useState<string>("");
   const [savingPrice, setSavingPrice] = useState(false);
 
-  const loadData = useCallback(async () => {
+  // Hydrate enriched positions + equity from a cached payload. Pure
+  // re-derivation; computeEnrichedPositions is a fast pass over arrays so
+  // this lands instantly compared to the full fetch path.
+  const hydrateFromPayload = useCallback((payload: ACSCache) => {
+    setEquity(payload.equity);
+    const enriched = computeEnrichedPositions(
+      payload.openTrades,
+      payload.details,
+      payload.equity,
+      payload.livePrices,
+    );
+    setPositions(enriched);
+  }, []);
+
+  const loadData = useCallback(async (opts?: { skipCacheRead?: boolean }) => {
+    const skipCacheRead = !!opts?.skipCacheRead;
+    const activeId = activePortfolio?.id;
+
+    // Try cache first unless the caller explicitly bypasses (Refresh button).
+    if (!skipCacheRead && activeId != null) {
+      const cached = readCache<ACSCache>(acsCacheName(activeId), ACS_CACHE_VERSION);
+      if (cached) {
+        hydrateFromPayload(cached.payload);
+        setLastUpdateMs(cached.saved_at);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
-      const activeId = activePortfolio?.id;
       const [openTrades, details, nlv, journal] = await Promise.all([
         api.tradesOpen(getActivePortfolio()).catch(() => []),
         api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
@@ -223,7 +269,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         ? (nlv as { nlv: number }).nlv
         : null;
       const eq = derivedNlv ?? (journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0);
-      setEquity(eq);
 
       // Fetch live prices for all open tickers. Pass portfolio so the
       // backend layers manual_price overrides (set per option position from
@@ -241,20 +286,26 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         }
       }
 
-      const enriched = computeEnrichedPositions(
-        openTrades as TradePosition[],
-        details as TradeDetail[],
-        eq,
-        prices,
-      );
-      setPositions(enriched);
-      setLastUpdate(new Date().toLocaleTimeString());
+      const payload: ACSCache = {
+        openTrades: openTrades as TradePosition[],
+        details: details as TradeDetail[],
+        equity: eq,
+        livePrices: prices,
+      };
+      hydrateFromPayload(payload);
+      if (activeId != null) {
+        writeCache(acsCacheName(activeId), ACS_CACHE_VERSION, payload);
+      }
+      setLastUpdateMs(Date.now());
       setLoading(false);
     } catch {
       setLoading(false);
     }
-  }, []);
+  }, [activePortfolio?.id, hydrateFromPayload]);
 
+  // Mount + portfolio-change loader. No tab-focus auto-refresh — the user
+  // explicitly opted into "stale until I click Refresh" behavior because
+  // ACS is the central position-sizing surface they visit constantly.
   useEffect(() => { loadData(); }, [loadData]);
 
   const startEditPrice = useCallback((p: EnrichedPosition) => {
@@ -304,16 +355,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     }
   }, [editPriceValue, savingPrice, cancelEditPrice, loadData]);
 
-  // Auto-refresh when tab regains focus
+  // Re-render the 'Updated X min ago' label every 30s so it stays accurate
+  // even when nothing else changes. Tab-focus auto-refresh used to live here;
+  // it was removed because it silently re-paid the full fetch cost on every
+  // tab switch even when the user only wanted to look at sizes again.
   useEffect(() => {
-    const onFocus = () => { if (!document.hidden) loadData(); };
-    document.addEventListener("visibilitychange", onFocus);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      document.removeEventListener("visibilitychange", onFocus);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [loadData]);
+    const id = setInterval(() => setFreshnessTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Close context menu on click anywhere or Escape
   useEffect(() => {
@@ -512,12 +561,34 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
               Active Campaign <em className="italic" style={{ color: navColor }}>Summary</em>
             </h1>
-            <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-              {totalPositions} open positions · {lastUpdate && `Updated ${lastUpdate}`}
+            <div className="text-[13px] mt-1.5 flex items-center gap-2" style={{ color: "var(--ink-3)" }}>
+              <span>{totalPositions} open positions</span>
+              {lastUpdateMs !== null && (() => {
+                const ageSec = Math.max(0, Math.floor((Date.now() - lastUpdateMs) / 1000));
+                let label: string;
+                if (ageSec < 30) label = "Updated just now";
+                else if (ageSec < 60) label = `Updated ${ageSec}s ago`;
+                else if (ageSec < 3600) label = `Updated ${Math.floor(ageSec / 60)} min ago`;
+                else if (ageSec < 86400) label = `Updated ${Math.floor(ageSec / 3600)}h ago`;
+                else label = `Updated ${Math.floor(ageSec / 86400)}d ago`;
+                const stale = ageSec >= 600; // 10 minutes — visually amber after that
+                const absolute = new Date(lastUpdateMs).toLocaleString();
+                return (
+                  <span className="text-[12px] font-medium"
+                        style={{ color: stale ? "#f59f00" : "var(--ink-3)" }}
+                        title={`Last loaded ${absolute}`}>
+                    · {label}
+                  </span>
+                );
+              })()}
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={loadData}
+            <button onClick={() => {
+                      const activeId = activePortfolio?.id;
+                      if (activeId != null) clearCache(acsCacheName(activeId));
+                      loadData({ skipCacheRead: true });
+                    }}
                     className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95"
                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

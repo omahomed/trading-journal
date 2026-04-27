@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -115,6 +116,29 @@ def test_override_used_when_live_price_missing(patched_compute_nlv) -> None:
     assert pos["price_source"] == "manual"
     # No price_unavailable flag because the override resolved the price.
     assert "price_unavailable" not in pos
+
+
+def test_nan_manual_price_does_not_leak_into_response(patched_compute_nlv) -> None:
+    """Regression: load_summary's Decimal-to-numeric conversion turns DB
+    NULLs in manual_price into pandas NaN. The override filter previously
+    only checked `is None`, so NaN survived `float()` and `<= 0` and ended
+    up in the response dict, which Starlette's JSONResponse rejects via
+    `allow_nan=False` — surfacing as a 500 from /api/prices/batch."""
+    configure, run = patched_compute_nlv
+    configure(
+        cash=10_000.0,
+        rows=[{"Trade_ID": "T1", "Ticker": "AAPL", "Shares": 100,
+               "Avg_Entry": 150.0, "Manual_Price": np.nan}],
+        prices={"AAPL": 200.0},
+    )
+    out = run()
+    pos = out["positions"][0]
+    # NaN must be filtered — fall through to live price.
+    assert pos["current_price"] == 200.0
+    assert pos.get("price_source") != "manual"
+    # NLV must be a finite, JSON-serializable number.
+    assert isinstance(out["nlv"], (int, float))
+    assert out["nlv"] == 30_000.0
 
 
 def test_zero_or_negative_override_ignored(patched_compute_nlv) -> None:

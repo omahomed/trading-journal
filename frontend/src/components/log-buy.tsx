@@ -192,7 +192,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [sizingMode, setSizingMode] = useState(1);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
-  const [stopMode, setStopMode] = useState<"price" | "pct">("price");
+  const [stopMode, setStopMode] = useState<"price" | "pct">("pct");
   const [stopValue, setStopValue] = useState("");
   const [slPct, setSlPct] = useState("5.0");
   const [notes, setNotes] = useState("");

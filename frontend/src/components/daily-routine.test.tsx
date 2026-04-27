@@ -13,8 +13,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 // usePortfolio is read at the top of the component; provide a stable
-// CanSlim active portfolio so the conditional shadowNlv block renders the
-// same path in every test.
+// CanSlim active portfolio so the same path renders in every test.
 vi.mock("@/lib/portfolio-context", () => ({
   usePortfolio: () => ({
     activePortfolio: { id: 1, name: "CanSlim" },
@@ -32,7 +31,6 @@ vi.mock("@/lib/api", () => ({
     batchPrices: vi.fn(),
     rallyPrefix: vi.fn(),
     tradesRecent: vi.fn(),
-    nlvShadow: vi.fn(),
     ibkrNavForDate: vi.fn(),
     journalEdit: vi.fn(),
   },
@@ -46,7 +44,6 @@ const mockedJournalLatest = vi.mocked(api.journalLatest);
 const mockedBatchPrices = vi.mocked(api.batchPrices);
 const mockedRallyPrefix = vi.mocked(api.rallyPrefix);
 const mockedTradesRecent = vi.mocked(api.tradesRecent);
-const mockedNlvShadow = vi.mocked(api.nlvShadow);
 const mockedIbkrNav = vi.mocked(api.ibkrNavForDate);
 const mockedJournalEdit = vi.mocked(api.journalEdit);
 
@@ -58,7 +55,6 @@ function setupDefaultMocks() {
   mockedBatchPrices.mockResolvedValue({ SPY: 500.0, "^IXIC": 18000.0 } as any);
   mockedRallyPrefix.mockResolvedValue({ prefix: "" } as any);
   mockedTradesRecent.mockResolvedValue([]);
-  mockedNlvShadow.mockResolvedValue(null as any);
   mockedJournalEdit.mockResolvedValue({ status: "ok", id: 1 });
 }
 
