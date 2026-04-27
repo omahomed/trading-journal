@@ -817,7 +817,7 @@ def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", p
 
 @app.get("/api/prices/batch")
 @limiter.limit("10/minute")
-def batch_prices(request: Request, tickers: str = ""):
+def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
     """Get live prices for a comma-separated list of tickers.
     Supports both stock tickers and readable option format ('LUMN 260717 $8C').
     Returns dict of {readable_ticker: price}.
@@ -825,6 +825,10 @@ def batch_prices(request: Request, tickers: str = ""):
     Delegates to the shared PriceProvider so the Dashboard NLV and Active
     Campaign Current columns are guaranteed to agree — both go through the
     same yfinance path.
+
+    When portfolio is provided, manual_price overrides on open positions in
+    that portfolio take precedence over the yfinance result for matching
+    tickers. Without portfolio, behavior is unchanged (yfinance only).
     """
     if not tickers.strip():
         return {}
@@ -844,14 +848,52 @@ def batch_prices(request: Request, tickers: str = ""):
             yf_to_readable[t] = t
 
     if not yf_symbols:
-        return {}
+        # No yfinance work to do, but overrides may still apply if portfolio
+        # is set and the requested tickers map to open positions.
+        if not portfolio:
+            return {}
 
     try:
-        prices = get_price_provider().get_current_prices(yf_symbols)
+        live = (get_price_provider().get_current_prices(yf_symbols)
+                if yf_symbols else {})
         # Re-key by the readable ticker so callers can look up by the format
         # they know (e.g. "LUMN 260717 $8C" instead of the OCC-encoded symbol).
-        return {yf_to_readable.get(yf_sym, yf_sym): price
-                for yf_sym, price in prices.items()}
+        result: dict[str, float] = {
+            yf_to_readable.get(yf_sym, yf_sym): price
+            for yf_sym, price in live.items()
+        }
+
+        # Layer manual_price overrides for open positions in the requested
+        # portfolio. Keyed by upper-cased readable ticker.
+        if portfolio:
+            try:
+                summary_df = db.load_summary(portfolio, status="OPEN")
+            except Exception:
+                summary_df = None
+            if summary_df is not None and not summary_df.empty:
+                manual_col = (
+                    "Manual_Price" if "Manual_Price" in summary_df.columns
+                    else ("manual_price" if "manual_price" in summary_df.columns
+                          else None)
+                )
+                ticker_col = "Ticker" if "Ticker" in summary_df.columns else "ticker"
+                if manual_col is not None:
+                    requested_upper = {t.upper(): t for t in ticker_list}
+                    for _, row in summary_df.iterrows():
+                        mp = row.get(manual_col)
+                        if mp is None:
+                            continue
+                        try:
+                            mp_f = float(mp)
+                        except (TypeError, ValueError):
+                            continue
+                        if mp_f <= 0:
+                            continue
+                        tkr = str(row.get(ticker_col, "") or "").upper()
+                        if tkr in requested_upper:
+                            # Re-key with the caller's original casing.
+                            result[requested_upper[tkr]] = mp_f
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -2476,6 +2518,64 @@ def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("Ca
         except Exception:
             pass
         return {"status": "ok", "trade_id": trade_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/manual-price")
+def set_trade_manual_price(body: dict):
+    """Set or clear the manual_price override on an open trades_summary row.
+
+    Body:
+        portfolio:    "CanSlim" | ...
+        trade_id:     "202602-001"
+        manual_price: <number> | null    (null clears the override)
+
+    yfinance can't reliably resolve OCC option symbols, so the live price for
+    options is unstable. The override lets the user pin a per-position price
+    that nlv_service + /api/prices/batch prefer over the live result. Cleared
+    automatically when the user blanks the field on the ACS row.
+    """
+    try:
+        portfolio = body.get("portfolio") or "CanSlim"
+        trade_id = (body.get("trade_id") or "").strip()
+        if not trade_id:
+            return {"error": "trade_id is required"}
+
+        raw = body.get("manual_price")
+        manual_price: float | None
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            manual_price = None
+        else:
+            try:
+                manual_price = float(raw)
+            except (TypeError, ValueError):
+                return {"error": "manual_price must be numeric or null"}
+            if manual_price <= 0:
+                return {"error": "manual_price must be greater than zero"}
+
+        updated = db.set_manual_price(portfolio, trade_id, manual_price)
+        if updated is None:
+            return {"error": "Trade not found or manual_price column missing"}
+        try:
+            db.load_summary.clear()
+        except Exception:
+            pass
+        try:
+            note = (
+                f"manual_price cleared" if manual_price is None
+                else f"manual_price set to {manual_price}"
+            )
+            db.log_audit(portfolio, "MANUAL_PRICE", trade_id, "", note, username="web")
+        except Exception:
+            pass
+
+        # Serialize the timestamp for JSON.
+        if updated.get("manual_price_set_at") is not None:
+            updated["manual_price_set_at"] = updated["manual_price_set_at"].isoformat()
+        if updated.get("manual_price") is not None:
+            updated["manual_price"] = float(updated["manual_price"])
+        return {"status": "ok", **updated}
     except Exception as e:
         return {"error": str(e)}
 

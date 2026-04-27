@@ -86,6 +86,29 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
             yf_symbols.append(t)
     prices = get_price_provider().get_current_prices(yf_symbols) if yf_symbols else {}
 
+    # Manual price overrides — keyed by upper-cased ticker. When set, takes
+    # precedence over the live yfinance result. Primarily a workaround for
+    # OCC option symbols yfinance can't resolve; equities can use it too.
+    # Tolerant of pre-migration-012 dataframes where the column doesn't exist.
+    manual_col = "Manual_Price" if "Manual_Price" in summary_df.columns else (
+        "manual_price" if "manual_price" in summary_df.columns else None
+    )
+    manual_overrides: dict[str, float] = {}
+    if manual_col is not None:
+        for _, row in summary_df.iterrows():
+            mp = row.get(manual_col)
+            if mp is None:
+                continue
+            try:
+                mp_f = float(mp)
+            except (TypeError, ValueError):
+                continue
+            if mp_f <= 0:
+                continue
+            tkr = str(row.get(ticker_col, "") or "").upper()
+            if tkr:
+                manual_overrides[tkr] = mp_f
+
     market_value = 0.0
     for _, row in summary_df.iterrows():
         ticker = str(row.get(ticker_col, "") or "").upper()
@@ -98,17 +121,23 @@ def compute_nlv(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         multiplier = _OPTION_CONTRACT_MULTIPLIER if is_option else 1
         yf_sym = ticker_to_yf.get(ticker)
         live = prices.get(yf_sym) if yf_sym else None
+        override = manual_overrides.get(ticker)
 
-        if live is not None:
-            mv = shares * live * multiplier
+        # Resolution order: manual override → yfinance live → cost-basis fallback.
+        resolved: float | None = override if override is not None else live
+
+        if resolved is not None:
+            mv = shares * resolved * multiplier
             position = {
                 "ticker": ticker,
                 "shares": shares,
                 "avg_entry": round(avg_entry, 4),
-                "current_price": round(live, 4),
+                "current_price": round(resolved, 4),
                 "market_value": round(mv, 2),
                 "unrealized_pl": round(mv - shares * avg_entry * multiplier, 2),
             }
+            if override is not None:
+                position["price_source"] = "manual"
         else:
             # Price unknown — fall back to cost basis so NLV stays sensible.
             # For equities: cost = shares × avg_entry. For options: avg_entry

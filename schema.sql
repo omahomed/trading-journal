@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     sell_notes TEXT,
     risk_budget NUMERIC(15, 2) DEFAULT 0,
     grade SMALLINT CHECK (grade IS NULL OR (grade BETWEEN 1 AND 5)),
+    -- Manual live-price override (Migration 012). NLV + ACS prefer this
+    -- over the yfinance result when set; NULL means 'fall through to the
+    -- live price provider'. Primarily a workaround for OCC option symbols
+    -- yfinance can't resolve.
+    manual_price NUMERIC(15, 4),
+    manual_price_set_at TIMESTAMPTZ,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_trade_per_portfolio UNIQUE (portfolio_id, trade_id)

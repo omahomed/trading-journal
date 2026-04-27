@@ -237,7 +237,25 @@ def load_summary(portfolio_name, status=None):
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            query = """
+            # Migration-tolerance for the manual_price columns (012). Prod and
+            # staging may temporarily run without them if a deploy lands before
+            # the migration. Detect once per call so older DBs don't 500 the
+            # entire load_summary path.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'manual_price'"
+                )
+                has_manual_price = cur.fetchone() is not None
+            except Exception:
+                has_manual_price = False
+            manual_price_select = (
+                's.manual_price AS "Manual_Price",\n                    '
+                's.manual_price_set_at AS "Manual_Price_Set_At",\n                    '
+                if has_manual_price else ''
+            )
+            query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
                     s.ticker AS "Ticker",
@@ -261,7 +279,7 @@ def load_summary(portfolio_name, status=None):
                     s.sell_notes AS "Sell_Notes",
                     s.risk_budget AS "Risk_Budget",
                     s.grade AS "Grade",
-                    s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule
@@ -535,6 +553,60 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
         with open('/tmp/db_journal_error.log', 'w') as f:
             f.write(error_msg)
         raise  # Re-raise so load_data() catches it and falls back to CSV
+
+
+def set_manual_price(portfolio_name, trade_id, manual_price):
+    """Set or clear the manual price override on an open trades_summary row.
+
+    manual_price=None clears the override (UI uses this when the user blanks
+    the cell). manual_price_set_at is bumped on every write so the UI can
+    surface staleness.
+
+    Returns the updated {trade_id, manual_price, manual_price_set_at} dict,
+    or None when the row isn't found / not owned by the current user (RLS).
+    Quietly no-ops when the manual_price columns don't exist yet — the same
+    migration-tolerance applied to load_summary so a code deploy that lands
+    before migration 012 doesn't 500 the endpoint.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'trades_summary' "
+                "AND column_name = 'manual_price'"
+            )
+            if cur.fetchone() is None:
+                return None
+
+            cur.execute(
+                "SELECT id FROM portfolios WHERE name = %s", (portfolio_name,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            if manual_price is None:
+                cur.execute(
+                    "UPDATE trades_summary "
+                    "SET manual_price = NULL, manual_price_set_at = NULL "
+                    "WHERE portfolio_id = %s AND trade_id = %s "
+                    "AND deleted_at IS NULL "
+                    "RETURNING trade_id, manual_price, manual_price_set_at",
+                    (portfolio_id, trade_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE trades_summary "
+                    "SET manual_price = %s, manual_price_set_at = NOW() "
+                    "WHERE portfolio_id = %s AND trade_id = %s "
+                    "AND deleted_at IS NULL "
+                    "RETURNING trade_id, manual_price, manual_price_set_at",
+                    (manual_price, portfolio_id, trade_id),
+                )
+            updated = cur.fetchone()
+            conn.commit()
+            return dict(updated) if updated else None
 
 
 # ============================================

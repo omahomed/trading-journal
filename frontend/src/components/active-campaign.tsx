@@ -36,6 +36,7 @@ interface EnrichedPosition {
   open_risk_equity: number;
   stop_pct: number;
   grade: number | null;
+  manual_price: number | null;
 }
 
 function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
@@ -172,6 +173,12 @@ function computeEnrichedPositions(
       open_risk_equity: openRiskEquity,
       stop_pct: stopPct,
       grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
+      manual_price: (() => {
+        const raw = (trade as any).manual_price;
+        if (raw === null || raw === undefined || raw === "") return null;
+        const n = parseFloat(String(raw));
+        return isFinite(n) && n > 0 ? n : null;
+      })(),
     };
   }).sort((a, b) => b.return_pct - a.return_pct);
 }
@@ -192,6 +199,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
 
+  // Inline editor state for the Current price cell on option rows. yfinance
+  // can't reliably resolve OCC option symbols, so the user pins a value here;
+  // it persists on trades_summary.manual_price and the backend layers it on
+  // top of /api/prices/batch.
+  const [editingPriceTradeId, setEditingPriceTradeId] = useState<string | null>(null);
+  const [editPriceValue, setEditPriceValue] = useState<string>("");
+  const [savingPrice, setSavingPrice] = useState(false);
+
   const loadData = useCallback(async () => {
     try {
       const activeId = activePortfolio?.id;
@@ -210,12 +225,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       const eq = derivedNlv ?? (journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0);
       setEquity(eq);
 
-      // Fetch live prices for all open tickers
+      // Fetch live prices for all open tickers. Pass portfolio so the
+      // backend layers manual_price overrides (set per option position from
+      // the inline-editable Current cell below).
       const tickers = (openTrades as TradePosition[]).map(t => t.ticker).filter(Boolean);
       let prices: Record<string, number> = {};
       if (tickers.length > 0) {
         try {
-          const result = await api.batchPrices(tickers);
+          const result = await api.batchPrices(tickers, getActivePortfolio());
           if (result && !("error" in result)) {
             prices = result;
           }
@@ -239,6 +256,53 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const startEditPrice = useCallback((p: EnrichedPosition) => {
+    setEditingPriceTradeId(p.trade_id);
+    setEditPriceValue(
+      p.manual_price !== null
+        ? String(p.manual_price)
+        : (p.current_price > 0 ? p.current_price.toFixed(2) : "")
+    );
+  }, []);
+
+  const cancelEditPrice = useCallback(() => {
+    setEditingPriceTradeId(null);
+    setEditPriceValue("");
+  }, []);
+
+  const commitEditPrice = useCallback(async (p: EnrichedPosition) => {
+    if (savingPrice) return;
+    const trimmed = editPriceValue.trim();
+    let newPrice: number | null;
+    if (trimmed === "") {
+      newPrice = null;  // clear override
+    } else {
+      const n = parseFloat(trimmed);
+      if (!isFinite(n) || n <= 0) {
+        cancelEditPrice();
+        return;
+      }
+      newPrice = n;
+    }
+    if (newPrice === p.manual_price) {
+      cancelEditPrice();
+      return;
+    }
+    setSavingPrice(true);
+    try {
+      await api.setManualPrice({
+        portfolio: getActivePortfolio(),
+        trade_id: p.trade_id,
+        manual_price: newPrice,
+      });
+      setEditingPriceTradeId(null);
+      setEditPriceValue("");
+      await loadData();
+    } finally {
+      setSavingPrice(false);
+    }
+  }, [editPriceValue, savingPrice, cancelEditPrice, loadData]);
 
   // Auto-refresh when tab regains focus
   useEffect(() => {
@@ -615,9 +679,50 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                       ${p.avg_entry.toFixed(2)}
                     </td>
-                    {/* Current Price */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                      ${p.current_price.toFixed(2)}
+                    {/* Current Price — inline-editable for option rows.
+                        Italic + 'M' badge when a manual_price override is in
+                        effect; click to edit, blur or Enter to save, blank +
+                        save to clear, Escape to cancel. */}
+                    <td className="px-2.5 py-2.5 text-right privacy-mask"
+                        style={{ fontFamily: mono, cursor: p.is_option ? "text" : "default" }}
+                        onClick={p.is_option && editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
+                        title={p.is_option
+                          ? (p.manual_price !== null
+                              ? `Manual override: $${p.manual_price.toFixed(2)}. Click to change or clear.`
+                              : "Click to set a manual price (yfinance is unreliable for option chains).")
+                          : undefined}>
+                      {editingPriceTradeId === p.trade_id ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          autoFocus
+                          disabled={savingPrice}
+                          value={editPriceValue}
+                          onChange={e => setEditPriceValue(e.target.value)}
+                          onBlur={() => commitEditPrice(p)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
+                            else if (e.key === "Escape") { e.preventDefault(); cancelEditPrice(); }
+                          }}
+                          placeholder="(blank to clear)"
+                          className="w-[80px] text-right rounded-[6px] px-1.5 py-0.5 text-[12px]"
+                          style={{ background: "var(--bg)", border: "1px solid var(--border)",
+                                   color: "var(--ink)", fontFamily: mono }}
+                        />
+                      ) : (
+                        <span style={{
+                          fontStyle: p.manual_price !== null ? "italic" : "normal",
+                          color: p.manual_price !== null ? "var(--ink-2)" : "inherit",
+                        }}>
+                          ${p.current_price.toFixed(2)}
+                          {p.manual_price !== null && (
+                            <span className="ml-1 inline-block px-1 rounded-[3px] text-[8px] font-bold align-middle"
+                                  style={{ background: "color-mix(in oklab, #3b82f6 15%, transparent)",
+                                           color: "#3b82f6", letterSpacing: "0.05em" }}
+                                  title="Manual override">M</span>
+                          )}
+                        </span>
+                      )}
                     </td>
                     {/* Avg Stop */}
                     <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: p.avg_stop > 0 ? "var(--ink)" : "var(--ink-4)" }}>

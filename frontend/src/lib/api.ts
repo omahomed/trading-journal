@@ -212,8 +212,17 @@ export const api = {
   priceLookup: (ticker: string) =>
     fetchJSON<{ ticker: string; price: number; atr: number; atr_pct: number }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),
 
-  batchPrices: (tickers: string[]) =>
-    fetchJSON<Record<string, number>>(`/api/prices/batch?tickers=${encodeURIComponent(tickers.join(","))}`),
+  setManualPrice: (body: { portfolio: string; trade_id: string; manual_price: number | null }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/manual-price`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ status: "ok"; trade_id: string; manual_price: number | null; manual_price_set_at: string | null } | { error: string }>,
+
+  batchPrices: (tickers: string[], portfolio?: string) => {
+    const qs = new URLSearchParams({ tickers: tickers.join(",") });
+    if (portfolio) qs.set("portfolio", portfolio);
+    return fetchJSON<Record<string, number>>(`/api/prices/batch?${qs.toString()}`);
+  },
 
   chartOhlcv: (ticker: string, start?: string, end?: string, period?: string, interval?: string) => {
     const params = new URLSearchParams();
