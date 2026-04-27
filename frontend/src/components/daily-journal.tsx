@@ -91,7 +91,7 @@ function exportCsv(rows: JournalHistoryPoint[]) {
     lines.push([
       String(h.day).slice(0, 10),
       (h as any).market_window || "",
-      (h as any).cash_flow ?? "",
+      (h as any).cash_change ?? (h as any).cash_flow ?? "",
       h.end_nlv ?? "",
       h.score ?? "",
       h.daily_pct_change ?? "",
@@ -300,8 +300,8 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                         </td>
                         <td className="px-2.5 py-2 privacy-mask whitespace-nowrap" style={{ fontFamily: mono }}>
                           {(() => {
-                            const cf = Number((h as any).cash_flow || 0);
-                            if (cf === 0) return <span style={{ color: "var(--ink-5)" }}>—</span>;
+                            const cf = Number((h as any).cash_change ?? (h as any).cash_flow ?? 0);
+                            if (!cf) return <span style={{ color: "var(--ink-5)" }}>—</span>;
                             const sign = cf > 0 ? "+" : "−";
                             const color = cf > 0 ? "#08a86b" : "#e5484d";
                             return <span style={{ color }}>{sign}${Math.abs(cf).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>;
