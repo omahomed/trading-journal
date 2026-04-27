@@ -168,17 +168,24 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     expect(screen.queryByText(/^Diff:/)).not.toBeInTheDocument();
   });
 
-  test("Cash + Total Holdings sub-row reads from new endpoint, both prefixed with $", async () => {
+  test("Cash + Total Holdings sub-row is NOT rendered when journal data is available", async () => {
+    // The sub-row was useful while journal and live NLV ran in parallel;
+    // now that journal is the single source of truth and live is only an
+    // informational sub-label, the breakdown is redundant (encoded in
+    // Live Exposure) and slightly misleading (the live breakdown wouldn't
+    // match the journal-headlined NLV). Numbers still live on the Trade
+    // Journal (positions) and Settings → Cash Transactions pages.
     mDash.mockResolvedValue(fullMetrics());
 
     render(<Dashboard navColor="#6366f1" />);
+    // Wait for the dashboard to finish rendering before asserting absence.
+    await screen.findByText("$486,630");
 
-    const row = await screen.findByTestId("dashboard-cash-positions-row");
-    // Cash is negative (margin account) — formatter renders the minus sign
-    expect(row).toHaveTextContent("$-430,868");
-    expect(row).toHaveTextContent("cash");
-    expect(row).toHaveTextContent("$917,499");  // 917498.78 → "917,499" rounded
-    expect(row).toHaveTextContent("positions");
+    expect(screen.queryByTestId("dashboard-cash-positions-row")).not.toBeInTheDocument();
+    // The literal " cash" / " positions" copy from the row should also
+    // be gone — guards against someone re-introducing the breakdown
+    // without the testid.
+    expect(screen.queryByText(/^\$-430,868$/)).not.toBeInTheDocument();
   });
 
   test("Drawdown tile reads from dashboard-metrics, not from history.max(end_nlv)", async () => {

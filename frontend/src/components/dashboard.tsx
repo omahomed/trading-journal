@@ -331,36 +331,17 @@ export function Dashboard({ navColor }: { navColor: string }) {
       )}
 
       {/* KPI Strip — REAL DATA */}
-      <div className="grid grid-cols-5 gap-3.5 mb-3">
+      <div className="grid grid-cols-5 gap-3.5 mb-6">
         {kpis.map((kpi) => <KPITile key={kpi.label} {...kpi} />)}
       </div>
-
-      {/* NLV breakdown: cash + positions, both sourced from the latest
-          journal entry (cash = nlv - total_holdings, total_holdings =
-          pct_invested × end_nlv / 100). The pre-refactor disclaimer
-          ("NLV excludes commissions & margin interest. Reconcile in
-          Settings to match your broker.") is gone — journal NLV now
-          comes from the broker via IBKR auto-fill, so it already
-          includes those. The "Some prices unavailable" warning is also
-          gone here (it was a live-snapshot concern; live NLV is now
-          only a sub-label on the NLV tile). */}
-      {metrics?.journal_available && (
-        <div className="flex items-center gap-4 mb-6 text-[11px] flex-wrap"
-             data-testid="dashboard-cash-positions-row"
-             style={{ color: "var(--ink-4)" }}>
-          <div>
-            <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${(metrics.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </span> cash
-          </div>
-          <span>·</span>
-          <div>
-            <span className="font-semibold privacy-mask" style={{ color: "var(--ink-3)" }}>
-              ${(metrics.total_holdings ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </span> positions
-          </div>
-        </div>
-      )}
+      {/* The cash + positions sub-row that lived here was removed once
+          journal.end_nlv became the single source of truth. The breakdown
+          was a debugging aid for the period when live and journal NLV ran
+          in parallel — now it's redundant (the Live Exposure tile encodes
+          the position-to-NLV ratio) and slightly misleading (the live
+          breakdown wouldn't match the journal-headlined NLV). The
+          underlying numbers still live on Trade Journal (positions) and
+          Settings → Cash Transactions (cash). */}
 
       {/* Two-column: EC + This Month (or full-width when maximized) */}
       <div className="grid gap-[18px]" style={{ gridTemplateColumns: ecMaximized ? "1fr" : "2fr 1fr", alignItems: "stretch" }}>
