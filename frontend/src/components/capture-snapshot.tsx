@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { api, getActivePortfolio } from "@/lib/api";
 
 interface Props {
@@ -11,9 +11,25 @@ interface Props {
   portfolio?: string;
 }
 
+const SAVE_LOCAL_KEY = "captureSnapshot.saveLocal";
+
 export function CaptureSnapshotButton({ targetSelector, snapshotType, label, portfolio = getActivePortfolio() }: Props) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [saveLocal, setSaveLocal] = useState(false);
+
+  useEffect(() => {
+    try {
+      setSaveLocal(localStorage.getItem(SAVE_LOCAL_KEY) === "1");
+    } catch { /* localStorage may be unavailable */ }
+  }, []);
+
+  const toggleSaveLocal = (checked: boolean) => {
+    setSaveLocal(checked);
+    try {
+      localStorage.setItem(SAVE_LOCAL_KEY, checked ? "1" : "0");
+    } catch { /* ignore */ }
+  };
 
   const capture = useCallback(async () => {
     setBusy(true);
@@ -41,6 +57,17 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
 
       const today = new Date();
       const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+      if (saveLocal) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${snapshotType}-${day}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
 
       // Replace-if-exists: the DB has a unique constraint on (portfolio,
       // trade_id, image_type), so uploading twice for the same day would
@@ -73,7 +100,7 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
     }
     setBusy(false);
     setTimeout(() => setMsg(null), 4000);
-  }, [targetSelector, snapshotType, portfolio]);
+  }, [targetSelector, snapshotType, portfolio, saveLocal]);
 
   return (
     <div className="flex items-center gap-2">
@@ -86,6 +113,12 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         </svg>
         {busy ? "Capturing..." : label}
       </button>
+      <label className="flex items-center gap-1.5 text-[11px] font-medium cursor-pointer select-none"
+             style={{ color: "var(--ink-3)" }}>
+        <input type="checkbox" checked={saveLocal} onChange={(e) => toggleSaveLocal(e.target.checked)}
+               className="cursor-pointer" />
+        Save copy to Downloads
+      </label>
       {msg && (
         <span className="text-[11px] font-medium" style={{ color: msg.ok ? "#16a34a" : "#e5484d" }}>
           {msg.ok ? "✓" : "✗"} {msg.text}
