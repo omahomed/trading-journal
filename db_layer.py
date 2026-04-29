@@ -438,13 +438,27 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 except Exception:
                     has_market_cycle = False
 
+                # Same gate for mct_display_day_num (migration 015) — newer DBs
+                # have it, older ones won't and SELECTing it would 500 the call.
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'mct_display_day_num'"
+                    )
+                    has_mct_day_num = cur.fetchone() is not None
+                except Exception:
+                    has_mct_day_num = False
+
                 cycle_select = 'j.market_cycle AS "Market Cycle",\n                        ' if has_market_cycle else ''
+                # Aliased as snake_case directly so normalize_journal_columns
+                # leaves it alone (the rename map only handles Pascal-case keys).
+                day_num_select = 'j.mct_display_day_num AS "mct_display_day_num",\n                        ' if has_mct_day_num else ''
                 query = f"""
                     SELECT
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        {cycle_select}j.above_21ema AS "> 21e",
+                        {cycle_select}{day_num_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
