@@ -212,13 +212,28 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # JOURNAL ENDPOINTS
 # ============================================================
 @app.get("/api/journal/latest")
-def journal_latest(portfolio: str = "CanSlim"):
-    """Get the most recent journal entry (NLV, daily change, etc.)."""
+def journal_latest(portfolio: str = "CanSlim", before: str = ""):
+    """Get the most recent journal entry (NLV, daily change, etc.).
+
+    `before` (YYYY-MM-DD, optional): when set, returns the latest entry
+    strictly before that date. Used by the Daily Routine form so editing a
+    past date pulls the correct *prior* day's NLV as the baseline for the
+    Daily % calculation — without this, editing yesterday's entry would
+    diff against yesterday's own prior-saved value (typically the
+    estimated NLV the user is trying to overwrite), producing a meaningless
+    delta.
+    """
     df = db.load_journal(portfolio)
     if df.empty:
         return {"error": "No journal data"}
     df = _normalize_journal(df)
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    if before:
+        cutoff = pd.to_datetime(str(before).strip()[:10], errors="coerce")
+        if pd.notna(cutoff):
+            df = df[df["day"] < cutoff]
+    if df.empty:
+        return {"error": "No journal data"}
     df = df.sort_values("day", ascending=False)
     row = df.iloc[0].to_dict()
     for k, v in row.items():
@@ -856,6 +871,40 @@ def _to_occ_symbol(readable_ticker):
         return None
 
 
+def _fetch_historical_closes(tickers: list[str], target_date) -> dict[str, float]:
+    """Return {ticker: close} for a specific past date via yfinance.
+
+    Used by /api/prices/batch when the caller passes a `date` param. Skips
+    option tickers (yfinance historical for options is unreliable and the
+    Daily Routine form only ever requests SPY/^IXIC). Falls back to the
+    most recent close on or before target_date if the exact day isn't a
+    trading day (handles weekends/holidays gracefully).
+    """
+    import yfinance as yf
+    out: dict[str, float] = {}
+    if not tickers:
+        return out
+    # Pull a small window (target ± a week) so weekend/holiday lookups still
+    # land on the last trading session — single-day yfinance queries can
+    # return empty when the requested day is a non-trading day.
+    start = (pd.Timestamp(target_date) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+    end = (pd.Timestamp(target_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    for t in tickers:
+        if _is_option_ticker(t):
+            continue
+        try:
+            df = yf.Ticker(t).history(start=start, end=end, auto_adjust=False)
+            if df.empty:
+                continue
+            df = df[df.index.date <= target_date]
+            if df.empty:
+                continue
+            out[t] = round(float(df["Close"].iloc[-1]), 2)
+        except Exception:
+            continue
+    return out
+
+
 @app.get("/api/prices/lookup")
 @limiter.limit("30/minute")
 def price_lookup(request: Request, ticker: str = ""):
@@ -934,21 +983,44 @@ def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", p
 
 @app.get("/api/prices/batch")
 @limiter.limit("10/minute")
-def batch_prices(request: Request, tickers: str = "", portfolio: str = ""):
-    """Get live prices for a comma-separated list of tickers.
+def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
+                 date: str = ""):
+    """Get prices for a comma-separated list of tickers.
     Supports both stock tickers and readable option format ('LUMN 260717 $8C').
     Returns dict of {readable_ticker: price}.
 
-    Delegates to the shared PriceProvider so the Dashboard NLV and Active
-    Campaign Current columns are guaranteed to agree — both go through the
-    same yfinance path.
+    `date` (YYYY-MM-DD, optional): when set to a *past* date, returns that
+    date's close from yfinance instead of the live price. Used by the Daily
+    Routine form when editing a past day so SPY/NDX/etc. reflect that day's
+    close, not the live price the user happens to be looking at later.
+    Today/future dates fall through to the live path. Manual_price overrides
+    are NOT layered in historical mode — they only apply to live snapshots.
 
-    When portfolio is provided, manual_price overrides on open positions in
-    that portfolio take precedence over the yfinance result for matching
-    tickers. Without portfolio, behavior is unchanged (yfinance only).
+    Delegates to the shared PriceProvider in live mode so the Dashboard NLV
+    and Active Campaign Current columns are guaranteed to agree — both go
+    through the same yfinance path.
+
+    When portfolio is provided (live mode only), manual_price overrides on
+    open positions in that portfolio take precedence over the yfinance
+    result for matching tickers.
     """
     if not tickers.strip():
         return {}
+
+    # Historical mode: if date is set and is strictly before today (in UTC,
+    # which is conservative — yfinance's "today" close isn't finalized until
+    # post-close anyway), pull the close for that date.
+    if date:
+        try:
+            target = pd.to_datetime(str(date).strip()[:10], errors="coerce").date()
+        except Exception:
+            target = None
+        if target is not None and target < datetime.now().date():
+            return _fetch_historical_closes(
+                [t.strip() for t in tickers.split(",") if t.strip()],
+                target,
+            )
+
     from price_providers import get_price_provider
 
     ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]

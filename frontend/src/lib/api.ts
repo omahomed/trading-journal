@@ -127,8 +127,11 @@ export type CashAction = "deposit" | "withdraw" | "reconcile";
 // API functions
 export const api = {
   // Journal
-  journalLatest: (portfolio = getActivePortfolio()) =>
-    fetchJSON<JournalEntry>(`/api/journal/latest?portfolio=${portfolio}`),
+  journalLatest: (portfolio = getActivePortfolio(), before = "") => {
+    const qs = new URLSearchParams({ portfolio });
+    if (before) qs.set("before", before);
+    return fetchJSON<JournalEntry>(`/api/journal/latest?${qs.toString()}`);
+  },
 
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
@@ -231,9 +234,10 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status: "ok"; trade_id: string; manual_price: number | null; manual_price_set_at: string | null } | { error: string }>,
 
-  batchPrices: (tickers: string[], portfolio?: string) => {
+  batchPrices: (tickers: string[], portfolio?: string, date?: string) => {
     const qs = new URLSearchParams({ tickers: tickers.join(",") });
     if (portfolio) qs.set("portfolio", portfolio);
+    if (date) qs.set("date", date);
     return fetchJSON<Record<string, number>>(`/api/prices/batch?${qs.toString()}`);
   },
 

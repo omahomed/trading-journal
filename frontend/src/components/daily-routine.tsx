@@ -86,10 +86,23 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [gradeNotes, setGradeNotes] = useState("");
   const [forceOverwrite, setForceOverwrite] = useState(false);
 
+  // portPrev + SPY/NDX must reflect the *entryDate*, not the calendar today.
+  // - portPrev: latest journal entry strictly BEFORE entryDate (so editing a
+  //   past day doesn't diff against that day's own prior estimate). Without
+  //   the `before` param, journalLatest returns the most recent entry overall
+  //   and Daily % gets computed against the wrong baseline.
+  // - SPY/NDX: when entryDate is in the past, use that date's CLOSE from
+  //   yfinance instead of the current live price. Otherwise editing a past
+  //   day silently overwrites SPY/NDX with whatever the index is doing right
+  //   now — which can be the same value across consecutive days and zero out
+  //   the Daily %% column.
   useEffect(() => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const isPastDate = entryDate < todayStr;
     Promise.all([
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 0 })),
-      api.batchPrices(["SPY", "^IXIC"]).catch(() => ({})),
+      api.journalLatest(getActivePortfolio(), entryDate).catch(() => ({ end_nlv: 0 })),
+      api.batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined).catch(() => ({})),
     ]).then(([latestJ, prices]) => {
       setPortPrev(parseFloat(String((latestJ as any).end_nlv || 0)));
       const p = prices as Record<string, number>;
@@ -97,7 +110,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       if (p["^IXIC"]) setNdxClose(p["^IXIC"].toFixed(2));
       setLoading(false);
     });
-  }, []);
+  }, [entryDate]);
 
   // Rally prefix lives in its own date-keyed effect so changing the date
   // picker refetches it. Also passes the entry date as `as_of_date` so the
