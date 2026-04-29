@@ -128,20 +128,38 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     return () => { cancelled = true; };
   }, [entryDate]);
 
-  // Auto-fill End NLV + Total Holdings from IBKR Flex Query. Runs on mount
-  // and on date change. Decoupled from the rest of the load — failures
-  // surface as one banner above the form (NLV and Holdings always succeed
-  // or fail together since they share the same response). Cancellation
-  // guard protects against the user changing the date mid-pull.
+  // Combined auto-fill effect for NLV/Holdings/Cash and report-card scores.
+  //
+  // Three data sources, prioritized in this order when populating the form:
+  //   1. IBKR Flex Query for entryDate (T+1 path) — official, settlement-
+  //      finalized numbers when available. Past dates almost always succeed.
+  //   2. Existing journal entry for entryDate — script-written values from
+  //      scripts/eod_journal_save.py (Client Portal, real-time same-day) OR
+  //      a previous manual save the user is now editing.
+  //   3. Blank — no data anywhere; user types from scratch.
+  //
+  // The existing-entry fallback prevents the silent-overwrite bug: opening
+  // Daily Routine on a date that already has saved values used to start
+  // blank and a save would zero them out. Now the form shows what's stored
+  // and a save merges only the fields the user actually edited.
+  //
+  // Report card scores, cash_change, and grade notes are pre-filled from
+  // the existing entry regardless of which path won for NLV — those are
+  // user-entered fields, never IBKR-derived.
   useEffect(() => {
     let cancelled = false;
     setNlvLoading(true);
     setIbkrError("");
-    api.ibkrNavForDate(entryDate).then(res => {
+
+    Promise.all([
+      api.ibkrNavForDate(entryDate),
+      api.journalByDate(entryDate, getActivePortfolio()).catch(() => null),
+    ]).then(([ibkr, existing]) => {
       if (cancelled) return;
-      if (res.success) {
-        const navStr = String(res.nav);
-        const holdStr = String(res.position_value);
+
+      if (ibkr.success) {
+        const navStr = String(ibkr.nav);
+        const holdStr = String(ibkr.position_value);
         setPortNlv(navStr);
         setPortHold(holdStr);
         setIbkrAutoFilledNlv(navStr);
@@ -149,16 +167,53 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         setNlvSource("ibkr_auto");
         setHoldingsSource("ibkr_auto");
         setIbkrError("");
+      } else if (existing && (existing as any).end_nlv != null) {
+        // Flex didn't deliver — fall back to whatever's already in the
+        // journal for this date (script-written or prior manual save).
+        const e = existing as any;
+        const navN = parseFloat(String(e.end_nlv || 0)) || 0;
+        const pctN = parseFloat(String(e.pct_invested || 0)) || 0;
+        const holdings = navN > 0 && pctN > 0 ? (pctN / 100) * navN : 0;
+        setPortNlv(String(navN));
+        setPortHold(holdings > 0 ? holdings.toFixed(2) : "");
+        setIbkrAutoFilledNlv("");
+        setIbkrAutoFilledHoldings("");
+        const src = String(e.nlv_source || "manual");
+        const hsrc = String(e.holdings_source || "manual");
+        setNlvSource((["manual", "ibkr_auto", "ibkr_override"].includes(src) ? src : "manual") as IbkrSource);
+        setHoldingsSource((["manual", "ibkr_auto", "ibkr_override"].includes(hsrc) ? hsrc : "manual") as IbkrSource);
+        // No banner — we have data, even if it didn't come from Flex.
+        setIbkrError("");
       } else {
-        // Soft failure (no_data_for_date, ibkr_not_configured, etc.) —
-        // both fields stay empty/editable, both source tags stay 'manual'.
-        // One banner covers the whole pull; we don't render it twice.
+        // Nothing anywhere — show the soft-failure banner so the user
+        // knows IBKR didn't auto-fill and they need to type values.
         setIbkrAutoFilledNlv("");
         setIbkrAutoFilledHoldings("");
         setNlvSource("manual");
         setHoldingsSource("manual");
-        setIbkrError(res.message || res.error || "IBKR pull failed");
+        setIbkrError(ibkr.message || ibkr.error || "IBKR pull failed");
       }
+
+      // Always restore user-entered fields from existing entry when present.
+      // These are never IBKR-derived so there's no priority question — if a
+      // saved value exists, show it. Skipping market_notes / market_action
+      // because those have their own auto-population effects (rally prefix
+      // and trade actions) that would race with this load.
+      if (existing) {
+        const e = existing as any;
+        if (e.cash_change != null) setPortCash(String(e.cash_change));
+        if (e.mistakes) setGradeNotes(String(e.mistakes));
+        try {
+          const parsed = JSON.parse(String(e.highlights || "{}"));
+          setScores(s => ({
+            plan: parsed.plan != null ? Number(parsed.plan) : s.plan,
+            stops: parsed.stops != null ? Number(parsed.stops) : s.stops,
+            sized: parsed.sized != null ? Number(parsed.sized) : s.sized,
+            fomo: parsed.fomo != null ? Number(parsed.fomo) : s.fomo,
+          }));
+        } catch { /* highlights wasn't JSON — legacy/free-text entry, ignore */ }
+      }
+
       setNlvLoading(false);
     }).catch((e: unknown) => {
       if (cancelled) return;
@@ -169,6 +224,7 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       setIbkrError(e instanceof Error ? e.message : "IBKR pull failed");
       setNlvLoading(false);
     });
+
     return () => { cancelled = true; };
   }, [entryDate]);
 

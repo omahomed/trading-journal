@@ -246,6 +246,39 @@ def journal_latest(portfolio: str = "CanSlim", before: str = ""):
     return row
 
 
+@app.get("/api/journal/by-date")
+def journal_by_date(date: str, portfolio: str = "CanSlim"):
+    """Get the journal entry for an exact date. Returns null when no row
+    exists for that day.
+
+    Used by the Daily Routine form to pre-fill fields when editing a date
+    that already has a saved entry — without this, the form starts blank
+    and a save with empty NLV/holdings would silently zero out previously-
+    saved values (notably the script-written values from
+    scripts/eod_journal_save.py).
+    """
+    df = db.load_journal(portfolio)
+    if df is None or df.empty:
+        return None
+    df = _normalize_journal(df)
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    target = pd.to_datetime(str(date).strip()[:10], errors="coerce")
+    if pd.isna(target):
+        return None
+    match = df[df["day"] == target]
+    if match.empty:
+        return None
+    row = match.iloc[0].to_dict()
+    for k, v in row.items():
+        if isinstance(v, pd.Timestamp):
+            row[k] = v.strftime("%Y-%m-%d")
+        elif pd.isna(v):
+            row[k] = None
+        elif hasattr(v, "item"):
+            row[k] = v.item()
+    return row
+
+
 @app.get("/api/journal/history")
 def journal_history(portfolio: str = "CanSlim", days: int = 365):
     """Get journal history for equity curve."""
