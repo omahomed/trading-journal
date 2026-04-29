@@ -9,7 +9,7 @@ import { CaptureSnapshotButton } from "./capture-snapshot";
 
 // Bump whenever the cached payload shape changes — old caches with a stale
 // shape will be ignored and refetched. Keep this dumb-simple: increment by 1.
-const ACS_CACHE_VERSION = 1;
+const ACS_CACHE_VERSION = 2;
 const acsCacheName = (portfolioId: number) => `active-campaign::${portfolioId}`;
 
 interface ACSCache {
@@ -262,13 +262,16 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
         api.journalLatest(getActivePortfolio()).catch(() => null),
       ]);
-      // Prefer the derived NLV (cash + live positions). Fall back to the
-      // last journal entry's end_nlv if the derivation is unavailable, and
-      // finally to 0 — the UI handles 0 by hiding the % exposure.
+      // Journal end_nlv is the canonical NLV for exposure and risk %s — it's
+      // the broker-confirmed EOD value, not a live estimate that can drift
+      // intraday with stale prices. Fall back to the derived NLV (cash + live
+      // positions) only if the journal hasn't been written yet, and finally
+      // to 0 — the UI handles 0 by hiding the % exposure.
+      const journalNlv = journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0;
       const derivedNlv = nlv && typeof nlv === "object" && !("error" in nlv)
         ? (nlv as { nlv: number }).nlv
         : null;
-      const eq = derivedNlv ?? (journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0);
+      const eq = journalNlv > 0 ? journalNlv : (derivedNlv ?? 0);
 
       // Fetch live prices for all open tickers. Pass portfolio so the
       // backend layers manual_price overrides (set per option position from
