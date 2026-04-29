@@ -7,16 +7,19 @@ import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 type ViewFilter = "week" | "month" | "all";
 type Tab = "view" | "manage";
 
+type MctStateName = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+
 type MctState = {
-  state: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
-  cap_at_100: boolean;
+  state: MctStateName;
   // display_day_num is the per-state Day count the badge renders as "D{N}".
   // POWERTREND anchors at STEP_8 firing; UPTREND/RALLY MODE anchor at cycle
-  // STEP_0; CORRECTION returns null (no suffix).
+  // STEP_0; CORRECTION returns null (no suffix). Both fields are snapshotted
+  // into the journal row at Daily Routine save time (migration 015) — the
+  // badge renders straight from the row, no live engine call.
   display_day_num: number | null;
 };
 
-const MCT_STATE_STYLES: Record<MctState["state"], { bg: string; fg: string }> = {
+const MCT_STATE_STYLES: Record<MctStateName, { bg: string; fg: string }> = {
   POWERTREND:   { bg: "#8A2BE2", fg: "#fff" },
   UPTREND:      { bg: "#08a86b", fg: "#fff" },
   "RALLY MODE": { bg: "#f59f00", fg: "#000" },
@@ -55,17 +58,9 @@ function MctStateBadge({ s }: { s: MctState | undefined }) {
     <span
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold whitespace-nowrap"
       style={{ background: st.bg, color: st.fg }}
-      title={s.cap_at_100 ? `${s.state} · capped at 100%` : s.state}
+      title={s.state}
     >
       <span>{s.state}{showDay ? ` D${s.display_day_num}` : ""}</span>
-      {s.cap_at_100 && (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-             aria-label="Capped at 100%" role="img">
-          <rect x="4" y="11" width="16" height="10" rx="2" />
-          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-        </svg>
-      )}
     </span>
   );
 }
@@ -137,8 +132,6 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
-  const [mctStates, setMctStates] = useState<Map<string, MctState>>(new Map());
-
   useEffect(() => {
     api.journalHistory(getActivePortfolio(), 0).then(h => {
       setHistory((h as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day))));
@@ -146,26 +139,22 @@ export function DailyJournal({ navColor }: { navColor: string }) {
     }).catch(() => setLoading(false));
   }, []);
 
-  // One-shot fetch of MCT V11 state across the journal's full date span.
-  // The new column joins per-day on trade_date, so a single round trip is
-  // enough — the engine replays over full history regardless of the slice.
-  useEffect(() => {
-    if (history.length === 0) return;
-    const sorted = [...history].sort((a, b) => String(a.day).localeCompare(String(b.day)));
-    const start = String(sorted[0].day).slice(0, 10);
-    const end = String(sorted[sorted.length - 1].day).slice(0, 10);
-    api.mctStateByDateRange(start, end).then(r => {
-      const m = new Map<string, MctState>();
-      for (const s of r.states || []) {
-        m.set(s.trade_date, {
-          state: s.state,
-          cap_at_100: s.cap_at_100,
-          display_day_num: s.display_day_num,
-        });
-      }
-      setMctStates(m);
-    }).catch(() => { /* ignore — column shows em-dashes */ });
-  }, [history]);
+  // MCT badge state is sourced directly from each journal row (market_cycle +
+  // mct_display_day_num, snapshotted at Daily Routine save time per migration
+  // 015). No live engine call — instant render, and the badge reflects what
+  // the user actually saw when they journaled the entry, even if engine rules
+  // change later.
+  const mctFromRow = (h: JournalHistoryPoint): MctState | undefined => {
+    const raw = String((h as any).market_cycle ?? "").toUpperCase().trim();
+    if (raw !== "POWERTREND" && raw !== "UPTREND" && raw !== "RALLY MODE" && raw !== "CORRECTION") {
+      return undefined;
+    }
+    const dayRaw = (h as any).mct_display_day_num;
+    const dayNum = typeof dayRaw === "number" && Number.isFinite(dayRaw) && dayRaw > 0
+      ? Math.round(dayRaw)
+      : null;
+    return { state: raw as MctStateName, display_day_num: dayNum };
+  };
 
   const filtered = useMemo(() => {
     if (history.length === 0) return [];
@@ -279,7 +268,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                     const heat = h.portfolio_heat || 0;
                     const mono = "var(--font-jetbrains), monospace";
                     const dateKey = String(h.day).slice(0, 10);
-                    const mct = mctStates.get(dateKey);
+                    const mct = mctFromRow(h);
                     const spyAtr = (h as any).spy_atr || 0;
                     const ndxAtr = (h as any).nasdaq_atr || 0;
                     const spyPct = (h as any).spy_daily_pct || 0;

@@ -1530,6 +1530,7 @@ def save_journal_entry(journal_entry):
             status = journal_entry.get('status', 'U')
             market_window = journal_entry.get('market_window', 'Open')
             market_cycle = journal_entry.get('market_cycle', '')
+            mct_display_day_num = journal_entry.get('mct_display_day_num')
             above_21ema = journal_entry.get('above_21ema', 0.0)
             cash_change = journal_entry.get('cash_flow', 0.0)
             beg_nlv = journal_entry.get('beginning_nlv', 0.0)
@@ -1579,6 +1580,7 @@ def save_journal_entry(journal_entry):
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, market_cycle = %s,
+                            mct_display_day_num = %s,
                             above_21ema = %s,
                             cash_change = %s, beg_nlv = %s, end_nlv = %s,
                             daily_dollar_change = %s, daily_pct_change = %s,
@@ -1593,7 +1595,9 @@ def save_journal_entry(journal_entry):
                         RETURNING id
                     """
                     cur.execute(update_query, (
-                        status, market_window, market_cycle, above_21ema,
+                        status, market_window, market_cycle,
+                        mct_display_day_num,
+                        above_21ema,
                         cash_change, beg_nlv, end_nlv,
                         daily_dollar_change, daily_pct_change,
                         pct_invested, spy, nasdaq,
@@ -1668,6 +1672,7 @@ def save_journal_entry(journal_entry):
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, market_cycle,
+                            mct_display_day_num,
                             above_21ema,
                             cash_change, beg_nlv, end_nlv, daily_dollar_change,
                             daily_pct_change, pct_invested, spy, nasdaq,
@@ -1678,12 +1683,13 @@ def save_journal_entry(journal_entry):
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
                     cur.execute(insert_query, (
                         portfolio_id, day, status, market_window, market_cycle,
+                        mct_display_day_num,
                         above_21ema,
                         cash_change, beg_nlv, end_nlv, daily_dollar_change,
                         daily_pct_change, pct_invested, spy, nasdaq,

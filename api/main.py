@@ -247,6 +247,11 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
               "portfolio_heat", "spy_atr", "nasdaq_atr"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    # mct_display_day_num is nullable INT — keep NaN distinct from 0 so the
+    # frontend can hide the "D{N}" suffix when no day count exists (e.g.
+    # CORRECTION rows, or legacy rows pre-dating migration 015).
+    if "mct_display_day_num" in df.columns:
+        df["mct_display_day_num"] = pd.to_numeric(df["mct_display_day_num"], errors="coerce")
 
     # Filter to requested days
     if days > 0:
@@ -275,7 +280,8 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
             "daily_return", "pct_invested", "portfolio_ltd",
             "spy_ltd", "ndx_ltd", "spy_daily_pct", "ndx_daily_pct",
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
-            "market_window", "market_cycle", "market_notes", "market_action",
+            "market_window", "market_cycle", "mct_display_day_num",
+            "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
             "highlights", "lowlights", "mistakes", "top_lesson"]
     available_cols = [c for c in cols if c in df.columns]
@@ -435,6 +441,72 @@ def _compute_cycle_state(as_of_date: str = "") -> str:
         return ""
 
 
+def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | None]:
+    """Compute (state_name, display_day_num) for a given date, snapshot-style.
+
+    Used by /api/journal/edit at save time to stamp both fields into the
+    trading_journal row, so the Daily Journal page can render its MCT badge
+    directly from the row instead of replaying the engine on every visit.
+
+    Anchoring rules mirror /api/journal/mct-state-by-date-range — the same
+    logic used by the dynamic endpoint the journal page used to call:
+      POWERTREND          → bars since pt_on_idx (Power-Trend ON anchor)
+      UPTREND / RALLY MODE → bars since cycle_start_idx (cycle STEP_0 anchor)
+      CORRECTION          → None (no day count)
+
+    Empty / unparseable date or engine failure → ("", None) so the caller
+    can persist NULL without breaking the journal save.
+    """
+    try:
+        from datetime import datetime as _dt
+        from api.mct_endpoint_adapter import run_engine
+
+        as_of = None
+        if as_of_date:
+            try:
+                as_of = _dt.strptime(as_of_date.strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, AttributeError):
+                as_of = None
+
+        result = run_engine("^IXIC", as_of=as_of)
+        if result.bars.empty:
+            return ("", None)
+
+        bars = result.bars
+        # Pick the row matching as_of (or the last bar if no as_of given).
+        if as_of is not None:
+            trade_dates = pd.to_datetime(bars["trade_date"]).dt.date
+            mask = trade_dates <= as_of
+            if not mask.any():
+                return ("", None)
+            row = bars[mask].iloc[-1]
+            orig_idx = int(bars[mask].index[-1])
+        else:
+            row = bars.iloc[-1]
+            orig_idx = int(bars.index[-1])
+
+        state_name = str(row["state"])
+        cycle_start_idx = row.get("cycle_start_idx")
+        pt_on_idx = row.get("pt_on_idx")
+        rally_active = bool(row.get("rally_active"))
+
+        cycle_day = 0
+        if (rally_active and cycle_start_idx is not None
+                and not pd.isna(cycle_start_idx)):
+            cycle_day = orig_idx - int(cycle_start_idx) + 1
+
+        if state_name == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
+            display_day_num: int | None = orig_idx - int(pt_on_idx) + 1
+        elif state_name in ("UPTREND", "RALLY MODE") and cycle_day > 0:
+            display_day_num = cycle_day
+        else:
+            display_day_num = None
+
+        return (state_name, display_day_num)
+    except Exception:
+        return ("", None)
+
+
 @app.post("/api/journal/edit")
 def journal_edit(entry: dict):
     """Update or insert a journal entry. Preserves existing values for fields not sent."""
@@ -462,6 +534,13 @@ def journal_edit(entry: dict):
                     "nasdaq_close": float(row.get("nasdaq", 0) or 0),
                     "market_window": str(row.get("market_window", "") or ""),
                     "market_cycle": str(row.get("market_cycle", "") or ""),
+                    "mct_display_day_num": (
+                        int(row["mct_display_day_num"])
+                        if "mct_display_day_num" in row
+                        and row["mct_display_day_num"] is not None
+                        and not pd.isna(row["mct_display_day_num"])
+                        else None
+                    ),
                     "market_notes": str(row.get("market_notes", "") or ""),
                     "market_action": str(row.get("market_action", "") or ""),
                     "portfolio_heat": float(row.get("portfolio_heat", 0) or 0),
@@ -511,6 +590,11 @@ def journal_edit(entry: dict):
             "nasdaq_close": _f("nasdaq", "nasdaq_close"),
             "market_window": _s("market_window", "market_window"),
             "market_cycle": _s("market_cycle", "market_cycle"),
+            "mct_display_day_num": (
+                int(entry["mct_display_day_num"])
+                if entry.get("mct_display_day_num") not in (None, "")
+                else existing.get("mct_display_day_num")
+            ),
             "market_notes": _s("market_notes", "market_notes"),
             "market_action": _s("market_action", "market_action"),
             "portfolio_heat": _f("portfolio_heat", "portfolio_heat"),
@@ -529,8 +613,16 @@ def journal_edit(entry: dict):
         # market_window is deprecated as of MCT V11 Phase 3a — no longer auto-filled.
         # Existing values are preserved if the caller sends them; new entries get NULL.
         day_str = str(day).strip()[:10]
-        if not journal_entry["market_cycle"]:
-            journal_entry["market_cycle"] = _compute_cycle_state(day_str)
+        # Single engine replay yields both the cycle state and the
+        # display_day_num the badge appends ("POWERTREND D3" etc.). Snapshot
+        # both into the row so the Daily Journal page can render the badge
+        # without re-running the engine on every visit.
+        if not journal_entry["market_cycle"] or journal_entry["mct_display_day_num"] is None:
+            mct_state, mct_day_num = _compute_mct_state_with_day_num(day_str)
+            if not journal_entry["market_cycle"]:
+                journal_entry["market_cycle"] = mct_state
+            if journal_entry["mct_display_day_num"] is None:
+                journal_entry["mct_display_day_num"] = mct_day_num
         if not journal_entry["spy_atr"]:
             journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
         if not journal_entry["nasdaq_atr"]:
