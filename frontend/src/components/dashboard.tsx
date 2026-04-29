@@ -272,7 +272,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       gradient: "linear-gradient(135deg, #10b981, #34d399)",
     },
     {
-      label: "LIVE EXPOSURE",
+      label: "EOD EXPOSURE",
       value: journalAvailable ? `${exposure.toFixed(1)}%` : "—",
       sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`,
       gradient: "linear-gradient(135deg, #f97316, #fb923c)",
