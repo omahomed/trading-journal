@@ -11,6 +11,8 @@ import pytest
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    is_option_ticker,
+    multiplier_for_ticker,
     normalize_journal_columns,
 )
 
@@ -194,3 +196,62 @@ class TestComputeLifoSummary:
         assert result["Shares"] == 90.0
         assert result["Avg_Entry"] == pytest.approx(50.6667, abs=1e-4)
         assert result["Status"] == "OPEN"
+
+
+class TestOptionsMultiplier:
+    """Equity options use multiplier=100; cost basis and P&L scale by it,
+    return % stays invariant. Mirrors the RKLB 260618 $80C case from the
+    bug report (6 contracts × $12.08 → $7.78)."""
+
+    def test_is_option_ticker_recognizes_readable_format(self) -> None:
+        assert is_option_ticker("RKLB 260618 $80C") is True
+        assert is_option_ticker("ARM 260618 $175C") is True
+        assert is_option_ticker("LUMN 260717 $8.5P") is True
+
+    def test_is_option_ticker_rejects_stocks(self) -> None:
+        assert is_option_ticker("AAPL") is False
+        assert is_option_ticker("BRK.B") is False
+        assert is_option_ticker("") is False
+        assert is_option_ticker(None) is False
+
+    def test_multiplier_for_ticker_routes_options_to_100(self) -> None:
+        assert multiplier_for_ticker("RKLB 260618 $80C") == 100.0
+        assert multiplier_for_ticker("AAPL") == 1.0
+
+    def test_calc_risk_budget_scales_by_multiplier(self) -> None:
+        # 6 contracts × ($12 entry - $6 stop) × 100 = $3,600 at risk
+        assert calc_risk_budget(6, 12.0, 6.0, multiplier=100) == 3600.0
+
+    def test_lifo_full_loss_scales_realized_pl(self) -> None:
+        # The RKLB scenario: 6 contracts buy @ 12.08, sell @ 7.78
+        df = pd.DataFrame([
+            {"date": "2026-04-27", "action": "BUY", "shares": 6, "amount": 12.08},
+            {"date": "2026-04-29", "action": "SELL", "shares": 6, "amount": 7.78},
+        ])
+        result = compute_lifo_summary(df, "T1", "RKLB 260618 $80C", multiplier=100)
+        assert result["Status"] == "CLOSED"
+        assert result["Realized_PL"] == pytest.approx(-2580.0)
+        assert result["Total_Cost"] == pytest.approx(7248.0)
+        assert result["Return_Pct"] == pytest.approx(-35.5960, abs=1e-3)
+        assert result["Avg_Entry"] == 12.08
+        assert result["Avg_Exit"] == 7.78
+
+    def test_lifo_open_option_position_scales_total_cost(self) -> None:
+        df = pd.DataFrame([
+            {"date": "2026-04-27", "action": "BUY", "shares": 13, "amount": 3.15},
+        ])
+        result = compute_lifo_summary(df, "T1", "LUMN 270115 $7C", multiplier=100)
+        assert result["Status"] == "OPEN"
+        assert result["Total_Cost"] == pytest.approx(4095.0)
+        assert result["Shares"] == 13.0
+        assert result["Avg_Entry"] == 3.15
+
+    def test_lifo_default_multiplier_unchanged(self) -> None:
+        """Stocks (multiplier=1, the default) keep the original behavior."""
+        df = pd.DataFrame([
+            {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 60.0},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result["Realized_PL"] == 1000.0
+        assert result["Total_Cost"] == 5000.0

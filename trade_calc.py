@@ -7,9 +7,31 @@ them with DB I/O + validation.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
+
+
+_OPTION_TICKER_RE = re.compile(r"^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$")
+
+
+def is_option_ticker(ticker: str | None) -> bool:
+    """True if ticker matches the readable option format `SYMBOL YYMMDD $STRIKE C|P`.
+
+    Matches the same shape api/main.py uses to route price lookups through
+    the OCC encoder. Used as a *fallback* for legacy rows that pre-date the
+    instrument_type column; new writes should set the column explicitly.
+    """
+    return bool(ticker and _OPTION_TICKER_RE.match(ticker.strip()))
+
+
+def multiplier_for_ticker(ticker: str | None) -> float:
+    """Standard contract multiplier inferred from ticker shape. 100 for equity
+    options, 1 for stocks. Mini options / futures options would override this
+    by passing an explicit multiplier on the trade row.
+    """
+    return 100.0 if is_option_ticker(ticker) else 1.0
 
 
 _JOURNAL_COLUMN_RENAME = {
@@ -31,16 +53,20 @@ def normalize_journal_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns={k: v for k, v in _JOURNAL_COLUMN_RENAME.items() if k in df.columns})
 
 
-def calc_risk_budget(shares: float, entry: float, stop_loss: float) -> float:
-    """Initial $ at risk: shares * (entry - stop_loss), floored at 0.
+def calc_risk_budget(
+    shares: float, entry: float, stop_loss: float, multiplier: float = 1.0
+) -> float:
+    """Initial $ at risk: shares * (entry - stop_loss) * multiplier, floored at 0.
 
     Returns 0 when the stop is missing, non-positive, or at/above entry — the
     "no stop" signal downstream risk views rely on to distinguish unsized
-    entries from truly zero-risk ones.
+    entries from truly zero-risk ones. Multiplier defaults to 1 (stocks); pass
+    100 for equity options so dollar risk reflects notional, not premium-per-
+    share.
     """
     if not (stop_loss and stop_loss > 0 and entry > stop_loss and shares > 0):
         return 0.0
-    return round(shares * (entry - stop_loss), 2)
+    return round(shares * (entry - stop_loss) * multiplier, 2)
 
 
 def compute_lifo_summary(
@@ -48,6 +74,7 @@ def compute_lifo_summary(
     trade_id: str,
     ticker: str,
     fallback_open_date: str = "",
+    multiplier: float = 1.0,
 ) -> dict[str, Any] | None:
     """Fold a campaign's BUY/SELL transactions into a summary row via LIFO.
 
@@ -55,6 +82,10 @@ def compute_lifo_summary(
     (price per share). Column names must already be normalized (snake_case).
     Returns None when no valid transactions exist — caller should interpret
     that as "delete this summary entirely."
+
+    Multiplier scales every dollar amount returned (total_cost, realized_pl).
+    Avg_entry / avg_exit / shares stay in per-contract units. Return_pct is
+    invariant under multiplier (it cancels in the ratio).
     """
     if txns.empty:
         return None
@@ -86,7 +117,6 @@ def compute_lifo_summary(
 
     remaining_shares = sum(lot["shares"] for lot in inventory)
     remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
-    avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else 0.0
 
     sells = txns[txns["action"].str.upper() == "SELL"]
     total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
@@ -96,7 +126,18 @@ def compute_lifo_summary(
     buys = txns[txns["action"].str.upper() == "BUY"]
     total_cost_all = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
     total_buy_shs = float(buys["shares"].astype(float).sum())
+    # Open trade: average over remaining inventory (LIFO post-sell). Closed
+    # trade: fall back to the volume-weighted buy average so the campaign
+    # face card keeps its entry price after the position is gone.
+    if remaining_shares > 0:
+        avg_entry = remaining_cost / remaining_shares
+    elif total_buy_shs > 0:
+        avg_entry = total_cost_all / total_buy_shs
+    else:
+        avg_entry = 0.0
     is_closed = remaining_shares < 0.01 and total_sell_shs > 0
+    # Return % is multiplier-invariant — it's a ratio of two notionals — so we
+    # apply multiplier only to absolute dollars (Total_Cost, Realized_PL).
     return_pct = (total_realized / total_cost_all * 100) if is_closed and total_cost_all > 0 else 0.0
 
     first_date = txns["date"].min()
@@ -104,6 +145,7 @@ def compute_lifo_summary(
     last_date = txns["date"].max()
     closed_date = last_date.strftime("%Y-%m-%d") if is_closed and pd.notna(last_date) else None
 
+    cost_to_report = remaining_cost if not is_closed else total_cost_all
     return {
         "Trade_ID": trade_id, "Ticker": ticker,
         "Status": "CLOSED" if is_closed else "OPEN",
@@ -112,7 +154,7 @@ def compute_lifo_summary(
         "Shares": float(remaining_shares if not is_closed else total_buy_shs),
         "Avg_Entry": float(round(avg_entry, 4)),
         "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
-        "Total_Cost": float(round(remaining_cost if not is_closed else total_cost_all, 2)),
-        "Realized_PL": float(round(total_realized, 2)),
+        "Total_Cost": float(round(cost_to_report * multiplier, 2)),
+        "Realized_PL": float(round(total_realized * multiplier, 2)),
         "Return_Pct": float(round(return_pct, 4)),
     }

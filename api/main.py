@@ -40,6 +40,8 @@ import nlv_service
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    is_option_ticker,
+    multiplier_for_ticker,
     normalize_journal_columns as _normalize_journal,
 )
 
@@ -771,6 +773,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Action": "action", "Date": "date", "Amount": "amount",
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
+        "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
@@ -854,7 +857,10 @@ def trades_recent(portfolio: str = "CanSlim", limit: int = 20):
 import re as _re
 
 def _is_option_ticker(ticker):
-    return bool(ticker and '$' in ticker and _re.search(r'\d{6}', ticker))
+    # Thin alias kept for legacy call sites — canonical impl lives in
+    # trade_calc.is_option_ticker so the LIFO engine and price routing share
+    # one ticker-pattern definition.
+    return is_option_ticker(ticker)
 
 def _to_occ_symbol(readable_ticker):
     try:
@@ -2261,7 +2267,12 @@ def log_buy(request: Request, body: dict):
         if not ticker or not trade_id or shares <= 0 or price <= 0:
             return {"error": "Missing required fields: ticker, trade_id, shares, price"}
 
-        value = shares * price
+        # Detect equity options from ticker shape (`SYMBOL YYMMDD $STRIKE C|P`)
+        # and apply the standard 100× contract multiplier so cost basis and
+        # downstream P&L reflect notional dollars, not premium-per-contract.
+        instrument_type = 'OPTION' if is_option_ticker(ticker) else 'STOCK'
+        multiplier = 100.0 if instrument_type == 'OPTION' else 1.0
+        value = shares * price * multiplier
         date_time = f"{date_str} {time_str}:00"
 
         # Determine trx_id if not provided
@@ -2285,7 +2296,8 @@ def log_buy(request: Request, body: dict):
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
+                "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                "Instrument_Type": instrument_type, "Multiplier": multiplier,
             }
         else:
             # Scale-in: load existing summary and update
@@ -2294,15 +2306,24 @@ def log_buy(request: Request, body: dict):
             existing = df_s[df_s["trade_id"] == trade_id]
             if not existing.empty:
                 row = existing.iloc[0]
+                # Inherit instrument_type from the existing campaign so a
+                # scale-in can never flip a stock trade into an option (or
+                # vice-versa). Falls back to the autodetected value if the row
+                # pre-dates Migration 016.
+                existing_instr = str(row.get("instrument_type") or "").upper() or instrument_type
+                existing_mult = float(row.get("multiplier") or 0) or multiplier
+                instrument_type = existing_instr
+                multiplier = existing_mult
+                value = shares * price * multiplier
                 old_shares = float(row.get("shares", 0))
                 old_entry = float(row.get("avg_entry", 0))
                 old_cost = float(row.get("total_cost", 0))
                 new_total_shares = old_shares + shares
                 new_total_cost = old_cost + value
-                new_avg_entry = new_total_cost / new_total_shares if new_total_shares > 0 else price
+                new_avg_entry = (new_total_cost / new_total_shares / multiplier) if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
                 existing_rb = float(row.get("risk_budget", 0) or 0)
-                added_rb = calc_risk_budget(shares, price, effective_stop)
+                added_rb = calc_risk_budget(shares, price, effective_stop, multiplier)
                 new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
@@ -2314,6 +2335,7 @@ def log_buy(request: Request, body: dict):
                     "Rule": str(row.get("rule", "") or rule or ""),
                     "Buy_Notes": str(notes or row.get("buy_notes", "") or ""),
                     "Risk_Budget": round(new_rb, 2),
+                    "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 }
             else:
                 summary_row = {
@@ -2321,7 +2343,8 @@ def log_buy(request: Request, body: dict):
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss),
+                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                    "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)
@@ -2332,6 +2355,7 @@ def log_buy(request: Request, body: dict):
             "Date": date_time, "Shares": shares, "Amount": price,
             "Value": value, "Rule": rule, "Notes": notes,
             "Stop_Loss": stop_loss, "Trx_ID": trx_id,
+            "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
         detail_id = db.save_detail_row(portfolio, detail_row)
 
@@ -2436,7 +2460,15 @@ def log_sell(request: Request, body: dict):
         if shares > current_shares:
             return {"error": f"Cannot sell {shares} shares — only {current_shares} held"}
 
-        value = shares * price
+        # Inherit instrument_type/multiplier from the existing campaign so the
+        # LIFO realized_pl + total_cost recompute use the right unit. Falls
+        # back to autodetect for legacy rows that pre-date Migration 016.
+        instrument_type = str(row.get("instrument_type") or "").upper() \
+            or ('OPTION' if is_option_ticker(ticker) else 'STOCK')
+        multiplier = float(row.get("multiplier") or 0) \
+            or (100.0 if instrument_type == 'OPTION' else 1.0)
+
+        value = shares * price * multiplier
         date_time = f"{date_str} {time_str}:00"
 
         # Generate trx_id if not provided
@@ -2456,6 +2488,7 @@ def log_sell(request: Request, body: dict):
             "Date": date_time, "Shares": shares, "Amount": price,
             "Value": value, "Rule": rule, "Notes": notes,
             "Realized_PL": 0, "Trx_ID": trx_id,
+            "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
         detail_id = db.save_detail_row(portfolio, detail_row)
 
@@ -2499,7 +2532,10 @@ def log_sell(request: Request, body: dict):
         buys = txns[txns["action"].str.upper() == "BUY"]
         total_cost = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
         total_buy_shs = float(buys["shares"].astype(float).sum())
+        # Return % is multiplier-invariant (ratio cancels). Apply multiplier
+        # only to absolute dollars (Total_Cost, Realized_PL).
         return_pct = (total_realized / total_cost * 100) if is_closed and total_cost > 0 else 0.0
+        cost_to_report = remaining_cost if not is_closed else total_cost
 
         summary_row = {
             "Trade_ID": trade_id, "Ticker": str(ticker),
@@ -2509,13 +2545,14 @@ def log_sell(request: Request, body: dict):
             "Shares": float(remaining_shares if not is_closed else total_buy_shs),
             "Avg_Entry": float(round(avg_entry, 4)),
             "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
-            "Total_Cost": float(round(remaining_cost if not is_closed else total_cost, 2)),
-            "Realized_PL": float(round(total_realized, 2)),
+            "Total_Cost": float(round(cost_to_report * multiplier, 2)),
+            "Realized_PL": float(round(total_realized * multiplier, 2)),
             "Return_Pct": float(round(return_pct, 4)),
             "Sell_Rule": rule,
             "Sell_Notes": notes,
             "Rule": str(row.get("rule", "") or ""),
             "Buy_Notes": str(row.get("buy_notes", "") or ""),
+            "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
         if grade_raw is not None and str(grade_raw).strip() != "":
             try:
@@ -2535,7 +2572,7 @@ def log_sell(request: Request, body: dict):
 
         return {
             "status": "ok", "detail_id": detail_id, "summary_id": summary_id,
-            "trx_id": trx_id, "realized_pl": round(total_realized, 2),
+            "trx_id": trx_id, "realized_pl": round(total_realized * multiplier, 2),
             "remaining_shares": round(remaining_shares, 4),
             "is_closed": is_closed,
         }
@@ -2551,18 +2588,41 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         detail_id = body.get("detail_id")
         portfolio = body.get("portfolio", "CanSlim")
         trade_id = body.get("trade_id", "")
+        ticker = body.get("ticker", "")
 
         if not detail_id:
             return {"error": "detail_id is required"}
 
+        # Resolve the multiplier from the existing detail row so an edit can't
+        # collapse an option's notional back to per-contract premium just
+        # because the form forgot to send it. Falls back to ticker-pattern
+        # autodetect for legacy rows.
+        df_d = db.load_details(portfolio)
+        multiplier = 1.0
+        if not df_d.empty:
+            df_d = _normalize_trades(df_d)
+            existing = df_d[df_d.get("detail_id", df_d.index) == detail_id] if "detail_id" in df_d.columns else df_d.iloc[0:0]
+            if not existing.empty:
+                m = existing.iloc[0].get("multiplier")
+                if m is not None and float(m) > 0:
+                    multiplier = float(m)
+        if multiplier == 1.0 and is_option_ticker(ticker):
+            multiplier = 100.0
+
+        shares = float(body.get("shares") or 0)
+        amount = float(body.get("amount") or 0)
+        # Recompute value server-side so detail.value stays consistent with
+        # shares × amount × multiplier regardless of what the form posted.
+        value = round(shares * amount * multiplier, 2)
+
         row_dict = {
             "Trade_ID": trade_id,
-            "Ticker": body.get("ticker", ""),
+            "Ticker": ticker,
             "Action": body.get("action", ""),
             "Date": body.get("date", ""),
-            "Shares": body.get("shares", 0),
-            "Amount": body.get("amount", 0),
-            "Value": body.get("value", 0),
+            "Shares": shares,
+            "Amount": amount,
+            "Value": value,
             "Rule": body.get("rule", ""),
             "Notes": body.get("notes", ""),
             "Stop_Loss": body.get("stop_loss", 0),
@@ -2577,7 +2637,7 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # closed the trade — the card still shows the pre-edit P&L).
         try:
             if trade_id:
-                _recompute_summary_lifo(portfolio, trade_id, body.get("ticker", ""))
+                _recompute_summary_lifo(portfolio, trade_id, ticker)
         except Exception:
             pass
 
@@ -2642,10 +2702,29 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         return
     df_d = _normalize_trades(df_d)
     txns = df_d[df_d["trade_id"] == trade_id]
-    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date)
+    # Resolve multiplier from the campaign's detail rows (Migration 016). Falls
+    # back to ticker-pattern autodetect for any pre-migration row that still
+    # has the default 1× multiplier.
+    instrument_type = 'STOCK'
+    multiplier = 1.0
+    if not txns.empty:
+        if "multiplier" in txns.columns:
+            mults = pd.to_numeric(txns["multiplier"], errors="coerce").dropna()
+            if not mults.empty and float(mults.max()) > 1:
+                multiplier = float(mults.max())
+        if "instrument_type" in txns.columns:
+            types = txns["instrument_type"].dropna().astype(str).str.upper().unique().tolist()
+            if 'OPTION' in types:
+                instrument_type = 'OPTION'
+        if multiplier == 1.0 and is_option_ticker(ticker):
+            multiplier = 100.0
+            instrument_type = 'OPTION'
+    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date, multiplier=multiplier)
     if summary_row is None:
         db.delete_trade(portfolio, trade_id)
         return
+    summary_row["Instrument_Type"] = instrument_type
+    summary_row["Multiplier"] = multiplier
     db.save_summary_row(portfolio, summary_row)
 
 

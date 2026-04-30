@@ -279,6 +279,8 @@ def load_summary(portfolio_name, status=None):
                     s.sell_notes AS "Sell_Notes",
                     s.risk_budget AS "Risk_Budget",
                     s.grade AS "Grade",
+                    s.instrument_type AS "Instrument_Type",
+                    s.multiplier AS "Multiplier",
                     {manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
@@ -367,7 +369,9 @@ def load_details(portfolio_name, trade_id=None):
                     d.trx_id AS "Trx_ID",
                     d.exec_grade AS "Exec_Grade",
                     d.behavior_tag AS "Behavior_Tag",
-                    d.retro_notes AS "Retro_Notes"
+                    d.retro_notes AS "Retro_Notes",
+                    d.instrument_type AS "Instrument_Type",
+                    d.multiplier AS "Multiplier"
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
                 WHERE p.name = %s
@@ -684,75 +688,58 @@ def save_summary_row(portfolio_name, row_dict):
                 except (ValueError, TypeError):
                     grade_clean = None
 
+            # instrument_type/multiplier (Migration 016) only get written when
+            # the caller passes them. Omitting both leaves the existing DB
+            # values untouched, which matters for legacy callers that never
+            # supply them (status updates, grade-only edits, etc.).
+            instrument_type_val = row_dict.get('Instrument_Type')
+            multiplier_val = row_dict.get('Multiplier')
+            update_instrument = instrument_type_val is not None or multiplier_val is not None
+
             if existing:
                 # UPDATE existing trade — try with grade, fall back without.
                 try:
+                    set_clauses = [
+                        "ticker = %s", "status = %s", "open_date = %s", "closed_date = %s",
+                        "shares = %s", "avg_entry = %s", "avg_exit = %s", "total_cost = %s",
+                        "realized_pl = %s", "unrealized_pl = %s", "return_pct = %s",
+                        "sell_rule = %s", "notes = %s", "stop_loss = %s", "rule = %s",
+                        "buy_notes = %s", "sell_notes = %s", "risk_budget = %s",
+                    ]
+                    params_list = [
+                        row_dict.get('Ticker'),
+                        row_dict.get('Status', 'OPEN'),
+                        clean_value(row_dict.get('Open_Date')),
+                        clean_value(row_dict.get('Closed_Date')),
+                        row_dict.get('Shares', 0),
+                        row_dict.get('Avg_Entry', 0),
+                        row_dict.get('Avg_Exit', 0),
+                        row_dict.get('Total_Cost', 0),
+                        row_dict.get('Realized_PL', 0),
+                        row_dict.get('Unrealized_PL', 0),
+                        row_dict.get('Return_Pct', 0),
+                        row_dict.get('Sell_Rule'),
+                        row_dict.get('Notes'),
+                        row_dict.get('Stop_Loss'),
+                        row_dict.get('Rule'),
+                        row_dict.get('Buy_Notes'),
+                        row_dict.get('Sell_Notes'),
+                        row_dict.get('Risk_Budget', 0),
+                    ]
                     if update_grade:
-                        update_query = """
-                            UPDATE trades_summary
-                            SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
-                                shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
-                                realized_pl = %s, unrealized_pl = %s, return_pct = %s,
-                                sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
-                                buy_notes = %s, sell_notes = %s, risk_budget = %s,
-                                grade = %s
-                            WHERE id = %s
-                            RETURNING id
-                        """
-                        params = (
-                            row_dict.get('Ticker'),
-                            row_dict.get('Status', 'OPEN'),
-                            clean_value(row_dict.get('Open_Date')),
-                            clean_value(row_dict.get('Closed_Date')),
-                            row_dict.get('Shares', 0),
-                            row_dict.get('Avg_Entry', 0),
-                            row_dict.get('Avg_Exit', 0),
-                            row_dict.get('Total_Cost', 0),
-                            row_dict.get('Realized_PL', 0),
-                            row_dict.get('Unrealized_PL', 0),
-                            row_dict.get('Return_Pct', 0),
-                            row_dict.get('Sell_Rule'),
-                            row_dict.get('Notes'),
-                            row_dict.get('Stop_Loss'),
-                            row_dict.get('Rule'),
-                            row_dict.get('Buy_Notes'),
-                            row_dict.get('Sell_Notes'),
-                            row_dict.get('Risk_Budget', 0),
-                            grade_clean,
-                            existing[0],
-                        )
-                    else:
-                        update_query = """
-                            UPDATE trades_summary
-                            SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
-                                shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
-                                realized_pl = %s, unrealized_pl = %s, return_pct = %s,
-                                sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
-                                buy_notes = %s, sell_notes = %s, risk_budget = %s
-                            WHERE id = %s
-                            RETURNING id
-                        """
-                        params = (
-                            row_dict.get('Ticker'),
-                            row_dict.get('Status', 'OPEN'),
-                            clean_value(row_dict.get('Open_Date')),
-                            clean_value(row_dict.get('Closed_Date')),
-                            row_dict.get('Shares', 0),
-                            row_dict.get('Avg_Entry', 0),
-                            row_dict.get('Avg_Exit', 0),
-                            row_dict.get('Total_Cost', 0),
-                            row_dict.get('Realized_PL', 0),
-                            row_dict.get('Unrealized_PL', 0),
-                            row_dict.get('Return_Pct', 0),
-                            row_dict.get('Sell_Rule'),
-                            row_dict.get('Notes'),
-                            row_dict.get('Stop_Loss'),
-                            row_dict.get('Rule'),
-                            row_dict.get('Buy_Notes'),
-                            row_dict.get('Sell_Notes'),
-                            row_dict.get('Risk_Budget', 0),
-                            existing[0],
-                        )
+                        set_clauses.append("grade = %s")
+                        params_list.append(grade_clean)
+                    if update_instrument:
+                        set_clauses.append("instrument_type = %s")
+                        params_list.append(instrument_type_val or 'STOCK')
+                        set_clauses.append("multiplier = %s")
+                        params_list.append(multiplier_val if multiplier_val is not None else 1)
+                    update_query = (
+                        f"UPDATE trades_summary SET {', '.join(set_clauses)} "
+                        "WHERE id = %s RETURNING id"
+                    )
+                    params_list.append(existing[0])
+                    params = tuple(params_list)
                     cur.execute(update_query, params)
                 except Exception:
                     # DB missing grade column — retry without
@@ -789,20 +776,16 @@ def save_summary_row(portfolio_name, row_dict):
                         existing[0],
                     ))
             else:
-                # INSERT new trade — try with grade, fall back without.
+                # INSERT new trade — try with grade + instrument_type, fall
+                # back without (legacy schema where Migration 016 hasn't run).
                 try:
-                    insert_query = """
-                        INSERT INTO trades_summary (
-                            portfolio_id, trade_id, ticker, status, open_date, closed_date,
-                            shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
-                            return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes, risk_budget,
-                            grade
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        )
-                        RETURNING id
-                    """
-                    cur.execute(insert_query, (
+                    insert_cols = [
+                        "portfolio_id", "trade_id", "ticker", "status", "open_date", "closed_date",
+                        "shares", "avg_entry", "avg_exit", "total_cost", "realized_pl", "unrealized_pl",
+                        "return_pct", "sell_rule", "notes", "stop_loss", "rule",
+                        "buy_notes", "sell_notes", "risk_budget", "grade",
+                    ]
+                    insert_vals = [
                         portfolio_id,
                         row_dict.get('Trade_ID'),
                         row_dict.get('Ticker'),
@@ -824,7 +807,19 @@ def save_summary_row(portfolio_name, row_dict):
                         row_dict.get('Sell_Notes'),
                         row_dict.get('Risk_Budget', 0),
                         grade_clean,
-                    ))
+                    ]
+                    if update_instrument:
+                        insert_cols += ["instrument_type", "multiplier"]
+                        insert_vals += [
+                            instrument_type_val or 'STOCK',
+                            multiplier_val if multiplier_val is not None else 1,
+                        ]
+                    placeholders = ", ".join(["%s"] * len(insert_vals))
+                    insert_query = (
+                        f"INSERT INTO trades_summary ({', '.join(insert_cols)}) "
+                        f"VALUES ({placeholders}) RETURNING id"
+                    )
+                    cur.execute(insert_query, tuple(insert_vals))
                 except Exception:
                     conn.rollback()
                     insert_query = """
@@ -903,16 +898,12 @@ def save_detail_row(portfolio_name, row_dict):
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            insert_query = """
-                INSERT INTO trades_details (
-                    portfolio_id, trade_id, ticker, action, date, shares, amount, value,
-                    rule, notes, realized_pl, stop_loss, trx_id, exec_grade, behavior_tag, retro_notes
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING id
-            """
-            cur.execute(insert_query, (
+            insert_cols = [
+                "portfolio_id", "trade_id", "ticker", "action", "date", "shares", "amount", "value",
+                "rule", "notes", "realized_pl", "stop_loss", "trx_id",
+                "exec_grade", "behavior_tag", "retro_notes",
+            ]
+            insert_vals = [
                 portfolio_id,
                 row_dict.get('Trade_ID'),
                 row_dict.get('Ticker'),
@@ -928,8 +919,23 @@ def save_detail_row(portfolio_name, row_dict):
                 row_dict.get('Trx_ID'),
                 row_dict.get('Exec_Grade'),
                 row_dict.get('Behavior_Tag'),
-                row_dict.get('Retro_Notes')
-            ))
+                row_dict.get('Retro_Notes'),
+            ]
+            # Migration 016: persist instrument_type + multiplier when caller
+            # passes them. Defaults (STOCK / 1) on the column take over when
+            # omitted, so legacy callers stay working.
+            if 'Instrument_Type' in row_dict or 'Multiplier' in row_dict:
+                insert_cols += ["instrument_type", "multiplier"]
+                insert_vals += [
+                    row_dict.get('Instrument_Type') or 'STOCK',
+                    row_dict.get('Multiplier') if row_dict.get('Multiplier') is not None else 1,
+                ]
+            placeholders = ", ".join(["%s"] * len(insert_vals))
+            insert_query = (
+                f"INSERT INTO trades_details ({', '.join(insert_cols)}) "
+                f"VALUES ({placeholders}) RETURNING id"
+            )
+            cur.execute(insert_query, tuple(insert_vals))
 
             row_id = cur.fetchone()[0]
 

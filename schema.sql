@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     -- yfinance can't resolve.
     manual_price NUMERIC(15, 4),
     manual_price_set_at TIMESTAMPTZ,
+    -- Migration 016. 'STOCK' or 'OPTION'. Equity options use multiplier=100;
+    -- stocks use 1. Persisted at trade time so cost-basis / P&L math stays
+    -- correct even if we later support mini options or futures (different
+    -- multipliers).
+    instrument_type VARCHAR(10) NOT NULL DEFAULT 'STOCK'
+        CHECK (instrument_type IN ('STOCK', 'OPTION')),
+    multiplier NUMERIC(8, 2) NOT NULL DEFAULT 1,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_trade_per_portfolio UNIQUE (portfolio_id, trade_id)
