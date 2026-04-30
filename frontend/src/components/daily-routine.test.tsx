@@ -59,7 +59,11 @@ function setupDefaultMocks() {
 }
 
 
-describe("DailyRoutine — IBKR auto-fill", () => {
+// IBKR_AUTOFILL_ENABLED in daily-routine.tsx is currently false — the
+// component skips the entire effect, so all tests that depend on the
+// auto-fill firing or the warning banner rendering are .skip'd. Flip back
+// to .describe when the upstream Flex Query issue is fixed.
+describe.skip("DailyRoutine — IBKR auto-fill", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupDefaultMocks();
@@ -216,7 +220,7 @@ describe("DailyRoutine — IBKR auto-fill", () => {
 });
 
 
-describe("DailyRoutine — IBKR Total Holdings auto-fill", () => {
+describe.skip("DailyRoutine — IBKR Total Holdings auto-fill", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupDefaultMocks();

@@ -4,6 +4,14 @@ import { useState, useEffect } from "react";
 import { api, getActivePortfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 
+// IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
+// "request error (1001) — statement could not be generated" intermittently,
+// so the auto-pull is more annoying than helpful. Manual entry only until
+// the upstream issue is resolved. Flip this back to true to re-enable the
+// effect + the warning banner; the matching test blocks in
+// daily-routine.test.tsx are .skip'd while this is false.
+const IBKR_AUTOFILL_ENABLED = false;
+
 const REPORT_CATEGORIES = [
   { key: "plan", label: "Followed plan" },
   { key: "stops", label: "Respected stops" },
@@ -134,6 +142,13 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   // or fail together since they share the same response). Cancellation
   // guard protects against the user changing the date mid-pull.
   useEffect(() => {
+    if (!IBKR_AUTOFILL_ENABLED) {
+      // Dormant mode: skip the network call, leave NLV / Holdings empty
+      // for manual entry, and never raise the warning banner.
+      setNlvLoading(false);
+      setIbkrError("");
+      return;
+    }
     let cancelled = false;
     setNlvLoading(true);
     setIbkrError("");
