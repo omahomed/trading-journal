@@ -1,16 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
 import { usePortfolio } from "@/lib/portfolio-context";
-import { readCache, writeCache, clearCache } from "@/lib/session-cache";
+import { readCache, writeCache } from "@/lib/session-cache";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 
 // Bump whenever the cached payload shape changes — old caches with a stale
 // shape will be ignored and refetched. Keep this dumb-simple: increment by 1.
 const ACS_CACHE_VERSION = 2;
 const acsCacheName = (portfolioId: number) => `active-campaign::${portfolioId}`;
+// Background refetch debounce: focus/mount events within this window of the
+// last successful fetch reuse the in-memory data instead of re-firing the
+// fan-out. Short enough that any "I came back to size a position" moment
+// hits live prices; long enough that bouncing between Dashboard and ACS
+// doesn't hammer yfinance.
+const STALE_THROTTLE_MS = 20_000;
 
 interface ACSCache {
   openTrades: TradePosition[];
@@ -212,6 +218,19 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // Tick state forces the 'Updated X min ago' label to re-render every 30s
   // even when the user isn't interacting. Cheap, just incrementing an int.
   const [, setFreshnessTick] = useState(0);
+  // True while a background revalidation fetch is in flight. Drives the
+  // pulsing dot next to the freshness label so the user can see fresh data
+  // is on the way without the table being yanked into a skeleton state.
+  const [refetching, setRefetching] = useState(false);
+  // Set when the most recent background fetch failed. We keep showing the
+  // stale data and surface this as a small red indicator instead of blanking
+  // — actionable while still being honest about freshness.
+  const [refetchError, setRefetchError] = useState(false);
+  // Throttle / dedupe state. Refs (not state) so loadData stays stable and
+  // the focus listener doesn't re-bind on every fetch.
+  const lastFetchAtRef = useRef<number>(0);
+  const inFlightRef = useRef(false);
+  const lastActiveIdRef = useRef<number | undefined>(undefined);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("return_pct");
@@ -240,20 +259,39 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     setPositions(enriched);
   }, []);
 
-  const loadData = useCallback(async (opts?: { skipCacheRead?: boolean }) => {
-    const skipCacheRead = !!opts?.skipCacheRead;
+  const loadData = useCallback(async (opts?: { force?: boolean }) => {
+    const force = !!opts?.force;
     const activeId = activePortfolio?.id;
 
-    // Try cache first unless the caller explicitly bypasses (Refresh button).
-    if (!skipCacheRead && activeId != null) {
-      const cached = readCache<ACSCache>(acsCacheName(activeId), ACS_CACHE_VERSION);
-      if (cached) {
-        hydrateFromPayload(cached.payload);
-        setLastUpdateMs(cached.saved_at);
-        setLoading(false);
-        return;
+    // First load OR portfolio switch: hydrate from the cache synchronously
+    // so the table paints instantly. Reset the throttle ref so the new
+    // portfolio's data gets a chance to refetch.
+    if (lastActiveIdRef.current !== activeId) {
+      lastActiveIdRef.current = activeId;
+      lastFetchAtRef.current = 0;
+      if (activeId != null) {
+        const cached = readCache<ACSCache>(acsCacheName(activeId), ACS_CACHE_VERSION);
+        if (cached) {
+          hydrateFromPayload(cached.payload);
+          setLastUpdateMs(cached.saved_at);
+          setLoading(false);
+          lastFetchAtRef.current = cached.saved_at;
+        }
       }
     }
+
+    // Throttle: if a recent fetch already gave us fresh data, skip the
+    // network round-trip. The Refresh button passes force=true to bypass.
+    if (!force && Date.now() - lastFetchAtRef.current < STALE_THROTTLE_MS) {
+      setLoading(false);
+      return;
+    }
+
+    // Dedupe: if a fetch is already in flight (e.g. focus fires while the
+    // mount fetch is still resolving), don't start a second one.
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setRefetching(true);
 
     try {
       const [openTrades, details, nlv, journal] = await Promise.all([
@@ -299,17 +337,42 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       if (activeId != null) {
         writeCache(acsCacheName(activeId), ACS_CACHE_VERSION, payload);
       }
-      setLastUpdateMs(Date.now());
-      setLoading(false);
+      const now = Date.now();
+      setLastUpdateMs(now);
+      lastFetchAtRef.current = now;
+      setRefetchError(false);
     } catch {
+      // Keep stale data on screen; surface failure via refetchError dot.
+      setRefetchError(true);
+    } finally {
       setLoading(false);
+      setRefetching(false);
+      inFlightRef.current = false;
     }
   }, [activePortfolio?.id, hydrateFromPayload]);
 
-  // Mount + portfolio-change loader. No tab-focus auto-refresh — the user
-  // explicitly opted into "stale until I click Refresh" behavior because
-  // ACS is the central position-sizing surface they visit constantly.
+  // Mount + portfolio-change loader. Cached payload paints instantly; a
+  // background fetch (subject to STALE_THROTTLE_MS) revalidates so prices
+  // stay current without the user clicking Refresh.
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Refetch on tab/window focus so coming back to the page from another tab
+  // (or another app) lands fresh prices. STALE_THROTTLE_MS prevents this
+  // from hammering the backend during quick tab-flips.
+  useEffect(() => {
+    const onVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        loadData();
+      }
+    };
+    const onFocus = () => loadData();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [loadData]);
 
   const startEditPrice = useCallback((p: EnrichedPosition) => {
     setEditingPriceTradeId(p.trade_id);
@@ -352,16 +415,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       });
       setEditingPriceTradeId(null);
       setEditPriceValue("");
-      await loadData();
+      await loadData({ force: true });
     } finally {
       setSavingPrice(false);
     }
   }, [editPriceValue, savingPrice, cancelEditPrice, loadData]);
 
   // Re-render the 'Updated X min ago' label every 30s so it stays accurate
-  // even when nothing else changes. Tab-focus auto-refresh used to live here;
-  // it was removed because it silently re-paid the full fetch cost on every
-  // tab switch even when the user only wanted to look at sizes again.
+  // even when nothing else changes.
   useEffect(() => {
     const id = setInterval(() => setFreshnessTick(t => t + 1), 30_000);
     return () => clearInterval(id);
@@ -576,28 +637,35 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                 else label = `Updated ${Math.floor(ageSec / 86400)}d ago`;
                 const stale = ageSec >= 600; // 10 minutes — visually amber after that
                 const absolute = new Date(lastUpdateMs).toLocaleString();
+                // Indicator: blue pulse while a background fetch is running,
+                // red dot if the last fetch failed (stale data still on screen).
+                const dotColor = refetching ? "#3b82f6" : refetchError ? "#e5484d" : null;
                 return (
-                  <span className="text-[12px] font-medium"
+                  <span className="text-[12px] font-medium flex items-center gap-1.5"
                         style={{ color: stale ? "#f59f00" : "var(--ink-3)" }}
-                        title={`Last loaded ${absolute}`}>
+                        title={refetchError ? `Couldn't refresh — showing data from ${absolute}` : `Last loaded ${absolute}`}>
+                    {dotColor && (
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${refetching ? "animate-pulse" : ""}`}
+                            style={{ background: dotColor }} />
+                    )}
                     · {label}
+                    {refetching && <span className="text-[var(--ink-4)]">· refreshing</span>}
+                    {refetchError && !refetching && <span style={{ color: "#e5484d" }}>· refresh failed</span>}
                   </span>
                 );
               })()}
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => {
-                      const activeId = activePortfolio?.id;
-                      if (activeId != null) clearCache(acsCacheName(activeId));
-                      loadData({ skipCacheRead: true });
-                    }}
-                    className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95"
+            <button onClick={() => loadData({ force: true })}
+                    disabled={refetching}
+                    className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                   className={refetching ? "animate-spin" : undefined}>
                 <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
               </svg>
-              Refresh
+              {refetching ? "Refreshing…" : "Refresh"}
             </button>
             <CaptureSnapshotButton targetSelector="#campaign-capture-root" snapshotType="campaign" label="Capture EOD Snapshot" />
           </div>
