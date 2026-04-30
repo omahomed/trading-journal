@@ -141,16 +141,26 @@ export function LogSell({ navColor }: { navColor: string }) {
   }, [selectedTrade]); // intentionally not `selected` to avoid thrash
   const sharesNum = parseFloat(shares) || 0;
   const priceNum = parseFloat(price) || 0;
-  const proceeds = sharesNum * priceNum;
+  // Detect option from the selected campaign's metadata first (preferred — set
+  // by Migration 016), with a ticker-shape fallback for any legacy row that
+  // hasn't been recomputed yet. Multiplier scales proceeds + realized P&L
+  // into notional dollars; return % is per-contract and stays invariant.
+  const isOption = String((selected as any)?.instrument_type || "").toUpperCase() === "OPTION"
+    || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(selected?.ticker || ""));
+  const multiplier = isOption
+    ? Math.max(parseFloat(String((selected as any)?.multiplier || 0)) || 100, 1)
+    : 1;
+  const unitLabel = isOption ? "Contracts" : "Shares";
+  const proceeds = sharesNum * priceNum * multiplier;
   const avgEntry = selected?.avg_entry || 0;
   const returnPct = avgEntry > 0 && priceNum > 0 ? ((priceNum - avgEntry) / avgEntry) * 100 : 0;
-  const realizedPl = avgEntry > 0 ? (priceNum - avgEntry) * sharesNum : 0;
+  const realizedPl = avgEntry > 0 ? (priceNum - avgEntry) * sharesNum * multiplier : 0;
 
   const handleSubmit = async () => {
     if (!selectedTrade || !selected) return;
-    if (sharesNum <= 0) return setSubmitResult({ ok: false, msg: "Shares must be > 0" });
+    if (sharesNum <= 0) return setSubmitResult({ ok: false, msg: `${unitLabel} must be > 0` });
     if (priceNum <= 0) return setSubmitResult({ ok: false, msg: "Price must be > 0" });
-    if (sharesNum > selected.shares) return setSubmitResult({ ok: false, msg: `Max shares: ${selected.shares}` });
+    if (sharesNum > selected.shares) return setSubmitResult({ ok: false, msg: `Max ${unitLabel.toLowerCase()}: ${selected.shares}` });
 
     setSubmitting(true);
     setSubmitResult(null);
@@ -230,17 +240,26 @@ export function LogSell({ navColor }: { navColor: string }) {
             <span className="text-[13px] font-semibold">Sell Order</span>
           </div>
           <div className="p-5 flex flex-col gap-5">
-            <FormField label="Select Campaign" hint={selected ? `${selected.shares} shares @ $${selected.avg_entry?.toFixed(2)} avg` : undefined}>
+            <FormField label="Select Campaign" hint={selected ? `${selected.shares} ${unitLabel.toLowerCase()} @ $${selected.avg_entry?.toFixed(2)} avg` : undefined}>
               <select value={selectedTrade} onChange={e => setSelectedTrade(e.target.value)}
                       className="w-full h-[38px] px-3 rounded-[10px] text-[13px] appearance-none" style={inputStyle}>
                 <option value="">Choose an open campaign...</option>
                 {openTrades.map(t => (
                   <option key={t.trade_id} value={t.trade_id}>
-                    {t.trade_id} — {t.ticker} ({t.shares} shares)
+                    {t.trade_id} — {t.ticker} ({t.shares} {String((t as any).instrument_type || "").toUpperCase() === "OPTION" ? "contracts" : "shares"})
                   </option>
                 ))}
               </select>
             </FormField>
+
+            {isOption && (
+              <div className="-mt-1 text-[12px] px-3 py-2 rounded-[8px] flex items-center gap-2"
+                   style={{ background: "color-mix(in oklab, #f59f00 10%, var(--surface))", color: "#92400e" }}>
+                <span className="font-semibold">OPTION ×{multiplier}</span>
+                <span style={{ color: "var(--ink-3)" }}>·</span>
+                <span>Proceeds and realized P&L shown as notional</span>
+              </div>
+            )}
 
             {(() => {
               const beStamp = (selected as any)?.be_stop_moved_at;
@@ -280,11 +299,11 @@ export function LogSell({ navColor }: { navColor: string }) {
             </FormField>
 
             <div className="grid grid-cols-2 gap-4">
-              <FormField label="Shares to Sell" hint={selected ? `Max: ${selected.shares}` : undefined}>
+              <FormField label={`${unitLabel} to Sell`} hint={selected ? `Max: ${selected.shares}` : undefined}>
                 <input type="number" value={shares} onChange={e => setShares(e.target.value)}
                        placeholder="0" className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
               </FormField>
-              <FormField label="Sell Price ($)">
+              <FormField label={isOption ? "Premium per Contract ($)" : "Sell Price ($)"}>
                 <input type="number" value={price} onChange={e => setPrice(e.target.value)} step="0.01"
                        placeholder="0.00" className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
               </FormField>
@@ -358,7 +377,7 @@ export function LogSell({ navColor }: { navColor: string }) {
                 { k: "Avg Entry", v: avgEntry > 0 ? `$${avgEntry.toFixed(2)}` : "—" },
                 { k: "Return", v: returnPct !== 0 ? `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(1)}%` : "—", color: returnPct >= 0 ? "#08a86b" : "#e5484d" },
                 { k: "Realized P&L", v: realizedPl !== 0 ? `$${realizedPl >= 0 ? "+" : ""}${realizedPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—", color: realizedPl >= 0 ? "#08a86b" : "#e5484d" },
-                { k: "Remaining", v: selected ? `${selected.shares - sharesNum} shares` : "—" },
+                { k: "Remaining", v: selected ? `${selected.shares - sharesNum} ${unitLabel.toLowerCase()}` : "—" },
               ].map(s => (
                 <div key={s.k} className="flex items-center justify-between">
                   <span className="text-[11px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>{s.k}</span>
@@ -391,7 +410,9 @@ export function LogSell({ navColor }: { navColor: string }) {
                           onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}>
                     <div>
                       <span className="text-[12px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.ticker}</span>
-                      <span className="text-[11px] ml-2" style={{ color: "var(--ink-4)" }}>{t.shares} sh</span>
+                      <span className="text-[11px] ml-2" style={{ color: "var(--ink-4)" }}>
+                        {t.shares} {String((t as any).instrument_type || "").toUpperCase() === "OPTION" ? "ct" : "sh"}
+                      </span>
                     </div>
                     <span className="text-[11px]" style={{ color: isSelected ? navColor : "var(--ink-4)", fontWeight: isSelected ? 600 : 400 }}>{t.trade_id}</span>
                   </button>

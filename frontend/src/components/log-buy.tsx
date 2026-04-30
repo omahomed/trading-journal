@@ -269,6 +269,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
     } catch { /* ignore */ }
   }, []);
 
+  // When the ticker resolves to an equity option, bump the default stop %
+  // from the stock convention (5%) to the user's option playbook (50% of
+  // premium). Only fires while the field still holds the stock default
+  // "5.0", so a manual override survives a ticker re-edit.
+  useEffect(() => {
+    const isOptionTicker = /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(ticker.trim());
+    if (isOptionTicker && slPct === "5.0") setSlPct("50");
+    if (!isOptionTicker && slPct === "50") setSlPct("5.0");
+  }, [ticker]);
+
   // Auto-fetch price when ticker changes (debounced)
   useEffect(() => {
     if (!ticker || ticker.length < 1 || actionType !== "new") return;
@@ -286,7 +296,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // ── Computed values ──
   const sharesNum = parseFloat(shares) || 0;
   const priceNum = parseFloat(price) || 0;
-  const totalCost = sharesNum * priceNum;
+  // Equity options carry a 100× contract multiplier; otherwise stocks are 1×.
+  // Detected from ticker shape so the user doesn't have to flag it manually —
+  // matches the same regex the backend uses to route option price lookups.
+  const isOption = /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(ticker.trim());
+  const multiplier = isOption ? 100 : 1;
+  const unitLabel = isOption ? "Contracts" : "Shares";
+  const totalCost = sharesNum * priceNum * multiplier;
   const riskPctInput = SIZING_MODES[sizingMode].pct;
   const riskBudget = equity * (riskPctInput / 100);
 
@@ -294,17 +310,20 @@ export function LogBuy({ navColor }: { navColor: string }) {
   if (stopMode === "price") {
     stopPrice = parseFloat(stopValue) || 0;
   } else {
-    const pct = parseFloat(slPct) || 5;
+    // Default stop = 50% of premium for options (per the user's playbook),
+    // 5% for stocks. The user can still override slPct manually.
+    const defaultPct = isOption ? 50 : 5;
+    const pct = parseFloat(slPct) || defaultPct;
     stopPrice = priceNum > 0 ? priceNum * (1 - pct / 100) : 0;
   }
   const stopDist = priceNum > 0 && stopPrice > 0 ? priceNum - stopPrice : 0;
   const stopPct = priceNum > 0 && stopPrice > 0 ? ((priceNum - stopPrice) / priceNum) * 100 : 0;
-  const riskDollars = stopDist * sharesNum;
+  const riskDollars = stopDist * sharesNum * multiplier;
   const posSizePct = equity > 0 ? (totalCost / equity) * 100 : 0;
-  const recommendedShares = stopDist > 0 ? Math.floor(riskBudget / stopDist) : 0;
-  const recommendedCost = recommendedShares * priceNum;
+  const recommendedShares = stopDist > 0 ? Math.floor(riskBudget / (stopDist * multiplier)) : 0;
+  const recommendedCost = recommendedShares * priceNum * multiplier;
 
-  const rbmStop = sharesNum > 0 && riskBudget > 0 ? priceNum - (riskBudget / sharesNum) : 0;
+  const rbmStop = sharesNum > 0 && riskBudget > 0 ? priceNum - (riskBudget / (sharesNum * multiplier)) : 0;
   const riskViolation = riskDollars > riskBudget && riskBudget > 0 && stopPrice > 0;
   const withinBudget = riskDollars > 0 && riskDollars <= riskBudget;
 
@@ -540,16 +559,26 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
             {/* Ticker + Trade ID (new) or Campaign Picker (scale-in) */}
             {actionType === "new" ? (
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Ticker Symbol">
-                  <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
-                         className={inputCls} style={inputStyle} />
-                </Field>
-                <Field label="Trade ID">
-                  <input type="text" value={tradeId} onChange={e => setTradeId(e.target.value)}
-                         className={inputCls} style={inputStyle} />
-                </Field>
-              </div>
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Ticker Symbol">
+                    <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+                           className={inputCls} style={inputStyle} />
+                  </Field>
+                  <Field label="Trade ID">
+                    <input type="text" value={tradeId} onChange={e => setTradeId(e.target.value)}
+                           className={inputCls} style={inputStyle} />
+                  </Field>
+                </div>
+                {isOption && (
+                  <div className="text-[12px] px-3 py-2 rounded-[8px] flex items-center gap-2"
+                       style={{ background: "color-mix(in oklab, #f59f00 10%, var(--surface))", color: "#92400e" }}>
+                    <span className="font-semibold">OPTION ×{multiplier}</span>
+                    <span style={{ color: "var(--ink-3)" }}>·</span>
+                    <span>Stop default 50% of premium · all dollar fields below shown as notional</span>
+                  </div>
+                )}
+              </>
             ) : (
               <Field label="Select Existing Campaign">
                 <SearchSelect
@@ -576,15 +605,20 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
             {/* Shares + Price */}
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Shares to Add">
+              <Field label={`${unitLabel} to Add`}>
                 <input type="number" value={shares} onChange={e => setShares(e.target.value)}
                        min="0" step="1" placeholder="0" className={inputCls} style={inputStyle} />
               </Field>
-              <Field label="Price ($)">
+              <Field label={isOption ? "Premium per Contract ($)" : "Price ($)"}>
                 <input type="number" value={price} onChange={e => setPrice(e.target.value)}
                        min="0" step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
               </Field>
             </div>
+            {isOption && sharesNum > 0 && priceNum > 0 && (
+              <div className="text-[11px] -mt-2" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                {sharesNum} × ${priceNum.toFixed(2)} × {multiplier} = ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} premium
+              </div>
+            )}
 
             {/* Stop Loss */}
             <div className="grid grid-cols-2 gap-4">
