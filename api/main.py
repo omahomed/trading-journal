@@ -258,6 +258,12 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
     df = df.sort_values("day")
 
+    # Self-heal MCT badge fields for recent rows whose stamp is NULL because
+    # they were saved before the engine had their bar (typical: today's
+    # entry saved while market_data still ends at yesterday). One engine
+    # replay, one DB write per healable row, no work in the common case.
+    _heal_recent_mct_stamps(portfolio, df)
+
     # Clean numeric columns
     for c in ["beg_nlv", "end_nlv", "cash_change", "daily_dollar_change",
               "daily_pct_change", "pct_invested", "spy", "nasdaq",
@@ -533,6 +539,73 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
         return (state_name, display_day_num)
     except Exception:
         return ("", None)
+
+
+def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
+    """Backfill NULL mct_display_day_num / market_cycle on recent journal rows.
+
+    The save-time stamper in _compute_mct_state_with_day_num intentionally
+    persists NULL when the engine has no bar for the requested date — the
+    common cause is "user logged today's journal before market_data ingested
+    today's bar." When the bar lands later, those rows would stay NULL
+    forever without an explicit re-save. This helper runs once per
+    /api/journal/history call: it locates NULL rows in the last
+    `lookback_days`, replays the engine once to get every cached bar's
+    state, and stamps any row whose date now has a bar. In-memory df is
+    patched so the response reflects the fresh values without a second
+    DB read.
+
+    Bounded lookback (default 14 days) keeps this cheap on every page
+    load — older NULLs go through scripts/backfill_mct_state.py for a
+    full historical sweep.
+    """
+    if df.empty or "mct_display_day_num" not in df.columns:
+        return
+
+    cutoff = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
+    needs_heal = df[
+        (df["day"] >= cutoff)
+        & (
+            df["mct_display_day_num"].isna()
+            | (df.get("market_cycle", pd.Series(dtype=object)).fillna("").astype(str) == "")
+        )
+    ]
+    if needs_heal.empty:
+        return
+
+    try:
+        from api.mct_endpoint_adapter import run_engine
+        result = run_engine("^IXIC")
+        if result.bars.empty:
+            return
+        bars = result.bars.copy()
+        bars["trade_date"] = pd.to_datetime(bars["trade_date"]).dt.date
+        bar_index = bars.set_index("trade_date")
+    except Exception:
+        return
+
+    for _, row in needs_heal.iterrows():
+        day_value = row["day"]
+        if pd.isna(day_value):
+            continue
+        as_of = day_value.date() if hasattr(day_value, "date") else day_value
+        if as_of not in bar_index.index:
+            continue  # engine still doesn't have this bar — skip
+        day_str = as_of.strftime("%Y-%m-%d")
+        state, day_num = _compute_mct_state_with_day_num(day_str)
+        if not state:
+            continue
+
+        # Persist via the targeted helper — save_journal_entry rewrites
+        # every column and would clobber NLV/notes when called with a
+        # partial dict.
+        try:
+            db.update_journal_mct_state(portfolio, day_str, state, day_num)
+        except Exception:
+            continue
+
+        df.loc[df["day"] == day_value, "market_cycle"] = state
+        df.loc[df["day"] == day_value, "mct_display_day_num"] = day_num
 
 
 @app.post("/api/journal/edit")

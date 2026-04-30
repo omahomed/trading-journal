@@ -1776,6 +1776,36 @@ def save_journal_entry(journal_entry):
             return row_id
 
 
+def update_journal_mct_state(portfolio_name: str, day: str, market_cycle: str | None, mct_display_day_num: int | None) -> int:
+    """Targeted UPDATE for just the MCT badge fields on a single journal row.
+
+    save_journal_entry rewrites every column, which clobbers NLV and notes
+    when called with a partial dict. The lazy-heal path in
+    api/main._heal_recent_mct_stamps only wants to touch the two MCT fields,
+    so it goes through here instead. Returns the row id, or 0 if no matching
+    row exists. RLS still applies via the standard get_db_connection path.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                return 0
+            portfolio_id = result[0]
+            cur.execute(
+                "UPDATE trading_journal "
+                "   SET market_cycle = %s, mct_display_day_num = %s, updated_at = NOW() "
+                " WHERE portfolio_id = %s AND day = %s "
+                "   AND deleted_at IS NULL "
+                " RETURNING id",
+                (market_cycle, mct_display_day_num, portfolio_id, day),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            load_journal.clear()
+            return int(row[0]) if row else 0
+
+
 def delete_journal_entry(portfolio_name, day):
     """
     Delete a journal entry by portfolio name and date.
