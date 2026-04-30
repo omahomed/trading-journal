@@ -133,11 +133,6 @@ export const api = {
     return fetchJSON<JournalEntry>(`/api/journal/latest?${qs.toString()}`);
   },
 
-  journalByDate: (date: string, portfolio = getActivePortfolio()) =>
-    fetchJSON<Record<string, any> | null>(
-      `/api/journal/by-date?date=${date}&portfolio=${portfolio}`,
-    ),
-
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
 
