@@ -7,7 +7,14 @@ export default auth((req) => {
   }
 });
 
-// Protect all routes except login page and auth API routes
+// Protect all routes except login, auth API routes, and the public
+// static assets that the PWA install/offline flow needs *before* the
+// user is signed in (manifest, service worker, app icons). Browsers
+// fetch these without auth headers; gating them returns the login
+// HTML which Chrome's manifest parser then reports as a JSON syntax
+// error.
 export const config = {
-  matcher: ["/((?!login|api/auth|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!login|api/auth|_next/static|_next/image|favicon.ico|manifest.json|sw.js|icon-192.png|icon-512.png|icon-maskable-512.png|apple-touch-icon.png).*)",
+  ],
 };
