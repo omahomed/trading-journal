@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trade Journal — Mobile Anchor v3 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .annotation ul { margin: 8px 0 0; padding-left: 20px; }
+  .annotation li { margin: 3px 0; }
+  .container { display: flex; flex-direction: column; align-items: center; }
+  .device {
+    max-width: 360px;
+    width: 100%;
+    background: #1c1815;
+    border-radius: 42px;
+    padding: 10px;
+    border: 0.5px solid rgba(255,235,210,0.06);
+  }
+  .screen {
+    background: #100D0B;
+    border-radius: 34px;
+    overflow: hidden;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Trade Journal — v3 (LOCKED)</h1>
+  Reference design for <strong>mobile-trade-journal.tsx</strong> (Phase 1 Step 6, Task 2). Mock data only in Phase 1. Card states demonstrated:
+  <ul>
+    <li><strong>NVDA:</strong> original-only (B1)</li>
+    <li><strong>ARM:</strong> READY state — green tinted border, READY pill, last add ≥+5%</li>
+    <li><strong>HOOD:</strong> added but not ready (last add &lt;+5%)</li>
+    <li><strong>ASML:</strong> at-risk — amber border, warning replaces day count</li>
+    <li><strong>LUMN:</strong> options call — purple CALLS badge</li>
+  </ul>
+</div>
+
+<div class="device">
+<div class="screen">
+
+<!-- iOS status bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 6px; font-size: 14px; font-weight: 500;">
+<span>9:41</span>
+<span style="display: flex; gap: 6px; align-items: center;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11h2v3H2zM6 7h2v7H6zM10 4h2v10h-2zM14 1h2v13h-2z" fill="#F5EFE5"/></svg>
+<svg width="20" height="14" viewBox="0 0 20 14" fill="none"><rect x="1" y="3" width="16" height="8" rx="2" stroke="#F5EFE5" stroke-width="1" fill="none"/><rect x="3" y="5" width="12" height="4" rx="1" fill="#F5EFE5"/><rect x="18" y="5" width="1" height="4" rx="0.5" fill="#F5EFE5"/></svg>
+</span>
+</div>
+
+<!-- Tape pill (sticky) -->
+<div style="margin: 8px 16px 0; padding: 8px 14px; background: rgba(175, 169, 236, 0.10); border: 0.5px solid rgba(175, 169, 236, 0.22); border-radius: 999px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #AFA9EC;"></span>
+<span style="color: #C9C5F0; font-weight: 500;">POWERTREND</span>
+<span style="color: #6B6358;">·</span>
+<span style="color: #B0A89E;">Day 5</span>
+<span style="margin-left: auto; color: #B0A89E; font-size: 11px;">Cap 200%</span>
+</div>
+
+<!-- Page header: back, italic-green wordmark, more menu -->
+<div style="padding: 14px 20px 12px; display: flex; justify-content: space-between; align-items: center;">
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="#B0A89E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<div style="text-align: center;">
+<div style="font-size: 16px; font-weight: 500; letter-spacing: -0.3px;">Trade <span style="font-family: 'Iowan Old Style', 'Palatino', Georgia, serif; font-style: italic; color: #4ADE80; font-weight: 400;">Journal</span></div>
+</div>
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="5" r="1.3" fill="#B0A89E"/><circle cx="10" cy="10" r="1.3" fill="#B0A89E"/><circle cx="10" cy="15" r="1.3" fill="#B0A89E"/></svg>
+</div>
+
+<!-- Search bar with sort icon -->
+<div style="margin: 0 20px 14px; padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; display: flex; align-items: center; gap: 10px;">
+<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="#7A7268" stroke-width="1.5"/><path d="M10.5 10.5l3 3" stroke="#7A7268" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span style="font-size: 14px; color: #7A7268; flex: 1;">Search ticker</span>
+<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M5 5h6M5 8h6M5 11h4" stroke="#7A7268" stroke-width="1.4" stroke-linecap="round"/></svg>
+</div>
+
+<!-- Holdings summary: $891K, today's P&L, status breakdown (Ready replaces Winners) -->
+<div style="padding: 0 20px 14px;">
+<div style="font-size: 11px; color: #7A7268; font-weight: 500; margin-bottom: 4px;">Holdings</div>
+<div style="font-size: 32px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-bottom: 4px;">$891,234</div>
+<div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;">
+<span style="font-size: 14px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+$8,420</span>
+<span style="font-size: 13px; color: #4ADE80; font-variant-numeric: tabular-nums;">+0.95%</span>
+<span style="font-size: 12px; color: #7A7268;">today</span>
+</div>
+<div style="display: flex; gap: 12px; font-size: 12px; color: #7A7268;">
+<span><span style="color: #F5EFE5; font-weight: 500;">23</span> open</span>
+<span><span style="color: #4ADE80; font-weight: 500;">3</span> ready</span>
+<span><span style="color: #F87171; font-weight: 500;">4</span> losers</span>
+<span><span style="color: #FBBF24; font-weight: 500;">1</span> at risk</span>
+</div>
+</div>
+
+<!-- Filter chips: All / Ready / Winners / Losers / At risk / Options -->
+<div style="overflow-x: auto; white-space: nowrap; padding: 0 16px 12px; -webkit-overflow-scrolling: touch;">
+<span style="display: inline-block; padding: 6px 14px; margin-right: 6px; font-size: 12px; color: #052e16; background: #4ADE80; border-radius: 999px; font-weight: 500;">All · 23</span>
+<span style="display: inline-block; padding: 6px 14px; margin-right: 6px; font-size: 12px; color: #4ADE80; background: rgba(74,222,128,0.10); border: 0.5px solid rgba(74,222,128,0.25); border-radius: 999px; font-weight: 500;">Ready · 3</span>
+<span style="display: inline-block; padding: 6px 14px; margin-right: 6px; font-size: 12px; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">Winners · 18</span>
+<span style="display: inline-block; padding: 6px 14px; margin-right: 6px; font-size: 12px; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">Losers · 4</span>
+<span style="display: inline-block; padding: 6px 14px; margin-right: 6px; font-size: 12px; color: #FBBF24; background: rgba(251,191,36,0.08); border: 0.5px solid rgba(251,191,36,0.20); border-radius: 999px; font-weight: 500;">At risk · 1</span>
+<span style="display: inline-block; padding: 6px 14px; font-size: 12px; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">Options · 3</span>
+</div>
+
+<div style="padding: 0 20px;">
+
+<!-- NVDA: original-only (B1) -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 16px; padding: 12px 16px; margin-bottom: 8px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+<span style="font-size: 17px; font-weight: 500; letter-spacing: -0.01em;">NVDA</span>
+<span style="font-size: 14px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+12.4%</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 13px; color: #B0A89E; font-variant-numeric: tabular-nums;">$139,125 · 750 sh</span>
+<span style="font-size: 13px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+$15,340</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">Day 12 · B1 only</span>
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">stop $172.69 · -3.5%</span>
+</div>
+</div>
+
+<!-- ARM: READY (green border + READY pill + last add green) -->
+<div style="background: #1A1612; border: 0.5px solid rgba(74,222,128,0.30); border-radius: 16px; padding: 12px 16px; margin-bottom: 8px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+<div style="display: flex; align-items: baseline; gap: 6px;">
+<span style="font-size: 17px; font-weight: 500; letter-spacing: -0.01em;">ARM</span>
+<span style="padding: 1px 7px; border-radius: 4px; background: #4ADE80; color: #052e16; font-size: 10px; font-weight: 600; letter-spacing: 0.04em;">READY</span>
+</div>
+<span style="font-size: 14px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+18.7%</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 13px; color: #B0A89E; font-variant-numeric: tabular-nums;">$62,540 · 425 sh</span>
+<span style="font-size: 13px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+$9,840</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 11px; color: #4ADE80; font-variant-numeric: tabular-nums; font-weight: 500;">A2 last add +6.4%</span>
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">stop $129.00 · -4.2%</span>
+</div>
+</div>
+
+<!-- HOOD: added but not ready -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 16px; padding: 12px 16px; margin-bottom: 8px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+<span style="font-size: 17px; font-weight: 500; letter-spacing: -0.01em;">HOOD</span>
+<span style="font-size: 14px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+8.2%</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 13px; color: #B0A89E; font-variant-numeric: tabular-nums;">$67,200 · 1,200 sh</span>
+<span style="font-size: 13px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+$5,100</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">A1 last add +2.8%</span>
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">stop $52.40 · -2.1%</span>
+</div>
+</div>
+
+<!-- ASML: at-risk (amber bg + amber border + warning line replaces day count) -->
+<div style="background: rgba(251,191,36,0.04); border: 0.5px solid rgba(251,191,36,0.30); border-radius: 16px; padding: 12px 16px; margin-bottom: 8px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+<span style="font-size: 17px; font-weight: 500; letter-spacing: -0.01em;">ASML</span>
+<span style="font-size: 14px; color: #F87171; font-weight: 500; font-variant-numeric: tabular-nums;">−2.1%</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 13px; color: #B0A89E; font-variant-numeric: tabular-nums;">$78,400 · 200 sh</span>
+<span style="font-size: 13px; color: #F87171; font-weight: 500; font-variant-numeric: tabular-nums;">−$1,680</span>
+</div>
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<div style="display: flex; align-items: center; gap: 5px;">
+<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1L11 10H1L6 1Z" stroke="#FBBF24" stroke-width="1.2" stroke-linejoin="round"/><path d="M6 5v2M6 8.5v0.5" stroke="#FBBF24" stroke-width="1.2" stroke-linecap="round"/></svg>
+<span style="font-size: 11px; color: #FBBF24; font-weight: 500;">Stop only −0.8% away</span>
+</div>
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">Day 8</span>
+</div>
+</div>
+
+<!-- LUMN: options (purple CALLS badge) -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 16px; padding: 12px 16px; margin-bottom: 8px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px;">
+<div style="display: flex; align-items: baseline; gap: 6px;">
+<span style="font-size: 17px; font-weight: 500; letter-spacing: -0.01em;">LUMN</span>
+<span style="padding: 1px 6px; border-radius: 4px; background: rgba(175,169,236,0.10); color: #C9C5F0; font-size: 10px; font-weight: 500; letter-spacing: 0.02em;">CALLS</span>
+</div>
+<span style="font-size: 14px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+24.0%</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 13px; color: #B0A89E; font-variant-numeric: tabular-nums;">$8,400 · 5 contracts</span>
+<span style="font-size: 13px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+$1,620</span>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">$5C · exp May 16</span>
+<span style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">Day 8</span>
+</div>
+</div>
+
+<div style="text-align: center; padding: 8px 0 16px; font-size: 12px; color: #7A7268;">18 more positions · scroll</div>
+
+</div>
+
+<!-- Bottom nav: Dashboard / Sizer / Journal (active) / Cycle / More -->
+<div style="display: flex; justify-content: space-around; padding: 6px 16px 22px; border-top: 0.5px solid rgba(255,235,210,0.04);">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 13l4-4 4 4 5-6 4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<span>Dashboard</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="4" y="3" width="14" height="16" rx="2" stroke="#5A5249" stroke-width="1.5"/><path d="M7 7h8M7 11h8M7 15h5" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Sizer</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #4ADE80;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 6h16M3 11h16M3 16h16" stroke="#4ADE80" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span style="font-weight: 500;">Journal</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="7" stroke="#5A5249" stroke-width="1.5"/><path d="M11 7v4l3 2" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Cycle</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="2" stroke="#5A5249" stroke-width="1.5"/><circle cx="11" cy="11" r="7" stroke="#5A5249" stroke-width="1.5"/></svg>
+<span>More</span>
+</div>
+</div>
+
+</div>
+</div>
+
+</div>
+</body>
+</html>

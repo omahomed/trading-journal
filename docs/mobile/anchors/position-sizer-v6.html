@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Position Sizer — Mobile Anchor v6 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .container { display: flex; flex-direction: column; align-items: center; }
+  .device {
+    max-width: 360px;
+    width: 100%;
+    background: #1c1815;
+    border-radius: 42px;
+    padding: 10px;
+    border: 0.5px solid rgba(255,235,210,0.06);
+  }
+  .screen {
+    background: #100D0B;
+    border-radius: 34px;
+    overflow: hidden;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Position Sizer — v6 (LOCKED)</h1>
+  Reference design for <strong>mobile-position-sizer.tsx</strong> (Phase 1 Step 6, Task 1). Mock data only in Phase 1. Mode chip, three picker tiles (Mode/Profile/Size), and Log buy CTA are visual stubs — no behavior wired until Phase 2/3.
+</div>
+
+<div class="device">
+<div class="screen">
+
+<!-- iOS status bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 6px; font-size: 14px; font-weight: 500;">
+<span>9:41</span>
+<span style="display: flex; gap: 6px; align-items: center;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11h2v3H2zM6 7h2v7H6zM10 4h2v10h-2zM14 1h2v13h-2z" fill="#F5EFE5"/></svg>
+<svg width="20" height="14" viewBox="0 0 20 14" fill="none"><rect x="1" y="3" width="16" height="8" rx="2" stroke="#F5EFE5" stroke-width="1" fill="none"/><rect x="3" y="5" width="12" height="4" rx="1" fill="#F5EFE5"/><rect x="18" y="5" width="1" height="4" rx="0.5" fill="#F5EFE5"/></svg>
+</span>
+</div>
+
+<!-- Tape pill (sticky) -->
+<div style="margin: 8px 16px 0; padding: 8px 14px; background: rgba(175, 169, 236, 0.10); border: 0.5px solid rgba(175, 169, 236, 0.22); border-radius: 999px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #AFA9EC;"></span>
+<span style="color: #C9C5F0; font-weight: 500;">POWERTREND</span>
+<span style="color: #6B6358;">·</span>
+<span style="color: #B0A89E;">Day 5</span>
+<span style="margin-left: auto; color: #B0A89E; font-size: 11px;">Cap 200%</span>
+</div>
+
+<!-- Page header: back, italic-green wordmark, settings -->
+<div style="padding: 14px 20px 10px; display: flex; justify-content: space-between; align-items: center;">
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 5l-5 5 5 5" stroke="#B0A89E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<div style="text-align: center;">
+<div style="font-size: 16px; font-weight: 500; letter-spacing: -0.3px;">Position <span style="font-family: 'Iowan Old Style', 'Palatino', Georgia, serif; font-style: italic; color: #4ADE80; font-weight: 400;">Sizer</span></div>
+</div>
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2" stroke="#B0A89E" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2" stroke="#B0A89E" stroke-width="1.5" stroke-linecap="round"/></svg>
+</div>
+
+<div style="padding: 0 20px;">
+
+<!-- Mode chip (tappable, opens grouped sheet: Entry/Position management/Options) -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; padding: 10px 14px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
+<div style="display: flex; align-items: center; gap: 10px;">
+<span style="font-size: 11px; color: #7A7268; font-weight: 500;">Mode</span>
+<span style="font-size: 14px; font-weight: 500;">Volatility</span>
+</div>
+<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="#7A7268" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+
+<!-- Ticker card: NVDA + 8E/21E/50S MA stack -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 16px; padding: 14px 18px; margin-bottom: 10px;">
+<div style="font-size: 28px; font-weight: 500; letter-spacing: -0.02em; margin-bottom: 6px;">NVDA</div>
+<div style="display: flex; gap: 16px; font-size: 12px; color: #7A7268; font-variant-numeric: tabular-nums;">
+<span>8E <span style="color: #F5EFE5; font-weight: 500;">182.10</span></span>
+<span>21E <span style="color: #F5EFE5; font-weight: 500;">173.40</span></span>
+<span>50S <span style="color: #F5EFE5; font-weight: 500;">162.50</span></span>
+</div>
+</div>
+
+<!-- 2x2 input grid: Entry / NLV (auto-pulled, lock icon) / Key MA / Buffer -->
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 14px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 2px;">Entry</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">$185.50</div>
+</div>
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 14px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 2px; display: flex; align-items: center; gap: 4px;">NLV
+<svg width="9" height="9" viewBox="0 0 10 10" fill="none"><rect x="2" y="4" width="6" height="5" rx="0.5" stroke="#7A7268" stroke-width="1"/><path d="M3.5 4V3a1.5 1.5 0 013 0v1" stroke="#7A7268" stroke-width="1"/></svg>
+</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">$487,704</div>
+</div>
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 14px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 2px;">Key MA</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">$173.40</div>
+</div>
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 14px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 2px;">Buffer</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">1.00%</div>
+</div>
+</div>
+
+<!-- ATR row (label left, value right) -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 11px; color: #7A7268; font-weight: 500;">ATR % (21D)</span>
+<span style="font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em;">5.0%</span>
+</div>
+
+<!-- Three picker tiles: Mode/Profile/Size (each opens its own bottom sheet) -->
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+<div style="background: #1A1612; border: 0.5px solid rgba(74,222,128,0.20); border-radius: 14px; padding: 10px 12px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 4px;">Mode</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 14px; font-weight: 500; color: #4ADE80;">Offense</span>
+<svg width="10" height="10" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="#7A7268" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+<div style="font-size: 11px; color: #B0A89E; font-variant-numeric: tabular-nums; margin-top: 1px;">1.00%</div>
+</div>
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 12px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 4px;">Profile</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 14px; font-weight: 500;">Tight</span>
+<svg width="10" height="10" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="#7A7268" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+<div style="font-size: 11px; color: #B0A89E; font-variant-numeric: tabular-nums; margin-top: 1px;">1.0×</div>
+</div>
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 14px; padding: 10px 12px;">
+<div style="font-size: 10px; color: #7A7268; font-weight: 500; margin-bottom: 4px;">Size</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between;">
+<span style="font-size: 14px; font-weight: 500;">Full</span>
+<svg width="10" height="10" viewBox="0 0 14 14" fill="none"><path d="M3 5l4 4 4-4" stroke="#7A7268" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+<div style="font-size: 11px; color: #B0A89E; font-variant-numeric: tabular-nums; margin-top: 1px;">10%</div>
+</div>
+</div>
+
+<!-- Audit result: live-computed (no Run Audit button), 28.5% NLV in amber, three stats -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 22px; padding: 16px 20px 14px; margin-bottom: 12px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;">
+<span style="font-size: 11px; color: #7A7268; font-weight: 500;">Audit result</span>
+<span style="font-size: 11px; color: #FBBF24; font-weight: 500;">28.5% of NLV</span>
+</div>
+<div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 1px;">
+<span style="font-size: 38px; font-weight: 500; letter-spacing: -0.03em; font-variant-numeric: tabular-nums;">750</span>
+<span style="font-size: 15px; color: #B0A89E;">shares · $139,125</span>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding-top: 12px; margin-top: 12px; border-top: 0.5px solid rgba(255,235,210,0.05);">
+<div>
+<div style="font-size: 10px; color: #7A7268; margin-bottom: 2px;">Total risk</div>
+<div style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; color: #F87171;">$4,875</div>
+</div>
+<div>
+<div style="font-size: 10px; color: #7A7268; margin-bottom: 2px;">ATR stop</div>
+<div style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums;">$172.69</div>
+</div>
+<div>
+<div style="font-size: 10px; color: #7A7268; margin-bottom: 2px;">2R target</div>
+<div style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; color: #4ADE80;">$9,750</div>
+</div>
+</div>
+</div>
+
+</div>
+
+<!-- CTA -->
+<div style="padding: 0 20px 12px;">
+<div style="display: block; width: 100%; padding: 16px; background: #4ADE80; color: #052e16; border: none; border-radius: 16px; font-size: 15px; font-weight: 500; text-align: center; letter-spacing: -0.01em;">Log buy →</div>
+</div>
+
+<!-- Bottom nav: Dashboard / Sizer (active) / Journal / Cycle / More -->
+<div style="display: flex; justify-content: space-around; padding: 6px 16px 22px; border-top: 0.5px solid rgba(255,235,210,0.04);">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 13l4-4 4 4 5-6 4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<span>Dashboard</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #4ADE80;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="4" y="3" width="14" height="16" rx="2" stroke="#4ADE80" stroke-width="1.5"/><path d="M7 7h8M7 11h8M7 15h5" stroke="#4ADE80" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span style="font-weight: 500;">Sizer</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 6h16M3 11h16M3 16h16" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Journal</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="7" stroke="#5A5249" stroke-width="1.5"/><path d="M11 7v4l3 2" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Cycle</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="2" stroke="#5A5249" stroke-width="1.5"/><circle cx="11" cy="11" r="7" stroke="#5A5249" stroke-width="1.5"/></svg>
+<span>More</span>
+</div>
+</div>
+
+</div>
+</div>
+
+</div>
+</body>
+</html>
