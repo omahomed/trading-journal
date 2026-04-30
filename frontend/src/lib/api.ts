@@ -81,6 +81,11 @@ export interface TradePosition {
   realized_pl: number;
   rule: string;
   grade?: number | null;
+  // Migration 016: equity options carry instrument_type='OPTION' + multiplier=100
+  // so the UI can format dollar amounts as notional (×100) instead of premium.
+  // Optional because legacy rows pre-migration may not have them populated.
+  instrument_type?: "STOCK" | "OPTION";
+  multiplier?: number;
   [key: string]: any;
 }
 
@@ -93,6 +98,8 @@ export interface TradeDetail {
   amount: number;
   value: number;
   rule: string;
+  instrument_type?: "STOCK" | "OPTION";
+  multiplier?: number;
   [key: string]: any;
 }
 

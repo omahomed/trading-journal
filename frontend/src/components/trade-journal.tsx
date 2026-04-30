@@ -673,6 +673,16 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           const avgExit = parseFloat(String(trade.avg_exit || 0));
           const totalCost = parseFloat(String(trade.total_cost || 0));
           const realizedBank = parseFloat(String(trade.realized_pl || 0));
+          // Migration 016 — when the row is an option, multiplier=100 turns
+          // every per-contract dollar back into notional. Falls back to a
+          // ticker-shape autodetect for any legacy row that pre-dates the
+          // backfill (e.g. demo data, partial imports).
+          const isOption = String((trade as any).instrument_type || "").toUpperCase() === "OPTION"
+            || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
+          const multiplier = isOption
+            ? Math.max(parseFloat(String((trade as any).multiplier || 0)) || 100, 1)
+            : 1;
+          const unitLabel = isOption ? "Contracts" : "Shares";
 
           // Transaction details for this trade
           const txns = allDetails.filter(d => d.trade_id === trade.trade_id);
@@ -694,7 +704,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           }
 
           const livePrice = isOpen ? (livePrices[trade.ticker] || 0) : enrichedExit;
-          const unrealizedPl = isOpen && livePrice > 0 ? (livePrice - enrichedEntry) * shares : 0;
+          const unrealizedPl = isOpen && livePrice > 0 ? (livePrice - enrichedEntry) * shares * multiplier : 0;
           const totalPl = isOpen ? unrealizedPl + realizedBank : realizedBank;
 
           // Return %: use summary if nonzero, else compute from enriched entry/exit
@@ -722,7 +732,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           // Core vs Add-on P&L
           const hasAddons = buys.length > 1;
           const b1Shares = b1 ? parseFloat(String(b1.shares || 0)) : 0;
-          const corePl = b1Price > 0 && avgExit > 0 ? (avgExit - b1Price) * b1Shares : 0;
+          const corePl = b1Price > 0 && avgExit > 0 ? (avgExit - b1Price) * b1Shares * multiplier : 0;
 
           const isExpanded = expandedCard === trade.trade_id;
 
@@ -740,6 +750,13 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-[20px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{trade.ticker}</span>
                     <StatusBadge status={trade.status || ""} />
+                    {isOption && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
+                            title={`Equity option · ${multiplier}× contract multiplier`}
+                            style={{ background: "color-mix(in oklab, #f59f00 14%, var(--surface))", color: "#b45309" }}>
+                        OPTION ×{multiplier}
+                      </span>
+                    )}
                     <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{trade.trade_id}</span>
                     {(trade as any).be_stop_moved_at && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
@@ -781,7 +798,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                 <div className="grid grid-cols-4 gap-4 py-3" style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
                   <CardMetric label="Entry" value={`$${avgEntry.toFixed(2)}`} />
                   <CardMetric label={isOpen ? "Status" : "Exit"} value={isOpen ? "Active" : `$${avgExit.toFixed(2)}`} color={isOpen ? "#08a86b" : undefined} />
-                  <CardMetric label="Shares" value={String(shares)} />
+                  <CardMetric label={unitLabel} value={String(shares)} />
                   <CardMetric label="Days Held" value={String(daysHeld)} />
                 </div>
 
@@ -866,18 +883,24 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     <div className="grid grid-cols-7 gap-2">
                       {(() => {
                         const curPrice = isOpen ? (livePrices[trade.ticker] || avgEntry) : avgExit;
-                        const mktVal = shares * curPrice;
-                        const unreal = isOpen ? (curPrice - avgEntry) * shares : 0;
+                        // Notional, not premium-per-contract: options need ×100 here
+                        // so Total Equity, Unrealized P&L, and % Size all read in
+                        // dollars at risk rather than per-share quotes.
+                        const mktVal = isOpen ? shares * curPrice * multiplier : 0;
+                        const unreal = isOpen ? (curPrice - avgEntry) * shares * multiplier : 0;
                         const unrealPct = avgEntry > 0 ? ((curPrice - avgEntry) / avgEntry) * 100 : 0;
                         const posSizePct = equity > 0 ? (mktVal / equity) * 100 : 0;
                         return [
                         { label: "Current Price", value: `$${curPrice.toFixed(2)}`, sub: undefined },
                         { label: "Orig Cost", value: b1Price > 0 ? `$${b1Price.toFixed(2)}` : `$${avgEntry.toFixed(2)}`, sub: undefined },
-                        { label: "Avg Cost", value: `$${avgEntry.toFixed(2)}`, sub: undefined },
-                        { label: "Shares Held", value: String(isOpen ? shares : 0), sub: undefined },
+                        { label: "Avg Cost", value: `$${avgEntry.toFixed(2)}`, sub: isOption ? `×${multiplier}` : undefined },
+                        { label: `${unitLabel} Held`, value: String(isOpen ? shares : 0), sub: undefined },
                         { label: "Unrealized P&L", value: `$${unreal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: isOpen ? `${unrealPct.toFixed(2)}%` : undefined, color: PLColor(unreal) },
                         { label: "Realized P&L", value: `$${realizedBank.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined, color: PLColor(realizedBank) },
-                        { label: "Total Equity", value: `$${mktVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: `${posSizePct.toFixed(1)}% Size` },
+                        { label: isOpen ? "Total Equity" : "Final Cost Basis", value: isOpen
+                            ? `$${mktVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                            : `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                          sub: isOpen ? `${posSizePct.toFixed(1)}% Size` : "Closed" },
                         ];
                       })().map(m => (
                         <div key={m.label} className="p-2.5 rounded-[8px]" style={{ border: "1px solid var(--border)" }}>
@@ -915,7 +938,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         const action = String(tx.action || "").toUpperCase();
                         const txShares = Math.abs(parseFloat(String(tx.shares || 0)));
                         const txAmount = parseFloat(String(tx.amount || 0));
-                        const txValue = parseFloat(String(tx.value || 0));
+                        // Compute Value from shares × amount × multiplier rather
+                        // than trusting tx.value, since pre-Migration-016
+                        // option detail rows are inconsistent (some baked the
+                        // ×100 in, some didn't). Phase 5 recompute heals
+                        // summary-level dollars but won't rewrite details.
+                        const txValue = txShares * txAmount * multiplier;
 
                         if (action === "BUY") {
                           inventory.push({ idx: i, qty: txShares, price: txAmount || enrichedEntry });
@@ -931,8 +959,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                           while (toSell > 0 && inventory.length > 0) {
                             const last = inventory[inventory.length - 1];
                             const take = Math.min(toSell, last.qty);
-                            const costBasis = take * last.price;
-                            const revenue = take * sellPrice;
+                            // Scale per-row P&L by the contract multiplier so
+                            // the Realized PL column shows notional dollars,
+                            // matching the campaign-level realized_pl that
+                            // the backend LIFO engine now persists.
+                            const costBasis = take * last.price * multiplier;
+                            const revenue = take * sellPrice * multiplier;
                             const rpl = revenue - costBasis;
                             const retPct = costBasis > 0 ? (rpl / costBasis) * 100 : 0;
 
@@ -968,7 +1000,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         rowData.forEach(row => {
                           if (!row.isSell && row.remaining > 0) {
                             const buyPrice = parseFloat(String(row.tx.amount || 0)) || enrichedEntry;
-                            row.unrealizedPl = (currentPrice - buyPrice) * row.remaining;
+                            row.unrealizedPl = (currentPrice - buyPrice) * row.remaining * multiplier;
                             // Return % = simple price change from entry
                             if (buyPrice > 0) {
                               row.returnPct = ((currentPrice - buyPrice) / buyPrice) * 100;
@@ -1001,7 +1033,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                           <thead>
                             <tr>
-                              {["Trx ID", "Date", "Ticker", "Action", "Status", "Shares", "Remaining", "Amount", "Exit Price", "Stop Loss", "Value", "Realized PL", "Unrealized PL", "Return %", "Rule", "Notes"].map(h => (
+                              {["Trx ID", "Date", "Ticker", "Action", "Status", unitLabel, "Remaining", "Amount", "Exit Price", "Stop Loss", "Value", "Realized PL", "Unrealized PL", "Return %", "Rule", "Notes"].map(h => (
                                 <th key={h} className="text-left px-2.5 py-2 text-[9px] uppercase tracking-[0.06em] font-semibold whitespace-nowrap"
                                     style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                               ))}
