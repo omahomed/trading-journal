@@ -192,6 +192,7 @@ Build the two anchor screens (Position Sizer and Trade Journal) as mobile-only c
 
 1. Create `src/components/mobile/mobile-position-sizer.tsx`:
    - Translates the locked v6 anchor design to React.
+   - Reference design: `docs/mobile/anchors/position-sizer-v6.html`
    - Uses `bg-m-surface`, `rounded-m-lg`, etc. — no inline `style={{}}` for color or spacing.
    - Mock data hardcoded inside the component (NVDA, the values from the anchor mockup).
    - Mode picker chip is a tappable button that does nothing yet (`onClick={() => {}}` with `// TODO Phase 2: open mode sheet` comment).
@@ -200,6 +201,7 @@ Build the two anchor screens (Position Sizer and Trade Journal) as mobile-only c
 
 2. Create `src/components/mobile/mobile-trade-journal.tsx`:
    - Translates the locked v3 anchor design to React.
+   - Reference design: `docs/mobile/anchors/trade-journal-v3.html`
    - Mock data: 6 positions matching the anchor (NVDA, ARM with READY, HOOD, ASML at-risk, ANET, LUMN calls).
    - Search field is a non-functional input with placeholder.
    - Filter chips are tappable but don't filter (mock data is fixed).
