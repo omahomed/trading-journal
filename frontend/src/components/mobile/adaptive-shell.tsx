@@ -1,9 +1,12 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ChevronLeft, EllipsisVertical, Settings } from "lucide-react";
 import { DesktopShell } from "@/components/desktop-shell";
 import { MobileShell } from "./mobile-shell";
+import type { MobilePageHeaderProps } from "./mobile-page-header";
 import { getNavItemForHref } from "@/lib/nav";
 
 /**
@@ -24,26 +27,94 @@ function splitWordmark(label: string): { title: string; italicWord: string } {
 }
 
 /**
- * Mounts both desktop and mobile chromes simultaneously and gates
- * visibility with the CSS-only `.d-only` / `.m-only` classes from
- * `mobile-tokens.css`. No JS branching for the shell — at any viewport
- * width exactly one chrome is `display: block`, the other is
- * `display: none`. The wrapping divs add a DOM node above each shell
- * but contribute no layout (no width/height/margin/padding); the inner
- * shell's own `flex h-screen` (desktop) and `h-[100dvh] flex flex-col`
- * (mobile) drive the page geometry exactly as before.
+ * Last-segment fallback for routes that have no `nav.ts` entry — kebab
+ * cased to Title Case. Examples: "/more" → "More", "/dev/foo" → "Foo",
+ * "/mobile-shell-preview" → "Mobile Shell Preview".
+ */
+function fallbackLabel(pathname: string): string {
+  const last = pathname.split("/").filter(Boolean).pop();
+  if (!last) return "";
+  return last
+    .split("-")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+/**
+ * Per-route mobile header overrides. The `MobileShell` chrome is
+ * provided by this AdaptiveShell on every mobile page, so per-page
+ * customization happens here rather than each page rendering its own
+ * shell. Keeps pages focused on content and avoids the SSR-hydration
+ * flash that page-owned shells would produce when `useIsMobile()`
+ * flips after the first paint.
  *
- * Mobile header config is derived from `getNavItemForHref(pathname)`
- * — the last word of the nav label becomes the italic-green wordmark.
- * Routes without a nav-table entry (e.g. dynamic dev routes) render
- * with an empty wordmark; pages that have a custom mobile design will
- * carry their own chrome from Step 6 onward (this AdaptiveShell only
- * provides the default wrapper).
+ * Pattern is intentionally bespoke for Phase 1's two custom-mobile
+ * routes. If Phase 2+ accretes enough entries to warrant a richer
+ * mechanism (sub-pages, dynamic right slots, header actions) this
+ * table is the natural seed for that abstraction.
+ */
+const ROUTE_HEADER_OVERRIDES: Record<string, Partial<MobilePageHeaderProps>> = {
+  "/position-sizer": {
+    leftSlot: (
+      <Link
+        href="/dashboard"
+        aria-label="Back"
+        className="flex h-5 w-5 items-center justify-center text-m-text-muted"
+      >
+        <ChevronLeft size={20} strokeWidth={1.5} aria-hidden="true" />
+      </Link>
+    ),
+    rightSlot: (
+      <Link
+        href="/settings"
+        aria-label="Settings"
+        className="flex h-5 w-5 items-center justify-center text-m-text-muted"
+      >
+        <Settings size={20} strokeWidth={1.5} aria-hidden="true" />
+      </Link>
+    ),
+  },
+  "/trade-journal": {
+    leftSlot: (
+      <Link
+        href="/dashboard"
+        aria-label="Back"
+        className="flex h-5 w-5 items-center justify-center text-m-text-muted"
+      >
+        <ChevronLeft size={20} strokeWidth={1.5} aria-hidden="true" />
+      </Link>
+    ),
+    // TODO Phase 4: open the trade-journal "more" sheet.
+    rightSlot: (
+      <button
+        type="button"
+        aria-label="More options"
+        onClick={() => {
+          /* TODO Phase 4 */
+        }}
+        className="flex h-5 w-5 items-center justify-center text-m-text-muted"
+      >
+        <EllipsisVertical size={20} strokeWidth={1.5} aria-hidden="true" />
+      </button>
+    ),
+  },
+};
+
+/**
+ * Mounts both desktop and mobile chromes simultaneously and gates
+ * visibility with the CSS-only `.d-only` / `.m-only` classes. No JS
+ * branching for the shell — at any viewport width exactly one chrome
+ * is `display: block`, the other is `display: none`. Mobile chrome
+ * (tape pill, header, bottom nav) is always provided here; pages
+ * supply only their content as `children`.
  */
 export function AdaptiveShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
-  const label = getNavItemForHref(pathname)?.label ?? "";
-  const header = splitWordmark(label);
+  const navLabel = getNavItemForHref(pathname)?.label ?? fallbackLabel(pathname);
+  const header: MobilePageHeaderProps = {
+    ...splitWordmark(navLabel),
+    ...ROUTE_HEADER_OVERRIDES[pathname],
+  };
 
   return (
     <>
