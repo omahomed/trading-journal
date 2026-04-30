@@ -144,6 +144,22 @@ def test_mct_state_range_2025_11_21_display_day_num_is_1(canonical_dependencies)
 
 
 @requires_db
+def test_compute_mct_state_strict_match_returns_empty_for_future_date(canonical_dependencies):
+    """The journal-save stamper must NOT fall through to the previous trading
+    day when its `as_of_date` has no exact bar in market_data — that bug
+    silently rewrote a Wednesday's row with Tuesday's day_num after an EOD
+    automation ran before market_data was ingested. Strict match means a
+    request for a date the engine doesn't have returns ('', None), and the
+    journal row is left NULL until a later re-save reconciles it."""
+    from api.main import _compute_mct_state_with_day_num
+    # Far enough in the future that no canonical fixture run will ever have
+    # ingested it. Engine has no bar for this date.
+    state, day_num = _compute_mct_state_with_day_num("2099-01-15")
+    assert state == ""
+    assert day_num is None
+
+
+@requires_db
 def test_mct_state_range_correction_has_null_display_day_num(canonical_dependencies):
     """CORRECTION rows should not render a Day suffix — display_day_num is None."""
     from api.main import journal_mct_state_by_date_range

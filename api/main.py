@@ -471,8 +471,17 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
       UPTREND / RALLY MODE → bars since cycle_start_idx (cycle STEP_0 anchor)
       CORRECTION          → None (no day count)
 
+    Strict bar match: if the engine has no bar for `as_of_date` exactly, we
+    return ("", None) rather than stamping the previous trading day's state
+    on the requested date. The old "fall through to the last bar ≤ as_of"
+    behavior caused the journal to write yesterday's `day_num` onto a row
+    saved before the day's market_data was ingested — so a Tuesday save run
+    on Wednesday morning could stamp `POWERTREND D5` on Wednesday because
+    Tuesday was D5.
+
     Empty / unparseable date or engine failure → ("", None) so the caller
-    can persist NULL without breaking the journal save.
+    can persist NULL without breaking the journal save; the backfill script
+    or a later re-save reconciles the row once market_data catches up.
     """
     try:
         from datetime import datetime as _dt
@@ -490,10 +499,12 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
             return ("", None)
 
         bars = result.bars
-        # Pick the row matching as_of (or the last bar if no as_of given).
+        # Require an exact bar match when the caller pinned a date. Anything
+        # else (no rows ≤ as_of, or the last bar predates as_of) means the
+        # engine is stale relative to the requested day — refuse to guess.
         if as_of is not None:
             trade_dates = pd.to_datetime(bars["trade_date"]).dt.date
-            mask = trade_dates <= as_of
+            mask = trade_dates == as_of
             if not mask.any():
                 return ("", None)
             row = bars[mask].iloc[-1]
