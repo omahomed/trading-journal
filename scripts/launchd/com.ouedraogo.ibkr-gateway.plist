@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    launchd job: keep the IBKR Client Portal Gateway running.
+
+    What it does:
+      - Starts the gateway at user login (RunAtLoad)
+      - Restarts it if it crashes or is killed (KeepAlive)
+      - Logs stdout / stderr to ~/ibkr-gateway/logs/
+
+    What it does NOT do:
+      - Re-authenticate the IBKR session. Sessions expire roughly every 24
+        hours; the user still needs to open https://localhost:5050 in a
+        browser and log in when that happens. Auto-restart only handles
+        process crashes, not session expiry.
+
+    Install:
+      cp scripts/launchd/com.ouedraogo.ibkr-gateway.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.ouedraogo.ibkr-gateway.plist
+
+    Uninstall:
+      launchctl unload ~/Library/LaunchAgents/com.ouedraogo.ibkr-gateway.plist
+      rm ~/Library/LaunchAgents/com.ouedraogo.ibkr-gateway.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ouedraogo.ibkr-gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/momacbookair/ibkr-gateway/bin/run.sh</string>
+        <string>root/conf.yaml</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/momacbookair/ibkr-gateway</string>
+
+    <!--
+        The gateway script invokes `java` from PATH. Java 25 (the system
+        default after `brew install openjdk`) breaks the gateway's auth
+        callback because of Netty 4.1.15 incompatibility. Pin Java 21 here
+        so launchd's environment matches what worked during manual setup.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/momacbookair/ibkr-gateway/logs/gateway.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/momacbookair/ibkr-gateway/logs/gateway.err.log</string>
+</dict>
+</plist>

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    launchd job: run the EOD journal save script weekdays at 4:05 PM CT.
+
+    Schedule rationale: US markets close at 3:00 PM Central Time. By 4:05 PM
+    after-hours has settled enough that yfinance returns the day's close
+    cleanly and the IBKR Client Portal NAV reflects the true EOD value.
+
+    Mac mini timezone is assumed to be America/Chicago. If you ever change
+    the system timezone, re-check the Hour values below — launchd uses the
+    Mac's local time, not UTC.
+
+    Install:
+      cp scripts/launchd/com.ouedraogo.eod-journal-save.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.ouedraogo.eod-journal-save.plist
+
+    Run manually for testing without waiting for 4:05 PM:
+      launchctl start com.ouedraogo.eod-journal-save
+
+    Uninstall:
+      launchctl unload ~/Library/LaunchAgents/com.ouedraogo.eod-journal-save.plist
+      rm ~/Library/LaunchAgents/com.ouedraogo.eod-journal-save.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ouedraogo.eod-journal-save</string>
+
+    <!--
+        macOS launchd cannot execute scripts that live inside iCloud Drive
+        ("Library/Mobile Documents/...") — the sandbox blocks it with
+        "Operation not permitted". The wrapper script must be copied to a
+        stable on-disk location outside iCloud:
+
+            cp scripts/launchd/eod_cron.sh ~/ibkr-cron/eod_cron.sh
+
+        Re-run that copy whenever eod_cron.sh changes — there's no symlink
+        trick here (iCloud is what's restricted, not just the script file).
+        Python invoked BY the wrapper can still read iCloud paths fine; the
+        restriction is only on launchd's direct child.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/momacbookair/ibkr-cron/eod_cron.sh</string>
+    </array>
+
+    <!--
+        Weekday: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri (per launchd.plist(5)).
+        Five separate dicts because StartCalendarInterval AND-conditions
+        the keys within a single dict — there's no way to express "any
+        weekday" in one dict, so we expand to 5.
+    -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>5</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>5</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>5</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>5</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>5</integer>
+        </dict>
+    </array>
+
+    <!-- Don't fire at load time — only on the schedule. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/momacbookair/ibkr-cron/logs/eod-save.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/momacbookair/ibkr-cron/logs/eod-save.err.log</string>
+</dict>
+</plist>
