@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Mobile design tokens (Phase 1 Step 2). All tokens are namespaced
+   `--m-*` and added to Tailwind under dedicated `m-` prefixes, so no
+   desktop rule can be overridden regardless of import order — this
+   import is here (at the top, per CSS-spec @import rules) rather than
+   at the bottom of the file. See docs/mobile/00b-tailwind-config-decision.md. */
+@import "../styles/mobile-tokens.css";
+
 /* ─────────────────────────────────────────────────────────────────
    Tailwind v4 theme tokens (migrated from former tailwind.config.ts)
    The v3-style JS config was never read by v4; these tokens are now
