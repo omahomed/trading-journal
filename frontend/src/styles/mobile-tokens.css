@@ -118,3 +118,18 @@
   --font-m-num: var(--font-jetbrains), ui-monospace, Menlo, monospace;
   --font-m-display-italic: 'Iowan Old Style', 'Palatino', Georgia, serif;
 }
+
+/* ── Adaptive shell visibility (CSS-only, no JS hydration required) ──
+   `.m-only` shows its element only at viewport widths below
+   MOBILE_BREAKPOINT_PX (1024px). `.d-only` shows it only at and above.
+
+   Used by the AdaptiveShell wrapper (Step 5) so the desktop and mobile
+   chrome can both mount in the React tree but only one renders to the
+   user. Components that wrap divs (the typical case) get the right
+   default. Inline / flex / grid items can override `display` directly. */
+.m-only { display: none; }
+.d-only { display: block; }
+@media (max-width: 1023px) {
+  .m-only { display: block; }
+  .d-only { display: none; }
+}
