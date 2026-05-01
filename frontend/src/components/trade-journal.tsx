@@ -598,8 +598,13 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                      if (e.key === "Enter" && tickerQuery) {
                        const allTickerSet = [...new Set(allTrades.map(t => t.ticker).filter(Boolean))];
                        const match = allTickerSet.find(t => t.toUpperCase() === tickerQuery.trim());
-                       if (match && !selectedTickers.includes(match)) {
-                         setSelectedTickers(prev => [...prev, match]);
+                       // Free-form fallback when no autocomplete match — covers
+                       // the empty-state case (allTrades=[] before any cohort
+                       // load) where ticker entry is what should drive the
+                       // initial fetch.
+                       const ticker = match ?? tickerQuery.trim().toUpperCase();
+                       if (ticker && !selectedTickers.includes(ticker)) {
+                         setSelectedTickers(prev => [...prev, ticker]);
                        }
                        setTickerQuery("");
                        setTickerDropdownOpen(false);
