@@ -1161,14 +1161,16 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
     yf_to_readable: dict[str, str] = {}
     yf_symbols: list[str] = []
     for t in ticker_list:
+        # yfinance can't reliably resolve OCC option symbols, so skip the
+        # fetch for options entirely. They stay in ticker_list and get
+        # priced by the manual_price override layer below when portfolio
+        # is set; options without a manual_price are omitted from the
+        # response, matching the prior behavior when the yfinance fetch
+        # failed.
         if _is_option_ticker(t):
-            occ = _to_occ_symbol(t)
-            if occ:
-                yf_symbols.append(occ)
-                yf_to_readable[occ] = t
-        else:
-            yf_symbols.append(t)
-            yf_to_readable[t] = t
+            continue
+        yf_symbols.append(t)
+        yf_to_readable[t] = t
 
     if not yf_symbols:
         # No yfinance work to do, but overrides may still apply if portfolio
