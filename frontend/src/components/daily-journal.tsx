@@ -132,6 +132,24 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   const [snapshots, setSnapshots] = useState<Array<{ id?: number; image_type?: string; view_url?: string; uploaded_at?: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [restampingDay, setRestampingDay] = useState<string>("");
+
+  const handleRestampMct = async (day: string) => {
+    if (restampingDay) return;
+    setRestampingDay(day);
+    try {
+      const r = await api.journalRestampMct(day);
+      if (r.status === "ok") {
+        setHistory(prev => prev.map(h =>
+          String(h.day).slice(0, 10) === day
+            ? { ...h, market_cycle: r.market_cycle ?? "", mct_display_day_num: r.mct_display_day_num ?? null } as JournalHistoryPoint
+            : h
+        ));
+      }
+    } finally {
+      setRestampingDay("");
+    }
+  };
   useEffect(() => {
     api.journalHistory(getActivePortfolio(), 0).then(h => {
       setHistory((h as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day))));
@@ -285,7 +303,24 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           {dateKey}
                         </td>
                         <td className="px-2.5 py-2">
-                          <MctStateBadge s={mct} />
+                          {mct ? (
+                            <MctStateBadge s={mct} />
+                          ) : (
+                            <span className="inline-flex items-center gap-1">
+                              <MctStateBadge s={mct} />
+                              <button
+                                type="button"
+                                onClick={() => handleRestampMct(dateKey)}
+                                disabled={restampingDay === dateKey}
+                                title="Re-stamp MCT state from current market data"
+                                aria-label="Re-stamp MCT state"
+                                className="text-[10px] px-1 py-0.5 rounded hover:opacity-80 disabled:opacity-50"
+                                style={{ border: "1px solid var(--border)", color: "var(--ink-3)" }}
+                              >
+                                {restampingDay === dateKey ? "…" : "↻"}
+                              </button>
+                            </span>
+                          )}
                         </td>
                         <td className="px-2.5 py-2 privacy-mask whitespace-nowrap" style={{ fontFamily: mono }}>
                           {(() => {

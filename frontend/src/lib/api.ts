@@ -210,6 +210,13 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
+  journalRestampMct: (day: string, portfolio = getActivePortfolio()) =>
+    fetchWithAuth(`${API_BASE}/api/journal/restamp-mct`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio, day }),
+    }).then(r => r.json()) as Promise<{ status: string; market_cycle?: string; mct_display_day_num?: number | null; detail?: string }>,
+
   journalDelete: (day: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/journal/delete?portfolio=${encodeURIComponent(portfolio)}&day=${encodeURIComponent(day)}`, {
       method: "DELETE",

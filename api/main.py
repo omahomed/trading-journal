@@ -500,6 +500,16 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
             except (ValueError, AttributeError):
                 as_of = None
 
+        # Best-effort: pull today's ^IXIC bar from yfinance before the engine
+        # reads market_data. Without this, a Daily Routine save run after
+        # market close (but before any external ingest cron) sees a stale
+        # market_data, fails the strict bar match below, and stamps NULL.
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
+
         result = run_engine("^IXIC", as_of=as_of)
         if result.bars.empty:
             return ("", None)
@@ -575,6 +585,16 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
 
     try:
         from api.mct_endpoint_adapter import run_engine
+        # Refresh market_data first so the bar_index built below reflects
+        # today's bar — otherwise the per-row short-circuit `if as_of not in
+        # bar_index.index: continue` skips today and the heal never fires.
+        # (The same refresh inside _compute_mct_state_with_day_num doesn't
+        # help here because we'd already have skipped before calling it.)
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
         result = run_engine("^IXIC")
         if result.bars.empty:
             return
@@ -734,6 +754,30 @@ def journal_edit(entry: dict):
 
         row_id = db.save_journal_entry(journal_entry)
         return {"status": "ok", "id": row_id}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@app.post("/api/journal/restamp-mct")
+def restamp_mct(payload: dict):
+    """Force-recompute MCT state + day_num for a single journal row.
+
+    Bypasses the "only stamp when missing" gate in /api/journal/edit so the
+    UI can unstick a row whose original save persisted NULL (engine had no
+    bar at the time). Idempotent — re-running with a date the engine still
+    can't resolve returns 'no_bar' without touching the row.
+    """
+    portfolio = payload.get("portfolio", "CanSlim")
+    day = payload.get("day")
+    if not day:
+        return {"status": "error", "detail": "day required"}
+    day_str = str(day).strip()[:10]
+    state, day_num = _compute_mct_state_with_day_num(day_str)
+    if not state:
+        return {"status": "no_bar", "detail": "engine has no bar for this date yet"}
+    try:
+        db.update_journal_mct_state(portfolio, day_str, state, day_num)
+        return {"status": "ok", "market_cycle": state, "mct_display_day_num": day_num}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
