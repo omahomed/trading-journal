@@ -91,7 +91,7 @@ FOUNDER_USER_ID = os.environ.get(
 )
 
 # Paths that remain reachable without a bearer token.
-_PUBLIC_PATHS = {"/api/health", "/"}
+_PUBLIC_PATHS = {"/api/health", "/api/healthz", "/"}
 
 # Must mirror the CORSMiddleware regex above. CORS headers don't automatically
 # propagate onto responses an inner middleware returns early (known Starlette
@@ -1463,6 +1463,12 @@ def health():
         return {"status": "ok" if ok else "db_error", "timestamp": datetime.now().isoformat()}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+@app.get("/api/healthz")
+def healthz():
+    """Lightweight liveness probe — does not check downstream dependencies. Use /api/health for readiness."""
+    return {"status": "ok"}
 
 
 # ============================================================

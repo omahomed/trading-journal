@@ -45,3 +45,4 @@ portfolios/*/Audit_Trail.csv
 
 # 21e equity curve build artifacts (live on R2, not in repo)
 scripts/equity_curve_*.png
+.env
