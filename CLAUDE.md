@@ -3,6 +3,8 @@
 ## Overview
 Streamlit-based trading journal for tracking CANSLIM and leveraged ETF strategies. Deployed on Streamlit Cloud with PostgreSQL (Supabase) and Cloudflare R2 for image storage. Falls back to CSV locally.
 
+**Note:** This repo also hosts utility scripts for the user's *separate* 21 EMA strategy, which is journaled in Notion (NOT in this Streamlit app). See `scripts/build_equity_curve.py` — generates the equity curve PNG for the Notion "21 EMA Strategy" page and uploads to R2 at `21ema/equity_curve_YYYYMMDD.png`. Run as part of the user's daily "Run 21e EOD" routine. The data lives in three Notion databases (Trade Log, Daily Journal, Equity Tracker) under the workspace-level "21 EMA Strategy" page; the IDs are kept in Claude Code memory.
+
 ## Tech Stack
 - **Frontend**: Streamlit with `streamlit-option-menu`
 - **Database**: PostgreSQL via `psycopg2-binary` (auto-detected on Streamlit Cloud)
