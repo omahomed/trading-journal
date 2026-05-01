@@ -3,9 +3,12 @@
 import { useState, useEffect } from "react";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { PositionSizer } from "@/components/position-sizer";
+import { MobilePositionSizer } from "@/components/mobile/mobile-position-sizer";
+import { useIsMobile } from "@/lib/use-viewport";
 import { getGroupForHref, hrefForId } from "@/lib/nav";
 
 export default function Route() {
+  const isMobile = useIsMobile();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -13,6 +16,8 @@ export default function Route() {
   const [initialTab, setInitialTab] = useState<string | undefined>(searchParams.get("tab") || undefined);
 
   useEffect(() => { setInitialTab(searchParams.get("tab") || undefined); }, [searchParams]);
+
+  if (isMobile) return <MobilePositionSizer />;
 
   const handleNavigate = (id: string) => {
     const href = hrefForId(id);

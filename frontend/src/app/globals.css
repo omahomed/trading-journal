@@ -1,5 +1,104 @@
 @import "tailwindcss";
 
+/* Mobile design tokens (Phase 1 Step 2). All tokens are namespaced
+   `--m-*` and added to Tailwind under dedicated `m-` prefixes, so no
+   desktop rule can be overridden regardless of import order — this
+   import is here (at the top, per CSS-spec @import rules) rather than
+   at the bottom of the file. See docs/mobile/00b-tailwind-config-decision.md. */
+@import "../styles/mobile-tokens.css";
+
+/* ─────────────────────────────────────────────────────────────────
+   Tailwind v4 theme tokens (migrated from former tailwind.config.ts)
+   The v3-style JS config was never read by v4; these tokens are now
+   declared natively. See docs/mobile/00b-tailwind-config-decision.md.
+   ───────────────────────────────────────────────────────────────── */
+@theme {
+  /* Canvas */
+  --color-bg: #f6f7fb;
+  --color-bg-2: #eef0f6;
+  --color-surface: #ffffff;
+  --color-surface-2: #fafbfd;
+  --color-border: #e6e8ef;
+  --color-border-2: #d8dbe5;
+
+  /* Ink (text hierarchy) */
+  --color-ink: #0f1524;
+  --color-ink-2: #2c3243;
+  --color-ink-3: #5a6175;
+  --color-ink-4: #8a90a2;
+  --color-ink-5: #b6bac7;
+
+  /* Semantic */
+  --color-up: #08a86b;
+  --color-up-soft: #e5f7ee;
+  --color-down: #e5484d;
+  --color-down-soft: #fdecec;
+  --color-warn: #f59f00;
+  --color-warn-soft: #fff4dd;
+
+  /* Group accents */
+  --color-g-dash: #6366f1;
+  --color-g-dash-soft: #eef0ff;
+  --color-g-ops: #08a86b;
+  --color-g-ops-soft: #e6f8ef;
+  --color-g-risk: #e5484d;
+  --color-g-risk-soft: #fdecec;
+  --color-g-daily: #f59f00;
+  --color-g-daily-soft: #fff4dd;
+  --color-g-mkt: #8b5cf6;
+  --color-g-mkt-soft: #f1ecfe;
+  --color-g-ai: #0ea5a4;
+  --color-g-ai-soft: #e0f5f4;
+  --color-g-deep: #0d6efd;
+  --color-g-deep-soft: #e7f0ff;
+  --color-g-legacy: #64748b;
+  --color-g-legacy-soft: #eef1f5;
+  --color-g-admin: #0f1524;
+  --color-g-admin-soft: #eceef3;
+
+  /* Fonts — wired to the next/font CSS variables set on <html> */
+  --font-ui: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-num: var(--font-jetbrains), ui-monospace, Menlo, monospace;
+  --font-display: var(--font-fraunces), "Instrument Serif", Georgia, serif;
+
+  /* Border radius */
+  --radius-r-1: 6px;
+  --radius-r-2: 10px;
+  --radius-r-3: 14px;
+  --radius-r-4: 20px;
+
+  /* Box shadows */
+  --shadow-sh-1: 0 1px 2px rgba(14, 20, 38, 0.04), 0 0 0 1px rgba(14, 20, 38, 0.04);
+  --shadow-sh-2: 0 4px 14px rgba(14, 20, 38, 0.06), 0 0 0 1px rgba(14, 20, 38, 0.04);
+  --shadow-sh-3: 0 20px 48px rgba(14, 20, 38, 0.14), 0 0 0 1px rgba(14, 20, 38, 0.06);
+
+  /* Spacing — shell dimensions */
+  --spacing-sidebar: 260px;
+  --spacing-sidebar-rail: 64px;
+  --spacing-header: 56px;
+
+  /* Animations */
+  --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
+  --animate-fade-in: fade-in 0.2s ease-out;
+  --animate-slide-up: slide-up 0.18s ease-out;
+}
+
+/* Keyframes referenced by --animate-* tokens above. (The same keyframes
+   are also declared inline in (app)/layout.tsx via styled-jsx; that file
+   is do-not-touch in Phase 1, so the duplicate is intentional for now.) */
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 3px var(--tw-shadow-color); }
+  50% { box-shadow: 0 0 0 6px var(--tw-shadow-color); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ── Recharts: kill active bar hover overlay ── */
 .recharts-active-bar { display: none !important; }
 .recharts-bar-rectangle:focus,

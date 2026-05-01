@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { UpdateBanner } from "@/components/update-banner";
+import { PwaRegister } from "@/components/mobile/pwa-register";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -25,6 +26,19 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "MO Trading — Trading Journal",
   description: "CANSLIM trading journal and analytics platform",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    title: "MO Trading",
+    statusBarStyle: "black-translucent",
+  },
+  icons: {
+    apple: "/apple-touch-icon.png",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#100D0B",
 };
 
 export default function RootLayout({
@@ -50,6 +64,7 @@ export default function RootLayout({
       <body className="min-h-full" style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
         {children}
         <UpdateBanner />
+        <PwaRegister />
       </body>
     </html>
   );

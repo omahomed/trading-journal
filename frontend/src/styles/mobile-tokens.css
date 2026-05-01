@@ -1,0 +1,135 @@
+/* ─────────────────────────────────────────────────────────────────
+   Mobile design tokens — Phase 1 Step 2.
+
+   All tokens are namespaced with the `--m-*` prefix so they cannot
+   collide with the desktop palette in `:root` / `.dark` of globals.css.
+
+   Two declaration sites, single source of truth per value:
+
+     1. `:root` block below — exposes `--m-bg`, `--m-surface`, etc. for
+        direct `var(--m-*)` consumption from inline styles or third-party
+        components that can't take a Tailwind class.
+
+     2. `@theme` block — adds the same tokens under the v4 namespaces
+        (`--color-m-*`, `--radius-m-*`, `--spacing-m-*`, `--font-m-*`)
+        so Tailwind generates utility classes (`bg-m-surface`,
+        `rounded-m-lg`, `p-m-4`, `font-m-num`, etc.). Each `@theme`
+        color token aliases its `:root` counterpart via `var(...)` so
+        the literal value lives in exactly one place.
+
+   Imported once from `src/app/globals.css`.
+   ───────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surfaces / borders ─────────────────────────────────────── */
+  --m-bg: #100D0B;            /* page background — warm near-black     */
+  --m-surface: #1A1612;       /* cards, input fields                   */
+  --m-surface-2: #2A211A;     /* selected segmented control state      */
+  --m-border: rgba(255, 235, 210, 0.06);
+  --m-border-strong: rgba(255, 235, 210, 0.22);
+
+  /* ── Text hierarchy ─────────────────────────────────────────── */
+  --m-text: #F5EFE5;          /* primary off-white, warm               */
+  --m-text-muted: #B0A89E;    /* secondary copy                        */
+  --m-text-dim: #7A7268;      /* tertiary / units / labels             */
+  --m-text-faint: #5A5249;    /* inactive nav, decorative              */
+
+  /* ── Semantic accents ───────────────────────────────────────── */
+  --m-accent: #4ADE80;            /* primary action / gains            */
+  --m-accent-text-on: #052e16;    /* readable text on the green pill   */
+  --m-down: #F87171;              /* losses / stop                     */
+  --m-warn: #FBBF24;              /* at-risk / amber callouts          */
+  --m-purple: #AFA9EC;            /* POWERTREND / M Factor inheritance */
+  --m-purple-text: #C9C5F0;       /* readable purple on dark           */
+
+  /* ── Tinted variants
+     Used by ready-state borders, at-risk washes, the POWERTREND pill,
+     etc. The numeric suffix encodes the alpha × 100 where given;
+     `-soft` and `-strong` are relative weights within a family. ── */
+  --m-accent-tint: rgba(74, 222, 128, 0.10);
+  --m-accent-border-soft: rgba(74, 222, 128, 0.20);
+  --m-accent-border: rgba(74, 222, 128, 0.25);
+  --m-accent-border-strong: rgba(74, 222, 128, 0.30);
+
+  --m-warn-tint-soft: rgba(251, 191, 36, 0.04);
+  --m-warn-tint: rgba(251, 191, 36, 0.08);
+  --m-warn-border-soft: rgba(251, 191, 36, 0.20);
+  --m-warn-border: rgba(251, 191, 36, 0.30);
+
+  --m-purple-tint: rgba(175, 169, 236, 0.10);
+  --m-purple-border: rgba(175, 169, 236, 0.22);
+
+  /* ── Motion ─────────────────────────────────────────────────── */
+  --m-ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --m-duration-tap: 120ms;
+  --m-duration-sheet: 320ms;
+}
+
+@theme {
+  /* Colors → bg-m-*, text-m-*, border-m-*, ring-m-*, fill-m-*, etc. */
+  --color-m-bg: var(--m-bg);
+  --color-m-surface: var(--m-surface);
+  --color-m-surface-2: var(--m-surface-2);
+  --color-m-border: var(--m-border);
+  --color-m-border-strong: var(--m-border-strong);
+
+  --color-m-text: var(--m-text);
+  --color-m-text-muted: var(--m-text-muted);
+  --color-m-text-dim: var(--m-text-dim);
+  --color-m-text-faint: var(--m-text-faint);
+
+  --color-m-accent: var(--m-accent);
+  --color-m-accent-text-on: var(--m-accent-text-on);
+  --color-m-down: var(--m-down);
+  --color-m-warn: var(--m-warn);
+  --color-m-purple: var(--m-purple);
+  --color-m-purple-text: var(--m-purple-text);
+
+  --color-m-accent-tint: var(--m-accent-tint);
+  --color-m-accent-border-soft: var(--m-accent-border-soft);
+  --color-m-accent-border: var(--m-accent-border);
+  --color-m-accent-border-strong: var(--m-accent-border-strong);
+
+  --color-m-warn-tint-soft: var(--m-warn-tint-soft);
+  --color-m-warn-tint: var(--m-warn-tint);
+  --color-m-warn-border-soft: var(--m-warn-border-soft);
+  --color-m-warn-border: var(--m-warn-border);
+
+  --color-m-purple-tint: var(--m-purple-tint);
+  --color-m-purple-border: var(--m-purple-border);
+
+  /* Border-radius → rounded-m-* */
+  --radius-m-sm: 10px;
+  --radius-m-md: 14px;
+  --radius-m-lg: 18px;
+  --radius-m-xl: 22px;
+  --radius-m-pill: 999px;
+
+  /* Spacing → p-m-*, m-m-*, gap-m-*, w-m-*, h-m-*, inset-m-*, etc. */
+  --spacing-m-1: 4px;
+  --spacing-m-2: 8px;
+  --spacing-m-3: 12px;
+  --spacing-m-4: 16px;
+  --spacing-m-5: 20px;
+  --spacing-m-6: 24px;
+
+  /* Fonts → font-m-ui, font-m-num, font-m-display-italic */
+  --font-m-ui: var(--font-inter), -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-m-num: var(--font-jetbrains), ui-monospace, Menlo, monospace;
+  --font-m-display-italic: 'Iowan Old Style', 'Palatino', Georgia, serif;
+}
+
+/* ── Adaptive shell visibility (CSS-only, no JS hydration required) ──
+   `.m-only` shows its element only at viewport widths below
+   MOBILE_BREAKPOINT_PX (1024px). `.d-only` shows it only at and above.
+
+   Used by the AdaptiveShell wrapper (Step 5) so the desktop and mobile
+   chrome can both mount in the React tree but only one renders to the
+   user. Components that wrap divs (the typical case) get the right
+   default. Inline / flex / grid items can override `display` directly. */
+.m-only { display: none; }
+.d-only { display: block; }
+@media (max-width: 1023px) {
+  .m-only { display: block; }
+  .d-only { display: none; }
+}

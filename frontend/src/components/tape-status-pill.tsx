@@ -1,19 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
+import { useRallyState, type RallyV11State, type RallyState as PillData } from "@/lib/use-rally-state";
 
-type V11State = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
-
-type PillData = {
-  state: V11State;
-  day_num?: number;
-  cap_at_100?: boolean;
-  drawdown_pct?: number;
-  power_trend_on_since?: string | null;
-  ftd_date?: string | null;
-};
+type V11State = RallyV11State;
 
 const STATE_STYLE: Record<V11State, { dot: string; ring: string; label: string }> = {
   POWERTREND:   { dot: "#8A2BE2", ring: "#efe4fb", label: "Power-Trend" },
@@ -21,8 +11,6 @@ const STATE_STYLE: Record<V11State, { dot: string; ring: string; label: string }
   "RALLY MODE": { dot: "#f59f00", ring: "#fdf2d8", label: "Rally Mode" },
   CORRECTION:   { dot: "#e5484d", ring: "#fde7e8", label: "Correction" },
 };
-
-const V11_STATES = ["POWERTREND", "UPTREND", "RALLY MODE", "CORRECTION"] as const;
 
 function fmtSince(iso?: string | null): string {
   if (!iso) return "";
@@ -38,30 +26,7 @@ function fmtSince(iso?: string | null): string {
 }
 
 export function TapeStatusPill() {
-  const [data, setData] = useState<PillData | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .rallyPrefix()
-      .then((r) => {
-        if (cancelled) return;
-        if (r?.state && (V11_STATES as readonly string[]).includes(r.state)) {
-          setData({
-            state: r.state as V11State,
-            day_num: r.day_num,
-            cap_at_100: r.cap_at_100,
-            drawdown_pct: r.drawdown_pct,
-            power_trend_on_since: r.power_trend_on_since,
-            ftd_date: r.ftd_date,
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setData(null);
-      });
-    return () => { cancelled = true; };
-  }, []);
+  const data = useRallyState();
 
   if (!data) {
     return (
