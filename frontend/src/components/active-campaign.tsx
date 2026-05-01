@@ -351,28 +351,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     }
   }, [activePortfolio?.id, hydrateFromPayload]);
 
-  // Mount + portfolio-change loader. Cached payload paints instantly; a
-  // background fetch (subject to STALE_THROTTLE_MS) revalidates so prices
-  // stay current without the user clicking Refresh.
+  // Fetch on mount and when the active portfolio changes. STALE_THROTTLE_MS
+  // dedupes quick remounts (e.g. nav away and back within 20s); the Refresh
+  // button bypasses it via force=true. No automatic background revalidation.
   useEffect(() => { loadData(); }, [loadData]);
-
-  // Refetch on tab/window focus so coming back to the page from another tab
-  // (or another app) lands fresh prices. STALE_THROTTLE_MS prevents this
-  // from hammering the backend during quick tab-flips.
-  useEffect(() => {
-    const onVisible = () => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        loadData();
-      }
-    };
-    const onFocus = () => loadData();
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [loadData]);
 
   const startEditPrice = useCallback((p: EnrichedPosition) => {
     setEditingPriceTradeId(p.trade_id);
