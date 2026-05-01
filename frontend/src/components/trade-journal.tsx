@@ -5,7 +5,7 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@
 import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
-type StatusFilter = "all" | "open" | "closed";
+type StatusFilter = "none" | "all" | "open" | "closed";
 type DateRange = "all" | "7d" | "30d" | "90d" | "ytd";
 type RecentActivity = "off" | "10" | "20" | "50";
 
@@ -364,8 +364,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [equity, setEquity] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("open");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("none");
   const [sort, setSort] = useState<SortKey>("newest");
   const [selectedTickers, setSelectedTickers] = useState<string[]>([]);
   const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
@@ -422,45 +421,60 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     setClosedLoaded(true);
   }, []);
 
-  // Filter-driven loader. Runs on mount (default filter triggers initial
-  // fetch) and on every filter change. Caches per-cohort so re-toggling
-  // back to a previously-loaded view is instant.
+  // On-demand loader. Fires only when the user picks a status, turns on
+  // Recent Activity, or has a ticker selected (via search, prefill, or
+  // ?ticker= URL param). The default empty state ('none' status, no
+  // ticker, recent activity off) does NOT fetch — clean visits don't
+  // touch the backend until the user expresses intent.
+  //
+  // Ticker mode loads BOTH cohorts opportunistically so a ticker search
+  // returns the full open + closed history. Each cohort renders as soon
+  // as it resolves (the trade list reacts to openLoaded/closedLoaded
+  // flipping), so open results show first and closed streams in behind.
   useEffect(() => {
-    const needsOpen = statusFilter === "open" || statusFilter === "all" || recentActivity !== "off";
-    const needsClosed = statusFilter === "closed" || statusFilter === "all" || recentActivity !== "off";
+    const tickerActive = selectedTickers.length > 0;
+    const needsOpen =
+      statusFilter === "open" || statusFilter === "all"
+      || recentActivity !== "off" || tickerActive;
+    const needsClosed =
+      statusFilter === "closed" || statusFilter === "all"
+      || recentActivity !== "off" || tickerActive;
 
     const fetches: Promise<void>[] = [];
     if (needsOpen && !openLoaded) fetches.push(loadOpen());
     if (needsClosed && !closedLoaded) fetches.push(loadClosed());
 
-    if (fetches.length === 0) {
-      if (loading) setLoading(false);
-      return;
-    }
+    if (fetches.length === 0) return;
 
-    if (!loading) setFilterLoading(true);
-    Promise.all(fetches).finally(() => {
-      setFilterLoading(false);
-      if (loading) setLoading(false);
-    });
-  }, [statusFilter, recentActivity, openLoaded, closedLoaded, loadOpen, loadClosed, loading]);
+    setFilterLoading(true);
+    Promise.all(fetches).finally(() => setFilterLoading(false));
+  }, [statusFilter, recentActivity, selectedTickers, openLoaded, closedLoaded, loadOpen, loadClosed]);
 
-  // Prefill from Active Campaign right-click runs once after the initial
-  // load completes. setStatusFilter("open") here is safe — it's the current
-  // default, so it won't trigger an unnecessary fetch.
+  // Mount-time prefill from explicit user intent: either a right-click
+  // "View in Journal" from Active Campaign (localStorage) or a ?ticker=
+  // URL param. Setting selectedTickers here is what triggers the
+  // filter-driven loader above to fetch both cohorts. We do NOT set
+  // statusFilter — the ticker is what drives the fetch in this mode.
   useEffect(() => {
-    if (loading) return;
+    let pickedTicker: string | null = null;
+    let pickedTradeId: string | null = null;
     try {
       const raw = localStorage.getItem("journal_prefill");
       if (raw) {
         localStorage.removeItem("journal_prefill");
         const data = JSON.parse(raw);
-        if (data.ticker) setSelectedTickers([data.ticker]);
-        if (data.trade_id) setExpandedCard(data.trade_id);
-        setStatusFilter("open");
+        if (data.ticker) pickedTicker = String(data.ticker).toUpperCase();
+        if (data.trade_id) pickedTradeId = String(data.trade_id);
       }
     } catch { /* ignore */ }
-  }, [loading]);
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlTicker = params.get("ticker");
+      if (urlTicker) pickedTicker = urlTicker.toUpperCase();
+    }
+    if (pickedTicker) setSelectedTickers([pickedTicker]);
+    if (pickedTradeId) setExpandedCard(pickedTradeId);
+  }, []);
 
   const filtered = useMemo(() => {
     let result = [...allTrades];
@@ -487,8 +501,9 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       return base.slice(0, n);
     }
 
-    // Status
-    if (statusFilter !== "all") {
+    // Status — 'none' and 'all' both mean "no status filter"; only 'open'
+    // and 'closed' actually narrow.
+    if (statusFilter === "open" || statusFilter === "closed") {
       result = result.filter(t => (t.status || "").toUpperCase() === statusFilter.toUpperCase());
     }
 
@@ -521,12 +536,9 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     return result;
   }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity]);
 
-  if (loading) {
-    return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
-  }
-
   const openCount = allTrades.filter(t => (t.status || "").toUpperCase() === "OPEN").length;
   const closedCount = allTrades.filter(t => (t.status || "").toUpperCase() === "CLOSED").length;
+  const hasLoadedAnyData = openLoaded || closedLoaded;
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -535,7 +547,11 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           Trade <em className="italic" style={{ color: navColor }}>Journal</em>
         </h1>
         <div className="text-[13px] mt-1.5 flex items-center gap-2" style={{ color: "var(--ink-3)" }}>
-          <span>{allTrades.length} campaigns ({openCount} open, {closedCount} closed)</span>
+          {hasLoadedAnyData ? (
+            <span>{allTrades.length} campaigns ({openCount} open, {closedCount} closed)</span>
+          ) : (
+            <span>Pick a filter or search a ticker to begin.</span>
+          )}
           {filterLoading && (
             <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
               · loading…
@@ -661,9 +677,45 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           <option value="50">Last 50 Activity</option>
         </select>
 
-        <span className="text-[12px] ml-auto" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
+        {hasLoadedAnyData && (
+          <span className="text-[12px] ml-auto" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
+        )}
       </div>
 
+      {/* Ticker-search banner: makes the active narrow obvious and gives a
+          one-click way back to the empty state. */}
+      {selectedTickers.length > 0 && (
+        <div className="flex items-center gap-3 mb-4 px-3 py-2 rounded-[10px] text-[12px]"
+             style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+          <span>
+            Showing trades for <strong style={{ color: "var(--ink)" }}>{selectedTickers.join(", ")}</strong>
+          </span>
+          {filterLoading && selectedTickers.length > 0 && !closedLoaded && (
+            <span style={{ color: "var(--ink-4)" }}>· loading closed trades…</span>
+          )}
+          <button onClick={() => { setSelectedTickers([]); setStatusFilter("none"); setRecentActivity("off"); }}
+                  className="ml-auto px-2 py-0.5 rounded-[6px] text-[11px] font-medium cursor-pointer"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+            Clear filter
+          </button>
+        </div>
+      )}
+
+      {/* Trade list / loading skeleton / empty-state CTA. Empty state only
+          renders when no fetch has completed AND no fetch is in flight, so
+          the prefill/URL flow shows the skeleton (not the CTA) while data
+          streams in. */}
+      {!hasLoadedAnyData && !filterLoading ? (
+        <div className="text-center py-20 px-6" style={{ color: "var(--ink-3)" }}>
+          <div className="text-[15px] font-medium" style={{ color: "var(--ink-2)" }}>Pick a filter or search a ticker above</div>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-4)" }}>
+            Choose <em>All</em>, <em>Open</em>, or <em>Closed</em> from the tabs, or type a ticker to see all activity for it.
+          </div>
+        </div>
+      ) : !hasLoadedAnyData && filterLoading ? (
+        <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>
+      ) : (
+      <>
       {/* Trade cards */}
       <div className="flex flex-col gap-4">
         {filtered.map(trade => {
@@ -1151,6 +1203,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
       {filtered.length === 0 && (
         <div className="text-center py-16 text-sm" style={{ color: "var(--ink-4)" }}>No trades match your filters</div>
+      )}
+      </>
       )}
     </div>
   );
