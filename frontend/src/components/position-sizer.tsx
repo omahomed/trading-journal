@@ -456,12 +456,23 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
   const scaleResults = useMemo(() => {
     if (!calculated || tab !== "scalein" || !holdingData) return null;
     const stop = ma * (1 - buf / 100);
-    const riskPerShare = entry - stop;
-    if (riskPerShare <= 0) return null;
+    const newAddRiskPerShare = entry - stop;
+    if (newAddRiskPerShare <= 0) return null;
 
     const currShares = holdingData.shares || 0;
     const avgEntry = holdingData.avg_entry || 0;
     const currValue = currShares * entry;
+
+    // Real-money risk on existing shares is only the portion of cost basis
+    // that sits above the stop. When stop ≥ avg_entry the position is
+    // "risk-free" — worst case is locking in profit, not losing capital —
+    // so existing shares contribute zero to the risk budget. This lets the
+    // user pyramid into a winner that has moved above its stop instead of
+    // being blocked by an open-risk calculation that double-counts gains
+    // already protected by the trailing stop.
+    const existingRiskPerShare = Math.max(0, avgEntry - stop);
+    const existingRisk = currShares * existingRiskPerShare;
+    const isRiskFree = existingRiskPerShare === 0 && currShares > 0;
 
     const targetValue = equity * (targetSize / 100);
     const targetTotalShares = Math.ceil(targetValue / entry);
@@ -469,26 +480,31 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
 
     const maxRisk = SIZING_MODES[sizingMode].pct;
     const maxRiskDol = equity * (maxRisk / 100);
-    const maxTotalShares = Math.ceil(maxRiskDol / riskPerShare);
-    const affordableAdd = maxTotalShares - currShares;
+    const remainingBudget = maxRiskDol - existingRisk;
+    const affordableAdd = remainingBudget > 0
+      ? Math.floor(remainingBudget / newAddRiskPerShare)
+      : 0;
 
     if (targetAdd <= 0) return { error: `You are already at or above the target weight! (Current: $${currValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} vs Target: $${targetValue.toLocaleString(undefined, { maximumFractionDigits: 0 })})` };
     if (affordableAdd <= 0) {
-      const riskAtCurr = currShares * riskPerShare;
-      return { error: `NO ADD - Your current ${currShares} shares already risk $${riskAtCurr.toLocaleString(undefined, { maximumFractionDigits: 0 })} (budget: $${maxRiskDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}). Tighten your stop or reduce position.` };
+      return { error: `NO ADD - Existing ${currShares} shares risk $${existingRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })} of capital below stop, exhausting the $${maxRiskDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} budget. Tighten your stop above your $${avgEntry.toFixed(2)} avg cost or reduce position.` };
     }
 
     const recommendedAdd = Math.min(targetAdd, affordableAdd);
     const newTotal = currShares + recommendedAdd;
     const newAvgCost = newTotal > 0 ? (currShares * avgEntry + recommendedAdd * entry) / newTotal : 0;
     const costOfAdd = recommendedAdd * entry;
-    const totalRiskAtNew = newTotal * riskPerShare;
+    // Total real-money risk after the add: locked-in risk on existing
+    // shares (zero when risk-free) plus the new shares' risk-to-stop.
+    const newAddRisk = recommendedAdd * newAddRiskPerShare;
+    const totalRiskAtNew = existingRisk + newAddRisk;
     const newWeight = equity > 0 ? (newTotal * entry / equity) * 100 : 0;
     const verdict = affordableAdd >= targetAdd ? "success" : "partial";
 
     return {
       recommendedAdd, newTotal, newAvgCost, costOfAdd, totalRiskAtNew, newWeight,
-      stop, riskPerShare, maxRiskDol, maxRisk, targetAdd, avgEntry, currShares, verdict,
+      stop, riskPerShare: newAddRiskPerShare, maxRiskDol, maxRisk, targetAdd,
+      avgEntry, currShares, verdict, isRiskFree, existingRisk, newAddRisk,
     };
   }, [calculated, tab, holdingData, ma, buf, entry, equity, targetSize, sizingMode]);
 
@@ -1132,6 +1148,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
                 <Banner type="error">{scaleResults.error}</Banner>
               ) : (
                 <>
+                  {scaleResults.isRiskFree && (
+                    <div className="mb-4 px-3 py-2 rounded-[8px] text-[12px]"
+                         style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                                  color: "#08a86b",
+                                  border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
+                      ✓ Position is risk-free — stop ${scaleResults.stop.toFixed(2)} sits above your ${scaleResults.avgEntry.toFixed(2)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
+                    </div>
+                  )}
                   <h3 className="text-[15px] font-semibold mb-4">PYRAMID TICKET</h3>
                   <div className="grid grid-cols-4 gap-3 mb-4">
                     <MetricCard label="ADD SHARES" value={`+${scaleResults.recommendedAdd}`}
