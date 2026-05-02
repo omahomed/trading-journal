@@ -254,14 +254,16 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
 
 const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker", label: "Contract", align: "left" },
+  { key: "days_held", label: "Days", align: "center" },
+  { key: "dte", label: "DTE", align: "center" },
+  { key: "return_pct", label: "Return %", align: "right" },
+  { key: "pos_size_pct", label: "Pos Size %", align: "right" },
   { key: "shares", label: "Qty", align: "center" },
   { key: "avg_entry", label: "Entry", align: "right" },
   { key: "total_cost", label: "Cost", align: "right" },
   { key: "current_price", label: "Current", align: "right" },
   { key: "current_value", label: "Value", align: "right" },
-  { key: "return_pct", label: "Return %", align: "right" },
   { key: "expiration", label: "Exp Date", align: "right" },
-  { key: "dte", label: "DTE", align: "center" },
 ];
 
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
@@ -604,6 +606,18 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const equityPlPct = equityCostSum > 0 ? (equityPlSum / equityCostSum) * 100 : 0;
   const optionsPlPct = optionsCostSum > 0 ? (optionsPlSum / optionsCostSum) * 100 : 0;
 
+  // Initial Risk + Open Risk (Heat) — equity-only sums to stay consistent
+  // with the Risk Monitor's scope. Initial Risk is the sum of per-trade
+  // risk_budget logged at trade open. Open Risk is current heat: distance
+  // from live price to safe-stop, times shares, times multiplier.
+  const initialRiskTotal = equities.reduce((sum, p) => sum + (p.risk_budget || 0), 0);
+  const initialRiskPct = equity > 0 ? (initialRiskTotal / equity) * 100 : 0;
+  const openRiskTotal = equities.reduce((sum, p) => {
+    const safeStop = p.avg_stop > 0 ? p.avg_stop : p.avg_entry;
+    return sum + (p.current_price - safeStop) * p.shares * p.multiplier;
+  }, 0);
+  const openRiskPct = equity > 0 ? (openRiskTotal / equity) * 100 : 0;
+
   const fmtMoney = (n: number, opts: Intl.NumberFormatOptions = { minimumFractionDigits: 2, maximumFractionDigits: 2 }) =>
     `$${n.toLocaleString(undefined, opts)}`;
   const signedMoney = (n: number) =>
@@ -629,6 +643,18 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       gradient: optionsExposurePct > 10
         ? "linear-gradient(135deg, #e5484d, #f87171)"
         : "linear-gradient(135deg, #f97316, #fb923c)",
+    },
+    {
+      label: "INITIAL RISK",
+      value: fmtMoney(initialRiskTotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      sub: `${initialRiskPct.toFixed(2)}% of NLV`,
+      gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
+    },
+    {
+      label: "OPEN RISK (HEAT)",
+      value: signedMoney(openRiskTotal),
+      sub: `${openRiskPct >= 0 ? "+" : ""}${openRiskPct.toFixed(2)}% of NLV`,
+      gradient: "linear-gradient(135deg, #e5484d, #f87171)",
     },
     {
       label: "EQUITY P&L",
@@ -759,7 +785,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       </div>
 
       {/* KPI tiles */}
-      <div className="grid grid-cols-5 gap-3 mb-6">
+      <div className="grid grid-cols-7 gap-3 mb-6">
         {kpis.map(k => <KPITile key={k.label} {...k} />)}
       </div>
 
@@ -841,8 +867,8 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         </span>
                       </td>
                       <td className="px-2.5 py-2.5 text-center"
-                          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); ctxOpenPyramid(p.trade_id); }}
-                          title="Right-click to open Position Sizer Pyramid for this position">
+                          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
+                          title="Right-click for actions (View in Journal · Open Position Sizer Pyramid)">
                         {pyramidReady ? (
                           <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
                                 style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff", minWidth: 40, textAlign: "center" }}>
@@ -963,18 +989,51 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
+                      {/* Contract */}
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
                         {p.ticker}
                       </td>
+                      {/* Days */}
+                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
+                        {p.days_held}
+                      </td>
+                      {/* DTE */}
+                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontWeight: 600, color: dteColor }}>
+                        {dte === null ? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        ) : dteExpired ? (
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
+                                style={{ background: "linear-gradient(135deg, #f87171, #ef4444)", color: "#fff" }}>
+                            EXPIRED
+                          </span>
+                        ) : (
+                          `${dte}d`
+                        )}
+                      </td>
+                      {/* Return % */}
+                      <td className="px-2.5 py-2.5 text-right">
+                        <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"
+                              style={{ background: retBg, color: retText, minWidth: 62, textAlign: "center", fontFamily: mono }}>
+                          {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
+                        </span>
+                      </td>
+                      {/* Pos Size % */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        {p.pos_size_pct.toFixed(1)}%
+                      </td>
+                      {/* Qty */}
                       <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono }}>
                         {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </td>
+                      {/* Entry */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.avg_entry.toFixed(2)}
                       </td>
+                      {/* Cost */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                       </td>
+                      {/* Current (inline-editable) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, cursor: editingPriceTradeId !== p.trade_id ? "text" : "default" }}
                           onClick={editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
@@ -1009,29 +1068,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           </span>
                         )}
                       </td>
+                      {/* Value */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
-                      <td className="px-2.5 py-2.5 text-right">
-                        <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"
-                              style={{ background: retBg, color: retText, minWidth: 62, textAlign: "center", fontFamily: mono }}>
-                          {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
-                        </span>
-                      </td>
+                      {/* Exp Date */}
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
                         {expDateLabel}
-                      </td>
-                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontWeight: 600, color: dteColor }}>
-                        {dte === null ? (
-                          <span style={{ color: "var(--ink-4)" }}>—</span>
-                        ) : dteExpired ? (
-                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
-                                style={{ background: "linear-gradient(135deg, #f87171, #ef4444)", color: "#fff" }}>
-                            EXPIRED
-                          </span>
-                        ) : (
-                          `${dte}d`
-                        )}
                       </td>
                     </tr>
                   );
@@ -1069,6 +1112,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                   onClick={e => { e.stopPropagation(); ctxViewJournal(ctxMenu.position); setCtxMenu(null); }}>
             <span style={{ color: "var(--ink-4)" }}>&#x1F4CB;</span> View in Journal
+          </button>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxOpenPyramid(ctxMenu.position.trade_id); setCtxMenu(null); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x1F53A;</span> Open Position Sizer Pyramid
           </button>
         </div>
       )}
