@@ -42,7 +42,4 @@ api/.streamlit/secrets.toml
 portfolios/*/Trade_Log_*.csv
 portfolios/*/Trading_Journal_*.csv
 portfolios/*/Audit_Trail.csv
-
-# 21e equity curve build artifacts (live on R2, not in repo)
-scripts/equity_curve_*.png
 .env
