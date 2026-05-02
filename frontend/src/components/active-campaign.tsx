@@ -222,6 +222,11 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
   } else if (key === "dte") {
     av = a.expiration ? daysUntilExpiration(a.expiration) : Number.MAX_SAFE_INTEGER;
     bv = b.expiration ? daysUntilExpiration(b.expiration) : Number.MAX_SAFE_INTEGER;
+  } else if (key === "cost_pct") {
+    // Derived field — sorted via total_cost since cost_pct = total_cost/nlv*100
+    // is monotonic in total_cost when nlv is the same constant for all rows.
+    av = a.total_cost;
+    bv = b.total_cost;
   } else {
     av = (a as any)[key];
     bv = (b as any)[key];
@@ -252,27 +257,40 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "projected_pl", label: "Projected P&L", align: "right" },
 ];
 
-// Column ordering for the Options table.
-// Positions 1–11 here intentionally mirror EQUITY_COLS positions 1–11 by
-// concept (Ticker↔Contract, Days↔Days, Risk Status↔Exp Date, Pyramid↔DTE,
-// Return %↔Return %, Pos Size %↔Pos Size %, Shares↔Qty, Avg Entry↔Entry,
-// Avg Stop↔Cost, Current Value↔Current, Risk $↔Value). Combined with
-// matching <colgroup> widths on both tables, this lets the two sections
-// stack with shared column positions at identical x-offsets — Return %
-// in particular MUST land at the same offset across both tables.
-// Don't reorder without also updating the equity colgroup + body cells.
+// Column ordering for the Options table — 14 columns to mirror EQUITY_COLS
+// position-for-position, so both tables auto-size identically under w-full
+// without colgroup pixel hacks. Conceptual mapping:
+//   1 Ticker       ↔ Contract
+//   2 Days         ↔ Days
+//   3 Risk Status  ↔ Exp Date
+//   4 Pyramid      ↔ DTE
+//   5 Return %     ↔ Return %
+//   6 Pos Size %   ↔ Pos Size %
+//   7 Shares       ↔ Qty
+//   8 Avg Entry    ↔ Entry
+//   9 Avg Stop     ↔ Current Price (inline-editable)
+//  10 Current Value↔ Value
+//  11 Risk $       ↔ Cost
+//  12 Risk %       ↔ Cost %
+//  13 Overall P&L  ↔ Overall P&L
+//  14 Projected P&L↔ — (N/A; not sortable)
+// Keep the cell counts in lock-step with the body render below — header
+// position must equal cell position or alignment breaks.
 const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
-  { key: "ticker", label: "Contract", align: "left" },
-  { key: "days_held", label: "Days", align: "center" },
-  { key: "expiration", label: "Exp Date", align: "right" },
-  { key: "dte", label: "DTE", align: "center" },
-  { key: "return_pct", label: "Return %", align: "right" },
-  { key: "pos_size_pct", label: "Pos Size %", align: "right" },
-  { key: "shares", label: "Qty", align: "center" },
-  { key: "avg_entry", label: "Entry", align: "right" },
-  { key: "total_cost", label: "Cost", align: "right" },
-  { key: "current_price", label: "Current", align: "right" },
-  { key: "current_value", label: "Value", align: "right" },
+  { key: "ticker",        label: "Contract",      align: "left" },
+  { key: "days_held",     label: "Days",          align: "center" },
+  { key: "expiration",    label: "Exp Date",      align: "right" },
+  { key: "dte",           label: "DTE",           align: "center" },
+  { key: "return_pct",    label: "Return %",      align: "right" },
+  { key: "pos_size_pct",  label: "Pos Size %",    align: "right" },
+  { key: "shares",        label: "Qty",           align: "center" },
+  { key: "avg_entry",     label: "Entry",         align: "right" },
+  { key: "current_price", label: "Current Price", align: "right" },
+  { key: "current_value", label: "Value",         align: "right" },
+  { key: "total_cost",    label: "Cost",          align: "right" },
+  { key: "cost_pct",      label: "Cost %",        align: "right" },
+  { key: "overall_pl",    label: "Overall P&L",   align: "right" },
+  { key: "projected_pl",  label: "—",             align: "right" },
 ];
 
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
@@ -800,12 +818,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
       {/* ── Equities Section ── */}
       {equities.length > 0 && (
-        // Card width matches the inner table (1245px = sum of equity colgroup
-        // widths) so the card hugs the table — no dead-zone whitespace to the
-        // right. maxWidth:100% clamps to viewport on narrow screens; the inner
-        // overflow-x-auto wrapper handles table scroll in that case. Keep
-        // overflow-hidden (rounded-corner clipping + sticky-header support).
-        <div className="rounded-[14px] overflow-hidden mb-6" style={{ width: "1245px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             <span className="text-[13px] font-semibold">Equities ({equities.length})</span>
@@ -813,34 +826,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            {/* Explicit width = sum of colgroup px (130+60+110+80+85+80+80+
-                85+95+110+110+75+115+115 = 1245). Must NOT use w-full —
-                w-full would scale the colgroup proportionally to the
-                container, breaking horizontal alignment with the Options
-                table (which has a different column count). At viewports
-                <1245px the parent overflow-x-auto handles scrolling. */}
-            <table className="text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: "1245px" }}>
-              {/* Column widths: positions 1–11 match the Options table so
-                  shared columns (esp. Return % at pos 5) align horizontally
-                  across both sections. Equity-only columns 12–14 extend the
-                  table further right. Don't change without mirroring the
-                  Options <colgroup> below. */}
-              <colgroup>
-                <col style={{ width: "130px" }} /> {/* 1  Ticker */}
-                <col style={{ width: "60px" }} />  {/* 2  Days */}
-                <col style={{ width: "110px" }} /> {/* 3  Risk Status */}
-                <col style={{ width: "80px" }} />  {/* 4  Pyramid */}
-                <col style={{ width: "85px" }} />  {/* 5  Return % */}
-                <col style={{ width: "80px" }} />  {/* 6  Pos Size % */}
-                <col style={{ width: "80px" }} />  {/* 7  Shares */}
-                <col style={{ width: "85px" }} />  {/* 8  Avg Entry */}
-                <col style={{ width: "95px" }} />  {/* 9  Avg Stop */}
-                <col style={{ width: "110px" }} /> {/* 10 Current Value */}
-                <col style={{ width: "110px" }} /> {/* 11 Risk $ */}
-                <col style={{ width: "75px" }} />  {/* 12 Risk % (equity-only) */}
-                <col style={{ width: "115px" }} /> {/* 13 Overall P&L (equity-only) */}
-                <col style={{ width: "115px" }} /> {/* 14 Projected P&L (equity-only) */}
-              </colgroup>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr>
                   {EQUITY_COLS.map(h => {
@@ -965,13 +951,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
       {/* ── Options Section ── */}
       {options.length > 0 && (
-        // Card width matches the inner table (945px = sum of options colgroup
-        // widths). Same rationale as the Equities card — card hugs table,
-        // shrinks below viewport via maxWidth, inner div scrolls on narrow
-        // screens. The 300px gap between this card's right edge and the
-        // Equities card's right edge corresponds to the equity-only columns
-        // (Risk %, Overall P&L, Projected P&L).
-        <div className="rounded-[14px] overflow-hidden mb-6" style={{ width: "945px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             <span className="text-[13px] font-semibold">Options ({options.length})</span>
@@ -984,33 +964,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            {/* Explicit width = sum of colgroup px (130+60+110+80+85+80+80+
-                85+95+110+110 = 945). Same rationale as the Equities table:
-                NEVER use w-full here — equal-x alignment of shared columns
-                across both sections requires identical absolute pixel
-                widths, not container-relative ones. */}
-            <table className="text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: "945px" }}>
-              {/* Column widths mirror the Equities table for positions 1–11
-                  so shared columns (esp. Return % at pos 5) align across
-                  both sections. Don't change without mirroring the Equities
-                  <colgroup> above. */}
-              <colgroup>
-                <col style={{ width: "130px" }} /> {/* 1  Contract */}
-                <col style={{ width: "60px" }} />  {/* 2  Days */}
-                <col style={{ width: "110px" }} /> {/* 3  Exp Date */}
-                <col style={{ width: "80px" }} />  {/* 4  DTE */}
-                <col style={{ width: "85px" }} />  {/* 5  Return % */}
-                <col style={{ width: "80px" }} />  {/* 6  Pos Size % */}
-                <col style={{ width: "80px" }} />  {/* 7  Qty */}
-                <col style={{ width: "85px" }} />  {/* 8  Entry */}
-                <col style={{ width: "95px" }} />  {/* 9  Cost */}
-                <col style={{ width: "110px" }} /> {/* 10 Current */}
-                <col style={{ width: "110px" }} /> {/* 11 Value */}
-              </colgroup>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr>
                   {OPTION_COLS.map(h => {
-                    const active = optSortKey === h.key;
+                    // projected_pl is N/A for options — header label is "—"
+                    // and the column is intentionally not sortable.
+                    const sortable = h.key !== "projected_pl";
+                    const active = sortable && optSortKey === h.key;
                     return (
                       <th key={h.key}
                           className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
@@ -1018,10 +979,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                             color: active ? "var(--ink)" : "var(--ink-4)",
                             background: "var(--surface-2)",
                             borderBottom: "1px solid var(--border)",
-                            cursor: "pointer",
+                            cursor: sortable ? "pointer" : "default",
                             userSelect: "none",
                           }}
-                          onClick={() => handleOptSort(h.key)}>
+                          onClick={sortable ? () => handleOptSort(h.key) : undefined}>
                         {h.label}
                         {active && <span className="ml-1 text-[9px]">{optSortDir === "desc" ? "▼" : "▲"}</span>}
                       </th>
@@ -1102,11 +1063,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.avg_entry.toFixed(2)}
                       </td>
-                      {/* Cost */}
-                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                      </td>
-                      {/* Current (inline-editable) */}
+                      {/* Current Price (inline-editable, pos 9) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, cursor: editingPriceTradeId !== p.trade_id ? "text" : "default" }}
                           onClick={editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
@@ -1141,9 +1098,25 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           </span>
                         )}
                       </td>
-                      {/* Value */}
+                      {/* Value (pos 10) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {/* Cost (pos 11) */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </td>
+                      {/* Cost % (pos 12) — total_cost as a share of NLV. equity may be 0 in pre-load states; guard the divide. */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        {equity > 0 ? `${(p.total_cost / equity * 100).toFixed(2)}%` : "—"}
+                      </td>
+                      {/* Overall P&L (pos 13) — same red/green coloring as the equity column. */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: p.overall_pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                        ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {/* — (pos 14) — Projected P&L is N/A for options. */}
+                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, color: "var(--ink-4)" }} title="N/A for options">
+                        —
                       </td>
                     </tr>
                   );
@@ -1193,9 +1166,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       )}
 
       {/* Risk Monitor (equity-only) */}
-      {/* Width matches the Equities card (1245px) since this panel is
-          equity-scoped. Keeps left edges aligned across the page. */}
-      <div className="mt-6 rounded-[14px] overflow-hidden" style={{ width: "1245px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+      <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
         <button onClick={() => setRiskMonitorOpen(!riskMonitorOpen)}
                 className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
                 style={{ borderBottom: riskMonitorOpen ? "1px solid var(--border)" : "none", background: "var(--surface-2)" }}>
