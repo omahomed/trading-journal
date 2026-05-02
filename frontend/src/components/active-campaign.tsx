@@ -252,9 +252,19 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "projected_pl", label: "Projected P&L", align: "right" },
 ];
 
+// Column ordering for the Options table.
+// Positions 1–11 here intentionally mirror EQUITY_COLS positions 1–11 by
+// concept (Ticker↔Contract, Days↔Days, Risk Status↔Exp Date, Pyramid↔DTE,
+// Return %↔Return %, Pos Size %↔Pos Size %, Shares↔Qty, Avg Entry↔Entry,
+// Avg Stop↔Cost, Current Value↔Current, Risk $↔Value). Combined with
+// matching <colgroup> widths on both tables, this lets the two sections
+// stack with shared column positions at identical x-offsets — Return %
+// in particular MUST land at the same offset across both tables.
+// Don't reorder without also updating the equity colgroup + body cells.
 const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker", label: "Contract", align: "left" },
   { key: "days_held", label: "Days", align: "center" },
+  { key: "expiration", label: "Exp Date", align: "right" },
   { key: "dte", label: "DTE", align: "center" },
   { key: "return_pct", label: "Return %", align: "right" },
   { key: "pos_size_pct", label: "Pos Size %", align: "right" },
@@ -263,7 +273,6 @@ const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "total_cost", label: "Cost", align: "right" },
   { key: "current_price", label: "Current", align: "right" },
   { key: "current_value", label: "Value", align: "right" },
-  { key: "expiration", label: "Exp Date", align: "right" },
 ];
 
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
@@ -799,7 +808,28 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Column widths: positions 1–11 match the Options table so
+                  shared columns (esp. Return % at pos 5) align horizontally
+                  across both sections. Equity-only columns 12–14 extend the
+                  table further right. Don't change without mirroring the
+                  Options <colgroup> below. */}
+              <colgroup>
+                <col style={{ width: "130px" }} /> {/* 1  Ticker */}
+                <col style={{ width: "60px" }} />  {/* 2  Days */}
+                <col style={{ width: "110px" }} /> {/* 3  Risk Status */}
+                <col style={{ width: "80px" }} />  {/* 4  Pyramid */}
+                <col style={{ width: "85px" }} />  {/* 5  Return % */}
+                <col style={{ width: "80px" }} />  {/* 6  Pos Size % */}
+                <col style={{ width: "80px" }} />  {/* 7  Shares */}
+                <col style={{ width: "85px" }} />  {/* 8  Avg Entry */}
+                <col style={{ width: "95px" }} />  {/* 9  Avg Stop */}
+                <col style={{ width: "110px" }} /> {/* 10 Current Value */}
+                <col style={{ width: "110px" }} /> {/* 11 Risk $ */}
+                <col style={{ width: "75px" }} />  {/* 12 Risk % (equity-only) */}
+                <col style={{ width: "115px" }} /> {/* 13 Overall P&L (equity-only) */}
+                <col style={{ width: "115px" }} /> {/* 14 Projected P&L (equity-only) */}
+              </colgroup>
               <thead>
                 <tr>
                   {EQUITY_COLS.map(h => {
@@ -937,7 +967,24 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Column widths mirror the Equities table for positions 1–11
+                  so shared columns (esp. Return % at pos 5) align across
+                  both sections. Don't change without mirroring the Equities
+                  <colgroup> above. */}
+              <colgroup>
+                <col style={{ width: "130px" }} /> {/* 1  Contract */}
+                <col style={{ width: "60px" }} />  {/* 2  Days */}
+                <col style={{ width: "110px" }} /> {/* 3  Exp Date */}
+                <col style={{ width: "80px" }} />  {/* 4  DTE */}
+                <col style={{ width: "85px" }} />  {/* 5  Return % */}
+                <col style={{ width: "80px" }} />  {/* 6  Pos Size % */}
+                <col style={{ width: "80px" }} />  {/* 7  Qty */}
+                <col style={{ width: "85px" }} />  {/* 8  Entry */}
+                <col style={{ width: "95px" }} />  {/* 9  Cost */}
+                <col style={{ width: "110px" }} /> {/* 10 Current */}
+                <col style={{ width: "110px" }} /> {/* 11 Value */}
+              </colgroup>
               <thead>
                 <tr>
                   {OPTION_COLS.map(h => {
@@ -996,6 +1043,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       {/* Days */}
                       <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
                         {p.days_held}
+                      </td>
+                      {/* Exp Date */}
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                        {expDateLabel}
                       </td>
                       {/* DTE */}
                       <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontWeight: 600, color: dteColor }}>
@@ -1071,10 +1122,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       {/* Value */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      {/* Exp Date */}
-                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
-                        {expDateLabel}
                       </td>
                     </tr>
                   );
