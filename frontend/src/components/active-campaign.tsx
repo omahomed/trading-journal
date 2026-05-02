@@ -240,6 +240,13 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
   return dir === "desc" ? -cmp : cmp;
 }
 
+// Shared column width used by both the Equities and Options <colgroup>
+// blocks. Both tables have 14 columns; giving every column an identical
+// percentage width forces position-N in both tables to land at the same
+// x-offset, regardless of cell content. tableLayout:"fixed" on each table
+// is what makes the browser honor these colgroup widths.
+const COL_WIDTH = "calc(100% / 14)";
+
 const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker", label: "Ticker", align: "left" },
   { key: "days_held", label: "Days", align: "center" },
@@ -826,7 +833,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Equal-percentage colgroup — must mirror the Options table's
+                  colgroup so position-N aligns at the same x in both. See
+                  COL_WIDTH constant above. */}
+              <colgroup>
+                {Array.from({ length: 14 }).map((_, i) => (
+                  <col key={i} style={{ width: COL_WIDTH }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
                   {EQUITY_COLS.map(h => {
@@ -964,7 +979,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Equal-percentage colgroup — mirrors the Equities table so
+                  position-N aligns at the same x in both. See COL_WIDTH
+                  constant above. */}
+              <colgroup>
+                {Array.from({ length: 14 }).map((_, i) => (
+                  <col key={i} style={{ width: COL_WIDTH }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
                   {OPTION_COLS.map(h => {
