@@ -808,7 +808,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+            {/* Explicit width = sum of colgroup px (130+60+110+80+85+80+80+
+                85+95+110+110+75+115+115 = 1245). Must NOT use w-full —
+                w-full would scale the colgroup proportionally to the
+                container, breaking horizontal alignment with the Options
+                table (which has a different column count). At viewports
+                <1245px the parent overflow-x-auto handles scrolling. */}
+            <table className="text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: "1245px" }}>
               {/* Column widths: positions 1–11 match the Options table so
                   shared columns (esp. Return % at pos 5) align horizontally
                   across both sections. Equity-only columns 12–14 extend the
@@ -967,7 +973,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+            {/* Explicit width = sum of colgroup px (130+60+110+80+85+80+80+
+                85+95+110+110 = 945). Same rationale as the Equities table:
+                NEVER use w-full here — equal-x alignment of shared columns
+                across both sections requires identical absolute pixel
+                widths, not container-relative ones. */}
+            <table className="text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: "945px" }}>
               {/* Column widths mirror the Equities table for positions 1–11
                   so shared columns (esp. Return % at pos 5) align across
                   both sections. Don't change without mirroring the Equities
