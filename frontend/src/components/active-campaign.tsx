@@ -800,7 +800,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
       {/* ── Equities Section ── */}
       {equities.length > 0 && (
-        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        // Card width matches the inner table (1245px = sum of equity colgroup
+        // widths) so the card hugs the table — no dead-zone whitespace to the
+        // right. maxWidth:100% clamps to viewport on narrow screens; the inner
+        // overflow-x-auto wrapper handles table scroll in that case. Keep
+        // overflow-hidden (rounded-corner clipping + sticky-header support).
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ width: "1245px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             <span className="text-[13px] font-semibold">Equities ({equities.length})</span>
@@ -960,7 +965,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
       {/* ── Options Section ── */}
       {options.length > 0 && (
-        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        // Card width matches the inner table (945px = sum of options colgroup
+        // widths). Same rationale as the Equities card — card hugs table,
+        // shrinks below viewport via maxWidth, inner div scrolls on narrow
+        // screens. The 300px gap between this card's right edge and the
+        // Equities card's right edge corresponds to the equity-only columns
+        // (Risk %, Overall P&L, Projected P&L).
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ width: "945px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
           <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             <span className="text-[13px] font-semibold">Options ({options.length})</span>
@@ -1182,7 +1193,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       )}
 
       {/* Risk Monitor (equity-only) */}
-      <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+      {/* Width matches the Equities card (1245px) since this panel is
+          equity-scoped. Keeps left edges aligned across the page. */}
+      <div className="mt-6 rounded-[14px] overflow-hidden" style={{ width: "1245px", maxWidth: "100%", background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
         <button onClick={() => setRiskMonitorOpen(!riskMonitorOpen)}
                 className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
                 style={{ borderBottom: riskMonitorOpen ? "1px solid var(--border)" : "none", background: "var(--surface-2)" }}>
