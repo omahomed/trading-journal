@@ -249,7 +249,7 @@ const COL_WIDTH = "calc(100% / 14)";
 
 const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker", label: "Ticker", align: "left" },
-  { key: "days_held", label: "Days", align: "center" },
+  { key: "days_held", label: "Days", align: "right" },
   { key: "risk_status", label: "Risk Status", align: "center" },
   { key: "pyramid_pct", label: "Pyramid", align: "center" },
   { key: "return_pct", label: "Return %", align: "right" },
@@ -285,12 +285,12 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
 // position must equal cell position or alignment breaks.
 const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker",        label: "Contract",      align: "left" },
-  { key: "days_held",     label: "Days",          align: "center" },
+  { key: "days_held",     label: "Days",          align: "right" },
   { key: "expiration",    label: "Exp Date",      align: "right" },
   { key: "dte",           label: "DTE",           align: "center" },
   { key: "return_pct",    label: "Return %",      align: "right" },
   { key: "pos_size_pct",  label: "Pos Size %",    align: "right" },
-  { key: "shares",        label: "Qty",           align: "center" },
+  { key: "shares",        label: "Qty",           align: "right" },
   { key: "avg_entry",     label: "Entry",         align: "right" },
   { key: "current_price", label: "Current Price", align: "right" },
   { key: "current_value", label: "Value",         align: "right" },
@@ -896,7 +896,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
                         {p.ticker}
                       </td>
-                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
                         {p.days_held}
                       </td>
                       <td className="px-2.5 py-2.5 text-center">
@@ -1047,7 +1047,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {p.ticker}
                       </td>
                       {/* Days */}
-                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
                         {p.days_held}
                       </td>
                       {/* Exp Date */}
@@ -1079,7 +1079,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {p.pos_size_pct.toFixed(1)}%
                       </td>
                       {/* Qty */}
-                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono }}>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono }}>
                         {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </td>
                       {/* Entry */}
