@@ -1,22 +1,21 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
+import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 
-// Bump whenever the cached payload shape changes — old caches with a stale
-// shape will be ignored and refetched. Keep this dumb-simple: increment by 1.
-const ACS_CACHE_VERSION = 2;
+// Bump whenever the cached payload shape (or its derived EnrichedPosition)
+// changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
+// would feed the legacy understated values to the new UI.
+const ACS_CACHE_VERSION = 3;
 const acsCacheName = (portfolioId: number) => `active-campaign::${portfolioId}`;
-// Background refetch debounce: focus/mount events within this window of the
-// last successful fetch reuse the in-memory data instead of re-firing the
-// fan-out. Short enough that any "I came back to size a position" moment
-// hits live prices; long enough that bouncing between Dashboard and ACS
-// doesn't hammer yfinance.
 const STALE_THROTTLE_MS = 20_000;
+const MULTIPLIER_NOTICE_KEY = "acs-v2-multiplier-notice-dismissed";
 
 interface ACSCache {
   openTrades: TradePosition[];
@@ -38,7 +37,13 @@ interface EnrichedPosition {
   open_date: string;
   days_held: number;
   avg_stop: number;
+  // Legacy non-negative LIFO risk (used by Risk Monitor's budget alert).
   risk_dollars: number;
+  // (avg_stop − avg_entry) × shares × multiplier — multiplier-correct for
+  // options. Signed: negative = at risk, zero = free roll, positive = stop
+  // locks in profit.
+  signed_risk: number;
+  // signed_risk / equity × 100 — same sign convention.
   risk_pct: number;
   current_price: number;
   current_value: number;
@@ -47,15 +52,14 @@ interface EnrichedPosition {
   return_pct: number;
   pos_size_pct: number;
   is_option: boolean;
-  opt_mult: number;
+  multiplier: number;
   pyramid_pct: number;
-  risk_status: string;
+  risk_status: "Free Roll" | "At Risk";
   projected_pl: number;
   realized_bank: number;
-  open_risk_equity: number;
-  stop_pct: number;
-  grade: number | null;
+  expiration: Date | null;
   manual_price: number | null;
+  grade: number | null;
 }
 
 function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
@@ -82,46 +86,46 @@ function computeEnrichedPositions(
 
   return openTrades.map(trade => {
     const tradeDetails = allDetails.filter(d => d.trade_id === trade.trade_id);
-    const buys = tradeDetails.filter(d => String(d.action).toUpperCase() === "BUY");
-
-    // Detect options
     const ticker = trade.ticker || "";
-    const isOption = /\d{6}/.test(ticker) || (trade.buy_notes || "").startsWith("OPT:");
-    const optMult = isOption ? 100 : 1;
+
+    // Migration 016: instrument_type + multiplier are the source of truth.
+    // Fallback to (isOption ? 100 : 1) only if the row pre-dates the backfill.
+    const isOption = String((trade as any).instrument_type || "").toUpperCase() === "OPTION";
+    const multRaw = parseFloat(String((trade as any).multiplier || 0));
+    const multiplier = multRaw > 0 ? multRaw : (isOption ? 100 : 1);
 
     const shares = trade.shares || 0;
     const summaryEntry = trade.avg_entry || 0;
-
-    // Run LIFO engine (same as Streamlit)
     const lifo = runLifoEngine(tradeDetails, summaryEntry, shares);
 
-    // Days held
     const firstDate = tradeDetails.length > 0
       ? new Date(tradeDetails[0].date)
       : new Date(trade.open_date);
-    const daysHeld = Math.max(1, Math.floor((now.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24)));
+    const daysHeld = Math.max(1, Math.floor((now.getTime() - firstDate.getTime()) / 86_400_000));
 
-    // Current price — use live price if available, else fall back to avg_entry
     const currentPrice = livePrices[ticker] || summaryEntry;
-
     const avgEntry = lifo.avgCost;
     const avgStop = lifo.avgStop;
-    const currentValue = shares * currentPrice * optMult;
-    const unrealizedPl = (currentPrice - avgEntry) * shares * optMult;
+
+    const currentValue = shares * currentPrice * multiplier;
+    const unrealizedPl = (currentPrice - avgEntry) * shares * multiplier;
     const overallPl = unrealizedPl + lifo.realizedBank;
     const returnPct = avgEntry > 0 ? ((currentPrice - avgEntry) / avgEntry) * 100 : 0;
     const posSizePct = equity > 0 ? (currentValue / equity) * 100 : 0;
-    const riskDollars = lifo.risk;
-    const riskPct = equity > 0 ? (riskDollars / equity) * 100 : 0;
+
+    // Signed risk — multiplier-correct. The legacy LIFO `risk` field omits
+    // the contract multiplier, so option Risk $ values were understated by
+    // 100×. We compute the new column directly here. avgStop=0 means no
+    // stop has been entered; treat that as zero risk to match the historic
+    // Free Roll behavior of the engine.
+    const stopForRisk = avgStop > 0 ? avgStop : avgEntry;
+    const signedRisk = (stopForRisk - avgEntry) * shares * multiplier;
+    const riskPct = equity > 0 ? (signedRisk / equity) * 100 : 0;
+
     const riskBudget = parseFloat(String(trade.risk_budget || 0));
-    const stopPct = avgEntry > 0 && avgStop > 0 ? ((avgEntry - avgStop) / avgEntry) * 100 : 0;
 
-    // Open risk equity (for heat KPI)
-    const safeStop = avgStop > 0 ? avgStop : avgEntry;
-    const openRiskEquity = (currentPrice - safeStop) * shares;
-
-    // Pyramid: last remaining lot return %
-    // Rebuild LIFO inventory to find last lot
+    // Pyramid: last LIFO lot's return %. Walk the buy/sell tape, LIFO-match
+    // sells, and look at what the most recent open lot is up.
     let pyramidPct = 0;
     if (tradeDetails.length > 0 && currentPrice > 0) {
       const sortedTx = [...tradeDetails].sort((a, b) => {
@@ -159,8 +163,8 @@ function computeEnrichedPositions(
       }
     }
 
-    // Risk status
-    const riskStatus = riskDollars <= 0.01 ? "Free Roll" : "At Risk";
+    const riskStatus: "Free Roll" | "At Risk" = signedRisk >= 0 ? "Free Roll" : "At Risk";
+    const expiration = isOption ? (parseOptionTicker(ticker)?.exp ?? null) : null;
 
     return {
       trade_id: trade.trade_id,
@@ -175,7 +179,13 @@ function computeEnrichedPositions(
       open_date: trade.open_date || "",
       days_held: daysHeld,
       avg_stop: avgStop,
-      risk_dollars: riskDollars,
+      // Non-negative magnitude of at-risk dollars, multiplier-correct.
+      // Mirrors what legacy callers expect from risk_dollars (≥ 0, equals
+      // |signed_risk| when at risk, 0 when free roll) but no longer
+      // understates option exposure by 100× — the LIFO engine's lifo.risk
+      // value is multiplier-blind and must not leak into v2 fields.
+      risk_dollars: Math.max(0, -signedRisk),
+      signed_risk: signedRisk,
       risk_pct: riskPct,
       current_price: currentPrice,
       current_value: currentValue,
@@ -184,70 +194,161 @@ function computeEnrichedPositions(
       return_pct: returnPct,
       pos_size_pct: posSizePct,
       is_option: isOption,
-      opt_mult: optMult,
+      multiplier,
       pyramid_pct: pyramidPct,
       risk_status: riskStatus,
       projected_pl: lifo.projectedPl,
       realized_bank: lifo.realizedBank,
-      open_risk_equity: openRiskEquity,
-      stop_pct: stopPct,
-      grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
+      expiration,
       manual_price: (() => {
         const raw = (trade as any).manual_price;
         if (raw === null || raw === undefined || raw === "") return null;
         const n = parseFloat(String(raw));
         return isFinite(n) && n > 0 ? n : null;
       })(),
+      grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
     };
-  }).sort((a, b) => b.return_pct - a.return_pct);
+  });
 }
 
-type RiskFilter = "all" | "at_risk" | "free_roll";
-type SortKey = keyof EnrichedPosition;
 type SortDir = "asc" | "desc";
 
+function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir: SortDir): number {
+  let av: any;
+  let bv: any;
+  if (key === "expiration") {
+    av = a.expiration ? a.expiration.getTime() : Number.MAX_SAFE_INTEGER;
+    bv = b.expiration ? b.expiration.getTime() : Number.MAX_SAFE_INTEGER;
+  } else if (key === "dte") {
+    av = a.expiration ? daysUntilExpiration(a.expiration) : Number.MAX_SAFE_INTEGER;
+    bv = b.expiration ? daysUntilExpiration(b.expiration) : Number.MAX_SAFE_INTEGER;
+  } else if (key === "cost_pct") {
+    // Derived field — sorted via total_cost since cost_pct = total_cost/nlv*100
+    // is monotonic in total_cost when nlv is the same constant for all rows.
+    av = a.total_cost;
+    bv = b.total_cost;
+  } else {
+    av = (a as any)[key];
+    bv = (b as any)[key];
+  }
+  let cmp: number;
+  if (av == null && bv == null) cmp = 0;
+  else if (av == null) cmp = -1;
+  else if (bv == null) cmp = 1;
+  else if (typeof av === "string" && typeof bv === "string") cmp = av.localeCompare(bv);
+  else cmp = (av as number) - (bv as number);
+  return dir === "desc" ? -cmp : cmp;
+}
+
+// Shared column width used by both the Equities and Options <colgroup>
+// blocks. Both tables have 14 columns; giving every column an identical
+// percentage width forces position-N in both tables to land at the same
+// x-offset, regardless of cell content. tableLayout:"fixed" on each table
+// is what makes the browser honor these colgroup widths.
+const COL_WIDTH = "calc(100% / 14)";
+
+const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
+  { key: "ticker", label: "Ticker", align: "left" },
+  { key: "days_held", label: "Days", align: "right" },
+  { key: "risk_status", label: "Risk Status", align: "center" },
+  { key: "pyramid_pct", label: "Pyramid", align: "center" },
+  { key: "return_pct", label: "Return %", align: "right" },
+  { key: "pos_size_pct", label: "Pos Size %", align: "right" },
+  { key: "shares", label: "Shares", align: "right" },
+  { key: "avg_entry", label: "Avg Entry", align: "right" },
+  { key: "avg_stop", label: "Avg Stop", align: "right" },
+  { key: "current_value", label: "Current Value", align: "right" },
+  { key: "signed_risk", label: "Risk $", align: "right" },
+  { key: "risk_pct", label: "Risk %", align: "right" },
+  { key: "overall_pl", label: "Overall P&L", align: "right" },
+  { key: "projected_pl", label: "Projected P&L", align: "right" },
+];
+
+// Column ordering for the Options table — 14 columns to mirror EQUITY_COLS
+// position-for-position, so both tables auto-size identically under w-full
+// without colgroup pixel hacks. Conceptual mapping:
+//   1 Ticker       ↔ Contract
+//   2 Days         ↔ Days
+//   3 Risk Status  ↔ Exp Date
+//   4 Pyramid      ↔ DTE
+//   5 Return %     ↔ Return %
+//   6 Pos Size %   ↔ Pos Size %
+//   7 Shares       ↔ Qty
+//   8 Avg Entry    ↔ Entry
+//   9 Avg Stop     ↔ Current Price (inline-editable)
+//  10 Current Value↔ Value
+//  11 Risk $       ↔ Cost
+//  12 Risk %       ↔ Cost %
+//  13 Overall P&L  ↔ Overall P&L
+//  14 Projected P&L↔ — (N/A; not sortable)
+// Keep the cell counts in lock-step with the body render below — header
+// position must equal cell position or alignment breaks.
+const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
+  { key: "ticker",        label: "Contract",      align: "left" },
+  { key: "days_held",     label: "Days",          align: "right" },
+  { key: "expiration",    label: "Exp Date",      align: "right" },
+  { key: "dte",           label: "DTE",           align: "center" },
+  { key: "return_pct",    label: "Return %",      align: "right" },
+  { key: "pos_size_pct",  label: "Pos Size %",    align: "right" },
+  { key: "shares",        label: "Qty",           align: "right" },
+  { key: "avg_entry",     label: "Entry",         align: "right" },
+  { key: "current_price", label: "Current Price", align: "right" },
+  { key: "current_value", label: "Value",         align: "right" },
+  { key: "total_cost",    label: "Cost",          align: "right" },
+  { key: "cost_pct",      label: "Cost %",        align: "right" },
+  { key: "overall_pl",    label: "Overall P&L",   align: "right" },
+  { key: "projected_pl",  label: "—",             align: "right" },
+];
+
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
+  const router = useRouter();
   const { activePortfolio } = usePortfolio();
   const [positions, setPositions] = useState<EnrichedPosition[]>([]);
   const [equity, setEquity] = useState(0);
   const [loading, setLoading] = useState(true);
-  // Epoch ms of when the currently-rendered data was loaded — used by the
-  // 'Updated X min ago' label. setLastUpdateMs is called both when a cache
-  // hit hydrates state and when a fresh fetch completes.
   const [lastUpdateMs, setLastUpdateMs] = useState<number | null>(null);
-  // Tick state forces the 'Updated X min ago' label to re-render every 30s
-  // even when the user isn't interacting. Cheap, just incrementing an int.
   const [, setFreshnessTick] = useState(0);
-  // True while a background revalidation fetch is in flight. Drives the
-  // pulsing dot next to the freshness label so the user can see fresh data
-  // is on the way without the table being yanked into a skeleton state.
   const [refetching, setRefetching] = useState(false);
-  // Set when the most recent background fetch failed. We keep showing the
-  // stale data and surface this as a small red indicator instead of blanking
-  // — actionable while still being honest about freshness.
   const [refetchError, setRefetchError] = useState(false);
-  // Throttle / dedupe state. Refs (not state) so loadData stays stable and
-  // the focus listener doesn't re-bind on every fetch.
   const lastFetchAtRef = useRef<number>(0);
   const inFlightRef = useRef(false);
   const lastActiveIdRef = useRef<number | undefined>(undefined);
-  const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("return_pct");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  // Independent sort state for each section. No localStorage persistence —
+  // resets to "Return % desc" on every mount per spec.
+  const [eqSortKey, setEqSortKey] = useState<string>("return_pct");
+  const [eqSortDir, setEqSortDir] = useState<SortDir>("desc");
+  const [optSortKey, setOptSortKey] = useState<string>("return_pct");
+  const [optSortDir, setOptSortDir] = useState<SortDir>("desc");
+
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
 
-  // Inline editor state for the Current price cell on option rows. yfinance
-  // can't reliably resolve OCC option symbols, so the user pins a value here;
-  // it persists on trades_summary.manual_price and the backend layers it on
-  // top of /api/prices/batch.
+  // Inline option price editor (preserved from v1).
   const [editingPriceTradeId, setEditingPriceTradeId] = useState<string | null>(null);
   const [editPriceValue, setEditPriceValue] = useState<string>("");
   const [savingPrice, setSavingPrice] = useState(false);
 
-  // Hydrate enriched positions + equity from a cached payload. Pure
-  // re-derivation; computeEnrichedPositions is a fast pass over arrays so
-  // this lands instantly compared to the full fetch path.
+  // EOD batch-edit modal.
+  const [eodModalOpen, setEodModalOpen] = useState(false);
+  const [eodEdits, setEodEdits] = useState<Record<string, string>>({});
+  const [eodSaving, setEodSaving] = useState(false);
+  const [eodErrors, setEodErrors] = useState<string[]>([]);
+
+  // Multiplier-fix banner. Default to dismissed during SSR; the localStorage
+  // read in useEffect below is the authoritative resolution.
+  const [bannerDismissed, setBannerDismissed] = useState(true);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setBannerDismissed(window.localStorage.getItem(MULTIPLIER_NOTICE_KEY) === "1");
+  }, []);
+  const dismissBanner = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(MULTIPLIER_NOTICE_KEY, "1");
+    }
+    setBannerDismissed(true);
+  }, []);
+
   const hydrateFromPayload = useCallback((payload: ACSCache) => {
     setEquity(payload.equity);
     const enriched = computeEnrichedPositions(
@@ -263,9 +364,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     const force = !!opts?.force;
     const activeId = activePortfolio?.id;
 
-    // First load OR portfolio switch: hydrate from the cache synchronously
-    // so the table paints instantly. Reset the throttle ref so the new
-    // portfolio's data gets a chance to refetch.
     if (lastActiveIdRef.current !== activeId) {
       lastActiveIdRef.current = activeId;
       lastFetchAtRef.current = 0;
@@ -280,15 +378,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       }
     }
 
-    // Throttle: if a recent fetch already gave us fresh data, skip the
-    // network round-trip. The Refresh button passes force=true to bypass.
     if (!force && Date.now() - lastFetchAtRef.current < STALE_THROTTLE_MS) {
       setLoading(false);
       return;
     }
 
-    // Dedupe: if a fetch is already in flight (e.g. focus fires while the
-    // mount fetch is still resolving), don't start a second one.
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setRefetching(true);
@@ -300,20 +394,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
         api.journalLatest(getActivePortfolio()).catch(() => null),
       ]);
-      // Journal end_nlv is the canonical NLV for exposure and risk %s — it's
-      // the broker-confirmed EOD value, not a live estimate that can drift
-      // intraday with stale prices. Fall back to the derived NLV (cash + live
-      // positions) only if the journal hasn't been written yet, and finally
-      // to 0 — the UI handles 0 by hiding the % exposure.
       const journalNlv = journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0;
       const derivedNlv = nlv && typeof nlv === "object" && !("error" in nlv)
         ? (nlv as { nlv: number }).nlv
         : null;
       const eq = journalNlv > 0 ? journalNlv : (derivedNlv ?? 0);
 
-      // Fetch live prices for all open tickers. Pass portfolio so the
-      // backend layers manual_price overrides (set per option position from
-      // the inline-editable Current cell below).
       const tickers = (openTrades as TradePosition[]).map(t => t.ticker).filter(Boolean);
       let prices: Record<string, number> = {};
       if (tickers.length > 0) {
@@ -323,7 +409,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             prices = result;
           }
         } catch {
-          // Fall back to entry prices if price fetch fails
+          /* keep entry prices as fallback */
         }
       }
 
@@ -342,7 +428,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       lastFetchAtRef.current = now;
       setRefetchError(false);
     } catch {
-      // Keep stale data on screen; surface failure via refetchError dot.
       setRefetchError(true);
     } finally {
       setLoading(false);
@@ -351,11 +436,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     }
   }, [activePortfolio?.id, hydrateFromPayload]);
 
-  // Fetch on mount and when the active portfolio changes. STALE_THROTTLE_MS
-  // dedupes quick remounts (e.g. nav away and back within 20s); the Refresh
-  // button bypasses it via force=true. No automatic background revalidation.
   useEffect(() => { loadData(); }, [loadData]);
 
+  useEffect(() => {
+    const id = setInterval(() => setFreshnessTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Inline option price editor handlers.
   const startEditPrice = useCallback((p: EnrichedPosition) => {
     setEditingPriceTradeId(p.trade_id);
     setEditPriceValue(
@@ -375,7 +463,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     const trimmed = editPriceValue.trim();
     let newPrice: number | null;
     if (trimmed === "") {
-      newPrice = null;  // clear override
+      newPrice = null;
     } else {
       const n = parseFloat(trimmed);
       if (!isFinite(n) || n <= 0) {
@@ -403,14 +491,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     }
   }, [editPriceValue, savingPrice, cancelEditPrice, loadData]);
 
-  // Re-render the 'Updated X min ago' label every 30s so it stays accurate
-  // even when nothing else changes.
-  useEffect(() => {
-    const id = setInterval(() => setFreshnessTick(t => t + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Close context menu on click anywhere or Escape
+  // Context menu close.
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
@@ -420,61 +501,124 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
   }, [ctxMenu]);
 
-  const ctxAddPosition = useCallback((p: EnrichedPosition) => {
-    localStorage.setItem("ps_prefill", JSON.stringify({
-      ticker: p.ticker,
-      shares: 0,
-      price: p.current_price,
-      stop: p.avg_stop > 0 ? p.avg_stop : undefined,
-      trade_id: p.trade_id,
-      action: "scale_in",
-    }));
-    if (onNavigate) onNavigate("logbuy");
-  }, [onNavigate]);
-
-  const ctxSellPosition = useCallback((p: EnrichedPosition) => {
-    localStorage.setItem("ps_prefill_sell", JSON.stringify({
-      ticker: p.ticker,
-      shares: 0,
-      price: p.current_price,
-      trade_id: p.trade_id,
-    }));
-    if (onNavigate) onNavigate("logsell");
-  }, [onNavigate]);
-
   const ctxViewJournal = useCallback((p: EnrichedPosition) => {
     localStorage.setItem("journal_prefill", JSON.stringify({ ticker: p.ticker, trade_id: p.trade_id }));
     if (onNavigate) onNavigate("journal");
   }, [onNavigate]);
 
-  const handleSort = useCallback((key: string) => {
-    if (key === "idx") return;
-    const k = key as SortKey;
-    setSortDir(prev => (sortKey === k ? (prev === "desc" ? "asc" : "desc") : "desc"));
-    setSortKey(k);
-  }, [sortKey]);
+  const ctxOpenPyramid = useCallback((trade_id: string) => {
+    router.push(`/position-sizer?tab=pyramid&trade_id=${encodeURIComponent(trade_id)}`);
+  }, [router]);
 
-  // Filtered + sorted positions
-  const filtered = useMemo(() => {
-    let list = positions;
-    if (riskFilter === "at_risk") list = list.filter(p => p.risk_status === "At Risk");
-    else if (riskFilter === "free_roll") list = list.filter(p => p.risk_status === "Free Roll");
+  // EOD modal.
+  const openEodModal = useCallback(() => {
+    setEodEdits({});
+    setEodErrors([]);
+    setEodModalOpen(true);
+  }, []);
 
-    return [...list].sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
-      let cmp: number;
-      if (av == null && bv == null) cmp = 0;
-      else if (av == null) cmp = -1;
-      else if (bv == null) cmp = 1;
-      else if (typeof av === "string" && typeof bv === "string") cmp = av.localeCompare(bv);
-      else cmp = (av as number) - (bv as number);
-      return sortDir === "desc" ? -cmp : cmp;
-    });
-  }, [positions, riskFilter, sortKey, sortDir]);
+  const closeEodModal = useCallback(() => {
+    setEodModalOpen(false);
+    setEodEdits({});
+    setEodErrors([]);
+  }, []);
 
-  const atRiskCount = positions.filter(p => p.risk_status === "At Risk").length;
-  const freeRollCount = positions.filter(p => p.risk_status === "Free Roll").length;
+  useEffect(() => {
+    if (!eodModalOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !eodSaving) closeEodModal(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [eodModalOpen, eodSaving, closeEodModal]);
+
+  const handleEqSort = useCallback((key: string) => {
+    setEqSortDir(prev => (eqSortKey === key ? (prev === "desc" ? "asc" : "desc") : "desc"));
+    setEqSortKey(key);
+  }, [eqSortKey]);
+  const handleOptSort = useCallback((key: string) => {
+    setOptSortDir(prev => (optSortKey === key ? (prev === "desc" ? "asc" : "desc") : "desc"));
+    setOptSortKey(key);
+  }, [optSortKey]);
+
+  const equities = useMemo(() => positions.filter(p => !p.is_option), [positions]);
+  const options = useMemo(() => positions.filter(p => p.is_option), [positions]);
+
+  const sortedEquities = useMemo(
+    () => [...equities].sort((a, b) => compareRows(a, b, eqSortKey, eqSortDir)),
+    [equities, eqSortKey, eqSortDir],
+  );
+  const sortedOptions = useMemo(
+    () => [...options].sort((a, b) => compareRows(a, b, optSortKey, optSortDir)),
+    [options, optSortKey, optSortDir],
+  );
+
+  const saveEodPrices = useCallback(async () => {
+    if (eodSaving) return;
+    setEodSaving(true);
+    setEodErrors([]);
+
+    // Collect submissions paired with their identity so we can map results
+    // back to specific contracts after Promise.allSettled. setManualPrice
+    // returns either { status: "ok", … } or { error: string } — backend
+    // failures don't reject the promise, so we also inspect the resolved
+    // value for an `error` key.
+    const submissions: { trade_id: string; ticker: string; promise: Promise<unknown> }[] = [];
+    for (const opt of options) {
+      const raw = eodEdits[opt.trade_id];
+      if (raw === undefined || raw.trim() === "") continue;
+      const n = parseFloat(raw.trim());
+      if (!isFinite(n) || n <= 0) continue;
+      if (n === opt.manual_price) continue;
+      submissions.push({
+        trade_id: opt.trade_id,
+        ticker: opt.ticker,
+        promise: api.setManualPrice({
+          portfolio: getActivePortfolio(),
+          trade_id: opt.trade_id,
+          manual_price: n,
+        }),
+      });
+    }
+
+    try {
+      if (submissions.length === 0) {
+        closeEodModal();
+        return;
+      }
+
+      const results = await Promise.allSettled(submissions.map(s => s.promise));
+      const failedTickers: string[] = [];
+      const succeededIds: string[] = [];
+      results.forEach((r, idx) => {
+        const sub = submissions[idx];
+        if (r.status === "rejected") {
+          failedTickers.push(sub.ticker);
+        } else if (r.value && typeof r.value === "object" && "error" in (r.value as object)) {
+          failedTickers.push(sub.ticker);
+        } else {
+          succeededIds.push(sub.trade_id);
+        }
+      });
+
+      // Always refresh — successful saves are committed server-side and
+      // should be reflected even when the modal stays open for retries.
+      await loadData({ force: true });
+
+      if (failedTickers.length > 0) {
+        // Clear inputs for the successful saves so the user only sees
+        // pending edits for what still needs to be retried.
+        setEodEdits(prev => {
+          const next = { ...prev };
+          for (const id of succeededIds) delete next[id];
+          return next;
+        });
+        setEodErrors(failedTickers);
+      } else {
+        closeEodModal();
+      }
+    } finally {
+      setEodSaving(false);
+    }
+  }, [eodEdits, options, eodSaving, closeEodModal, loadData]);
 
   if (loading) {
     return (
@@ -484,62 +628,90 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     );
   }
 
-  // ── Aggregate KPIs ──
-  const totalPositions = positions.length;
-  const totalMarketValue = positions.reduce((a, p) => a + p.current_value, 0);
-  const liveExposure = equity > 0 ? (totalMarketValue / equity) * 100 : 0;
-  const totalOverallPl = positions.reduce((a, p) => a + p.overall_pl, 0);
-  const totalProjected = positions.reduce((a, p) => a + p.projected_pl, 0);
-  const totalInitialRisk = positions.reduce((a, p) => a + p.risk_dollars, 0);
-  const totalOpenRiskEquity = positions.reduce((a, p) => a + p.open_risk_equity, 0);
-  const irPct = equity > 0 ? (totalInitialRisk / equity) * 100 : 0;
-  const orPct = equity > 0 ? (totalOpenRiskEquity / equity) * 100 : 0;
+  // ── Header KPIs ──
+  const equityExposureDollar = equities.reduce((a, p) => a + p.current_value, 0);
+  const optionsExposureDollar = options.reduce((a, p) => a + p.current_value, 0);
+  const equityExposurePct = equity > 0 ? (equityExposureDollar / equity) * 100 : 0;
+  const optionsExposurePct = equity > 0 ? (optionsExposureDollar / equity) * 100 : 0;
+  const equityPlSum = equities.reduce((a, p) => a + p.overall_pl, 0);
+  const optionsPlSum = options.reduce((a, p) => a + p.overall_pl, 0);
+  const equityCostSum = equities.reduce((a, p) => a + p.total_cost, 0);
+  const optionsCostSum = options.reduce((a, p) => a + p.total_cost, 0);
+  const equityPlPct = equityCostSum > 0 ? (equityPlSum / equityCostSum) * 100 : 0;
+  const optionsPlPct = optionsCostSum > 0 ? (optionsPlSum / optionsCostSum) * 100 : 0;
+
+  // Initial Risk + Open Risk (Heat) — equity-only sums to stay consistent
+  // with the Risk Monitor's scope. Initial Risk is the sum of per-trade
+  // risk_budget logged at trade open. Open Risk is current heat: distance
+  // from live price to safe-stop, times shares, times multiplier.
+  const initialRiskTotal = equities.reduce((sum, p) => sum + (p.risk_budget || 0), 0);
+  const initialRiskPct = equity > 0 ? (initialRiskTotal / equity) * 100 : 0;
+  const openRiskTotal = equities.reduce((sum, p) => {
+    const safeStop = p.avg_stop > 0 ? p.avg_stop : p.avg_entry;
+    return sum + (p.current_price - safeStop) * p.shares * p.multiplier;
+  }, 0);
+  const openRiskPct = equity > 0 ? (openRiskTotal / equity) * 100 : 0;
+
+  const fmtMoney = (n: number, opts: Intl.NumberFormatOptions = { minimumFractionDigits: 2, maximumFractionDigits: 2 }) =>
+    `$${n.toLocaleString(undefined, opts)}`;
+  const signedMoney = (n: number) =>
+    `${n >= 0 ? "+" : "−"}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const kpis = [
     {
-      label: "OPEN POSITIONS",
-      value: String(totalPositions),
-      sub: `${freeRollCount} free roll · ${atRiskCount} at risk`,
+      label: "NLV",
+      value: fmtMoney(equity, { maximumFractionDigits: 2 }),
+      sub: equity > 0 ? "End-of-day journal" : "—",
       gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)",
     },
     {
-      label: "TOTAL MARKET VALUE",
-      value: `$${totalMarketValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-      sub: "",
-      gradient: "linear-gradient(135deg, #ec4899, #f472b6)",
+      label: "EQUITY EXPOSURE",
+      value: `${equityExposurePct.toFixed(1)}%`,
+      sub: fmtMoney(equityExposureDollar, { maximumFractionDigits: 2 }),
+      gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
     {
-      label: "LIVE EXPOSURE",
-      value: `${liveExposure.toFixed(1)}%`,
-      sub: `of $${equity.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-      gradient: "linear-gradient(135deg, #f97316, #fb923c)",
-    },
-    {
-      label: "OVERALL P&L",
-      value: `$${totalOverallPl >= 0 ? "" : ""}${totalOverallPl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      sub: `Projected: $${totalProjected.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      gradient: totalOverallPl >= 0 ? "linear-gradient(135deg, #10b981, #34d399)" : "linear-gradient(135deg, #e5484d, #f472b6)",
+      label: "OPTIONS EXPOSURE",
+      value: `${optionsExposurePct.toFixed(1)}%`,
+      sub: `${fmtMoney(optionsExposureDollar, { maximumFractionDigits: 2 })} · cap ~10%`,
+      gradient: optionsExposurePct > 10
+        ? "linear-gradient(135deg, #e5484d, #f87171)"
+        : "linear-gradient(135deg, #f97316, #fb923c)",
     },
     {
       label: "INITIAL RISK",
-      value: `$${totalInitialRisk.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      sub: `${irPct.toFixed(2)}% of NLV`,
+      value: fmtMoney(initialRiskTotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      sub: `${initialRiskPct.toFixed(2)}% of NLV`,
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
     {
       label: "OPEN RISK (HEAT)",
-      value: `$${totalOpenRiskEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      sub: `${orPct.toFixed(2)}% of NLV`,
+      value: signedMoney(openRiskTotal),
+      sub: `${openRiskPct >= 0 ? "+" : ""}${openRiskPct.toFixed(2)}% of NLV`,
       gradient: "linear-gradient(135deg, #e5484d, #f87171)",
+    },
+    {
+      label: "EQUITY P&L",
+      value: signedMoney(equityPlSum),
+      sub: equityCostSum > 0 ? `${equityPlPct >= 0 ? "+" : ""}${equityPlPct.toFixed(2)}% vs cost` : "—",
+      gradient: equityPlSum >= 0
+        ? "linear-gradient(135deg, #10b981, #34d399)"
+        : "linear-gradient(135deg, #e5484d, #f472b6)",
+    },
+    {
+      label: "OPTIONS P&L",
+      value: signedMoney(optionsPlSum),
+      sub: optionsCostSum > 0 ? `${optionsPlPct >= 0 ? "+" : ""}${optionsPlPct.toFixed(2)}% vs cost` : "—",
+      gradient: optionsPlSum >= 0
+        ? "linear-gradient(135deg, #10b981, #34d399)"
+        : "linear-gradient(135deg, #e5484d, #f472b6)",
     },
   ];
 
-  // ── Risk Monitor Alerts ──
+  // ── Risk Monitor (equity-only per spec H) ──
   const monitorAlerts: { type: "error" | "warn" | "info" | "success"; ticker: string; msg: string }[] = [];
   const freeRollTickers: string[] = [];
-
-  positions.forEach(p => {
-    // Budget check: raise stop suggestion
+  for (const p of equities) {
     if (p.risk_budget > 0 && p.risk_dollars > (p.risk_budget + 5)) {
       const rbmStop = p.total_cost > 0 && p.shares > 0
         ? (p.total_cost - p.risk_budget) / p.shares
@@ -550,8 +722,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         msg: `Risk ($${p.risk_dollars.toFixed(0)}) > Budget ($${p.risk_budget.toFixed(0)}). Raise stop to $${rbmStop.toFixed(2)} to stay within budget.`,
       });
     }
-
-    // Stop rule violation
     if (p.return_pct <= -7.0) {
       monitorAlerts.push({
         type: "error",
@@ -559,8 +729,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         msg: `Down ${p.return_pct.toFixed(2)}%. Violates Stop Rule.`,
       });
     }
-
-    // Consider moving stop to BE
     if (p.return_pct >= 10.0 && p.avg_stop > 0 && p.avg_stop < (p.avg_entry - 0.01)) {
       monitorAlerts.push({
         type: "info",
@@ -568,38 +736,36 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         msg: `Up ${p.return_pct.toFixed(2)}%. Consider moving stop to BE ($${p.avg_entry.toFixed(2)}). Current stop: $${p.avg_stop.toFixed(2)}.`,
       });
     }
-
-    // Track free rolls
     if (p.risk_status === "Free Roll") {
       freeRollTickers.push(p.ticker);
     }
-  });
+  }
 
-  // ── Table columns matching Streamlit exactly ──
-  const COL_HEADERS = [
-    { key: "idx", label: "#", align: "center" as const },
-    { key: "trade_id", label: "Trade_ID", align: "left" as const },
-    { key: "ticker", label: "Ticker", align: "left" as const },
-    { key: "days_held", label: "Days", align: "center" as const },
-    { key: "risk_status", label: "Risk Status", align: "center" as const },
-    { key: "pyramid_pct", label: "Pyramid", align: "right" as const },
-    { key: "return_pct", label: "Return %", align: "right" as const },
-    { key: "pos_size_pct", label: "Pos Size %", align: "right" as const },
-    { key: "shares", label: "Shares", align: "right" as const },
-    { key: "avg_entry", label: "Avg Entry", align: "right" as const },
-    { key: "current_price", label: "Current", align: "right" as const },
-    { key: "avg_stop", label: "Avg Stop", align: "right" as const },
-    { key: "stop_pct", label: "Stop %", align: "right" as const },
-    { key: "risk_budget", label: "Risk $", align: "right" as const },
-    { key: "risk_dollars", label: "Risk $", align: "right" as const },
-    { key: "risk_pct", label: "Risk %", align: "right" as const },
-    { key: "current_value", label: "Current Value", align: "right" as const },
-    { key: "overall_pl", label: "Overall_PL", align: "right" as const },
-    { key: "projected_pl", label: "Projected P&L", align: "right" as const },
-  ];
+  const mono = "var(--font-jetbrains), monospace";
+  const totalPositions = positions.length;
+  const showBanner = !bannerDismissed && options.length > 0;
 
   return (
     <div id="campaign-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
+      {showBanner && (
+        <div className="mb-4 rounded-[10px] px-4 py-3 flex items-start gap-3"
+             style={{
+               background: "color-mix(in oklab, #3b82f6 8%, var(--surface))",
+               border: "1px solid color-mix(in oklab, #3b82f6 30%, var(--border))",
+             }}>
+          <span className="text-[14px] mt-0.5">ℹ</span>
+          <div className="flex-1 text-[12px] leading-relaxed" style={{ color: "var(--ink-2)" }}>
+            <strong>Option risk numbers now correctly include the 100× contract multiplier.</strong>{" "}
+            Past Risk $ values for option positions were understated.
+          </div>
+          <button onClick={dismissBanner}
+                  className="text-[11px] font-medium px-2 py-1 rounded-md hover:brightness-95"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <div className="flex items-center justify-between">
@@ -608,7 +774,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               Active Campaign <em className="italic" style={{ color: navColor }}>Summary</em>
             </h1>
             <div className="text-[13px] mt-1.5 flex items-center gap-2" style={{ color: "var(--ink-3)" }}>
-              <span>{totalPositions} open positions</span>
+              <span>{totalPositions} open · {equities.length} equit{equities.length === 1 ? "y" : "ies"} · {options.length} option{options.length === 1 ? "" : "s"}</span>
               {lastUpdateMs !== null && (() => {
                 const ageSec = Math.max(0, Math.floor((Date.now() - lastUpdateMs) / 1000));
                 let label: string;
@@ -617,10 +783,8 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                 else if (ageSec < 3600) label = `Updated ${Math.floor(ageSec / 60)} min ago`;
                 else if (ageSec < 86400) label = `Updated ${Math.floor(ageSec / 3600)}h ago`;
                 else label = `Updated ${Math.floor(ageSec / 86400)}d ago`;
-                const stale = ageSec >= 600; // 10 minutes — visually amber after that
+                const stale = ageSec >= 600;
                 const absolute = new Date(lastUpdateMs).toLocaleString();
-                // Indicator: blue pulse while a background fetch is running,
-                // red dot if the last fetch failed (stale data still on screen).
                 const dotColor = refetching ? "#3b82f6" : refetchError ? "#e5484d" : null;
                 return (
                   <span className="text-[12px] font-medium flex items-center gap-1.5"
@@ -655,240 +819,346 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       </div>
 
       {/* KPI tiles */}
-      <div className="grid grid-cols-6 gap-3 mb-6">
+      <div className="grid grid-cols-7 gap-3 mb-6">
         {kpis.map(k => <KPITile key={k.label} {...k} />)}
       </div>
 
-      {/* Positions table */}
-      <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-        <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-          <span className="text-[13px] font-semibold">Active Positions</span>
-          <span className="text-xs" style={{ color: "var(--ink-4)" }}>Click headers to sort</span>
-
-          {/* Filter tabs */}
-          <div className="ml-auto flex items-center gap-2">
-            <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-              {([
-                { key: "all" as RiskFilter, label: "All", count: totalPositions },
-                { key: "at_risk" as RiskFilter, label: "At Risk", count: atRiskCount },
-                { key: "free_roll" as RiskFilter, label: "Free Roll", count: freeRollCount },
-              ]).map(f => (
-                <button key={f.key} onClick={() => setRiskFilter(f.key)}
-                        className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
-                        style={{
-                          background: riskFilter === f.key ? "var(--surface)" : "transparent",
-                          color: riskFilter === f.key ? "var(--ink)" : "var(--ink-4)",
-                          boxShadow: riskFilter === f.key ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
-                        }}>
-                  {f.label} <span style={{ opacity: 0.6 }}>({f.count})</span>
-                </button>
-              ))}
-            </div>
+      {/* ── Equities Section ── */}
+      {equities.length > 0 && (
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+          <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+            <span className="text-[13px] font-semibold">Equities ({equities.length})</span>
+            <span className="text-xs" style={{ color: "var(--ink-4)" }}>Click headers to sort · right-click row for actions · right-click Pyramid cell for sizer</span>
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
-            <thead>
-              <tr>
-                {COL_HEADERS.map(h => {
-                  const sortable = h.key !== "idx";
-                  const active = sortKey === h.key;
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Equal-percentage colgroup — must mirror the Options table's
+                  colgroup so position-N aligns at the same x in both. See
+                  COL_WIDTH constant above. */}
+              <colgroup>
+                {Array.from({ length: 14 }).map((_, i) => (
+                  <col key={i} style={{ width: COL_WIDTH }} />
+                ))}
+              </colgroup>
+              <thead>
+                <tr>
+                  {EQUITY_COLS.map(h => {
+                    const active = eqSortKey === h.key;
+                    return (
+                      <th key={h.key}
+                          className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
+                          style={{
+                            color: active ? "var(--ink)" : "var(--ink-4)",
+                            background: "var(--surface-2)",
+                            borderBottom: "1px solid var(--border)",
+                            cursor: "pointer",
+                            userSelect: "none",
+                          }}
+                          onClick={() => handleEqSort(h.key)}>
+                        {h.label}
+                        {active && <span className="ml-1 text-[9px]">{eqSortDir === "desc" ? "▼" : "▲"}</span>}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedEquities.map((p, i) => {
+                  const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
+                  const projColor = p.projected_pl >= 0 ? "#08a86b" : "#e5484d";
+                  const riskColor = p.signed_risk > 0 ? "#08a86b" : p.signed_risk < 0 ? "#e5484d" : "var(--ink-3)";
+
+                  let retBg: string;
+                  let retText: string;
+                  if (p.return_pct >= 5) { retBg = "linear-gradient(135deg, #16a34a, #22c55e)"; retText = "#fff"; }
+                  else if (p.return_pct > 0) { retBg = "linear-gradient(135deg, #a3e635, #84cc16)"; retText = "#1a2e05"; }
+                  else if (p.return_pct > -3) { retBg = "linear-gradient(135deg, #fbbf24, #f59e0b)"; retText = "#451a03"; }
+                  else { retBg = "linear-gradient(135deg, #f87171, #ef4444)"; retText = "#fff"; }
+
+                  const pyramidReady = p.pyramid_pct >= 5;
+
+                  // Tooltip math: "de-risked %" is how much of the original budget
+                  // is no longer exposed. Clamp 0–100 so positive signed_risk
+                  // (free roll, stop above entry) doesn't read as 200% de-risked.
+                  const dRiskedPct = p.risk_budget > 0
+                    ? Math.max(0, Math.min(100, (1 - Math.abs(p.signed_risk) / p.risk_budget) * 100))
+                    : 0;
+                  const riskTooltip = `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.signed_risk).toFixed(2)} · De-risked: ${dRiskedPct.toFixed(1)}%`;
+
                   return (
-                    <th key={h.key + h.label}
-                        className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
-                        style={{
-                          color: active ? "var(--ink)" : "var(--ink-4)",
-                          background: "var(--surface-2)",
-                          borderBottom: "1px solid var(--border)",
-                          cursor: sortable ? "pointer" : "default",
-                          userSelect: "none",
-                        }}
-                        onClick={() => sortable && handleSort(h.key)}>
-                      {h.label}
-                      {active && (
-                        <span className="ml-1 text-[9px]">{sortDir === "desc" ? "▼" : "▲"}</span>
-                      )}
-                    </th>
+                    <tr key={p.trade_id} className="transition-colors"
+                        style={{ borderBottom: i < sortedEquities.length - 1 ? "1px solid var(--border)" : "none" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                        onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
+                      <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
+                        {p.ticker}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
+                        {p.days_held}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-center">
+                        <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
+                              style={{
+                                background: p.risk_status === "Free Roll" ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : "color-mix(in oklab, #f59f00 12%, var(--surface))",
+                                color: p.risk_status === "Free Roll" ? "#16a34a" : "#d97706",
+                              }}>
+                          {p.risk_status}
+                        </span>
+                      </td>
+                      <td className="px-2.5 py-2.5 text-center"
+                          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
+                          title="Right-click for actions (View in Journal · Open Position Sizer Pyramid)">
+                        {pyramidReady ? (
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
+                                style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff", minWidth: 40, textAlign: "center" }}>
+                            Ready
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--ink-4)", fontSize: 11 }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right">
+                        <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"
+                              style={{ background: retBg, color: retText, minWidth: 62, textAlign: "center", fontFamily: mono }}>
+                          {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        {p.pos_size_pct.toFixed(1)}%
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono }}>
+                        {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.avg_entry.toFixed(2)}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: p.avg_stop > 0 ? "var(--ink)" : "var(--ink-4)" }}>
+                        {p.avg_stop > 0 ? `$${p.avg_stop.toFixed(2)}` : "—"}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.current_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: riskColor, fontWeight: 600 }}
+                          title={riskTooltip}>
+                        ${p.signed_risk >= 0 ? "+" : ""}{p.signed_risk.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: riskColor }}>
+                        {p.risk_pct >= 0 ? "+" : ""}{p.risk_pct.toFixed(2)}%
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
+                        ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: projColor }}>
+                        ${p.projected_pl >= 0 ? "+" : ""}{p.projected_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
                   );
                 })}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p, i) => {
-                const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
-                const projColor = p.projected_pl >= 0 ? "#08a86b" : "#e5484d";
-                const mono = "var(--font-jetbrains), monospace";
-
-                // Return % badge — gradient backgrounds like the prototype
-                let retBg: string;
-                let retText: string;
-                if (p.return_pct >= 5) {
-                  retBg = "linear-gradient(135deg, #16a34a, #22c55e)";
-                  retText = "#fff";
-                } else if (p.return_pct > 0) {
-                  retBg = "linear-gradient(135deg, #a3e635, #84cc16)";
-                  retText = "#1a2e05";
-                } else if (p.return_pct > -3) {
-                  retBg = "linear-gradient(135deg, #fbbf24, #f59e0b)";
-                  retText = "#451a03";
-                } else {
-                  retBg = "linear-gradient(135deg, #f87171, #ef4444)";
-                  retText = "#fff";
-                }
-
-                // Pyramid: only show "Ready" if last lot is up >= 5%
-                const pyramidReady = p.pyramid_pct >= 5;
-
-                return (
-                  <tr key={p.trade_id} className="transition-colors"
-                      style={{ borderBottom: i < filtered.length - 1 ? "1px solid var(--border)" : "none" }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                      onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
-                    {/* # */}
-                    <td className="px-2.5 py-2.5 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>
-                      {i + 1}
-                    </td>
-                    {/* Trade_ID */}
-                    <td className="px-2.5 py-2.5 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
-                      {p.trade_id}
-                    </td>
-                    {/* Ticker */}
-                    <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }}>
-                      {p.ticker}
-                    </td>
-                    {/* Days */}
-                    <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
-                      {p.days_held}
-                    </td>
-                    {/* Risk Status */}
-                    <td className="px-2.5 py-2.5 text-center">
-                      <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
-                            style={{
-                              background: p.risk_status === "Free Roll" ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : "color-mix(in oklab, #f59f00 12%, var(--surface))",
-                              color: p.risk_status === "Free Roll" ? "#16a34a" : "#d97706",
-                            }}>
-                        {p.risk_status === "Free Roll" ? "Free Roll" : "At Risk"}
-                      </span>
-                    </td>
-                    {/* Pyramid — only show green "Ready" badge if last lot >= +5% */}
-                    <td className="px-2.5 py-2.5 text-center">
-                      {pyramidReady ? (
-                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
-                              style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff", minWidth: 40, textAlign: "center" }}>
-                          Ready
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--ink-4)", fontSize: 11 }}>—</span>
-                      )}
-                    </td>
-                    {/* Return % — gradient badge like prototype */}
-                    <td className="px-2.5 py-2.5 text-right">
-                      <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"
-                            style={{ background: retBg, color: retText, minWidth: 62, textAlign: "center", fontFamily: mono }}>
-                        {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
-                      </span>
-                    </td>
-                    {/* Pos Size % */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                      {p.pos_size_pct.toFixed(1)}%
-                    </td>
-                    {/* Shares */}
-                    <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono }}>
-                      {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                    </td>
-                    {/* Avg Entry */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                      ${p.avg_entry.toFixed(2)}
-                    </td>
-                    {/* Current Price — inline-editable for option rows.
-                        Italic + 'M' badge when a manual_price override is in
-                        effect; click to edit, blur or Enter to save, blank +
-                        save to clear, Escape to cancel. */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask"
-                        style={{ fontFamily: mono, cursor: p.is_option ? "text" : "default" }}
-                        onClick={p.is_option && editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
-                        title={p.is_option
-                          ? (p.manual_price !== null
-                              ? `Manual override: $${p.manual_price.toFixed(2)}. Click to change or clear.`
-                              : "Click to set a manual price (yfinance is unreliable for option chains).")
-                          : undefined}>
-                      {editingPriceTradeId === p.trade_id ? (
-                        <input
-                          type="number"
-                          step="0.01"
-                          autoFocus
-                          disabled={savingPrice}
-                          value={editPriceValue}
-                          onChange={e => setEditPriceValue(e.target.value)}
-                          onBlur={() => commitEditPrice(p)}
-                          onKeyDown={e => {
-                            if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
-                            else if (e.key === "Escape") { e.preventDefault(); cancelEditPrice(); }
-                          }}
-                          placeholder="(blank to clear)"
-                          className="w-[80px] text-right rounded-[6px] px-1.5 py-0.5 text-[12px]"
-                          style={{ background: "var(--bg)", border: "1px solid var(--border)",
-                                   color: "var(--ink)", fontFamily: mono }}
-                        />
-                      ) : (
-                        <span style={{
-                          fontStyle: p.manual_price !== null ? "italic" : "normal",
-                          color: p.manual_price !== null ? "var(--ink-2)" : "inherit",
-                        }}>
-                          ${p.current_price.toFixed(2)}
-                          {p.manual_price !== null && (
-                            <span className="ml-1 inline-block px-1 rounded-[3px] text-[8px] font-bold align-middle"
-                                  style={{ background: "color-mix(in oklab, #3b82f6 15%, transparent)",
-                                           color: "#3b82f6", letterSpacing: "0.05em" }}
-                                  title="Manual override">M</span>
-                          )}
-                        </span>
-                      )}
-                    </td>
-                    {/* Avg Stop */}
-                    <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: p.avg_stop > 0 ? "var(--ink)" : "var(--ink-4)" }}>
-                      {p.avg_stop > 0 ? `$${p.avg_stop.toFixed(2)}` : "—"}
-                    </td>
-                    {/* Stop % */}
-                    <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-4)" }}>
-                      {p.stop_pct > 0 ? `${p.stop_pct.toFixed(1)}%` : "—"}
-                    </td>
-                    {/* Risk Budget */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                      ${p.risk_budget.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </td>
-                    {/* Risk $ */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, color: p.risk_dollars > 0 ? "#e5484d" : "#08a86b" }}>
-                      ${p.risk_dollars.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </td>
-                    {/* Risk % */}
-                    <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: p.risk_pct > 1 ? "#e5484d" : "var(--ink-4)" }}>
-                      {p.risk_pct.toFixed(2)}%
-                    </td>
-                    {/* Current Value */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                      ${p.current_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </td>
-                    {/* Overall P&L — BOLD + colored */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
-                      ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    {/* Projected P&L */}
-                    <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: projColor }}>
-                      ${p.projected_pl >= 0 ? "+" : ""}{p.projected_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Right-click context menu */}
+      {/* ── Options Section ── */}
+      {options.length > 0 && (
+        <div className="rounded-[14px] overflow-hidden mb-6" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+          <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+            <span className="text-[13px] font-semibold">Options ({options.length})</span>
+            <span className="text-xs" style={{ color: "var(--ink-4)" }}>Click cell to set price · click headers to sort</span>
+            <button onClick={openEodModal}
+                    className="ml-auto text-[11px] font-medium h-[26px] px-2.5 rounded-md hover:brightness-95"
+                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+              Update EOD Prices
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed" }}>
+              {/* Equal-percentage colgroup — mirrors the Equities table so
+                  position-N aligns at the same x in both. See COL_WIDTH
+                  constant above. */}
+              <colgroup>
+                {Array.from({ length: 14 }).map((_, i) => (
+                  <col key={i} style={{ width: COL_WIDTH }} />
+                ))}
+              </colgroup>
+              <thead>
+                <tr>
+                  {OPTION_COLS.map(h => {
+                    // projected_pl is N/A for options — header label is "—"
+                    // and the column is intentionally not sortable.
+                    const sortable = h.key !== "projected_pl";
+                    const active = sortable && optSortKey === h.key;
+                    return (
+                      <th key={h.key}
+                          className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
+                          style={{
+                            color: active ? "var(--ink)" : "var(--ink-4)",
+                            background: "var(--surface-2)",
+                            borderBottom: "1px solid var(--border)",
+                            cursor: sortable ? "pointer" : "default",
+                            userSelect: "none",
+                          }}
+                          onClick={sortable ? () => handleOptSort(h.key) : undefined}>
+                        {h.label}
+                        {active && <span className="ml-1 text-[9px]">{optSortDir === "desc" ? "▼" : "▲"}</span>}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedOptions.map((p, i) => {
+                  let retBg: string;
+                  let retText: string;
+                  if (p.return_pct >= 5) { retBg = "linear-gradient(135deg, #16a34a, #22c55e)"; retText = "#fff"; }
+                  else if (p.return_pct > 0) { retBg = "linear-gradient(135deg, #a3e635, #84cc16)"; retText = "#1a2e05"; }
+                  else if (p.return_pct > -3) { retBg = "linear-gradient(135deg, #fbbf24, #f59e0b)"; retText = "#451a03"; }
+                  else { retBg = "linear-gradient(135deg, #f87171, #ef4444)"; retText = "#fff"; }
+
+                  // DTE — recomputed every render so it stays correct without
+                  // any manual refresh. Coloring per spec D.
+                  const dte = p.expiration ? daysUntilExpiration(p.expiration) : null;
+                  const dteExpired = dte !== null && dte < 0;
+                  let dteColor: string = "var(--ink)";
+                  if (dte !== null && !dteExpired) {
+                    if (dte > 45) dteColor = "#16a34a";
+                    else if (dte >= 30) dteColor = "#d97706";
+                    else dteColor = "#e5484d";
+                  }
+                  const expDateLabel = p.expiration
+                    ? p.expiration.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit", timeZone: "UTC" })
+                    : "—";
+
+                  return (
+                    <tr key={p.trade_id} className="transition-colors"
+                        style={{ borderBottom: i < sortedOptions.length - 1 ? "1px solid var(--border)" : "none" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                        onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
+                      {/* Contract */}
+                      <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
+                        {p.ticker}
+                      </td>
+                      {/* Days */}
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
+                        {p.days_held}
+                      </td>
+                      {/* Exp Date */}
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                        {expDateLabel}
+                      </td>
+                      {/* DTE */}
+                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, fontWeight: 600, color: dteColor }}>
+                        {dte === null ? (
+                          <span style={{ color: "var(--ink-4)" }}>—</span>
+                        ) : dteExpired ? (
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
+                                style={{ background: "linear-gradient(135deg, #f87171, #ef4444)", color: "#fff" }}>
+                            EXPIRED
+                          </span>
+                        ) : (
+                          `${dte}d`
+                        )}
+                      </td>
+                      {/* Return % */}
+                      <td className="px-2.5 py-2.5 text-right">
+                        <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"
+                              style={{ background: retBg, color: retText, minWidth: 62, textAlign: "center", fontFamily: mono }}>
+                          {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
+                        </span>
+                      </td>
+                      {/* Pos Size % */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        {p.pos_size_pct.toFixed(1)}%
+                      </td>
+                      {/* Qty */}
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono }}>
+                        {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      </td>
+                      {/* Entry */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.avg_entry.toFixed(2)}
+                      </td>
+                      {/* Current Price (inline-editable, pos 9) */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask"
+                          style={{ fontFamily: mono, cursor: editingPriceTradeId !== p.trade_id ? "text" : "default" }}
+                          onClick={editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
+                          title={p.manual_price !== null
+                            ? `Manual override: $${p.manual_price.toFixed(2)}. Click to change or clear.`
+                            : "Click to set a manual price (yfinance is unreliable for option chains)."}>
+                        {editingPriceTradeId === p.trade_id ? (
+                          <input
+                            type="number" step="0.01" autoFocus disabled={savingPrice}
+                            value={editPriceValue}
+                            onChange={e => setEditPriceValue(e.target.value)}
+                            onBlur={() => commitEditPrice(p)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); }
+                              else if (e.key === "Escape") { e.preventDefault(); cancelEditPrice(); }
+                            }}
+                            placeholder="(blank to clear)"
+                            className="w-[80px] text-right rounded-[6px] px-1.5 py-0.5 text-[12px]"
+                            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }}
+                          />
+                        ) : (
+                          <span style={{
+                            fontStyle: p.manual_price !== null ? "italic" : "normal",
+                            color: p.manual_price !== null ? "var(--ink-2)" : "inherit",
+                          }}>
+                            ${p.current_price.toFixed(2)}
+                            {p.manual_price !== null && (
+                              <span className="ml-1 inline-block px-1 rounded-[3px] text-[8px] font-bold align-middle"
+                                    style={{ background: "color-mix(in oklab, #3b82f6 15%, transparent)", color: "#3b82f6", letterSpacing: "0.05em" }}
+                                    title="Manual override">M</span>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                      {/* Value (pos 10) */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {/* Cost (pos 11) */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        ${p.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      </td>
+                      {/* Cost % (pos 12) — total_cost as a share of NLV. equity may be 0 in pre-load states; guard the divide. */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+                        {equity > 0 ? `${(p.total_cost / equity * 100).toFixed(2)}%` : "—"}
+                      </td>
+                      {/* Overall P&L (pos 13) — same red/green coloring as the equity column. */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: p.overall_pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                        ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {/* — (pos 14) — Projected P&L is N/A for options. */}
+                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, color: "var(--ink-4)" }} title="N/A for options">
+                        —
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state — both sections empty */}
+      {equities.length === 0 && options.length === 0 && (
+        <div className="rounded-[14px] p-8 text-center text-[13px]"
+             style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+          No open positions.
+        </div>
+      )}
+
+      {/* Right-click row context menu */}
       {ctxMenu && (
         <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[180px] overflow-hidden"
              style={{
@@ -905,29 +1175,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   style={{ color: "var(--ink)" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                  onClick={e => { e.stopPropagation(); ctxAddPosition(ctxMenu.position); }}>
-            <span style={{ color: "#16a34a" }}>+</span> Add to Position
-          </button>
-          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
-                  style={{ color: "var(--ink)" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                  onClick={e => { e.stopPropagation(); ctxSellPosition(ctxMenu.position); }}>
-            <span style={{ color: "#e5484d" }}>−</span> Sell / Trim
-          </button>
-          <div style={{ borderTop: "1px solid var(--border)", margin: "2px 0" }} />
-          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
-                  style={{ color: "var(--ink)" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                  onClick={e => { e.stopPropagation(); ctxViewJournal(ctxMenu.position); }}>
+                  onClick={e => { e.stopPropagation(); ctxViewJournal(ctxMenu.position); setCtxMenu(null); }}>
             <span style={{ color: "var(--ink-4)" }}>&#x1F4CB;</span> View in Journal
+          </button>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxOpenPyramid(ctxMenu.position.trade_id); setCtxMenu(null); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x1F53A;</span> Open Position Sizer Pyramid
           </button>
         </div>
       )}
 
-      {/* ── Risk Monitor (collapsible, default collapsed so EOD captures
-           don't swell in height) ── */}
+      {/* Risk Monitor (equity-only) */}
       <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
         <button onClick={() => setRiskMonitorOpen(!riskMonitorOpen)}
                 className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
@@ -936,14 +1197,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
           <span className="text-[13px] font-semibold">Risk Monitor</span>
           <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-            Active alerts · {positions.length} positions
+            Equity alerts · {equities.length} position{equities.length === 1 ? "" : "s"}
             {!riskMonitorOpen && monitorAlerts.length > 0 && ` · ${monitorAlerts.length} alert${monitorAlerts.length === 1 ? "" : "s"}`}
             {!riskMonitorOpen && " · click to expand"}
           </span>
         </button>
         {riskMonitorOpen && (
         <div className="p-4 flex flex-col gap-2.5">
-          {/* Info alerts (move to BE) */}
           {monitorAlerts.filter(a => a.type === "info").map((a, i) => (
             <div key={`info-${i}`} className="flex items-start gap-2.5 px-4 py-3 rounded-[10px]"
                  style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
@@ -953,8 +1213,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </div>
             </div>
           ))}
-
-          {/* Warnings (budget exceeded) */}
           {monitorAlerts.filter(a => a.type === "warn").map((a, i) => (
             <div key={`warn-${i}`} className="flex items-start gap-2.5 px-4 py-3 rounded-[10px]"
                  style={{ background: "color-mix(in oklab, #f59f00 10%, var(--surface))", border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))" }}>
@@ -964,8 +1222,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </div>
             </div>
           ))}
-
-          {/* Errors (stop violations) */}
           {monitorAlerts.filter(a => a.type === "error").map((a, i) => (
             <div key={`err-${i}`} className="flex items-start gap-2.5 px-4 py-3 rounded-[10px]"
                  style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))" }}>
@@ -975,8 +1231,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </div>
             </div>
           ))}
-
-          {/* Free rolls summary */}
           {freeRollTickers.length > 0 && (
             <div className="flex items-start gap-2.5 px-4 py-3 rounded-[10px]"
                  style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
@@ -986,8 +1240,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </div>
             </div>
           )}
-
-          {/* All clear */}
           {monitorAlerts.length === 0 && freeRollTickers.length === 0 && (
             <div className="flex items-center gap-2 px-4 py-3 rounded-[10px] text-[12px] font-medium"
                  style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#16a34a", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
@@ -997,6 +1249,83 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         </div>
         )}
       </div>
+
+      {/* EOD batch-edit modal */}
+      {eodModalOpen && (
+        <div className="fixed inset-0 z-[100] grid place-items-start justify-center pt-[12vh]"
+             style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
+             onClick={() => { if (!eodSaving) closeEodModal(); }}>
+          <div className="w-[640px] max-w-[92vw] rounded-[14px] overflow-hidden"
+               style={{ background: "var(--surface)", boxShadow: "0 20px 48px rgba(0,0,0,0.2), 0 0 0 1px var(--border)", animation: "cmdk-rise 0.22s cubic-bezier(.2,.9,.3,1.1)" }}
+               onClick={e => e.stopPropagation()}>
+            <div className="px-[18px] py-3.5 flex items-center" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div>
+                <div className="text-[14px] font-semibold">Update End-of-Day Option Prices</div>
+                <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                  Leave a field blank to keep the current value. Tab moves between inputs.
+                </div>
+              </div>
+              <kbd className="ml-auto text-[10px] rounded px-1.5 py-0.5"
+                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-4)", fontFamily: mono }}>ESC</kbd>
+            </div>
+            {eodErrors.length > 0 && (
+              <div className="mx-2 mt-2 px-3 py-2 rounded-[8px] text-[11px] leading-relaxed"
+                   style={{
+                     background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                     border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                     color: "#991b1b",
+                   }}>
+                Failed to save {eodErrors.length} contract{eodErrors.length === 1 ? "" : "s"}: <strong>{eodErrors.join(", ")}</strong>. Edit and retry.
+              </div>
+            )}
+            <div className="max-h-[60vh] overflow-y-auto p-2">
+              {options.length === 0 ? (
+                <div className="px-3 py-6 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>No open option positions.</div>
+              ) : options.map(opt => (
+                <div key={opt.trade_id} className="grid grid-cols-[1fr_auto_140px] items-center gap-3 px-3 py-2 rounded-[8px]"
+                     style={{ background: "var(--surface)" }}>
+                  <div className="text-[12px] font-semibold truncate" style={{ fontFamily: mono }} title={opt.ticker}>
+                    {opt.ticker}
+                  </div>
+                  <div className="text-[11px] tabular-nums whitespace-nowrap" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+                    Current: {opt.manual_price !== null ? `$${opt.manual_price.toFixed(2)}` : "—"}
+                  </div>
+                  <input
+                    type="number" step="0.01"
+                    placeholder="(blank = no change)"
+                    disabled={eodSaving}
+                    value={eodEdits[opt.trade_id] ?? ""}
+                    onChange={e => setEodEdits(prev => ({ ...prev, [opt.trade_id]: e.target.value }))}
+                    className="w-full text-right rounded-[6px] px-2 py-1 text-[12px]"
+                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="px-[18px] py-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+              <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{options.length} option position{options.length === 1 ? "" : "s"}</span>
+              <button onClick={closeEodModal}
+                      disabled={eodSaving}
+                      className="ml-auto h-[30px] px-3 rounded-md text-[12px] font-medium hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+                Cancel
+              </button>
+              <button onClick={saveEodPrices}
+                      disabled={eodSaving || options.length === 0}
+                      className="h-[30px] px-3.5 rounded-md text-[12px] font-medium text-white flex items-center gap-1.5 hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                      style={{ background: navColor }}>
+                {eodSaving && (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                  </svg>
+                )}
+                {eodSaving ? "Saving…" : "Save All"}
+              </button>
+            </div>
+          </div>
+          <style jsx global>{`@keyframes cmdk-rise { from { transform: translateY(-10px) scale(0.97); opacity: 0; } }`}</style>
+        </div>
+      )}
     </div>
   );
 }

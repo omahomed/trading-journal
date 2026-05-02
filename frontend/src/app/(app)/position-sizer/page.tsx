@@ -14,8 +14,10 @@ export default function Route() {
   const searchParams = useSearchParams();
   const navColor = getGroupForHref(pathname)?.color || "#6366f1";
   const [initialTab, setInitialTab] = useState<string | undefined>(searchParams.get("tab") || undefined);
+  const [initialHoldingTradeId, setInitialHoldingTradeId] = useState<string | undefined>(searchParams.get("trade_id") || undefined);
 
   useEffect(() => { setInitialTab(searchParams.get("tab") || undefined); }, [searchParams]);
+  useEffect(() => { setInitialHoldingTradeId(searchParams.get("trade_id") || undefined); }, [searchParams]);
 
   if (isMobile) return <MobilePositionSizer />;
 
@@ -30,6 +32,8 @@ export default function Route() {
       onNavigate={handleNavigate}
       initialTab={initialTab}
       onTabConsumed={() => setInitialTab(undefined)}
+      initialHoldingTradeId={initialHoldingTradeId}
+      onHoldingConsumed={() => setInitialHoldingTradeId(undefined)}
     />
   );
 }
