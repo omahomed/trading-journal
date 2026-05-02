@@ -26,6 +26,7 @@ const SELL_RULES = [
   "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
   "sr13 Earnings Exit", "sr14 Market Correction Exit",
   "sr15 BE Stop Out (moved at +10%)",
+  "sr16 Profit Taking",
 ];
 
 type Trade = {
