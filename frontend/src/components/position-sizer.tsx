@@ -148,7 +148,7 @@ function lifoAvgCost(inventory: InventoryLot[]): number {
 
 // --- Main Component ---
 
-export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed }: { navColor: string; onNavigate?: (page: string) => void; initialTab?: string; onTabConsumed?: () => void }) {
+export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed, initialHoldingTradeId, onHoldingConsumed }: { navColor: string; onNavigate?: (page: string) => void; initialTab?: string; onTabConsumed?: () => void; initialHoldingTradeId?: string; onHoldingConsumed?: () => void }) {
   const [tab, setTab] = useState<SizerTab>((initialTab as SizerTab) || "normal");
 
   useEffect(() => {
@@ -193,6 +193,17 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed 
   const [volProfile, setVolProfile] = useState(0);
   const [ticker, setTicker] = useState("");
   const [selectedHolding, setSelectedHolding] = useState("");
+
+  // Active Campaign Summary v2 deep-links into this view via
+  // ?tab=pyramid&trade_id=… — apply the trade_id once on mount, then call
+  // onHoldingConsumed so the parent can clear the search param. Mirrors the
+  // initialTab / onTabConsumed pattern above.
+  useEffect(() => {
+    if (initialHoldingTradeId) {
+      setSelectedHolding(initialHoldingTradeId);
+      onHoldingConsumed?.();
+    }
+  }, [initialHoldingTradeId, onHoldingConsumed]);
   const [targetSize, setTargetSize] = useState(10);
   const [maxRiskPct, setMaxRiskPct] = useState("0.75");
   const [costPerContract, setCostPerContract] = useState("1.00");
