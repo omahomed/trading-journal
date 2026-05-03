@@ -68,9 +68,12 @@ from trade_calc import compute_lifo_summary, is_option_ticker  # noqa: E402
 # before opening a connection. Same constant heal_options uses.
 FOUNDER_UUID = "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a"
 
-# 1¢ reconciliation window. Floats accumulate sub-cent rounding noise across
-# a multi-leg LIFO walk; anything inside this window is treated as MATCH.
-TOLERANCE = 0.01
+# 1¢ reconciliation window + tiny epsilon to absorb float-comparison noise.
+# IEEE 754 can round abs(-0.01) to 0.010000000000000009, which would trip a
+# strict 0.01 comparison and falsely classify a clean 1¢ rounding delta as
+# a discrepancy (caught on staging: FIGR 202601-004, delta=-0.01). The
+# conceptual tolerance is still 1¢; the extra 0.001 is pure noise absorption.
+TOLERANCE = 0.011
 
 # Sub-half-cent → label as "exact" rather than "0¢ tolerance". Avoids the
 # floating-point footguns of comparing delta directly to 0.0 (signed zero,
