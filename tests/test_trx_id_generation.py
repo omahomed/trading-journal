@@ -211,18 +211,24 @@ class TestConcurrency:
 
 def _constraint_present() -> bool:
     """True if migration 018 has been applied to the connected DB.
-    The end-to-end concurrency test depends on the constraint to provide
-    the UniqueViolation that the retry loop catches; without the constraint,
-    duplicate inserts would land silently and the test would falsely 'pass'
-    (no errors) but with duplicate trx_ids."""
+
+    Migration 018 declares unique_trx_id_per_trade as a CREATE UNIQUE INDEX
+    (with a WHERE clause for partial coverage of active rows), not as an
+    ALTER TABLE ... ADD CONSTRAINT. Partial indexes don't register in
+    pg_constraint — only in pg_indexes — so we query that catalog instead.
+
+    The end-to-end concurrency test depends on the index to provide the
+    UniqueViolation that the retry loop catches; without it, duplicate
+    inserts would land silently and the test would falsely 'pass' (no
+    errors) but with duplicate trx_ids."""
     from db_layer import get_db_connection
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT 1 FROM pg_constraint
-                WHERE conrelid = 'trades_details'::regclass
-                  AND conname = 'unique_trx_id_per_trade'
+                SELECT 1 FROM pg_indexes
+                WHERE tablename = 'trades_details'
+                  AND indexname = 'unique_trx_id_per_trade'
                 """
             )
             return cur.fetchone() is not None
