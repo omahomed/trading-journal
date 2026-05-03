@@ -75,7 +75,8 @@ def compute_lifo_summary(
     ticker: str,
     fallback_open_date: str = "",
     multiplier: float = 1.0,
-) -> dict[str, Any] | None:
+    with_closures: bool = False,
+) -> dict[str, Any] | None | tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Fold a campaign's BUY/SELL transactions into a summary row via LIFO.
 
     Expects a DataFrame with columns: date, action (BUY/SELL), shares, amount
@@ -86,30 +87,52 @@ def compute_lifo_summary(
     Multiplier scales every dollar amount returned (total_cost, realized_pl).
     Avg_entry / avg_exit / shares stay in per-contract units. Return_pct is
     invariant under multiplier (it cancels in the ratio).
+
+    When `with_closures=True` (opt-in for the lot_closures persistence path),
+    returns a `(summary, closures)` tuple instead of just `summary`. Each
+    closure is one BUY × SELL pairing produced inside the LIFO walk, with
+    keys: sell_trx_id, buy_trx_id, shares, buy_price, sell_price, multiplier,
+    realized_pl, closed_at. Summary may still be None for empty/all-null-date
+    inputs; closures is `[]` in that case. The flag is opt-in so existing
+    callers (and tests) keep the simpler return shape unchanged.
     """
     if txns.empty:
-        return None
+        return (None, []) if with_closures else None
 
     txns = txns.copy()
     txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
     txns = txns.dropna(subset=["date"]).sort_values("date")
     if txns.empty:
-        return None
+        return (None, []) if with_closures else None
 
-    inventory: list[dict[str, float]] = []
+    inventory: list[dict[str, Any]] = []
+    closures: list[dict[str, Any]] = []
     total_realized = 0.0
     for _, tx in txns.iterrows():
         action = str(tx.get("action", "")).upper()
         tx_shares = float(tx.get("shares", 0) or 0)
         tx_price = float(tx.get("amount", 0) or 0)
+        tx_trx_id = str(tx.get("trx_id", "") or "")
         if action == "BUY":
-            inventory.append({"price": tx_price, "shares": tx_shares})
+            inventory.append({"price": tx_price, "shares": tx_shares, "trx_id": tx_trx_id})
         elif action == "SELL":
             to_sell = tx_shares
+            sell_date = tx.get("date")
             while to_sell > 0 and inventory:
                 last = inventory[-1]
                 take = min(to_sell, last["shares"])
-                total_realized += (tx_price - last["price"]) * take
+                pair_pl = (tx_price - last["price"]) * take
+                total_realized += pair_pl
+                closures.append({
+                    "sell_trx_id": tx_trx_id,
+                    "buy_trx_id": str(last.get("trx_id", "") or ""),
+                    "shares": float(take),
+                    "buy_price": float(last["price"]),
+                    "sell_price": float(tx_price),
+                    "multiplier": float(multiplier),
+                    "realized_pl": float(pair_pl * multiplier),
+                    "closed_at": sell_date,
+                })
                 last["shares"] -= take
                 to_sell -= take
                 if last["shares"] < 0.0001:
@@ -146,7 +169,7 @@ def compute_lifo_summary(
     closed_date = last_date.strftime("%Y-%m-%d") if is_closed and pd.notna(last_date) else None
 
     cost_to_report = remaining_cost if not is_closed else total_cost_all
-    return {
+    summary = {
         "Trade_ID": trade_id, "Ticker": ticker,
         "Status": "CLOSED" if is_closed else "OPEN",
         "Open_Date": open_date,
@@ -158,3 +181,4 @@ def compute_lifo_summary(
         "Realized_PL": float(round(total_realized * multiplier, 2)),
         "Return_Pct": float(round(return_pct, 4)),
     }
+    return (summary, closures) if with_closures else summary
