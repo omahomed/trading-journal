@@ -2732,9 +2732,13 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # Resolve the multiplier from the existing detail row so an edit can't
         # collapse an option's notional back to per-contract premium just
         # because the form forgot to send it. Falls back to ticker-pattern
-        # autodetect for legacy rows.
+        # autodetect for legacy rows. We also capture the row's trade_id and
+        # ticker as fallbacks so an omitted client param can't blank them out
+        # on the row or cause the post-edit recompute to silently skip.
         df_d = db.load_details(portfolio)
         multiplier = 1.0
+        existing_trade_id = ""
+        existing_ticker = ""
         if not df_d.empty:
             df_d = _normalize_trades(df_d)
             existing = df_d[df_d.get("detail_id", df_d.index) == detail_id] if "detail_id" in df_d.columns else df_d.iloc[0:0]
@@ -2742,7 +2746,12 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
                 m = existing.iloc[0].get("multiplier")
                 if m is not None and float(m) > 0:
                     multiplier = float(m)
-        if multiplier == 1.0 and is_option_ticker(ticker):
+                existing_trade_id = str(existing.iloc[0].get("trade_id", "") or "")
+                existing_ticker = str(existing.iloc[0].get("ticker", "") or "")
+        # Client value wins; fall back to whatever was on the row.
+        effective_trade_id = trade_id or existing_trade_id
+        effective_ticker = ticker or existing_ticker
+        if multiplier == 1.0 and is_option_ticker(effective_ticker):
             multiplier = 100.0
 
         shares = float(body.get("shares") or 0)
@@ -2752,8 +2761,8 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         value = round(shares * amount * multiplier, 2)
 
         row_dict = {
-            "Trade_ID": trade_id,
-            "Ticker": ticker,
+            "Trade_ID": effective_trade_id,
+            "Ticker": effective_ticker,
             "Action": body.get("action", ""),
             "Date": body.get("date", ""),
             "Shares": shares,
@@ -2772,13 +2781,13 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # keeps stale numbers (e.g. edit a buy price after the sell already
         # closed the trade — the card still shows the pre-edit P&L).
         try:
-            if trade_id:
-                _recompute_summary_lifo(portfolio, trade_id, ticker)
+            if effective_trade_id:
+                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
         except Exception:
             pass
 
         try:
-            db.log_audit(portfolio, "EDIT", trade_id, row_dict.get("Trx_ID", ""),
+            db.log_audit(portfolio, "EDIT", effective_trade_id, row_dict.get("Trx_ID", ""),
                          f"Transaction {detail_id} edited", username="web")
         except Exception:
             pass
@@ -2803,14 +2812,35 @@ def delete_transaction_endpoint(request: Request,
         if not detail_id:
             return {"error": "detail_id is required"}
 
+        # Look up the row's trade_id/ticker before deleting so the recompute
+        # can fire even when the client doesn't pass them in the query string.
+        # Client values still win when supplied; row values are the fallback.
+        effective_trade_id = trade_id
+        effective_ticker = ticker
+        try:
+            df_d = db.load_details(portfolio)
+            if not df_d.empty:
+                df_d = _normalize_trades(df_d)
+                if "detail_id" in df_d.columns:
+                    row = df_d[df_d["detail_id"] == int(detail_id)]
+                    if not row.empty:
+                        if not effective_trade_id:
+                            effective_trade_id = str(row.iloc[0].get("trade_id", "") or "")
+                        if not effective_ticker:
+                            effective_ticker = str(row.iloc[0].get("ticker", "") or "")
+        except Exception:
+            # Lookup failure is non-fatal — the delete below will still run,
+            # and if we end up without a trade_id the recompute is skipped.
+            pass
+
         try:
             db.delete_detail_row(portfolio, int(detail_id))
         except ValueError as e:
             return {"error": str(e)}
 
-        if trade_id:
+        if effective_trade_id:
             try:
-                _recompute_summary_lifo(portfolio, trade_id, ticker)
+                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
             except Exception:
                 # Summary recompute failure shouldn't roll back the delete —
                 # the row is gone; the worst case is a stale summary that
@@ -2818,7 +2848,7 @@ def delete_transaction_endpoint(request: Request,
                 pass
 
         try:
-            db.log_audit(portfolio, "DELETE_TXN", trade_id, "",
+            db.log_audit(portfolio, "DELETE_TXN", effective_trade_id, "",
                          f"Transaction {detail_id} deleted", username="web")
         except Exception:
             pass
