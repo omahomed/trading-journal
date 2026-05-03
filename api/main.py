@@ -2706,6 +2706,17 @@ def log_sell(request: Request, body: dict):
         except Exception:
             pass
 
+        # Re-run LIFO via the shared recompute path so lot_closures gets
+        # populated for fresh SELLs too. The inline LIFO above already wrote
+        # the correct summary; this second pass produces the same summary
+        # numbers (idempotent) and adds the per-pair closure rows the inline
+        # path doesn't touch. TODO step 5: kill the inline LIFO duplication
+        # and have this endpoint use _recompute_summary_lifo exclusively.
+        try:
+            _recompute_summary_lifo(portfolio, trade_id, ticker)
+        except Exception as e:
+            print(f"[lot_closures] post-SELL recompute failed for {trade_id}: {e}")
+
         return {
             "status": "ok", "detail_id": detail_id, "summary_id": summary_id,
             "trx_id": trx_id, "realized_pl": round(total_realized * multiplier, 2),
@@ -2732,9 +2743,13 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # Resolve the multiplier from the existing detail row so an edit can't
         # collapse an option's notional back to per-contract premium just
         # because the form forgot to send it. Falls back to ticker-pattern
-        # autodetect for legacy rows.
+        # autodetect for legacy rows. We also capture the row's trade_id and
+        # ticker as fallbacks so an omitted client param can't blank them out
+        # on the row or cause the post-edit recompute to silently skip.
         df_d = db.load_details(portfolio)
         multiplier = 1.0
+        existing_trade_id = ""
+        existing_ticker = ""
         if not df_d.empty:
             df_d = _normalize_trades(df_d)
             existing = df_d[df_d.get("detail_id", df_d.index) == detail_id] if "detail_id" in df_d.columns else df_d.iloc[0:0]
@@ -2742,7 +2757,12 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
                 m = existing.iloc[0].get("multiplier")
                 if m is not None and float(m) > 0:
                     multiplier = float(m)
-        if multiplier == 1.0 and is_option_ticker(ticker):
+                existing_trade_id = str(existing.iloc[0].get("trade_id", "") or "")
+                existing_ticker = str(existing.iloc[0].get("ticker", "") or "")
+        # Client value wins; fall back to whatever was on the row.
+        effective_trade_id = trade_id or existing_trade_id
+        effective_ticker = ticker or existing_ticker
+        if multiplier == 1.0 and is_option_ticker(effective_ticker):
             multiplier = 100.0
 
         shares = float(body.get("shares") or 0)
@@ -2752,8 +2772,8 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         value = round(shares * amount * multiplier, 2)
 
         row_dict = {
-            "Trade_ID": trade_id,
-            "Ticker": ticker,
+            "Trade_ID": effective_trade_id,
+            "Ticker": effective_ticker,
             "Action": body.get("action", ""),
             "Date": body.get("date", ""),
             "Shares": shares,
@@ -2772,13 +2792,13 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # keeps stale numbers (e.g. edit a buy price after the sell already
         # closed the trade — the card still shows the pre-edit P&L).
         try:
-            if trade_id:
-                _recompute_summary_lifo(portfolio, trade_id, ticker)
+            if effective_trade_id:
+                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
         except Exception:
             pass
 
         try:
-            db.log_audit(portfolio, "EDIT", trade_id, row_dict.get("Trx_ID", ""),
+            db.log_audit(portfolio, "EDIT", effective_trade_id, row_dict.get("Trx_ID", ""),
                          f"Transaction {detail_id} edited", username="web")
         except Exception:
             pass
@@ -2803,14 +2823,35 @@ def delete_transaction_endpoint(request: Request,
         if not detail_id:
             return {"error": "detail_id is required"}
 
+        # Look up the row's trade_id/ticker before deleting so the recompute
+        # can fire even when the client doesn't pass them in the query string.
+        # Client values still win when supplied; row values are the fallback.
+        effective_trade_id = trade_id
+        effective_ticker = ticker
+        try:
+            df_d = db.load_details(portfolio)
+            if not df_d.empty:
+                df_d = _normalize_trades(df_d)
+                if "detail_id" in df_d.columns:
+                    row = df_d[df_d["detail_id"] == int(detail_id)]
+                    if not row.empty:
+                        if not effective_trade_id:
+                            effective_trade_id = str(row.iloc[0].get("trade_id", "") or "")
+                        if not effective_ticker:
+                            effective_ticker = str(row.iloc[0].get("ticker", "") or "")
+        except Exception:
+            # Lookup failure is non-fatal — the delete below will still run,
+            # and if we end up without a trade_id the recompute is skipped.
+            pass
+
         try:
             db.delete_detail_row(portfolio, int(detail_id))
         except ValueError as e:
             return {"error": str(e)}
 
-        if trade_id:
+        if effective_trade_id:
             try:
-                _recompute_summary_lifo(portfolio, trade_id, ticker)
+                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
             except Exception:
                 # Summary recompute failure shouldn't roll back the delete —
                 # the row is gone; the worst case is a stale summary that
@@ -2818,7 +2859,7 @@ def delete_transaction_endpoint(request: Request,
                 pass
 
         try:
-            db.log_audit(portfolio, "DELETE_TXN", trade_id, "",
+            db.log_audit(portfolio, "DELETE_TXN", effective_trade_id, "",
                          f"Transaction {detail_id} deleted", username="web")
         except Exception:
             pass
@@ -2830,11 +2871,13 @@ def delete_transaction_endpoint(request: Request,
 
 def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback_open_date: str = "") -> None:
     """Recompute a trade campaign's summary from its remaining detail rows
-    using LIFO. If no details remain, deletes the summary entirely. Shared
-    helper used by delete-by-date cleanup."""
+    using LIFO and replace its lot_closures rows. If no details remain,
+    deletes the summary and any orphan closures. Shared helper used by
+    delete-by-date cleanup."""
     df_d = db.load_details(portfolio)
     if df_d.empty:
         db.delete_trade(portfolio, trade_id)
+        _safe_delete_lot_closures(portfolio, trade_id)
         return
     df_d = _normalize_trades(df_d)
     txns = df_d[df_d["trade_id"] == trade_id]
@@ -2855,13 +2898,37 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         if multiplier == 1.0 and is_option_ticker(ticker):
             multiplier = 100.0
             instrument_type = 'OPTION'
-    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date, multiplier=multiplier)
+    result = compute_lifo_summary(
+        txns, trade_id, ticker, fallback_open_date,
+        multiplier=multiplier, with_closures=True,
+    )
+    summary_row, closures = result
     if summary_row is None:
         db.delete_trade(portfolio, trade_id)
+        _safe_delete_lot_closures(portfolio, trade_id)
         return
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
-    db.save_summary_row(portfolio, summary_row)
+    # Try the combined write first so summary + closures land together.
+    # Falls back to summary-only if lot_closures isn't there yet (deploy ran
+    # before migration 017) or if the closures phase fails — summary is the
+    # high-stakes write; closures self-heal on the next recompute. Failures
+    # are logged loudly so we don't silently ship a permanently-stale state.
+    try:
+        db.save_summary_with_closures(portfolio, trade_id, summary_row, closures)
+    except Exception as e:
+        print(f"[lot_closures] save_summary_with_closures failed for {trade_id}: {e}. "
+              f"Falling back to summary-only write.")
+        db.save_summary_row(portfolio, summary_row)
+
+
+def _safe_delete_lot_closures(portfolio: str, trade_id: str) -> None:
+    """Best-effort cleanup of lot_closures rows when the parent trade is gone.
+    Tolerates a missing table (deploy-before-migrate) by logging and moving on."""
+    try:
+        db.delete_lot_closures_for_trade(portfolio, trade_id)
+    except Exception as e:
+        print(f"[lot_closures] delete_lot_closures_for_trade failed for {trade_id}: {e}")
 
 
 @app.delete("/api/trades/delete-transactions-by-date")
