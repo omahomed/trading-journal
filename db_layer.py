@@ -4,7 +4,9 @@ import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
 import pandas as pd
 import os
+import re
 import threading
+import zlib
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
@@ -1456,6 +1458,85 @@ def delete_lot_closures_for_trade(portfolio_name, trade_id):
                 (portfolio_id, trade_id),
             )
             conn.commit()
+
+
+def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> str:
+    """Return the lowest-numbered unused trx_id matching ^{prefix}\\d+$ in
+    (portfolio_id, trade_id), e.g. 'B2' or 'S5'. Skips gaps already filled.
+
+    Concurrency — read this carefully:
+      An advisory lock keyed on (portfolio_id, crc32(trade_id)) is held
+      during the SELECT to serialize concurrent generators on the same
+      trade. The lock auto-releases at this function's commit, BEFORE
+      the caller's INSERT. Two concurrent callers can therefore still
+      receive the same trx_id in the (small) window between this
+      function returning and either caller's INSERT landing.
+
+      The actual race-safety guarantee is the partial unique index
+      `unique_trx_id_per_trade` on trades_details (migration 018):
+      UNIQUE (portfolio_id, trade_id, trx_id) WHERE deleted_at IS NULL.
+      Active rows only — soft-deleted rows are outside the index's
+      scope, matching this helper's existing-trx_id scan (which already
+      filters deleted_at IS NULL). A duplicate active INSERT raises
+      psycopg2.errors.UniqueViolation, which the caller catches and
+      retries by calling this helper again. The advisory lock is a
+      contention reducer that makes retries rare; it is NOT a
+      correctness guarantee on its own.
+
+      In short: the returned trx_id is a best guess, not a reservation.
+
+    Why the regex (not LIKE 'prefix%'): we want pure {prefix}{digits}
+    matches only. For prefix='S', LIKE 'S%' would also match legacy
+    'SA1' / 'SB2' rows and incorrectly think S1 is taken when it isn't.
+    The ^{prefix}\\d+$ regex isolates the integer-suffix variant.
+
+    Soft-deleted rows (deleted_at IS NOT NULL) don't count as taken —
+    a deleted 'S2' frees up that suffix for reuse.
+
+    Examples (in a trade with existing trx_ids B1, A1, A2, S1, SA1):
+        generate_unique_trx_id(portfolio, trade, 'B') -> 'B2'
+        generate_unique_trx_id(portfolio, trade, 'A') -> 'A3'
+        generate_unique_trx_id(portfolio, trade, 'S') -> 'S2'
+        generate_unique_trx_id(portfolio, trade, 'SA') -> 'SA2'
+    """
+    # crc32 is deterministic across processes (unlike Python's built-in hash,
+    # which is randomized by PYTHONHASHSEED). Mask to int32 signed range so
+    # pg_advisory_xact_lock(int4, int4) accepts the value.
+    lock_key = zlib.crc32(trade_id.encode()) & 0x7FFFFFFF
+    prefix_re = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+
+    with atomic_transaction() as (_conn, cur):
+        cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+        result = cur.fetchone()
+        if not result:
+            raise ValueError(f"Portfolio '{portfolio_name}' not found")
+        portfolio_id = result[0]
+
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(%s, %s)",
+            (portfolio_id, lock_key),
+        )
+
+        cur.execute(
+            """
+            SELECT trx_id FROM trades_details
+            WHERE portfolio_id = %s
+              AND trade_id = %s
+              AND deleted_at IS NULL
+              AND trx_id ~ %s
+            """,
+            (portfolio_id, trade_id, prefix_re.pattern),
+        )
+        used: set[int] = set()
+        for (trx_id,) in cur.fetchall():
+            m = prefix_re.match(trx_id)
+            if m:
+                used.add(int(m.group(1)))
+
+    n = 1
+    while n in used:
+        n += 1
+    return f"{prefix}{n}"
 
 
 def update_trade_stops(portfolio_name, trade_id, new_stop,
