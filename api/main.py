@@ -2706,6 +2706,17 @@ def log_sell(request: Request, body: dict):
         except Exception:
             pass
 
+        # Re-run LIFO via the shared recompute path so lot_closures gets
+        # populated for fresh SELLs too. The inline LIFO above already wrote
+        # the correct summary; this second pass produces the same summary
+        # numbers (idempotent) and adds the per-pair closure rows the inline
+        # path doesn't touch. TODO step 5: kill the inline LIFO duplication
+        # and have this endpoint use _recompute_summary_lifo exclusively.
+        try:
+            _recompute_summary_lifo(portfolio, trade_id, ticker)
+        except Exception as e:
+            print(f"[lot_closures] post-SELL recompute failed for {trade_id}: {e}")
+
         return {
             "status": "ok", "detail_id": detail_id, "summary_id": summary_id,
             "trx_id": trx_id, "realized_pl": round(total_realized * multiplier, 2),
@@ -2860,11 +2871,13 @@ def delete_transaction_endpoint(request: Request,
 
 def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback_open_date: str = "") -> None:
     """Recompute a trade campaign's summary from its remaining detail rows
-    using LIFO. If no details remain, deletes the summary entirely. Shared
-    helper used by delete-by-date cleanup."""
+    using LIFO and replace its lot_closures rows. If no details remain,
+    deletes the summary and any orphan closures. Shared helper used by
+    delete-by-date cleanup."""
     df_d = db.load_details(portfolio)
     if df_d.empty:
         db.delete_trade(portfolio, trade_id)
+        _safe_delete_lot_closures(portfolio, trade_id)
         return
     df_d = _normalize_trades(df_d)
     txns = df_d[df_d["trade_id"] == trade_id]
@@ -2885,13 +2898,37 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         if multiplier == 1.0 and is_option_ticker(ticker):
             multiplier = 100.0
             instrument_type = 'OPTION'
-    summary_row = compute_lifo_summary(txns, trade_id, ticker, fallback_open_date, multiplier=multiplier)
+    result = compute_lifo_summary(
+        txns, trade_id, ticker, fallback_open_date,
+        multiplier=multiplier, with_closures=True,
+    )
+    summary_row, closures = result
     if summary_row is None:
         db.delete_trade(portfolio, trade_id)
+        _safe_delete_lot_closures(portfolio, trade_id)
         return
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
-    db.save_summary_row(portfolio, summary_row)
+    # Try the combined write first so summary + closures land together.
+    # Falls back to summary-only if lot_closures isn't there yet (deploy ran
+    # before migration 017) or if the closures phase fails — summary is the
+    # high-stakes write; closures self-heal on the next recompute. Failures
+    # are logged loudly so we don't silently ship a permanently-stale state.
+    try:
+        db.save_summary_with_closures(portfolio, trade_id, summary_row, closures)
+    except Exception as e:
+        print(f"[lot_closures] save_summary_with_closures failed for {trade_id}: {e}. "
+              f"Falling back to summary-only write.")
+        db.save_summary_row(portfolio, summary_row)
+
+
+def _safe_delete_lot_closures(portfolio: str, trade_id: str) -> None:
+    """Best-effort cleanup of lot_closures rows when the parent trade is gone.
+    Tolerates a missing table (deploy-before-migrate) by logging and moving on."""
+    try:
+        db.delete_lot_closures_for_trade(portfolio, trade_id)
+    except Exception as e:
+        print(f"[lot_closures] delete_lot_closures_for_trade failed for {trade_id}: {e}")
 
 
 @app.delete("/api/trades/delete-transactions-by-date")

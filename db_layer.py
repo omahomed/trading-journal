@@ -1274,6 +1274,190 @@ def delete_trade(portfolio_name, trade_id):
                 pass
 
 
+def save_summary_with_closures(portfolio_name, trade_id, summary_row, closures):
+    """Atomically persist the summary row and replace the trade's lot_closures.
+
+    All writes — trades_summary UPSERT, lot_closures DELETE, lot_closures
+    INSERT — run inside a single atomic_transaction. Either everything
+    commits or everything rolls back; no half-committed state where summary
+    is updated but closures are stale (or vice versa).
+
+    Why we inline the summary upsert here instead of calling save_summary_row:
+    save_summary_row owns its own connection + commit + a conn.rollback() in
+    its legacy-schema fallback path. Calling it from inside this transaction
+    would either commit early (breaking atomicity) or roll back the closures
+    work alongside its own retry. Inlining the recompute-specific upsert is
+    the cheaper fix — we accept ~30 lines of SQL duplication in exchange
+    for true single-transaction semantics. The duplicated SQL targets the
+    modern schema only (grade + instrument_type both present); migration 017
+    can't be applied to a DB that's missing those columns anyway.
+
+    Field-write behavior matches the existing save_summary_row recompute
+    call site: LIFO-derived columns + Instrument_Type + Multiplier are
+    written; Sell_Rule / Notes / Stop_Loss / Rule / Buy_Notes / Sell_Notes /
+    Risk_Budget take whatever's in summary_row (None if absent). Grade,
+    manual_price, and be_stop_moved_at are NEVER touched here — the
+    recompute path doesn't own those columns.
+
+    `closures` is the list returned by compute_lifo_summary(..., with_closures=True);
+    pass `[]` for an open-only trade (the DELETE still clears any prior closures).
+
+    Returns the summary row id.
+    """
+    trade_id_for_summary = summary_row.get('Trade_ID')
+
+    with atomic_transaction() as (_conn, cur):
+        cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+        result = cur.fetchone()
+        if not result:
+            raise ValueError(f"Portfolio '{portfolio_name}' not found")
+        portfolio_id = result[0]
+
+        # --- 1. Summary upsert ---
+        cur.execute(
+            "SELECT id FROM trades_summary WHERE portfolio_id = %s AND trade_id = %s",
+            (portfolio_id, trade_id_for_summary),
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            cur.execute(
+                """
+                UPDATE trades_summary SET
+                    ticker = %s, status = %s, open_date = %s, closed_date = %s,
+                    shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
+                    realized_pl = %s, unrealized_pl = %s, return_pct = %s,
+                    sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
+                    buy_notes = %s, sell_notes = %s, risk_budget = %s,
+                    instrument_type = %s, multiplier = %s
+                WHERE id = %s
+                RETURNING id
+                """,
+                (
+                    summary_row.get('Ticker'),
+                    summary_row.get('Status', 'OPEN'),
+                    summary_row.get('Open_Date'),
+                    summary_row.get('Closed_Date'),
+                    summary_row.get('Shares', 0),
+                    summary_row.get('Avg_Entry', 0),
+                    summary_row.get('Avg_Exit', 0),
+                    summary_row.get('Total_Cost', 0),
+                    summary_row.get('Realized_PL', 0),
+                    summary_row.get('Unrealized_PL', 0),
+                    summary_row.get('Return_Pct', 0),
+                    summary_row.get('Sell_Rule'),
+                    summary_row.get('Notes'),
+                    summary_row.get('Stop_Loss'),
+                    summary_row.get('Rule'),
+                    summary_row.get('Buy_Notes'),
+                    summary_row.get('Sell_Notes'),
+                    summary_row.get('Risk_Budget', 0),
+                    summary_row.get('Instrument_Type', 'STOCK'),
+                    summary_row.get('Multiplier', 1),
+                    existing[0],
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO trades_summary (
+                    portfolio_id, trade_id, ticker, status, open_date, closed_date,
+                    shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
+                    return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes,
+                    risk_budget, instrument_type, multiplier
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    portfolio_id,
+                    trade_id_for_summary,
+                    summary_row.get('Ticker'),
+                    summary_row.get('Status', 'OPEN'),
+                    summary_row.get('Open_Date'),
+                    summary_row.get('Closed_Date'),
+                    summary_row.get('Shares', 0),
+                    summary_row.get('Avg_Entry', 0),
+                    summary_row.get('Avg_Exit', 0),
+                    summary_row.get('Total_Cost', 0),
+                    summary_row.get('Realized_PL', 0),
+                    summary_row.get('Unrealized_PL', 0),
+                    summary_row.get('Return_Pct', 0),
+                    summary_row.get('Sell_Rule'),
+                    summary_row.get('Notes'),
+                    summary_row.get('Stop_Loss'),
+                    summary_row.get('Rule'),
+                    summary_row.get('Buy_Notes'),
+                    summary_row.get('Sell_Notes'),
+                    summary_row.get('Risk_Budget', 0),
+                    summary_row.get('Instrument_Type', 'STOCK'),
+                    summary_row.get('Multiplier', 1),
+                ),
+            )
+        summary_id = cur.fetchone()[0]
+
+        # --- 2. Replace lot_closures (DELETE-then-INSERT) ---
+        cur.execute(
+            "DELETE FROM lot_closures WHERE portfolio_id = %s AND trade_id = %s",
+            (portfolio_id, trade_id),
+        )
+
+        if closures:
+            cur.executemany(
+                """
+                INSERT INTO lot_closures (
+                    portfolio_id, trade_id, sell_trx_id, buy_trx_id,
+                    shares, buy_price, sell_price, multiplier,
+                    realized_pl, closed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        portfolio_id,
+                        trade_id,
+                        c["sell_trx_id"],
+                        c["buy_trx_id"],
+                        c["shares"],
+                        c["buy_price"],
+                        c["sell_price"],
+                        c["multiplier"],
+                        c["realized_pl"],
+                        c["closed_at"],
+                    )
+                    for c in closures
+                ],
+            )
+
+    # Cache invalidation only after the transaction has committed.
+    load_summary.clear()
+    return summary_id
+
+
+def delete_lot_closures_for_trade(portfolio_name, trade_id):
+    """Hard-delete every lot_closures row for one trade.
+
+    Standalone primitive used by the recompute empty-txns branch in
+    api/main.py (when the trade is being deleted because no detail rows
+    remain). Whole-portfolio deletes don't need a bulk version — the
+    portfolio_id FK on lot_closures is ON DELETE CASCADE, so dropping a
+    portfolio cleans its closures automatically.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+            cur.execute(
+                "DELETE FROM lot_closures WHERE portfolio_id = %s AND trade_id = %s",
+                (portfolio_id, trade_id),
+            )
+            conn.commit()
+
+
 def update_trade_stops(portfolio_name, trade_id, new_stop,
                        be_applied=False, be_cleared=False):
     """
