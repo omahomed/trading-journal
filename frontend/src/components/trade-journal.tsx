@@ -1022,7 +1022,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
                       <span>🚁</span> Flight Deck: {trade.ticker}
                     </div>
-                    <div className="grid grid-cols-7 gap-2">
+                    <div className="grid grid-cols-8 gap-2">
                       {(() => {
                         const curPrice = isOpen ? (livePrices[trade.ticker] || avgEntry) : avgExit;
                         // Notional, not premium-per-contract: options need ×100 here
@@ -1032,10 +1032,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         const unreal = isOpen ? (curPrice - avgEntry) * shares * multiplier : 0;
                         const unrealPct = avgEntry > 0 ? ((curPrice - avgEntry) / avgEntry) * 100 : 0;
                         const posSizePct = equity > 0 ? (mktVal / equity) * 100 : 0;
+                        const riskBudget = parseFloat(String(trade.risk_budget || 0));
                         return [
                         { label: "Current Price", value: `$${curPrice.toFixed(2)}`, sub: undefined },
                         { label: "Orig Cost", value: b1Price > 0 ? `$${b1Price.toFixed(2)}` : `$${avgEntry.toFixed(2)}`, sub: undefined },
                         { label: "Avg Cost", value: `$${avgEntry.toFixed(2)}`, sub: isOption ? `×${multiplier}` : undefined },
+                        { label: "Risk Budget", value: `$${riskBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined },
                         { label: `${unitLabel} Held`, value: String(isOpen ? shares : 0), sub: undefined },
                         { label: "Unrealized P&L", value: `$${unreal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: isOpen ? `${unrealPct.toFixed(2)}%` : undefined, color: PLColor(unreal) },
                         { label: "Realized P&L", value: `$${realizedBank.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined, color: PLColor(realizedBank) },
