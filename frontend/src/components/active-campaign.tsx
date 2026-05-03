@@ -56,6 +56,9 @@ interface EnrichedPosition {
   pyramid_pct: number;
   risk_status: "Free Roll" | "At Risk";
   projected_pl: number;
+  // projected_pl / equity × 100. Same total-exposure shape as projected_pl,
+  // bound to the Risk % column so it tracks realized losses on closed lots.
+  projected_pct: number;
   realized_bank: number;
   expiration: Date | null;
   manual_price: number | null;
@@ -198,6 +201,7 @@ function computeEnrichedPositions(
       pyramid_pct: pyramidPct,
       risk_status: riskStatus,
       projected_pl: lifo.projectedPl,
+      projected_pct: equity > 0 ? (lifo.projectedPl / equity) * 100 : 0,
       realized_bank: lifo.realizedBank,
       expiration,
       manual_price: (() => {
@@ -227,6 +231,17 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
     // is monotonic in total_cost when nlv is the same constant for all rows.
     av = a.total_cost;
     bv = b.total_cost;
+  } else if (key === "signed_risk") {
+    // Risk $ column displays projected_pl (total exposure including realized
+    // losses on closed lots). Sort by the displayed value, not the legacy
+    // open-only signed_risk that the column key still references.
+    av = a.projected_pl;
+    bv = b.projected_pl;
+  } else if (key === "risk_pct") {
+    // Risk % column displays projected_pct. Mirror the cell's value so sort
+    // order matches what the user sees.
+    av = a.projected_pct;
+    bv = b.projected_pct;
   } else {
     av = (a as any)[key];
     bv = (b as any)[key];
@@ -868,7 +883,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                 {sortedEquities.map((p, i) => {
                   const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
                   const projColor = p.projected_pl >= 0 ? "#08a86b" : "#e5484d";
-                  const riskColor = p.signed_risk > 0 ? "#08a86b" : p.signed_risk < 0 ? "#e5484d" : "var(--ink-3)";
+                  // Risk $ / Risk % columns show total exposure (projected_pl)
+                  // — realized losses on closed lots + open-to-stop risk —
+                  // so coloring tracks projected_pl, not signed_risk.
+                  const riskColor = p.projected_pl > 0 ? "#08a86b" : p.projected_pl < 0 ? "#e5484d" : "var(--ink-3)";
 
                   let retBg: string;
                   let retText: string;
@@ -879,13 +897,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
                   const pyramidReady = p.pyramid_pct >= 5;
 
-                  // Tooltip math: "de-risked %" is how much of the original budget
-                  // is no longer exposed. Clamp 0–100 so positive signed_risk
-                  // (free roll, stop above entry) doesn't read as 200% de-risked.
+                  // Tooltip "Current" mirrors the Risk $ cell value: the magnitude
+                  // of projected_pl (total exposure — realized losses on closed
+                  // lots plus open-to-stop on the rest). "De-risked %" — fraction
+                  // of original budget protected by the stop — is only meaningful
+                  // for fresh opens; for partially-closed trades, realized losses
+                  // aren't de-risked, they're locked in, so we drop that component
+                  // rather than show a misleading number.
+                  const isPartiallyClosed = p.realized_bank !== 0;
                   const dRiskedPct = p.risk_budget > 0
                     ? Math.max(0, Math.min(100, (1 - Math.abs(p.signed_risk) / p.risk_budget) * 100))
                     : 0;
-                  const riskTooltip = `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.signed_risk).toFixed(2)} · De-risked: ${dRiskedPct.toFixed(1)}%`;
+                  const riskTooltip = isPartiallyClosed
+                    ? `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.projected_pl).toFixed(2)}`
+                    : `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.projected_pl).toFixed(2)} · De-risked: ${dRiskedPct.toFixed(1)}%`;
 
                   return (
                     <tr key={p.trade_id} className="transition-colors"
@@ -944,10 +969,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, color: riskColor, fontWeight: 600 }}
                           title={riskTooltip}>
-                        ${p.signed_risk >= 0 ? "+" : ""}{p.signed_risk.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        ${p.projected_pl >= 0 ? "+" : ""}{p.projected_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: riskColor }}>
-                        {p.risk_pct >= 0 ? "+" : ""}{p.risk_pct.toFixed(2)}%
+                        {p.projected_pct >= 0 ? "+" : ""}{p.projected_pct.toFixed(2)}%
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
                         ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
