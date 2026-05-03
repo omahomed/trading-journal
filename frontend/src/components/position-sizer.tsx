@@ -472,6 +472,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
     const currShares = holdingData.shares || 0;
     const avgEntry = holdingData.avg_entry || 0;
+    // Contract multiplier — 100 for options, 1 for equities. Required to
+    // dollarize per-share risk into notional risk; previously omitted, which
+    // understated option risk by 100× and let the budget guard mis-fire.
+    const multiplier = holdingData.multiplier || 1;
     const currValue = currShares * entry;
 
     // Real-money risk on existing shares is only the portion of cost basis
@@ -482,7 +486,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     // being blocked by an open-risk calculation that double-counts gains
     // already protected by the trailing stop.
     const existingRiskPerShare = Math.max(0, avgEntry - stop);
-    const existingRisk = currShares * existingRiskPerShare;
+    const existingRisk = currShares * existingRiskPerShare * multiplier;
     const isRiskFree = existingRiskPerShare === 0 && currShares > 0;
 
     const targetValue = equity * (targetSize / 100);
@@ -493,7 +497,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     const maxRiskDol = equity * (maxRisk / 100);
     const remainingBudget = maxRiskDol - existingRisk;
     const affordableAdd = remainingBudget > 0
-      ? Math.floor(remainingBudget / newAddRiskPerShare)
+      ? Math.floor(remainingBudget / (newAddRiskPerShare * multiplier))
       : 0;
 
     if (targetAdd <= 0) return { error: `You are already at or above the target weight! (Current: $${currValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} vs Target: $${targetValue.toLocaleString(undefined, { maximumFractionDigits: 0 })})` };
@@ -507,7 +511,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     const costOfAdd = recommendedAdd * entry;
     // Total real-money risk after the add: locked-in risk on existing
     // shares (zero when risk-free) plus the new shares' risk-to-stop.
-    const newAddRisk = recommendedAdd * newAddRiskPerShare;
+    const newAddRisk = recommendedAdd * newAddRiskPerShare * multiplier;
     const totalRiskAtNew = existingRisk + newAddRisk;
     const newWeight = equity > 0 ? (newTotal * entry / equity) * 100 : 0;
     const verdict = affordableAdd >= targetAdd ? "success" : "partial";
