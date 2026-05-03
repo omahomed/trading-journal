@@ -2402,11 +2402,14 @@ def _save_detail_with_unique_trx_id(
     Every retry regenerates via the helper. Bounded at TRX_ID_MAX_RETRIES so
     a runaway never spins forever.
 
-    Race-safety leans on the UNIQUE (portfolio_id, trade_id, trx_id) constraint
-    added in migration 018 — the constraint raises UniqueViolation on a
-    concurrent duplicate insert, which this loop catches and retries. Without
-    the constraint (pre-018), this function CAN still produce duplicates
-    under concurrency; that's the deploy-window risk we knowingly accept,
+    Race-safety leans on the partial unique index `unique_trx_id_per_trade`
+    added in migration 018 — UNIQUE (portfolio_id, trade_id, trx_id) WHERE
+    deleted_at IS NULL. Active rows only; soft-deleted rows are outside the
+    index's scope so a deleted trx_id is reusable for a new active row.
+    The index raises UniqueViolation on a concurrent duplicate active
+    insert, which this loop catches and retries. Without the index (pre-
+    migration-018), this function CAN still produce duplicates under
+    concurrency; that's the deploy-window risk we knowingly accept,
     mitigated by the advisory lock in db.generate_unique_trx_id and by
     re-running scripts/dedupe_trx_ids.py post-migration.
 

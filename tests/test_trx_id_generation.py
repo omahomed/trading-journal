@@ -207,3 +207,93 @@ class TestConcurrency:
         # All results are valid trx_ids of the form S<digits>
         assert all(r.startswith("S") and r[1:].isdigit() for r in results), \
             f"Got non-conforming trx_ids: {results}"
+
+
+def _constraint_present() -> bool:
+    """True if migration 018 has been applied to the connected DB.
+
+    Migration 018 declares unique_trx_id_per_trade as a CREATE UNIQUE INDEX
+    (with a WHERE clause for partial coverage of active rows), not as an
+    ALTER TABLE ... ADD CONSTRAINT. Partial indexes don't register in
+    pg_constraint — only in pg_indexes — so we query that catalog instead.
+
+    The end-to-end concurrency test depends on the index to provide the
+    UniqueViolation that the retry loop catches; without it, duplicate
+    inserts would land silently and the test would falsely 'pass' (no
+    errors) but with duplicate trx_ids."""
+    from db_layer import get_db_connection
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM pg_indexes
+                WHERE tablename = 'trades_details'
+                  AND indexname = 'unique_trx_id_per_trade'
+                """
+            )
+            return cur.fetchone() is not None
+
+
+@pytestmark_db
+@pytest.mark.skipif(
+    "CI" in os.environ,
+    reason="threading + Postgres timing can be flaky in CI",
+)
+class TestEndToEnd:
+    """Race-safety guarantee end-to-end: helper + retry-on-UniqueViolation +
+    UNIQUE constraint together produce strictly unique trx_ids under
+    concurrent load. This is the real correctness story — see
+    generate_unique_trx_id docstring for why the helper alone isn't enough.
+
+    Requires migration 018 to be applied (the constraint is what raises the
+    UniqueViolation that the retry loop catches). Skips with a clear hint
+    if the constraint isn't present yet.
+    """
+
+    def test_5_concurrent_inserts_yield_S1_through_S5(self, clean_test_trade) -> None:
+        if not _constraint_present():
+            pytest.skip(
+                "Migration 018 not applied to this database — "
+                "run `python migrations/run.py` to enable end-to-end concurrency test."
+            )
+
+        # Lazy-import so dry test runs don't load FastAPI.
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(repo_root / "api"))
+        from main import _save_detail_with_unique_trx_id
+
+        results: list[str] = []
+        errors: list[Exception] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            try:
+                detail_row = {
+                    "Trade_ID": TEST_TRADE_ID, "Ticker": TEST_TICKER, "Action": "SELL",
+                    "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Shares": 1, "Amount": 100, "Value": 100,
+                    "Trx_ID": "",
+                }
+                _detail_id, trx = _save_detail_with_unique_trx_id(
+                    TEST_PORTFOLIO, TEST_TRADE_ID, "S", detail_row,
+                )
+                with results_lock:
+                    results.append(trx)
+            except Exception as exc:
+                with results_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert not errors, f"Worker errors: {errors}"
+        assert len(results) == 5, f"Expected 5 successful inserts, got {len(results)}"
+        # The actual race-safety guarantee: 5 unique values forming the
+        # complete S1..S5 sequence, no gaps, no duplicates.
+        assert set(results) == {"S1", "S2", "S3", "S4", "S5"}, \
+            f"Expected {{S1..S5}}, got {sorted(results)}"

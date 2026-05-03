@@ -1472,10 +1472,14 @@ def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> s
       receive the same trx_id in the (small) window between this
       function returning and either caller's INSERT landing.
 
-      The actual race-safety guarantee is the UNIQUE (portfolio_id,
-      trade_id, trx_id) constraint on trades_details (migration 018).
-      Callers should catch psycopg2.errors.UniqueViolation on INSERT
-      and retry by calling this helper again. The advisory lock is a
+      The actual race-safety guarantee is the partial unique index
+      `unique_trx_id_per_trade` on trades_details (migration 018):
+      UNIQUE (portfolio_id, trade_id, trx_id) WHERE deleted_at IS NULL.
+      Active rows only — soft-deleted rows are outside the index's
+      scope, matching this helper's existing-trx_id scan (which already
+      filters deleted_at IS NULL). A duplicate active INSERT raises
+      psycopg2.errors.UniqueViolation, which the caller catches and
+      retries by calling this helper again. The advisory lock is a
       contention reducer that makes retries rare; it is NOT a
       correctness guarantee on its own.
 
