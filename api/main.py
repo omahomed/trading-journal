@@ -25,6 +25,8 @@ from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
 import math
 import re
+
+import psycopg2
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from datetime import datetime, date
@@ -2382,6 +2384,52 @@ def import_ibkr_trades(request: Request):
         return {"error": str(e)}
 
 
+TRX_ID_MAX_RETRIES = 5
+
+
+def _save_detail_with_unique_trx_id(
+    portfolio: str,
+    trade_id: str,
+    prefix: str,
+    detail_row: dict,
+    *,
+    given_trx_id: str = "",
+) -> tuple[int, str]:
+    """Save a detail row, regenerating its trx_id on UniqueViolation.
+
+    First attempt uses given_trx_id when non-empty (preserves a client-
+    supplied value if one came in); otherwise asks db.generate_unique_trx_id.
+    Every retry regenerates via the helper. Bounded at TRX_ID_MAX_RETRIES so
+    a runaway never spins forever.
+
+    Race-safety leans on the UNIQUE (portfolio_id, trade_id, trx_id) constraint
+    added in migration 018 — the constraint raises UniqueViolation on a
+    concurrent duplicate insert, which this loop catches and retries. Without
+    the constraint (pre-018), this function CAN still produce duplicates
+    under concurrency; that's the deploy-window risk we knowingly accept,
+    mitigated by the advisory lock in db.generate_unique_trx_id and by
+    re-running scripts/dedupe_trx_ids.py post-migration.
+
+    Returns (detail_id, final_trx_id).
+    """
+    last_err: Exception | None = None
+    for attempt in range(TRX_ID_MAX_RETRIES):
+        if attempt == 0 and given_trx_id:
+            detail_row["Trx_ID"] = given_trx_id
+        else:
+            detail_row["Trx_ID"] = db.generate_unique_trx_id(portfolio, trade_id, prefix)
+        try:
+            detail_id = db.save_detail_row(portfolio, detail_row)
+            return detail_id, detail_row["Trx_ID"]
+        except psycopg2.errors.UniqueViolation as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"Failed to generate unique trx_id for trade {trade_id} after "
+        f"{TRX_ID_MAX_RETRIES} attempts. Last error: {last_err}"
+    )
+
+
 @app.post("/api/trades/buy")
 @limiter.limit("10/minute")
 def log_buy(request: Request, body: dict):
@@ -2398,7 +2446,7 @@ def log_buy(request: Request, body: dict):
         notes = body.get("notes", "")
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
         time_str = body.get("time", datetime.now().strftime("%H:%M"))
-        trx_id = body.get("trx_id", "")
+        client_trx_id = body.get("trx_id", "")
 
         if not ticker or not trade_id or shares <= 0 or price <= 0:
             return {"error": "Missing required fields: ticker, trade_id, shares, price"}
@@ -2411,16 +2459,18 @@ def log_buy(request: Request, body: dict):
         value = shares * price * multiplier
         date_time = f"{date_str} {time_str}:00"
 
-        # Determine trx_id if not provided
-        if not trx_id:
+        # Determine trx_id prefix: first BUY on a trade uses 'B'; any
+        # subsequent BUY (add-on) uses 'A'. The numeric suffix is assigned
+        # by _save_detail_with_unique_trx_id at insert time (collision-safe
+        # via db.generate_unique_trx_id + retry-on-conflict).
+        trx_prefix = "B"
+        if not client_trx_id:
             df_d = db.load_details(portfolio)
             if not df_d.empty:
                 df_d = _normalize_trades(df_d)
                 existing_txns = df_d[df_d["trade_id"] == trade_id]
-                buy_count = len(existing_txns[existing_txns["action"].str.upper() == "BUY"]) if not existing_txns.empty else 0
-                trx_id = f"B{buy_count + 1}" if buy_count == 0 else f"A{buy_count}"
-            else:
-                trx_id = "B1"
+                if not existing_txns.empty and (existing_txns["action"].str.upper() == "BUY").any():
+                    trx_prefix = "A"
 
         # Build summary row first (FK requires summary before detail).
         # risk_budget = initial $ at risk at entry (shares * (entry - stop)).
@@ -2485,15 +2535,18 @@ def log_buy(request: Request, body: dict):
 
         summary_id = db.save_summary_row(portfolio, summary_row)
 
-        # Save detail row (after summary so FK constraint is satisfied)
+        # Save detail row (after summary so FK constraint is satisfied).
+        # Trx_ID is assigned by the helper — the placeholder here is overwritten.
         detail_row = {
             "Trade_ID": trade_id, "Ticker": ticker, "Action": "BUY",
             "Date": date_time, "Shares": shares, "Amount": price,
             "Value": value, "Rule": rule, "Notes": notes,
-            "Stop_Loss": stop_loss, "Trx_ID": trx_id,
+            "Stop_Loss": stop_loss, "Trx_ID": "",
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
-        detail_id = db.save_detail_row(portfolio, detail_row)
+        detail_id, trx_id = _save_detail_with_unique_trx_id(
+            portfolio, trade_id, trx_prefix, detail_row, given_trx_id=client_trx_id,
+        )
 
         # Audit trail
         try:
@@ -2576,7 +2629,7 @@ def log_sell(request: Request, body: dict):
         notes = body.get("notes", "")
         date_str = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         time_str = body.get("time") or datetime.now().strftime("%H:%M")
-        trx_id = body.get("trx_id", "")
+        client_trx_id = body.get("trx_id", "")
         grade_raw = body.get("grade", None)
 
         if not trade_id or shares <= 0 or price <= 0:
@@ -2607,26 +2660,20 @@ def log_sell(request: Request, body: dict):
         value = shares * price * multiplier
         date_time = f"{date_str} {time_str}:00"
 
-        # Generate trx_id if not provided
-        if not trx_id:
-            df_d = db.load_details(portfolio)
-            if not df_d.empty:
-                df_d = _normalize_trades(df_d)
-                existing_txns = df_d[df_d["trade_id"] == trade_id]
-                sell_count = len(existing_txns[existing_txns["action"].str.upper() == "SELL"]) if not existing_txns.empty else 0
-                trx_id = f"S{sell_count + 1}"
-            else:
-                trx_id = "S1"
-
-        # Save detail row
+        # Save detail row. Trx_ID is assigned by the helper (always 'S{n}'
+        # for SELLs — no SA/SB branching in live code; legacy SA/SB rows
+        # are preserved by the regex-based suffix scan in the helper).
+        # The placeholder Trx_ID below is overwritten before the INSERT.
         detail_row = {
             "Trade_ID": trade_id, "Ticker": ticker, "Action": "SELL",
             "Date": date_time, "Shares": shares, "Amount": price,
             "Value": value, "Rule": rule, "Notes": notes,
-            "Realized_PL": 0, "Trx_ID": trx_id,
+            "Realized_PL": 0, "Trx_ID": "",
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
-        detail_id = db.save_detail_row(portfolio, detail_row)
+        detail_id, trx_id = _save_detail_with_unique_trx_id(
+            portfolio, trade_id, "S", detail_row, given_trx_id=client_trx_id,
+        )
 
         # LIFO recalculation: reload all details and recompute summary
         df_d = db.load_details(portfolio)
@@ -2750,6 +2797,7 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         multiplier = 1.0
         existing_trade_id = ""
         existing_ticker = ""
+        existing_trx_id = ""
         if not df_d.empty:
             df_d = _normalize_trades(df_d)
             existing = df_d[df_d.get("detail_id", df_d.index) == detail_id] if "detail_id" in df_d.columns else df_d.iloc[0:0]
@@ -2759,11 +2807,32 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
                     multiplier = float(m)
                 existing_trade_id = str(existing.iloc[0].get("trade_id", "") or "")
                 existing_ticker = str(existing.iloc[0].get("ticker", "") or "")
+                existing_trx_id = str(existing.iloc[0].get("trx_id", "") or "")
         # Client value wins; fall back to whatever was on the row.
         effective_trade_id = trade_id or existing_trade_id
         effective_ticker = ticker or existing_ticker
         if multiplier == 1.0 and is_option_ticker(effective_ticker):
             multiplier = 100.0
+
+        # Validate trx_id (if changing): must not collide with another row in
+        # the same trade. The frontend's edit form makes the field readOnly so
+        # the client shouldn't be sending changed values, but treat it as a
+        # belt-and-suspenders check — reject early with a friendly error
+        # rather than relying on the migration-018 UNIQUE constraint to fail
+        # the UPDATE midway.
+        client_trx_id = str(body.get("trx_id", "") or "").strip()
+        if client_trx_id and client_trx_id != existing_trx_id and not df_d.empty \
+                and "trx_id" in df_d.columns and "detail_id" in df_d.columns:
+            try:
+                collision = df_d[
+                    (df_d["trade_id"] == effective_trade_id)
+                    & (df_d["trx_id"] == client_trx_id)
+                    & (df_d["detail_id"] != int(detail_id))
+                ]
+                if not collision.empty:
+                    return {"error": f"trx_id '{client_trx_id}' already used by another row in this trade"}
+            except (TypeError, ValueError):
+                pass  # malformed detail_id — fall through; later DB layer catches it
 
         shares = float(body.get("shares") or 0)
         amount = float(body.get("amount") or 0)
