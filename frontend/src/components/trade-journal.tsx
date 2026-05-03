@@ -78,6 +78,86 @@ const FUND_RATINGS = [
   { key: "acc_dis_rating", label: "Acc/Dis" },
 ];
 
+type LifoRow = {
+  tx: TradeDetail; displayShares: number; remaining: number;
+  exitPrice: number; realizedPl: number; returnPct: number;
+  unrealizedPl: number; status: string; value: number; isSell: boolean;
+};
+
+// LIFO walk over a campaign's BUY/SELL transactions. Returns per-row P&L
+// (attributed to the BUY row each closed lot came from) plus the campaign's
+// realized bank — the sum the Flight Deck tile shows. Single source of
+// truth for the Realized P&L tile and the Transaction History table; the
+// persisted summary `realized_pl` field drifts when sell paths skip the
+// backend recompute, so the frontend derives it from details directly.
+function computeLifoRowData(
+  txns: TradeDetail[],
+  enrichedEntry: number,
+  multiplier: number,
+): { rowData: LifoRow[]; realizedBank: number } {
+  const sorted = [...txns].sort((a, b) => {
+    const da = String(a.date || "");
+    const db = String(b.date || "");
+    if (da !== db) return da.localeCompare(db);
+    return String(a.action).toUpperCase() === "BUY" ? -1 : 1;
+  });
+
+  const inventory: { idx: number; qty: number; price: number }[] = [];
+  const rowData: LifoRow[] = [];
+  let realizedBank = 0;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const tx = sorted[i];
+    const action = String(tx.action || "").toUpperCase();
+    const txShares = Math.abs(parseFloat(String(tx.shares || 0)));
+    const txAmount = parseFloat(String(tx.amount || 0));
+    const txValue = txShares * txAmount * multiplier;
+
+    if (action === "BUY") {
+      inventory.push({ idx: i, qty: txShares, price: txAmount || enrichedEntry });
+      rowData.push({
+        tx, displayShares: txShares, remaining: txShares,
+        exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
+        status: "Open", value: txValue, isSell: false,
+      });
+    } else if (action === "SELL") {
+      let toSell = txShares;
+      const sellPrice = txAmount;
+
+      while (toSell > 0 && inventory.length > 0) {
+        const last = inventory[inventory.length - 1];
+        const take = Math.min(toSell, last.qty);
+        const costBasis = take * last.price * multiplier;
+        const revenue = take * sellPrice * multiplier;
+        const rpl = revenue - costBasis;
+
+        last.qty -= take;
+        toSell -= take;
+
+        const buyRow = rowData[last.idx];
+        if (buyRow) {
+          buyRow.remaining = last.qty;
+          buyRow.realizedPl += rpl;
+          buyRow.exitPrice = sellPrice;
+          const buyRowPrice = parseFloat(String(buyRow.tx.amount || 0)) || enrichedEntry;
+          buyRow.returnPct = buyRowPrice > 0 ? ((sellPrice - buyRowPrice) / buyRowPrice) * 100 : 0;
+          if (last.qty < 0.00001) buyRow.status = "Closed";
+        }
+        realizedBank += rpl;
+        if (last.qty < 0.00001) inventory.pop();
+      }
+
+      rowData.push({
+        tx, displayShares: -txShares, remaining: 0,
+        exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
+        status: "Closed", value: -txValue, isSell: true,
+      });
+    }
+  }
+
+  return { rowData, realizedBank };
+}
+
 function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
   const [images, setImages] = useState<any[]>([]);
   const [fundamentals, setFundamentals] = useState<any[]>([]);
@@ -729,7 +809,6 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           const avgEntry = parseFloat(String(trade.avg_entry || 0));
           const avgExit = parseFloat(String(trade.avg_exit || 0));
           const totalCost = parseFloat(String(trade.total_cost || 0));
-          const realizedBank = parseFloat(String(trade.realized_pl || 0));
           // Migration 016 — when the row is an option, multiplier=100 turns
           // every per-contract dollar back into notional. Falls back to a
           // ticker-shape autodetect for any legacy row that pre-dates the
@@ -759,6 +838,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
             const totalShs = sells.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0);
             enrichedExit = totalShs > 0 ? totalVal / totalShs : 0;
           }
+
+          // LIFO walk — single source for the Realized P&L tile and the
+          // Transaction History table. The persisted summary `realized_pl`
+          // drifts when sell paths skip the backend recompute, so we derive
+          // both from details here.
+          const { rowData: lifoRowData, realizedBank } = computeLifoRowData(txns, enrichedEntry, multiplier);
 
           const livePrice = isOpen ? (livePrices[trade.ticker] || 0) : enrichedExit;
           const unrealizedPl = isOpen && livePrice > 0 ? (livePrice - enrichedEntry) * shares * multiplier : 0;
@@ -975,81 +1060,11 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                       <span>📋</span> Transaction History
                     </div>
                     {(() => {
-                      // LIFO processing — P&L attributed to BUY rows (matching Streamlit)
-                      const sorted = [...txns].sort((a, b) => {
-                        const da = String(a.date || "");
-                        const db2 = String(b.date || "");
-                        if (da !== db2) return da.localeCompare(db2);
-                        return String(a.action).toUpperCase() === "BUY" ? -1 : 1;
-                      });
-
-                      const inventory: { idx: number; qty: number; price: number }[] = [];
-                      const rowData: {
-                        tx: typeof txns[0]; displayShares: number; remaining: number;
-                        exitPrice: number; realizedPl: number; returnPct: number;
-                        unrealizedPl: number; status: string; value: number; isSell: boolean;
-                      }[] = [];
-
-                      for (let i = 0; i < sorted.length; i++) {
-                        const tx = sorted[i];
-                        const action = String(tx.action || "").toUpperCase();
-                        const txShares = Math.abs(parseFloat(String(tx.shares || 0)));
-                        const txAmount = parseFloat(String(tx.amount || 0));
-                        // Compute Value from shares × amount × multiplier rather
-                        // than trusting tx.value, since pre-Migration-016
-                        // option detail rows are inconsistent (some baked the
-                        // ×100 in, some didn't). Phase 5 recompute heals
-                        // summary-level dollars but won't rewrite details.
-                        const txValue = txShares * txAmount * multiplier;
-
-                        if (action === "BUY") {
-                          inventory.push({ idx: i, qty: txShares, price: txAmount || enrichedEntry });
-                          rowData.push({
-                            tx, displayShares: txShares, remaining: txShares,
-                            exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
-                            status: "Open", value: txValue, isSell: false,
-                          });
-                        } else if (action === "SELL") {
-                          let toSell = txShares;
-                          const sellPrice = txAmount;
-
-                          while (toSell > 0 && inventory.length > 0) {
-                            const last = inventory[inventory.length - 1];
-                            const take = Math.min(toSell, last.qty);
-                            // Scale per-row P&L by the contract multiplier so
-                            // the Realized PL column shows notional dollars,
-                            // matching the campaign-level realized_pl that
-                            // the backend LIFO engine now persists.
-                            const costBasis = take * last.price * multiplier;
-                            const revenue = take * sellPrice * multiplier;
-                            const rpl = revenue - costBasis;
-                            const retPct = costBasis > 0 ? (rpl / costBasis) * 100 : 0;
-
-                            last.qty -= take;
-                            toSell -= take;
-
-                            // Attribute P&L to the BUY row
-                            const buyRow = rowData[last.idx];
-                            if (buyRow) {
-                              buyRow.remaining = last.qty;
-                              buyRow.realizedPl += rpl;
-                              buyRow.exitPrice = sellPrice;
-                              // For fully closed rows, return % = exit vs entry price
-                              const buyRowPrice = parseFloat(String(buyRow.tx.amount || 0)) || enrichedEntry;
-                              buyRow.returnPct = buyRowPrice > 0 ? ((sellPrice - buyRowPrice) / buyRowPrice) * 100 : 0;
-                              if (last.qty < 0.00001) buyRow.status = "Closed";
-                            }
-                            if (last.qty < 0.00001) inventory.pop();
-                          }
-
-                          // Sell row — no P&L (attributed to buy rows above)
-                          rowData.push({
-                            tx, displayShares: -txShares, remaining: 0,
-                            exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
-                            status: "Closed", value: -txValue, isSell: true,
-                          });
-                        }
-                      }
+                      // rowData (LIFO walk) is precomputed at the .map level so
+                      // the Realized P&L tile and this table draw from one
+                      // source. We still own the unrealized-P&L pass below
+                      // since it depends on livePrice / isOpen.
+                      const rowData = lifoRowData;
 
                       // Compute unrealized P&L and return % for open buy rows using live price
                       const currentPrice = isOpen ? livePrice : 0;
