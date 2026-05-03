@@ -432,8 +432,13 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <Field label="Trx ID">
-                    <input type="text" value={editFields.trx_id || ""} onChange={e => setEditFields({ ...editFields, trx_id: e.target.value })}
-                           className={inputCls} style={inputStyle} />
+                    {/* Read-only — server generates trx_ids collision-safely
+                        (db_layer.generate_unique_trx_id + migration 018 UNIQUE
+                        constraint). Editing here would just be a way to create
+                        new collisions. */}
+                    <input type="text" value={editFields.trx_id || ""} readOnly
+                           className={inputCls}
+                           style={{ ...inputStyle, opacity: 0.6, cursor: "not-allowed" }} />
                   </Field>
                   <Field label="Stop Loss ($)">
                     <input type="number" value={editFields.stop_loss || ""} onChange={e => setEditFields({ ...editFields, stop_loss: e.target.value })}
