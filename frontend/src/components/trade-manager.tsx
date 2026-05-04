@@ -134,11 +134,11 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
     Promise.all([
       api.tradesOpen(getActivePortfolio()).catch(() => []),
       api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => ({ details: [], lot_closures: [] })),
     ]).then(([open, closed, det]) => {
       setOpenTrades(open as TradePosition[]);
       setAllTrades([...open as TradePosition[], ...closed as TradePosition[]]);
-      setDetails(det as TradeDetail[]);
+      setDetails(det.details);
       setLoading(false);
     });
   }, []);
@@ -270,7 +270,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                         ]);
                         setOpenTrades(open as TradePosition[]);
                         setAllTrades([...(open as TradePosition[]), ...(closed as TradePosition[])]);
-                        setDetails(det as TradeDetail[]);
+                        setDetails(det.details);
                       }
                     }}
                     className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -345,7 +345,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                       ]);
                       setOpenTrades(open as TradePosition[]);
                       setAllTrades([...(open as TradePosition[]), ...(closed as TradePosition[])]);
-                      setDetails(det as TradeDetail[]);
+                      setDetails(det.details);
                     }
                   }}
                   className="h-[32px] px-3 rounded-[8px] text-[11px] font-semibold transition-all hover:brightness-95 disabled:opacity-50"
@@ -490,7 +490,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                                   api.tradesClosed(getActivePortfolio(), 500),
                                   api.tradesRecent(getActivePortfolio(), 500),
                                 ]);
-                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det as TradeDetail[]);
+                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det.details);
                               }
                             } catch (err: any) {
                               setEditResult({ ok: false, msg: err.message || "Failed to save" });
@@ -530,7 +530,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                                   api.tradesClosed(getActivePortfolio(), 500),
                                   api.tradesRecent(getActivePortfolio(), 500),
                                 ]);
-                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det as TradeDetail[]);
+                                setOpenTrades(open); setAllTrades([...open, ...closed]); setDetails(det.details);
                               }
                             } catch (err: any) {
                               setEditResult({ ok: false, msg: err.message || "Failed to delete" });

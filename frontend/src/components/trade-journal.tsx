@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure } from "@/lib/api";
 import { InteractiveChart } from "./interactive-chart";
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
@@ -153,6 +153,105 @@ function computeLifoRowData(
         status: "Closed", value: -txValue, isSell: true,
       });
     }
+  }
+
+  return { rowData, realizedBank };
+}
+
+// Inverse of computeLifoRowData: takes already-walked closure rows from the
+// API (lot_closures table, migration 017) and produces the same per-row P&L
+// shape, without re-running LIFO client-side. Used when the backend has
+// authoritative closures; the caller falls back to computeLifoRowData for
+// trades whose closures haven't been backfilled yet (the 6 deferred trades
+// with data integrity issues).
+//
+// Output shape is identical to computeLifoRowData so downstream consumers
+// (the Transaction History table, the Realized P&L tile, the per-row
+// live-exposure overwrite at the table-render site) don't notice which
+// path produced the data.
+function lotClosuresToLifoRows(
+  txns: TradeDetail[],
+  closures: LotClosure[],
+  enrichedEntry: number,
+  multiplier: number,
+): { rowData: LifoRow[]; realizedBank: number } {
+  // Same chronological sort as computeLifoRowData (BUY before SELL within
+  // the same date) so rowData iteration order — and the table render order —
+  // matches exactly.
+  const sorted = [...txns].sort((a, b) => {
+    const da = String(a.date || "");
+    const db = String(b.date || "");
+    if (da !== db) return da.localeCompare(db);
+    return String(a.action).toUpperCase() === "BUY" ? -1 : 1;
+  });
+
+  // Initial rows. BUY rows start fully-open with zero closures attributed;
+  // SELL rows are fully-closed with no P&L attribution (closures attribute
+  // to BUY rows in the original walk; preserve that exactly).
+  const rowData: LifoRow[] = sorted.map(tx => {
+    const action = String(tx.action || "").toUpperCase();
+    const txShares = Math.abs(parseFloat(String(tx.shares || 0)));
+    const txAmount = parseFloat(String(tx.amount || 0));
+    const txValue = txShares * txAmount * multiplier;
+    if (action === "SELL") {
+      return {
+        tx, displayShares: -txShares, remaining: 0,
+        exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
+        status: "Closed", value: -txValue, isSell: true,
+      };
+    }
+    return {
+      tx, displayShares: txShares, remaining: txShares,
+      exitPrice: 0, realizedPl: 0, returnPct: 0, unrealizedPl: 0,
+      status: "Open", value: txValue, isSell: false,
+    };
+  });
+
+  // trx_id → BUY row lookup for O(1) closure attribution. Only BUY rows
+  // are addressable; closures attribute to them, never to SELL rows.
+  const buyRowByTrxId = new Map<string, LifoRow>();
+  for (const row of rowData) {
+    if (!row.isSell) {
+      const trx = String((row.tx as any).trx_id || "");
+      if (trx) buyRowByTrxId.set(trx, row);
+    }
+  }
+
+  // Apply closures. The API returns them sorted by closed_at ASC within a
+  // trade, matching the original walk's iteration order (chronological
+  // SELLs). exitPrice on the BUY row is overwritten on each closure —
+  // last write wins, so the chronologically-latest SELL's price ends up
+  // displayed (same semantics as the original walk).
+  let realizedBank = 0;
+  for (const closure of closures) {
+    const buyRow = buyRowByTrxId.get(closure.buy_trx_id);
+    if (!buyRow) {
+      // Stale or orphaned closure — shouldn't happen in well-formed data
+      // (lot_closures rows are DELETE-then-INSERTed by the recompute path).
+      // Logged so we notice if it ever does during the rewire's rollout.
+      console.warn(
+        "[lifo-rewire] closure references unknown buy_trx_id",
+        { buy_trx_id: closure.buy_trx_id, sell_trx_id: closure.sell_trx_id, trade_id: closure.trade_id },
+      );
+      continue;
+    }
+    const closureShares = Number(closure.shares || 0);
+    const sellPrice = Number(closure.sell_price || 0);
+    const closureRpl = Number(closure.realized_pl || 0);
+
+    buyRow.realizedPl += closureRpl;
+    buyRow.remaining -= closureShares;
+    buyRow.exitPrice = sellPrice;
+
+    const buyRowPrice = parseFloat(String(buyRow.tx.amount || 0)) || enrichedEntry;
+    buyRow.returnPct = buyRowPrice > 0 ? ((sellPrice - buyRowPrice) / buyRowPrice) * 100 : 0;
+
+    if (buyRow.remaining < 0.00001) {
+      buyRow.status = "Closed";
+      buyRow.remaining = 0; // clamp tiny float residuals so "−0" doesn't render
+    }
+
+    realizedBank += closureRpl;
   }
 
   return { rowData, realizedBank };
@@ -434,6 +533,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
   const [openDetails, setOpenDetails] = useState<TradeDetail[]>([]);
   const [closedDetails, setClosedDetails] = useState<TradeDetail[]>([]);
+  // Persisted lot_closures from the API — primary source for per-row
+  // realized P&L. Keeps cohort-split alongside details so each loader
+  // populates its own slice. The fallback (computeLifoRowData) handles
+  // trades whose closures aren't in either array (the 6 deferred trades).
+  const [openClosures, setOpenClosures] = useState<LotClosure[]>([]);
+  const [closedClosures, setClosedClosures] = useState<LotClosure[]>([]);
   const [openLoaded, setOpenLoaded] = useState(false);
   const [closedLoaded, setClosedLoaded] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
@@ -441,6 +546,20 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // Derived combined views — keep the rest of the component code unchanged.
   const allTrades = useMemo(() => [...openTrades, ...closedTrades], [openTrades, closedTrades]);
   const allDetails = useMemo(() => [...openDetails, ...closedDetails], [openDetails, closedDetails]);
+  // Lookup keyed by trade_id so the .map(trade => ...) below can grab a
+  // trade's closures in O(1) without re-filtering allClosures per render.
+  const closuresByTradeId = useMemo(() => {
+    const m = new Map<string, LotClosure[]>();
+    for (const c of openClosures) {
+      const list = m.get(c.trade_id);
+      if (list) list.push(c); else m.set(c.trade_id, [c]);
+    }
+    for (const c of closedClosures) {
+      const list = m.get(c.trade_id);
+      if (list) list.push(c); else m.set(c.trade_id, [c]);
+    }
+    return m;
+  }, [openClosures, closedClosures]);
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [equity, setEquity] = useState(0);
@@ -464,12 +583,15 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const loadOpen = useCallback(async () => {
     const [open, openDet, journal] = await Promise.all([
       api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+      // catch fallback shape mirrors success shape so the destructuring
+      // below doesn't crash on a fetch error.
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
     ]);
     const openArr = open as TradePosition[];
     setOpenTrades(openArr);
-    setOpenDetails(openDet as TradeDetail[]);
+    setOpenDetails(openDet.details);
+    setOpenClosures(openDet.lot_closures);
     setEquity(parseFloat(String((journal as any).end_nlv || 100000)));
     setOpenLoaded(true);
 
@@ -487,17 +609,19 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const loadClosed = useCallback(async () => {
     const [closed, recent] = await Promise.all([
       api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 5000).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 5000).catch(() => ({ details: [], lot_closures: [] })),
     ]);
     const closedArr = closed as TradePosition[];
-    // tradesRecent returns details for ALL trades (open + closed) sorted by
-    // recency. We already loaded open details via tradesOpenDetails, so keep
-    // only the closed-trade details here to avoid duplicating rows when the
-    // two cohorts merge into allDetails.
+    // tradesRecent returns details + lot_closures for ALL trades (open +
+    // closed) sorted by recency. We already loaded open details via
+    // tradesOpenDetails, so keep only the closed-trade rows here to avoid
+    // duplicating when the two cohorts merge into allDetails / closuresByTradeId.
     const closedIds = new Set(closedArr.map(t => t.trade_id));
-    const closedDet = (recent as TradeDetail[]).filter(d => closedIds.has(d.trade_id));
+    const closedDet = recent.details.filter(d => closedIds.has(d.trade_id));
+    const closedClos = recent.lot_closures.filter(c => closedIds.has(c.trade_id));
     setClosedTrades(closedArr);
     setClosedDetails(closedDet);
+    setClosedClosures(closedClos);
     setClosedLoaded(true);
   }, []);
 
@@ -839,11 +963,18 @@ export function TradeJournal({ navColor }: { navColor: string }) {
             enrichedExit = totalShs > 0 ? totalVal / totalShs : 0;
           }
 
-          // LIFO walk — single source for the Realized P&L tile and the
-          // Transaction History table. The persisted summary `realized_pl`
-          // drifts when sell paths skip the backend recompute, so we derive
-          // both from details here.
-          const { rowData: lifoRowData, realizedBank } = computeLifoRowData(txns, enrichedEntry, multiplier);
+          // LIFO source — single source for the Realized P&L tile and the
+          // Transaction History table. Prefer the persisted lot_closures
+          // from the API (authoritative since LIFO Persistence Plan steps
+          // 5-6); fall back to a client-side LIFO walk for trades that
+          // haven't had closures backfilled yet (the 6 deferred trades).
+          // Both paths return the same LifoRow shape so downstream code
+          // (Realized P&L tile, table render, live-exposure overwrite
+          // below) doesn't notice which produced the data.
+          const tradeClosures = closuresByTradeId.get(trade.trade_id) || [];
+          const { rowData: lifoRowData, realizedBank } = tradeClosures.length > 0
+            ? lotClosuresToLifoRows(txns, tradeClosures, enrichedEntry, multiplier)
+            : computeLifoRowData(txns, enrichedEntry, multiplier);
 
           const livePrice = isOpen ? (livePrices[trade.ticker] || 0) : enrichedExit;
           const unrealizedPl = isOpen && livePrice > 0 ? (livePrice - enrichedEntry) * shares * multiplier : 0;

@@ -35,7 +35,7 @@ const mRally = vi.mocked(api.rallyPrefix);
 function setupDefaults() {
   vi.mocked(api.journalLatest).mockResolvedValue({ end_nlv: 100000 } as any);
   vi.mocked(api.tradesOpen).mockResolvedValue([]);
-  vi.mocked(api.tradesOpenDetails).mockResolvedValue([]);
+  vi.mocked(api.tradesOpenDetails).mockResolvedValue({ details: [], lot_closures: [] });
   vi.mocked(api.config).mockResolvedValue({ key: "pyramid_rules", value: { trigger_pct: 5, alloc_pct: 20 } } as any);
 }
 
