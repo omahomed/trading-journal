@@ -54,7 +54,7 @@ function setupDefaultMocks() {
   mockedJournalLatest.mockResolvedValue({ end_nlv: 100000 } as any);
   mockedBatchPrices.mockResolvedValue({ SPY: 500.0, "^IXIC": 18000.0 } as any);
   mockedRallyPrefix.mockResolvedValue({ prefix: "" } as any);
-  mockedTradesRecent.mockResolvedValue([]);
+  mockedTradesRecent.mockResolvedValue({ details: [], lot_closures: [] });
   mockedJournalEdit.mockResolvedValue({ status: "ok", id: 1 });
 }
 

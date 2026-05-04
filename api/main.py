@@ -949,36 +949,65 @@ def trade_details(trade_id: str, portfolio: str = "CanSlim"):
 
 @app.get("/api/trades/open/details")
 def trades_open_details(portfolio: str = "CanSlim"):
-    """Get all transactions for open trades (for stop loss, pyramid info)."""
+    """Get all transactions for open trades (for stop loss, pyramid info)
+    plus the lot_closures for those trades. Frontend uses lot_closures to
+    render per-row realized P&L without re-walking LIFO client-side; falls
+    back to its own walk for trades whose closures aren't yet backfilled.
+
+    Response shape: {"details": [...], "lot_closures": [...]}.
+    """
     summary_df = db.load_summary(portfolio)
     if summary_df.empty:
-        return []
+        return {"details": [], "lot_closures": []}
     summary_df = _normalize_trades(summary_df)
     status_col = "status" if "status" in summary_df.columns else "Status"
     open_ids = summary_df[summary_df[status_col].str.upper() == "OPEN"]["trade_id"].tolist()
     if not open_ids:
-        return []
+        return {"details": [], "lot_closures": []}
     details_df = db.load_details(portfolio)
     if details_df.empty:
-        return []
+        return {"details": [], "lot_closures": []}
     details_df = _normalize_trades(details_df)
     filtered = details_df[details_df["trade_id"].isin(open_ids)].copy()
     if "date" in filtered.columns:
         filtered["date"] = pd.to_datetime(filtered["date"], errors="coerce")
         filtered = filtered.sort_values(["trade_id", "date"])
-    return _df_to_records(filtered)
+
+    # Closures for the same set of trades — one query, batch-filtered to
+    # the open_ids we just returned details for. Avoids N+1; bounded payload.
+    closures_df = db.load_lot_closures(portfolio, trade_ids=open_ids)
+
+    return {
+        "details": _df_to_records(filtered),
+        "lot_closures": _df_to_records(closures_df),
+    }
 
 
 @app.get("/api/trades/recent")
 def trades_recent(portfolio: str = "CanSlim", limit: int = 20):
-    """Get most recent trade transactions (buys + sells)."""
+    """Get most recent trade transactions (buys + sells) plus the
+    lot_closures for the trades that appear in the result. Same
+    enrichment shape as /api/trades/open/details.
+
+    Response shape: {"details": [...], "lot_closures": [...]}.
+    """
     df = db.load_details(portfolio)
     if df.empty:
-        return []
+        return {"details": [], "lot_closures": []}
     df = _normalize_trades(df)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.sort_values("date", ascending=False)
-    return _df_to_records(df.head(limit))
+    sliced = df.head(limit)
+
+    # Closures for the trade_ids that survived the LIMIT slice. Bounds the
+    # payload to the same trades the details cover.
+    recent_trade_ids = sliced["trade_id"].dropna().astype(str).unique().tolist()
+    closures_df = db.load_lot_closures(portfolio, trade_ids=recent_trade_ids)
+
+    return {
+        "details": _df_to_records(sliced),
+        "lot_closures": _df_to_records(closures_df),
+    }
 
 
 # ============================================================

@@ -103,6 +103,31 @@ export interface TradeDetail {
   [key: string]: any;
 }
 
+// One persisted BUY × SELL pairing from the lot_closures table (migration
+// 017). Returned alongside details by /api/trades/open/details and
+// /api/trades/recent so the trade-journal frontend can render per-row
+// realized P&L without re-walking LIFO client-side.
+export interface LotClosure {
+  trade_id: string;
+  buy_trx_id: string;
+  sell_trx_id: string;
+  shares: number;
+  buy_price: number;
+  sell_price: number;
+  multiplier: number;
+  realized_pl: number;
+  closed_at: string;
+}
+
+// Wrapper response shape for the two trade-detail endpoints. lot_closures
+// is empty for trades that haven't had their closures backfilled (the 6
+// deferred trades) — frontend silently falls back to its own LIFO walk
+// in that case.
+export interface TradeDetailsBundle {
+  details: TradeDetail[];
+  lot_closures: LotClosure[];
+}
+
 export interface Portfolio {
   id: number;
   name: string;
@@ -154,10 +179,10 @@ export const api = {
     fetchJSON<TradeDetail[]>(`/api/trades/details/${tradeId}?portfolio=${portfolio}`),
 
   tradesOpenDetails: (portfolio = getActivePortfolio()) =>
-    fetchJSON<TradeDetail[]>(`/api/trades/open/details?portfolio=${portfolio}`),
+    fetchJSON<TradeDetailsBundle>(`/api/trades/open/details?portfolio=${portfolio}`),
 
   tradesRecent: (portfolio = getActivePortfolio(), limit = 20) =>
-    fetchJSON<TradeDetail[]>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
+    fetchJSON<TradeDetailsBundle>(`/api/trades/recent?portfolio=${portfolio}&limit=${limit}`),
 
   updateTradeStops: (body: { portfolio?: string; trade_id: string; new_stop: number }) =>
     fetchWithAuth(`${API_BASE}/api/trades/update-stops`, {

@@ -227,9 +227,11 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
       return parts.join(" | ");
     };
 
-    api.tradesRecent(getActivePortfolio(), 1000).catch(() => []).then(det => {
-      setPortAction(buildActions(det as any[]));
-    });
+    api.tradesRecent(getActivePortfolio(), 1000)
+      .catch(() => ({ details: [], lot_closures: [] }))
+      .then(det => {
+        setPortAction(buildActions(det.details));
+      });
   }, [entryDate]);
 
   // Computed

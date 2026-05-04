@@ -81,7 +81,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     api.tradesRecent(getActivePortfolio(), 1000).then(d => {
-      setDetails(d as TradeDetail[]);
+      setDetails(d.details);
       setLoading(false);
     }).catch(() => setLoading(false));
     setRetros(loadRetros());
