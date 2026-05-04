@@ -4,6 +4,36 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure } from "@/lib/api";
 import { InteractiveChart } from "./interactive-chart";
 
+// Rule dropdowns for the closed-trade edit modal. Duplicated from
+// trade-manager.tsx / log-buy.tsx / log-sell.tsx / import-trades.tsx —
+// the codebase pattern is per-component copies rather than a shared
+// module. Stable strings; keep in sync if those copies move.
+const BUY_RULES = [
+  "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
+  "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot", "br1.8 High Tight Flag",
+  "br2.1 HVE", "br2.2 HVSI", "br2.3 HV1",
+  "br3.1 Reclaim 21e", "br3.2 Reclaim 50s", "br3.3 Reclaim 200s", "br3.4 Reclaim 10W", "br3.5 Reclaim 8e",
+  "br4.1 PB 21e", "br4.2 PB 50s", "br4.3 PB 10w", "br4.4 PB 200s", "br4.5 PB 8e", "br4.6 VWAP",
+  "br5.1 Undercut & Rally", "br5.2 Upside Reversal",
+  "br6.1 Gapper", "br6.2 Continuation Gap Up",
+  "br7.1 TQQQ Strategy", "br7.2 New High after Gentle PB", "br7.3 JL Century Mark",
+  "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break",
+  "br9.1 21e Strategy",
+  "br10.1 Hedging with leverage product",
+  "br11.1 Shorting",
+  "br12.1 Option Play",
+];
+
+const SELL_RULES = [
+  "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
+  "sr4 Time Stop", "sr5 Climax Top", "sr6 Exhaustion Gap",
+  "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
+  "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
+  "sr13 Earnings Exit", "sr14 Market Correction Exit",
+  "sr15 BE Stop Out (moved at +10%)",
+  "sr16 Profit Taking",
+];
+
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
 type StatusFilter = "none" | "all" | "open" | "closed";
 type DateRange = "all" | "7d" | "30d" | "90d" | "ytd";
@@ -580,6 +610,47 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [analysisOpen, setAnalysisOpen] = useState<string | null>(null);
   const [liveChartOpen, setLiveChartOpen] = useState<string | null>(null);
 
+  // Closed-trade edit modal. Hoisted to page level so a single modal
+  // instance handles every Edit button in every trade card's Transaction
+  // History table. Form fields are controlled-input strings; the API call
+  // parses them back to numbers at save time. trx_id / trade_id / ticker /
+  // action are pass-through (read from editingTxn directly), so they
+  // don't live in editForm.
+  const [editingTxn, setEditingTxn] = useState<TradeDetail | null>(null);
+  const [editForm, setEditForm] = useState<{
+    date: string;
+    shares: string;
+    amount: string;
+    stop_loss: string;
+    rule: string;
+    notes: string;
+  }>({ date: "", shares: "", amount: "", stop_loss: "", rule: "", notes: "" });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const openEditModal = useCallback((tx: TradeDetail) => {
+    setEditingTxn(tx);
+    setEditForm({
+      date: String(tx.date || "").slice(0, 16),
+      shares: String(tx.shares ?? ""),
+      amount: String(tx.amount ?? ""),
+      stop_loss: String((tx as any).stop_loss ?? ""),
+      rule: tx.rule || "",
+      notes: String((tx as any).notes ?? ""),
+    });
+    setEditError(null);
+    setConfirmingDelete(false);
+    setEditLoading(false);
+  }, []);
+
+  const closeEditModal = useCallback(() => {
+    setEditingTxn(null);
+    setEditError(null);
+    setConfirmingDelete(false);
+    setEditLoading(false);
+  }, []);
+
   const loadOpen = useCallback(async () => {
     const [open, openDet, journal] = await Promise.all([
       api.tradesOpen(getActivePortfolio()).catch(() => []),
@@ -624,6 +695,88 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     setClosedClosures(closedClos);
     setClosedLoaded(true);
   }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!editingTxn) return;
+    setEditLoading(true);
+    setEditError(null);
+    try {
+      const shares = parseFloat(editForm.shares || "0") || 0;
+      const amount = parseFloat(editForm.amount || "0") || 0;
+      const res = await api.editTransaction({
+        detail_id: (editingTxn as any).detail_id as number,
+        trade_id: editingTxn.trade_id,
+        ticker: editingTxn.ticker,
+        action: editingTxn.action,
+        date: editForm.date,
+        shares,
+        amount,
+        // Backend recomputes value as shares × amount × multiplier; we
+        // send shares × amount un-multiplied to match Trade Manager's
+        // request shape. The field is required by the API client type.
+        value: shares * amount,
+        rule: editForm.rule,
+        notes: editForm.notes,
+        stop_loss: parseFloat(editForm.stop_loss || "0") || 0,
+        trx_id: String((editingTxn as any).trx_id || ""),
+      });
+      if (res.error) {
+        setEditError(res.error);
+      } else {
+        // Refresh BOTH cohorts — status may have flipped (open↔closed)
+        // when the edit changed remaining shares, and we don't know which
+        // side the trade ends up on without re-fetching.
+        await Promise.all([loadOpen(), loadClosed()]);
+        closeEditModal();
+      }
+    } catch (err: any) {
+      setEditError(err?.message || "Failed to save");
+    } finally {
+      setEditLoading(false);
+    }
+  }, [editingTxn, editForm, loadOpen, loadClosed, closeEditModal]);
+
+  const deleteTxn = useCallback(async () => {
+    if (!editingTxn) return;
+    // Two-click confirm: first click arms the destructive action, second
+    // click executes. Avoids a modal-on-modal native confirm() dialog.
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+    setEditLoading(true);
+    setEditError(null);
+    try {
+      const res = await api.deleteTransaction(
+        (editingTxn as any).detail_id as number,
+        editingTxn.trade_id,
+        editingTxn.ticker,
+      );
+      if (res.error) {
+        setEditError(res.error);
+        setConfirmingDelete(false);
+      } else {
+        await Promise.all([loadOpen(), loadClosed()]);
+        closeEditModal();
+      }
+    } catch (err: any) {
+      setEditError(err?.message || "Failed to delete");
+      setConfirmingDelete(false);
+    } finally {
+      setEditLoading(false);
+    }
+  }, [editingTxn, confirmingDelete, loadOpen, loadClosed, closeEditModal]);
+
+  // ESC dismisses the edit modal (gated on !editLoading so an in-flight
+  // save/delete can't be cancelled mid-request).
+  useEffect(() => {
+    if (!editingTxn) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !editLoading) closeEditModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editingTxn, editLoading, closeEditModal]);
 
   // On-demand loader. Fires only when the user picks a status, turns on
   // Recent Activity, or has a ticker selected (via search, prefill, or
@@ -1238,7 +1391,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                           <thead>
                             <tr>
-                              {["Trx ID", "Date", "Ticker", "Action", "Status", unitLabel, "Remaining", "Amount", "Exit Price", "Stop Loss", "Value", "Realized PL", "Unrealized PL", "Return %", "Rule", "Notes"].map(h => (
+                              {["Trx ID", "Date", "Ticker", "Action", "Status", unitLabel, "Remaining", "Amount", "Exit Price", "Stop Loss", "Value", "Realized PL", "Unrealized PL", "Return %", "Rule", "Notes", "Edit"].map(h => (
                                 <th key={h} className="text-left px-2.5 py-2 text-[9px] uppercase tracking-[0.06em] font-semibold whitespace-nowrap"
                                     style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                               ))}
@@ -1271,6 +1424,13 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.returnPct) }}>{!row.isSell ? `${row.returnPct.toFixed(2)}%` : ""}</td>
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-4)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(tx as any).notes || ""}</td>
+                                  <td className="px-2.5 py-2">
+                                    <button onClick={() => openEditModal(tx)}
+                                            className="text-[10px] px-2 py-0.5 rounded-[4px] cursor-pointer transition-colors hover:brightness-95"
+                                            style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                                      Edit
+                                    </button>
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -1358,6 +1518,148 @@ export function TradeJournal({ navColor }: { navColor: string }) {
         <div className="text-center py-16 text-sm" style={{ color: "var(--ink-4)" }}>No trades match your filters</div>
       )}
       </>
+      )}
+
+      {/* Closed-trade edit modal — opens from the Edit button in any
+          Transaction History row. Same recipe as active-campaign.tsx's
+          EOD modal: fixed-position backdrop + stop-propagation card +
+          ESC handler in useEffect above.
+
+          z-[100] matches the EOD modal in active-campaign.tsx. The
+          chart lightbox uses z-[200] but cannot open simultaneously
+          with this modal under current UI flows. If a future feature
+          opens both, this layering needs revisiting. */}
+      {editingTxn && (
+        <div className="fixed inset-0 z-[100] grid place-items-start justify-center pt-[10vh]"
+             style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
+             onClick={() => { if (!editLoading) closeEditModal(); }}>
+          <div className="w-[640px] max-w-[92vw] rounded-[14px] overflow-hidden"
+               style={{ background: "var(--surface)", boxShadow: "0 20px 48px rgba(0,0,0,0.2), 0 0 0 1px var(--border)", animation: "cmdk-rise 0.22s cubic-bezier(.2,.9,.3,1.1)" }}
+               onClick={e => e.stopPropagation()}>
+            <div className="px-[18px] py-3.5 flex items-center" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div>
+                <div className="text-[14px] font-semibold">
+                  Edit · {editingTxn.action} · {editingTxn.ticker}
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                  Trade {editingTxn.trade_id} · transaction {(editingTxn as any).trx_id || `#${(editingTxn as any).detail_id}`}
+                </div>
+              </div>
+              <kbd className="ml-auto text-[10px] rounded px-1.5 py-0.5"
+                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>ESC</kbd>
+            </div>
+            <div className="p-4 flex flex-col gap-3 max-h-[70vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Date / Time</label>
+                  <input type="datetime-local" value={editForm.date}
+                         onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))}
+                         disabled={editLoading}
+                         className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Trx ID</label>
+                  {/* Read-only — server generates trx_ids collision-safely
+                      (db_layer.generate_unique_trx_id + migration 018 UNIQUE).
+                      Editing here would just be a way to create new collisions. */}
+                  <input type="text" value={(editingTxn as any).trx_id || ""} readOnly
+                         className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", opacity: 0.6, cursor: "not-allowed", fontFamily: "var(--font-jetbrains), monospace" }} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Shares</label>
+                  <input type="number" step="any" value={editForm.shares}
+                         onChange={e => setEditForm(f => ({ ...f, shares: e.target.value }))}
+                         disabled={editLoading}
+                         className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }} />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Price ($)</label>
+                  <input type="number" step="0.01" value={editForm.amount}
+                         onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))}
+                         disabled={editLoading}
+                         className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Stop Loss ($)</label>
+                  <input type="number" step="0.01" value={editForm.stop_loss}
+                         onChange={e => setEditForm(f => ({ ...f, stop_loss: e.target.value }))}
+                         disabled={editLoading}
+                         className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }} />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Rule (Strategy)</label>
+                  <select value={editForm.rule}
+                          onChange={e => setEditForm(f => ({ ...f, rule: e.target.value }))}
+                          disabled={editLoading}
+                          className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                          style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", WebkitAppearance: "none", MozAppearance: "none", appearance: "none" }}>
+                    <option value="">Select...</option>
+                    {(String(editingTxn.action).toUpperCase() === "SELL" ? SELL_RULES : BUY_RULES).map(r => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Notes</label>
+                <textarea value={editForm.notes}
+                          onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                          disabled={editLoading} rows={2}
+                          className="w-full px-3 py-2 rounded-[8px] text-[12px] outline-none resize-none"
+                          style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+              </div>
+              {editError && (
+                <div className="px-3 py-2 rounded-[8px] text-[11px] leading-relaxed"
+                     style={{
+                       background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                       border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                       color: "#991b1b",
+                     }}>
+                  {editError}
+                </div>
+              )}
+            </div>
+            <div className="px-[18px] py-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+              <button onClick={deleteTxn}
+                      disabled={editLoading}
+                      className="h-[32px] px-3 rounded-md text-[12px] font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                      style={{
+                        background: confirmingDelete ? "#e5484d" : "var(--surface)",
+                        color: confirmingDelete ? "white" : "#e5484d",
+                        border: confirmingDelete ? "1px solid #e5484d" : "1px solid color-mix(in oklab, #e5484d 35%, var(--border))",
+                      }}>
+                {confirmingDelete ? "Confirm Delete" : "Delete Transaction"}
+              </button>
+              <button onClick={closeEditModal}
+                      disabled={editLoading}
+                      className="ml-auto h-[32px] px-3 rounded-md text-[12px] font-medium hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+                Cancel
+              </button>
+              <button onClick={saveEdit}
+                      disabled={editLoading}
+                      className="h-[32px] px-3.5 rounded-md text-[12px] font-medium text-white flex items-center gap-1.5 hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                      style={{ background: navColor }}>
+                {editLoading && (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                  </svg>
+                )}
+                {editLoading ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+          <style jsx global>{`@keyframes cmdk-rise { from { transform: translateY(-10px) scale(0.97); opacity: 0; } }`}</style>
+        </div>
       )}
     </div>
   );
