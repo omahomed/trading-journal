@@ -339,6 +339,31 @@ def load_summary(portfolio_name, status=None):
             return df
 
 
+def load_all_trade_ids_for_month(portfolio_name, ym):
+    """Return every trade_id in trades_summary for the given portfolio whose
+    Trade_ID starts with the YYYYMM prefix `ym`, INCLUDING soft-deleted rows.
+
+    This intentionally bypasses the deleted_at filter that load_summary
+    applies. Used by api/main.py:next_trade_id so generated trade_ids are
+    computed against the full historical sequence — recycling a soft-deleted
+    id silently merges a new campaign into a tombstoned summary row, which
+    is exactly the failure mode this helper exists to prevent.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.trade_id
+                FROM trades_summary s
+                JOIN portfolios p ON s.portfolio_id = p.id
+                WHERE p.name = %s
+                  AND s.trade_id LIKE %s
+                """,
+                (portfolio_name, f"{ym}-%"),
+            )
+            return [r[0] for r in cur.fetchall()]
+
+
 @ttl_cache(ttl=30, show_spinner=False)  # Cache for 30 seconds
 def load_details(portfolio_name, trade_id=None):
     """
@@ -670,9 +695,14 @@ def save_summary_row(portfolio_name, row_dict):
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            # Check if trade exists
+            # Check if trade exists. Soft-deleted rows are excluded so a
+            # recycled trade_id never silently UPDATEs a tombstoned summary —
+            # the INSERT branch runs instead, where the schema's
+            # unique_trade_per_portfolio constraint surfaces the duplicate
+            # as a loud IntegrityError. See fix/trade-id-soft-delete-safety.
             cur.execute(
-                "SELECT id FROM trades_summary WHERE portfolio_id = %s AND trade_id = %s",
+                "SELECT id FROM trades_summary "
+                "WHERE portfolio_id = %s AND trade_id = %s AND deleted_at IS NULL",
                 (portfolio_id, row_dict.get('Trade_ID'))
             )
             existing = cur.fetchone()
