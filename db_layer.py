@@ -1460,6 +1460,79 @@ def delete_lot_closures_for_trade(portfolio_name, trade_id):
             conn.commit()
 
 
+def load_lot_closures(portfolio_name, trade_id=None, trade_ids=None):
+    """Load lot_closures rows for a portfolio, optionally filtered.
+
+    Args:
+        portfolio_name: Portfolio name (e.g. 'CanSlim')
+        trade_id: If given, return only rows for this single trade
+        trade_ids: If given (and trade_id is None), return rows for this set
+                   of trades — used by batch endpoints to fetch closures for
+                   the same slice of trades they're returning details for.
+        If neither filter is given, returns ALL closures for the portfolio.
+
+    Returns:
+        DataFrame with columns: trade_id, buy_trx_id, sell_trx_id, shares,
+        buy_price, sell_price, multiplier, realized_pl, closed_at.
+
+    No deleted_at filter — lot_closures has no soft-delete column. The
+    recompute path keeps rows current via DELETE-then-INSERT in
+    save_summary_with_closures, so any row present is authoritative.
+    Empty DataFrame returned when no rows match (or for the 6 deferred
+    trades that haven't been backfilled).
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            base_query = """
+                SELECT trade_id, buy_trx_id, sell_trx_id,
+                       shares, buy_price, sell_price,
+                       multiplier, realized_pl, closed_at
+                FROM lot_closures
+                WHERE portfolio_id = %s
+            """
+            params = [portfolio_id]
+
+            if trade_id is not None:
+                base_query += " AND trade_id = %s"
+                params.append(trade_id)
+            elif trade_ids is not None:
+                if not trade_ids:
+                    # Empty list filter → no rows can match. Skip the SQL
+                    # round-trip and return an empty frame with the right
+                    # columns so callers can iterate without special cases.
+                    return pd.DataFrame(columns=[
+                        "trade_id", "buy_trx_id", "sell_trx_id",
+                        "shares", "buy_price", "sell_price",
+                        "multiplier", "realized_pl", "closed_at",
+                    ])
+                placeholders = ",".join(["%s"] * len(trade_ids))
+                base_query += f" AND trade_id IN ({placeholders})"
+                params.extend(trade_ids)
+
+            base_query += " ORDER BY trade_id, closed_at, id"
+
+            cur.execute(base_query, tuple(params))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+
+    df = pd.DataFrame(rows, columns=columns)
+
+    # Coerce Decimal columns to float so JSON serialization downstream
+    # produces numbers, not strings. Same pattern load_summary uses.
+    if not df.empty:
+        for col in ("shares", "buy_price", "sell_price", "multiplier", "realized_pl"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+
 def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> str:
     """Return the lowest-numbered unused trx_id matching ^{prefix}\\d+$ in
     (portfolio_id, trade_id), e.g. 'B2' or 'S5'. Skips gaps already filled.
