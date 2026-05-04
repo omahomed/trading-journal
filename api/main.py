@@ -45,6 +45,7 @@ from trade_calc import (
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns as _normalize_journal,
+    validate_post_edit_lifo,
 )
 
 
@@ -2868,6 +2869,24 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
 
         shares = float(body.get("shares") or 0)
         amount = float(body.get("amount") or 0)
+        proposed_date = str(body.get("date", "") or "")
+        proposed_action = str(body.get("action", "") or "").upper()
+
+        # LIFO-safety check: simulate the post-edit state and reject before
+        # we commit if the edit would leave any SELL shares unmatched. The
+        # recompute path that runs after a successful UPDATE silently drops
+        # unmatched sells, producing wrong realized_pl with no error surface
+        # — six production trades carried bad data because of this gap.
+        if effective_trade_id and not df_d.empty:
+            txns_for_trade = df_d[df_d["trade_id"] == effective_trade_id] \
+                if "trade_id" in df_d.columns else df_d.iloc[0:0]
+            err = validate_post_edit_lifo(
+                txns_for_trade, int(detail_id),
+                proposed_action, shares, amount, proposed_date,
+            )
+            if err:
+                return {"error": err}
+
         # Recompute value server-side so detail.value stays consistent with
         # shares × amount × multiplier regardless of what the form posted.
         value = round(shares * amount * multiplier, 2)
@@ -2929,6 +2948,10 @@ def delete_transaction_endpoint(request: Request,
         # Client values still win when supplied; row values are the fallback.
         effective_trade_id = trade_id
         effective_ticker = ticker
+        # Pre-initialize so the LIFO validator below can rely on df_d being
+        # defined even when the inner load fails (the bare except below would
+        # otherwise leave it unbound).
+        df_d = pd.DataFrame()
         try:
             df_d = db.load_details(portfolio)
             if not df_d.empty:
@@ -2944,6 +2967,19 @@ def delete_transaction_endpoint(request: Request,
             # Lookup failure is non-fatal — the delete below will still run,
             # and if we end up without a trade_id the recompute is skipped.
             pass
+
+        # LIFO-safety check (same rationale as edit_transaction_endpoint):
+        # reject deletions that would leave SELL shares unmatched, before we
+        # soft-delete the row.
+        if effective_trade_id and not df_d.empty:
+            txns_for_trade = df_d[df_d["trade_id"] == effective_trade_id] \
+                if "trade_id" in df_d.columns else df_d.iloc[0:0]
+            err = validate_post_edit_lifo(
+                txns_for_trade, int(detail_id),
+                "DELETE", 0.0, 0.0, "",
+            )
+            if err:
+                return {"error": err}
 
         try:
             db.delete_detail_row(portfolio, int(detail_id))
