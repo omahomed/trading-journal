@@ -1530,7 +1530,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           with this modal under current UI flows. If a future feature
           opens both, this layering needs revisiting. */}
       {editingTxn && (
-        <div className="fixed inset-0 z-[100] grid place-items-start justify-center pt-[10vh]"
+        <div data-testid="tj-edit-modal-backdrop"
+             className="fixed inset-0 z-[100] grid place-items-start justify-center pt-[10vh]"
              style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
              onClick={() => { if (!editLoading) closeEditModal(); }}>
           <div className="w-[640px] max-w-[92vw] rounded-[14px] overflow-hidden"
