@@ -67,14 +67,14 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
       api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 2000).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
     ]).then(([closed, open, journal, details]) => {
       setAllTrades(closed as TradePosition[]);
       const openArr = open as TradePosition[];
       setOpenCount(openArr.length);
       setOpenTrades(openArr);
       setJournalHistory(journal as any[]);
-      setAllDetails(details as TradeDetail[]);
+      setAllDetails(details.details);
       // Fetch trade lessons
       api.getTradeLessons(getActivePortfolio()).then(r => { if (r.lessons) setLessons(r.lessons); }).catch(() => {});
       setLoading(false);

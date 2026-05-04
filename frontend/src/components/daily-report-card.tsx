@@ -92,12 +92,12 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
   useEffect(() => {
     Promise.all([
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => ({ details: [], lot_closures: [] })),
       api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
     ]).then(([hist, det, closed]) => {
       const h = (hist as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
       setHistory(h);
-      setDetails(det as TradeDetail[]);
+      setDetails(det.details);
       setClosedTrades(closed as TradePosition[]);
       if (h.length > 0) {
         const match = dateParam && h.find(d => String(d.day).slice(0, 10) === dateParam);

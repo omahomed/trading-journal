@@ -33,12 +33,12 @@ export function TradingOverview({ navColor }: { navColor: string }) {
     Promise.all([
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 10).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 10).catch(() => ({ details: [], lot_closures: [] })),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
     ]).then(async ([hist, cl, rec, open]) => {
       setHistory(hist as JournalHistoryPoint[]);
       setClosed(cl as TradePosition[]);
-      setRecent(rec as any[]);
+      setRecent(rec.details);
       const openArr = open as TradePosition[];
       setOpenTrades(openArr);
 
@@ -48,7 +48,10 @@ export function TradingOverview({ navColor }: { navColor: string }) {
         try {
           const prices = await api.batchPrices(tickers);
           if (prices && !("error" in prices)) setLivePrices(prices);
-        } catch { /* fall back */ }
+        } catch (e) {
+          console.error("[trading-overview] price fetch failed:", e);
+          /* fall back */
+        }
       }
       setLoading(false);
     });

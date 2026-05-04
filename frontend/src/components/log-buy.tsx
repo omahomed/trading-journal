@@ -225,11 +225,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
       // V11 MCT state drives sizing mode. Replaces the legacy
       // /api/market/mfactor MA-stack heuristic. We only read `state`.
       api.rallyPrefix().catch(() => ({ prefix: "" })),
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
     ]).then(([j, open, rally, det]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
-      setAllDetails(det as TradeDetail[]);
+      setAllDetails(det.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
       setMctState(stateStr);
       setSizingMode(mctStateToSizingMode(stateStr));
