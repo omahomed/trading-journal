@@ -182,3 +182,74 @@ def compute_lifo_summary(
         "Return_Pct": float(round(return_pct, 4)),
     }
     return (summary, closures) if with_closures else summary
+
+
+def validate_post_edit_lifo(
+    txns_for_trade: pd.DataFrame,
+    detail_id: int,
+    proposed_action: str,
+    proposed_shares: float,
+    proposed_amount: float,
+    proposed_date: str,
+) -> str | None:
+    """Detect LIFO-breaking edits BEFORE the underlying detail UPDATE/DELETE
+    commits. Returns an error message when the proposed edit would leave SELL
+    shares unmatched (gross under-allocation OR chronological mismatch where a
+    SELL precedes its only supporting BUY); returns None if the edit is safe.
+
+    Why this exists: the recompute path silently drops unmatched SELLs
+    (compute_lifo_summary's `while to_sell > 0 and inventory:` loop just exits
+    when inventory empties), which produces undetectable wrong realized_pl on
+    the campaign card. Six production trades carried bad data because of
+    edits that pre-dated this guard.
+
+    `proposed_action` is "BUY" / "SELL" for an edit, or "DELETE" to simulate
+    soft-deleting the row. If the caller omits action (empty string), we fall
+    back to the existing row's action — Trade Manager and Trade Journal both
+    send it today, but this protects against partial-edit callers that would
+    otherwise simulate a blank-action row and silently drop the buy's
+    inventory contribution. `txns_for_trade` is the current detail rows for
+    the campaign (already filtered to one trade_id). For "DELETE", the other
+    proposed_* args are ignored.
+    """
+    if txns_for_trade.empty or "detail_id" not in txns_for_trade.columns:
+        return None
+
+    txns = txns_for_trade.copy()
+    if proposed_action == "DELETE":
+        txns = txns[txns["detail_id"] != detail_id]
+    else:
+        mask = txns["detail_id"] == detail_id
+        if mask.any():
+            existing_action = ""
+            if "action" in txns.columns:
+                existing_action = str(txns.loc[mask, "action"].iloc[0] or "")
+            effective_action = proposed_action or existing_action
+            txns.loc[mask, "action"] = effective_action
+            txns.loc[mask, "shares"] = float(proposed_shares)
+            txns.loc[mask, "amount"] = float(proposed_amount)
+            if proposed_date:
+                txns.loc[mask, "date"] = proposed_date
+
+    if txns.empty:
+        return None  # Whole campaign goes away — caller cleans up summary.
+
+    result = compute_lifo_summary(
+        txns, trade_id="", ticker="", multiplier=1.0, with_closures=True,
+    )
+    if result is None:
+        return None
+    _summary, closures = result
+
+    sells = txns[txns["action"].astype(str).str.upper() == "SELL"]
+    if sells.empty:
+        return None
+    total_sell_shs = float(pd.to_numeric(sells["shares"], errors="coerce").fillna(0).sum())
+    matched_sell_shs = sum(float(c.get("shares", 0) or 0) for c in closures)
+    if matched_sell_shs + 0.0001 < total_sell_shs:
+        unmatched = total_sell_shs - matched_sell_shs
+        return (
+            f"This edit would leave {unmatched:g} sell shares unmatched by buys. "
+            f"Adjust or remove the sells first, or undo the buy deletion."
+        )
+    return None
