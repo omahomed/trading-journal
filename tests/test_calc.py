@@ -14,6 +14,7 @@ from trade_calc import (
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns,
+    validate_post_edit_lifo,
 )
 
 
@@ -255,3 +256,90 @@ class TestOptionsMultiplier:
         result = compute_lifo_summary(df, "T1", "AAPL")
         assert result["Realized_PL"] == 1000.0
         assert result["Total_Cost"] == 5000.0
+
+
+class TestValidatePostEditLifo:
+    """Pure-logic tests for the LIFO-breaking edit guard. No DB."""
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        df = pd.DataFrame(rows)
+        if "detail_id" not in df.columns:
+            df["detail_id"] = range(1, len(df) + 1)
+        return df
+
+    def test_delete_buy_with_referencing_sell_rejected(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        err = validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "")
+        assert err is not None
+        assert "unmatched" in err.lower()
+
+    def test_delete_sell_allowed(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        assert validate_post_edit_lifo(df, 2, "DELETE", 0, 0, "") is None
+
+    def test_delete_buy_when_no_sells_allowed(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-02", "action": "BUY", "shares": 50, "amount": 12.0},
+        ])
+        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+
+    def test_delete_buy_when_prior_buy_absorbs_sells_allowed(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 200, "amount": 8.0},
+            {"date": "2026-01-02", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        assert validate_post_edit_lifo(df, 2, "DELETE", 0, 0, "") is None
+
+    def test_edit_buy_shares_down_below_sells_rejected(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        err = validate_post_edit_lifo(df, 1, "BUY", 20, 10.0, "2026-01-01")
+        assert err is not None
+        assert "30" in err
+
+    def test_edit_buy_date_forward_past_sell_rejected(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        err = validate_post_edit_lifo(df, 1, "BUY", 100, 10.0, "2026-01-10")
+        assert err is not None
+
+    def test_edit_unrelated_field_allowed(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        assert validate_post_edit_lifo(df, 1, "BUY", 100, 12.50, "2026-01-01") is None
+
+    def test_empty_action_falls_back_to_existing(self) -> None:
+        # Caller omits `action`. Validator should treat the row as keeping
+        # its existing action (BUY) instead of simulating a blank-action
+        # row that loses its inventory contribution. Today's callers always
+        # send action, but this guard protects future partial-edit callers.
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
+        ])
+        assert validate_post_edit_lifo(df, 1, "", 100, 10.0, "2026-01-01") is None
+
+    def test_empty_txns_allowed(self) -> None:
+        df = pd.DataFrame(columns=["date", "action", "shares", "amount", "detail_id"])
+        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+
+    def test_delete_only_remaining_txn_allowed(self) -> None:
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
+        ])
+        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
