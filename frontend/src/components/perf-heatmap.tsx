@@ -31,12 +31,12 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
       api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 2000).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
     ]).then(([closed, open, jrnl, details]) => {
       setTrades(closed as TradePosition[]);
       setOpenTrades(open as TradePosition[]);
       setJournal(jrnl as JournalHistoryPoint[]);
-      setAllDetails(details as TradeDetail[]);
+      setAllDetails(details.details);
       setLoading(false);
     });
   }, []);

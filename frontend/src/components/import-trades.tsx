@@ -101,10 +101,10 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
 
   const loadContext = async () => {
     const [details, open] = await Promise.all([
-      api.tradesRecent(getActivePortfolio(), 500).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch(() => ({ details: [], lot_closures: [] })),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
     ]);
-    setTodayDetails(details as TradeDetail[]);
+    setTodayDetails(details.details);
     setOpenTrades(open as TradePosition[]);
   };
 

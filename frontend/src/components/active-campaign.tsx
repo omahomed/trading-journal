@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle } from "@/lib/api";
 import { runLifoEngine } from "@/lib/lifo";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
@@ -405,7 +405,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     try {
       const [openTrades, details, nlv, journal] = await Promise.all([
         api.tradesOpen(getActivePortfolio()).catch(() => []),
-        api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+        api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
         activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
         api.journalLatest(getActivePortfolio()).catch(() => null),
       ]);
@@ -423,14 +423,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           if (result && !("error" in result)) {
             prices = result;
           }
-        } catch {
+        } catch (e) {
+          console.error("[active-campaign] price fetch failed:", e);
           /* keep entry prices as fallback */
         }
       }
 
       const payload: ACSCache = {
         openTrades: openTrades as TradePosition[],
-        details: details as TradeDetail[],
+        details: (details as TradeDetailsBundle).details,
         equity: eq,
         livePrices: prices,
       };
@@ -442,7 +443,8 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       setLastUpdateMs(now);
       lastFetchAtRef.current = now;
       setRefetchError(false);
-    } catch {
+    } catch (e) {
+      console.error("[active-campaign] refresh failed:", e);
       setRefetchError(true);
     } finally {
       setLoading(false);

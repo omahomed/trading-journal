@@ -235,7 +235,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     Promise.all([
       api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
       api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => []),
+      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
       // V11 MCT state drives default sizing mode. Replaces the legacy
       // /api/market/mfactor MA-stack heuristic. rallyPrefix returns
       // {state: POWERTREND|UPTREND|RALLY MODE|CORRECTION, ...}; we
@@ -245,7 +245,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     ]).then(([j, open, details, rally, pyrCfg]) => {
       setEquity(parseFloat(String((j as any).end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
-      setAllDetails(details as TradeDetail[]);
+      setAllDetails(details.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
       setMctState(stateStr);
       // Only auto-apply when the user hasn't manually overridden — but on
