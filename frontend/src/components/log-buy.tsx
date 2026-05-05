@@ -211,6 +211,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [stopMode, setStopMode] = useState<"price" | "pct">("pct");
   const [stopValue, setStopValue] = useState("");
   const [slPct, setSlPct] = useState("5.0");
+  // For options the stop-loss field is hidden by default — premium-based
+  // stops don't follow the < 8% stock convention, and 50% is a placeholder
+  // not a meaningful default. The user can reveal it via "Show stop loss".
+  // Reset to true for stocks via the ticker-keyed effect below.
+  const [showStopLoss, setShowStopLoss] = useState(true);
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -277,6 +282,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
     const isOptionTicker = /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(ticker.trim());
     if (isOptionTicker && slPct === "5.0") setSlPct("50");
     if (!isOptionTicker && slPct === "50") setSlPct("5.0");
+  }, [ticker]);
+
+  // Stop-loss visibility tracks ticker shape: hide for options, show for
+  // stocks. Kept separate from the slPct flip above so each effect stays
+  // single-purpose. The "Show stop loss" link sets this true; switching
+  // back to a stock ticker re-defaults to true (which is a no-op if it
+  // was already true from a prior reveal).
+  useEffect(() => {
+    const isOptionTicker = /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(ticker.trim());
+    setShowStopLoss(!isOptionTicker);
   }, [ticker]);
 
   // Auto-fetch price when ticker changes (debounced)
@@ -455,8 +470,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
     if (!rule.trim()) e.push("Buy Rule is required");
     if (sharesNum <= 0) e.push("Shares must be > 0");
     if (priceNum <= 0) e.push("Price must be > 0");
-    if (stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
-    if (stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
+    // Stop-related checks skip when the user has opted into no-stop
+    // (showStopLoss=false, only possible for options). The < 8%
+    // recommendation is additionally suppressed for any option ticker
+    // even when revealed — it's a stock-price-distance heuristic that
+    // doesn't translate to premium-based stops.
+    if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
+    if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
     if (posSizePct > 25) e.push(`Position size ${posSizePct.toFixed(1)}% exceeds 25% max`);
     if (riskViolation) w.push(`Risk $${riskDollars.toFixed(0)} > Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)}`);
     setErrors(e); setWarnings(w);
@@ -479,7 +499,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
         trade_id: actionType === "scalein" ? selectedCampaign : tradeId,
         shares: parseFloat(shares),
         price: parseFloat(price),
-        stop_loss: stopMode === "price" ? parseFloat(stopValue) : parseFloat(price) * (1 - parseFloat(slPct) / 100),
+        stop_loss: showStopLoss
+          ? (stopMode === "price" ? parseFloat(stopValue) : parseFloat(price) * (1 - parseFloat(slPct) / 100))
+          : null,
         rule,
         notes,
         date: date,
@@ -620,24 +642,33 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </div>
             )}
 
-            {/* Stop Loss */}
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Stop Loss Mode">
-                <div className="flex gap-4 mt-1">
-                  <Radio checked={stopMode === "price"} onClick={() => setStopMode("price")} label="Price Level ($)" />
-                  <Radio checked={stopMode === "pct"} onClick={() => setStopMode("pct")} label="Percentage (%)" />
-                </div>
-              </Field>
-              <Field label={stopMode === "price" ? "Stop Price ($)" : "Stop Loss %"}>
-                {stopMode === "price" ? (
-                  <input type="number" value={stopValue} onChange={e => setStopValue(e.target.value)}
-                         step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
-                ) : (
-                  <input type="number" value={slPct} onChange={e => setSlPct(e.target.value)}
-                         step="0.5" placeholder="5.0" className={inputCls} style={inputStyle} />
-                )}
-              </Field>
-            </div>
+            {/* Stop Loss — hidden by default for options; revealed via the
+                small link below. Stock trades always render the full block. */}
+            {showStopLoss ? (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Stop Loss Mode">
+                  <div className="flex gap-4 mt-1">
+                    <Radio checked={stopMode === "price"} onClick={() => setStopMode("price")} label="Price Level ($)" />
+                    <Radio checked={stopMode === "pct"} onClick={() => setStopMode("pct")} label="Percentage (%)" />
+                  </div>
+                </Field>
+                <Field label={stopMode === "price" ? "Stop Price ($)" : "Stop Loss %"}>
+                  {stopMode === "price" ? (
+                    <input type="number" value={stopValue} onChange={e => setStopValue(e.target.value)}
+                           step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
+                  ) : (
+                    <input type="number" value={slPct} onChange={e => setSlPct(e.target.value)}
+                           step="0.5" placeholder="5.0" className={inputCls} style={inputStyle} />
+                  )}
+                </Field>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setShowStopLoss(true)}
+                      className="self-start text-[12px] hover:underline cursor-pointer"
+                      style={{ color: "var(--ink-4)", background: "transparent", border: "none", padding: 0 }}>
+                Show stop loss
+              </button>
+            )}
 
             {/* Notes */}
             <Field label="Buy Rationale (Notes)">
