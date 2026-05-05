@@ -678,7 +678,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     {
       label: "NLV",
       value: fmtMoney(equity, { maximumFractionDigits: 2 }),
-      sub: equity > 0 ? "End-of-day journal" : "—",
+      sub: equity > 0
+        ? `Holdings Value · ${fmtMoney(equityExposureDollar + optionsExposureDollar, { maximumFractionDigits: 2 })}`
+        : "—",
       gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)",
     },
     {
