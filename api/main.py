@@ -2249,14 +2249,19 @@ Give me a behavioral profile and 3 specific things to work on."""
 # ============================================================
 @app.get("/api/trades/next-id")
 def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
-    """Generate next available trade ID for a given month."""
+    """Generate next available trade ID for a given month.
+
+    Counts BOTH active and soft-deleted summaries when computing
+    max(seq) + 1, so a deleted trade_id is never recycled to a new
+    campaign. Gaps in the visible sequence are expected and recoverable —
+    any missing number corresponds to a soft-deleted summary, queryable
+    via WHERE deleted_at IS NOT NULL.
+    """
     try:
         if not date:
             date = datetime.now().strftime("%Y-%m-%d")
         ym = pd.Timestamp(date).strftime("%Y%m")
-        df_s = db.load_summary(portfolio)
-        df_s = _normalize_trades(df_s)
-        existing = df_s[df_s["trade_id"].str.startswith(ym)]["trade_id"].tolist() if not df_s.empty else []
+        existing = db.load_all_trade_ids_for_month(portfolio, ym)
         seqs = []
         for x in existing:
             try:
