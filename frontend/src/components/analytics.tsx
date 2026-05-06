@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 // Pure CSS bar chart — no Recharts dependency
 
 type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns";
@@ -184,6 +185,26 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [campGrade, setCampGrade] = useState<"all" | "unrated" | "1" | "2" | "3" | "4" | "5">("all");
   const [campSort, setCampSort] = useState<{ col: string; asc: boolean }>({ col: "open", asc: false });
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [pricesStale, setPricesStale] = useState(false);
+
+  useEffect(() => {
+    if (openTrades.length === 0) return;
+    const tickers = [...new Set(openTrades.map(t => t.ticker).filter(Boolean))];
+    if (tickers.length === 0) return;
+    api.batchPrices(tickers, getActivePortfolio())
+      .then(prices => { setLivePrices(prices); setPricesStale(false); })
+      .catch(() => setPricesStale(true));
+  }, [openTrades]);
+
+  const enrichedOpen = useMemo(
+    () => computeEnrichedPositions(openTrades, allDetails, 0, livePrices),
+    [openTrades, allDetails, livePrices]
+  );
+  const enrichedById = useMemo(
+    () => Object.fromEntries(enrichedOpen.map(p => [p.trade_id, p])) as Record<string, EnrichedPosition>,
+    [enrichedOpen]
+  );
 
   // Rule stats — always 2026 for buy/sell rules (matching Streamlit)
   const ruleStats = useMemo(() => {
@@ -260,7 +281,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Analytics & <em className="italic" style={{ color: navColor }}>Audit</em>
         </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{trades.length} closed trades · {scope === "2026" ? "2026" : "Life to Date"}</div>
+        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{openCount} open · {allTrades.length} closed · {openCount + allTrades.length} total</div>
       </div>
 
       {/* Tabs */}
@@ -1372,7 +1393,9 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
           let ret = parseFloat(String(t.return_pct || 0));
           if (ret === 0 && entry > 0 && exit > 0) ret = ((exit - entry) / entry) * 100;
           const rb = parseFloat(String(t.risk_budget || 0));
-          const pl = parseFloat(String(t.realized_pl || 0));
+          const realizedPl = parseFloat(String(t.realized_pl || 0));
+          const isOpen = (t.status || "").toUpperCase() === "OPEN";
+          const pl = isOpen ? (enrichedById[t.trade_id]?.overall_pl ?? 0) : realizedPl;
           const rMult = rb > 0 ? pl / rb : 0;
           switch (sortKey) {
             case "ticker": return (t.ticker || "").toUpperCase();
@@ -1397,17 +1420,70 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
           return sortAsc ? cmp : -cmp;
         });
 
-        // Flight deck stats
-        const fdTrades = campTicker ? filtered : filtered;
-        const fdTotal = fdTrades.length;
-        const fdWins = fdTrades.filter(t => parseFloat(String(t.realized_pl || 0)) > 0).length;
-        const fdLosses = fdTrades.filter(t => parseFloat(String(t.realized_pl || 0)) < 0).length;
-        const fdPl = fdTrades.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
-        const fdWinRate = fdTotal > 0 ? (fdWins / fdTotal) * 100 : 0;
-        const fdAvgPl = fdTotal > 0 ? fdPl / fdTotal : 0;
-        const fdGrossW = fdTrades.filter(t => parseFloat(String(t.realized_pl || 0)) > 0).reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
-        const fdGrossL = Math.abs(fdTrades.filter(t => parseFloat(String(t.realized_pl || 0)) < 0).reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0));
-        const fdPf = fdGrossL > 0 ? fdGrossW / fdGrossL : 0;
+        // Flight deck — adaptive by visible filtered set
+        const filteredOpen = filtered.filter(t => (t.status || "").toUpperCase() === "OPEN");
+        const filteredClosed = filtered.filter(t => (t.status || "").toUpperCase() === "CLOSED");
+        const enrichedFilteredOpen = filteredOpen
+          .map(t => enrichedById[t.trade_id])
+          .filter(Boolean) as EnrichedPosition[];
+
+        const fdMode: "open" | "closed" | "mixed" =
+          filteredClosed.length === 0 && filteredOpen.length > 0 ? "open"
+          : filteredOpen.length === 0 && filteredClosed.length > 0 ? "closed"
+          : "mixed";
+
+        // Closed-mode metrics (scoped to filteredClosed only)
+        const cWins = filteredClosed.filter(t => parseFloat(String(t.realized_pl || 0)) > 0);
+        const cLosses = filteredClosed.filter(t => parseFloat(String(t.realized_pl || 0)) < 0);
+        const cPl = filteredClosed.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
+        const cWinRate = filteredClosed.length > 0 ? (cWins.length / filteredClosed.length) * 100 : 0;
+        const cAvgPl = filteredClosed.length > 0 ? cPl / filteredClosed.length : 0;
+        const cGrossW = cWins.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
+        const cGrossL = Math.abs(cLosses.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0));
+        const cPf = cGrossL > 0 ? cGrossW / cGrossL : 0;
+
+        // Open-mode metrics
+        const oUnrealized = enrichedFilteredOpen.reduce((a, p) => a + p.unrealized_pl, 0);
+        const oInProfit = enrichedFilteredOpen.filter(p => p.unrealized_pl > 0).length;
+        const oInLoss = enrichedFilteredOpen.filter(p => p.unrealized_pl < 0).length;
+        const oAvgUnrl = enrichedFilteredOpen.length > 0 ? oUnrealized / enrichedFilteredOpen.length : 0;
+        const oCurrentVal = enrichedFilteredOpen.reduce((a, p) => a + p.current_value, 0);
+        const oAvgDays = enrichedFilteredOpen.length > 0
+          ? enrichedFilteredOpen.reduce((a, p) => a + p.days_held, 0) / enrichedFilteredOpen.length : 0;
+
+        // Mixed-mode metrics — total economic outcome across both
+        const mRealized = cPl + enrichedFilteredOpen.reduce((a, p) => a + p.realized_bank, 0);
+        const mUnrealized = enrichedFilteredOpen.reduce((a, p) => a + p.unrealized_pl, 0);
+        const mTotal = mRealized + mUnrealized;
+
+        const fmt$ = (n: number) =>
+          `$${n >= 0 ? "+" : ""}${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        const fmt$Plain = (n: number) =>
+          `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+        type Tile = { k: string; v: string; sub?: string; color?: string };
+        const tiles: Tile[] = fdMode === "closed" ? [
+          { k: "Trades",        v: String(filtered.length) },
+          { k: "Net P&L",       v: fmt$(cPl), color: pctColor(cPl) },
+          { k: "Win Rate",      v: `${cWinRate.toFixed(0)}%`, color: cWinRate >= 50 ? "#08a86b" : "#e5484d" },
+          { k: "Avg P&L",       v: fmt$(cAvgPl), color: pctColor(cAvgPl) },
+          { k: "Profit Factor", v: cPf.toFixed(2) },
+          { k: "W / L",         v: `${cWins.length}W · ${cLosses.length}L` },
+        ] : fdMode === "open" ? [
+          { k: "Trades",             v: String(filtered.length) },
+          { k: "Unrealized P&L",     v: fmt$(oUnrealized), color: pctColor(oUnrealized) },
+          { k: "In Profit / Loss",   v: `${oInProfit} · ${oInLoss}` },
+          { k: "Avg Unrealized P&L", v: fmt$(oAvgUnrl), color: pctColor(oAvgUnrl) },
+          { k: "Total Value",        v: fmt$Plain(oCurrentVal) },
+          { k: "Avg Days Held",      v: oAvgDays.toFixed(0) },
+        ] : [
+          { k: "Trades",         v: String(filtered.length) },
+          { k: "Total P&L",      v: fmt$(mTotal), color: pctColor(mTotal) },
+          { k: "Closed / Open",  v: `${filteredClosed.length} · ${filteredOpen.length}` },
+          { k: "Win Rate",       v: `${cWinRate.toFixed(0)}%`, sub: "closed only", color: cWinRate >= 50 ? "#08a86b" : "#e5484d" },
+          { k: "Net Realized",   v: fmt$(mRealized), color: pctColor(mRealized) },
+          { k: "Net Unrealized", v: fmt$(mUnrealized), color: pctColor(mUnrealized) },
+        ];
 
         // Unique tickers for filter dropdown
         const allTickers = [...new Set(allCampaigns.map(t => t.ticker).filter(Boolean))].sort();
@@ -1470,22 +1546,24 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             </div>
 
             {/* Flight Deck */}
+            {pricesStale && fdMode !== "closed" && (
+              <div className="text-[11px] mb-2 px-3 py-1.5 rounded-[8px]"
+                   style={{ background: "color-mix(in oklab, #d97706 10%, var(--surface))", color: "#92400e", border: "1px solid color-mix(in oklab, #d97706 20%, var(--border))" }}>
+                ⚠️ Live prices unavailable — using cost basis for open trades
+              </div>
+            )}
             <div className="rounded-[14px] overflow-hidden mb-5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div className="px-5 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>
-                Flight Deck {campTicker ? `— ${campTicker}` : "— All"}
+                Flight Deck {campTicker ? `— ${campTicker}` : "— All"} · {fdMode === "open" ? "Open" : fdMode === "closed" ? "Closed" : "Mixed"}
               </div>
               <div className="grid grid-cols-6 divide-x" style={{ borderColor: "var(--border)" }}>
-                {[
-                  { k: "Trades", v: String(fdTotal) },
-                  { k: "Net P&L", v: `$${fdPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(fdPl) },
-                  { k: "Win Rate", v: `${fdWinRate.toFixed(0)}%`, color: fdWinRate >= 50 ? "#08a86b" : "#e5484d" },
-                  { k: "Avg P&L", v: `$${fdAvgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(fdAvgPl) },
-                  { k: "Profit Factor", v: fdPf.toFixed(2) },
-                  { k: "W / L", v: `${fdWins}W · ${fdLosses}L` },
-                ].map(m => (
+                {tiles.map(m => (
                   <div key={m.k} className="p-4 text-center">
                     <div className="text-[9px] uppercase tracking-[0.06em] font-bold" style={{ color: "var(--ink-4)" }}>{m.k}</div>
-                    <div className="text-[20px] font-extrabold mt-1 privacy-mask" style={{ fontFamily: mono, color: (m as any).color || "var(--ink)" }}>{m.v}</div>
+                    <div className="text-[20px] font-extrabold mt-1 privacy-mask" style={{ fontFamily: mono, color: m.color || "var(--ink)" }}>{m.v}</div>
+                    {m.sub && (
+                      <div className="text-[9px] mt-0.5" style={{ color: "var(--ink-4)" }}>{m.sub}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1511,11 +1589,12 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                     ))}
                   </tr></thead>
                   <tbody>{filtered.map((t, i) => {
-                    const pl = parseFloat(String(t.realized_pl || 0));
+                    const isOpen = (t.status || "").toUpperCase() === "OPEN";
+                    const realizedPl = parseFloat(String(t.realized_pl || 0));
+                    const pl = isOpen ? (enrichedById[t.trade_id]?.overall_pl ?? 0) : realizedPl;
                     const ret = parseFloat(String(t.return_pct || 0));
                     const rb = parseFloat(String(t.risk_budget || 0));
                     const rMult = rb > 0 ? pl / rb : null;
-                    const isOpen = (t.status || "").toUpperCase() === "OPEN";
 
                     // Enrich from details if summary has missing data
                     const txns = allDetails.filter(d => d.trade_id === t.trade_id);
