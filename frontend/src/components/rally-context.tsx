@@ -7,12 +7,14 @@ import {
   CartesianGrid, Tooltip, ReferenceLine, Legend,
 } from "recharts";
 
-// Persona benchmarks (% gain from FTD close, Day 1-25)
+// Persona benchmarks (% gain from pre-FTD close, Day 1 = FTD)
 const LIFE_CHANGER = [0.8,1.1,1.5,2.1,2.7,2.9,3.1,4.0,4.4,4.8,5.2,5.5,5.9,6.3,6.7,7.2,7.5,7.8,8.2,8.5,8.7,8.8,9.0,9.2,9.9];
 const MONEY_MAKER = [0.5,0.8,1.2,1.5,1.7,2.0,2.2,2.5,2.7,3.0,3.3,3.6,3.9,4.2,4.4,4.7,5.0,5.3,5.6,5.8,6.0,6.1,6.2,6.3,6.4];
 const SLOG = [0.3,0.4,0.5,0.7,0.8,0.9,1.0,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.6,1.7,1.9,2.0,2.0,2.0,2.0,2.1,2.1,2.2,2.2];
 const WHIPSAW = [0.1,-0.1,-0.3,-0.5,-0.6,-0.8,-0.9,-1.1,-1.3,-1.5,-1.9,-2.2,-2.6,-3.0,-3.4];
-const RALLY_2025 = [2.5,5.3,6.6,6.5,7.1,7.0,8.7,10.3,9.5,8.5,8.8,10.0,10.0,14.8,16.6,17.5,17.3,17.9,17.9,17.4,15.8,16.1,14.9,17.8,17.2];
+// 4/22/2025 historical reference line is now sourced from the backend
+// (data.historical_rally_2025) — recomputed under the same convention
+// as the user line. Hardcoded array removed.
 
 function nearestPersona(pct: number, dayIdx: number): string {
   if (dayIdx < 1 || dayIdx > 25) return "—";
@@ -27,7 +29,9 @@ function nearestPersona(pct: number, dayIdx: number): string {
 export function RallyContext({ navColor }: { navColor: string }) {
   const [rallyData, setRallyData] = useState<any>(null);
   const [rallyPoints, setRallyPoints] = useState<any[]>([]);
-  const [day0Close, setDay0Close] = useState(0);
+  const [historicalRally2025, setHistoricalRally2025] =
+    useState<{ day: number; date: string; close: number; pct: number }[]>([]);
+  const [dayBeforeFtdClose, setDayBeforeFtdClose] = useState(0);
   const [ftdDate, setFtdDate] = useState("");
   const [rallyLow, setRallyLow] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -48,8 +52,9 @@ export function RallyContext({ navColor }: { navColor: string }) {
         const data = await res.json();
         if (data.error) { setError(data.error); }
         else {
-          setDay0Close(data.day0_close || 0);
+          setDayBeforeFtdClose(data.day_before_ftd_close || 0);
           setRallyPoints(data.points || []);
+          setHistoricalRally2025(data.historical_rally_2025 || []);
           setRallyData(data);
         }
       } catch (e) { setError("Failed to fetch rally data"); }
@@ -62,17 +67,18 @@ export function RallyContext({ navColor }: { navColor: string }) {
     const days = Array.from({ length: 25 }, (_, i) => i + 1);
     return days.map(d => {
       const pt = rallyPoints.find((p: any) => p.day === d);
+      const hist = historicalRally2025.find(p => p.day === d);
       return {
         day: d,
         lifeChanger: LIFE_CHANGER[d - 1],
         moneyMaker: MONEY_MAKER[d - 1],
         slog: SLOG[d - 1],
         whipsaw: d <= 15 ? WHIPSAW[d - 1] : null,
-        rally2025: RALLY_2025[d - 1],
+        rally2025: hist ? hist.pct : null,
         current: pt ? pt.pct : null,
       };
     });
-  }, [rallyPoints]);
+  }, [rallyPoints, historicalRally2025]);
 
   const currentDay = rallyPoints.length;
   const currentPct = currentDay > 0 ? rallyPoints[currentDay - 1]?.pct || 0 : 0;
@@ -162,7 +168,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
           <div className="p-4 flex flex-col gap-3">
             {[
               { k: "Rally Day", v: `Day ${currentDay} of 25` },
-              { k: "Current Gain", v: `${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}%`, color: currentPct >= 0 ? "#08a86b" : "#e5484d", sub: `from FTD close $${day0Close.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
+              { k: "Current Gain", v: `${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}%`, color: currentPct >= 0 ? "#08a86b" : "#e5484d", sub: `from pre-FTD close $${dayBeforeFtdClose.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
               { k: "Tracking Toward", v: tracking, color: tracking === "Life Changer" ? "#08a86b" : tracking === "Whipsaw" ? "#e5484d" : "var(--ink)" },
               { k: "FTD Date", v: ftdDate },
             ].map(s => (
@@ -191,7 +197,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["Day", "Close", "% FTD"].map(h => (
+                    {["Day", "Close", "% Gain"].map(h => (
                       <th key={h} className="text-left px-3 py-1.5 text-[9px] uppercase tracking-[0.06em] font-semibold sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                     ))}
