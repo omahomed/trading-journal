@@ -524,9 +524,7 @@ export const api = {
 
   // Aggregated dashboard read view. Single source of truth: every
   // journal-derived field comes from the latest saved trading_journal row.
-  // The live computed NLV (compute_nlv) only feeds live_estimate_* — never
-  // exposure / drawdown / position-sizing math. See nlv_service.dashboard_metrics
-  // for the field-level contract.
+  // See nlv_service.dashboard_metrics for the field-level contract.
   dashboardMetrics: (id: number) =>
     fetchJSON<DashboardMetrics>(`/api/portfolios/${id}/dashboard-metrics`),
 
@@ -607,8 +605,7 @@ export interface PortfolioTwrReturns {
 
 // Aggregated dashboard read view — see nlv_service.dashboard_metrics for
 // the field-level contract. journal-derived fields are nullable (frontend
-// renders "—" or empty state when journal_available is false). live_estimate_*
-// fields are best-effort (compute_nlv may have failed or no anchor available).
+// renders "—" or empty state when journal_available is false).
 export interface DashboardMetrics {
   journal_available: boolean;
   as_of_date: string | null;
@@ -626,9 +623,5 @@ export interface DashboardMetrics {
   ytd_pct: number | null;
   ytd_pl_dollar: number | null;
   ytd_available: boolean;
-  live_estimate_nlv: number | null;
-  live_estimate_diff: number | null;
-  live_estimate_diff_pct: number | null;
-  live_estimate_unavailable: boolean;
   as_of: string;
 }

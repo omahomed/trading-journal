@@ -317,23 +317,17 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
 
     Architecturally this is the user-facing flip from "live computed NLV
     drives the dashboard" to "the broker-pulled, EOD-saved journal value
-    drives the dashboard". `compute_nlv()` survives only as the source of a
-    small "Live estimate: $X" sub-label on the NLV tile — its values never
-    feed exposure, drawdown, position sizing, or risk math.
+    drives the dashboard". Live yfinance prices no longer feed any field
+    on this response — exposure, drawdown, position sizing, and risk math
+    all read from journal.end_nlv.
 
-    Three classes of field in the response:
+    Two classes of field in the response:
 
     1. Journal-derived (always present when `journal_available: true`):
        nlv, total_holdings, exposure_pct, cash, drawdown_*, ltd_pct, ytd_pct,
        nlv_delta_*, as_of_date.
 
-    2. Live-estimate fields (best-effort): live_estimate_nlv,
-       live_estimate_diff, live_estimate_diff_pct. All None and
-       `live_estimate_unavailable: true` when compute_nlv() raises.
-       Per-position price gaps don't count as unavailable — compute_nlv
-       handles them via the cost-basis fallback.
-
-    3. State flags: journal_available, live_estimate_unavailable.
+    2. State flag: journal_available.
 
     Total Holdings is computed on read as `pct_invested × end_nlv / 100`.
     There's no `total_holdings` column; pct_invested is NUMERIC(10,4),
@@ -358,25 +352,18 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         "ytd_pct": None,
         "ytd_pl_dollar": None,
         "ytd_available": False,
-        "live_estimate_nlv": None,
-        "live_estimate_diff": None,
-        "live_estimate_diff_pct": None,
-        "live_estimate_unavailable": True,
         "as_of": now_iso,
     }
 
     journal_df = db.load_journal(portfolio_name)
     if journal_df is None or journal_df.empty:
-        # Compute the live estimate anyway — even with no journal we can
-        # surface "Live estimate: $X" so a brand-new account isn't a
-        # completely blank dashboard.
-        return {**empty, **_compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=None)}
+        return empty
 
     work = normalize_journal_columns(journal_df).copy()
     work["day"] = pd.to_datetime(work["day"], errors="coerce")
     work = work.dropna(subset=["day"]).sort_values("day").reset_index(drop=True)
     if work.empty:
-        return {**empty, **_compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=None)}
+        return empty
 
     for col in ("end_nlv", "pct_invested", "daily_dollar_change", "daily_pct_change"):
         if col in work.columns:
@@ -422,9 +409,6 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
     ltd_pl_dollar = _compute_ltd_pl_dollar(portfolio_id, journal_nlv)
     ytd_pl_dollar = _compute_ytd_pl_dollar(work, journal_nlv) if twr["twr_ytd_available"] else None
 
-    # Live estimate — best-effort, doesn't affect any other field.
-    live_fields = _compute_live_estimate_fields(portfolio_id, portfolio_name, journal_nlv=journal_nlv)
-
     as_of_date = latest["day"].date().isoformat() if pd.notna(latest["day"]) else None
 
     return {
@@ -444,7 +428,6 @@ def dashboard_metrics(portfolio_id: int, portfolio_name: str) -> dict[str, Any]:
         "ytd_pct": twr["twr_ytd_pct"],
         "ytd_pl_dollar": ytd_pl_dollar,
         "ytd_available": twr["twr_ytd_available"],
-        **live_fields,
         "as_of": now_iso,
     }
 
@@ -498,45 +481,3 @@ def _compute_ytd_pl_dollar(journal_df: pd.DataFrame, journal_nlv: float) -> floa
 
     cash_flows = float(year_rows.get("cash_change", pd.Series(dtype=float)).sum())
     return round(journal_nlv - baseline - cash_flows, 2)
-
-
-def _compute_live_estimate_fields(
-    portfolio_id: int, portfolio_name: str, *, journal_nlv: float | None,
-) -> dict[str, Any]:
-    """Best-effort `live_estimate_*` fields for the dashboard-metrics
-    response. Catches every exception compute_nlv can raise (DB errors,
-    yfinance outages, malformed positions) — failure here must NEVER
-    break the journal-driven part of the response. Per-position price
-    gaps inside compute_nlv are normal degraded mode (cost-basis
-    fallback) and don't count as unavailable.
-    """
-    try:
-        snapshot = compute_nlv(portfolio_id, portfolio_name)
-        live_nlv = float(snapshot.get("nlv") or 0.0)
-        if not math.isfinite(live_nlv):
-            raise ValueError("compute_nlv returned non-finite NLV")
-    except Exception:
-        return {
-            "live_estimate_nlv": None,
-            "live_estimate_diff": None,
-            "live_estimate_diff_pct": None,
-            "live_estimate_unavailable": True,
-        }
-
-    if journal_nlv is None or journal_nlv == 0:
-        # No anchor for diff; surface the live number alone, no diff %.
-        return {
-            "live_estimate_nlv": round(live_nlv, 2),
-            "live_estimate_diff": None,
-            "live_estimate_diff_pct": None,
-            "live_estimate_unavailable": False,
-        }
-
-    diff = live_nlv - journal_nlv
-    diff_pct = (diff / journal_nlv) * 100.0
-    return {
-        "live_estimate_nlv": round(live_nlv, 2),
-        "live_estimate_diff": round(diff, 2),
-        "live_estimate_diff_pct": round(diff_pct, 4),
-        "live_estimate_unavailable": False,
-    }

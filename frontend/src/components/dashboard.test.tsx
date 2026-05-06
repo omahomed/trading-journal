@@ -61,9 +61,7 @@ const mDash = vi.mocked(api.dashboardMetrics);
 function fullMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetrics {
   // Anchored on the user's actual prod data (verified live):
   // NLV $486,630.39, Total Holdings $917,498.79, Exposure 188.5%,
-  // LTD 286.51% TWR. The "Live estimate" is intentionally a hair higher
-  // than journal NLV — what you'd see if yfinance's intraday quotes
-  // moved positions up after the broker's EOD snapshot.
+  // LTD 286.51% TWR.
   return {
     journal_available: true,
     as_of_date: "2026-04-24",
@@ -81,10 +79,6 @@ function fullMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetric
     ytd_pct: 57.16,
     ytd_pl_dollar: 124363.00,
     ytd_available: true,
-    live_estimate_nlv: 487291.22,
-    live_estimate_diff: 660.83,
-    live_estimate_diff_pct: 0.14,
-    live_estimate_unavailable: false,
     as_of: "2026-04-27T13:30:00",
     ...overrides,
   };
@@ -111,43 +105,6 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupDefaults();
-  });
-
-  test("renders headline NLV from journal + 'Live estimate' as a subordinate sub-label", async () => {
-    mDash.mockResolvedValue(fullMetrics());
-
-    render(<Dashboard navColor="#6366f1" />);
-
-    // The big number on the NLV tile — sourced from journal, not from
-    // compute_nlv.
-    expect(await screen.findByText("$486,630")).toBeInTheDocument();
-
-    // The live estimate is rendered as the smaller second subtext line on
-    // the same tile (not as a peer KPI). data-testid pins it as the
-    // "extraSub" slot of the KPITile component.
-    const extraSubs = await screen.findAllByTestId("kpi-extra-sub");
-    const liveLine = extraSubs.find(el => /Live estimate/.test(el.textContent || ""));
-    expect(liveLine).toBeDefined();
-    expect(liveLine).toHaveTextContent("Live estimate: $487,291");
-    expect(liveLine).toHaveTextContent("(+$661, +0.14%)");
-  });
-
-  test("renders 'Live estimate: unavailable' when compute_nlv blew up", async () => {
-    mDash.mockResolvedValue(fullMetrics({
-      live_estimate_nlv: null,
-      live_estimate_diff: null,
-      live_estimate_diff_pct: null,
-      live_estimate_unavailable: true,
-    }));
-
-    render(<Dashboard navColor="#6366f1" />);
-
-    // Headline NLV still renders normally — journal-derived fields aren't
-    // affected by a live-estimate failure.
-    expect(await screen.findByText("$486,630")).toBeInTheDocument();
-    const extraSubs = await screen.findAllByTestId("kpi-extra-sub");
-    const liveLine = extraSubs.find(el => /Live estimate/.test(el.textContent || ""));
-    expect(liveLine).toHaveTextContent("Live estimate: unavailable");
   });
 
   test("removes pre-refactor disclaimer + Computed/Diff line", async () => {
@@ -252,10 +209,6 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
       ytd_pct: null,
       ytd_pl_dollar: null,
       ytd_available: false,
-      live_estimate_nlv: null,
-      live_estimate_diff: null,
-      live_estimate_diff_pct: null,
-      live_estimate_unavailable: true,
       as_of: "2026-04-27T13:30:00",
     });
     mLatest.mockResolvedValue(null as any);

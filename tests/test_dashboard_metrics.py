@@ -1,8 +1,8 @@
 """Tests for nlv_service.dashboard_metrics — the read view powering the
 dashboard refactor.
 
-Stubs db.load_journal + compute_nlv (via monkeypatch) so the tests run
-without a database. Mirrors the pattern in test_manual_price_override.py.
+Stubs db.load_journal (via monkeypatch) so the tests run without a
+database. Mirrors the pattern in test_manual_price_override.py.
 """
 from __future__ import annotations
 
@@ -30,36 +30,18 @@ def _journal_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=cols)
 
 
-def _live_snapshot(nlv: float = 487291.22, cash: float = -430868.40,
-                   market_value: float = 918159.62) -> dict[str, Any]:
-    """Canonical compute_nlv return shape for the happy path."""
-    return {
-        "cash": cash,
-        "market_value": market_value,
-        "nlv": nlv,
-        "positions": [],
-        "as_of": "2026-04-27T13:30:00",
-    }
-
-
 @pytest.fixture
 def stubbed(monkeypatch):
     """Yield (configure, run) — configure stubs, then run dashboard_metrics."""
     import nlv_service
 
     state: dict[str, Any] = {
-        "journal": None, "live": None, "live_raises": False,
+        "journal": None,
         "net_contributions": 0.0, "net_contrib_raises": False,
     }
 
     monkeypatch.setattr(nlv_service.db, "load_journal",
                         lambda name: state["journal"])
-
-    def fake_compute_nlv(pid, name):
-        if state["live_raises"]:
-            raise RuntimeError("yfinance unreachable")
-        return state["live"]
-    monkeypatch.setattr(nlv_service, "compute_nlv", fake_compute_nlv)
 
     def fake_net_contrib(pid):
         if state["net_contrib_raises"]:
@@ -67,12 +49,10 @@ def stubbed(monkeypatch):
         return state["net_contributions"]
     monkeypatch.setattr(nlv_service.db, "get_net_contributions", fake_net_contrib)
 
-    def configure(*, journal=None, live=None, live_raises: bool = False,
+    def configure(*, journal=None,
                   net_contributions: float = 0.0,
                   net_contrib_raises: bool = False):
         state["journal"] = journal
-        state["live"] = live
-        state["live_raises"] = live_raises
         state["net_contributions"] = net_contributions
         state["net_contrib_raises"] = net_contrib_raises
 
@@ -114,7 +94,6 @@ def test_total_holdings_round_trips_within_one_cent(stubbed):
              "cash_change": 0, "pct_invested": pct_invested_stored,
              "daily_dollar_change": 13496.0, "daily_pct_change": 2.85},
         ]),
-        live=_live_snapshot(),
     )
 
     out = run()
@@ -143,7 +122,6 @@ def test_full_journal_returns_all_journal_fields(stubbed):
              "cash_change": 0, "pct_invested": 188.5413,
              "daily_dollar_change": 6630.39, "daily_pct_change": 1.38},
         ]),
-        live=_live_snapshot(),
     )
 
     out = run()
@@ -173,7 +151,6 @@ def test_drawdown_when_current_below_peak(stubbed):
              "cash_change": 0, "pct_invested": 0,
              "daily_dollar_change": -25000.00, "daily_pct_change": -5.0},
         ]),
-        live=_live_snapshot(),
     )
 
     out = run()
@@ -194,7 +171,7 @@ def test_no_journal_entries_returns_empty_shape_with_flag(stubbed):
     response keys still exist (frontend can render with optional chains)
     but every journal field is None and `journal_available` is false."""
     configure, run = stubbed
-    configure(journal=pd.DataFrame(), live=_live_snapshot())
+    configure(journal=pd.DataFrame())
 
     out = run()
 
@@ -221,7 +198,6 @@ def test_first_journal_entry_has_null_deltas(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 0, "daily_pct_change": 0},
         ]),
-        live=_live_snapshot(),
     )
 
     out = run()
@@ -230,88 +206,6 @@ def test_first_journal_entry_has_null_deltas(stubbed):
     assert out["nlv"] == 486630.39
     assert out["nlv_delta_dollar"] is None
     assert out["nlv_delta_pct"] is None
-
-
-def test_live_estimate_fields_when_compute_nlv_succeeds(stubbed):
-    """Diff = live - journal; diff_pct = diff / journal * 100. The field
-    is what the NLV tile's small grey sub-label renders below the headline."""
-    configure, run = stubbed
-    configure(
-        journal=_journal_df([
-            {"day": "2026-04-24", "end_nlv": 486630.39, "beg_nlv": 0,
-             "cash_change": 0, "pct_invested": 100.0,
-             "daily_dollar_change": 0, "daily_pct_change": 0},
-        ]),
-        live=_live_snapshot(nlv=487291.22),
-    )
-
-    out = run()
-
-    assert out["live_estimate_unavailable"] is False
-    assert out["live_estimate_nlv"] == 487291.22
-    assert out["live_estimate_diff"] == round(487291.22 - 486630.39, 2)
-    # 660.83 / 486630.39 * 100 ≈ 0.1358%
-    assert abs(out["live_estimate_diff_pct"] - 0.1358) < 0.001
-
-
-def test_live_estimate_unavailable_when_compute_nlv_raises(stubbed):
-    """yfinance / DB / network blow-up in compute_nlv must not break the
-    journal-derived fields. live_estimate_unavailable=true is the contract."""
-    configure, run = stubbed
-    configure(
-        journal=_journal_df([
-            {"day": "2026-04-24", "end_nlv": 486630.39, "beg_nlv": 0,
-             "cash_change": 0, "pct_invested": 100.0,
-             "daily_dollar_change": 0, "daily_pct_change": 0},
-        ]),
-        live_raises=True,
-    )
-
-    out = run()
-
-    # Journal fields still populated
-    assert out["journal_available"] is True
-    assert out["nlv"] == 486630.39
-    # Live fields all None + the unavailable flag set
-    assert out["live_estimate_unavailable"] is True
-    assert out["live_estimate_nlv"] is None
-    assert out["live_estimate_diff"] is None
-    assert out["live_estimate_diff_pct"] is None
-
-
-def test_live_estimate_unavailable_does_not_block_no_journal_case(stubbed):
-    """No journal AND compute_nlv blew up — both classes of failure can
-    coexist; response is just the 'all fields null + flags true' shape."""
-    configure, run = stubbed
-    configure(journal=pd.DataFrame(), live_raises=True)
-
-    out = run()
-
-    assert out["journal_available"] is False
-    assert out["live_estimate_unavailable"] is True
-    assert out["nlv"] is None
-    assert out["live_estimate_nlv"] is None
-
-
-def test_live_estimate_no_anchor_when_journal_nlv_zero(stubbed):
-    """Defensive — a journal entry with end_nlv=0 (corrupted? test data?)
-    would divide-by-zero on diff_pct. Surface live nlv alone, no diff."""
-    configure, run = stubbed
-    configure(
-        journal=_journal_df([
-            {"day": "2026-04-24", "end_nlv": 0, "beg_nlv": 0,
-             "cash_change": 0, "pct_invested": 0,
-             "daily_dollar_change": 0, "daily_pct_change": 0},
-        ]),
-        live=_live_snapshot(nlv=487291.22),
-    )
-
-    out = run()
-
-    assert out["live_estimate_nlv"] == 487291.22
-    assert out["live_estimate_diff"] is None
-    assert out["live_estimate_diff_pct"] is None
-    assert out["live_estimate_unavailable"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +229,6 @@ def test_drawdown_peak_date_uses_first_occurrence(stubbed):
              "cash_change": 0, "pct_invested": 0,
              "daily_dollar_change": 10000, "daily_pct_change": 2.04},
         ]),
-        live=_live_snapshot(),
     )
 
     out = run()
@@ -363,7 +256,6 @@ def test_ltd_pl_dollar_uses_journal_nlv_minus_net_contributions(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 0, "daily_pct_change": 0},
         ]),
-        live=_live_snapshot(),
         net_contributions=146801.39,  # so ltd_pl_dollar = 339,829.00
     )
 
@@ -383,7 +275,6 @@ def test_ltd_pl_dollar_none_when_ledger_lookup_fails(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 0, "daily_pct_change": 0},
         ]),
-        live=_live_snapshot(),
         net_contrib_raises=True,
     )
 
@@ -417,7 +308,6 @@ def test_ytd_pl_dollar_uses_prior_year_end_baseline(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 4630.39, "daily_pct_change": 0.96},
         ]),
-        live=_live_snapshot(),
         net_contributions=146801.39,
     )
 
@@ -448,7 +338,6 @@ def test_ytd_pl_dollar_subtracts_intra_year_cash_flows(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 0, "daily_pct_change": 0},
         ]),
-        live=_live_snapshot(),
         net_contributions=450000,
     )
 
@@ -475,7 +364,6 @@ def test_ytd_pl_dollar_falls_back_to_first_current_year_beg_nlv(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 5000, "daily_pct_change": 3.45},
         ]),
-        live=_live_snapshot(),
         net_contributions=95000,
     )
 
@@ -499,7 +387,6 @@ def test_ytd_pl_dollar_none_when_no_current_year_rows(stubbed):
              "cash_change": 0, "pct_invested": 100.0,
              "daily_dollar_change": 0, "daily_pct_change": 0},
         ]),
-        live=_live_snapshot(),
         net_contributions=100000,
     )
 
@@ -515,7 +402,7 @@ def test_empty_journal_dollar_pl_fields_are_null(stubbed):
     response shape (frontend reads with optional chains; the keys must
     exist or we'd get TS narrowing surprises)."""
     configure, run = stubbed
-    configure(journal=pd.DataFrame(), live=_live_snapshot())
+    configure(journal=pd.DataFrame())
 
     out = run()
 

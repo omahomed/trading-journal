@@ -18,10 +18,9 @@ function formatSignedDollars(n: number): string {
   return `$${sign}${abs.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
-// KPI tile renders one or two subtext lines. The NLV tile uses `extraSub`
-// for the small grey "Live estimate: $X" diagnostic — visually subordinate
-// to the main `sub` so the user immediately sees which is "the number"
-// (journal/broker) and which is "the estimate" (live yfinance).
+// KPI tile renders one or two subtext lines. `extraSub` is an optional
+// secondary line rendered in smaller, dimmer type below the main `sub`
+// (e.g. the YTD tile uses it for the SPY/NDX benchmark row).
 function KPITile({ label, value, sub, extraSub, gradient }: {
   label: string;
   value: string;
@@ -181,9 +180,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
 
   // After this refactor: every KPI value below is sourced from the dashboard-
   // metrics endpoint, which itself reads journal.end_nlv as the single
-  // source of truth. The live compute_nlv() result appears ONLY as the NLV
-  // tile's "Live estimate: $X" subordinate sub-label — it doesn't feed
-  // exposure / drawdown / position sizing / risk math.
+  // source of truth.
   const journalAvailable = metrics?.journal_available ?? false;
   const nlv = metrics?.nlv ?? 0;
   const dailyDol = metrics?.nlv_delta_dollar;
@@ -216,30 +213,11 @@ export function Dashboard({ navColor }: { navColor: string }) {
     ? `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`
     : (journalAvailable ? "First entry — no prior day" : "Save your first daily routine");
 
-  // NLV tile extraSub — small grey "Live estimate" diagnostic. Three states:
-  //   1. compute_nlv unavailable → "Live estimate: unavailable"
-  //   2. available but no journal anchor → just the dollar value
-  //   3. available with anchor → value + diff in $ and %
-  let liveEstimateSub: string | undefined;
-  if (metrics?.live_estimate_unavailable) {
-    liveEstimateSub = "Live estimate: unavailable";
-  } else if (metrics?.live_estimate_nlv != null) {
-    const liveStr = `$${metrics.live_estimate_nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-    if (metrics.live_estimate_diff != null && metrics.live_estimate_diff_pct != null) {
-      const d = metrics.live_estimate_diff;
-      const dPct = metrics.live_estimate_diff_pct;
-      liveEstimateSub = `Live estimate: ${liveStr} (${d >= 0 ? "+" : ""}$${d.toLocaleString(undefined, { maximumFractionDigits: 0 })}, ${dPct >= 0 ? "+" : ""}${dPct.toFixed(2)}%)`;
-    } else {
-      liveEstimateSub = `Live estimate: ${liveStr}`;
-    }
-  }
-
   const kpis = [
     {
       label: "NET LIQ VALUE",
       value: journalAvailable ? `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—",
       sub: nlvSub,
-      extraSub: liveEstimateSub,
       gradient: "linear-gradient(135deg, #6366f1, #818cf8)",
     },
     {
