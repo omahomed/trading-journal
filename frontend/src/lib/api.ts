@@ -419,6 +419,22 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; trx_id?: string; realized_pl?: number; remaining_shares?: number; is_closed?: boolean }>,
 
+  // Exercise an open option: closes ALL held contracts on the option trade
+  // and either scales into an existing OPEN stock trade for the underlying
+  // or opens a new stock trade. Backend writes are atomic — see
+  // api/main.py:exercise_option for the contract.
+  exerciseOption: (body: { trade_id: string; date: string; notes?: string; portfolio?: string }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/exercise-option`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
+    }).then(r => r.json()) as Promise<{
+      status?: "ok"; error?: string;
+      option_trade_id?: string; stock_trade_id?: string;
+      stock_was_new?: boolean;
+      contracts_exercised?: number; shares_acquired?: number;
+      stock_entry_price?: number;
+    }>,
+
   deleteTransactionsByDate: (date: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/trades/delete-transactions-by-date?date=${encodeURIComponent(date)}&portfolio=${encodeURIComponent(portfolio)}`, {
       method: "DELETE",

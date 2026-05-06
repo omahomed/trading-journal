@@ -41,3 +41,35 @@ def to_occ_symbol(readable_ticker: str | None) -> str | None:
         return f"{underlying}{expiry}{put_call}{strike_int:08d}"
     except Exception:
         return None
+
+
+def parse_option_ticker(readable_ticker: str | None) -> dict | None:
+    """Parse a readable option ticker into its components.
+
+    Mirror of to_occ_symbol's parse step but returns the structured fields
+    instead of the OCC string — used by the exercise-option flow which
+    needs the underlying symbol and strike to construct the resulting
+    stock position.
+
+    Returns None for anything is_option_ticker would reject (malformed,
+    non-option, etc.) so the caller can branch on a single None check.
+
+    Example: "AMZN 270115 $270C" → {
+        "underlying": "AMZN", "expiry": "270115",
+        "strike": 270.0, "type": "C",
+    }
+    """
+    if not readable_ticker:
+        return None
+    try:
+        m = _OPTION_RE.match(readable_ticker.strip())
+        if not m:
+            return None
+        return {
+            "underlying": m.group(1),
+            "expiry": m.group(2),
+            "strike": float(m.group(3)),
+            "type": m.group(4),
+        }
+    except Exception:
+        return None
