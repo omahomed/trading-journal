@@ -25,6 +25,7 @@ from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
 import io
 import math
 import re
+from functools import lru_cache
 
 import psycopg2
 from fastapi.middleware.cors import CORSMiddleware
@@ -1369,10 +1370,67 @@ def rally_prefix(as_of_date: str = ""):
         return {"prefix": "", "error": str(e)}
 
 
+@lru_cache(maxsize=1)
+def _get_2025_historical_rally():
+    """Build the 4/22/2025 historical reference line under the new
+    convention (Day 1 = FTD, baseline = day-before-FTD close).
+
+    Anchored on the 2025-04-22 IXIC FTD. Uses ^IXIC (Nasdaq Composite) —
+    must match the index used by the user line so the comparison is
+    apples-to-apples. Hardcoded to ^IXIC here even when the live
+    rally-data endpoint receives a different `index` query parameter
+    (the historical reference is a fixed point of comparison, not a
+    function of the user's chosen index).
+
+    The data is immutable (past prices don't change) so we cache the
+    result for the lifetime of the worker process. A worker restart
+    re-fetches; on yfinance failure the caller catches and serves
+    historical_rally_2025 = None (graceful degradation).
+
+    Returns: list[{day, date, close, pct}] of length 25, where Day 1
+    is 2025-04-22 (the FTD itself) and Day 25 is 2025-05-27.
+    """
+    import yfinance as yf
+    df = yf.Ticker("^IXIC").history(start="2025-04-15", end="2025-06-15")
+    if df.empty:
+        raise RuntimeError("No data returned for ^IXIC 2025 historical fetch")
+
+    df.index = df.index.tz_localize(None) if df.index.tz else df.index
+    ftd_ts = pd.Timestamp("2025-04-22")
+    ftd_mask = df.index.date >= ftd_ts.date()
+    df_pre = df[~ftd_mask]
+    df_post = df[ftd_mask]
+    if df_pre.empty or df_post.empty:
+        raise RuntimeError("Missing pre- or post-FTD bars in 2025 historical fetch")
+
+    day_before_ftd_close = float(df_pre.iloc[-1]["Close"])
+    out = []
+    for i in range(0, min(len(df_post), 25)):
+        row = df_post.iloc[i]
+        pct = ((float(row["Close"]) / day_before_ftd_close) - 1) * 100
+        out.append({
+            "day": i + 1,
+            "date": df_post.index[i].strftime("%Y-%m-%d"),
+            "close": round(float(row["Close"]), 2),
+            "pct": round(pct, 2),
+        })
+    return out
+
+
 @app.get("/api/market/rally-data")
 @limiter.limit("25/minute")
 def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
-    """Fetch index closes from FTD through Day 25 for Rally Context chart."""
+    """Fetch index closes from FTD through Day 25 for Rally Context chart.
+
+    Day numbering: Day 1 = the FTD itself; baseline for the % gain column
+    is the day-before-FTD close (so Day 1's pct shows the FTD's own
+    session gain). Returns up to 25 trading days starting at the FTD.
+
+    Response also includes `historical_rally_2025` — the 4/22/2025 IXIC
+    reference line under the same convention — so the frontend can
+    overlay it without re-fetching. This field is `None` if the
+    historical fetch fails; the user line still renders.
+    """
     if not ftd_date:
         return {"error": "ftd_date required"}
     try:
@@ -1389,24 +1447,44 @@ def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
 
         df.index = df.index.tz_localize(None) if df.index.tz else df.index
         ftd_mask = df.index.date >= ftd_ts.date()
+        df_pre = df[~ftd_mask]
         df_post = df[ftd_mask]
         if df_post.empty:
             return {"error": f"No data on or after {ftd_date}"}
+        if df_pre.empty:
+            return {"error": f"No data on the trading day before {ftd_date} "
+                             f"(needed as baseline for the % gain column)"}
 
-        day0_close = float(df_post.iloc[0]["Close"])
+        # Baseline is the day-before-FTD close, not the FTD close.
+        # This means Day 1 (the FTD itself) carries its OWN session gain
+        # in the pct column rather than a +0.00% no-op.
+        day_before_ftd_close = float(df_pre.iloc[-1]["Close"])
         points = []
-        for i in range(1, min(len(df_post), 26)):
+        for i in range(0, min(len(df_post), 25)):
             row = df_post.iloc[i]
-            pct = ((float(row["Close"]) / day0_close) - 1) * 100
+            pct = ((float(row["Close"]) / day_before_ftd_close) - 1) * 100
             points.append({
-                "day": i,
+                "day": i + 1,
                 "date": df_post.index[i].strftime("%Y-%m-%d"),
                 "close": round(float(row["Close"]), 2),
                 "low": round(float(row["Low"]), 2),
                 "pct": round(pct, 2),
             })
 
-        return {"day0_close": round(day0_close, 2), "points": points}
+        # Historical 4/22/2025 reference line. Cached after first call;
+        # if the underlying yfinance fetch fails, degrade gracefully so
+        # the user line still renders.
+        try:
+            historical_rally_2025 = _get_2025_historical_rally()
+        except Exception as e:
+            print(f"[rally-data] 2025 historical fetch failed: {e}")
+            historical_rally_2025 = None
+
+        return {
+            "day_before_ftd_close": round(day_before_ftd_close, 2),
+            "points": points,
+            "historical_rally_2025": historical_rally_2025,
+        }
     except Exception as e:
         return {"error": str(e)}
 
