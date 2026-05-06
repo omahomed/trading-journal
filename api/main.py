@@ -47,6 +47,7 @@ from trade_calc import (
     normalize_journal_columns as _normalize_journal,
     validate_post_edit_lifo,
 )
+from tickers import parse_option_ticker
 
 
 def _rate_limit_key(request: Request) -> str:
@@ -2805,6 +2806,384 @@ def log_sell(request: Request, body: dict):
             "trx_id": trx_id, "realized_pl": round(total_realized * multiplier, 2),
             "remaining_shares": round(remaining_shares, 4),
             "is_closed": is_closed,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/exercise-option")
+@limiter.limit("10/minute")
+def exercise_option(request: Request, body: dict = Body(...)):
+    """Exercise an OPEN option position into the underlying stock.
+
+    Closes ALL currently-held contracts on the option trade (LIFO walk over
+    open BUYs) and either scales into an existing OPEN stock trade for the
+    underlying, or opens a new stock trade if none exists. The whole
+    sequence — option SELL detail, option summary recompute, stock detail
+    insert, stock summary upsert, audit log — runs inside one
+    atomic_transaction. A failure at any step rolls back every write.
+
+    Body: { portfolio: str, trade_id: str, date: 'YYYY-MM-DD', notes?: str }
+
+    Math (per-contract premium → per-share stock cost basis):
+        contracts_held         = LIFO remaining shares on the option trade
+        weighted_avg_premium   = LIFO remaining cost / contracts_held  ($/share)
+        shares_acquired        = contracts_held × multiplier            (typ. 100×)
+        stock_entry_price      = strike + weighted_avg_premium
+        stock_total_cost_basis = shares_acquired × stock_entry_price
+                                = (premium × contracts × multiplier) + (strike × shares)
+
+    The option SELL is priced at weighted_avg_premium so the option-side
+    realized P&L is exactly $0 by construction — the cost basis migrates
+    to the stock position rather than being realized. Cash-ledger impact
+    nets to −strike × shares (the strike payment), correct under
+    physical-settlement assumptions.
+    """
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        option_trade_id = str(body.get("trade_id", "") or "").strip()
+        date_str = str(body.get("date", "") or "").strip() \
+                   or datetime.now().strftime("%Y-%m-%d")
+        user_notes = str(body.get("notes", "") or "").strip()
+
+        if not option_trade_id:
+            return {"error": "Missing trade_id"}
+
+        # Pre-flight reads of the SUMMARY only — used for early validation
+        # (trade exists, is OPEN, is OPTION) before opening a transaction
+        # and for the existing-stock-trade lookup. Details are re-read
+        # INSIDE the txn block below so the LIFO walk that produces
+        # contracts_held / weighted_avg_premium sees the latest committed
+        # state (avoids a stale-snapshot race against a parallel writer
+        # that committed during the pre-flight phase).
+        df_s = db.load_summary(portfolio)
+        df_s = _normalize_trades(df_s)
+        opt_summary = df_s[df_s["trade_id"] == option_trade_id]
+        if opt_summary.empty:
+            return {"error": f"Trade {option_trade_id} not found"}
+
+        opt_row = opt_summary.iloc[0]
+        opt_status = str(opt_row.get("status", "") or "").upper()
+        opt_instrument = str(opt_row.get("instrument_type") or "").upper()
+        opt_ticker = str(opt_row.get("ticker", "") or "")
+
+        if opt_status != "OPEN":
+            return {"error": "Trade is not open"}
+        # Treat legacy rows that pre-date Migration 016 as OPTION when their
+        # ticker matches the readable option format. Otherwise reject — the
+        # exercise flow only makes sense for an option position.
+        if opt_instrument != "OPTION" and not is_option_ticker(opt_ticker):
+            return {"error": "Only options can be exercised"}
+
+        parsed = parse_option_ticker(opt_ticker)
+        if parsed is None:
+            return {"error": f"Cannot parse option ticker '{opt_ticker}' "
+                             f"(expected: SYMBOL YYMMDD $STRIKEC|P)"}
+        underlying = parsed["underlying"]
+        strike = float(parsed["strike"])
+
+        opt_multiplier = float(opt_row.get("multiplier") or 0) or 100.0
+
+        # Look up an existing OPEN stock trade for the underlying so we know
+        # whether to scale-in or open a new campaign. Match on ticker AND
+        # instrument_type=STOCK so we never collide with a same-ticker option
+        # row (e.g. AAPL stock + AAPL option both open).
+        df_s_norm = df_s
+        existing_stock = df_s_norm[
+            (df_s_norm["ticker"] == underlying)
+            & (df_s_norm["status"].astype(str).str.upper() == "OPEN")
+        ]
+        # instrument_type may be missing/NULL on legacy rows — treat anything
+        # that isn't explicitly OPTION as a stock candidate.
+        if "instrument_type" in existing_stock.columns:
+            existing_stock = existing_stock[
+                existing_stock["instrument_type"].astype(str).str.upper() != "OPTION"
+            ]
+        scale_into_existing = not existing_stock.empty
+        if scale_into_existing:
+            stock_trade_id = str(existing_stock.iloc[0].get("trade_id", ""))
+            stock_existing_row = existing_stock.iloc[0]
+        else:
+            # Generate a fresh trade_id using the same soft-delete-safe path
+            # next_trade_id uses (load_all_trade_ids_for_month sees deleted
+            # rows so we never recycle).
+            ym = pd.Timestamp(date_str).strftime("%Y%m")
+            existing_ids = db.load_all_trade_ids_for_month(portfolio, ym)
+            seqs = []
+            for x in existing_ids:
+                try:
+                    if "-" in x:
+                        seqs.append(int(x.split("-")[-1]))
+                except Exception:
+                    pass
+            next_seq = (max(seqs) + 1) if seqs else 1
+            stock_trade_id = f"{ym}-{next_seq:03d}"
+            stock_existing_row = None
+
+        date_time = f"{date_str} {datetime.now().strftime('%H:%M')}:00"
+
+        # === ATOMIC SECTION ===
+        # All mutating writes live inside one atomic_transaction. Any exception
+        # below rolls back every write. The details read + LIFO walk also
+        # happen inside so contracts_held / weighted_avg_premium reflect the
+        # latest committed state — not a stale snapshot from a parallel writer
+        # that committed during the pre-flight phase. The advisory locks taken
+        # inside _generate_unique_trx_id_in_txn additionally serialize
+        # concurrent writers to the same trade_id.
+        with db.atomic_transaction() as (_conn, cur):
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Portfolio '{portfolio}' not found")
+            portfolio_id = row[0]
+
+            # LIFO walk on a fresh details read — load_details is ttl_cached,
+            # so .clear() forces a real round-trip and we don't accidentally
+            # recompute against the pre-flight cached snapshot. The early
+            # return below is safe: no writes have happened yet, so the
+            # context-manager exit is an empty no-op commit.
+            db.load_details.clear()
+            df_d = db.load_details(portfolio)
+            df_d = _normalize_trades(df_d)
+            opt_txns = df_d[df_d["trade_id"] == option_trade_id].copy()
+            opt_txns["date"] = pd.to_datetime(opt_txns["date"], errors="coerce")
+            opt_txns = opt_txns.dropna(subset=["date"]).sort_values("date")
+
+            inventory = []
+            for _, tx in opt_txns.iterrows():
+                action = str(tx.get("action", "")).upper()
+                tx_shares = float(tx.get("shares", 0) or 0)
+                tx_price = float(tx.get("amount", 0) or 0)
+                if action == "BUY":
+                    inventory.append({"price": tx_price, "shares": tx_shares})
+                elif action == "SELL":
+                    to_sell = tx_shares
+                    while to_sell > 0 and inventory:
+                        last = inventory[-1]
+                        take = min(to_sell, last["shares"])
+                        last["shares"] -= take
+                        to_sell -= take
+                        if last["shares"] < 0.0001:
+                            inventory.pop()
+            contracts_held = sum(lot["shares"] for lot in inventory)
+            held_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
+            if contracts_held <= 0:
+                return {"error": "No contracts currently held"}
+            weighted_avg_premium = held_cost / contracts_held
+
+            # Derived stock-side numbers (depend on the LIFO walk output above).
+            shares_acquired = contracts_held * opt_multiplier
+            stock_entry_price = strike + weighted_avg_premium
+            stock_total_cost = shares_acquired * stock_entry_price
+            opt_total_premium_dollars = held_cost * opt_multiplier  # for audit detail
+
+            # --- 1. Option SELL detail ---
+            opt_sell_value = contracts_held * weighted_avg_premium * opt_multiplier
+            opt_sell_trx_id = db._generate_unique_trx_id_in_txn(
+                cur, portfolio_id, option_trade_id, "S",
+            )
+            opt_detail_row = {
+                "Trade_ID": option_trade_id, "Ticker": opt_ticker, "Action": "SELL",
+                "Date": date_time,
+                "Shares": float(contracts_held),
+                "Amount": float(round(weighted_avg_premium, 4)),
+                "Value": float(round(opt_sell_value, 2)),
+                "Rule": "",  # locked decision: empty (no SELL_RULES expansion)
+                "Notes": user_notes,
+                "Realized_PL": 0,
+                "Trx_ID": opt_sell_trx_id,
+                "Instrument_Type": "OPTION",
+                "Multiplier": opt_multiplier,
+            }
+            opt_detail_id = db._save_detail_row_in_txn(cur, portfolio_id, opt_detail_row)
+
+            # --- 2. Recompute option summary + closures ---
+            # Re-walk all option details (including the SELL we just inserted)
+            # via compute_lifo_summary. The pure function returns the LIFO
+            # fields; we layer on the preserved/derived columns.
+            opt_txns_after = pd.concat([
+                opt_txns,
+                pd.DataFrame([{
+                    "trade_id": option_trade_id,
+                    "ticker": opt_ticker,
+                    "action": "SELL",
+                    "date": pd.Timestamp(date_time),
+                    "shares": float(contracts_held),
+                    "amount": float(weighted_avg_premium),
+                    "trx_id": opt_sell_trx_id,
+                }]),
+            ], ignore_index=True)
+            opt_lifo_result = compute_lifo_summary(
+                opt_txns_after, option_trade_id, opt_ticker,
+                multiplier=opt_multiplier, with_closures=True,
+            )
+            opt_lifo_summary, opt_closures = opt_lifo_result
+            if opt_lifo_summary is None:
+                # Defensive — would only happen with corrupt detail rows.
+                raise RuntimeError("LIFO recompute returned None for option side")
+
+            # Preserve user-set fields from the existing summary; append the
+            # exercise breadcrumb to .notes per locked decision #2.
+            preserved_notes = str(opt_row.get("notes", "") or "").strip()
+            auto_note = (f"Exercised on {date_str} — converted to {underlying} "
+                         f"stock position {stock_trade_id}")
+            new_opt_notes = f"{preserved_notes}\n{auto_note}".strip() if preserved_notes else auto_note
+
+            opt_summary_row = {
+                **opt_lifo_summary,
+                "Notes": new_opt_notes,
+                "Stop_Loss": opt_row.get("stop_loss"),
+                "Rule": opt_row.get("rule"),
+                "Buy_Notes": opt_row.get("buy_notes"),
+                "Sell_Rule": opt_row.get("sell_rule"),
+                "Sell_Notes": opt_row.get("sell_notes"),
+                "Risk_Budget": float(opt_row.get("risk_budget") or 0),
+                "Instrument_Type": "OPTION",
+                "Multiplier": opt_multiplier,
+            }
+            db._save_summary_with_closures_in_txn(
+                cur, portfolio_id, option_trade_id, opt_summary_row, opt_closures,
+            )
+
+            # --- 3. Stock summary placeholder (FK precondition for detail) ---
+            # When opening a new stock trade, the trades_summary row must
+            # exist before we INSERT the BUY detail (FK constraint). Insert a
+            # minimal placeholder now; the LIFO recompute below UPDATEs it
+            # with the real numbers.
+            if not scale_into_existing:
+                cross_link = (f"Created via exercise of option trade "
+                              f"{option_trade_id} ({opt_ticker})")
+                placeholder = {
+                    "Trade_ID": stock_trade_id, "Ticker": underlying,
+                    "Status": "OPEN", "Open_Date": date_str,
+                    "Shares": 0, "Avg_Entry": 0, "Total_Cost": 0,
+                    "Stop_Loss": None, "Rule": "",
+                    "Buy_Notes": "", "Notes": cross_link,
+                    "Risk_Budget": 0,
+                    "Instrument_Type": "STOCK", "Multiplier": 1,
+                }
+                db._save_summary_with_closures_in_txn(
+                    cur, portfolio_id, stock_trade_id, placeholder, [],
+                )
+
+            # --- 4. Stock BUY detail ---
+            # Prefix B for the first BUY on a new trade; A for an add-on
+            # (scale-in) on an existing trade. Mirrors log_buy's convention.
+            stock_trx_prefix = "A" if scale_into_existing else "B"
+            stock_buy_trx_id = db._generate_unique_trx_id_in_txn(
+                cur, portfolio_id, stock_trade_id, stock_trx_prefix,
+            )
+            stock_detail_row = {
+                "Trade_ID": stock_trade_id, "Ticker": underlying, "Action": "BUY",
+                "Date": date_time,
+                "Shares": float(shares_acquired),
+                "Amount": float(round(stock_entry_price, 4)),
+                "Value": float(round(stock_total_cost, 2)),
+                "Rule": "",  # locked decision: blank, user fills via Edit
+                "Notes": "",
+                "Stop_Loss": None,  # locked decision: NULL, user fills via Edit
+                "Trx_ID": stock_buy_trx_id,
+                "Instrument_Type": "STOCK",
+                "Multiplier": 1.0,
+            }
+            stock_detail_id = db._save_detail_row_in_txn(
+                cur, portfolio_id, stock_detail_row,
+            )
+
+            # --- 5. Recompute stock summary + closures ---
+            # Reload all stock details for this trade and run LIFO on the full
+            # set (existing + newly inserted BUY). For new trades the inventory
+            # is just our single BUY, so LIFO is trivially the BUY's cost.
+            if scale_into_existing:
+                stock_existing_txns = df_d[df_d["trade_id"] == stock_trade_id].copy()
+                stock_existing_txns["date"] = pd.to_datetime(
+                    stock_existing_txns["date"], errors="coerce",
+                )
+                stock_existing_txns = stock_existing_txns.dropna(subset=["date"])
+            else:
+                stock_existing_txns = pd.DataFrame()
+            stock_txns_after = pd.concat([
+                stock_existing_txns,
+                pd.DataFrame([{
+                    "trade_id": stock_trade_id,
+                    "ticker": underlying,
+                    "action": "BUY",
+                    "date": pd.Timestamp(date_time),
+                    "shares": float(shares_acquired),
+                    "amount": float(stock_entry_price),
+                    "trx_id": stock_buy_trx_id,
+                }]),
+            ], ignore_index=True)
+            stock_lifo_result = compute_lifo_summary(
+                stock_txns_after, stock_trade_id, underlying,
+                multiplier=1.0, with_closures=True,
+            )
+            stock_lifo_summary, stock_closures = stock_lifo_result
+            if stock_lifo_summary is None:
+                raise RuntimeError("LIFO recompute returned None for stock side")
+
+            # Preserve scale-in row's user fields when present; new-trade row
+            # uses the placeholder defaults + cross-link note.
+            if scale_into_existing:
+                existing_notes = str(stock_existing_row.get("notes", "") or "").strip()
+                scale_link = (f"Scaled in via exercise of option trade "
+                              f"{option_trade_id} on {date_str}")
+                merged_notes = f"{existing_notes}\n{scale_link}".strip() if existing_notes else scale_link
+                stock_summary_row = {
+                    **stock_lifo_summary,
+                    "Notes": merged_notes,
+                    "Stop_Loss": stock_existing_row.get("stop_loss"),
+                    "Rule": str(stock_existing_row.get("rule", "") or ""),
+                    "Buy_Notes": str(stock_existing_row.get("buy_notes", "") or ""),
+                    "Sell_Rule": stock_existing_row.get("sell_rule"),
+                    "Sell_Notes": stock_existing_row.get("sell_notes"),
+                    "Risk_Budget": float(stock_existing_row.get("risk_budget") or 0),
+                    "Instrument_Type": "STOCK",
+                    "Multiplier": 1.0,
+                }
+            else:
+                cross_link = (f"Created via exercise of option trade "
+                              f"{option_trade_id} ({opt_ticker})")
+                stock_summary_row = {
+                    **stock_lifo_summary,
+                    "Notes": cross_link,
+                    "Stop_Loss": None,
+                    "Rule": "",
+                    "Buy_Notes": "",
+                    "Sell_Rule": None,
+                    "Sell_Notes": None,
+                    "Risk_Budget": 0,
+                    "Instrument_Type": "STOCK",
+                    "Multiplier": 1.0,
+                }
+            db._save_summary_with_closures_in_txn(
+                cur, portfolio_id, stock_trade_id, stock_summary_row, stock_closures,
+            )
+
+            # --- 6. Audit log entry ---
+            audit_detail = (
+                f"{opt_sell_trx_id}: exercised {contracts_held:g} contract(s) "
+                f"of {opt_ticker} (premium ${opt_total_premium_dollars:.2f}) → "
+                f"{stock_buy_trx_id}: {shares_acquired:g} {underlying} shares "
+                f"@ ${stock_entry_price:.2f} on trade {stock_trade_id}"
+            )
+            db._log_audit_in_txn(
+                cur, portfolio_id, "EXERCISE", option_trade_id, opt_ticker,
+                audit_detail, "web",
+            )
+
+        # Cache invalidation only after successful commit.
+        db.load_details.clear()
+        db.load_summary.clear()
+
+        return {
+            "status": "ok",
+            "option_trade_id": option_trade_id,
+            "stock_trade_id": stock_trade_id,
+            "stock_was_new": not scale_into_existing,
+            "contracts_exercised": float(contracts_held),
+            "shares_acquired": float(shares_acquired),
+            "stock_entry_price": float(round(stock_entry_price, 4)),
         }
     except Exception as e:
         return {"error": str(e)}

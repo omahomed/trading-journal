@@ -350,6 +350,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [eodSaving, setEodSaving] = useState(false);
   const [eodErrors, setEodErrors] = useState<string[]>([]);
 
+  // Exercise-option modal — single-record. Set to a position to open;
+  // null to close. Mirrors the trade-journal Edit modal recipe (state
+  // tuple + ESC gate + error-stays-open).
+  const [exerciseTarget, setExerciseTarget] = useState<EnrichedPosition | null>(null);
+  const [exerciseDate, setExerciseDate] = useState<string>("");
+  const [exerciseNotes, setExerciseNotes] = useState<string>("");
+  const [exerciseSaving, setExerciseSaving] = useState(false);
+  const [exerciseError, setExerciseError] = useState<string | null>(null);
+
   // Multiplier-fix banner. Default to dismissed during SSR; the localStorage
   // read in useEffect below is the authoritative resolution.
   const [bannerDismissed, setBannerDismissed] = useState(true);
@@ -526,6 +535,59 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const ctxOpenPyramid = useCallback((trade_id: string) => {
     router.push(`/position-sizer?tab=pyramid&trade_id=${encodeURIComponent(trade_id)}`);
   }, [router]);
+
+  // Exercise-option modal handlers.
+  const ctxOpenExercise = useCallback((p: EnrichedPosition) => {
+    setExerciseTarget(p);
+    setExerciseDate(new Date().toISOString().slice(0, 10));
+    setExerciseNotes("");
+    setExerciseError(null);
+  }, []);
+
+  const closeExerciseModal = useCallback(() => {
+    setExerciseTarget(null);
+    setExerciseDate("");
+    setExerciseNotes("");
+    setExerciseError(null);
+  }, []);
+
+  const submitExercise = useCallback(async () => {
+    if (!exerciseTarget || exerciseSaving) return;
+    setExerciseSaving(true);
+    setExerciseError(null);
+    try {
+      const res = await api.exerciseOption({
+        trade_id: exerciseTarget.trade_id,
+        date: exerciseDate,
+        notes: exerciseNotes,
+      });
+      if (res.error) {
+        setExerciseError(res.error);
+        return;
+      }
+      // Force-refresh: option flips CLOSED (drops from open list); stock
+      // either appears or scales in. The cached snapshot is now stale.
+      await loadData({ force: true });
+      closeExerciseModal();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Network error";
+      setExerciseError(msg);
+    } finally {
+      setExerciseSaving(false);
+    }
+  }, [exerciseTarget, exerciseSaving, exerciseDate, exerciseNotes,
+      loadData, closeExerciseModal]);
+
+  // ESC dismiss for the exercise modal — gated on !saving so an in-flight
+  // submit can't be cancelled mid-write.
+  useEffect(() => {
+    if (!exerciseTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !exerciseSaving) closeExerciseModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [exerciseTarget, exerciseSaving, closeExerciseModal]);
 
   // EOD modal.
   const openEodModal = useCallback(() => {
@@ -1214,8 +1276,157 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   onClick={e => { e.stopPropagation(); ctxOpenPyramid(ctxMenu.position.trade_id); setCtxMenu(null); }}>
             <span style={{ color: "var(--ink-4)" }}>&#x1F53A;</span> Open Position Sizer Pyramid
           </button>
+          {ctxMenu.position.is_option && (
+            <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                    style={{ color: "var(--ink)" }}
+                    data-testid="ctx-exercise-option"
+                    onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    onClick={e => { e.stopPropagation(); ctxOpenExercise(ctxMenu.position); setCtxMenu(null); }}>
+              <span style={{ color: "var(--ink-4)" }}>&#x26A1;</span> Exercise option
+            </button>
+          )}
         </div>
       )}
+
+      {/* Exercise-option modal. Preview math is computed client-side from
+          the option summary's avg_entry (which the backend keeps as the
+          weighted avg of remaining open lots) — close to the server's
+          authoritative computation, may differ by a fraction if there are
+          un-recomputed edits in flight. The backend always recomputes
+          atomically, so the on-disk numbers are exact. */}
+      {exerciseTarget && (() => {
+        const parsed = parseOptionTicker(exerciseTarget.ticker);
+        const contracts = exerciseTarget.shares;
+        const multiplier = exerciseTarget.multiplier || 100;
+        const sharesAcquired = contracts * multiplier;
+        const previewEntry = parsed ? parsed.strike + exerciseTarget.avg_entry : null;
+        const previewCost = previewEntry != null ? sharesAcquired * previewEntry : null;
+        const dollarFmt = (n: number) =>
+          `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+               data-testid="exercise-modal"
+               style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
+               onClick={() => { if (!exerciseSaving) closeExerciseModal(); }}>
+            <div className="rounded-[14px] w-full max-w-[480px] overflow-hidden"
+                 style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                          boxShadow: "0 12px 32px rgba(0,0,0,0.18)" }}
+                 onClick={e => e.stopPropagation()}>
+              <div className="px-[18px] py-3 flex items-center gap-2"
+                   style={{ borderBottom: "1px solid var(--border)" }}>
+                <span style={{ color: "var(--ink-4)" }}>&#x26A1;</span>
+                <span className="text-[13px] font-semibold">Exercise option</span>
+                <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>
+                  {exerciseTarget.ticker}
+                </span>
+              </div>
+
+              <div className="px-[18px] py-4 flex flex-col gap-3.5">
+                {/* Preview math — read-only summary so the user can sanity-
+                    check the conversion before committing. */}
+                <div className="rounded-[10px] p-3 text-[12px]"
+                     data-testid="exercise-preview"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  <div className="font-semibold mb-1.5" style={{ color: "var(--ink)" }}>
+                    Preview
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-1" style={{ color: "var(--ink-3)" }}>
+                    <div>Will close:</div>
+                    <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
+                      {contracts.toLocaleString()} contract{contracts === 1 ? "" : "s"}
+                    </div>
+                    {parsed ? (
+                      <>
+                        <div>Will open:</div>
+                        <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
+                          {sharesAcquired.toLocaleString()} {parsed.underlying} sh.
+                        </div>
+                        <div>Entry price:</div>
+                        <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
+                          ≈ {dollarFmt(previewEntry || 0)}
+                        </div>
+                        <div>Cost basis:</div>
+                        <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
+                          ≈ {dollarFmt(previewCost || 0)}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="col-span-2 text-[11px]" style={{ color: "#dc2626" }}>
+                        Cannot parse option ticker — backend will reject.
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-[10px] mt-1.5" style={{ color: "var(--ink-4)" }}>
+                    Approximate · backend computes exact values from current transactions on save
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1"
+                         style={{ color: "var(--ink-4)" }}>
+                    Date
+                  </label>
+                  <input type="date" value={exerciseDate}
+                         disabled={exerciseSaving}
+                         onChange={e => setExerciseDate(e.target.value)}
+                         data-testid="exercise-date"
+                         className="w-full px-3 py-2 rounded-[8px] text-[13px]"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)",
+                                  color: "var(--ink)" }} />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1"
+                         style={{ color: "var(--ink-4)" }}>
+                    Notes (optional)
+                  </label>
+                  <textarea value={exerciseNotes}
+                            disabled={exerciseSaving}
+                            onChange={e => setExerciseNotes(e.target.value)}
+                            data-testid="exercise-notes"
+                            rows={2}
+                            placeholder="e.g. Exercising before expiry"
+                            className="w-full px-3 py-2 rounded-[8px] text-[13px] resize-none"
+                            style={{ background: "var(--bg)", border: "1px solid var(--border)",
+                                     color: "var(--ink)" }} />
+                </div>
+
+                {exerciseError && (
+                  <div className="rounded-[8px] px-3 py-2 text-[12px]"
+                       data-testid="exercise-error"
+                       style={{ background: "color-mix(in oklab, #dc2626 8%, var(--surface))",
+                                border: "1px solid color-mix(in oklab, #dc2626 30%, var(--border))",
+                                color: "#dc2626" }}>
+                    {exerciseError}
+                  </div>
+                )}
+              </div>
+
+              <div className="px-[18px] py-3 flex items-center justify-end gap-2"
+                   style={{ borderTop: "1px solid var(--border)", background: "var(--surface-2)" }}>
+                <button onClick={closeExerciseModal}
+                        disabled={exerciseSaving}
+                        data-testid="exercise-cancel"
+                        className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-colors hover:brightness-95"
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                                 color: "var(--ink-3)",
+                                 opacity: exerciseSaving ? 0.5 : 1 }}>
+                  Cancel
+                </button>
+                <button onClick={submitExercise}
+                        disabled={exerciseSaving || !parsed}
+                        data-testid="exercise-confirm"
+                        className="px-3 py-1.5 rounded-[8px] text-[12px] font-semibold transition-colors hover:brightness-95"
+                        style={{ background: "var(--ink)", color: "var(--surface)",
+                                 opacity: (exerciseSaving || !parsed) ? 0.5 : 1 }}>
+                  {exerciseSaving ? "Exercising…" : "Confirm exercise"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Risk Monitor (equity-only) */}
       <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
