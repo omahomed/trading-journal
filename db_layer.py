@@ -896,18 +896,20 @@ def save_summary_row(portfolio_name, row_dict):
             return row_id
 
 
-def save_detail_row(portfolio_name, row_dict):
-    """
-    Insert a transaction detail row.
+def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
+    """Insert a trades_details row + emit its cash_transactions ledger row,
+    using the caller's cursor. Returns the new detail row id.
 
-    Args:
-        portfolio_name: Portfolio name
-        row_dict: Dictionary with column values
+    Caller owns the transaction (commit/rollback) and is responsible for
+    invalidating the load_details cache after the outer commit. Sanitizes
+    numpy-typed values in row_dict so the SQL adapter sees plain Python
+    scalars.
 
-    Returns:
-        int: ID of inserted row
+    Extracted from save_detail_row so multi-write endpoints (e.g. exercise-
+    option) can compose this with other writes inside one atomic_transaction.
+    The public save_detail_row wrapper preserves the original single-call
+    semantics for existing callers (log_buy, log_sell, IBKR import, etc.).
     """
-    # Sanitize numpy types
     def _clean(val):
         if val is None:
             return None
@@ -921,65 +923,80 @@ def save_detail_row(portfolio_name, row_dict):
         return val
     row_dict = {k: _clean(v) for k, v in row_dict.items()}
 
+    insert_cols = [
+        "portfolio_id", "trade_id", "ticker", "action", "date", "shares", "amount", "value",
+        "rule", "notes", "realized_pl", "stop_loss", "trx_id",
+        "exec_grade", "behavior_tag", "retro_notes",
+    ]
+    insert_vals = [
+        portfolio_id,
+        row_dict.get('Trade_ID'),
+        row_dict.get('Ticker'),
+        row_dict.get('Action'),
+        row_dict.get('Date'),
+        row_dict.get('Shares'),
+        row_dict.get('Amount'),
+        row_dict.get('Value'),
+        row_dict.get('Rule'),
+        row_dict.get('Notes'),
+        row_dict.get('Realized_PL', 0),
+        row_dict.get('Stop_Loss'),
+        row_dict.get('Trx_ID'),
+        row_dict.get('Exec_Grade'),
+        row_dict.get('Behavior_Tag'),
+        row_dict.get('Retro_Notes'),
+    ]
+    # Migration 016: persist instrument_type + multiplier when caller
+    # passes them. Defaults (STOCK / 1) on the column take over when
+    # omitted, so legacy callers stay working.
+    if 'Instrument_Type' in row_dict or 'Multiplier' in row_dict:
+        insert_cols += ["instrument_type", "multiplier"]
+        insert_vals += [
+            row_dict.get('Instrument_Type') or 'STOCK',
+            row_dict.get('Multiplier') if row_dict.get('Multiplier') is not None else 1,
+        ]
+    placeholders = ", ".join(["%s"] * len(insert_vals))
+    insert_query = (
+        f"INSERT INTO trades_details ({', '.join(insert_cols)}) "
+        f"VALUES ({placeholders}) RETURNING id"
+    )
+    cur.execute(insert_query, tuple(insert_vals))
+
+    row_id = cur.fetchone()[0]
+
+    # Emit cash_transactions row for the NLV ledger (BUY/SELL only).
+    # Runs inside the same transaction so the trade and its cash
+    # movement commit together or not at all.
+    _emit_trade_cash_tx(
+        cur, portfolio_id, row_id,
+        action=row_dict.get('Action'),
+        date=row_dict.get('Date'),
+        value=row_dict.get('Value'),
+    )
+
+    return row_id
+
+
+def save_detail_row(portfolio_name, row_dict):
+    """
+    Insert a transaction detail row.
+
+    Args:
+        portfolio_name: Portfolio name
+        row_dict: Dictionary with column values
+
+    Returns:
+        int: ID of inserted row
+    """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # Get portfolio_id
             cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
             result = cur.fetchone()
             if not result:
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            insert_cols = [
-                "portfolio_id", "trade_id", "ticker", "action", "date", "shares", "amount", "value",
-                "rule", "notes", "realized_pl", "stop_loss", "trx_id",
-                "exec_grade", "behavior_tag", "retro_notes",
-            ]
-            insert_vals = [
-                portfolio_id,
-                row_dict.get('Trade_ID'),
-                row_dict.get('Ticker'),
-                row_dict.get('Action'),
-                row_dict.get('Date'),
-                row_dict.get('Shares'),
-                row_dict.get('Amount'),
-                row_dict.get('Value'),
-                row_dict.get('Rule'),
-                row_dict.get('Notes'),
-                row_dict.get('Realized_PL', 0),
-                row_dict.get('Stop_Loss'),
-                row_dict.get('Trx_ID'),
-                row_dict.get('Exec_Grade'),
-                row_dict.get('Behavior_Tag'),
-                row_dict.get('Retro_Notes'),
-            ]
-            # Migration 016: persist instrument_type + multiplier when caller
-            # passes them. Defaults (STOCK / 1) on the column take over when
-            # omitted, so legacy callers stay working.
-            if 'Instrument_Type' in row_dict or 'Multiplier' in row_dict:
-                insert_cols += ["instrument_type", "multiplier"]
-                insert_vals += [
-                    row_dict.get('Instrument_Type') or 'STOCK',
-                    row_dict.get('Multiplier') if row_dict.get('Multiplier') is not None else 1,
-                ]
-            placeholders = ", ".join(["%s"] * len(insert_vals))
-            insert_query = (
-                f"INSERT INTO trades_details ({', '.join(insert_cols)}) "
-                f"VALUES ({placeholders}) RETURNING id"
-            )
-            cur.execute(insert_query, tuple(insert_vals))
-
-            row_id = cur.fetchone()[0]
-
-            # Emit cash_transactions row for the NLV ledger (BUY/SELL only).
-            # Runs inside the same transaction so the trade and its cash
-            # movement commit together or not at all.
-            _emit_trade_cash_tx(
-                cur, portfolio_id, row_id,
-                action=row_dict.get('Action'),
-                date=row_dict.get('Date'),
-                value=row_dict.get('Value'),
-            )
+            row_id = _save_detail_row_in_txn(cur, portfolio_id, row_dict)
 
             conn.commit()
 
@@ -1179,6 +1196,20 @@ def delete_detail_row(portfolio_name, detail_id):
             return True
 
 
+def _log_audit_in_txn(cur, portfolio_id, action, trade_id, ticker, details, username='User'):
+    """Insert an audit_trail row using the supplied cursor. Caller owns
+    the transaction. Used by multi-write endpoints (e.g. exercise-option)
+    that need the audit row to commit-or-rollback alongside the trade
+    writes it describes."""
+    cur.execute(
+        """
+        INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (portfolio_id, username, action, trade_id, ticker, details),
+    )
+
+
 def log_audit(portfolio_name, action, trade_id, ticker, details, username='User'):
     """
     Log an audit trail entry.
@@ -1192,10 +1223,7 @@ def log_audit(portfolio_name, action, trade_id, ticker, details, username='User'
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            cur.execute("""
-                INSERT INTO audit_trail (portfolio_id, username, action, trade_id, ticker, details)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (portfolio_id, username, action, trade_id, ticker, details))
+            _log_audit_in_txn(cur, portfolio_id, action, trade_id, ticker, details, username)
 
             conn.commit()
 
@@ -1336,8 +1364,6 @@ def save_summary_with_closures(portfolio_name, trade_id, summary_row, closures):
 
     Returns the summary row id.
     """
-    trade_id_for_summary = summary_row.get('Trade_ID')
-
     with atomic_transaction() as (_conn, cur):
         cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
         result = cur.fetchone()
@@ -1345,125 +1371,146 @@ def save_summary_with_closures(portfolio_name, trade_id, summary_row, closures):
             raise ValueError(f"Portfolio '{portfolio_name}' not found")
         portfolio_id = result[0]
 
-        # --- 1. Summary upsert ---
-        cur.execute(
-            "SELECT id FROM trades_summary WHERE portfolio_id = %s AND trade_id = %s",
-            (portfolio_id, trade_id_for_summary),
+        summary_id = _save_summary_with_closures_in_txn(
+            cur, portfolio_id, trade_id, summary_row, closures,
         )
-        existing = cur.fetchone()
-
-        if existing:
-            cur.execute(
-                """
-                UPDATE trades_summary SET
-                    ticker = %s, status = %s, open_date = %s, closed_date = %s,
-                    shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
-                    realized_pl = %s, unrealized_pl = %s, return_pct = %s,
-                    sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
-                    buy_notes = %s, sell_notes = %s, risk_budget = %s,
-                    instrument_type = %s, multiplier = %s
-                WHERE id = %s
-                RETURNING id
-                """,
-                (
-                    summary_row.get('Ticker'),
-                    summary_row.get('Status', 'OPEN'),
-                    summary_row.get('Open_Date'),
-                    summary_row.get('Closed_Date'),
-                    summary_row.get('Shares', 0),
-                    summary_row.get('Avg_Entry', 0),
-                    summary_row.get('Avg_Exit', 0),
-                    summary_row.get('Total_Cost', 0),
-                    summary_row.get('Realized_PL', 0),
-                    summary_row.get('Unrealized_PL', 0),
-                    summary_row.get('Return_Pct', 0),
-                    summary_row.get('Sell_Rule'),
-                    summary_row.get('Notes'),
-                    summary_row.get('Stop_Loss'),
-                    summary_row.get('Rule'),
-                    summary_row.get('Buy_Notes'),
-                    summary_row.get('Sell_Notes'),
-                    summary_row.get('Risk_Budget', 0),
-                    summary_row.get('Instrument_Type', 'STOCK'),
-                    summary_row.get('Multiplier', 1),
-                    existing[0],
-                ),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO trades_summary (
-                    portfolio_id, trade_id, ticker, status, open_date, closed_date,
-                    shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
-                    return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes,
-                    risk_budget, instrument_type, multiplier
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING id
-                """,
-                (
-                    portfolio_id,
-                    trade_id_for_summary,
-                    summary_row.get('Ticker'),
-                    summary_row.get('Status', 'OPEN'),
-                    summary_row.get('Open_Date'),
-                    summary_row.get('Closed_Date'),
-                    summary_row.get('Shares', 0),
-                    summary_row.get('Avg_Entry', 0),
-                    summary_row.get('Avg_Exit', 0),
-                    summary_row.get('Total_Cost', 0),
-                    summary_row.get('Realized_PL', 0),
-                    summary_row.get('Unrealized_PL', 0),
-                    summary_row.get('Return_Pct', 0),
-                    summary_row.get('Sell_Rule'),
-                    summary_row.get('Notes'),
-                    summary_row.get('Stop_Loss'),
-                    summary_row.get('Rule'),
-                    summary_row.get('Buy_Notes'),
-                    summary_row.get('Sell_Notes'),
-                    summary_row.get('Risk_Budget', 0),
-                    summary_row.get('Instrument_Type', 'STOCK'),
-                    summary_row.get('Multiplier', 1),
-                ),
-            )
-        summary_id = cur.fetchone()[0]
-
-        # --- 2. Replace lot_closures (DELETE-then-INSERT) ---
-        cur.execute(
-            "DELETE FROM lot_closures WHERE portfolio_id = %s AND trade_id = %s",
-            (portfolio_id, trade_id),
-        )
-
-        if closures:
-            cur.executemany(
-                """
-                INSERT INTO lot_closures (
-                    portfolio_id, trade_id, sell_trx_id, buy_trx_id,
-                    shares, buy_price, sell_price, multiplier,
-                    realized_pl, closed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                [
-                    (
-                        portfolio_id,
-                        trade_id,
-                        c["sell_trx_id"],
-                        c["buy_trx_id"],
-                        c["shares"],
-                        c["buy_price"],
-                        c["sell_price"],
-                        c["multiplier"],
-                        c["realized_pl"],
-                        c["closed_at"],
-                    )
-                    for c in closures
-                ],
-            )
 
     # Cache invalidation only after the transaction has committed.
     load_summary.clear()
+    return summary_id
+
+
+def _save_summary_with_closures_in_txn(cur, portfolio_id, trade_id, summary_row, closures):
+    """Inner-transaction body of save_summary_with_closures: UPSERT the
+    trades_summary row and replace its lot_closures using the supplied
+    cursor. Returns the summary row id.
+
+    Caller owns the transaction (commit/rollback) and is responsible for
+    invalidating the load_summary cache after the outer commit.
+
+    Field-write semantics match the public save_summary_with_closures —
+    see that function's docstring for the full contract on which columns
+    this writes vs. preserves.
+    """
+    trade_id_for_summary = summary_row.get('Trade_ID')
+
+    # --- 1. Summary upsert ---
+    cur.execute(
+        "SELECT id FROM trades_summary WHERE portfolio_id = %s AND trade_id = %s",
+        (portfolio_id, trade_id_for_summary),
+    )
+    existing = cur.fetchone()
+
+    if existing:
+        cur.execute(
+            """
+            UPDATE trades_summary SET
+                ticker = %s, status = %s, open_date = %s, closed_date = %s,
+                shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
+                realized_pl = %s, unrealized_pl = %s, return_pct = %s,
+                sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
+                buy_notes = %s, sell_notes = %s, risk_budget = %s,
+                instrument_type = %s, multiplier = %s
+            WHERE id = %s
+            RETURNING id
+            """,
+            (
+                summary_row.get('Ticker'),
+                summary_row.get('Status', 'OPEN'),
+                summary_row.get('Open_Date'),
+                summary_row.get('Closed_Date'),
+                summary_row.get('Shares', 0),
+                summary_row.get('Avg_Entry', 0),
+                summary_row.get('Avg_Exit', 0),
+                summary_row.get('Total_Cost', 0),
+                summary_row.get('Realized_PL', 0),
+                summary_row.get('Unrealized_PL', 0),
+                summary_row.get('Return_Pct', 0),
+                summary_row.get('Sell_Rule'),
+                summary_row.get('Notes'),
+                summary_row.get('Stop_Loss'),
+                summary_row.get('Rule'),
+                summary_row.get('Buy_Notes'),
+                summary_row.get('Sell_Notes'),
+                summary_row.get('Risk_Budget', 0),
+                summary_row.get('Instrument_Type', 'STOCK'),
+                summary_row.get('Multiplier', 1),
+                existing[0],
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO trades_summary (
+                portfolio_id, trade_id, ticker, status, open_date, closed_date,
+                shares, avg_entry, avg_exit, total_cost, realized_pl, unrealized_pl,
+                return_pct, sell_rule, notes, stop_loss, rule, buy_notes, sell_notes,
+                risk_budget, instrument_type, multiplier
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            RETURNING id
+            """,
+            (
+                portfolio_id,
+                trade_id_for_summary,
+                summary_row.get('Ticker'),
+                summary_row.get('Status', 'OPEN'),
+                summary_row.get('Open_Date'),
+                summary_row.get('Closed_Date'),
+                summary_row.get('Shares', 0),
+                summary_row.get('Avg_Entry', 0),
+                summary_row.get('Avg_Exit', 0),
+                summary_row.get('Total_Cost', 0),
+                summary_row.get('Realized_PL', 0),
+                summary_row.get('Unrealized_PL', 0),
+                summary_row.get('Return_Pct', 0),
+                summary_row.get('Sell_Rule'),
+                summary_row.get('Notes'),
+                summary_row.get('Stop_Loss'),
+                summary_row.get('Rule'),
+                summary_row.get('Buy_Notes'),
+                summary_row.get('Sell_Notes'),
+                summary_row.get('Risk_Budget', 0),
+                summary_row.get('Instrument_Type', 'STOCK'),
+                summary_row.get('Multiplier', 1),
+            ),
+        )
+    summary_id = cur.fetchone()[0]
+
+    # --- 2. Replace lot_closures (DELETE-then-INSERT) ---
+    cur.execute(
+        "DELETE FROM lot_closures WHERE portfolio_id = %s AND trade_id = %s",
+        (portfolio_id, trade_id),
+    )
+
+    if closures:
+        cur.executemany(
+            """
+            INSERT INTO lot_closures (
+                portfolio_id, trade_id, sell_trx_id, buy_trx_id,
+                shares, buy_price, sell_price, multiplier,
+                realized_pl, closed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (
+                    portfolio_id,
+                    trade_id,
+                    c["sell_trx_id"],
+                    c["buy_trx_id"],
+                    c["shares"],
+                    c["buy_price"],
+                    c["sell_price"],
+                    c["multiplier"],
+                    c["realized_pl"],
+                    c["closed_at"],
+                )
+                for c in closures
+            ],
+        )
+
     return summary_id
 
 
@@ -1602,12 +1649,6 @@ def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> s
         generate_unique_trx_id(portfolio, trade, 'S') -> 'S2'
         generate_unique_trx_id(portfolio, trade, 'SA') -> 'SA2'
     """
-    # crc32 is deterministic across processes (unlike Python's built-in hash,
-    # which is randomized by PYTHONHASHSEED). Mask to int32 signed range so
-    # pg_advisory_xact_lock(int4, int4) accepts the value.
-    lock_key = zlib.crc32(trade_id.encode()) & 0x7FFFFFFF
-    prefix_re = re.compile(rf"^{re.escape(prefix)}(\d+)$")
-
     with atomic_transaction() as (_conn, cur):
         cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
         result = cur.fetchone()
@@ -1615,26 +1656,52 @@ def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> s
             raise ValueError(f"Portfolio '{portfolio_name}' not found")
         portfolio_id = result[0]
 
-        cur.execute(
-            "SELECT pg_advisory_xact_lock(%s, %s)",
-            (portfolio_id, lock_key),
-        )
+        return _generate_unique_trx_id_in_txn(cur, portfolio_id, trade_id, prefix)
 
-        cur.execute(
-            """
-            SELECT trx_id FROM trades_details
-            WHERE portfolio_id = %s
-              AND trade_id = %s
-              AND deleted_at IS NULL
-              AND trx_id ~ %s
-            """,
-            (portfolio_id, trade_id, prefix_re.pattern),
-        )
-        used: set[int] = set()
-        for (trx_id,) in cur.fetchall():
-            m = prefix_re.match(trx_id)
-            if m:
-                used.add(int(m.group(1)))
+
+def _generate_unique_trx_id_in_txn(cur, portfolio_id, trade_id, prefix):
+    """Inner-transaction body of generate_unique_trx_id: take the per-trade
+    advisory lock, scan existing active trx_ids matching ^{prefix}\\d+$,
+    and return the lowest unused integer suffix as '{prefix}{n}'.
+
+    Caller owns the transaction. Same race-safety contract as the public
+    helper — the returned trx_id is a best guess, not a reservation, and
+    the caller's INSERT must be ready to handle a UniqueViolation by
+    retrying.
+
+    The advisory lock is keyed on (portfolio_id, crc32(trade_id)) and
+    auto-releases at the caller's commit/rollback. Multi-write callers
+    (e.g. exercise-option) holding the same outer transaction across two
+    generate_*_in_txn calls for the SAME trade_id will serialize
+    correctly; calls for DIFFERENT trade_ids never contend because the
+    lock key includes trade_id.
+    """
+    # crc32 is deterministic across processes (unlike Python's built-in hash,
+    # which is randomized by PYTHONHASHSEED). Mask to int32 signed range so
+    # pg_advisory_xact_lock(int4, int4) accepts the value.
+    lock_key = zlib.crc32(trade_id.encode()) & 0x7FFFFFFF
+    prefix_re = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(%s, %s)",
+        (portfolio_id, lock_key),
+    )
+
+    cur.execute(
+        """
+        SELECT trx_id FROM trades_details
+        WHERE portfolio_id = %s
+          AND trade_id = %s
+          AND deleted_at IS NULL
+          AND trx_id ~ %s
+        """,
+        (portfolio_id, trade_id, prefix_re.pattern),
+    )
+    used: set[int] = set()
+    for (trx_id,) in cur.fetchall():
+        m = prefix_re.match(trx_id)
+        if m:
+            used.add(int(m.group(1)))
 
     n = 1
     while n in used:
