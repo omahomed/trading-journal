@@ -1,8 +1,17 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics } from "@/lib/api";
+import Link from "next/link";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { computeEnrichedPositions } from "@/lib/positions";
+import {
+  computeWinRate,
+  computeProfitFactor,
+  computeHoldRatio,
+  computeOnePctCompliance,
+  computeLast10Stats,
+} from "@/lib/analytics-stats";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
@@ -54,8 +63,11 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const { activePortfolio } = usePortfolio();
   const [latest, setLatest] = useState<JournalEntry | null>(null);
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
-  const [openCount, setOpenCount] = useState(0);
+  const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [closedTrades, setClosedTrades] = useState<any[]>([]);
+  const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [pricesStale, setPricesStale] = useState(false);
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("1Y");
@@ -63,15 +75,18 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [showEvents, setShowEvents] = useState(true);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
+  const openCount = openTrades.length;
+
   const loadData = useCallback(async () => {
     const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, dash] = await Promise.all([
+    const [lat, hist, open, closed, ev, dash, recent] = await Promise.all([
       api.journalLatest().catch(() => null),
       api.journalHistory(getActivePortfolio(), 0).catch(() => []),
       api.tradesOpen().catch(() => []),
       api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
       api.events().catch(() => []),
       activeId != null ? api.dashboardMetrics(activeId).catch(() => null) : Promise.resolve(null),
+      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
     ]);
     // Guard: backend can return {error: "..."} at HTTP 200 when something
     // goes wrong server-side. Don't let that poison the render.
@@ -81,12 +96,30 @@ export function Dashboard({ navColor }: { navColor: string }) {
     setMetrics(safeMetrics);
     setLatest(lat as JournalEntry);
     setHistory(hist as JournalHistoryPoint[]);
-    const openArr = (open as any[]) || [];
-    setOpenCount(openArr.length);
+    const openArr = (open as TradePosition[]) || [];
+    setOpenTrades(openArr);
     setClosedTrades(Array.isArray(closed) ? closed : []);
+    setAllDetails((recent && (recent as any).details) || []);
     setEvents(Array.isArray(ev) ? ev : []);
     setLoading(false);
   }, []);
+
+  // Live prices for open trades — drives overall_pl on the Last 10 panel.
+  // Mirrors the analytics.tsx pattern: fetch once when openTrades changes;
+  // on failure, fall back to cost basis with a visible stale caption.
+  useEffect(() => {
+    if (openTrades.length === 0) return;
+    const tickers = [...new Set(openTrades.map(t => t.ticker).filter(Boolean))];
+    if (tickers.length === 0) return;
+    api.batchPrices(tickers, getActivePortfolio())
+      .then(prices => { setLivePrices(prices); setPricesStale(false); })
+      .catch(() => setPricesStale(true));
+  }, [openTrades]);
+
+  const enrichedById = useMemo(() => {
+    const enriched = computeEnrichedPositions(openTrades, allDetails, 0, livePrices);
+    return Object.fromEntries(enriched.map(p => [p.trade_id, p])) as Record<string, ReturnType<typeof computeEnrichedPositions>[number]>;
+  }, [openTrades, allDetails, livePrices]);
 
   useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
 
@@ -266,9 +299,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
   ];
-
-  // Recent history for mini bar chart
-  const recentHistory = history.slice(-20);
 
   return (
     <div id="dashboard-capture-root" style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -562,139 +592,188 @@ export function Dashboard({ navColor }: { navColor: string }) {
         </div>
       </div>
 
-        {/* This Month at a Glance — hidden when EC maximized */}
+        {/* Leading-indicator panels — hidden when EC maximized */}
         {!ecMaximized && (() => {
-          const now = new Date();
-          const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-          const monthData = history.filter(h => String(h.day).slice(0, 7) === monthStr);
+          // ─── Last 10 Trades ────────────────────────────────────────────
+          // Combine open + closed; per-trade P&L uses overall_pl for open
+          // (unrealized + realized partial closures) and realized_pl for
+          // closed. Window of 10 most-recent by open_date.
+          const allTradesForLast10 = [
+            ...openTrades.map(t => ({
+              trade_id: t.trade_id,
+              ticker: t.ticker || "",
+              status: "OPEN",
+              open_date: String(t.open_date || ""),
+              pl: enrichedById[t.trade_id]?.overall_pl ?? 0,
+            })),
+            ...closedTrades.map((t: any) => ({
+              trade_id: t.trade_id,
+              ticker: t.ticker || "",
+              status: "CLOSED",
+              open_date: String(t.open_date || ""),
+              pl: parseFloat(String(t.realized_pl || 0)),
+            })),
+          ];
+          const ltdWinRate = computeWinRate(closedTrades as TradePosition[]);
+          const last10 = computeLast10Stats(allTradesForLast10, ltdWinRate);
 
-          // MTD return via TWR (compound daily returns)
-          const mtdPct = monthData.length > 0
-            ? (monthData.reduce((prod, h) => prod * (1 + (h.daily_pct_change || 0) / 100), 1) - 1) * 100
-            : 0;
-          const mtdDol = monthData.length > 0
-            ? monthData[monthData.length - 1].end_nlv - monthData[0].end_nlv
-            : 0;
+          // ─── Discipline Pulse (2026 only) ──────────────────────────────
+          const closedArr = closedTrades as TradePosition[];
+          const closed2026 = closedArr.filter(t => String(t.closed_date || "").startsWith("2026"));
+          const losses2026 = closed2026.filter(t => parseFloat(String(t.realized_pl || 0)) < 0);
+          const compliance = computeOnePctCompliance(losses2026, history);
+          const hr = computeHoldRatio(closed2026);
+          const pf2026 = computeProfitFactor(closed2026);
 
-          // Best and worst day
-          const sortedByPct = [...monthData].sort((a, b) => (b.daily_pct_change || 0) - (a.daily_pct_change || 0));
-          const bestDay = sortedByPct[0];
-          const worstDay = sortedByPct[sortedByPct.length - 1];
+          const fmt$ = (n: number) =>
+            `$${n >= 0 ? "+" : "-"}${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+          const outcomeColor = (o: "win" | "loss" | "be") =>
+            o === "win" ? "#08a86b" : o === "loss" ? "#e5484d" : "var(--ink-4)";
+          const pctColor = (n: number) => (n > 0 ? "#08a86b" : n < 0 ? "#e5484d" : "var(--ink-3)");
 
-          // Win/loss count
-          const wins = monthData.filter(h => (h.daily_pct_change || 0) > 0).length;
-          const losses = monthData.filter(h => (h.daily_pct_change || 0) < 0).length;
+          const winRateDelta = last10.winRate - ltdWinRate;
+          const winRateDeltaColor = winRateDelta >= 0 ? "#08a86b" : "#e5484d";
 
           return (
-            <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-                <span className="text-[13px] font-semibold">This Month at a Glance</span>
-                <span className="text-xs" style={{ color: "var(--ink-4)" }}>{now.toLocaleString("en-US", { month: "long", year: "numeric" })}</span>
-              </div>
-              <div className="flex-1 p-[18px] flex flex-col gap-3.5">
-                {/* 4 stat tiles */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>MTD Return</div>
-                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: mtdPct >= 0 ? "#08a86b" : "#e5484d" }}>
-                      {mtdPct >= 0 ? "+" : ""}{mtdPct.toFixed(2)}%
-                    </div>
-                    <div className="text-[11px] mt-0.5 privacy-mask" style={{ color: "var(--ink-4)" }}>${mtdDol >= 0 ? "+" : ""}{mtdDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Trades</div>
-                    <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{monthData.length}</div>
-                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{wins}W · {losses}L</div>
-                  </div>
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Best Day</div>
-                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}>
-                      +{(bestDay?.daily_pct_change || 0).toFixed(2)}%
-                    </div>
-                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{bestDay?.day?.slice(5) || ""}</div>
-                  </div>
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Worst Day</div>
-                    <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#e5484d" }}>
-                      {(worstDay?.daily_pct_change || 0).toFixed(2)}%
-                    </div>
-                    <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{worstDay?.day?.slice(5) || ""}</div>
-                  </div>
+            <div className="flex flex-col gap-3.5">
+              {/* ━━━ PANEL 1 — Last 10 Trades ━━━ */}
+              <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+                <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                  <span className="text-[13px] font-semibold">Last {last10.count > 0 && last10.count < 10 ? last10.count : 10} Trades</span>
+                  <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>recent momentum</span>
                 </div>
+                <div className="flex-1 p-[18px] flex flex-col gap-3.5">
+                  {pricesStale && last10.trades.some(t => t.status === "OPEN") && (
+                    <div className="text-[11px] px-3 py-1.5 rounded-[8px]"
+                         style={{ background: "color-mix(in oklab, #d97706 10%, var(--surface))", color: "#92400e", border: "1px solid color-mix(in oklab, #d97706 20%, var(--border))" }}>
+                      ⚠️ Live prices unavailable — open trades use cost basis
+                    </div>
+                  )}
 
-                {/* Daily P&L bars from REAL data */}
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
-                    Daily P&L · last {recentHistory.length} sessions
-                  </div>
-                  <div className="flex items-center gap-[3px] h-[80px]">
-                    {recentHistory.map((h, i) => {
-                      const v = h.daily_pct_change || 0;
-                      const pos = v >= 0;
-                      const maxAbs = Math.max(...recentHistory.map(r => Math.abs(r.daily_pct_change || 0)), 1);
-                      const ht = (Math.abs(v) / maxAbs) * 60 + 4;
-                      return (
-                        <div key={i} className="flex-1 flex flex-col justify-center items-center h-full">
-                          {pos ? (
-                            <div className="flex-1 flex items-end justify-center w-full">
-                              <div style={{ width: "80%", height: ht, background: "#08a86b", borderRadius: "3px 3px 0 0" }} />
-                            </div>
-                          ) : (
-                            <>
-                              <div className="flex-1" />
-                              <div className="flex items-start justify-center w-full">
-                                <div style={{ width: "80%", height: ht, background: "#e5484d", borderRadius: "0 0 3px 3px" }} />
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="h-px" style={{ background: "var(--border)" }} />
-
-                {/* Monthly pulse — computed from journal data */}
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2.5" style={{ color: "var(--ink-4)" }}>
-                    Monthly Pulse · {now.toLocaleString("en-US", { month: "long" })}
-                  </div>
-                  {(() => {
-                    const winPct = monthData.length > 0 ? (wins / monthData.length) * 100 : 0;
-                    const avgExposure = monthData.length > 0
-                      ? monthData.reduce((s, d) => s + (d.pct_invested || 0), 0) / monthData.length
-                      : 0;
-                    const exposureColor = avgExposure > 100 ? "#e5484d" : avgExposure > 70 ? "#f59f00" : "#08a86b";
-
-                    // Profit Factor from closed trades this month
-                    const mtdClosed = closedTrades.filter(t => String(t.closed_date || "").slice(0, 7) === monthStr);
-                    const grossWins = mtdClosed.filter(t => parseFloat(String(t.realized_pl || 0)) > 0).reduce((s, t) => s + parseFloat(String(t.realized_pl || 0)), 0);
-                    const grossLosses = Math.abs(mtdClosed.filter(t => parseFloat(String(t.realized_pl || 0)) < 0).reduce((s, t) => s + parseFloat(String(t.realized_pl || 0)), 0));
-                    const profitFactor = grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? 99 : 0;
-                    const pfColor = profitFactor >= 2 ? "#08a86b" : profitFactor >= 1 ? "#f59f00" : "#e5484d";
-                    const pfBar = Math.min(profitFactor * 25, 100); // Scale: 4x = 100%
-
-                    const metrics = [
-                      ["Win Rate", winPct, winPct >= 50 ? "#08a86b" : winPct >= 40 ? "#f59f00" : "#e5484d"],
-                      ["Profit Factor", pfBar, pfColor, mtdClosed.length > 0 ? `${profitFactor.toFixed(2)}x` : "—"],
-                      ["Avg Exposure", Math.min(avgExposure, 100), exposureColor, `${avgExposure.toFixed(0)}%`],
-                    ] as [string, number, string, string?][];
-                    return (
-                      <div className="flex flex-col gap-2">
-                        {metrics.map(([k, v, c, label]) => (
-                          <div key={k} className="grid items-center gap-2.5" style={{ gridTemplateColumns: "1fr 60px 40px", fontSize: 12 }}>
-                            <span>{k}</span>
-                            <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--bg-2)" }}>
-                              <div className="h-full rounded-full" style={{ width: `${Math.min(v, 100)}%`, background: c, transition: "width 0.6s ease" }} />
-                            </div>
-                            <span className="text-right text-[11px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", color: c }}>{label || `${v.toFixed(0)}%`}</span>
+                  {last10.count === 0 ? (
+                    <div className="text-[12px] py-6 text-center" style={{ color: "var(--ink-4)" }}>No trades yet</div>
+                  ) : (
+                    <>
+                      {/* 4 mini tiles */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Win Rate</div>
+                          <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: last10.winRate >= 50 ? "#08a86b" : last10.winRate >= 40 ? "#f59f00" : "#e5484d" }}>
+                            {last10.winRate.toFixed(0)}%
                           </div>
-                        ))}
+                          <div className="text-[10px] mt-0.5" style={{ color: winRateDeltaColor }}>
+                            vs LTD {ltdWinRate.toFixed(0)}% ({winRateDelta >= 0 ? "+" : ""}{winRateDelta.toFixed(0)}pp)
+                          </div>
+                          <div className="text-[9px] mt-0.5" style={{ color: "var(--ink-4)" }}>(open trades by current value)</div>
+                        </div>
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Net P&L</div>
+                          <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(last10.netPl) }}>
+                            {fmt$(last10.netPl)}
+                          </div>
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>across {last10.count} trades</div>
+                        </div>
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg W / L</div>
+                          <div className="text-[14px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                            <span style={{ color: "#08a86b" }}>{fmt$(last10.avgWin)}</span>
+                            <span style={{ color: "var(--ink-4)" }}> / </span>
+                            <span style={{ color: "#e5484d" }}>{fmt$(last10.avgLoss)}</span>
+                          </div>
+                        </div>
+                        <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Profit Factor</div>
+                          <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: last10.profitFactor >= 2 ? "#08a86b" : last10.profitFactor >= 1 ? "#f59f00" : "#e5484d" }}>
+                            {last10.profitFactor > 0 ? `${last10.profitFactor.toFixed(2)}x` : "—"}
+                          </div>
+                        </div>
                       </div>
-                    );
-                  })()}
+
+                      {/* Trade Sequence Strip — oldest → newest */}
+                      <div>
+                        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                          Sequence · oldest → newest
+                        </div>
+                        <div className="flex items-center gap-1" data-testid="last10-sequence">
+                          {last10.trades.map(t => (
+                            <div key={t.trade_id}
+                                 title={`${t.ticker} · ${fmt$(t.pl)} · ${t.status}`}
+                                 className="w-7 h-7 rounded-[4px]"
+                                 style={{ background: outcomeColor(t.outcome) }} />
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* ━━━ PANEL 2 — Discipline Pulse ━━━ */}
+              <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+                <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                  <span className="text-[13px] font-semibold">Discipline Pulse</span>
+                  <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>2026</span>
+                </div>
+                <div className="flex-1 p-[18px] grid grid-cols-1 gap-2.5">
+                  {/* 1% Rule */}
+                  <Link href="/analytics?tab=drawdown" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>1% Rule Compliance</div>
+                    {compliance.totalLosses === 0 ? (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers yet</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: compliance.passRate >= 95 ? "#08a86b" : compliance.passRate >= 85 ? "#d97706" : "#e5484d" }}>
+                          {compliance.passRate.toFixed(0)}% within rule
+                        </div>
+                        <div className="text-[11px] mt-0.5" style={{ color: compliance.breaches > 0 ? "#e5484d" : "var(--ink-4)" }}>
+                          {compliance.breaches} {compliance.breaches === 1 ? "breach" : "breaches"} of {compliance.totalLosses}
+                        </div>
+                      </>
+                    )}
+                  </Link>
+
+                  {/* Hold Ratio */}
+                  <Link href="/analytics?tab=overview" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Hold Ratio (W/L)</div>
+                    {hr.losersHold === 0 ? (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers yet</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: hr.ratio >= 1 ? "#08a86b" : "#e5484d" }}>
+                          {hr.ratio.toFixed(2)}x
+                        </div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                          {hr.ratio >= 1 ? "letting winners run" : "holding losers too long"}
+                        </div>
+                      </>
+                    )}
+                  </Link>
+
+                  {/* Profit Factor (2026 trailing) */}
+                  <Link href="/analytics?tab=overview" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Profit Factor · 2026</div>
+                    {closed2026.length === 0 ? (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no closed trades in 2026</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pf2026 >= 2 ? "#08a86b" : pf2026 >= 1 ? "#f59f00" : "#e5484d" }}>
+                          {pf2026 > 0 ? `${pf2026.toFixed(2)}x` : "—"}
+                        </div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{closed2026.length} closed in 2026</div>
+                      </>
+                    )}
+                  </Link>
                 </div>
               </div>
             </div>
