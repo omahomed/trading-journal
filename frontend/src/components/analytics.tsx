@@ -3,6 +3,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import {
+  computeWinRate,
+  computeProfitFactor,
+  computeHoldRatio,
+  computeOnePctCompliance,
+} from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
 type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns";
@@ -94,8 +100,8 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
     const breakEven = closed.filter(t => parseFloat(String(t.realized_pl || 0)) === 0);
     const grossProfit = wins.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
     const grossLoss = Math.abs(losses.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0));
-    const pf = grossLoss > 0 ? grossProfit / grossLoss : 0;
-    const winRate = closed.length > 0 ? (wins.length / closed.length) * 100 : 0;
+    const pf = computeProfitFactor(closed);
+    const winRate = computeWinRate(closed);
     const avgWin = wins.length > 0 ? grossProfit / wins.length : 0;
     const avgLoss = losses.length > 0 ? -grossLoss / losses.length : 0;
     const avgTrade = closed.length > 0 ? (grossProfit - grossLoss) / closed.length : 0;
@@ -110,7 +116,9 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
     const avgR = withR.length > 0 ? withR.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)) / parseFloat(String(t.risk_budget || 1)), 0) / withR.length : 0;
     const maxR = withR.length > 0 ? Math.max(...withR.map(t => parseFloat(String(t.realized_pl || 0)) / parseFloat(String(t.risk_budget || 1)))) : 0;
 
-    // Hold days — guard against empty/invalid dates
+    // Hold days — guard against empty/invalid dates. avgHold stays inline
+    // because avgHoldAll is unique to the analytics overview; lib only
+    // needs the W/L pieces.
     const holdDays = (t: TradePosition) => {
       const oStr = String(t.open_date || "").trim();
       const cStr = String(t.closed_date || "").trim();
@@ -124,10 +132,11 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
       const valid = arr.map(holdDays).filter((d): d is number => d !== null);
       return valid.length > 0 ? valid.reduce((a, b) => a + b, 0) / valid.length : 0;
     };
-    const winnersHold = avgHold(wins);
-    const losersHold = avgHold(losses);
     const avgHoldAll = avgHold(closed);
-    const holdRatio = losersHold > 0 ? winnersHold / losersHold : 0;
+    const hr = computeHoldRatio(closed);
+    const winnersHold = hr.winnersHold;
+    const losersHold = hr.losersHold;
+    const holdRatio = hr.ratio;
 
     // Consecutive streaks
     const sorted = [...closed].sort((a, b) => String(a.closed_date || "").localeCompare(String(b.closed_date || "")));
@@ -372,23 +381,22 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             // Compute Impact_Pct = Realized_PL / NLV at trade open date
             const losses2026 = allTrades.filter(t => parseFloat(String(t.realized_pl || 0)) < 0 && String(t.closed_date || "").startsWith("2026"));
 
+            // Headline numbers via shared lib (Dashboard reuses the same fn).
+            const compliance = computeOnePctCompliance(losses2026, journalHistory as any);
+            const { passRate, withinRule, breaches, totalLosses } = compliance;
+
+            // Bucket distribution + worst offenders need per-trade impact;
+            // recompute here (cheap — same loop the lib does internally).
             const getNlvAtOpen = (openDate: string) => {
               const d = String(openDate).slice(0, 10);
-              // Find closest journal entry on or before the open date
               const sorted = journalHistory.filter(h => String(h.day).slice(0, 10) <= d).sort((a: any, b: any) => String(b.day).localeCompare(String(a.day)));
               return sorted.length > 0 ? sorted[0].end_nlv : null;
             };
-
             const impactTrades = losses2026.map(t => {
               const nlv = getNlvAtOpen(t.open_date);
               const impact = nlv && nlv > 0 ? (parseFloat(String(t.realized_pl || 0)) / nlv) * 100 : null;
               return { ticker: t.ticker, trade_id: t.trade_id, closed_date: t.closed_date, realized_pl: t.realized_pl, open_date: t.open_date, nlvAtOpen: nlv, impactPct: impact };
             }).filter(t => t.impactPct !== null);
-
-            const totalLosses = impactTrades.length;
-            const withinRule = impactTrades.filter(t => (t.impactPct || 0) >= -1.0).length;
-            const breaches = totalLosses - withinRule;
-            const passRate = totalLosses > 0 ? (withinRule / totalLosses) * 100 : 100;
 
             // Buckets
             const bucketDefs = [

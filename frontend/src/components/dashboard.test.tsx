@@ -37,6 +37,8 @@ vi.mock("@/lib/api", () => ({
     tradesClosed: vi.fn(),
     events: vi.fn(),
     dashboardMetrics: vi.fn(),
+    tradesRecent: vi.fn(),
+    batchPrices: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -56,6 +58,8 @@ const mOpen = vi.mocked(api.tradesOpen);
 const mClosed = vi.mocked(api.tradesClosed);
 const mEvents = vi.mocked(api.events);
 const mDash = vi.mocked(api.dashboardMetrics);
+const mRecent = vi.mocked(api.tradesRecent);
+const mPrices = vi.mocked(api.batchPrices);
 
 
 function fullMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetrics {
@@ -98,6 +102,8 @@ function setupDefaults() {
   })) as any);
   mClosed.mockResolvedValue([]);
   mEvents.mockResolvedValue([]);
+  mRecent.mockResolvedValue({ details: [], lot_closures: [] } as any);
+  mPrices.mockResolvedValue({});
 }
 
 
@@ -166,17 +172,17 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     expect(screen.getByText(/from peak \$525,000/)).toBeInTheDocument();
   });
 
-  test("Live Exposure tile renders metrics.exposure_pct (no live-prices side fetch)", async () => {
+  test("Live Exposure tile renders metrics.exposure_pct from journal, not from live prices", async () => {
     mDash.mockResolvedValue(fullMetrics());
+    // Even with a failed price fetch the exposure tile must still render
+    // its metric from the journal — the Live Exposure path is journal-
+    // backed; batchPrices is only used by the Last 10 Trades panel.
+    mPrices.mockRejectedValue(new Error("simulated price fetch failure"));
 
     render(<Dashboard navColor="#6366f1" />);
 
     // 188.5413 rounded to 1 decimal place → 188.5%
     expect(await screen.findByText("188.5%")).toBeInTheDocument();
-    // The dashboard must NOT call batchPrices any more — that side-fetch
-    // was the old live-exposure path. (api mock doesn't include it; if
-    // dashboard.tsx still calls it the test would crash.)
-    expect((api as any).batchPrices).toBeUndefined();
   });
 
   test("'As of [date]' badge is shown when journal_available is true", async () => {
@@ -296,5 +302,111 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     // No extraSub row on the YTD tile in this case
     const benchmarkText = await screen.findByText(/SPY:.*NDX:/);
     expect(benchmarkText).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    mDash.mockResolvedValue(fullMetrics());
+  });
+
+  test("Last 10 panel renders sequence strip with exactly 10 squares when ≥10 trades exist", async () => {
+    // 12 closed trades → window of 10 most recent
+    const trades = Array.from({ length: 12 }, (_, i) => {
+      const day = String(28 - i).padStart(2, "0");
+      return {
+        trade_id: `T${i}`,
+        ticker: `TICK${i}`,
+        status: "CLOSED",
+        open_date: `2026-04-${day}`,
+        closed_date: `2026-04-${day}`,
+        realized_pl: i % 2 === 0 ? 1500 : -800,
+      };
+    });
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    const strip = await screen.findByTestId("last10-sequence");
+    expect(strip.children.length).toBe(10);
+
+    // Headline tile labels render
+    expect(screen.getByText("Win Rate")).toBeInTheDocument();
+    expect(screen.getByText("Net P&L")).toBeInTheDocument();
+    expect(screen.getByText("Avg W / L")).toBeInTheDocument();
+    expect(screen.getByText("Profit Factor")).toBeInTheDocument();
+  });
+
+  test("Last 10 panel handles <10 trades gracefully (no padding)", async () => {
+    const trades = Array.from({ length: 4 }, (_, i) => ({
+      trade_id: `T${i}`,
+      ticker: `TICK${i}`,
+      status: "CLOSED",
+      open_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      closed_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      realized_pl: 1000,
+    }));
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    const strip = await screen.findByTestId("last10-sequence");
+    expect(strip.children.length).toBe(4);
+    // Header reflects actual count
+    expect(screen.getByText("Last 4 Trades")).toBeInTheDocument();
+  });
+
+  test("Last 10 panel shows empty state when no trades exist", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("No trades yet")).toBeInTheDocument();
+  });
+
+  test("Discipline Pulse renders all three tiles wrapped in /analytics?tab=... links", async () => {
+    // Need 2026 closed losses for compliance + ratio computations to be
+    // meaningful; the tiles render regardless, but linking is what we
+    // assert here.
+    mClosed.mockResolvedValue([
+      { trade_id: "C1", ticker: "AAA", status: "CLOSED", open_date: "2026-02-01", closed_date: "2026-02-15", realized_pl: 5000 },
+      { trade_id: "C2", ticker: "BBB", status: "CLOSED", open_date: "2026-03-01", closed_date: "2026-03-10", realized_pl: -2000 },
+    ] as any);
+    mHistory.mockResolvedValue([
+      { day: "2026-02-01", end_nlv: 500_000 } as any,
+      { day: "2026-03-01", end_nlv: 510_000 } as any,
+    ]);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("1% Rule Compliance")).toBeInTheDocument();
+    expect(screen.getByText("Hold Ratio (W/L)")).toBeInTheDocument();
+    expect(screen.getByText(/Profit Factor · 2026/)).toBeInTheDocument();
+
+    // All three tiles are wrapped in clickable links to specific tabs
+    const drawdownLinks = screen.getAllByRole("link").filter(a => a.getAttribute("href") === "/analytics?tab=drawdown");
+    const overviewLinks = screen.getAllByRole("link").filter(a => a.getAttribute("href") === "/analytics?tab=overview");
+    expect(drawdownLinks.length).toBeGreaterThanOrEqual(1); // 1% Rule
+    expect(overviewLinks.length).toBeGreaterThanOrEqual(2); // Hold Ratio + Profit Factor
+  });
+
+  test("1% Rule tile shows 'no losers yet' when 2026 has no closed losses", async () => {
+    mClosed.mockResolvedValue([
+      { trade_id: "C1", ticker: "AAA", status: "CLOSED", open_date: "2026-02-01", closed_date: "2026-02-15", realized_pl: 5000 },
+    ] as any);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    // The "no losers yet" subtitle should appear (rendered for 1% Rule and
+    // Hold Ratio tiles; we accept either match since both share the copy).
+    const matches = await screen.findAllByText("no losers yet");
+    expect(matches.length).toBeGreaterThanOrEqual(1);
   });
 });
