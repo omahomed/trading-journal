@@ -84,6 +84,27 @@ export function computeOnePctCompliance(
   return { passRate, withinRule, breaches, totalLosses };
 }
 
+// Window the most recent N closed trades by closed_date. Trades without
+// a closed_date are excluded — they're either open (no closure) or have
+// missing data. Caller passes the full closed-trade array; this helper
+// owns the sort + slice. Used by Dashboard's Discipline Pulse panel for
+// trailing-window metrics.
+export function trailingClosedTrades(closed: TradePosition[], n: number): TradePosition[] {
+  return [...closed]
+    .filter(t => Boolean(t.closed_date))
+    .sort((a, b) => String(b.closed_date || "").localeCompare(String(a.closed_date || "")))
+    .slice(0, n);
+}
+
+// Same windowing applied to the losing subset. Useful for 1% Rule
+// compliance tile, which is naturally scoped to losses.
+export function trailingClosedLosses(closed: TradePosition[], n: number): TradePosition[] {
+  return trailingClosedTrades(
+    closed.filter(t => parseFloat(String(t.realized_pl || 0)) < 0),
+    n,
+  );
+}
+
 export type Last10Outcome = "win" | "loss" | "be";
 
 export interface Last10Trade {
@@ -93,6 +114,7 @@ export interface Last10Trade {
   open_date: string;
   pl: number;
   outcome: Last10Outcome;
+  rule?: string;
 }
 
 export interface Last10Stats {
@@ -117,7 +139,7 @@ export interface Last10Stats {
 // caller-provided so this module doesn't need to know which window
 // the comparison is against.
 export function computeLast10Stats(
-  trades: { trade_id: string; ticker: string; status: string; open_date: string; pl: number }[],
+  trades: { trade_id: string; ticker: string; status: string; open_date: string; pl: number; rule?: string }[],
   ltdWinRate: number,
   windowSize: number = 10,
   beDeadzone: number = 50,

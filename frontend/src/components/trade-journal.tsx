@@ -754,6 +754,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       const params = new URLSearchParams(window.location.search);
       const urlTicker = params.get("ticker");
       if (urlTicker) pickedTicker = urlTicker.toUpperCase();
+      const urlTradeId = params.get("trade_id");
+      if (urlTradeId) pickedTradeId = urlTradeId;
     }
     if (pickedTicker) setSelectedTickers([pickedTicker]);
     if (pickedTradeId) setExpandedCard(pickedTradeId);

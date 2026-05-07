@@ -261,3 +261,36 @@ describe("TradeJournal — Edit transaction modal", () => {
     expect(trxInput.readOnly).toBe(true);
   });
 });
+
+describe("TradeJournal — URL deep-link", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+  });
+
+  test("?trade_id=XXX in URL pre-expands the matching trade card on mount", async () => {
+    // Stage the URL before mount; the component reads window.location.search
+    // synchronously inside its useEffect.
+    window.history.pushState({}, "", `/trade-journal?trade_id=${TRADE.trade_id}`);
+
+    render(<TradeJournal navColor="#6366f1" />);
+
+    // Trade Journal defaults to "closed" filter; switch to "open" so the
+    // mocked OPEN trade is visible. The deep-link only sets expandedCard,
+    // not the filter — match the existing test pattern.
+    const openFilter = await screen.findByRole("button", { name: /^open \(/i });
+    await act(async () => { fireEvent.click(openFilter); });
+
+    // The card pre-expansion is signaled by the Transaction History block,
+    // which only renders when expandedCard === trade_id. Look for the
+    // BUY transaction's trx_id from the mock — present iff expanded.
+    // (The deep-link's pre-expansion is what we're verifying — without it,
+    // the user would have to click Details to see B1.)
+    await waitFor(() => {
+      expect(screen.queryByText("B1")).toBeInTheDocument();
+    });
+
+    // Cleanup: restore default URL so it doesn't leak into other tests
+    window.history.pushState({}, "", "/");
+  });
+});
