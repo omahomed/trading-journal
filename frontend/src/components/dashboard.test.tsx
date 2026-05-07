@@ -337,7 +337,9 @@ describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
     expect(screen.getByText("Win Rate")).toBeInTheDocument();
     expect(screen.getByText("Net P&L")).toBeInTheDocument();
     expect(screen.getByText("Avg W / L")).toBeInTheDocument();
-    expect(screen.getByText("Profit Factor")).toBeInTheDocument();
+    // "Profit Factor" appears in BOTH Last 10 panel and Discipline Pulse;
+    // assert at least one match rather than uniqueness.
+    expect(screen.getAllByText("Profit Factor").length).toBeGreaterThanOrEqual(1);
   });
 
   test("Last 10 panel handles <10 trades gracefully (no padding)", async () => {
@@ -387,7 +389,9 @@ describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
 
     expect(await screen.findByText("1% Rule Compliance")).toBeInTheDocument();
     expect(screen.getByText("Hold Ratio (W/L)")).toBeInTheDocument();
-    expect(screen.getByText(/Profit Factor · 2026/)).toBeInTheDocument();
+    // Profit Factor label is now bare (no " · 2026" suffix) — appears in
+    // both Last 10 panel and Discipline Pulse, so getAllByText.
+    expect(screen.getAllByText("Profit Factor").length).toBeGreaterThanOrEqual(1);
 
     // All three tiles are wrapped in clickable links to specific tabs
     const drawdownLinks = screen.getAllByRole("link").filter(a => a.getAttribute("href") === "/analytics?tab=drawdown");
@@ -396,7 +400,7 @@ describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
     expect(overviewLinks.length).toBeGreaterThanOrEqual(2); // Hold Ratio + Profit Factor
   });
 
-  test("1% Rule tile shows 'no losers yet' when 2026 has no closed losses", async () => {
+  test("1% Rule tile shows 'no losers in window' when no closed losses exist", async () => {
     mClosed.mockResolvedValue([
       { trade_id: "C1", ticker: "AAA", status: "CLOSED", open_date: "2026-02-01", closed_date: "2026-02-15", realized_pl: 5000 },
     ] as any);
@@ -404,9 +408,99 @@ describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
 
     render(<Dashboard navColor="#6366f1" />);
 
-    // The "no losers yet" subtitle should appear (rendered for 1% Rule and
-    // Hold Ratio tiles; we accept either match since both share the copy).
-    const matches = await screen.findAllByText("no losers yet");
+    // The "no losers in window" subtitle should appear (1% Rule, Hold
+    // Ratio, and Profit Factor tiles all share this copy when the
+    // trailing window has no losers).
+    const matches = await screen.findAllByText("no losers in window");
     expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Discipline Pulse header shows trailing-30 subtitle when ≥30 closed trades exist", async () => {
+    // 32 closed trades — more than the trailing-30 window
+    const trades = Array.from({ length: 32 }, (_, i) => {
+      const m = String((i % 12) + 1).padStart(2, "0");
+      const d = String((i % 28) + 1).padStart(2, "0");
+      return {
+        trade_id: `T${i}`, ticker: `TICK${i}`, status: "CLOSED",
+        open_date: `2025-${m}-${d}`, closed_date: `2025-${m}-${d}`,
+        realized_pl: i % 3 === 0 ? -800 : 1500,
+      };
+    });
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+    mHistory.mockResolvedValue([{ day: "2025-01-01", end_nlv: 500_000 } as any]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("trailing 30 closed")).toBeInTheDocument();
+    // LTD baseline subtitle appears (we don't pin the exact ratio — just that
+    // the LTD prefix is present somewhere in the panel)
+    const ltdMatches = await screen.findAllByText(/^LTD: /);
+    expect(ltdMatches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("Discipline Pulse subtitle shows 'trailing N closed' when fewer than 30 trades exist", async () => {
+    const trades = Array.from({ length: 7 }, (_, i) => ({
+      trade_id: `T${i}`, ticker: `TICK${i}`, status: "CLOSED",
+      open_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      closed_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      realized_pl: 1000,
+    }));
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    expect(await screen.findByText("trailing 7 closed")).toBeInTheDocument();
+  });
+
+  test("sequence strip squares are wrapped in Link to /trade-journal?trade_id=...", async () => {
+    const trades = Array.from({ length: 3 }, (_, i) => ({
+      trade_id: `T${i + 1}`, ticker: `TKR${i + 1}`, status: "CLOSED",
+      open_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      closed_date: `2026-04-${String(20 - i).padStart(2, "0")}`,
+      realized_pl: 1000,
+    }));
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+
+    render(<Dashboard navColor="#6366f1" />);
+
+    const strip = await screen.findByTestId("last10-sequence");
+    // Each child is a Link with the right href
+    const hrefs = Array.from(strip.querySelectorAll("a")).map(a => a.getAttribute("href"));
+    expect(hrefs).toContain("/trade-journal?trade_id=T1");
+    expect(hrefs).toContain("/trade-journal?trade_id=T2");
+    expect(hrefs).toContain("/trade-journal?trade_id=T3");
+  });
+
+  test("hovering a sequence square shows rich tooltip with ticker, P&L, status, days, rule", async () => {
+    const trades = [{
+      trade_id: "T1",
+      ticker: "RICH",
+      status: "CLOSED",
+      open_date: "2026-04-01",
+      closed_date: "2026-04-15",
+      realized_pl: 2500,
+      rule: "br1.1 Consolidation",
+    }];
+    mClosed.mockResolvedValue(trades as any);
+    mOpen.mockResolvedValue([]);
+
+    const { fireEvent } = await import("@testing-library/react");
+    render(<Dashboard navColor="#6366f1" />);
+
+    const strip = await screen.findByTestId("last10-sequence");
+    const square = strip.querySelector("a");
+    expect(square).not.toBeNull();
+
+    fireEvent.mouseEnter(square!);
+
+    const tooltip = await screen.findByTestId("last10-tooltip-0");
+    expect(tooltip).toHaveTextContent("RICH");
+    expect(tooltip).toHaveTextContent("$+2,500");
+    expect(tooltip).toHaveTextContent("CLOSED");
+    expect(tooltip).toHaveTextContent("2026-04-01");
+    expect(tooltip).toHaveTextContent("br1.1 Consolidation");
   });
 });

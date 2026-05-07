@@ -5,6 +5,8 @@ import {
   computeHoldRatio,
   computeOnePctCompliance,
   computeLast10Stats,
+  trailingClosedTrades,
+  trailingClosedLosses,
 } from "./analytics-stats";
 import type { TradePosition, JournalHistoryPoint } from "./api";
 
@@ -215,5 +217,73 @@ describe("computeLast10Stats", () => {
     expect(r.trades[0].outcome).toBe("win");
     expect(r.trades[1].status).toBe("CLOSED");
     expect(r.trades[1].outcome).toBe("loss");
+  });
+
+  it("threads the rule field through to the windowed output", () => {
+    const trades = [
+      { trade_id: "T1", ticker: "AAA", status: "CLOSED", open_date: "2026-04-01", pl: 1000, rule: "br1.1 Consolidation" },
+      { trade_id: "T2", ticker: "BBB", status: "OPEN",   open_date: "2026-04-02", pl: 500,  rule: "RS leader" },
+    ];
+    const r = computeLast10Stats(trades, 50);
+    // Oldest → newest: [T1, T2]
+    expect(r.trades[0].rule).toBe("br1.1 Consolidation");
+    expect(r.trades[1].rule).toBe("RS leader");
+  });
+});
+
+describe("trailingClosedTrades", () => {
+  it("returns [] for empty input", () => {
+    expect(trailingClosedTrades([], 30)).toEqual([]);
+  });
+
+  it("excludes trades without closed_date (open trades)", () => {
+    const trades = [
+      closed({ trade_id: "T1", closed_date: "2026-04-01", realized_pl: 100 }),
+      closed({ trade_id: "T2", closed_date: "", realized_pl: 100 }),
+      closed({ trade_id: "T3", closed_date: null, realized_pl: 100 }),
+    ];
+    const r = trailingClosedTrades(trades, 10);
+    expect(r.length).toBe(1);
+    expect(r[0].trade_id).toBe("T1");
+  });
+
+  it("sorts by closed_date descending and slices to N", () => {
+    const trades = [
+      closed({ trade_id: "T1", closed_date: "2026-01-15" }),
+      closed({ trade_id: "T2", closed_date: "2026-04-01" }),
+      closed({ trade_id: "T3", closed_date: "2026-02-20" }),
+      closed({ trade_id: "T4", closed_date: "2026-03-10" }),
+    ];
+    const r = trailingClosedTrades(trades, 2);
+    expect(r.length).toBe(2);
+    expect(r[0].trade_id).toBe("T2"); // most recent
+    expect(r[1].trade_id).toBe("T4"); // second most recent
+  });
+
+  it("returns all available when N exceeds count", () => {
+    const trades = [
+      closed({ trade_id: "T1", closed_date: "2026-01-15" }),
+      closed({ trade_id: "T2", closed_date: "2026-02-15" }),
+    ];
+    expect(trailingClosedTrades(trades, 30).length).toBe(2);
+  });
+});
+
+describe("trailingClosedLosses", () => {
+  it("filters to losses then windows", () => {
+    const trades = [
+      closed({ trade_id: "W1", closed_date: "2026-04-01", realized_pl: 1000 }),
+      closed({ trade_id: "L1", closed_date: "2026-03-01", realized_pl: -500 }),
+      closed({ trade_id: "L2", closed_date: "2026-02-01", realized_pl: -300 }),
+      closed({ trade_id: "BE", closed_date: "2026-01-01", realized_pl: 0 }),
+    ];
+    const r = trailingClosedLosses(trades, 5);
+    expect(r.length).toBe(2);
+    expect(r.map(t => t.trade_id)).toEqual(["L1", "L2"]); // sorted desc by closed_date
+  });
+
+  it("returns [] when no losses exist", () => {
+    const trades = [closed({ realized_pl: 1000 }), closed({ realized_pl: 500 })];
+    expect(trailingClosedLosses(trades, 30)).toEqual([]);
   });
 });

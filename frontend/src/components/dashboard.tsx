@@ -11,6 +11,8 @@ import {
   computeHoldRatio,
   computeOnePctCompliance,
   computeLast10Stats,
+  trailingClosedTrades,
+  trailingClosedLosses,
 } from "@/lib/analytics-stats";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
@@ -68,6 +70,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [pricesStale, setPricesStale] = useState(false);
+  const [hoveredSquareIdx, setHoveredSquareIdx] = useState<number | null>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("1Y");
@@ -605,6 +608,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
               status: "OPEN",
               open_date: String(t.open_date || ""),
               pl: enrichedById[t.trade_id]?.overall_pl ?? 0,
+              rule: (t as any).rule || "",
             })),
             ...closedTrades.map((t: any) => ({
               trade_id: t.trade_id,
@@ -612,18 +616,33 @@ export function Dashboard({ navColor }: { navColor: string }) {
               status: "CLOSED",
               open_date: String(t.open_date || ""),
               pl: parseFloat(String(t.realized_pl || 0)),
+              rule: t.rule || "",
             })),
           ];
           const ltdWinRate = computeWinRate(closedTrades as TradePosition[]);
           const last10 = computeLast10Stats(allTradesForLast10, ltdWinRate);
 
-          // ─── Discipline Pulse (2026 only) ──────────────────────────────
+          // ─── Discipline Pulse (trailing 30 closed, with LTD baselines) ─
           const closedArr = closedTrades as TradePosition[];
-          const closed2026 = closedArr.filter(t => String(t.closed_date || "").startsWith("2026"));
-          const losses2026 = closed2026.filter(t => parseFloat(String(t.realized_pl || 0)) < 0);
-          const compliance = computeOnePctCompliance(losses2026, history);
-          const hr = computeHoldRatio(closed2026);
-          const pf2026 = computeProfitFactor(closed2026);
+          const trailing30 = trailingClosedTrades(closedArr, 30);
+          const trailing30Losses = trailingClosedLosses(closedArr, 30);
+          const ltdLosses = closedArr.filter((t: TradePosition) => parseFloat(String(t.realized_pl || 0)) < 0);
+
+          const compliance = computeOnePctCompliance(trailing30Losses, history);
+          const complianceLtd = computeOnePctCompliance(ltdLosses, history);
+          const hr = computeHoldRatio(trailing30);
+          const hrLtd = computeHoldRatio(closedArr);
+          const pf30 = computeProfitFactor(trailing30);
+          const pfLtd = computeProfitFactor(closedArr);
+          // Profit Factor needs at least one losing trade in the window
+          // to be meaningful — if all wins (or empty), grossLoss=0 and the
+          // function returns 0. Tile renders "—" in that case.
+          const pf30Losers = trailing30.filter(t => parseFloat(String(t.realized_pl || 0)) < 0).length;
+
+          const dpHeaderSubtitle =
+            trailing30.length === 0 ? "no closed trades yet"
+            : trailing30.length < 30 ? `trailing ${trailing30.length} closed`
+            : "trailing 30 closed";
 
           const fmt$ = (n: number) =>
             `$${n >= 0 ? "+" : "-"}${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -696,12 +715,47 @@ export function Dashboard({ navColor }: { navColor: string }) {
                           Sequence · oldest → newest
                         </div>
                         <div className="flex items-center gap-1" data-testid="last10-sequence">
-                          {last10.trades.map(t => (
-                            <div key={t.trade_id}
-                                 title={`${t.ticker} · ${fmt$(t.pl)} · ${t.status}`}
-                                 className="w-7 h-7 rounded-[4px]"
-                                 style={{ background: outcomeColor(t.outcome) }} />
-                          ))}
+                          {last10.trades.map((t, i) => {
+                            const daysHeld = (() => {
+                              if (!t.open_date) return null;
+                              const open = new Date(t.open_date);
+                              if (isNaN(open.getTime())) return null;
+                              return Math.max(0, Math.floor((Date.now() - open.getTime()) / 86_400_000));
+                            })();
+                            const tooltipFlipLeft = i >= 5;
+                            return (
+                              <Link key={t.trade_id}
+                                    href={`/trade-journal?trade_id=${encodeURIComponent(t.trade_id)}`}
+                                    onMouseEnter={() => setHoveredSquareIdx(i)}
+                                    onMouseLeave={() => setHoveredSquareIdx(null)}
+                                    className="relative w-7 h-7 rounded-[4px] cursor-pointer transition-transform hover:scale-110"
+                                    style={{ background: outcomeColor(t.outcome) }}
+                                    aria-label={`${t.ticker} ${t.status}, P&L ${fmt$(t.pl)}`}>
+                                {hoveredSquareIdx === i && (
+                                  <div className="absolute z-50 p-2.5 rounded-[8px] text-left whitespace-nowrap pointer-events-none"
+                                       data-testid={`last10-tooltip-${i}`}
+                                       style={{
+                                         bottom: "calc(100% + 6px)",
+                                         [tooltipFlipLeft ? "right" : "left"]: 0,
+                                         background: "var(--surface)",
+                                         border: "1px solid var(--border)",
+                                         boxShadow: "var(--card-shadow)",
+                                         minWidth: 140,
+                                       }}>
+                                    <div className="text-[12px] font-bold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.ticker}</div>
+                                    <div className="text-[12px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: outcomeColor(t.outcome) }}>{fmt$(t.pl)}</div>
+                                    <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>{t.status}</div>
+                                    <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                                      {String(t.open_date || "").slice(0, 10)}{daysHeld != null ? ` · ${daysHeld}d held` : ""}
+                                    </div>
+                                    {t.rule && (
+                                      <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-3)" }}>{t.rule}</div>
+                                    )}
+                                  </div>
+                                )}
+                              </Link>
+                            );
+                          })}
                         </div>
                       </div>
                     </>
@@ -714,16 +768,21 @@ export function Dashboard({ navColor }: { navColor: string }) {
                 <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
                   <span className="text-[13px] font-semibold">Discipline Pulse</span>
-                  <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>2026</span>
+                  <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>{dpHeaderSubtitle}</span>
                 </div>
                 <div className="flex-1 p-[18px] grid grid-cols-1 gap-2.5">
-                  {/* 1% Rule */}
+                  {/* 1% Rule — trailing 30 closed losses, with LTD baseline */}
                   <Link href="/analytics?tab=drawdown" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
                     <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>1% Rule Compliance</div>
                     {compliance.totalLosses === 0 ? (
                       <>
                         <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
-                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers yet</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers in window</div>
+                        {complianceLtd.totalLosses > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                            LTD: {complianceLtd.passRate.toFixed(0)}% ({complianceLtd.totalLosses} closed losses)
+                          </div>
+                        )}
                       </>
                     ) : (
                       <>
@@ -733,17 +792,25 @@ export function Dashboard({ navColor }: { navColor: string }) {
                         <div className="text-[11px] mt-0.5" style={{ color: compliance.breaches > 0 ? "#e5484d" : "var(--ink-4)" }}>
                           {compliance.breaches} {compliance.breaches === 1 ? "breach" : "breaches"} of {compliance.totalLosses}
                         </div>
+                        {complianceLtd.totalLosses > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                            LTD: {complianceLtd.passRate.toFixed(0)}% ({complianceLtd.totalLosses} closed losses)
+                          </div>
+                        )}
                       </>
                     )}
                   </Link>
 
-                  {/* Hold Ratio */}
+                  {/* Hold Ratio — trailing 30 closed, with LTD baseline */}
                   <Link href="/analytics?tab=overview" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
                     <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Hold Ratio (W/L)</div>
                     {hr.losersHold === 0 ? (
                       <>
                         <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
-                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers yet</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers in window</div>
+                        {hrLtd.losersHold > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>LTD: {hrLtd.ratio.toFixed(2)}x</div>
+                        )}
                       </>
                     ) : (
                       <>
@@ -753,24 +820,41 @@ export function Dashboard({ navColor }: { navColor: string }) {
                         <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
                           {hr.ratio >= 1 ? "letting winners run" : "holding losers too long"}
                         </div>
+                        {hrLtd.losersHold > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>LTD: {hrLtd.ratio.toFixed(2)}x</div>
+                        )}
                       </>
                     )}
                   </Link>
 
-                  {/* Profit Factor (2026 trailing) */}
+                  {/* Profit Factor — trailing 30 closed, with LTD baseline */}
                   <Link href="/analytics?tab=overview" className="block p-3 rounded-[10px] transition-colors hover:bg-[var(--surface-2)]" style={{ border: "1px solid var(--border)", textDecoration: "none", color: "inherit" }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Profit Factor · 2026</div>
-                    {closed2026.length === 0 ? (
+                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Profit Factor</div>
+                    {trailing30.length === 0 ? (
                       <>
                         <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
-                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no closed trades in 2026</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no closed trades in window</div>
+                        {pfLtd > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>LTD: {pfLtd.toFixed(2)}x</div>
+                        )}
+                      </>
+                    ) : pf30Losers === 0 ? (
+                      <>
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>no losers in window</div>
+                        {pfLtd > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>LTD: {pfLtd.toFixed(2)}x</div>
+                        )}
                       </>
                     ) : (
                       <>
-                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pf2026 >= 2 ? "#08a86b" : pf2026 >= 1 ? "#f59f00" : "#e5484d" }}>
-                          {pf2026 > 0 ? `${pf2026.toFixed(2)}x` : "—"}
+                        <div className="text-[18px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pf30 >= 2 ? "#08a86b" : pf30 >= 1 ? "#f59f00" : "#e5484d" }}>
+                          {pf30.toFixed(2)}x
                         </div>
-                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{closed2026.length} closed in 2026</div>
+                        <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>{trailing30.length} closed in window</div>
+                        {pfLtd > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>LTD: {pfLtd.toFixed(2)}x</div>
+                        )}
                       </>
                     )}
                   </Link>
