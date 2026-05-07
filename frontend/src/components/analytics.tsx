@@ -1358,10 +1358,15 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
           }
           if (campDateRange === "Last 30d" && d < new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)) return false;
           if (campDateRange === "Last 90d" && d < new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10)) return false;
-          // Result
-          const pl = parseFloat(String(t.realized_pl || 0));
-          if (campResult === "winners" && pl <= 0) return false;
-          if (campResult === "losers" && pl >= 0) return false;
+          // Result — open trades classified by overall_pl (unrealized + realized
+          // partial closures); closed trades by realized_pl (the only thing left
+          // once shares hit zero).
+          const isOpenRow = (t.status || "").toUpperCase() === "OPEN";
+          const resultPl = isOpenRow
+            ? (enrichedById[t.trade_id]?.overall_pl ?? 0)
+            : parseFloat(String(t.realized_pl || 0));
+          if (campResult === "winners" && resultPl <= 0) return false;
+          if (campResult === "losers" && resultPl >= 0) return false;
           // Grade
           if (campGrade !== "all") {
             const g = (t as any).grade;
@@ -1647,14 +1652,14 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                         </td>
                         <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{t.rule}</td>
                         <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(0, 10)}</td>
-                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{displayCloseDate || "—"}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{isOpen ? "—" : (displayCloseDate || "—")}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{displayShares > 0 ? displayShares : "—"}</td>
                         <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{displayEntry > 0 ? `$${displayEntry.toFixed(2)}` : "—"}</td>
-                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{displayExit > 0 ? `$${displayExit.toFixed(2)}` : "—"}</td>
+                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{!isOpen && displayExit > 0 ? `$${displayExit.toFixed(2)}` : "—"}</td>
                         <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>
                           ${pl >= 0 ? "+" : ""}{pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
-                        <td className="px-3 py-2" style={{ fontFamily: mono, color: pctColor(displayRet) }}>{displayRet !== 0 ? `${displayRet >= 0 ? "+" : ""}${displayRet.toFixed(1)}%` : "—"}</td>
+                        <td className="px-3 py-2" style={{ fontFamily: mono, color: pctColor(isOpen ? 0 : displayRet) }}>{!isOpen && displayRet !== 0 ? `${displayRet >= 0 ? "+" : ""}${displayRet.toFixed(1)}%` : "—"}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
                       </tr>
                     );

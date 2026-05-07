@@ -217,4 +217,70 @@ describe("Analytics — All Campaigns Flight Deck", () => {
     expect(screen.getByText("W / L")).toBeInTheDocument();
     expect(screen.queryByText("Total P&L")).not.toBeInTheDocument();
   });
+
+  test("winners filter classifies open trade by overall_pl, not realized_pl", async () => {
+    // Open trade with NEGATIVE realized_pl (partial sell at a loss) but
+    // POSITIVE overall_pl (current price recovered above avg entry).
+    // Should appear in "winners" filter and NOT in "losers".
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([
+      openTrade({
+        trade_id: "O1",
+        ticker: "RECOV",
+        shares: 50,
+        avg_entry: 100,
+        total_cost: 5000,
+        realized_pl: -1000, // partial sell at a loss
+      }),
+    ]);
+    mRecent.mockResolvedValue({
+      details: [
+        txn({ trade_id: "O1", action: "BUY",  date: "2026-01-01", shares: 100, amount: 100 }),
+        txn({ trade_id: "O1", action: "SELL", date: "2026-02-01", shares: 50,  amount: 80 }),
+      ],
+      lot_closures: [],
+    });
+    // Live price 130 → unrealized = (130-100)*50 = +1500; realized_bank = -1000
+    // overall_pl = +500 → Winner
+    mPrices.mockResolvedValue({ RECOV: 130 });
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+
+    await waitFor(() => expect(mPrices).toHaveBeenCalled());
+    expect(await screen.findByText("RECOV")).toBeInTheDocument();
+
+    // Switch to winners — should still appear (overall_pl > 0)
+    fireEvent.click(screen.getByRole("button", { name: "winners" }));
+    await waitFor(() => expect(screen.getByText("RECOV")).toBeInTheDocument());
+
+    // Switch to losers — should NOT appear (overall_pl > 0)
+    fireEvent.click(screen.getByRole("button", { name: "losers" }));
+    await waitFor(() =>
+      expect(screen.queryByText("RECOV")).not.toBeInTheDocument()
+    );
+  });
+
+  test("open trade renders '—' in Close/Exit/Return % even when partial-sell data exists", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([
+      openTrade({ trade_id: "O1", ticker: "PSELL", shares: 50, avg_entry: 100, realized_pl: 1000 }),
+    ]);
+    mRecent.mockResolvedValue({
+      details: [
+        txn({ trade_id: "O1", action: "BUY",  date: "2026-01-01", shares: 100, amount: 100 }),
+        txn({ trade_id: "O1", action: "SELL", date: "2026-02-01", shares: 50,  amount: 120 }),
+      ],
+      lot_closures: [],
+    });
+    mPrices.mockResolvedValue({ PSELL: 100 });
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+
+    // Without the fix, partial sell would render: Close="2026-02-01",
+    // Exit="$120.00", Return="+20.0%". With the fix all three are "—".
+    await screen.findByText("PSELL");
+    expect(screen.queryByText("$120.00")).not.toBeInTheDocument();
+    expect(screen.queryByText("+20.0%")).not.toBeInTheDocument();
+    expect(screen.queryByText("2026-02-01")).not.toBeInTheDocument();
+  });
 });
