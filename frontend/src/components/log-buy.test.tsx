@@ -24,9 +24,16 @@ vi.mock("@/lib/api", () => ({
     nextTradeId: vi.fn(),
     priceLookup: vi.fn(),
     logBuy: vi.fn(),
+    listStrategies: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
+
+const SEED_STRATEGIES = [
+  { name: "CanSlim",     description: "primary",   color: "#6366f1", is_active: true, created_at: "2026-01-01T00:00:00" },
+  { name: "StockTalk",   description: "small-cap", color: "#d97706", is_active: true, created_at: "2026-01-01T00:00:01" },
+  { name: "21eStrategy", description: "21 EMA",    color: "#0d9488", is_active: true, created_at: "2026-01-01T00:00:02" },
+];
 
 import { api } from "@/lib/api";
 import { LogBuy } from "./log-buy";
@@ -38,6 +45,7 @@ function setupDefaults() {
   vi.mocked(api.tradesOpen).mockResolvedValue([]);
   vi.mocked(api.tradesOpenDetails).mockResolvedValue({ details: [], lot_closures: [] });
   vi.mocked(api.nextTradeId).mockResolvedValue({ trade_id: "202604-001" } as any);
+  vi.mocked(api.listStrategies).mockResolvedValue(SEED_STRATEGIES as any);
 }
 
 
@@ -338,5 +346,119 @@ describe("LogBuy — options stop-loss visibility", () => {
     // the warning text is absent.
     await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
     expect(screen.queryByText(/recommend < 8%/)).not.toBeInTheDocument();
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Strategy dropdown (Migration 019).
+// Defaults to CanSlim, ships in submit body, and on scale-in inherits
+// from the parent campaign with the field rendered read-only.
+// ─────────────────────────────────────────────────────────────────────
+
+function findStrategyTrigger(): HTMLButtonElement {
+  // Field renders <Field label="Strategy *">…SearchSelect…</Field>. The
+  // SearchSelect's trigger is the first <button> inside the Field's parent
+  // div, same accessor pattern as selectBuyRule above.
+  const label = screen.getByText("Strategy *");
+  const trigger = label.parentElement?.querySelector("button") as HTMLButtonElement;
+  if (!trigger) throw new Error("Strategy trigger not found");
+  return trigger;
+}
+
+describe("LogBuy — strategy dropdown", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+    vi.mocked(api.priceLookup).mockReturnValue(new Promise(() => {}) as any);
+    vi.mocked(api.logBuy).mockResolvedValue({ trx_id: "B1" } as any);
+  });
+
+  test("renders Strategy dropdown defaulted to CanSlim", async () => {
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    // Wait for listStrategies to resolve and populate the dropdown.
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+
+    const trigger = findStrategyTrigger();
+    expect(trigger.textContent).toContain("CanSlim");
+  });
+
+  test("submitting a new buy includes strategy in the request body", async () => {
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await selectBuyRule(FIRST_RULE);
+    fillByLabel("Shares to Add", "100");
+    fillByLabel("Price ($)", "200.00");
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG BUY ORDER"));
+    });
+
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+    const body = vi.mocked(api.logBuy).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.strategy).toBe("CanSlim");
+  });
+
+  test("user can switch strategy and the new value flows into the submit body", async () => {
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+
+    // Open Strategy dropdown and pick StockTalk.
+    const trigger = findStrategyTrigger();
+    await act(async () => { fireEvent.click(trigger); });
+    await act(async () => { fireEvent.click(screen.getByText("StockTalk")); });
+
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await selectBuyRule(FIRST_RULE);
+    fillByLabel("Shares to Add", "100");
+    fillByLabel("Price ($)", "200.00");
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG BUY ORDER"));
+    });
+
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+    const body = vi.mocked(api.logBuy).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.strategy).toBe("StockTalk");
+  });
+
+  test("scale-in disables the Strategy field and prefills from parent", async () => {
+    // Parent campaign tagged 21eStrategy. Switching to scale-in mode and
+    // selecting it should lock the dropdown to that value.
+    vi.mocked(api.tradesOpen).mockResolvedValue([{
+      trade_id: "202604-077", ticker: "MSFT", status: "OPEN",
+      shares: 50, avg_entry: 350, total_cost: 17500, realized_pl: 0, rule: "br1.1",
+      strategy: "21eStrategy",
+    }] as any);
+
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+
+    // Switch to scale-in
+    await act(async () => {
+      fireEvent.click(screen.getByText("Scale In (Add to Existing)"));
+    });
+
+    // Pick the parent campaign from the campaign-picker SearchSelect.
+    const campaignField = screen.getByText("Select Existing Campaign");
+    const campaignTrigger = campaignField.parentElement?.querySelector("button") as HTMLButtonElement;
+    await act(async () => { fireEvent.click(campaignTrigger); });
+    await act(async () => { fireEvent.click(screen.getByText("MSFT | 202604-077")); });
+
+    // Strategy now reflects the parent and the trigger is disabled.
+    await waitFor(() => {
+      const trigger = findStrategyTrigger();
+      expect(trigger.textContent).toContain("21eStrategy");
+      expect(trigger.disabled).toBe(true);
+    });
+    expect(screen.getByText("Inherited from parent campaign")).toBeInTheDocument();
   });
 });

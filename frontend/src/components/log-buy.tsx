@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -105,8 +105,20 @@ function DropZone({ label, icon, files, onFiles, multiple, accept }: {
   );
 }
 
-function SearchSelect({ value, onChange, options, placeholder }: {
-  value: string; onChange: (v: string) => void; options: string[]; placeholder?: string;
+// Structured option for SearchSelect. Lets callers attach a leading visual
+// (e.g. a color swatch for the Strategy dropdown) without forking the
+// component. `value` is what gets passed to onChange and matched against the
+// current selection; `label` is what's rendered if different from value.
+// Backwards compatible: callers that pass `string[]` for `options` continue
+// to work unchanged — the component normalizes plain strings into structured
+// form internally.
+export type SearchSelectOption =
+  | string
+  | { value: string; label?: string; renderPrefix?: () => React.ReactNode };
+
+function SearchSelect({ value, onChange, options, placeholder, disabled }: {
+  value: string; onChange: (v: string) => void;
+  options: SearchSelectOption[]; placeholder?: string; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -120,34 +132,57 @@ function SearchSelect({ value, onChange, options, placeholder }: {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // Normalize plain-string options into structured form so the render loop
+  // below has one shape to deal with.
+  const normalized = options.map(o =>
+    typeof o === "string" ? { value: o, label: o } : { label: o.value, ...o }
+  );
+
   const filtered = search
-    ? options.filter(o => o.toLowerCase().includes(search.toLowerCase()))
-    : options;
+    ? normalized.filter(o =>
+        (o.label ?? o.value).toLowerCase().includes(search.toLowerCase())
+        || o.value.toLowerCase().includes(search.toLowerCase())
+      )
+    : normalized;
+
+  // The trigger button's leading visual mirrors the selected option's
+  // renderPrefix so the swatch (or any future prefix) stays visible after
+  // selection. Falls back to nothing when the current value isn't found.
+  const selectedOpt = normalized.find(o => o.value === value);
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)}
+      <button type="button" onClick={() => { if (!disabled) setOpen(!open); }}
+              disabled={disabled}
               className={inputCls + " flex items-center justify-between text-left"}
-              style={{ ...inputStyle, fontFamily: "inherit", cursor: "pointer" }}>
-        <span style={{ opacity: value ? 1 : 0.5 }}>{value || placeholder || "Select..."}</span>
+              style={{
+                ...inputStyle, fontFamily: "inherit",
+                cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.6 : 1,
+              }}>
+        <span className="flex items-center gap-2 min-w-0" style={{ opacity: value ? 1 : 0.5 }}>
+          {selectedOpt?.renderPrefix?.()}
+          <span className="truncate">{selectedOpt?.label ?? value ?? placeholder ?? "Select..."}</span>
+        </span>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
       </button>
-      {open && (
+      {open && !disabled && (
         <div className="absolute z-50 mt-1 w-full rounded-[10px] overflow-hidden shadow-lg"
              style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: 280 }}>
           <div className="p-2" style={{ borderBottom: "1px solid var(--border)" }}>
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                   placeholder="Type to search rules..." autoFocus
+                   placeholder="Type to search..." autoFocus
                    className="w-full h-[34px] px-3 rounded-[8px] text-[12px] outline-none"
                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
           </div>
           <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
             {filtered.map(o => (
-              <button key={o} type="button"
-                      onClick={() => { onChange(o); setOpen(false); setSearch(""); }}
-                      className="w-full text-left px-3 py-2 text-[12px] transition-colors hover:brightness-95"
-                      style={{ background: o === value ? "var(--surface-2)" : "transparent", color: "var(--ink)" }}>
-                {o}
+              <button key={o.value} type="button"
+                      onClick={() => { onChange(o.value); setOpen(false); setSearch(""); }}
+                      className="w-full text-left px-3 py-2 text-[12px] transition-colors hover:brightness-95 flex items-center gap-2"
+                      style={{ background: o.value === value ? "var(--surface-2)" : "transparent", color: "var(--ink)" }}>
+                {o.renderPrefix?.()}
+                <span className="truncate">{o.label ?? o.value}</span>
               </button>
             ))}
             {filtered.length === 0 && (
@@ -196,6 +231,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [tradeId, setTradeId] = useState("");
   const [rule, setRule] = useState("");
   const [selectedCampaign, setSelectedCampaign] = useState("");
+  // Strategy tagging (Migration 019). Defaults to CanSlim — matches the DB
+  // column DEFAULT and the user's primary strategy. On scale-in we render
+  // the field read-only and prefill from the parent campaign so the strategy
+  // can never drift mid-campaign.
+  const [strategy, setStrategy] = useState("CanSlim");
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   // sizingMode default Normal (1) — overwritten on mount by the MCT
   // state read. Stays Normal if the read fails (mctStateToSizingMode
   // falls back to safe middle ground). sizingModeManual flips true the
@@ -231,13 +272,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
       // /api/market/mfactor MA-stack heuristic. We only read `state`.
       api.rallyPrefix().catch(() => ({ prefix: "" })),
       api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
-    ]).then(([j, open, rally, det]) => {
+      api.listStrategies({ active: true }).catch(() => [] as Strategy[]),
+    ]).then(([j, open, rally, det, strats]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
       setAllDetails(det.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
       setMctState(stateStr);
       setSizingMode(mctStateToSizingMode(stateStr));
+      setStrategies(strats);
     });
   }, []);
 
@@ -351,6 +394,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
       if (data && !("error" in data)) setCampPrice(data.price);
     }).catch(() => {});
   }, [actionType, selectedCamp?.ticker]);
+
+  // Scale-in: inherit the parent campaign's strategy and lock the dropdown.
+  // A campaign's strategy is fixed at creation; scaling in must never
+  // reclassify it. Falls back to CanSlim for legacy rows that pre-date
+  // Migration 019 (defensive — post-migration every row has a value).
+  useEffect(() => {
+    if (actionType === "scalein") {
+      setStrategy(selectedCamp?.strategy || "CanSlim");
+    }
+  }, [actionType, selectedCamp?.strategy]);
 
   // ── Scale-In Cockpit computations ──
   const scaleIn = useMemo(() => {
@@ -468,6 +521,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     const t = actionType === "scalein" ? selectedCamp?.ticker || "" : ticker;
     if (!t.trim()) e.push("Ticker is required");
     if (!rule.trim()) e.push("Buy Rule is required");
+    if (!strategy.trim()) e.push("Strategy is required");
     if (sharesNum <= 0) e.push("Shares must be > 0");
     if (priceNum <= 0) e.push("Price must be > 0");
     // Stop-related checks skip when the user has opted into no-stop
@@ -503,6 +557,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
           ? (stopMode === "price" ? parseFloat(stopValue) : parseFloat(price) * (1 - parseFloat(slPct) / 100))
           : null,
         rule,
+        strategy,
         notes,
         date: date,
         time: time,
@@ -532,6 +587,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setSubmitResult({ ok: true, msg: `Logged ${result.trx_id || "B1"}: ${shares} shs of ${ticker} @ $${price}` });
         // Reset form
         setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
+        setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
       }
     } catch (err: any) {
@@ -623,6 +679,32 @@ export function LogBuy({ navColor }: { navColor: string }) {
             {/* Buy Rule (searchable) */}
             <Field label="Buy Rule *">
               <SearchSelect value={rule} onChange={setRule} options={BUY_RULES} placeholder="Type to search rules..." />
+            </Field>
+
+            {/* Strategy (Migration 019). Read-only on scale-in (inherited
+                from parent campaign — strategy is fixed at creation and
+                must never drift mid-campaign). */}
+            <Field label="Strategy *">
+              <SearchSelect
+                value={strategy}
+                onChange={setStrategy}
+                disabled={actionType === "scalein"}
+                options={strategies.map(s => ({
+                  value: s.name,
+                  label: s.name,
+                  renderPrefix: () => (
+                    <span aria-hidden="true"
+                          className="inline-block rounded-full shrink-0"
+                          style={{ width: 10, height: 10, background: s.color }} />
+                  ),
+                }))}
+                placeholder="Select strategy..."
+              />
+              {actionType === "scalein" && (
+                <div className="mt-1.5 text-[11px]" style={{ color: "var(--ink-4)" }}>
+                  Inherited from parent campaign
+                </div>
+              )}
             </Field>
 
             {/* Shares + Price */}

@@ -907,6 +907,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
+        "Strategy": "strategy",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
@@ -1615,6 +1616,31 @@ def _ensure_user_owns_portfolio(portfolio_id: int) -> bool:
     """RLS will hide portfolios the user doesn't own, so list_portfolios()
     returning no match for a given id implies 404."""
     return any(p["id"] == portfolio_id for p in db.list_portfolios())
+
+
+@app.get("/api/strategies")
+def list_strategies_endpoint(active: bool = True):
+    """Return rows from the strategies lookup table (Migration 019).
+
+    `active` (default true) filters to is_active=true — what the Log Buy
+    dropdown wants. Pass `?active=false` to include disabled strategies
+    (used by Phase 2 admin UI). Strategies are global, not per-user, so
+    this endpoint is safe to call without a portfolio context.
+    """
+    try:
+        rows = db.load_strategies(active_only=active)
+        return [
+            {
+                "name": r["name"],
+                "description": r.get("description"),
+                "color": r["color"],
+                "is_active": r["is_active"],
+                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/api/portfolios")
@@ -2562,9 +2588,21 @@ def log_buy(request: Request, body: dict):
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
         time_str = body.get("time", datetime.now().strftime("%H:%M"))
         client_trx_id = body.get("trx_id", "")
+        # Strategy (Migration 019). Defaults to CanSlim — matches the DB
+        # column DEFAULT and the user's primary strategy. For new buys we
+        # validate the value against the active strategies; for scale-ins
+        # we ignore the body entirely and inherit from the parent campaign
+        # (same defense-in-depth pattern as instrument_type below).
+        strategy = (body.get("strategy") or "CanSlim").strip() or "CanSlim"
 
         if not ticker or not trade_id or shares <= 0 or price <= 0:
             return {"error": "Missing required fields: ticker, trade_id, shares, price"}
+
+        # Validate strategy on new buys only. Scale-in trusts the parent.
+        if action_type == "new":
+            valid_strategy_names = {s["name"] for s in db.load_strategies(active_only=True)}
+            if strategy not in valid_strategy_names:
+                return {"error": f"Unknown strategy: {strategy}"}
 
         # Detect equity options from ticker shape (`SYMBOL YYMMDD $STRIKE C|P`)
         # and apply the standard 100× contract multiplier so cost basis and
@@ -2599,6 +2637,7 @@ def log_buy(request: Request, body: dict):
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
                 "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
                 "Instrument_Type": instrument_type, "Multiplier": multiplier,
+                "Strategy": strategy,
             }
         else:
             # Scale-in: load existing summary and update
@@ -2615,6 +2654,11 @@ def log_buy(request: Request, body: dict):
                 existing_mult = float(row.get("multiplier") or 0) or multiplier
                 instrument_type = existing_instr
                 multiplier = existing_mult
+                # Inherit strategy from the parent campaign (same reason as
+                # instrument_type — a scale-in must never reclassify the
+                # campaign). Falls back to 'CanSlim' for legacy rows that
+                # pre-date Migration 019.
+                strategy = str(row.get("strategy") or "").strip() or "CanSlim"
                 value = shares * price * multiplier
                 old_shares = float(row.get("shares", 0))
                 old_entry = float(row.get("avg_entry", 0))
@@ -2637,8 +2681,14 @@ def log_buy(request: Request, body: dict):
                     "Buy_Notes": str(notes or row.get("buy_notes", "") or ""),
                     "Risk_Budget": round(new_rb, 2),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
+                    "Strategy": strategy,
                 }
             else:
+                # Parent campaign not found — treat as a new campaign with the
+                # body-supplied strategy. Validate same as the "new" branch.
+                valid_strategy_names = {s["name"] for s in db.load_strategies(active_only=True)}
+                if strategy not in valid_strategy_names:
+                    return {"error": f"Unknown strategy: {strategy}"}
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": date_str, "Shares": shares,
@@ -2646,6 +2696,7 @@ def log_buy(request: Request, body: dict):
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
                     "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
+                    "Strategy": strategy,
                 }
 
         summary_id = db.save_summary_row(portfolio, summary_row)

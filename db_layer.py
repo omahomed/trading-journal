@@ -283,6 +283,7 @@ def load_summary(portfolio_name, status=None):
                     s.grade AS "Grade",
                     s.instrument_type AS "Instrument_Type",
                     s.multiplier AS "Multiplier",
+                    s.strategy AS "Strategy",
                     {manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
@@ -728,6 +729,13 @@ def save_summary_row(portfolio_name, row_dict):
             multiplier_val = row_dict.get('Multiplier')
             update_instrument = instrument_type_val is not None or multiplier_val is not None
 
+            # strategy (Migration 019) follows the same opt-in pattern as
+            # instrument_type — only written when the caller passes it.
+            # Legacy paths (status updates, grade-only edits, etc.) leave
+            # the existing DB value alone.
+            strategy_val = row_dict.get('Strategy')
+            update_strategy = strategy_val is not None
+
             if existing:
                 # UPDATE existing trade — try with grade, fall back without.
                 try:
@@ -766,6 +774,9 @@ def save_summary_row(portfolio_name, row_dict):
                         params_list.append(instrument_type_val or 'STOCK')
                         set_clauses.append("multiplier = %s")
                         params_list.append(multiplier_val if multiplier_val is not None else 1)
+                    if update_strategy:
+                        set_clauses.append("strategy = %s")
+                        params_list.append(strategy_val)
                     update_query = (
                         f"UPDATE trades_summary SET {', '.join(set_clauses)} "
                         "WHERE id = %s RETURNING id"
@@ -846,6 +857,9 @@ def save_summary_row(portfolio_name, row_dict):
                             instrument_type_val or 'STOCK',
                             multiplier_val if multiplier_val is not None else 1,
                         ]
+                    if update_strategy:
+                        insert_cols.append("strategy")
+                        insert_vals.append(strategy_val)
                     placeholders = ", ".join(["%s"] * len(insert_vals))
                     insert_query = (
                         f"INSERT INTO trades_summary ({', '.join(insert_cols)}) "
@@ -3617,6 +3631,35 @@ def test_connection():
 # PORTFOLIO CRUD (multi-tenant)
 # ============================================
 _PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at"
+
+
+def load_strategies(active_only: bool = True) -> list[dict]:
+    """Return rows from the `strategies` lookup table (Migration 019).
+
+    Sorted by created_at ASC so seeded strategies render in their canonical
+    order (CanSlim → StockTalk → 21eStrategy). active_only filters out
+    soft-disabled strategies — what GET /api/strategies returns by default
+    and what log_buy validates new trades against.
+
+    Tiny, uncached read by design: 3 rows today (~5 ever), so the simplicity
+    of avoiding cache invalidation when the Phase 2 admin UI mutates the
+    table is worth more than the saved sub-millisecond.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if active_only:
+                cur.execute(
+                    "SELECT name, description, color, is_active, created_at "
+                    "FROM strategies WHERE is_active "
+                    "ORDER BY created_at ASC"
+                )
+            else:
+                cur.execute(
+                    "SELECT name, description, color, is_active, created_at "
+                    "FROM strategies "
+                    "ORDER BY created_at ASC"
+                )
+            return [dict(r) for r in cur.fetchall()]
 
 
 def list_portfolios():

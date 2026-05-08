@@ -86,6 +86,10 @@ export interface TradePosition {
   // Optional because legacy rows pre-migration may not have them populated.
   instrument_type?: "STOCK" | "OPTION";
   multiplier?: number;
+  // Migration 019. Tags the campaign with a strategy from the strategies
+  // lookup table. Optional only because legacy un-migrated rows might lack
+  // the column — post-019 every row has a value (defaults to 'CanSlim').
+  strategy?: string;
   [key: string]: any;
 }
 
@@ -155,6 +159,17 @@ export interface CashTransaction {
 }
 
 export type CashAction = "deposit" | "withdraw" | "reconcile";
+
+// Strategy lookup row from the `strategies` table (Migration 019). Each
+// trades_summary row carries a `strategy` text key referencing this table.
+// `color` is a hex string used to distinguish strategies in the UI.
+export interface Strategy {
+  name: string;
+  description: string | null;
+  color: string;
+  is_active: boolean;
+  created_at: string | null;
+}
 
 // API functions
 export const api = {
@@ -508,6 +523,12 @@ export const api = {
 
   // Health
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
+
+  // Strategies — small global lookup table (Migration 019). Log Buy fetches
+  // the active list to populate its Strategy dropdown; Phase 2 admin UI will
+  // fetch with active=false to show disabled strategies for editing.
+  listStrategies: ({ active = true }: { active?: boolean } = {}) =>
+    fetchJSON<Strategy[]>(`/api/strategies?active=${active}`),
 
   // Portfolios — multi-tenant CRUD. listPortfolios is called at app load by
   // PortfolioProvider; others are used by the onboarding screen and Settings.
