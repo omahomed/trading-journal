@@ -22,6 +22,30 @@ ON CONFLICT (name) DO NOTHING;
 
 
 -- ============================================
+-- TABLE: strategies
+-- PURPOSE: Lookup table for the trading strategy a campaign belongs to.
+-- KEYED BY NAME (not id) — see migrations/019_strategies.sql for the
+-- rationale; trades_summary.strategy stores the name directly so analytics
+-- filters can read the value without a join.
+-- ============================================
+CREATE TABLE IF NOT EXISTS strategies (
+    name        TEXT PRIMARY KEY,
+    description TEXT,
+    color       TEXT NOT NULL,  -- hex string, e.g. '#6366f1'
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed rows. CanSlim's color matches --color-g-dash (the dashboard primary
+-- accent in frontend/src/app/globals.css).
+INSERT INTO strategies (name, description, color) VALUES
+    ('CanSlim',     'O''Neil''s CanSlim methodology — high RS, strong fundamentals, technical breakouts', '#6366f1'),
+    ('StockTalk',   'Small-cap fundamentals-heavy strategy with light technical analysis',                 '#d97706'),
+    ('21eStrategy', '21 EMA-based technical strategy',                                                     '#0d9488')
+ON CONFLICT (name) DO NOTHING;
+
+
+-- ============================================
 -- TABLE: trades_summary
 -- PURPOSE: Campaign-level trade summaries (CSV: Trade_Log_Summary.csv)
 -- SYNC: Calculated from trades_details via Python LIFO engine
@@ -64,6 +88,14 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     instrument_type VARCHAR(10) NOT NULL DEFAULT 'STOCK'
         CHECK (instrument_type IN ('STOCK', 'OPTION')),
     multiplier NUMERIC(8, 2) NOT NULL DEFAULT 1,
+    -- Migration 019. Tags the campaign with the strategy it belongs to.
+    -- Defaults to 'CanSlim' so legacy rows + un-tagged inserts land on the
+    -- user's primary strategy. FK references strategies(name) directly
+    -- (text PK, not integer surrogate) — see migration header for the
+    -- rationale. ON UPDATE CASCADE handles future renames; ON DELETE
+    -- RESTRICT prevents deleting a strategy that's in use by a trade.
+    strategy TEXT NOT NULL DEFAULT 'CanSlim'
+        REFERENCES strategies(name) ON UPDATE CASCADE ON DELETE RESTRICT,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_trade_per_portfolio UNIQUE (portfolio_id, trade_id)
