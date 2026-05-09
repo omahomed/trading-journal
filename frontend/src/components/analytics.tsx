@@ -60,14 +60,30 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [openCount, setOpenCount] = useState(0);
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  // Phase 2 — All Campaigns retroactive tagging.
+  // Phase 2 — All Campaigns retroactive tagging (right-click flyout
+  // only; the bulk-select toolbar was removed in feat/all-campaigns-
+  // filter-row in favour of filter pills).
+  // - strategies: active-only, used by the right-click flyout (matches
+  //   log_buy / patch_trade_strategy validation: can't tag via PATCH
+  //   with an inactive strategy).
+  // - allStrategies: all rows including inactive, used by the Strategy
+  //   filter dropdown so existing tagged trades stay filterable even
+  //   after their strategy is deactivated.
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
-  const [bulkBanner, setBulkBanner] = useState<{ updated: number; failed: string[]; strategy: string } | null>(null);
+  const [allStrategies, setAllStrategies] = useState<Strategy[]>([]);
   const [campCtxMenu, setCampCtxMenu] = useState<{ x: number; y: number; trade: TradePosition } | null>(null);
-  const tagDropdownRef = useRef<HTMLDivElement>(null);
   const coarsePointer = useCoarsePointer();
+  // All Campaigns filter state. New in feat/all-campaigns-filter-row:
+  // four pill filters (Strategy, Instrument, Buy Rule, Sell Rule) plus
+  // open/close state + outside-click ref for the custom Strategy
+  // dropdown (the only one of the four that needs a custom dropdown,
+  // because <select> can't render the colored swatch).
+  const [campStrategy, setCampStrategy] = useState<string>("");
+  const [campInstrument, setCampInstrument] = useState<string>("");
+  const [campBuyRule, setCampBuyRule] = useState<string>("");
+  const [campSellRule, setCampSellRule] = useState<string>("");
+  const [strategyFilterOpen, setStrategyFilterOpen] = useState(false);
+  const strategyFilterRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || "overview");
 
   useEffect(() => {
@@ -98,9 +114,19 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
     });
   }, []);
 
-  // Phase 2 — strategies for the right-click flyout + bulk dropdown.
+  // Phase 2 — active strategies for the right-click flyout. Inactive
+  // strategies are excluded here because PATCH /api/trades/{id}/strategy
+  // rejects them (matches log_buy's contract).
   useEffect(() => {
     api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  // All strategies (including inactive) for the Strategy filter
+  // dropdown. Two separate fetches by design: each consumer's purpose
+  // is obvious from its source-of-truth name, and the endpoint is tiny
+  // enough that doubling the request cost is negligible.
+  useEffect(() => {
+    api.listStrategies({ active: false }).then(setAllStrategies).catch(() => setAllStrategies([]));
   }, []);
 
   // Refresh just the campaign rows after a tagging action — cheaper than
@@ -125,17 +151,17 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
   }, [campCtxMenu]);
 
-  // Close the "Tag as" dropdown on outside click.
+  // Close the Strategy filter dropdown on outside click.
   useEffect(() => {
-    if (!tagDropdownOpen) return;
+    if (!strategyFilterOpen) return;
     const handler = (e: MouseEvent) => {
-      if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target as Node)) {
-        setTagDropdownOpen(false);
+      if (strategyFilterRef.current && !strategyFilterRef.current.contains(e.target as Node)) {
+        setStrategyFilterOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [tagDropdownOpen]);
+  }, [strategyFilterOpen]);
 
   // Single-trade retag from the right-click menu. Refreshes after success
   // so the table re-renders with the new strategy on the row.
@@ -143,28 +169,6 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
     setCampCtxMenu(null);
     const r = await api.setTradeStrategy(trade_id, { strategy }).catch(() => ({ error: "network" }));
     if (!("error" in r) || !r.error) await refreshCampaigns();
-  };
-
-  // Bulk retag everything in selectedIds. Validates strategy server-side
-  // (active list); on success clears selection + shows a banner with the
-  // updated/failed counts. Server returns failed: [trade_ids] for any
-  // missing rows; we surface that count rather than the ids themselves
-  // to keep the banner short.
-  const bulkSetStrategy = async (strategy: string) => {
-    setTagDropdownOpen(false);
-    const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
-    const r = await api.bulkSetStrategy({ trade_ids: ids, strategy }).catch(() => null);
-    if (r && !("error" in r)) {
-      setBulkBanner({
-        updated: r?.updated ?? 0,
-        failed: r?.failed ?? [],
-        strategy,
-      });
-      setSelectedIds(new Set());
-      await refreshCampaigns();
-      setTimeout(() => setBulkBanner(null), 5000);
-    }
   };
 
   const trades = useMemo(() => {
@@ -275,6 +279,23 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [pricesStale, setPricesStale] = useState(false);
+
+  // All Campaigns filter — derived option lists (Buy Rule, Sell Rule,
+  // Instrument). Computed at component level via useMemo so React-hooks
+  // ordering stays stable across renders (the campaigns tab is a
+  // conditional sub-render, so hooks can't live inside its IIFE).
+  const buyRuleOptions = useMemo(() => {
+    const all = [...openTrades, ...allTrades];
+    return [...new Set(all.map(t => String((t as any).buy_rule || t.rule || "").trim()).filter(Boolean))].sort();
+  }, [openTrades, allTrades]);
+  const sellRuleOptions = useMemo(() => {
+    const all = [...openTrades, ...allTrades];
+    return [...new Set(all.map(t => String((t as any).sell_rule || "").trim()).filter(Boolean))].sort();
+  }, [openTrades, allTrades]);
+  const instrumentOptions = useMemo(() => {
+    const all = [...openTrades, ...allTrades];
+    return [...new Set(all.map(t => String(t.instrument_type || "STOCK")))].sort();
+  }, [openTrades, allTrades]);
 
   useEffect(() => {
     if (openTrades.length === 0) return;
@@ -1460,6 +1481,20 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             if (campGrade === "unrated" && g != null) return false;
             if (campGrade !== "unrated" && g !== parseInt(campGrade, 10)) return false;
           }
+          // Strategy ("" = no filter, includes inactive strategies so
+          // existing tagged trades stay filterable post-deactivation).
+          if (campStrategy && String((t as any).strategy || "") !== campStrategy) return false;
+          // Instrument (STOCK / OPTION). Default "STOCK" for legacy
+          // pre-Migration-016 rows that lack the column.
+          if (campInstrument && String(t.instrument_type || "STOCK") !== campInstrument) return false;
+          // Buy Rule — match on the same buy_rule || rule fallback used
+          // for the option list above so the filter compares like-with-
+          // like.
+          if (campBuyRule && String((t as any).buy_rule || t.rule || "").trim() !== campBuyRule) return false;
+          // Sell Rule — only set on closed trades; matching against ""
+          // for an open trade would never fire because campSellRule is
+          // also "" (no filter) in that case.
+          if (campSellRule && String((t as any).sell_rule || "").trim() !== campSellRule) return false;
           return true;
         });
 
@@ -1634,66 +1669,99 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                 <option value="1">★ (1)</option>
               </select>
 
+              {/* Strategy filter — custom dropdown with StrategyChip
+                  swatches per option. Native <select> can't render the
+                  swatch, so this is the one filter that needs a
+                  bespoke control. Inactive strategies render with an
+                  "(inactive)" suffix so the user knows the option
+                  refers to a deactivated strategy that some trades
+                  may still be tagged with. */}
+              <div ref={strategyFilterRef} className="relative" data-testid="campaigns-strategy-filter">
+                <button type="button"
+                        onClick={() => setStrategyFilterOpen(o => !o)}
+                        className="h-[32px] px-3 rounded-[8px] text-[11px] flex items-center gap-2 cursor-pointer"
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+                  {campStrategy ? (
+                    (() => {
+                      const s = allStrategies.find(x => x.name === campStrategy);
+                      return s
+                        ? <StrategyChip name={s.name} color={s.color} size="sm" />
+                        : <span>{campStrategy}</span>;
+                    })()
+                  ) : (
+                    <span>All Strategies</span>
+                  )}
+                  <span style={{ color: "var(--ink-4)" }}>▾</span>
+                </button>
+                {strategyFilterOpen && (
+                  <div className="absolute top-full mt-1 left-0 z-40 rounded-[10px] py-1.5 overflow-hidden"
+                       style={{
+                         minWidth: 200,
+                         background: "var(--surface)",
+                         border: "1px solid var(--border)",
+                         boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+                       }}>
+                    <button type="button"
+                            onClick={() => { setCampStrategy(""); setStrategyFilterOpen(false); }}
+                            className="w-full text-left px-3 py-2 text-[12px] transition-colors hover:brightness-95"
+                            style={{ background: campStrategy === "" ? "var(--surface-2)" : "transparent", color: "var(--ink)" }}
+                            onMouseEnter={e => { if (campStrategy !== "") e.currentTarget.style.background = "var(--surface-2)"; }}
+                            onMouseLeave={e => { if (campStrategy !== "") e.currentTarget.style.background = "transparent"; }}>
+                      All Strategies
+                    </button>
+                    {allStrategies.map(s => (
+                      <button key={s.name} type="button"
+                              onClick={() => { setCampStrategy(s.name); setStrategyFilterOpen(false); }}
+                              className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition-colors hover:brightness-95"
+                              style={{ background: campStrategy === s.name ? "var(--surface-2)" : "transparent", color: "var(--ink)" }}
+                              onMouseEnter={e => { if (campStrategy !== s.name) e.currentTarget.style.background = "var(--surface-2)"; }}
+                              onMouseLeave={e => { if (campStrategy !== s.name) e.currentTarget.style.background = "transparent"; }}>
+                        <StrategyChip name={s.name} color={s.color} size="md" />
+                        {!s.is_active && (
+                          <span className="ml-auto text-[10px]" style={{ color: "var(--ink-4)" }}>(inactive)</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Instrument filter (STOCK / OPTION). Native <select>;
+                  options derived from the loaded data so a future third
+                  instrument type appears automatically. */}
+              <select value={campInstrument} onChange={e => setCampInstrument(e.target.value)}
+                      data-testid="campaigns-instrument-filter"
+                      className="h-[32px] px-2.5 rounded-[8px] text-[11px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+                <option value="">All Instruments</option>
+                {instrumentOptions.map(o => <option key={o} value={o}>{o === "STOCK" ? "Stocks" : o === "OPTION" ? "Options" : o}</option>)}
+              </select>
+
+              {/* Buy Rule filter — option list derived from data, not
+                  the master BUY_RULES list, so the dropdown only shows
+                  rules actually used by the user's trades. */}
+              <select value={campBuyRule} onChange={e => setCampBuyRule(e.target.value)}
+                      data-testid="campaigns-buy-rule-filter"
+                      className="h-[32px] px-2.5 rounded-[8px] text-[11px] max-w-[180px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+                <option value="">All Buy Rules</option>
+                {buyRuleOptions.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+
+              {/* Sell Rule filter — only populated by closed trades
+                  (sell_rule is set when the campaign closes). On a
+                  fresh portfolio with only open trades, this dropdown
+                  shows just "All Sell Rules". */}
+              <select value={campSellRule} onChange={e => setCampSellRule(e.target.value)}
+                      data-testid="campaigns-sell-rule-filter"
+                      className="h-[32px] px-2.5 rounded-[8px] text-[11px] max-w-[180px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+                <option value="">All Sell Rules</option>
+                {sellRuleOptions.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+
               <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
             </div>
-
-            {/* Phase 2 — bulk-tag toolbar. Visible only when N > 0 selected.
-                Sticky so it stays visible when scrolling the long table. */}
-            {selectedIds.size > 0 && (
-              <div className="sticky top-0 z-30 mb-3 px-4 py-2.5 rounded-[10px] flex items-center gap-3 flex-wrap"
-                   style={{ background: "var(--surface-2)", border: "1px solid var(--border)", boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
-                   data-testid="campaigns-bulk-toolbar">
-                <span className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>
-                  {selectedIds.size} selected
-                </span>
-                <span style={{ color: "var(--ink-4)" }}>·</span>
-                <div ref={tagDropdownRef} className="relative">
-                  <button type="button"
-                          onClick={() => setTagDropdownOpen(o => !o)}
-                          className="px-3 py-1 rounded-[8px] text-[11px] font-semibold cursor-pointer"
-                          style={{ background: navColor, color: "#fff" }}
-                          data-testid="campaigns-tag-as">
-                    Tag as ▾
-                  </button>
-                  {tagDropdownOpen && strategies.length > 0 && (
-                    <div className="absolute top-full mt-1 left-0 z-40 rounded-[10px] py-1.5 overflow-hidden"
-                         style={{
-                           minWidth: 200,
-                           background: "var(--surface)",
-                           border: "1px solid var(--border)",
-                           boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
-                         }}>
-                      {strategies.map(s => (
-                        <button key={s.name} type="button"
-                                onClick={() => bulkSetStrategy(s.name)}
-                                className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition-colors hover:brightness-95"
-                                style={{ background: "transparent", color: "var(--ink)" }}
-                                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <StrategyChip name={s.name} color={s.color} size="md" />
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <button type="button"
-                        onClick={() => setSelectedIds(new Set())}
-                        className="ml-auto text-[11px] underline"
-                        style={{ color: "var(--ink-3)", background: "transparent", border: "none", cursor: "pointer" }}>
-                  Clear
-                </button>
-              </div>
-            )}
-
-            {/* Phase 2 — bulk-tag result banner (auto-dismisses after 5s). */}
-            {bulkBanner && (
-              <div className="mb-3 px-3 py-2 rounded-[8px] text-[12px]"
-                   style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#08a86b", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}
-                   data-testid="campaigns-bulk-banner">
-                Tagged {bulkBanner.updated} as <strong>{bulkBanner.strategy}</strong>
-                {bulkBanner.failed.length > 0 && <> · {bulkBanner.failed.length} not found</>}
-              </div>
-            )}
 
             {/* Flight Deck */}
             {pricesStale && fdMode !== "closed" && (
@@ -1756,32 +1824,6 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
               <div className="overflow-x-auto" style={{ maxHeight: 600 }}>
                 <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                   <thead><tr>
-                    {/* Phase 2 — bulk-select checkbox column. Header
-                        checkbox toggles all visible (filtered) rows;
-                        indeterminate when some-but-not-all selected. */}
-                    <th className="text-left px-3 py-2.5 sticky top-0"
-                        style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", width: 32 }}>
-                      <input type="checkbox"
-                             aria-label="Select all visible campaigns"
-                             data-testid="campaigns-select-all"
-                             ref={el => {
-                               if (el) {
-                                 const visibleIds = filtered.map(t => t.trade_id);
-                                 const selectedVisible = visibleIds.filter(id => selectedIds.has(id)).length;
-                                 el.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
-                               }
-                             }}
-                             checked={filtered.length > 0 && filtered.every(t => selectedIds.has(t.trade_id))}
-                             onChange={e => {
-                               const next = new Set(selectedIds);
-                               if (e.target.checked) {
-                                 filtered.forEach(t => next.add(t.trade_id));
-                               } else {
-                                 filtered.forEach(t => next.delete(t.trade_id));
-                               }
-                               setSelectedIds(next);
-                             }} />
-                    </th>
                     {([
                       { label: "Ticker", key: "ticker" }, { label: "Trade ID", key: "trade_id" }, { label: "Status", key: "status" },
                       { label: "Rule", key: "rule" }, { label: "Open", key: "open" }, { label: "Close", key: "close" },
@@ -1846,19 +1888,6 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                           onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                           onContextMenu={e => { e.preventDefault(); setCampCtxMenu({ x: e.clientX, y: e.clientY, trade: t }); }}>
-                        <td className="px-3 py-2" style={{ width: 32 }}>
-                          <input type="checkbox"
-                                 aria-label={`Select ${t.ticker} ${t.trade_id}`}
-                                 data-testid={`campaigns-select-${t.trade_id}`}
-                                 checked={selectedIds.has(t.trade_id)}
-                                 onChange={e => {
-                                   const next = new Set(selectedIds);
-                                   if (e.target.checked) next.add(t.trade_id);
-                                   else next.delete(t.trade_id);
-                                   setSelectedIds(next);
-                                 }}
-                                 onClick={e => e.stopPropagation()} />
-                        </td>
                         <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>{t.trade_id}</td>
                         <td className="px-3 py-2">

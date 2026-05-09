@@ -293,57 +293,130 @@ describe("Analytics — All Campaigns Flight Deck", () => {
 
 
 // ─────────────────────────────────────────────────────────────────────
-// Phase 2 — Bulk-select on All Campaigns.
+// All Campaigns filter row — Strategy / Instrument / Buy Rule /
+// Sell Rule pills. Replaced the bulk-select toolbar from Phase 2;
+// the right-click "Set strategy →" path stays for one-off retags.
 // ─────────────────────────────────────────────────────────────────────
 
-describe("Analytics — bulk strategy tagging", () => {
+describe("Analytics — All Campaigns filters", () => {
   test("listStrategies fires on mount (contract guard for fetch wiring)", async () => {
-    // Both the right-click flyout AND the bulk "Tag as" dropdown need
-    // this fetch. An explicit contract assertion prevents a silent
-    // regression where strategies stays empty and either UI hides.
+    // The right-click flyout (active=true) AND the new Strategy filter
+    // dropdown (active=false) both depend on listStrategies. Two
+    // separate fetches by design — assert the call happens at least
+    // once so a regressed useEffect surfaces here, not in a silent
+    // empty-state UI.
     mClosed.mockResolvedValue([]);
     mOpen.mockResolvedValue([]);
     render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
     await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
   });
 
-  test("selecting rows reveals the toolbar; Tag as → StockTalk fires bulk PATCH", async () => {
+  test("Strategy filter narrows visible rows and lists inactive strategies with '(inactive)' suffix", async () => {
+    // Three trades: two tagged StockTalk, one CanSlim. The Strategy
+    // dropdown also includes a Retired (inactive) strategy — it must
+    // appear in the dropdown (so existing tagged trades stay
+    // filterable post-deactivation) with an '(inactive)' suffix.
     mClosed.mockResolvedValue([
-      closedTrade({ trade_id: "C1", ticker: "MSFT" }),
-      closedTrade({ trade_id: "C2", ticker: "AAPL" }),
-      closedTrade({ trade_id: "C3", ticker: "NVDA" }),
+      closedTrade({ trade_id: "C1", ticker: "MSFT", strategy: "StockTalk" }),
+      closedTrade({ trade_id: "C2", ticker: "AAPL", strategy: "StockTalk" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA", strategy: "CanSlim" }),
     ]);
     mOpen.mockResolvedValue([]);
-    vi.mocked(api.bulkSetStrategy).mockResolvedValue({
-      ok: true, updated: 2, failed: [], strategy: "StockTalk",
-    } as any);
+    // listStrategies is called twice (active + all). Default mock from
+    // the module-level vi.mock returns active-only — override per-call
+    // to return all strategies including a Retired inactive row when
+    // the filter requests them.
+    vi.mocked(api.listStrategies).mockImplementation(({ active = true } = {}) => {
+      const rows = [
+        { name: "CanSlim",   description: null, color: "#6366f1", is_active: true,  created_at: "2026-01-01" },
+        { name: "StockTalk", description: null, color: "#d97706", is_active: true,  created_at: "2026-01-02" },
+        { name: "Retired",   description: null, color: "#888888", is_active: false, created_at: "2026-01-03" },
+      ];
+      return Promise.resolve(active ? rows.filter(r => r.is_active) : rows) as any;
+    });
 
     render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
-
-    // Wait for strategies + table.
-    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
     await screen.findByText("MSFT");
 
-    // No toolbar yet.
-    expect(screen.queryByTestId("campaigns-bulk-toolbar")).not.toBeInTheDocument();
+    // Open the Strategy dropdown.
+    const strategyFilter = screen.getByTestId("campaigns-strategy-filter");
+    const trigger = strategyFilter.querySelector("button") as HTMLButtonElement;
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalledWith({ active: false }));
+    fireEvent.click(trigger);
 
-    // Select two rows by clicking their checkboxes.
-    fireEvent.click(screen.getByTestId("campaigns-select-C1"));
-    fireEvent.click(screen.getByTestId("campaigns-select-C2"));
+    // Inactive strategy is listed with the '(inactive)' suffix.
+    expect(await screen.findByText("(inactive)")).toBeInTheDocument();
+    expect(screen.getByText("Retired")).toBeInTheDocument();
 
-    // Toolbar appears with "2 selected".
-    const toolbar = await screen.findByTestId("campaigns-bulk-toolbar");
-    expect(toolbar).toHaveTextContent("2 selected");
-
-    // Click "Tag as ▾" to open the dropdown.
-    fireEvent.click(screen.getByTestId("campaigns-tag-as"));
-
-    // Click StockTalk option.
+    // Pick StockTalk → table narrows to two rows.
     fireEvent.click(screen.getByText("StockTalk"));
+    await waitFor(() => {
+      expect(screen.getByText("MSFT")).toBeInTheDocument();
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+      expect(screen.queryByText("NVDA")).not.toBeInTheDocument();
+    });
+  });
 
-    await waitFor(() => expect(api.bulkSetStrategy).toHaveBeenCalled());
-    const body = vi.mocked(api.bulkSetStrategy).mock.calls[0][0];
-    expect(body.strategy).toBe("StockTalk");
-    expect(body.trade_ids.sort()).toEqual(["C1", "C2"]);
+  test("Buy Rule filter narrows visible rows", async () => {
+    mClosed.mockResolvedValue([
+      closedTrade({ trade_id: "C1", ticker: "MSFT", rule: "br1.1 Consolidation" }),
+      closedTrade({ trade_id: "C2", ticker: "AAPL", rule: "br3.1 Reclaim 21e" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA", rule: "br1.1 Consolidation" }),
+    ]);
+    mOpen.mockResolvedValue([]);
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+    await screen.findByText("MSFT");
+
+    const select = screen.getByTestId("campaigns-buy-rule-filter") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "br1.1 Consolidation" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("MSFT")).toBeInTheDocument();
+      expect(screen.getByText("NVDA")).toBeInTheDocument();
+      expect(screen.queryByText("AAPL")).not.toBeInTheDocument();
+    });
+  });
+
+  test("Sell Rule filter narrows visible rows", async () => {
+    mClosed.mockResolvedValue([
+      closedTrade({ trade_id: "C1", ticker: "MSFT", sell_rule: "sr1.1 Stop hit" }),
+      closedTrade({ trade_id: "C2", ticker: "AAPL", sell_rule: "sr2.1 Target reached" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA", sell_rule: "sr1.1 Stop hit" }),
+    ]);
+    mOpen.mockResolvedValue([]);
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+    await screen.findByText("MSFT");
+
+    const select = screen.getByTestId("campaigns-sell-rule-filter") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "sr1.1 Stop hit" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("MSFT")).toBeInTheDocument();
+      expect(screen.getByText("NVDA")).toBeInTheDocument();
+      expect(screen.queryByText("AAPL")).not.toBeInTheDocument();
+    });
+  });
+
+  test("Instrument filter narrows visible rows (STOCK / OPTION)", async () => {
+    mClosed.mockResolvedValue([
+      closedTrade({ trade_id: "C1", ticker: "MSFT", instrument_type: "STOCK" }),
+      closedTrade({ trade_id: "C2", ticker: "AMZN 270115 $270C", instrument_type: "OPTION" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA", instrument_type: "STOCK" }),
+    ]);
+    mOpen.mockResolvedValue([]);
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+    await screen.findByText("MSFT");
+
+    const select = screen.getByTestId("campaigns-instrument-filter") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "OPTION" } });
+
+    await waitFor(() => {
+      expect(screen.getByText("AMZN 270115 $270C")).toBeInTheDocument();
+      expect(screen.queryByText("MSFT")).not.toBeInTheDocument();
+      expect(screen.queryByText("NVDA")).not.toBeInTheDocument();
+    });
   });
 });
