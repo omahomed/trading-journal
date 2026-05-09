@@ -3774,7 +3774,8 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
                                       ("sell_rule", "Sell_Rule"),
                                       ("sell_notes", "Sell_Notes"),
                                       ("risk_budget", "Risk_Budget"),
-                                      ("stop_loss", "Stop_Loss")):
+                                      ("stop_loss", "Stop_Loss"),
+                                      ("notes", "Notes")):
                     val = existing_row.get(snake)
                     if pd.notna(val):
                         summary_row[pascal] = val

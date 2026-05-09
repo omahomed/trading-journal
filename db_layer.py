@@ -691,6 +691,91 @@ def set_manual_price(portfolio_name, trade_id, manual_price):
 # ============================================
 # CORE WRITE OPERATIONS (Replace secure_save)
 # ============================================
+# ============================================
+# trades_summary UPDATE column whitelist (Commit 6)
+# ============================================
+# Maps PascalCase dict keys to snake_case DB columns. save_summary_row's
+# UPDATE path binds ONLY the columns whose keys are present in row_dict —
+# omitted keys leave the existing DB value untouched (partial-dict-safe).
+# This map documents the legitimate UPDATE surface; new columns require a
+# deliberate edit here before they can be written via save_summary_row.
+#
+# Trade_ID is the lookup key, never updated via this map.
+# deleted_at, created_at, last_updated are managed by the schema/triggers.
+_TRADES_SUMMARY_UPDATE_COLUMNS = {
+    "Ticker":          "ticker",
+    "Status":          "status",
+    "Open_Date":       "open_date",
+    "Closed_Date":     "closed_date",
+    "Shares":          "shares",
+    "Avg_Entry":       "avg_entry",
+    "Avg_Exit":        "avg_exit",
+    "Total_Cost":      "total_cost",
+    "Realized_PL":     "realized_pl",
+    "Unrealized_PL":   "unrealized_pl",
+    "Return_Pct":      "return_pct",
+    "Sell_Rule":       "sell_rule",
+    "Notes":           "notes",
+    "Stop_Loss":       "stop_loss",
+    "Rule":            "rule",
+    "Buy_Notes":       "buy_notes",
+    "Sell_Notes":      "sell_notes",
+    "Risk_Budget":     "risk_budget",
+    "Grade":           "grade",
+    "Instrument_Type": "instrument_type",
+    "Multiplier":      "multiplier",
+    "Strategy":        "strategy",
+}
+
+# Columns added in newer migrations (013+); removed from the working dict
+# on legacy-schema fallback so a DB that hasn't run those migrations can
+# still UPDATE successfully via the existing try/except retry pattern.
+_TRADES_SUMMARY_LEGACY_EXCLUDED = frozenset((
+    "Grade", "Instrument_Type", "Multiplier", "Strategy",
+))
+
+
+def _build_summary_update_set_clauses(row_dict):
+    """Build (set_clauses, params_list, unknown_keys) for save_summary_row's
+    UPDATE path. Only columns whose PascalCase keys appear in row_dict are
+    bound — omitted keys leave the existing DB value untouched.
+
+    Honors explicit None as a deliberate "set to NULL". Distinguishes
+    via key-presence check, not value check.
+
+    Grade gets special 1-5 validation (returns None for invalid values).
+    Other columns pass through unchanged (clean_value already ran upstream
+    on every dict value).
+
+    Returns:
+        set_clauses: list of "col = %s" strings
+        params_list: list of bound values matching set_clauses order
+        unknown_keys: set of dict keys that weren't in the column whitelist
+                      (caller decides whether to warn / ignore)
+    """
+    set_clauses = []
+    params_list = []
+    for key, col in _TRADES_SUMMARY_UPDATE_COLUMNS.items():
+        if key not in row_dict:
+            continue
+        val = row_dict[key]
+        if key == "Grade" and val is not None:
+            try:
+                g = int(val)
+                val = g if 1 <= g <= 5 else None
+            except (ValueError, TypeError):
+                val = None
+        set_clauses.append(f"{col} = %s")
+        params_list.append(val)
+
+    unknown_keys = (
+        set(row_dict.keys())
+        - set(_TRADES_SUMMARY_UPDATE_COLUMNS.keys())
+        - {"Trade_ID"}
+    )
+    return set_clauses, params_list, unknown_keys
+
+
 def save_summary_row(portfolio_name, row_dict):
     """
     Insert or update a single summary row.
@@ -774,87 +859,53 @@ def save_summary_row(portfolio_name, row_dict):
             update_strategy = strategy_val is not None
 
             if existing:
-                # UPDATE existing trade — try with grade, fall back without.
+                # UPDATE existing trade — whitelist mode (Commit 6).
+                # Only columns whose PascalCase keys are present in row_dict
+                # are bound; omitted keys leave the existing DB value
+                # untouched (partial-dict-safe). Try with newer migrations'
+                # columns first; on failure (legacy schema), drop those
+                # columns and retry.
                 try:
-                    set_clauses = [
-                        "ticker = %s", "status = %s", "open_date = %s", "closed_date = %s",
-                        "shares = %s", "avg_entry = %s", "avg_exit = %s", "total_cost = %s",
-                        "realized_pl = %s", "unrealized_pl = %s", "return_pct = %s",
-                        "sell_rule = %s", "notes = %s", "stop_loss = %s", "rule = %s",
-                        "buy_notes = %s", "sell_notes = %s", "risk_budget = %s",
-                    ]
-                    params_list = [
-                        row_dict.get('Ticker'),
-                        row_dict.get('Status', 'OPEN'),
-                        clean_value(row_dict.get('Open_Date')),
-                        clean_value(row_dict.get('Closed_Date')),
-                        row_dict.get('Shares', 0),
-                        row_dict.get('Avg_Entry', 0),
-                        row_dict.get('Avg_Exit', 0),
-                        row_dict.get('Total_Cost', 0),
-                        row_dict.get('Realized_PL', 0),
-                        row_dict.get('Unrealized_PL', 0),
-                        row_dict.get('Return_Pct', 0),
-                        row_dict.get('Sell_Rule'),
-                        row_dict.get('Notes'),
-                        row_dict.get('Stop_Loss'),
-                        row_dict.get('Rule'),
-                        row_dict.get('Buy_Notes'),
-                        row_dict.get('Sell_Notes'),
-                        row_dict.get('Risk_Budget', 0),
-                    ]
-                    if update_grade:
-                        set_clauses.append("grade = %s")
-                        params_list.append(grade_clean)
-                    if update_instrument:
-                        set_clauses.append("instrument_type = %s")
-                        params_list.append(instrument_type_val or 'STOCK')
-                        set_clauses.append("multiplier = %s")
-                        params_list.append(multiplier_val if multiplier_val is not None else 1)
-                    if update_strategy:
-                        set_clauses.append("strategy = %s")
-                        params_list.append(strategy_val)
+                    set_clauses, params_list, unknown_keys = \
+                        _build_summary_update_set_clauses(row_dict)
+                    if unknown_keys:
+                        print(f"[save_summary_row] ignored unknown columns: {sorted(unknown_keys)}")
+                    if not set_clauses:
+                        raise ValueError(
+                            "save_summary_row: dict has no columns to UPDATE"
+                        )
                     update_query = (
                         f"UPDATE trades_summary SET {', '.join(set_clauses)} "
                         "WHERE id = %s RETURNING id"
                     )
                     params_list.append(existing[0])
-                    params = tuple(params_list)
-                    cur.execute(update_query, params)
+                    cur.execute(update_query, tuple(params_list))
+                except ValueError:
+                    # Empty-clause guard above — propagate up rather than
+                    # masking with the legacy-fallback retry.
+                    raise
                 except Exception:
-                    # DB missing grade column — retry without
+                    # DB missing newer-migration columns (Migration 013+ —
+                    # grade, instrument_type, multiplier, strategy) — drop
+                    # them from the working dict and retry.
                     conn.rollback()
-                    update_query = """
-                        UPDATE trades_summary
-                        SET ticker = %s, status = %s, open_date = %s, closed_date = %s,
-                            shares = %s, avg_entry = %s, avg_exit = %s, total_cost = %s,
-                            realized_pl = %s, unrealized_pl = %s, return_pct = %s,
-                            sell_rule = %s, notes = %s, stop_loss = %s, rule = %s,
-                            buy_notes = %s, sell_notes = %s, risk_budget = %s
-                        WHERE id = %s
-                        RETURNING id
-                    """
-                    cur.execute(update_query, (
-                        row_dict.get('Ticker'),
-                        row_dict.get('Status', 'OPEN'),
-                        clean_value(row_dict.get('Open_Date')),
-                        clean_value(row_dict.get('Closed_Date')),
-                        row_dict.get('Shares', 0),
-                        row_dict.get('Avg_Entry', 0),
-                        row_dict.get('Avg_Exit', 0),
-                        row_dict.get('Total_Cost', 0),
-                        row_dict.get('Realized_PL', 0),
-                        row_dict.get('Unrealized_PL', 0),
-                        row_dict.get('Return_Pct', 0),
-                        row_dict.get('Sell_Rule'),
-                        row_dict.get('Notes'),
-                        row_dict.get('Stop_Loss'),
-                        row_dict.get('Rule'),
-                        row_dict.get('Buy_Notes'),
-                        row_dict.get('Sell_Notes'),
-                        row_dict.get('Risk_Budget', 0),
-                        existing[0],
-                    ))
+                    fallback_row = {
+                        k: v for k, v in row_dict.items()
+                        if k not in _TRADES_SUMMARY_LEGACY_EXCLUDED
+                    }
+                    set_clauses, params_list, _ = \
+                        _build_summary_update_set_clauses(fallback_row)
+                    if not set_clauses:
+                        raise ValueError(
+                            "save_summary_row: dict has no columns to UPDATE "
+                            "(legacy fallback)"
+                        )
+                    update_query = (
+                        f"UPDATE trades_summary SET {', '.join(set_clauses)} "
+                        "WHERE id = %s RETURNING id"
+                    )
+                    params_list.append(existing[0])
+                    cur.execute(update_query, tuple(params_list))
             else:
                 # INSERT new trade — try with grade + instrument_type, fall
                 # back without (legacy schema where Migration 016 hasn't run).
