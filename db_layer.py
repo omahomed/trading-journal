@@ -715,6 +715,10 @@ def save_summary_row(portfolio_name, row_dict):
         # Convert numpy types to native Python types
         if hasattr(val, 'item'):  # np.float64, np.int64, etc.
             return val.item()
+        # Defense-in-depth: literal 'nan'/'none'/'null' on string values
+        # (mirrors clean_text_value's sentinel check from Commit 1).
+        if isinstance(val, str) and val.strip().lower() in ('nan', 'none', 'null'):
+            return None
         return val
 
     # Sanitize all values in row_dict to prevent numpy types reaching psycopg2
@@ -1439,6 +1443,16 @@ def _save_summary_with_closures_in_txn(cur, portfolio_id, trade_id, summary_row,
     see that function's docstring for the full contract on which columns
     this writes vs. preserves.
     """
+    # Defense-in-depth: sanitize user-prose text columns at the writer
+    # boundary. Callers may pass raw row.get(...) values (e.g.,
+    # exercise_option's option-side path); writer never trusts. Reuses
+    # the canonical clean_text_value from Commit 1 — the existing
+    # 'nan'/'none'/'null'/NaN sentinels are normalized to None here.
+    summary_row = dict(summary_row)  # don't mutate caller's dict
+    for col in ('Rule', 'Buy_Notes', 'Sell_Rule', 'Sell_Notes', 'Notes'):
+        if col in summary_row:
+            summary_row[col] = clean_text_value(summary_row[col])
+
     trade_id_for_summary = summary_row.get('Trade_ID')
 
     # --- 1. Summary upsert ---
