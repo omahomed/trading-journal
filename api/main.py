@@ -3040,6 +3040,8 @@ def log_sell(request: Request, body: dict):
             "Sell_Notes": notes,
             "Rule": str(row.get("rule", "") or ""),
             "Buy_Notes": str(row.get("buy_notes", "") or ""),
+            "Stop_Loss": row.get("stop_loss"),
+            "Risk_Budget": row.get("risk_budget"),
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
         if grade_raw is not None and str(grade_raw).strip() != "":
@@ -3696,6 +3698,29 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         return
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
+    # Preserve user-entered fields that LIFO doesn't compute. compute_lifo_summary
+    # only returns LIFO-derived fields (status, shares, avg_entry, etc.), so passing
+    # its output directly to save_summary_with_closures would bind NULL/DEFAULT to
+    # rule, buy_notes, sell_rule, sell_notes, risk_budget, stop_loss — wiping user
+    # metadata on every sell/edit/delete/rebuild.
+    try:
+        df_s_existing = db.load_summary(portfolio)
+        if not df_s_existing.empty:
+            df_s_existing = _normalize_trades(df_s_existing)
+            existing_match = df_s_existing[df_s_existing["trade_id"] == trade_id]
+            if not existing_match.empty:
+                existing_row = existing_match.iloc[0]
+                for snake, pascal in (("rule", "Rule"),
+                                      ("buy_notes", "Buy_Notes"),
+                                      ("sell_rule", "Sell_Rule"),
+                                      ("sell_notes", "Sell_Notes"),
+                                      ("risk_budget", "Risk_Budget"),
+                                      ("stop_loss", "Stop_Loss")):
+                    val = existing_row.get(snake)
+                    if pd.notna(val):
+                        summary_row[pascal] = val
+    except Exception as e:
+        print(f"[recompute] preserve-existing-fields failed for {trade_id}: {e}")
     # Try the combined write first so summary + closures land together.
     # Falls back to summary-only if lot_closures isn't there yet (deploy ran
     # before migration 017) or if the closures phase fails — summary is the
