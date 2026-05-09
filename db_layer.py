@@ -536,7 +536,9 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.highlights AS "Highlights",
                         j.lowlights AS "Lowlights",
                         j.mistakes AS "Mistakes",
-                        j.top_lesson AS "Top_Lesson"
+                        j.top_lesson AS "Top_Lesson",
+                        j.nlv_source AS "nlv_source",
+                        j.holdings_source AS "holdings_source"
                     FROM trading_journal j
                     JOIN portfolios p ON j.portfolio_id = p.id
                     WHERE p.name = %s

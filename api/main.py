@@ -679,6 +679,8 @@ def journal_edit(entry: dict):
                     "top_lesson": str(row.get("top_lesson", "") or ""),
                     "nlv_source": str(row.get("nlv_source", "") or "manual"),
                     "holdings_source": str(row.get("holdings_source", "") or "manual"),
+                    "status": db.clean_text_value(row.get("status")),
+                    "above_21ema": int(row.get("above_21ema", 0) or 0),
                 }
 
         # Merge: use sent values, fall back to existing
@@ -733,6 +735,20 @@ def journal_edit(entry: dict):
             "top_lesson": _s("top_lesson", "top_lesson"),
             "nlv_source": nlv_source_in,
             "holdings_source": holdings_source_in,
+            # PRESERVATION: status + above_21ema. Without these keys,
+            # save_journal_entry binds status='U' and above_21ema=0 on every
+            # edit — wiping any prior user-entered value. Body wins, falls
+            # back to existing-row value, then schema default.
+            "status": (
+                db.clean_text_value(entry.get("status"))
+                or existing.get("status")
+                or "U"
+            ),
+            "above_21ema": int(
+                entry["above_21ema"]
+                if entry.get("above_21ema") not in (None, "")
+                else (existing.get("above_21ema") or 0)
+            ),
         }
 
         # Auto-compute missing market/risk metrics.
@@ -848,6 +864,16 @@ def journal_backfill_metrics(request: Request, body: dict = Body(...)):
                 continue
 
             try:
+                # Sanitize source-of-truth flags to the allowed enum values.
+                # Defends against any pre-existing pollution and keeps the
+                # CHECK constraint on trading_journal happy.
+                nlv_source_in = str(row.get("nlv_source") or "manual").strip()
+                if nlv_source_in not in ("manual", "ibkr_auto", "ibkr_override"):
+                    nlv_source_in = "manual"
+                holdings_source_in = str(row.get("holdings_source") or "manual").strip()
+                if holdings_source_in not in ("manual", "ibkr_auto", "ibkr_override"):
+                    holdings_source_in = "manual"
+
                 journal_entry = {
                     "portfolio_id": portfolio,
                     "day": day_str,
@@ -871,6 +897,21 @@ def journal_backfill_metrics(request: Request, body: dict = Body(...)):
                     "lowlights": str(row.get("lowlights", "") or ""),
                     "mistakes": str(row.get("mistakes", "") or ""),
                     "top_lesson": str(row.get("top_lesson", "") or ""),
+                    # PRESERVATION: 5 fields journal_backfill_metrics doesn't
+                    # recompute. Without these keys, save_journal_entry's
+                    # rewrite-every-column UPDATE binds NULL/DEFAULT — silently
+                    # wiping user-entered values on every backfill run.
+                    "status": db.clean_text_value(row.get("status")) or "U",
+                    "above_21ema": int(row.get("above_21ema", 0) or 0),
+                    "mct_display_day_num": (
+                        int(row["mct_display_day_num"])
+                        if "mct_display_day_num" in row
+                        and row["mct_display_day_num"] is not None
+                        and not pd.isna(row["mct_display_day_num"])
+                        else None
+                    ),
+                    "nlv_source": nlv_source_in,
+                    "holdings_source": holdings_source_in,
                 }
                 db.save_journal_entry(journal_entry)
                 updated += 1
