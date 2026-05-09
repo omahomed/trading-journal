@@ -525,10 +525,37 @@ export const api = {
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
 
   // Strategies — small global lookup table (Migration 019). Log Buy fetches
-  // the active list to populate its Strategy dropdown; Phase 2 admin UI will
-  // fetch with active=false to show disabled strategies for editing.
+  // the active list to populate its Strategy dropdown; Phase 2 admin UI
+  // fetches with active=false to show disabled strategies for editing.
   listStrategies: ({ active = true }: { active?: boolean } = {}) =>
     fetchJSON<Strategy[]>(`/api/strategies?active=${active}`),
+
+  // Phase 2 — strategies CRUD. Founder-gated server-side; non-founder
+  // calls return { error: "forbidden_not_admin" }.
+  createStrategy: (body: { name: string; color: string; description?: string; is_active?: boolean }) =>
+    fetchWithAuth(`${API_BASE}/api/strategies`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<Strategy | { error: string }>,
+
+  updateStrategy: (name: string, body: { description?: string; color?: string; is_active?: boolean }) =>
+    fetchWithAuth(`${API_BASE}/api/strategies/${encodeURIComponent(name)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<Strategy | { error: string }>,
+
+  // Phase 2 — retroactive tagging (per-trade and bulk). Not founder-gated.
+  setTradeStrategy: (tradeId: string, body: { strategy: string; portfolio?: string }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/${encodeURIComponent(tradeId)}/strategy`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
+    }).then(r => r.json()) as Promise<{ ok?: true; trade_id?: string; strategy?: string; error?: string }>,
+
+  bulkSetStrategy: (body: { trade_ids: string[]; strategy: string; portfolio?: string }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/bulk-strategy`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
+    }).then(r => r.json()) as Promise<{ ok?: true; updated?: number; failed?: string[]; strategy?: string; error?: string }>,
 
   // Portfolios — multi-tenant CRUD. listPortfolios is called at app load by
   // PortfolioProvider; others are used by the onboarding screen and Settings.

@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
 import { InteractiveChart } from "./interactive-chart";
+import { StrategyChip } from "./strategy-chip";
+import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 
 // Rule dropdowns for the closed-trade edit modal. Duplicated from
 // trade-manager.tsx / log-buy.tsx / log-sell.tsx / import-trades.tsx —
@@ -498,6 +500,19 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [openLoaded, setOpenLoaded] = useState(false);
   const [closedLoaded, setClosedLoaded] = useState(false);
   const [filterLoading, setFilterLoading] = useState(false);
+  // Phase 2 — strategies for the right-click flyout + card pill colors.
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [tjCtxMenu, setTjCtxMenu] = useState<{ x: number; y: number; trade: TradePosition } | null>(null);
+  const coarsePointer = useCoarsePointer();
+  // Lookup keyed by name so the card pill can grab a strategy's color
+  // in O(1). When a trade references a strategy that's been deleted
+  // from the table (shouldn't happen — FK is RESTRICT), we fall back
+  // to grey so the chip still renders.
+  const strategyByName = useMemo(() => {
+    const m = new Map<string, Strategy>();
+    for (const s of strategies) m.set(s.name, s);
+    return m;
+  }, [strategies]);
 
   // Derived combined views — keep the rest of the component code unchanged.
   const allTrades = useMemo(() => [...openTrades, ...closedTrades], [openTrades, closedTrades]);
@@ -703,6 +718,39 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [editingTxn, editLoading, closeEditModal]);
+
+  // Phase 2 — load active strategies once on mount. Used by both the
+  // card pill (color lookup) and the right-click flyout (option list).
+  useEffect(() => {
+    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  // Close the right-click context menu on outside click / Escape.
+  useEffect(() => {
+    if (!tjCtxMenu) return;
+    const close = () => setTjCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [tjCtxMenu]);
+
+  // Phase 2 — single-trade retag from the right-click menu. Optimistic
+  // update of both cohorts (the trade lives in exactly one), then fire
+  // the PATCH. Reverts on error so the UI never lies about persisted
+  // state. Mirrors how setTradeGrade is handled in the same component.
+  const setTradeStrategyOptimistic = useCallback((trade_id: string, newStrategy: string) => {
+    setTjCtxMenu(null);
+    const patch = (s: string | undefined) => {
+      setOpenTrades(prev => prev.map(t => t.trade_id === trade_id ? { ...t, strategy: s } as any : t));
+      setClosedTrades(prev => prev.map(t => t.trade_id === trade_id ? { ...t, strategy: s } as any : t));
+    };
+    const prev = [...openTrades, ...closedTrades].find(t => t.trade_id === trade_id)?.strategy;
+    patch(newStrategy);
+    api.setTradeStrategy(trade_id, { strategy: newStrategy }).then(r => {
+      if ("error" in r && r.error) patch(prev);
+    }).catch(() => patch(prev));
+  }, [openTrades, closedTrades]);
 
   // On-demand loader. Fires only when the user picks a status, turns on
   // Recent Activity, or has a ticker selected (via search, prefill, or
@@ -1090,6 +1138,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
           return (
             <div key={trade.trade_id} className="rounded-[14px] overflow-hidden transition-all"
+                 onContextMenu={e => { e.preventDefault(); setTjCtxMenu({ x: e.clientX, y: e.clientY, trade }); }}
                  style={{
                    background: bgTint,
                    border: "1px solid var(--border)",
@@ -1203,11 +1252,27 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   </div>
                 )}
 
-                {/* Footer: dates + rule + expand toggle */}
-                <div className="flex items-center justify-between mt-3 pt-2">
-                  <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                {/* Footer: dates + rule + strategy pill + expand toggle */}
+                <div className="flex items-center justify-between mt-3 pt-2 gap-2 flex-wrap">
+                  <div className="text-[11px] flex items-center gap-2 flex-wrap" style={{ color: "var(--ink-4)" }}>
                     <span>{trade.rule}</span>
-                    <span className="mx-2">·</span>
+                    {/* Phase 2 — strategy pill. Color from DB (strategies
+                        table); chip continues to render even when the
+                        strategy has been deactivated since this trade was
+                        tagged. Falls back to a grey chip if the row's
+                        strategy isn't in the loaded list (defensive — FK
+                        is RESTRICT so this shouldn't happen). */}
+                    {(trade as any).strategy && (
+                      <>
+                        <span>·</span>
+                        <StrategyChip
+                          name={(trade as any).strategy}
+                          color={strategyByName.get((trade as any).strategy)?.color ?? "var(--ink-4)"}
+                          size="lg"
+                        />
+                      </>
+                    )}
+                    <span>·</span>
                     <span>Opened {String(trade.open_date || "").slice(0, 10)}</span>
                     {trade.closed_date && <><span className="mx-2">·</span><span>Closed {String(trade.closed_date).slice(0, 10)}</span></>}
                   </div>
@@ -1444,6 +1509,38 @@ export function TradeJournal({ navColor }: { navColor: string }) {
         <div className="text-center py-16 text-sm" style={{ color: "var(--ink-4)" }}>No trades match your filters</div>
       )}
       </>
+      )}
+
+      {/* Phase 2 — right-click context menu for retroactive strategy
+          tagging on Trade Journal cards. Same flyout/flat-list split
+          as ACS and All Campaigns. */}
+      {tjCtxMenu && strategies.length > 0 && (
+        <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[200px] overflow-hidden"
+             data-testid="tj-ctx-menu"
+             style={{
+               left: tjCtxMenu.x,
+               top: tjCtxMenu.y,
+               background: "var(--surface)",
+               border: "1px solid var(--border)",
+               boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+             }}>
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
+            {tjCtxMenu.trade.ticker} · {tjCtxMenu.trade.trade_id}
+          </div>
+          {coarsePointer ? (
+            <StrategyFlatList
+              strategies={strategies}
+              currentStrategy={(tjCtxMenu.trade as any).strategy}
+              onPick={(name) => setTradeStrategyOptimistic(tjCtxMenu.trade.trade_id, name)}
+            />
+          ) : (
+            <StrategyFlyout
+              strategies={strategies}
+              currentStrategy={(tjCtxMenu.trade as any).strategy}
+              onPick={(name) => setTradeStrategyOptimistic(tjCtxMenu.trade.trade_id, name)}
+            />
+          )}
+        </div>
       )}
 
       {/* Closed-trade edit modal — opens from the Edit button in any

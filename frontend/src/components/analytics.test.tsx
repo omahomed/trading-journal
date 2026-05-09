@@ -33,6 +33,12 @@ vi.mock("@/lib/api", () => ({
     tradesRecent: vi.fn(),
     getTradeLessons: vi.fn(),
     batchPrices: vi.fn(),
+    listStrategies: vi.fn().mockResolvedValue([
+      { name: "CanSlim", description: null, color: "#6366f1", is_active: true, created_at: "2026-01-01" },
+      { name: "StockTalk", description: null, color: "#d97706", is_active: true, created_at: "2026-01-02" },
+    ]),
+    setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
+    bulkSetStrategy: vi.fn().mockResolvedValue({ ok: true, updated: 0, failed: [] }),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -282,5 +288,52 @@ describe("Analytics — All Campaigns Flight Deck", () => {
     expect(screen.queryByText("$120.00")).not.toBeInTheDocument();
     expect(screen.queryByText("+20.0%")).not.toBeInTheDocument();
     expect(screen.queryByText("2026-02-01")).not.toBeInTheDocument();
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 2 — Bulk-select on All Campaigns.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("Analytics — bulk strategy tagging", () => {
+  test("selecting rows reveals the toolbar; Tag as → StockTalk fires bulk PATCH", async () => {
+    mClosed.mockResolvedValue([
+      closedTrade({ trade_id: "C1", ticker: "MSFT" }),
+      closedTrade({ trade_id: "C2", ticker: "AAPL" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA" }),
+    ]);
+    mOpen.mockResolvedValue([]);
+    vi.mocked(api.bulkSetStrategy).mockResolvedValue({
+      ok: true, updated: 2, failed: [], strategy: "StockTalk",
+    } as any);
+
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+
+    // Wait for strategies + table.
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+    await screen.findByText("MSFT");
+
+    // No toolbar yet.
+    expect(screen.queryByTestId("campaigns-bulk-toolbar")).not.toBeInTheDocument();
+
+    // Select two rows by clicking their checkboxes.
+    fireEvent.click(screen.getByTestId("campaigns-select-C1"));
+    fireEvent.click(screen.getByTestId("campaigns-select-C2"));
+
+    // Toolbar appears with "2 selected".
+    const toolbar = await screen.findByTestId("campaigns-bulk-toolbar");
+    expect(toolbar).toHaveTextContent("2 selected");
+
+    // Click "Tag as ▾" to open the dropdown.
+    fireEvent.click(screen.getByTestId("campaigns-tag-as"));
+
+    // Click StockTalk option.
+    fireEvent.click(screen.getByText("StockTalk"));
+
+    await waitFor(() => expect(api.bulkSetStrategy).toHaveBeenCalled());
+    const body = vi.mocked(api.bulkSetStrategy).mock.calls[0][0];
+    expect(body.strategy).toBe("StockTalk");
+    expect(body.trade_ids.sort()).toEqual(["C1", "C2"]);
   });
 });

@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { api, getActivePortfolio } from "@/lib/api";
+import { api, getActivePortfolio, type Strategy } from "@/lib/api";
+import { StrategyChip } from "./strategy-chip";
+
+// Hex-color regex mirrored from db_layer._HEX_COLOR_RE so client-side
+// validation rejects bad input before the server has to. Six hex digits
+// (no shorthand), case-insensitive.
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -100,6 +106,100 @@ export function Admin({ navColor }: { navColor: string }) {
   const [rebuildRunning, setRebuildRunning] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<Awaited<ReturnType<typeof api.rebuildMctSignals>> | null>(null);
 
+  // Phase 2 — strategies admin. Includes inactive rows (active=false) so
+  // the founder can edit any strategy regardless of its toggle state.
+  // Modal state is shared between Add (target=null) and Edit (target=row)
+  // — same modal renders both.
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [strategyModalOpen, setStrategyModalOpen] = useState(false);
+  const [strategyEditing, setStrategyEditing] = useState<Strategy | null>(null);
+  const [strategyForm, setStrategyForm] = useState<{ name: string; color: string; description: string; is_active: boolean }>({
+    name: "", color: "#6366f1", description: "", is_active: true,
+  });
+  const [strategySaving, setStrategySaving] = useState(false);
+  const [strategyError, setStrategyError] = useState<string | null>(null);
+
+  const loadStrategies = useCallback(() => {
+    api.listStrategies({ active: false }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  const openAddStrategy = () => {
+    setStrategyEditing(null);
+    setStrategyForm({ name: "", color: "#6366f1", description: "", is_active: true });
+    setStrategyError(null);
+    setStrategyModalOpen(true);
+  };
+
+  const openEditStrategy = (s: Strategy) => {
+    setStrategyEditing(s);
+    setStrategyForm({
+      name: s.name,
+      color: s.color,
+      description: s.description ?? "",
+      is_active: s.is_active,
+    });
+    setStrategyError(null);
+    setStrategyModalOpen(true);
+  };
+
+  const closeStrategyModal = () => {
+    setStrategyModalOpen(false);
+    setStrategyEditing(null);
+    setStrategyError(null);
+  };
+
+  const submitStrategyForm = async () => {
+    setStrategyError(null);
+    // Mirror the server-side hex check so the user gets immediate feedback
+    // without a round-trip. Server re-validates regardless.
+    if (!HEX_COLOR_RE.test(strategyForm.color)) {
+      setStrategyError("Color must be a six-digit hex string like '#6366f1'");
+      return;
+    }
+    if (!strategyEditing && !strategyForm.name.trim()) {
+      setStrategyError("Name is required");
+      return;
+    }
+    setStrategySaving(true);
+    try {
+      const r = strategyEditing
+        ? await api.updateStrategy(strategyEditing.name, {
+            description: strategyForm.description,
+            color: strategyForm.color,
+            is_active: strategyForm.is_active,
+          })
+        : await api.createStrategy({
+            name: strategyForm.name.trim(),
+            color: strategyForm.color,
+            description: strategyForm.description || undefined,
+            is_active: strategyForm.is_active,
+          });
+      if ("error" in r && r.error) {
+        setStrategyError(r.error);
+      } else {
+        loadStrategies();
+        closeStrategyModal();
+        flash(strategyEditing ? "Strategy updated" : "Strategy created", "ok");
+      }
+    } catch (err: any) {
+      setStrategyError(err?.message || "Save failed");
+    } finally {
+      setStrategySaving(false);
+    }
+  };
+
+  // Inline is_active toggle in the table row — flips the current value
+  // without opening the modal. Matches the existing `inline edit mode`
+  // pattern used in the Event Log table above.
+  const toggleStrategyActive = async (s: Strategy) => {
+    const r = await api.updateStrategy(s.name, { is_active: !s.is_active }).catch(() => null);
+    if (r && (!("error" in r) || !r.error)) {
+      loadStrategies();
+    } else if (r && "error" in r) {
+      flash(r.error || "Toggle failed", "err");
+    }
+  };
+
   const runRebuildSignals = async () => {
     if (!confirm("This will DELETE every row in market_signals and re-insert from a fresh engine run. Proceed?")) return;
     setRebuildRunning(true);
@@ -166,6 +266,12 @@ export function Admin({ navColor }: { navColor: string }) {
       setEvents(Array.isArray(ev) ? ev : []);
     });
   }, []);
+
+  // Phase 2 — load strategies (including inactive). Separate from the
+  // config-loading effect above because strategies live in their own
+  // table, not app_config, and the admin form mutates them via dedicated
+  // endpoints rather than the generic api.setConfig path.
+  useEffect(() => { loadStrategies(); }, [loadStrategies]);
 
   const loadEvents = useCallback(() => {
     api.events().then(ev => setEvents(Array.isArray(ev) ? ev : [])).catch(() => {});
@@ -423,6 +529,130 @@ export function Admin({ navColor }: { navColor: string }) {
           <SaveBtn label="Save Pyramid Rules" loading={saving} onClick={() =>
             saveConfig("pyramid_rules", pyramidRules, { value_type: "json", category: "sizing" })} />
         </InputRow>
+      </Section>
+
+      {/* ── 5.5 Strategies (Phase 2 — Migration 019) ── */}
+      <Section title="Strategies" icon="T">
+        <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Manage the strategies a campaign can be tagged with. Color is a
+          hex string used as the visual cue throughout the app. Inactive
+          strategies are hidden from new-trade forms but remain visible
+          on existing trades that were tagged before the toggle flipped.
+          <strong> Renaming is not supported in v1</strong> — name is the FK key.
+        </div>
+        <button onClick={openAddStrategy}
+                className="px-3 py-1.5 rounded-[8px] text-[12px] font-semibold mb-3 cursor-pointer"
+                style={{ background: navColor, color: "#fff" }}
+                data-testid="admin-add-strategy">
+          + Add Strategy
+        </button>
+        {strategies.length > 0 && (
+          <div className="overflow-auto rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+            <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+              <thead className="sticky top-0">
+                <tr style={{ background: "var(--bg-2)" }}>
+                  {["Strategy", "Description", "Active", "Edit"].map(h => (
+                    <th key={h} className="text-left px-3 py-2 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)", borderBottom: "1px solid var(--border)" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {strategies.map(s => (
+                  <tr key={s.name} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td className="px-3 py-1.5">
+                      <StrategyChip name={s.name} color={s.color} size="md" />
+                    </td>
+                    <td className="px-3 py-1.5 text-[10px]" style={{ color: "var(--ink-3)", maxWidth: 360 }}>
+                      {s.description || <span style={{ color: "var(--ink-4)" }}>—</span>}
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <input type="checkbox"
+                             checked={s.is_active}
+                             onChange={() => toggleStrategyActive(s)}
+                             aria-label={`Toggle ${s.name} active`}
+                             data-testid={`admin-strategy-active-${s.name}`} />
+                    </td>
+                    <td className="px-3 py-1.5">
+                      <button onClick={() => openEditStrategy(s)}
+                              className="text-[11px] underline"
+                              style={{ color: navColor, background: "transparent", border: "none", cursor: "pointer" }}
+                              data-testid={`admin-strategy-edit-${s.name}`}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Strategy Add/Edit modal — single modal for both flows.
+            Mirrors the Exercise modal pattern from active-campaign.tsx
+            (fixed-position backdrop, centered card, ESC handled via
+            backdrop click). Name is editable on Add only — disabled
+            when strategyEditing is set, since renames cascade through
+            trades_summary and audit blobs and are deferred to a future
+            "rename strategy" flow. */}
+        {strategyModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center"
+               style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
+               onClick={() => { if (!strategySaving) closeStrategyModal(); }}
+               data-testid="admin-strategy-modal">
+            <div className="w-[420px] max-w-[92vw] rounded-[14px] overflow-hidden"
+                 style={{ background: "var(--surface)", boxShadow: "0 20px 48px rgba(0,0,0,0.2), 0 0 0 1px var(--border)" }}
+                 onClick={e => e.stopPropagation()}>
+              <div className="px-[18px] py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>
+                {strategyEditing ? `Edit ${strategyEditing.name}` : "Add Strategy"}
+              </div>
+              <div className="p-4 flex flex-col gap-3">
+                <InputRow label="Name" help={strategyEditing ? "Renames are not supported in v1" : "1-60 characters"}>
+                  <TextInput value={strategyForm.name}
+                             onChange={(v) => setStrategyForm(f => ({ ...f, name: v }))}
+                             placeholder="CanSlim"
+                             {...({} as any)} />
+                  {strategyEditing && (
+                    <div className="text-[10px] mt-1" style={{ color: "var(--ink-4)" }}>Locked</div>
+                  )}
+                </InputRow>
+                <InputRow label="Color" help="Hex string, e.g. #6366f1">
+                  <div className="flex items-center gap-2">
+                    <TextInput value={strategyForm.color}
+                               onChange={(v) => setStrategyForm(f => ({ ...f, color: v }))}
+                               placeholder="#6366f1" mono />
+                    <span className="inline-block rounded-full shrink-0"
+                          aria-hidden="true"
+                          style={{ width: 24, height: 24, background: HEX_COLOR_RE.test(strategyForm.color) ? strategyForm.color : "var(--border)", border: "1px solid var(--border)" }} />
+                  </div>
+                </InputRow>
+                <InputRow label="Description (optional)">
+                  <TextInput value={strategyForm.description}
+                             onChange={(v) => setStrategyForm(f => ({ ...f, description: v }))}
+                             placeholder="Short prose" />
+                </InputRow>
+                <label className="flex items-center gap-2 text-[12px] cursor-pointer" style={{ color: "var(--ink-3)" }}>
+                  <input type="checkbox"
+                         checked={strategyForm.is_active}
+                         onChange={e => setStrategyForm(f => ({ ...f, is_active: e.target.checked }))} />
+                  <span>Active (visible in new-trade forms)</span>
+                </label>
+                {strategyError && (
+                  <div className="text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))", color: "#dc2626", border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))" }}>
+                    {strategyError}
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-3 flex items-center justify-end gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+                <button onClick={closeStrategyModal} disabled={strategySaving}
+                        className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium cursor-pointer"
+                        style={{ background: "transparent", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                  Cancel
+                </button>
+                <SaveBtn label={strategyEditing ? "Save Changes" : "Create Strategy"} loading={strategySaving} onClick={submitStrategyForm} />
+              </div>
+            </div>
+          </div>
+        )}
       </Section>
 
       {/* ── 6. Audit Trail ── */}

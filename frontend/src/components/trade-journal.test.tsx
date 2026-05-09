@@ -27,6 +27,11 @@ vi.mock("@/lib/api", () => ({
     batchPrices: vi.fn(),
     editTransaction: vi.fn(),
     deleteTransaction: vi.fn(),
+    listStrategies: vi.fn().mockResolvedValue([
+      { name: "CanSlim", description: null, color: "#6366f1", is_active: true, created_at: "2026-01-01" },
+      { name: "StockTalk", description: null, color: "#d97706", is_active: true, created_at: "2026-01-02" },
+    ]),
+    setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -292,5 +297,62 @@ describe("TradeJournal — URL deep-link", () => {
 
     // Cleanup: restore default URL so it doesn't leak into other tests
     window.history.pushState({}, "", "/");
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 2 — Strategy pill on Trade Journal cards.
+// Pill renders DB-driven color and continues to render even when the
+// strategy has been deactivated since the trade was tagged.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("TradeJournal — strategy pill", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+  });
+
+  test("renders the strategy chip with the correct color in the card footer", async () => {
+    vi.mocked(api.tradesOpen).mockResolvedValue([
+      { ...TRADE, strategy: "StockTalk" } as any,
+    ]);
+
+    render(<TradeJournal navColor="#6366f1" />);
+
+    const openFilter = await screen.findByRole("button", { name: /^open \(/i });
+    await act(async () => { fireEvent.click(openFilter); });
+
+    // Pill renders with the strategy name.
+    await waitFor(() => expect(screen.getByText("StockTalk")).toBeInTheDocument());
+    // Swatch picks up the color from the loaded strategies list. The
+    // chip's title attribute is the strategy name; its swatch span has
+    // the color in inline style. Verify by querying the chip element.
+    const chip = screen.getByTitle("StockTalk");
+    expect(chip).toBeInTheDocument();
+    // The first child span is the swatch (size sm/md/lg → 12 here).
+    const swatch = chip.querySelector("span");
+    expect(swatch).toHaveStyle({ background: "#d97706" });
+  });
+
+  test("pill still renders when the trade's strategy is no longer active", async () => {
+    // Per Phase 2 design: a trade tagged when StockTalk was active
+    // continues to display the StockTalk chip even after is_active=false.
+    // Server returns only active strategies, so this case becomes the
+    // "strategy not in loaded list" branch — chip falls back to a grey
+    // swatch but still renders the recorded name.
+    vi.mocked(api.tradesOpen).mockResolvedValue([
+      { ...TRADE, strategy: "Retired" } as any,
+    ]);
+    // listStrategies only returns the two active ones (no "Retired").
+
+    render(<TradeJournal navColor="#6366f1" />);
+
+    const openFilter = await screen.findByRole("button", { name: /^open \(/i });
+    await act(async () => { fireEvent.click(openFilter); });
+
+    // The recorded strategy name is shown even though it's missing from
+    // the active list.
+    await waitFor(() => expect(screen.getByText("Retired")).toBeInTheDocument());
   });
 });

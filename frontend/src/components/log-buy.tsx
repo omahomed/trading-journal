@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
+import { StrategyChip } from "./strategy-chip";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -683,7 +684,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
             {/* Strategy (Migration 019). Read-only on scale-in (inherited
                 from parent campaign — strategy is fixed at creation and
-                must never drift mid-campaign). */}
+                must never drift mid-campaign). Phase 2: visual swatch
+                rendering moved to <StrategyChip>. The structured option
+                still has an inline-only label so the search filter still
+                matches against the strategy name. */}
             <Field label="Strategy *">
               <SearchSelect
                 value={strategy}
@@ -692,11 +696,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 options={strategies.map(s => ({
                   value: s.name,
                   label: s.name,
-                  renderPrefix: () => (
-                    <span aria-hidden="true"
-                          className="inline-block rounded-full shrink-0"
-                          style={{ width: 10, height: 10, background: s.color }} />
-                  ),
+                  renderPrefix: () => <StrategyChip name={s.name} color={s.color} size="sm" showName={false} />,
                 }))}
                 placeholder="Select strategy..."
               />
