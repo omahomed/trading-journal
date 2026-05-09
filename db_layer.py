@@ -1818,6 +1818,98 @@ def update_trade_stops(portfolio_name, trade_id, new_stop,
             return updated
 
 
+def mirror_detail_edit_to_summary(portfolio_name: str, trade_id: str) -> None:
+    """Mirror canonical detail-row fields to trades_summary.
+
+    Convention:
+      - earliest BUY (date ASC, id ASC) wins for summary.rule, buy_notes,
+        stop_loss
+      - latest SELL (date DESC, id DESC) on a CLOSED campaign wins for
+        summary.sell_rule, sell_notes
+      - OPEN campaign with partial sells: sell_rule/sell_notes left alone
+        (those edits are detail-level only)
+
+    Called from edit_transaction_endpoint AFTER update_detail_row so the
+    helper sees the post-edit state, and BEFORE _recompute_summary_lifo so
+    the recompute's preservation block reads the just-mirrored values
+    instead of the stale pre-edit ones.
+
+    Idempotent: re-running with no detail changes is a no-op.
+    No-op if the trade has no BUY rows (e.g. mid-delete state).
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # Earliest BUY — canonical row for summary.rule/buy_notes/stop_loss.
+            # date ASC + id ASC tiebreak matches load_summary's Buy_Rule
+            # projection conceptually (date ASC) with deterministic insertion-
+            # order tiebreak for same-day rows.
+            cur.execute("""
+                SELECT rule, notes, stop_loss
+                  FROM trades_details
+                 WHERE portfolio_id = %s AND trade_id = %s
+                   AND action = 'BUY' AND deleted_at IS NULL
+                 ORDER BY date ASC, id ASC
+                 LIMIT 1
+            """, (portfolio_id, trade_id))
+            first_buy = cur.fetchone()
+
+            # Latest SELL on a CLOSED campaign — canonical row for
+            # summary.sell_rule/sell_notes. OPEN campaign with partial sells
+            # returns no row (status filter), so the SELL UPDATE is skipped
+            # and detail-level rule/notes stay detail-only.
+            cur.execute("""
+                SELECT d.rule, d.notes
+                  FROM trades_details d
+                  JOIN trades_summary s
+                    ON s.portfolio_id = d.portfolio_id
+                   AND s.trade_id = d.trade_id
+                 WHERE d.portfolio_id = %s AND d.trade_id = %s
+                   AND d.action = 'SELL' AND d.deleted_at IS NULL
+                   AND s.deleted_at IS NULL
+                   AND s.status = 'CLOSED'
+                 ORDER BY d.date DESC, d.id DESC
+                 LIMIT 1
+            """, (portfolio_id, trade_id))
+            latest_sell = cur.fetchone()
+
+            if first_buy is not None:
+                cur.execute("""
+                    UPDATE trades_summary
+                       SET rule = %s,
+                           buy_notes = %s,
+                           stop_loss = %s
+                     WHERE portfolio_id = %s AND trade_id = %s
+                       AND deleted_at IS NULL
+                """, (
+                    clean_text_value(first_buy[0]),
+                    clean_text_value(first_buy[1]),
+                    first_buy[2],
+                    portfolio_id, trade_id,
+                ))
+
+            if latest_sell is not None:
+                cur.execute("""
+                    UPDATE trades_summary
+                       SET sell_rule = %s,
+                           sell_notes = %s
+                     WHERE portfolio_id = %s AND trade_id = %s
+                       AND deleted_at IS NULL
+                """, (
+                    clean_text_value(latest_sell[0]),
+                    clean_text_value(latest_sell[1]),
+                    portfolio_id, trade_id,
+                ))
+
+            conn.commit()
+            load_summary.clear()
+
+
 # ============================================
 # UTILITY: Query Cross-Portfolio
 # ============================================

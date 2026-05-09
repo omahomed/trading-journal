@@ -3559,6 +3559,24 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
 
         db.update_detail_row(portfolio, detail_id, row_dict)
 
+        # Mirror canonical detail-row fields (earliest BUY's rule/notes/
+        # stop_loss; latest SELL's rule/notes on CLOSED) to trades_summary
+        # BEFORE the recompute. The recompute's preservation block then
+        # reads the just-mirrored values instead of the stale pre-edit
+        # ones — fixes the c0435ee interaction where edits to detail
+        # rule/notes/stop_loss were locked out of summary.
+        try:
+            if effective_trade_id:
+                db.mirror_detail_edit_to_summary(portfolio, effective_trade_id)
+        except Exception as e:
+            print(f"[edit_transaction] mirror to summary failed for {effective_trade_id}: {e}")
+            try:
+                db.log_audit(portfolio, "MIRROR_FAILED", effective_trade_id,
+                             effective_ticker, f"detail {detail_id}: {e}",
+                             username="web")
+            except Exception:
+                pass
+
         # Recompute the campaign summary so avg_entry / realized_pl /
         # return_pct reflect the edited detail. Without this the face card
         # keeps stale numbers (e.g. edit a buy price after the sell already
