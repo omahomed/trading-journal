@@ -1629,16 +1629,155 @@ def list_strategies_endpoint(active: bool = True):
     """
     try:
         rows = db.load_strategies(active_only=active)
-        return [
-            {
-                "name": r["name"],
-                "description": r.get("description"),
-                "color": r["color"],
-                "is_active": r["is_active"],
-                "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
-            }
-            for r in rows
-        ]
+        return [_serialize_strategy(r) for r in rows]
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _serialize_strategy(r: dict) -> dict:
+    """Shared serialization for strategy rows. Centralized so GET, POST,
+    and PUT all return the same shape (name, description, color,
+    is_active, created_at-as-isoformat)."""
+    return {
+        "name": r["name"],
+        "description": r.get("description"),
+        "color": r["color"],
+        "is_active": r["is_active"],
+        "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+    }
+
+
+# Phase 2 — strategies CRUD (founder-gated). Single-tenant for now;
+# strategies are global, so a non-founder writing them would mutate state
+# everyone sees. Mirrors the gate already in place on /api/admin/* paths.
+@app.post("/api/strategies")
+@limiter.limit("5/minute")
+def create_strategy_endpoint(request: Request, body: dict = Body(...)):
+    """Create a new strategy. Founder-only.
+
+    Body: { name, color, description?, is_active? }. Validates hex color
+    server-side regardless of what the client sends — frontend mirrors the
+    same regex but never trust the client. Returns the persisted row, or
+    an {error} body the frontend reads.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id != FOUNDER_USER_ID:
+        return {"error": "forbidden_not_admin"}
+    try:
+        row = db.create_strategy(
+            name=body.get("name", ""),
+            color=body.get("color", ""),
+            description=body.get("description"),
+            is_active=bool(body.get("is_active", True)),
+        )
+        return _serialize_strategy(row)
+    except ValueError as e:
+        return {"error": str(e)}
+    except psycopg2.errors.UniqueViolation:
+        return {"error": f"Strategy '{body.get('name', '')}' already exists"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/api/strategies/{name}")
+@limiter.limit("10/minute")
+def update_strategy_endpoint(name: str, request: Request, body: dict = Body(...)):
+    """Update a strategy's description, color, or is_active. Founder-only.
+
+    Name is NOT updatable here — renaming would cascade through every
+    trades_summary.strategy via the FK's ON UPDATE CASCADE, which is fine
+    for the DB but a UX/audit minefield (every audit row's "Strategy: X"
+    blob would be retroactively wrong). Defer rename to a future explicit
+    "rename strategy" flow.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id != FOUNDER_USER_ID:
+        return {"error": "forbidden_not_admin"}
+    try:
+        # Pass through only the recognised keys so a typo'd body field
+        # doesn't silently no-op (caller sees the unchanged row and can
+        # diagnose). The helper itself ignores unrecognised keys.
+        fields = {k: body[k] for k in ("description", "color", "is_active") if k in body}
+        row = db.update_strategy(name, **fields)
+        if row is None:
+            return {"error": f"Strategy '{name}' not found"}
+        return _serialize_strategy(row)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# Phase 2 — retroactive tagging (NOT founder-gated). Per-trade ops; any
+# authenticated owner of the portfolio can retag their own campaigns.
+@app.patch("/api/trades/{trade_id}/strategy")
+@limiter.limit("30/minute")
+def patch_trade_strategy_endpoint(trade_id: str, request: Request, body: dict = Body(...)):
+    """Retag a single campaign with a new strategy.
+
+    Body: { strategy: string, portfolio?: string }. Strategy is validated
+    against the active list (matches log_buy's contract — you can't tag a
+    trade with an inactive strategy via this endpoint, even if the row
+    already references one).
+    """
+    portfolio = body.get("portfolio", "CanSlim")
+    strategy = (body.get("strategy") or "").strip()
+    if not strategy:
+        return {"error": "Missing strategy"}
+    try:
+        valid = {s["name"] for s in db.load_strategies(active_only=True)}
+        if strategy not in valid:
+            return {"error": f"Unknown strategy: {strategy}"}
+        ok = db.update_trade_strategy(portfolio, trade_id, strategy)
+        if not ok:
+            return {"error": f"Trade {trade_id} not found in {portfolio}"}
+        try:
+            db.log_audit(portfolio, "STRATEGY_TAG", trade_id, "",
+                         f"strategy → {strategy}", username="web")
+        except Exception:
+            pass
+        return {"ok": True, "trade_id": trade_id, "strategy": strategy}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/bulk-strategy")
+@limiter.limit("5/minute")
+def bulk_set_trade_strategy_endpoint(request: Request, body: dict = Body(...)):
+    """Retag many campaigns at once.
+
+    Body: { trade_ids: [string], strategy: string, portfolio?: string }.
+
+    Failure semantics (per Phase 2 design):
+      - Strategy validation failure → reject ENTIRE batch up-front
+        (no partial commits). One up-front lookup against the active set.
+      - Missing trade_id (subset of trade_ids not found) → commit the
+        valid ones and return failed: [trade_ids] for the missing ones.
+        The single UPDATE … WHERE trade_id = ANY(%s) is atomic for the
+        rows it does match, and missing_ids are computed from the
+        RETURNING set vs the input.
+    """
+    portfolio = body.get("portfolio", "CanSlim")
+    strategy = (body.get("strategy") or "").strip()
+    trade_ids = body.get("trade_ids") or []
+    if not strategy:
+        return {"error": "Missing strategy"}
+    if not isinstance(trade_ids, list) or not trade_ids:
+        return {"error": "Missing trade_ids"}
+    try:
+        # All-or-nothing on strategy validation — if the strategy is bad,
+        # the whole batch is rejected before any UPDATE runs.
+        valid = {s["name"] for s in db.load_strategies(active_only=True)}
+        if strategy not in valid:
+            return {"error": f"Unknown strategy: {strategy}"}
+        updated, missing = db.bulk_update_trade_strategy(portfolio, trade_ids, strategy)
+        try:
+            db.log_audit(portfolio, "STRATEGY_BULK_TAG", "",
+                         "", f"strategy → {strategy}: {updated} updated, "
+                         f"{len(missing)} missing", username="web")
+        except Exception:
+            pass
+        return {"ok": True, "updated": updated, "failed": missing, "strategy": strategy}
     except Exception as e:
         return {"error": str(e)}
 

@@ -62,6 +62,11 @@ vi.mock("@/lib/api", () => ({
     batchPrices: vi.fn(),
     setManualPrice: vi.fn(),
     exerciseOption: vi.fn(),
+    listStrategies: vi.fn().mockResolvedValue([
+      { name: "CanSlim", description: null, color: "#6366f1", is_active: true, created_at: "2026-01-01" },
+      { name: "StockTalk", description: null, color: "#d97706", is_active: true, created_at: "2026-01-02" },
+    ]),
+    setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -312,5 +317,46 @@ describe("ActiveCampaign — Exercise option flow", () => {
     expect(screen.getByTestId("exercise-modal")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("exercise-modal")).not.toBeInTheDocument();
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Phase 2 — Right-click → "Set strategy" flyout submenu.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("ActiveCampaign — Set strategy submenu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // listStrategies + setTradeStrategy fall through to their default
+    // resolved values from the module-level mock unless a test overrides.
+    vi.mocked(api.listStrategies).mockResolvedValue([
+      { name: "CanSlim", description: null, color: "#6366f1", is_active: true, created_at: "2026-01-01" },
+      { name: "StockTalk", description: null, color: "#d97706", is_active: true, created_at: "2026-01-02" },
+    ] as any);
+    vi.mocked(api.setTradeStrategy).mockResolvedValue({ ok: true } as any);
+  });
+
+  test("right-click → hover Set strategy → click StockTalk fires PATCH", async () => {
+    setupApi([stockPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+
+    const tickerEl = await screen.findByText(/AAPL/);
+    fireEvent.contextMenu(tickerEl, { clientX: 100, clientY: 100 });
+
+    // Hover the "Set strategy" parent to reveal the flyout.
+    const setStrategyBtn = await screen.findByText(/Set strategy/);
+    fireEvent.mouseEnter(setStrategyBtn.closest("div")!);
+    const flyout = await screen.findByTestId("strategy-flyout");
+    expect(flyout).toBeInTheDocument();
+
+    // Click StockTalk option.
+    fireEvent.click(screen.getByText("StockTalk"));
+
+    await waitFor(() => expect(api.setTradeStrategy).toHaveBeenCalled());
+    const [tradeId, body] = vi.mocked(api.setTradeStrategy).mock.calls[0];
+    expect(tradeId).toBe("202603-005");
+    expect(body.strategy).toBe("StockTalk");
   });
 });

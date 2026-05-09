@@ -3662,6 +3662,139 @@ def load_strategies(active_only: bool = True) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def update_trade_strategy(portfolio_name: str, trade_id: str, strategy: str) -> bool:
+    """Retag a single campaign's strategy. Returns True if a row was updated.
+
+    Caller is responsible for validating that `strategy` exists in the
+    strategies table (the FK from Migration 019 will raise IntegrityError
+    on an unknown value, but callers are expected to pre-check for a
+    cleaner error response). Soft-deleted rows are skipped — retagging a
+    tombstoned campaign is a no-op.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE trades_summary SET strategy = %s "
+                "WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s) "
+                "  AND trade_id = %s "
+                "  AND deleted_at IS NULL",
+                (strategy, portfolio_name, trade_id),
+            )
+            updated = cur.rowcount
+            conn.commit()
+            return updated > 0
+
+
+def bulk_update_trade_strategy(
+    portfolio_name: str, trade_ids: list[str], strategy: str
+) -> tuple[int, list[str]]:
+    """Retag many campaigns at once in a single UPDATE.
+
+    Returns (updated_count, missing_trade_ids). missing_trade_ids is the
+    subset of trade_ids that didn't match an active row — caller surfaces
+    them as `failed: [...]` so the user can act on them. Strategy
+    validation is the caller's job (matches the single-row helper).
+
+    Atomic: one UPDATE … WHERE trade_id = ANY(%s) inside one transaction.
+    Either all matched rows are updated or none are.
+    """
+    if not trade_ids:
+        return 0, []
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE trades_summary SET strategy = %s "
+                "WHERE portfolio_id = (SELECT id FROM portfolios WHERE name = %s) "
+                "  AND trade_id = ANY(%s) "
+                "  AND deleted_at IS NULL "
+                "RETURNING trade_id",
+                (strategy, portfolio_name, list(trade_ids)),
+            )
+            matched = {row[0] for row in cur.fetchall()}
+            conn.commit()
+            missing = [tid for tid in trade_ids if tid not in matched]
+            return len(matched), missing
+
+
+# Hex color regex — used by both create_strategy and update_strategy. Six
+# hex digits (no shorthand), case-insensitive. Matches the regex mirrored
+# in the frontend's Admin form so client and server agree on what's valid.
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def create_strategy(
+    name: str, color: str, description: str | None = None, is_active: bool = True
+) -> dict:
+    """Insert a new strategy row. Returns the persisted row.
+
+    Validates name (1–60 chars, non-empty after strip) and color (six-hex
+    format) up front so the DB never receives garbage. Raises ValueError
+    for input errors and lets psycopg2's UniqueViolation propagate when
+    the name is already taken — endpoint catches and surfaces both.
+    """
+    name = (name or "").strip()
+    if not name or len(name) > 60:
+        raise ValueError("Strategy name must be 1-60 characters")
+    if not _HEX_COLOR_RE.match(color or ""):
+        raise ValueError("Color must be a six-digit hex string like '#6366f1'")
+    description = (description or "").strip() or None
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "INSERT INTO strategies (name, description, color, is_active) "
+                "VALUES (%s, %s, %s, %s) "
+                "RETURNING name, description, color, is_active, created_at",
+                (name, description, color, is_active),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+
+
+def update_strategy(name: str, **fields) -> dict | None:
+    """Update opt-in fields on a strategy. Returns the updated row, or None
+    if no row exists with that name.
+
+    Recognized fields: description, color, is_active. Unrecognized keys are
+    silently ignored so a forward-compatible body (e.g. a future `icon`
+    field) doesn't break older clients. Hex color is re-validated; other
+    fields are passed through. `name` itself is NOT updatable in v1 — see
+    Phase 2 design doc for the rename-deferral rationale.
+    """
+    set_clauses: list[str] = []
+    params: list = []
+    if "description" in fields:
+        desc = fields["description"]
+        set_clauses.append("description = %s")
+        params.append((desc or "").strip() or None)
+    if "color" in fields:
+        color = fields["color"]
+        if not _HEX_COLOR_RE.match(color or ""):
+            raise ValueError("Color must be a six-digit hex string like '#6366f1'")
+        set_clauses.append("color = %s")
+        params.append(color)
+    if "is_active" in fields:
+        set_clauses.append("is_active = %s")
+        params.append(bool(fields["is_active"]))
+    if not set_clauses:
+        # No-op update — return the current row so the endpoint can always
+        # respond with a row-shaped body.
+        rows = load_strategies(active_only=False)
+        return next((r for r in rows if r["name"] == name), None)
+    params.append(name)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"UPDATE strategies SET {', '.join(set_clauses)} "
+                f"WHERE name = %s "
+                f"RETURNING name, description, color, is_active, created_at",
+                tuple(params),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+
+
 def list_portfolios():
     """Return portfolios owned by the current authenticated user plus a
     live cash_balance derived from the cash_transactions ledger.

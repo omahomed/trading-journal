@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import { StrategyChip } from "./strategy-chip";
+import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import {
   computeWinRate,
   computeProfitFactor,
@@ -58,6 +60,14 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [openCount, setOpenCount] = useState(0);
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // Phase 2 — All Campaigns retroactive tagging.
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
+  const [bulkBanner, setBulkBanner] = useState<{ updated: number; failed: string[]; strategy: string } | null>(null);
+  const [campCtxMenu, setCampCtxMenu] = useState<{ x: number; y: number; trade: TradePosition } | null>(null);
+  const tagDropdownRef = useRef<HTMLDivElement>(null);
+  const coarsePointer = useCoarsePointer();
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || "overview");
 
   useEffect(() => {
@@ -87,6 +97,75 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
       setLoading(false);
     });
   }, []);
+
+  // Phase 2 — strategies for the right-click flyout + bulk dropdown.
+  useEffect(() => {
+    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  // Refresh just the campaign rows after a tagging action — cheaper than
+  // reloading journal history + trade lessons. Open + closed combined is
+  // what the campaigns tab reads from.
+  const refreshCampaigns = async () => {
+    const [closed, open] = await Promise.all([
+      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch(() => []),
+    ]);
+    setAllTrades(closed as TradePosition[]);
+    setOpenTrades(open as TradePosition[]);
+  };
+
+  // Close the right-click context menu on outside click / Escape.
+  useEffect(() => {
+    if (!campCtxMenu) return;
+    const close = () => setCampCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [campCtxMenu]);
+
+  // Close the "Tag as" dropdown on outside click.
+  useEffect(() => {
+    if (!tagDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (tagDropdownRef.current && !tagDropdownRef.current.contains(e.target as Node)) {
+        setTagDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [tagDropdownOpen]);
+
+  // Single-trade retag from the right-click menu. Refreshes after success
+  // so the table re-renders with the new strategy on the row.
+  const setOneStrategy = async (trade_id: string, strategy: string) => {
+    setCampCtxMenu(null);
+    const r = await api.setTradeStrategy(trade_id, { strategy }).catch(() => ({ error: "network" }));
+    if (!("error" in r) || !r.error) await refreshCampaigns();
+  };
+
+  // Bulk retag everything in selectedIds. Validates strategy server-side
+  // (active list); on success clears selection + shows a banner with the
+  // updated/failed counts. Server returns failed: [trade_ids] for any
+  // missing rows; we surface that count rather than the ids themselves
+  // to keep the banner short.
+  const bulkSetStrategy = async (strategy: string) => {
+    setTagDropdownOpen(false);
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const r = await api.bulkSetStrategy({ trade_ids: ids, strategy }).catch(() => null);
+    if (r && !("error" in r)) {
+      setBulkBanner({
+        updated: r?.updated ?? 0,
+        failed: r?.failed ?? [],
+        strategy,
+      });
+      setSelectedIds(new Set());
+      await refreshCampaigns();
+      setTimeout(() => setBulkBanner(null), 5000);
+    }
+  };
 
   const trades = useMemo(() => {
     if (scope === "2026") return allTrades.filter(t => String(t.closed_date || t.open_date || "").startsWith("2026"));
@@ -1558,6 +1637,64 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
               <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
             </div>
 
+            {/* Phase 2 — bulk-tag toolbar. Visible only when N > 0 selected.
+                Sticky so it stays visible when scrolling the long table. */}
+            {selectedIds.size > 0 && (
+              <div className="sticky top-0 z-30 mb-3 px-4 py-2.5 rounded-[10px] flex items-center gap-3 flex-wrap"
+                   style={{ background: "var(--surface-2)", border: "1px solid var(--border)", boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
+                   data-testid="campaigns-bulk-toolbar">
+                <span className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>
+                  {selectedIds.size} selected
+                </span>
+                <span style={{ color: "var(--ink-4)" }}>·</span>
+                <div ref={tagDropdownRef} className="relative">
+                  <button type="button"
+                          onClick={() => setTagDropdownOpen(o => !o)}
+                          className="px-3 py-1 rounded-[8px] text-[11px] font-semibold cursor-pointer"
+                          style={{ background: navColor, color: "#fff" }}
+                          data-testid="campaigns-tag-as">
+                    Tag as ▾
+                  </button>
+                  {tagDropdownOpen && strategies.length > 0 && (
+                    <div className="absolute top-full mt-1 left-0 z-40 rounded-[10px] py-1.5 overflow-hidden"
+                         style={{
+                           minWidth: 200,
+                           background: "var(--surface)",
+                           border: "1px solid var(--border)",
+                           boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+                         }}>
+                      {strategies.map(s => (
+                        <button key={s.name} type="button"
+                                onClick={() => bulkSetStrategy(s.name)}
+                                className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition-colors hover:brightness-95"
+                                style={{ background: "transparent", color: "var(--ink)" }}
+                                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <StrategyChip name={s.name} color={s.color} size="md" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button type="button"
+                        onClick={() => setSelectedIds(new Set())}
+                        className="ml-auto text-[11px] underline"
+                        style={{ color: "var(--ink-3)", background: "transparent", border: "none", cursor: "pointer" }}>
+                  Clear
+                </button>
+              </div>
+            )}
+
+            {/* Phase 2 — bulk-tag result banner (auto-dismisses after 5s). */}
+            {bulkBanner && (
+              <div className="mb-3 px-3 py-2 rounded-[8px] text-[12px]"
+                   style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#08a86b", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}
+                   data-testid="campaigns-bulk-banner">
+                Tagged {bulkBanner.updated} as <strong>{bulkBanner.strategy}</strong>
+                {bulkBanner.failed.length > 0 && <> · {bulkBanner.failed.length} not found</>}
+              </div>
+            )}
+
             {/* Flight Deck */}
             {pricesStale && fdMode !== "closed" && (
               <div className="text-[11px] mb-2 px-3 py-1.5 rounded-[8px]"
@@ -1583,10 +1720,68 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             </div>
 
             {/* Trade table */}
+            {/* Phase 2 — right-click context menu for single-row retag.
+                Mirrors the ACS menu style; renders the StrategyFlyout on
+                desktop and StrategyFlatList on touch (no hover state). */}
+            {campCtxMenu && strategies.length > 0 && (
+              <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[200px] overflow-hidden"
+                   data-testid="campaigns-ctx-menu"
+                   style={{
+                     left: campCtxMenu.x,
+                     top: campCtxMenu.y,
+                     background: "var(--surface)",
+                     border: "1px solid var(--border)",
+                     boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+                   }}>
+                <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                  {campCtxMenu.trade.ticker} · {campCtxMenu.trade.trade_id}
+                </div>
+                {coarsePointer ? (
+                  <StrategyFlatList
+                    strategies={strategies}
+                    currentStrategy={(campCtxMenu.trade as any).strategy}
+                    onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
+                  />
+                ) : (
+                  <StrategyFlyout
+                    strategies={strategies}
+                    currentStrategy={(campCtxMenu.trade as any).strategy}
+                    onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
+                  />
+                )}
+              </div>
+            )}
+
             <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
               <div className="overflow-x-auto" style={{ maxHeight: 600 }}>
                 <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                   <thead><tr>
+                    {/* Phase 2 — bulk-select checkbox column. Header
+                        checkbox toggles all visible (filtered) rows;
+                        indeterminate when some-but-not-all selected. */}
+                    <th className="text-left px-3 py-2.5 sticky top-0"
+                        style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", width: 32 }}>
+                      <input type="checkbox"
+                             aria-label="Select all visible campaigns"
+                             data-testid="campaigns-select-all"
+                             ref={el => {
+                               if (el) {
+                                 const visibleIds = filtered.map(t => t.trade_id);
+                                 const selectedVisible = visibleIds.filter(id => selectedIds.has(id)).length;
+                                 el.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+                               }
+                             }}
+                             checked={filtered.length > 0 && filtered.every(t => selectedIds.has(t.trade_id))}
+                             onChange={e => {
+                               const next = new Set(selectedIds);
+                               if (e.target.checked) {
+                                 filtered.forEach(t => next.add(t.trade_id));
+                               } else {
+                                 filtered.forEach(t => next.delete(t.trade_id));
+                               }
+                               setSelectedIds(next);
+                             }} />
+                    </th>
                     {([
                       { label: "Ticker", key: "ticker" }, { label: "Trade ID", key: "trade_id" }, { label: "Status", key: "status" },
                       { label: "Rule", key: "rule" }, { label: "Open", key: "open" }, { label: "Close", key: "close" },
@@ -1649,7 +1844,21 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                       <tr key={`${t.trade_id}-${i}`} style={{ borderBottom: "1px solid var(--border)" }}
                           className="transition-colors"
                           onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                          onContextMenu={e => { e.preventDefault(); setCampCtxMenu({ x: e.clientX, y: e.clientY, trade: t }); }}>
+                        <td className="px-3 py-2" style={{ width: 32 }}>
+                          <input type="checkbox"
+                                 aria-label={`Select ${t.ticker} ${t.trade_id}`}
+                                 data-testid={`campaigns-select-${t.trade_id}`}
+                                 checked={selectedIds.has(t.trade_id)}
+                                 onChange={e => {
+                                   const next = new Set(selectedIds);
+                                   if (e.target.checked) next.add(t.trade_id);
+                                   else next.delete(t.trade_id);
+                                   setSelectedIds(next);
+                                 }}
+                                 onClick={e => e.stopPropagation()} />
+                        </td>
                         <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>{t.trade_id}</td>
                         <td className="px-3 py-2">

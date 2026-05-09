@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle, type Strategy } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
 import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { CaptureSnapshotButton } from "./capture-snapshot";
+import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
 // changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
@@ -161,6 +162,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [optSortDir, setOptSortDir] = useState<SortDir>("desc");
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
+  // Phase 2 — list of active strategies for the right-click "Set strategy"
+  // submenu. Loaded once on mount; refresh after a successful retag is
+  // unnecessary because the source of truth (trades_summary.strategy) is
+  // re-read by loadData().
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const coarsePointer = useCoarsePointer();
 
   // Inline option price editor (preserved from v1).
   const [editingPriceTradeId, setEditingPriceTradeId] = useState<string | null>(null);
@@ -287,6 +294,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Load strategies once. Phase 2 admin UI mutations don't auto-propagate
+  // here — user can refresh if they just added a strategy. Acceptable for
+  // a low-mutation lookup.
+  useEffect(() => {
+    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
   useEffect(() => {
     const id = setInterval(() => setFreshnessTick(t => t + 1), 30_000);
     return () => clearInterval(id);
@@ -358,6 +372,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const ctxOpenPyramid = useCallback((trade_id: string) => {
     router.push(`/position-sizer?tab=pyramid&trade_id=${encodeURIComponent(trade_id)}`);
   }, [router]);
+
+  // Phase 2 — retag the campaign via PATCH /api/trades/{id}/strategy.
+  // Optimistic UX: close the menu, fire the request, refresh on success.
+  // The TradePosition.strategy on positions[] is computed from
+  // trades_summary, so the refresh covers the round-trip.
+  const ctxSetStrategy = useCallback(async (trade_id: string, strategy: string) => {
+    setCtxMenu(null);
+    try {
+      const r = await api.setTradeStrategy(trade_id, { strategy });
+      if (!("error" in r) || !r.error) {
+        await loadData({ force: true });
+      }
+    } catch {
+      /* swallow — user can retry from the menu */
+    }
+  }, [loadData]);
 
   // Exercise-option modal handlers.
   const ctxOpenExercise = useCallback((p: EnrichedPosition) => {
@@ -1099,6 +1129,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   onClick={e => { e.stopPropagation(); ctxOpenPyramid(ctxMenu.position.trade_id); setCtxMenu(null); }}>
             <span style={{ color: "var(--ink-4)" }}>&#x1F53A;</span> Open Position Sizer Pyramid
           </button>
+          {/* Phase 2 — Set strategy. Desktop: hover-flyout. Touch: flat list. */}
+          {strategies.length > 0 && (coarsePointer ? (
+            <StrategyFlatList
+              strategies={strategies}
+              currentStrategy={(ctxMenu.position as any).strategy}
+              onPick={(name) => ctxSetStrategy(ctxMenu.position.trade_id, name)}
+            />
+          ) : (
+            <StrategyFlyout
+              strategies={strategies}
+              currentStrategy={(ctxMenu.position as any).strategy}
+              onPick={(name) => ctxSetStrategy(ctxMenu.position.trade_id, name)}
+            />
+          ))}
           {ctxMenu.position.is_option && (
             <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
                     style={{ color: "var(--ink)" }}
