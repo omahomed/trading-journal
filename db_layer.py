@@ -56,6 +56,37 @@ def ttl_cache(ttl: float, **_unused):
         return _TTLCache(func, ttl=ttl)
     return decorator
 
+
+# ============================================
+# VALUE SANITIZATION
+# ============================================
+
+def clean_text_value(val) -> str | None:
+    """Normalize user-entered text values before persisting.
+
+    Returns None for None, pandas/numpy NaN, empty/whitespace strings, and
+    the literal sentinels 'nan'/'none'/'null' (case-insensitive, trimmed).
+    Otherwise returns the stripped str(val).
+
+    This is the canonical conversion at the DataFrame->dict boundary for
+    text columns in trades_summary, trades_details, trading_journal.
+    Without it, str(np.nan) writes the literal string 'nan' to the DB.
+    """
+    if val is None:
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    if not s:
+        return None
+    if s.lower() in ('nan', 'none', 'null'):
+        return None
+    return s
+
+
 # ============================================
 # TENANT CONTEXT
 # ============================================
