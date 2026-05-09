@@ -2816,8 +2816,8 @@ def log_buy(request: Request, body: dict):
                     "Avg_Entry": float(round(new_avg_entry, 4)),
                     "Total_Cost": float(round(new_total_cost, 2)),
                     "Stop_Loss": effective_stop,
-                    "Rule": str(row.get("rule", "") or rule or ""),
-                    "Buy_Notes": str(notes or row.get("buy_notes", "") or ""),
+                    "Rule": db.clean_text_value(row.get("rule")) or db.clean_text_value(rule),
+                    "Buy_Notes": db.clean_text_value(notes) or db.clean_text_value(row.get("buy_notes")),
                     "Risk_Budget": round(new_rb, 2),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
@@ -2906,12 +2906,12 @@ def set_trade_grade(body: dict = Body(...)):
             "Realized_PL": float(row.get("realized_pl", 0) or 0),
             "Unrealized_PL": float(row.get("unrealized_pl", 0) or 0),
             "Return_Pct": float(row.get("return_pct", 0) or 0),
-            "Sell_Rule": row.get("sell_rule") or None,
-            "Notes": row.get("notes") or None,
+            "Sell_Rule": db.clean_text_value(row.get("sell_rule")),
+            "Notes": db.clean_text_value(row.get("notes")),
             "Stop_Loss": row.get("stop_loss") or None,
-            "Rule": row.get("rule") or None,
-            "Buy_Notes": row.get("buy_notes") or None,
-            "Sell_Notes": row.get("sell_notes") or None,
+            "Rule": db.clean_text_value(row.get("rule")),
+            "Buy_Notes": db.clean_text_value(row.get("buy_notes")),
+            "Sell_Notes": db.clean_text_value(row.get("sell_notes")),
             "Risk_Budget": float(row.get("risk_budget", 0) or 0),
             "Grade": grade_val,
         }
@@ -3038,8 +3038,8 @@ def log_sell(request: Request, body: dict):
             "Return_Pct": float(round(return_pct, 4)),
             "Sell_Rule": rule,
             "Sell_Notes": notes,
-            "Rule": str(row.get("rule", "") or ""),
-            "Buy_Notes": str(row.get("buy_notes", "") or ""),
+            "Rule": db.clean_text_value(row.get("rule")),
+            "Buy_Notes": db.clean_text_value(row.get("buy_notes")),
             "Stop_Loss": row.get("stop_loss"),
             "Risk_Budget": row.get("risk_budget"),
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
@@ -3294,7 +3294,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
 
             # Preserve user-set fields from the existing summary; append the
             # exercise breadcrumb to .notes per locked decision #2.
-            preserved_notes = str(opt_row.get("notes", "") or "").strip()
+            preserved_notes = db.clean_text_value(opt_row.get("notes")) or ""
             auto_note = (f"Exercised on {date_str} — converted to {underlying} "
                          f"stock position {stock_trade_id}")
             new_opt_notes = f"{preserved_notes}\n{auto_note}".strip() if preserved_notes else auto_note
@@ -3395,7 +3395,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
             # Preserve scale-in row's user fields when present; new-trade row
             # uses the placeholder defaults + cross-link note.
             if scale_into_existing:
-                existing_notes = str(stock_existing_row.get("notes", "") or "").strip()
+                existing_notes = db.clean_text_value(stock_existing_row.get("notes")) or ""
                 scale_link = (f"Scaled in via exercise of option trade "
                               f"{option_trade_id} on {date_str}")
                 merged_notes = f"{existing_notes}\n{scale_link}".strip() if existing_notes else scale_link
@@ -3403,8 +3403,8 @@ def exercise_option(request: Request, body: dict = Body(...)):
                     **stock_lifo_summary,
                     "Notes": merged_notes,
                     "Stop_Loss": stock_existing_row.get("stop_loss"),
-                    "Rule": str(stock_existing_row.get("rule", "") or ""),
-                    "Buy_Notes": str(stock_existing_row.get("buy_notes", "") or ""),
+                    "Rule": db.clean_text_value(stock_existing_row.get("rule")),
+                    "Buy_Notes": db.clean_text_value(stock_existing_row.get("buy_notes")),
                     "Sell_Rule": stock_existing_row.get("sell_rule"),
                     "Sell_Notes": stock_existing_row.get("sell_notes"),
                     "Risk_Budget": float(stock_existing_row.get("risk_budget") or 0),
