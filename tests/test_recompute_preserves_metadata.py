@@ -72,6 +72,7 @@ def _existing_summary_row() -> dict[str, Any]:
         "buy_notes": "Initial entry on breakout",
         "sell_rule": "sr2.1 Stop hit",
         "sell_notes": "Trailing stop triggered",
+        "notes": "General notes on this campaign",
         "risk_budget": 500.0,
         "stop_loss": 195.0,
         "instrument_type": "STOCK",
@@ -222,6 +223,27 @@ def test_recompute_summary_lifo_preserves_all_six_fields(stubbed):
     for field, want in expected.items():
         assert saved.get(field) == want, \
             f"{field} not preserved: got {saved.get(field)!r}, expected {want!r}"
+
+
+def test_recompute_preserves_notes(stubbed):
+    """Phase 2 Commit 6 expansion: the c0435ee preservation block now also
+    preserves summary.notes (the legacy general-notes column). Without this,
+    every recompute would silently wipe notes — the same shape of bug
+    c0435ee fixed for the 6 user-prose fields.
+
+    Existing summary row has notes='General notes on this campaign'.
+    After _recompute_summary_lifo runs, the captured save_summary_with_closures
+    payload must carry that Notes value.
+    """
+    state, _client = stubbed
+    import api.main as main
+
+    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
+
+    assert len(state["saved_with_closures"]) == 1
+    saved = state["saved_with_closures"][0]["summary_row"]
+    assert saved.get("Notes") == "General notes on this campaign", \
+        f"Notes not preserved: got {saved.get('Notes')!r}"
 
 
 def test_recompute_summary_lifo_no_existing_summary_does_not_crash(stubbed):
