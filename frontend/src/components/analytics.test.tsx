@@ -297,6 +297,16 @@ describe("Analytics — All Campaigns Flight Deck", () => {
 // ─────────────────────────────────────────────────────────────────────
 
 describe("Analytics — bulk strategy tagging", () => {
+  test("listStrategies fires on mount (contract guard for fetch wiring)", async () => {
+    // Both the right-click flyout AND the bulk "Tag as" dropdown need
+    // this fetch. An explicit contract assertion prevents a silent
+    // regression where strategies stays empty and either UI hides.
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+  });
+
   test("selecting rows reveals the toolbar; Tag as → StockTalk fires bulk PATCH", async () => {
     mClosed.mockResolvedValue([
       closedTrade({ trade_id: "C1", ticker: "MSFT" }),

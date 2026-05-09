@@ -42,18 +42,33 @@ interface StrategyFlyoutProps {
 // the side. Auto-flips horizontally when the right edge would clip the
 // viewport. The parent is responsible for closing the outer context
 // menu after onPick fires.
+//
+// Positioning: fixed to the viewport, with coordinates computed from
+// the wrapper's getBoundingClientRect on open. Why fixed (not absolute):
+// every parent context menu uses overflow-hidden to keep its rounded
+// corners clean, which would clip an absolute-positioned panel that
+// extends beyond the wrapper's bounds. position: fixed is anchored to
+// the viewport, so it escapes any ancestor's overflow / clip / transform
+// constraint. Trade-off: the flyout doesn't follow scroll, but right-
+// click menus are short-lived (next click closes them) so this is fine.
 export function StrategyFlyout({ strategies, currentStrategy, onPick }: StrategyFlyoutProps) {
   const [open, setOpen] = useState(false);
-  const [flipLeft, setFlipLeft] = useState(false);
+  const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Measure the parent's bounding rect on hover-open. Compare its right
-  // edge + the flyout width against window.innerWidth. If overflow,
-  // anchor the flyout to the parent's LEFT edge (open leftward) instead.
+  // Measure the parent's bounding rect on hover-open. Compute viewport
+  // coordinates for the flyout: anchor to parent's right edge by default;
+  // flip to parent's left edge if rendering right-side would clip the
+  // viewport. Single coords state captures both axes so the render reads
+  // a single shape rather than a flip-flag + a rect.
   useEffect(() => {
     if (!open || !wrapperRef.current) return;
     const rect = wrapperRef.current.getBoundingClientRect();
-    setFlipLeft(rect.right + FLYOUT_WIDTH > window.innerWidth);
+    const flipLeft = rect.right + FLYOUT_WIDTH > window.innerWidth;
+    setCoords({
+      top: rect.top,
+      left: flipLeft ? rect.left - FLYOUT_WIDTH : rect.right,
+    });
   }, [open]);
 
   return (
@@ -77,12 +92,12 @@ export function StrategyFlyout({ strategies, currentStrategy, onPick }: Strategy
         </span>
         <span style={{ color: "var(--ink-4)" }}>›</span>
       </button>
-      {open && strategies.length > 0 && (
+      {open && strategies.length > 0 && coords && (
         <div
-          className="absolute top-0 z-50 rounded-[10px] py-1.5 overflow-hidden"
+          className="fixed z-50 rounded-[10px] py-1.5 overflow-hidden"
           style={{
-            [flipLeft ? "right" : "left"]: "100%",
-            [flipLeft ? "left" : "right"]: "auto",
+            top: coords.top,
+            left: coords.left,
             width: FLYOUT_WIDTH,
             background: "var(--surface)",
             border: "1px solid var(--border)",

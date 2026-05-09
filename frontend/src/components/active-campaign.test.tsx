@@ -351,6 +351,17 @@ describe("ActiveCampaign — Set strategy submenu", () => {
     const flyout = await screen.findByTestId("strategy-flyout");
     expect(flyout).toBeInTheDocument();
 
+    // Regression guard: flyout must use position: fixed so it escapes
+    // the parent context menu's overflow-hidden clip. Reverting to
+    // position: absolute would silently break the panel in real
+    // browsers (jsdom doesn't compute layout, so this className check
+    // is the only thing standing between a regression and an invisible
+    // bug shipping again). Asserting on className rather than
+    // getComputedStyle because jsdom doesn't apply Tailwind classes
+    // into computed style — but we DO control the class string.
+    expect(flyout.className).toContain("fixed");
+    expect(flyout.className).not.toContain("absolute");
+
     // Click StockTalk option.
     fireEvent.click(screen.getByText("StockTalk"));
 
@@ -358,5 +369,15 @@ describe("ActiveCampaign — Set strategy submenu", () => {
     const [tradeId, body] = vi.mocked(api.setTradeStrategy).mock.calls[0];
     expect(tradeId).toBe("202603-005");
     expect(body.strategy).toBe("StockTalk");
+  });
+
+  test("listStrategies fires on mount (contract guard for fetch wiring)", async () => {
+    // Even though the actual flyout-clipping bug wasn't a fetch issue,
+    // making the fetch wiring an explicit test contract prevents a
+    // regression where someone removes the useEffect and the empty
+    // strategies array silently hides the menu item.
+    setupApi([stockPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
   });
 });

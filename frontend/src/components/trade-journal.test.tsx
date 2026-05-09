@@ -313,6 +313,14 @@ describe("TradeJournal — strategy pill", () => {
     setupDefaults();
   });
 
+  test("listStrategies fires on mount (contract guard for fetch wiring)", async () => {
+    // Explicit contract: the right-click flyout AND card pill colors
+    // both depend on this fetch. Regressing the useEffect would silently
+    // hide the menu item and grey-out every pill.
+    render(<TradeJournal navColor="#6366f1" />);
+    await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
+  });
+
   test("renders the strategy chip with the correct color in the card footer", async () => {
     vi.mocked(api.tradesOpen).mockResolvedValue([
       { ...TRADE, strategy: "StockTalk" } as any,
