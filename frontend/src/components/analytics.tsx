@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import { LESSON_CATEGORIES, CAT_COLORS } from "@/lib/lesson-categories";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import {
@@ -17,19 +18,6 @@ import {
 type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns";
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
-
-const LESSON_CATEGORIES = [
-  "Entry timing", "Stop placement", "Undersized", "Oversized",
-  "Scaled in too fast", "Exit too early", "Exit too late",
-  "Market conditions", "Rule deviation", "Other",
-];
-const CAT_COLORS: Record<string, { bg: string; fg: string }> = {
-  "Entry timing": { bg: "color-mix(in oklab, #f59f00 12%, var(--surface))", fg: "#b45309" }, "Stop placement": { bg: "#fed7aa", fg: "#c2410c" },
-  "Undersized": { bg: "#dbeafe", fg: "#3b82f6" }, "Oversized": { bg: "#ede9fe", fg: "#6d28d9" },
-  "Scaled in too fast": { bg: "color-mix(in oklab, #e5484d 30%, var(--border))", fg: "#b91c1c" }, "Exit too early": { bg: "#ccfbf1", fg: "#0f766e" },
-  "Exit too late": { bg: "#e0e7ff", fg: "#4338ca" }, "Market conditions": { bg: "var(--border)", fg: "var(--ink-2)" },
-  "Rule deviation": { bg: "#ffe4e6", fg: "#be123c" }, "Other": { bg: "var(--bg-2)", fg: "var(--ink-3)" },
-};
 
 function HeroCard({ label, value, sub, ok }: { label: string; value: string; sub: string; ok: boolean }) {
   const color = ok ? "#08a86b" : "#e5484d";
