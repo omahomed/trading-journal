@@ -96,10 +96,12 @@ DRIFT_CHECKS: list[DriftCheck] = [
                  WHERE portfolio_id = s.portfolio_id
                    AND trade_id     = s.trade_id
                    AND action       = 'BUY'
+                   AND deleted_at IS NULL
                  ORDER BY date ASC, id ASC
                  LIMIT 1
             ) d ON TRUE
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND s.rule IS DISTINCT FROM d.rule
         """,
         remediation=(
@@ -132,10 +134,12 @@ DRIFT_CHECKS: list[DriftCheck] = [
                  WHERE portfolio_id = s.portfolio_id
                    AND trade_id     = s.trade_id
                    AND action       = 'BUY'
+                   AND deleted_at IS NULL
                  ORDER BY date ASC, id ASC
                  LIMIT 1
             ) d ON TRUE
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND s.buy_notes IS DISTINCT FROM d.notes
         """,
         remediation=(
@@ -163,6 +167,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
             FROM trades_summary s
             JOIN portfolios p ON p.id = s.portfolio_id
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND s.status = 'OPEN'
               AND s.open_date >= TIMESTAMP '2026-01-01'
               AND (s.risk_budget IS NULL OR s.risk_budget = 0)
@@ -195,6 +200,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               FROM trades_summary s
               JOIN portfolios p ON p.id = s.portfolio_id
              WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+               AND s.deleted_at IS NULL
                AND s.rule IS NOT NULL
                AND LOWER(TRIM(s.rule)) IN ('nan', 'none', 'null')
             UNION ALL
@@ -204,6 +210,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               FROM trades_summary s
               JOIN portfolios p ON p.id = s.portfolio_id
              WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+               AND s.deleted_at IS NULL
                AND s.buy_notes IS NOT NULL
                AND LOWER(TRIM(s.buy_notes)) IN ('nan', 'none', 'null')
             UNION ALL
@@ -213,6 +220,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               FROM trades_summary s
               JOIN portfolios p ON p.id = s.portfolio_id
              WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+               AND s.deleted_at IS NULL
                AND s.sell_rule IS NOT NULL
                AND LOWER(TRIM(s.sell_rule)) IN ('nan', 'none', 'null')
             UNION ALL
@@ -222,6 +230,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               FROM trades_summary s
               JOIN portfolios p ON p.id = s.portfolio_id
              WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+               AND s.deleted_at IS NULL
                AND s.sell_notes IS NOT NULL
                AND LOWER(TRIM(s.sell_notes)) IN ('nan', 'none', 'null')
             UNION ALL
@@ -231,6 +240,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               FROM trades_summary s
               JOIN portfolios p ON p.id = s.portfolio_id
              WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+               AND s.deleted_at IS NULL
                AND s.notes IS NOT NULL
                AND LOWER(TRIM(s.notes)) IN ('nan', 'none', 'null')
         """,
@@ -260,6 +270,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
             FROM trades_summary s
             JOIN portfolios p ON p.id = s.portfolio_id
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND s.status = 'OPEN'
               AND s.closed_date IS NOT NULL
         """,
@@ -289,6 +300,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
             FROM trading_journal j
             JOIN portfolios p ON p.id = j.portfolio_id
             WHERE (j.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND j.deleted_at IS NULL
               AND ( j.nlv_source      NOT IN ('manual', 'ibkr_auto', 'ibkr_override')
                  OR j.holdings_source NOT IN ('manual', 'ibkr_auto', 'ibkr_override') )
         """,
@@ -331,6 +343,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                   FROM trades_summary s
                   JOIN portfolios p ON p.id = s.portfolio_id
                  WHERE s.status = 'OPEN'
+                   AND s.deleted_at IS NULL
                    AND (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
             ) os
             LEFT JOIN (
@@ -346,6 +359,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                         AND lc.trade_id     = d.trade_id
                         AND lc.buy_trx_id   = d.trx_id
                      WHERE d.action = 'BUY'
+                       AND d.deleted_at IS NULL
                      GROUP BY d.portfolio_id, d.trade_id, d.trx_id, d.shares
                   ) br
                  GROUP BY br.portfolio_id, br.trade_id
@@ -358,6 +372,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                    WHERE d_check.portfolio_id = os.portfolio_id
                      AND d_check.trade_id     = os.trade_id
                      AND d_check.action       = 'BUY'
+                     AND d_check.deleted_at IS NULL
                      AND (d_check.trx_id IS NULL OR d_check.trx_id = '')
               )
               AND NOT EXISTS (
@@ -403,6 +418,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                   FROM trades_summary s
                   JOIN portfolios p ON p.id = s.portfolio_id
                  WHERE s.status = 'CLOSED'
+                   AND s.deleted_at IS NULL
                    AND (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
             ) cs
             JOIN (
@@ -418,6 +434,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                         AND lc.trade_id     = d.trade_id
                         AND lc.buy_trx_id   = d.trx_id
                      WHERE d.action = 'BUY'
+                       AND d.deleted_at IS NULL
                      GROUP BY d.portfolio_id, d.trade_id, d.trx_id, d.shares
                   ) br
                  GROUP BY br.portfolio_id, br.trade_id
@@ -430,6 +447,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                    WHERE d_check.portfolio_id = cs.portfolio_id
                      AND d_check.trade_id     = cs.trade_id
                      AND d_check.action       = 'BUY'
+                     AND d_check.deleted_at IS NULL
                      AND (d_check.trx_id IS NULL OR d_check.trx_id = '')
               )
               AND NOT EXISTS (
@@ -511,11 +529,13 @@ DRIFT_CHECKS: list[DriftCheck] = [
               ON lc.portfolio_id = s.portfolio_id
              AND lc.trade_id     = s.trade_id
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND EXISTS (
                   SELECT 1 FROM trades_details d
                    WHERE d.portfolio_id = s.portfolio_id
                      AND d.trade_id     = s.trade_id
                      AND d.action       = 'SELL'
+                     AND d.deleted_at IS NULL
               )
               AND ABS(s.realized_pl - COALESCE(lc.sum_pl, 0)) > 0.01
         """,
@@ -578,11 +598,13 @@ DRIFT_CHECKS: list[DriftCheck] = [
                     AND closed.trade_id     = d.trade_id
                     AND closed.buy_trx_id   = d.trx_id
                  WHERE d.action = 'BUY'
+                   AND d.deleted_at IS NULL
                  GROUP BY d.portfolio_id, d.trade_id
             ) br
               ON br.portfolio_id = s.portfolio_id
              AND br.trade_id     = s.trade_id
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.deleted_at IS NULL
               AND s.status = 'OPEN'
               AND ABS(s.shares - COALESCE(br.open_remaining, 0)) > 0.0001
               AND NOT EXISTS (
@@ -590,6 +612,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                    WHERE d_check.portfolio_id = s.portfolio_id
                      AND d_check.trade_id     = s.trade_id
                      AND d_check.action       = 'BUY'
+                     AND d_check.deleted_at IS NULL
                      AND (d_check.trx_id IS NULL OR d_check.trx_id = '')
               )
               AND NOT EXISTS (
