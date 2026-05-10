@@ -43,6 +43,7 @@ export interface EnrichedPosition {
   expiration: Date | null;
   manual_price: number | null;
   grade: number | null;
+  strategy: string | null;
 }
 
 export function computeEnrichedPositions(
@@ -177,6 +178,7 @@ export function computeEnrichedPositions(
         return isFinite(n) && n > 0 ? n : null;
       })(),
       grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
+      strategy: trade.strategy ?? null,
     };
   });
 }

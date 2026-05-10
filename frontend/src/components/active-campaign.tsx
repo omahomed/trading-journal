@@ -8,6 +8,7 @@ import { readCache, writeCache } from "@/lib/session-cache";
 import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { CaptureSnapshotButton } from "./capture-snapshot";
+import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
@@ -473,6 +474,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
   const equities = useMemo(() => positions.filter(p => !p.is_option), [positions]);
   const options = useMemo(() => positions.filter(p => p.is_option), [positions]);
+  // O(1) name → color lookup for the per-row strategy dot. Mirrors the
+  // pattern used by Trade Journal's pill so colors stay consistent across
+  // surfaces.
+  const strategyByName = useMemo(() => {
+    const m = new Map<string, Strategy>();
+    for (const s of strategies) m.set(s.name, s);
+    return m;
+  }, [strategies]);
 
   const sortedEquities = useMemo(
     () => [...equities].sort((a, b) => compareRows(a, b, eqSortKey, eqSortDir)),
@@ -838,7 +847,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
-                        {p.ticker}
+                        <span className="inline-flex items-center" style={{ gap: 6 }}>
+                          {p.ticker}
+                          {p.strategy && (
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                          )}
+                        </span>
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
                         {p.days_held}
@@ -883,7 +897,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {p.avg_stop > 0 ? `$${p.avg_stop.toFixed(2)}` : "—"}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.current_value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, color: riskColor, fontWeight: 600 }}
@@ -988,7 +1002,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
                       {/* Contract */}
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
-                        {p.ticker}
+                        <span className="inline-flex items-center" style={{ gap: 6 }}>
+                          {p.ticker}
+                          {p.strategy && (
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                          )}
+                        </span>
                       </td>
                       {/* Days */}
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
@@ -1071,7 +1090,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       </td>
                       {/* Cost (pos 11) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.total_cost.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        ${p.total_cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       {/* Cost % (pos 12) — total_cost as a share of NLV. equity may be 0 in pre-load states; guard the divide. */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
