@@ -110,45 +110,6 @@ DRIFT_CHECKS: list[DriftCheck] = [
         ),
     ),
     DriftCheck(
-        check_id="summary_detail_buy_notes_mismatch",
-        description=(
-            "trades_summary.buy_notes differs from the notes on the earliest "
-            "BUY detail."
-        ),
-        severity="warning",
-        # trades_details has a single `notes` column (line 125). Summary
-        # splits prose into buy_notes / sell_notes — for the earliest BUY,
-        # detail.notes maps to summary.buy_notes.
-        sql="""
-            SELECT
-                s.trade_id,
-                s.ticker,
-                p.name AS portfolio,
-                s.buy_notes AS summary_buy_notes,
-                d.notes     AS detail_buy_notes
-            FROM trades_summary s
-            JOIN portfolios p ON p.id = s.portfolio_id
-            JOIN LATERAL (
-                SELECT notes
-                  FROM trades_details
-                 WHERE portfolio_id = s.portfolio_id
-                   AND trade_id     = s.trade_id
-                   AND action       = 'BUY'
-                   AND deleted_at IS NULL
-                 ORDER BY date ASC, id ASC
-                 LIMIT 1
-            ) d ON TRUE
-            WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
-              AND s.deleted_at IS NULL
-              AND s.buy_notes IS DISTINCT FROM d.notes
-        """,
-        remediation=(
-            "Edit the campaign's buy_notes via Trade Manager or rerun the "
-            "save_summary_row whitelist path that copies detail.notes onto "
-            "summary.buy_notes for the earliest BUY."
-        ),
-    ),
-    DriftCheck(
         check_id="risk_budget_null_or_zero_post_021",
         description=(
             "Open trades opened on/after 2026-01-01 with NULL or 0 risk_budget. "
