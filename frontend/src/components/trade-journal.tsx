@@ -806,7 +806,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       const urlTradeId = params.get("trade_id");
       if (urlTradeId) pickedTradeId = urlTradeId;
     }
+    // Seed the search box with whichever token we got. Group 3's
+    // matchesAnyTradeQuery handles both tickers and trade IDs natively, so
+    // a `?trade_id=...` deep-link narrows the list to that one campaign
+    // (and `?ticker=...` keeps its prior inclusive behavior).
     if (pickedTicker) setSelectedTickers([pickedTicker]);
+    else if (pickedTradeId) setSelectedTickers([pickedTradeId]);
     if (pickedTradeId) setExpandedCard(pickedTradeId);
   }, []);
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { StrategyChip } from "./strategy-chip";
@@ -58,6 +59,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [openCount, setOpenCount] = useState(0);
+  const router = useRouter();
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   // Phase 2 — All Campaigns retroactive tagging (right-click flyout
@@ -1528,7 +1530,8 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             case "ticker": return (t.ticker || "").toUpperCase();
             case "trade_id": return t.trade_id || "";
             case "status": return (t.status || "").toUpperCase();
-            case "rule": return (t.rule || "").toUpperCase();
+            case "buy_rule": return String((t as any).buy_rule || t.rule || "").toUpperCase();
+            case "sell_rule": return String((t as any).sell_rule || "").toUpperCase();
             case "open": return t.open_date || "";
             case "close": return t.closed_date || "";
             case "shares": return t.shares || 0;
@@ -1788,10 +1791,13 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
             </div>
 
             {/* Trade table */}
-            {/* Phase 2 — right-click context menu for single-row retag.
-                Mirrors the ACS menu style; renders the StrategyFlyout on
-                desktop and StrategyFlatList on touch (no hover state). */}
-            {campCtxMenu && strategies.length > 0 && (
+            {/* Phase 2 — right-click context menu for single-row retag,
+                plus "Open in Trade Journal" drill-in. Mirrors the ACS menu
+                style; renders the StrategyFlyout on desktop and
+                StrategyFlatList on touch (no hover state). The retag block
+                is hidden when no strategies are loaded, but the menu still
+                renders so the journal drill-in is always available. */}
+            {campCtxMenu && (
               <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[200px] overflow-hidden"
                    data-testid="campaigns-ctx-menu"
                    style={{
@@ -1804,18 +1810,36 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                 <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
                   {campCtxMenu.trade.ticker} · {campCtxMenu.trade.trade_id}
                 </div>
-                {coarsePointer ? (
-                  <StrategyFlatList
-                    strategies={strategies}
-                    currentStrategy={(campCtxMenu.trade as any).strategy}
-                    onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
-                  />
-                ) : (
-                  <StrategyFlyout
-                    strategies={strategies}
-                    currentStrategy={(campCtxMenu.trade as any).strategy}
-                    onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
-                  />
+                <button type="button"
+                        data-testid="campaigns-ctx-open-journal"
+                        onClick={() => {
+                          const id = encodeURIComponent(campCtxMenu.trade.trade_id);
+                          router.push(`/trade-journal?trade_id=${id}`);
+                          setCampCtxMenu(null);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-[12px] transition-colors hover:brightness-95"
+                        style={{ color: "var(--ink)" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                  Open in Trade Journal
+                </button>
+                {strategies.length > 0 && (
+                  <>
+                    <div className="my-1 mx-2" style={{ borderTop: "1px solid var(--border)" }} />
+                    {coarsePointer ? (
+                      <StrategyFlatList
+                        strategies={strategies}
+                        currentStrategy={(campCtxMenu.trade as any).strategy}
+                        onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
+                      />
+                    ) : (
+                      <StrategyFlyout
+                        strategies={strategies}
+                        currentStrategy={(campCtxMenu.trade as any).strategy}
+                        onPick={(name) => setOneStrategy(campCtxMenu.trade.trade_id, name)}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -1826,7 +1850,8 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                   <thead><tr>
                     {([
                       { label: "Ticker", key: "ticker" }, { label: "Trade ID", key: "trade_id" }, { label: "Status", key: "status" },
-                      { label: "Rule", key: "rule" }, { label: "Open", key: "open" }, { label: "Close", key: "close" },
+                      { label: "Buy Rule", key: "buy_rule" }, { label: "Sell Rule", key: "sell_rule" },
+                      { label: "Open", key: "open" }, { label: "Close", key: "close" },
                       { label: "Shares", key: "shares" }, { label: "Entry", key: "entry" }, { label: "Exit", key: "exit" },
                       { label: "P&L", key: "pl" }, { label: "Return %", key: "return" }, { label: "R", key: "r" },
                     ] as const).map(h => (
@@ -1896,7 +1921,8 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                             {t.status}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{t.rule}</td>
+                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{(t as any).buy_rule || t.rule || "—"}</td>
+                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{isOpen ? "—" : ((t as any).sell_rule || "—")}</td>
                         <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(0, 10)}</td>
                         <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{isOpen ? "—" : (displayCloseDate || "—")}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{displayShares > 0 ? displayShares : "—"}</td>
