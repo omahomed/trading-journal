@@ -43,7 +43,13 @@ function QualityTile({ label, value, status, ok }: { label: string; value: strin
   );
 }
 
-export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: string; initialTab?: string; onTabConsumed?: () => void }) {
+export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed, onTradeIdConsumed }: {
+  navColor: string;
+  initialTab?: string;
+  initialTradeId?: string;
+  onTabConsumed?: () => void;
+  onTradeIdConsumed?: () => void;
+}) {
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [openCount, setOpenCount] = useState(0);
@@ -75,6 +81,11 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
   const [strategyFilterOpen, setStrategyFilterOpen] = useState(false);
   const strategyFilterRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || "overview");
+  // Trade Review deep-link target. Captured from ?trade_id=<id> on URL
+  // entry; we scroll to and auto-expand its lesson card once the closed
+  // trades have loaded. Held as state so the URL prop can be consumed
+  // (cleared in the parent) without losing the in-component target.
+  const [selectedTradeId, setSelectedTradeId] = useState<string | null>(initialTradeId ?? null);
 
   useEffect(() => {
     if (initialTab && ["overview", "buyrules", "sellrules", "drawdown", "review", "campaigns"].includes(initialTab)) {
@@ -82,6 +93,13 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
       onTabConsumed?.();
     }
   }, [initialTab, onTabConsumed]);
+
+  useEffect(() => {
+    if (initialTradeId) {
+      setSelectedTradeId(initialTradeId);
+      onTradeIdConsumed?.();
+    }
+  }, [initialTradeId, onTradeIdConsumed]);
   const [scope, setScope] = useState<"ltd" | "2026">("ltd");
   // drillRule kept for sell rules tab (TODO)
 
@@ -1201,7 +1219,40 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
         const worstLosers = [...trFiltered].filter(t => parseFloat(String(t.realized_pl || 0)) < 0)
           .sort((a, b) => parseFloat(String(a.realized_pl || 0)) - parseFloat(String(b.realized_pl || 0))).slice(0, topN);
 
-        const TradeCard = ({ rank, t, isWinner }: { rank: number; t: TradePosition; isWinner: boolean }) => {
+        // Deep-link target. Looked up against the FULL closed-trade list
+        // (not trFiltered) so explicit user nav overrides the date filter.
+        // If the target sits inside Top/Worst we just auto-open + scroll
+        // the existing card; otherwise we render an extra "Selected
+        // Campaign" section above the lists.
+        const selectedTrade = selectedTradeId
+          ? allTrades.find(t => t.trade_id === selectedTradeId) ?? null
+          : null;
+        const selectedInLists = !!selectedTrade && (
+          topWinners.some(t => t.trade_id === selectedTrade.trade_id) ||
+          worstLosers.some(t => t.trade_id === selectedTrade.trade_id)
+        );
+        const showSelectedSection = !!selectedTrade && !selectedInLists;
+        if (selectedTradeId && !selectedTrade) {
+          // eslint-disable-next-line no-console
+          console.warn(`[Trade Review] trade_id=${selectedTradeId} not found in loaded closed trades.`);
+        }
+
+        // Ref callback wired to the targeted card. Fires once when the
+        // element mounts (after trades load and the card renders),
+        // scrolls it into view, then no-ops on subsequent renders.
+        const onSelectedCardRef = (el: HTMLDivElement | null) => {
+          if (el && selectedTradeId) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        };
+
+        const TradeCard = ({ rank, t, isWinner, autoOpenLesson, refCallback }: {
+          rank: number | null;
+          t: TradePosition;
+          isWinner: boolean;
+          autoOpenLesson?: boolean;
+          refCallback?: (el: HTMLDivElement | null) => void;
+        }) => {
           const pl = parseFloat(String(t.realized_pl || 0));
           const ret = parseFloat(String(t.return_pct || 0));
           const rb = parseFloat(String(t.risk_budget || 0));
@@ -1211,10 +1262,10 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
           const borderColor = isWinner ? "#08a86b" : "#e5484d";
           const plColor = isWinner ? "#08a86b" : "#e5484d";
           return (
-            <div className="rounded-[12px] overflow-hidden mb-3" style={{ background: "var(--surface)", borderLeft: `4px solid ${borderColor}`, border: "1px solid var(--border)" }}>
+            <div ref={refCallback} className="rounded-[12px] overflow-hidden mb-3" style={{ background: "var(--surface)", borderLeft: `4px solid ${borderColor}`, border: "1px solid var(--border)" }}>
               <div className="px-4 py-3">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-[15px] font-extrabold">#{rank} · {t.ticker} <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>({t.trade_id})</span></div>
+                  <div className="text-[15px] font-extrabold">{rank != null ? `#${rank} · ` : ""}{t.ticker} <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>({t.trade_id})</span></div>
                   <div className="text-[18px] font-extrabold privacy-mask" style={{ color: plColor }}>{pl >= 0 ? "+" : ""}${pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                 </div>
                 {/* Category pills */}
@@ -1316,7 +1367,7 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
                 };
 
                 return (
-                  <details className="mx-4 mb-3">
+                  <details className="mx-4 mb-3" {...(autoOpenLesson ? { open: true } : {})}>
                     <summary className="text-[11px] font-medium cursor-pointer px-3 py-1.5 rounded-[6px]" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
                       📝 Lesson — {t.ticker} {t.trade_id} {existing?.note ? "✅" : ""}
                     </summary>
@@ -1397,15 +1448,58 @@ export function Analytics({ navColor, initialTab, onTabConsumed }: { navColor: s
               </div>
             </div>
 
+            {/* Selected Campaign — deep-link target rendered above the
+                top/worst lists when the targeted trade isn't already in
+                either list (cold trade, or sitting outside the active
+                date-range filter). Explicit user nav overrides the
+                filter for the targeted trade only. */}
+            {showSelectedSection && selectedTrade && (
+              <>
+                <div className="text-[15px] font-bold mb-3">🎯 Selected Campaign</div>
+                <TradeCard
+                  key={`selected-${selectedTrade.trade_id}`}
+                  rank={null}
+                  t={selectedTrade}
+                  isWinner={parseFloat(String(selectedTrade.realized_pl || 0)) >= 0}
+                  autoOpenLesson
+                  refCallback={onSelectedCardRef}
+                />
+              </>
+            )}
+
             {/* Top Winners */}
             <div className="text-[15px] font-bold mb-3">🏆 Top {topN} Winners</div>
-            {topWinners.length > 0 ? topWinners.map((t, i) => <TradeCard key={t.trade_id} rank={i + 1} t={t} isWinner />) : (
+            {topWinners.length > 0 ? topWinners.map((t, i) => {
+              const isTarget = selectedInLists && t.trade_id === selectedTradeId;
+              return (
+                <TradeCard
+                  key={t.trade_id}
+                  rank={i + 1}
+                  t={t}
+                  isWinner
+                  autoOpenLesson={isTarget}
+                  refCallback={isTarget ? onSelectedCardRef : undefined}
+                />
+              );
+            }) : (
               <div className="mb-4 px-4 py-3 rounded-[10px] text-[12px]" style={{ background: "var(--bg)", color: "var(--ink-4)" }}>No profitable trades in this window.</div>
             )}
 
             {/* Worst Losers */}
             <div className="text-[15px] font-bold mb-3 mt-5">⚠️ Worst {topN} Losers</div>
-            {worstLosers.length > 0 ? worstLosers.map((t, i) => <TradeCard key={t.trade_id} rank={i + 1} t={t} isWinner={false} />) : (
+            {worstLosers.length > 0 ? worstLosers.map((t, i) => {
+              const isTarget = selectedInLists && t.trade_id === selectedTradeId;
+              return (
+                <TradeCard
+                  key={t.trade_id}
+                  rank={i + 1}
+                  t={t}
+                  isWinner={false}
+                  autoOpenLesson={isTarget}
+                  refCallback={isTarget ? onSelectedCardRef : undefined}
+                />
+              );
+            }) : (
               <div className="mb-4 px-4 py-3 rounded-[10px] text-[12px]" style={{ background: `color-mix(in oklab, #08a86b 6%, var(--surface))`, color: "#08a86b" }}>No losing trades in this window.</div>
             )}
 
