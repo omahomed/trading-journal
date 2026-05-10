@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
 import { matchesAnyTradeQuery } from "@/lib/trade-search";
+import { CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -483,6 +485,7 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
 }
 
 export function TradeJournal({ navColor }: { navColor: string }) {
+  const router = useRouter();
   // Cohort-split storage so the page can fetch open trades on mount without
   // waiting on the closed-trade payload. tradesClosed(500) + tradesRecent(5000)
   // were the page's slowest fetches and most users only need them when they
@@ -503,6 +506,11 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [filterLoading, setFilterLoading] = useState(false);
   // Phase 2 — strategies for the right-click flyout + card pill colors.
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  // Trade Review lesson notes for the read-only block on the trade card.
+  // Single fetch per portfolio on mount — same pattern analytics.tsx uses
+  // for its full lesson editor. Map shape: { [trade_id]: { note, category } }
+  // where `category` is a pipe-separated tag list.
+  const [lessons, setLessons] = useState<Record<string, { note: string; category: string }>>({});
   const [tjCtxMenu, setTjCtxMenu] = useState<{ x: number; y: number; trade: TradePosition } | null>(null);
   const coarsePointer = useCoarsePointer();
   // Lookup keyed by name so the card pill can grab a strategy's color
@@ -724,6 +732,15 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // card pill (color lookup) and the right-click flyout (option list).
   useEffect(() => {
     api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  // Trade Review lessons — one fetch per portfolio. The trade card's lesson
+  // block reads from this map; editing still happens on Analytics → Trade
+  // Review. No per-card refetch.
+  useEffect(() => {
+    api.getTradeLessons(getActivePortfolio())
+      .then(r => { if (r.lessons) setLessons(r.lessons); })
+      .catch(() => {});
   }, []);
 
   // Close the right-click context menu on outside click / Escape.
@@ -1482,28 +1499,51 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         {/* Charts */}
                         <TradeCharts tradeId={trade.trade_id} ticker={trade.ticker} />
 
-                        {/* Trade Notes */}
-                        <div className="px-5 py-4">
-                          <div className="text-[13px] font-semibold mb-3 flex items-center gap-2">
-                            <span>📝</span> Trade Notes
-                          </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Entry Notes</div>
-                              <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
-                                {trade.buy_notes || "_No entry notes_"}
+                        {/* Trade Review lesson — read-only window into
+                            trade_lessons. Editing happens on Analytics →
+                            Trade Review; the link below jumps there with
+                            the trade pre-selected. Renders nothing when no
+                            lesson exists or both fields are empty, so empty
+                            campaigns don't carry a placeholder block. */}
+                        {(() => {
+                          const lesson = lessons[trade.trade_id];
+                          const note = (lesson?.note || "").trim();
+                          const cats = (lesson?.category || "").split("|").map(c => c.trim()).filter(Boolean);
+                          if (!note && cats.length === 0) return null;
+                          return (
+                            <div className="px-5 py-4">
+                              <div className="flex items-center justify-between mb-2.5">
+                                <div className="text-[13px] font-semibold flex items-center gap-2">
+                                  <span>📝</span> Lesson
+                                </div>
+                                <button type="button"
+                                        onClick={() => router.push(`/analytics?tab=review&trade_id=${encodeURIComponent(trade.trade_id)}`)}
+                                        className="text-[11px] font-medium hover:underline"
+                                        style={{ color: navColor, background: "transparent", border: "none", cursor: "pointer" }}>
+                                  Edit in Trade Review →
+                                </button>
                               </div>
+                              {cats.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mb-2">
+                                  {cats.map(c => {
+                                    const cc = CAT_COLORS[c] || CAT_FALLBACK;
+                                    return (
+                                      <span key={c} className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                            style={{ background: cc.bg, color: cc.fg }}>
+                                        ✓ {c}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {note && (
+                                <div className="text-[12px] whitespace-pre-wrap" style={{ color: "var(--ink-3)" }}>
+                                  {note}
+                                </div>
+                              )}
                             </div>
-                            <div className="p-3 rounded-[8px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                              <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
-                                {trade.sell_rule ? `Sell Rule: ${trade.sell_rule}` : "Setup/Rule"}
-                              </div>
-                              <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
-                                {trade.sell_notes || trade.rule || "_No notes_"}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
