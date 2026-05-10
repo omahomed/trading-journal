@@ -1338,7 +1338,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         { label: "Current Price", value: `$${curPrice.toFixed(2)}`, sub: undefined },
                         { label: "Orig Cost", value: b1Price > 0 ? `$${b1Price.toFixed(2)}` : `$${avgEntry.toFixed(2)}`, sub: undefined },
                         { label: "Avg Cost", value: `$${avgEntry.toFixed(2)}`, sub: isOption ? `×${multiplier}` : undefined },
-                        { label: "Risk Budget", value: `$${riskBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined },
+                        { label: "Trade Risk $", value: `$${riskBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined },
                         { label: `${unitLabel} Held`, value: String(isOpen ? shares : 0), sub: undefined },
                         { label: "Unrealized P&L", value: `$${unreal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: isOpen ? `${unrealPct.toFixed(2)}%` : undefined, color: PLColor(unreal) },
                         { label: "Realized P&L", value: `$${realizedBank.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined, color: PLColor(realizedBank) },

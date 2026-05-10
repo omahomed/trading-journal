@@ -99,10 +99,10 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "avg_entry", label: "Avg Entry", align: "right" },
   { key: "avg_stop", label: "Avg Stop", align: "right" },
   { key: "current_value", label: "Current Value", align: "right" },
-  { key: "signed_risk", label: "Risk $", align: "right" },
-  { key: "risk_pct", label: "Risk %", align: "right" },
+  { key: "signed_risk", label: "Current Risk $", align: "right" },
+  { key: "risk_pct", label: "Current Risk %", align: "right" },
   { key: "overall_pl", label: "Overall P&L", align: "right" },
-  { key: "projected_pl", label: "Projected P&L", align: "right" },
+  { key: "risk_budget", label: "Trade Risk $", align: "right" },
 ];
 
 // Column ordering for the Options table — 14 columns to mirror EQUITY_COLS
@@ -118,10 +118,10 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
 //   8 Avg Entry    ↔ Entry
 //   9 Avg Stop     ↔ Current Price (inline-editable)
 //  10 Current Value↔ Value
-//  11 Risk $       ↔ Cost
-//  12 Risk %       ↔ Cost %
-//  13 Overall P&L  ↔ Overall P&L
-//  14 Projected P&L↔ — (N/A; not sortable)
+//  11 Current Risk $ ↔ Cost
+//  12 Current Risk % ↔ Cost %
+//  13 Overall P&L    ↔ Overall P&L
+//  14 Trade Risk $   ↔ Trade Risk $  (both tables — historical risk_budget)
 // Keep the cell counts in lock-step with the body render below — header
 // position must equal cell position or alignment breaks.
 const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
@@ -138,7 +138,7 @@ const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "total_cost",    label: "Cost",          align: "right" },
   { key: "cost_pct",      label: "Cost %",        align: "right" },
   { key: "overall_pl",    label: "Overall P&L",   align: "right" },
-  { key: "projected_pl",  label: "—",             align: "right" },
+  { key: "risk_budget",   label: "Trade Risk $",  align: "right" },
 ];
 
 export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
@@ -658,7 +658,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       monitorAlerts.push({
         type: "warn",
         ticker: p.ticker,
-        msg: `Risk (${formatCurrency(p.risk_dollars, { decimals: 0 })}) > Budget (${formatCurrency(p.risk_budget, { decimals: 0 })}). Raise stop to ${formatCurrency(rbmStop)} to stay within budget.`,
+        msg: `Current Risk (${formatCurrency(p.risk_dollars, { decimals: 0 })}) > Trade Risk $ (${formatCurrency(p.risk_budget, { decimals: 0 })}). Tighten stops to ${formatCurrency(rbmStop)} to bring exposure back to the locked Trade Risk $.`,
       });
     }
     if (p.return_pct <= -7.0) {
@@ -806,11 +806,19 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <tbody>
                 {sortedEquities.map((p, i) => {
                   const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
-                  const projColor = p.projected_pl >= 0 ? "#08a86b" : "#e5484d";
-                  // Risk $ / Risk % columns show total exposure (projected_pl)
-                  // — realized losses on closed lots + open-to-stop risk —
-                  // so coloring tracks projected_pl, not signed_risk.
+                  // Current Risk $ / Current Risk % columns show total exposure
+                  // (projected_pl) — realized losses on closed lots + open-to-stop
+                  // risk — so coloring tracks projected_pl, not signed_risk.
                   const riskColor = p.projected_pl > 0 ? "#08a86b" : p.projected_pl < 0 ? "#e5484d" : "var(--ink-3)";
+                  // Group 7-2: divergence flag — current open-only risk exceeds
+                  // the historical Trade Risk $ by more than $5. Same trigger as
+                  // the Risk Monitor warning at line ~657 so they fire together.
+                  // Amber tint matches the At-Risk Risk-Status pill (line 859);
+                  // unobtrusive flag-style, not emergency-style.
+                  const riskDivergent = p.risk_budget > 0 && p.risk_dollars > (p.risk_budget + 5);
+                  const riskCellBg = riskDivergent
+                    ? "color-mix(in oklab, #f59f00 12%, var(--surface))"
+                    : undefined;
 
                   let retBg: string;
                   let retText: string;
@@ -821,20 +829,21 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
                   const pyramidReady = p.pyramid_pct >= 5;
 
-                  // Tooltip "Current" mirrors the Risk $ cell value: the magnitude
-                  // of projected_pl (total exposure — realized losses on closed
-                  // lots plus open-to-stop on the rest). "De-risked %" — fraction
-                  // of original budget protected by the stop — is only meaningful
-                  // for fresh opens; for partially-closed trades, realized losses
-                  // aren't de-risked, they're locked in, so we drop that component
-                  // rather than show a misleading number.
+                  // Tooltip "Current" mirrors the Current Risk $ cell value: the
+                  // magnitude of projected_pl (total exposure — realized losses on
+                  // closed lots plus open-to-stop on the rest). "De-risked %" —
+                  // fraction of Trade Risk $ (locked at buy events) that current
+                  // stops have eliminated — is only meaningful for fresh opens;
+                  // for partially-closed trades, realized losses aren't de-risked,
+                  // they're locked in, so we drop that component rather than show
+                  // a misleading number.
                   const isPartiallyClosed = p.realized_bank !== 0;
                   const dRiskedPct = p.risk_budget > 0
                     ? Math.max(0, Math.min(100, (1 - Math.abs(p.signed_risk) / p.risk_budget) * 100))
                     : 0;
                   const riskTooltip = isPartiallyClosed
-                    ? `Initial budget: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))}`
-                    : `Initial budget: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))} · De-risked: ${dRiskedPct.toFixed(1)}%`;
+                    ? `Trade Risk $: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))}`
+                    : `Trade Risk $: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))} · De-risked: ${dRiskedPct.toFixed(1)}%`;
 
                   return (
                     <tr key={p.trade_id} className="transition-colors"
@@ -896,7 +905,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {formatCurrency(p.current_value)}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
-                          style={{ fontFamily: mono, color: riskColor, fontWeight: 600 }}
+                          style={{ fontFamily: mono, color: riskColor, fontWeight: 600, background: riskCellBg }}
                           title={riskTooltip}>
                         {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
@@ -906,8 +915,8 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
                         {formatCurrency(p.overall_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
-                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: projColor }}>
-                        {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600 }}>
+                        {formatCurrency(p.risk_budget)}
                       </td>
                     </tr>
                   );
@@ -945,10 +954,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <thead>
                 <tr>
                   {OPTION_COLS.map(h => {
-                    // projected_pl is N/A for options — header label is "—"
-                    // and the column is intentionally not sortable.
-                    const sortable = h.key !== "projected_pl";
-                    const active = sortable && optSortKey === h.key;
+                    // Group 7-2: Pos 14 is now Trade Risk $ (historical
+                    // risk_budget) on both tables, so all 14 columns are
+                    // sortable — the prior projected_pl-only no-op cell
+                    // is gone.
+                    const active = optSortKey === h.key;
                     return (
                       <th key={h.key}
                           className={`text-${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-2.5 py-2.5 whitespace-nowrap sticky top-0`}
@@ -956,10 +966,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                             color: active ? "var(--ink)" : "var(--ink-4)",
                             background: "var(--surface-2)",
                             borderBottom: "1px solid var(--border)",
-                            cursor: sortable ? "pointer" : "default",
+                            cursor: "pointer",
                             userSelect: "none",
                           }}
-                          onClick={sortable ? () => handleOptSort(h.key) : undefined}>
+                          onClick={() => handleOptSort(h.key)}>
                         {h.label}
                         {active && <span className="ml-1 text-[9px]">{optSortDir === "desc" ? "▼" : "▲"}</span>}
                       </th>
@@ -1096,9 +1106,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: p.overall_pl >= 0 ? "#08a86b" : "#e5484d" }}>
                         {formatCurrency(p.overall_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
-                      {/* — (pos 14) — Projected P&L is N/A for options. */}
-                      <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, color: "var(--ink-4)" }} title="N/A for options">
-                        —
+                      {/* Trade Risk $ (pos 14) — historical risk_budget locked at
+                          buy events; equivalent to the equity column. */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600 }}>
+                        {formatCurrency(p.risk_budget)}
                       </td>
                     </tr>
                   );
