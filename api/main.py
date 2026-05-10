@@ -43,6 +43,7 @@ import nlv_service
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns as _normalize_journal,
@@ -2915,9 +2916,12 @@ def log_buy(request: Request, body: dict):
                 new_total_cost = old_cost + value
                 new_avg_entry = (new_total_cost / new_total_shares / multiplier) if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
-                existing_rb = float(row.get("risk_budget", 0) or 0)
-                added_rb = calc_risk_budget(shares, price, effective_stop, multiplier)
-                new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
+                # Risk_Budget placeholder for the inline write. The post-save
+                # _recompute_summary_lifo below is the canonical recompute and
+                # will overwrite this with compute_trade_risk over the post-
+                # insert detail set. Group 7-1: replaces the prior additive
+                # logic (existing_rb + new_lot_rb) which inflated risk on every
+                # scale-in and never reflected stops moving up.
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": str(row.get("open_date", date_str))[:10],
@@ -2927,7 +2931,7 @@ def log_buy(request: Request, body: dict):
                     "Stop_Loss": effective_stop,
                     "Rule": db.clean_text_value(row.get("rule")) or db.clean_text_value(rule),
                     "Buy_Notes": db.clean_text_value(notes) or db.clean_text_value(row.get("buy_notes")),
-                    "Risk_Budget": round(new_rb, 2),
+                    "Risk_Budget": calc_risk_budget(shares, price, effective_stop, multiplier),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
                 }
@@ -2968,6 +2972,16 @@ def log_buy(request: Request, body: dict):
                          f"{trx_id}: {shares} shs @ ${price:.2f}", username="web")
         except Exception:
             pass
+
+        # Group 7-1: canonical Trade Risk $ recompute. Walks LIFO over the
+        # full post-insert detail set and writes the holistic value to
+        # summary.risk_budget. Best-effort like log_sell's same call — a
+        # recompute failure leaves the inline placeholder in place rather
+        # than rolling back the BUY.
+        try:
+            _recompute_summary_lifo(portfolio, trade_id, ticker)
+        except Exception as e:
+            print(f"[risk_budget] post-BUY recompute failed for {trade_id}: {e}")
 
         return {"status": "ok", "detail_id": detail_id, "summary_id": summary_id, "trx_id": trx_id}
     except Exception as e:
@@ -3825,11 +3839,19 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         return
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
-    # Preserve user-entered fields that LIFO doesn't compute. compute_lifo_summary
+    # Group 7-1: Risk_Budget is a *derived* field — recomputed from the
+    # current LIFO inventory on every state-change path. Independent of any
+    # prior stored value, so the additive scale-in bug and the frozen-after-
+    # sell bug both go away here. Walked over the same txns that
+    # compute_lifo_summary just consumed.
+    summary_row["Risk_Budget"] = compute_trade_risk(txns, multiplier=multiplier)
+    # Preserve *user-authored* fields that LIFO doesn't compute. compute_lifo_summary
     # only returns LIFO-derived fields (status, shares, avg_entry, etc.), so passing
     # its output directly to save_summary_with_closures would bind NULL/DEFAULT to
-    # rule, buy_notes, sell_rule, sell_notes, risk_budget, stop_loss — wiping user
-    # metadata on every sell/edit/delete/rebuild.
+    # rule, buy_notes, sell_rule, sell_notes, stop_loss — wiping user metadata on
+    # every sell/edit/delete/rebuild. risk_budget is intentionally NOT in this list
+    # post-Group 7-1: it's recomputed above as a derived field, not preserved as if
+    # user-authored.
     try:
         df_s_existing = db.load_summary(portfolio)
         if not df_s_existing.empty:
@@ -3841,7 +3863,6 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
                                       ("buy_notes", "Buy_Notes"),
                                       ("sell_rule", "Sell_Rule"),
                                       ("sell_notes", "Sell_Notes"),
-                                      ("risk_budget", "Risk_Budget"),
                                       ("stop_loss", "Stop_Loss"),
                                       ("notes", "Notes")):
                     val = existing_row.get(snake)
@@ -4117,6 +4138,13 @@ def update_trade_stops(body: dict):
                          username="web")
         except Exception:
             pass
+        # Group 7-1: stops moved → Trade Risk $ stale until recomputed.
+        # Best-effort; failure leaves stop_loss correct but risk_budget
+        # frozen until the next state change.
+        try:
+            _recompute_summary_lifo(portfolio, trade_id, ticker)
+        except Exception as e:
+            print(f"[risk_budget] post-stop-update recompute failed for {trade_id}: {e}")
         return {"status": "ok", "trade_id": trade_id, "updated_lots": updated_lots,
                 "be_applied": be_applied, "current_price": round(current_price, 4)}
     except Exception as e:
