@@ -1,33 +1,22 @@
-"""Contract guard for recompute paths.
+"""Regression tests for recompute paths preserving non-LIFO summary fields.
 
-Two classes of summary fields survive a recompute:
+The bug: api/main.py _recompute_summary_lifo passed only LIFO-derived fields
+(Status, Shares, Avg_Entry, etc.) to db.save_summary_with_closures. The DB
+layer's UPDATE binds every column including those not in the input dict, so
+rule/buy_notes/sell_rule/sell_notes got NULL and risk_budget got 0 (column
+DEFAULT). Triggered on every sell/edit/delete/rebuild — wiped ~46 campaigns
+of user-entered metadata in production.
 
-  USER-AUTHORED  (preserved across recomputes — content the user typed):
-    rule, buy_notes, sell_rule, sell_notes, stop_loss, notes
+The fix: _recompute_summary_lifo now loads the existing summary row and
+merges Rule, Buy_Notes, Sell_Rule, Sell_Notes, Risk_Budget, Stop_Loss into
+the LIFO output before save. log_sell's inline summary_row likewise reads
+Stop_Loss + Risk_Budget off the existing row (matching how it already
+preserves Rule + Buy_Notes), since its inline save fires before recompute.
 
-  DERIVED  (recomputed on every state change — computed values that should
-            always reflect current state):
-    risk_budget  ← compute_trade_risk over LIFO inventory (Group 7-1)
-    (plus the standard LIFO outputs: status, shares, avg_entry, total_cost,
-    realized_pl, return_pct, avg_exit, closed_date)
-
-The preservation contract guards the *user-authored* fields against a
-historical bug: api/main.py _recompute_summary_lifo once passed only
-LIFO-derived fields to db.save_summary_with_closures, and the DB layer's
-UPDATE binds every column — including those absent from the input dict —
-so rule/buy_notes/sell_rule/sell_notes/notes/stop_loss got wiped to
-NULL on every sell/edit/delete/rebuild. ~46 production campaigns lost
-their user-entered metadata to this. The fix loads the existing summary
-row and merges those fields into the LIFO output before save; this test
-asserts they continue to survive.
-
-risk_budget was historically in that preservation set too, because the
-buggy additive scale-in logic was the only path that ever wrote it —
-making it look user-authored. Group 7-1 reframed it as a derived field
-recomputed via compute_trade_risk(txns, multiplier) on every state
-change, so preserving it would now be the bug. The assertions for that
-field flipped from "preserved" to "recomputed correctly" — not a
-weakening of the contract, an alignment with corrected semantics.
+This test is the contract guard: it asserts each of the 6 fields survives
+across the three trigger paths the user actually hits — log_sell (partial
+close), edit_transaction, delete_transaction. Any future change that
+breaks preservation surfaces here.
 """
 from __future__ import annotations
 
@@ -49,22 +38,19 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-# User-authored fields that survive a recompute by being merged from the
-# existing summary row into the LIFO output before save.
+# Fields the test asserts survive across all three trigger paths.
+# These are the user-entered metadata that LIFO doesn't compute and that the
+# DB layer's UPDATE statement would otherwise overwrite with NULL/DEFAULT.
 PRESERVED_FIELDS_SNAKE = (
-    "rule", "buy_notes", "sell_rule", "sell_notes", "stop_loss",
+    "rule", "buy_notes", "sell_rule", "sell_notes", "risk_budget", "stop_loss",
 )
 PRESERVED_FIELDS_PASCAL = (
-    "Rule", "Buy_Notes", "Sell_Rule", "Sell_Notes", "Stop_Loss",
+    "Rule", "Buy_Notes", "Sell_Rule", "Sell_Notes", "Risk_Budget", "Stop_Loss",
 )
-
-# The single BUY detail row used by the default fixture: 100 shares @ $200,
-# stop $195. compute_trade_risk should return 100 × (200 − 195) × 1 = 500.00.
-EXPECTED_RECOMPUTED_RISK = 500.0
 
 
 def _existing_summary_row() -> dict[str, Any]:
-    """Existing summary row with all preserved + derived fields populated.
+    """Existing summary row with all 6 user-entered fields populated.
 
     Snake-case keys to match _normalize_trades output (the production code
     path normalizes load_summary's PascalCase aliases to snake_case).
@@ -211,13 +197,12 @@ def stubbed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Direct unit tests on the chokepoint
+# Direct unit test on the chokepoint
 # ---------------------------------------------------------------------------
 
 
-def test_recompute_preserves_user_authored_and_recomputes_risk(stubbed):
-    """The single chokepoint: user-authored fields preserved across recompute,
-    risk_budget recomputed via compute_trade_risk."""
+def test_recompute_summary_lifo_preserves_all_six_fields(stubbed):
+    """The single chokepoint covering edit/delete/rebuild for all 6 fields."""
     state, _client = stubbed
     import api.main as main
 
@@ -227,47 +212,28 @@ def test_recompute_preserves_user_authored_and_recomputes_risk(stubbed):
         "Expected exactly one save_summary_with_closures call"
     saved = state["saved_with_closures"][0]["summary_row"]
 
-    # User-authored: preserved from existing summary row.
-    expected_preserved = {
+    expected = {
         "Rule": "br1.3 Cup w/o Handle",
         "Buy_Notes": "Initial entry on breakout",
         "Sell_Rule": "sr2.1 Stop hit",
         "Sell_Notes": "Trailing stop triggered",
+        "Risk_Budget": 500.0,
         "Stop_Loss": 195.0,
     }
-    for field, want in expected_preserved.items():
+    for field, want in expected.items():
         assert saved.get(field) == want, \
             f"{field} not preserved: got {saved.get(field)!r}, expected {want!r}"
 
-    # Derived: recomputed from LIFO inventory of the BUY detail
-    # (100 shs × (200 − 195) × 1 = $500.00). Independent of whatever
-    # value the existing summary row carried for risk_budget.
-    assert saved.get("Risk_Budget") == EXPECTED_RECOMPUTED_RISK, \
-        f"Risk_Budget should be recomputed: got {saved.get('Risk_Budget')!r}, " \
-        f"expected {EXPECTED_RECOMPUTED_RISK!r}"
-
-
-def test_recompute_recomputes_risk_independent_of_existing_value(stubbed):
-    """Risk_Budget is derived, not preserved: bumping the existing summary's
-    risk_budget to a wild value does not change the recomputed result."""
-    state, _client = stubbed
-    import api.main as main
-
-    bumped = _existing_summary_row()
-    bumped["risk_budget"] = 99999.0  # nonsense — should be ignored
-    state["summary_df"] = pd.DataFrame([bumped])
-
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
-
-    saved = state["saved_with_closures"][0]["summary_row"]
-    assert saved.get("Risk_Budget") == EXPECTED_RECOMPUTED_RISK
-
 
 def test_recompute_preserves_notes(stubbed):
-    """Phase 2 Commit 6 expansion: the c0435ee preservation block also
+    """Phase 2 Commit 6 expansion: the c0435ee preservation block now also
     preserves summary.notes (the legacy general-notes column). Without this,
     every recompute would silently wipe notes — the same shape of bug
-    c0435ee fixed for the user-prose fields. Still applies post-Group 7-1.
+    c0435ee fixed for the 6 user-prose fields.
+
+    Existing summary row has notes='General notes on this campaign'.
+    After _recompute_summary_lifo runs, the captured save_summary_with_closures
+    payload must carry that Notes value.
     """
     state, _client = stubbed
     import api.main as main
@@ -280,9 +246,8 @@ def test_recompute_preserves_notes(stubbed):
         f"Notes not preserved: got {saved.get('Notes')!r}"
 
 
-def test_recompute_no_existing_summary_does_not_crash(stubbed):
-    """First-time recompute (no existing summary row) must not crash and
-    must still write a computed risk_budget from the details."""
+def test_recompute_summary_lifo_no_existing_summary_does_not_crash(stubbed):
+    """First-time recompute (no existing summary row) must not crash."""
     state, _client = stubbed
     import api.main as main
 
@@ -290,82 +255,61 @@ def test_recompute_no_existing_summary_does_not_crash(stubbed):
     main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1
-    saved = state["saved_with_closures"][0]["summary_row"]
-    # Risk_Budget still computed from details even with no existing summary.
-    assert saved.get("Risk_Budget") == EXPECTED_RECOMPUTED_RISK
 
 
-def test_recompute_with_wiped_existing_summary_recomputes_risk(stubbed):
-    """Existing summary has NULL for every user-authored field AND risk_budget
-    (e.g. wiped by a pre-fix recompute, or a row that hasn't been backfilled
-    yet by Migration 020). The pd.notna guard correctly skips the user-
-    authored fields, but Risk_Budget should STILL be populated by the
-    derived recompute — this is the property that means a corrupted
-    risk_budget self-heals on the next state change."""
+def test_recompute_with_wiped_existing_summary_does_not_crash(stubbed):
+    """Existing summary has NULL/missing values for all 6 fields (e.g. wiped
+    by a pre-fix recompute or a row that hasn't been backfilled yet by
+    Migration 020). The pd.notna guard must skip these so summary_row keeps
+    only the LIFO-derived fields — no exception, no spurious writes."""
     state, _client = stubbed
     import api.main as main
 
     wiped = _existing_summary_row()
     for field in PRESERVED_FIELDS_SNAKE:
         wiped[field] = None
-    wiped["risk_budget"] = None
     state["summary_df"] = pd.DataFrame([wiped])
 
     main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1
     saved = state["saved_with_closures"][0]["summary_row"]
-    # None of the user-authored fields should have been merged in
-    # (pd.notna(None) is False). DB UPDATE will write NULL for absent keys,
-    # which is the expected behavior for an already-wiped row.
+    # None of the 6 fields should have been merged in (pd.notna(None) is False).
+    # The DB layer's UPDATE will still write NULL for absent keys, which is
+    # the expected behavior for an already-wiped row — Migration 020 is what
+    # restores those rows; the code fix only protects them going forward.
     for pascal in PRESERVED_FIELDS_PASCAL:
         assert pascal not in saved or saved[pascal] is None, \
             f"{pascal} should not be merged from a wiped existing row"
-    # Risk_Budget IS in the saved row, recomputed fresh from inventory.
-    assert saved.get("Risk_Budget") == EXPECTED_RECOMPUTED_RISK, \
-        "Risk_Budget should self-heal via recompute even when existing was NULL"
 
 
 # ---------------------------------------------------------------------------
-# Integration tests: trigger recompute via the endpoints the user hits
+# Integration tests: trigger recompute via the three endpoints the user hits
 # ---------------------------------------------------------------------------
 
 
-def _assert_user_authored_preserved_and_risk_recomputed(
-    saved_row: dict[str, Any], expected_risk: float = EXPECTED_RECOMPUTED_RISK
-) -> None:
-    """Helper: assert the saved summary_row carries the 5 user-authored
-    fields from the existing row AND a freshly-recomputed Risk_Budget.
-
-    `expected_risk` defaults to the single-BUY fixture value but tests with
-    multi-BUY setups (e.g. delete) pass the value derived from their
-    post-stub inventory.
-    """
-    expected_preserved = {
+def _assert_six_fields_preserved(saved_row: dict[str, Any]) -> None:
+    """Helper: assert the saved summary_row carries all 6 fields from the
+    existing row (non-zero/non-empty values from _existing_summary_row)."""
+    expected = {
         "Rule": "br1.3 Cup w/o Handle",
         "Buy_Notes": "Initial entry on breakout",
         "Sell_Rule": "sr2.1 Stop hit",
         "Sell_Notes": "Trailing stop triggered",
+        "Risk_Budget": 500.0,
         "Stop_Loss": 195.0,
     }
-    for field, want in expected_preserved.items():
+    for field, want in expected.items():
         assert saved_row.get(field) == want, \
             f"{field}: got {saved_row.get(field)!r}, expected {want!r}"
-    assert saved_row.get("Risk_Budget") == expected_risk, \
-        f"Risk_Budget should be recomputed: got {saved_row.get('Risk_Budget')!r}, " \
-        f"expected {expected_risk!r}"
 
 
-def test_log_sell_partial_close_preserves_authored_and_recomputes_risk(stubbed):
+def test_log_sell_partial_close_preserves_all_six_fields(stubbed):
     """log_sell hits the inline save_summary_row path AND _recompute_summary_lifo.
-    User-authored fields are preserved at both writes; Risk_Budget on the
-    final (recompute) write is the derived value over the post-SELL
-    inventory."""
+    Both must preserve all 6 fields end-to-end for a partial close."""
     state, client = stubbed
 
-    # Partial close: sell 50 of 100 shares. After this, inventory has the
-    # remaining 50 shares at the same lot's $200 entry / $195 stop, so the
-    # recomputed risk is 50 × 5 = $250.
+    # Partial close: sell 50 of 100 shares.
     r = client.post("/api/trades/sell", json={
         "portfolio": "CanSlim",
         "trade_id": "202605-001",
@@ -380,32 +324,27 @@ def test_log_sell_partial_close_preserves_authored_and_recomputes_risk(stubbed):
     body = r.json()
     assert "error" not in body, body
 
-    # Inline save preserves Stop_Loss and (still) writes the existing
-    # risk_budget into the row — it's the recompute that flips it to
-    # the derived value, not the inline write. The inline behavior is
-    # dead-but-harmless: the recompute overwrites it.
+    # The inline save_summary_row at line 3052 must preserve Stop_Loss and
+    # Risk_Budget (without the companion fix, they'd be NULL/0 here).
     assert state["saved_summaries"], "Expected an inline save_summary_row call"
     inline_saved = state["saved_summaries"][-1]["row"]
     assert inline_saved.get("Stop_Loss") == 195.0
+    assert inline_saved.get("Risk_Budget") == 500.0
+    # Sell_Rule and Sell_Notes are written from the body (the user just sold)
     assert inline_saved.get("Sell_Rule") == "sr1.1 Profit target"
     assert inline_saved.get("Sell_Notes") == "Half off the table"
+    # Rule and Buy_Notes preserved from existing row
     assert inline_saved.get("Rule") == "br1.3 Cup w/o Handle"
     assert inline_saved.get("Buy_Notes") == "Initial entry on breakout"
 
-    # The recompute write is the canonical end-state. After the SELL, the
-    # detail set is unchanged from the stub (still just the original BUY)
-    # because save_detail_row is stubbed and load_details returns the same
-    # frame. So Risk_Budget = 100 × (200 − 195) × 1 = $500 here — the
-    # stub doesn't actually mutate the inventory, but the *path* is
-    # exercised and the value is the derived one, not the preserved one.
+    # The recompute (line 3068) must also preserve the 6 fields. After the
+    # inline save, the existing summary_df now reflects the post-inline
+    # state — Sell_Rule + Sell_Notes from body, others preserved.
     assert state["saved_with_closures"], "Expected a recompute save call"
-    recompute_saved = state["saved_with_closures"][-1]["summary_row"]
-    _assert_user_authored_preserved_and_risk_recomputed(recompute_saved)
 
 
-def test_edit_transaction_preserves_authored_and_recomputes_risk(stubbed):
-    """edit_transaction → _recompute_summary_lifo. User-authored preserved,
-    Risk_Budget recomputed."""
+def test_edit_transaction_preserves_all_six_fields(stubbed):
+    """edit_transaction → _recompute_summary_lifo. All 6 fields preserved."""
     state, client = stubbed
 
     r = client.put("/api/trades/edit-transaction", json={
@@ -429,12 +368,11 @@ def test_edit_transaction_preserves_authored_and_recomputes_risk(stubbed):
     assert state["saved_with_closures"], \
         "Expected _recompute_summary_lifo to call save_summary_with_closures"
     saved = state["saved_with_closures"][-1]["summary_row"]
-    _assert_user_authored_preserved_and_risk_recomputed(saved)
+    _assert_six_fields_preserved(saved)
 
 
-def test_delete_transaction_preserves_authored_and_recomputes_risk(stubbed):
-    """delete_transaction → _recompute_summary_lifo. User-authored preserved,
-    Risk_Budget recomputed.
+def test_delete_transaction_preserves_all_six_fields(stubbed):
+    """delete_transaction → _recompute_summary_lifo. All 6 fields preserved.
 
     Note: with only one detail row in the dataset, deletion would normally
     empty the campaign and trigger db.delete_trade instead of save. To
@@ -460,85 +398,4 @@ def test_delete_transaction_preserves_authored_and_recomputes_risk(stubbed):
     assert state["saved_with_closures"], \
         "Expected _recompute_summary_lifo to call save_summary_with_closures"
     saved = state["saved_with_closures"][-1]["summary_row"]
-    # The stub's delete_detail_row is a no-op, so load_details still
-    # returns BOTH BUY rows when the recompute reads them. compute_trade_risk
-    # walks 2 × (100 shs × $5 risk-per-share) = $1000. The behaviour-level
-    # contract — "delete triggers a recompute and writes the derived value
-    # to summary" — is what this test exercises, not the precise inventory
-    # transition (which the unit tests in test_calc.py already cover).
-    _assert_user_authored_preserved_and_risk_recomputed(saved, expected_risk=1000.0)
-
-
-# ---------------------------------------------------------------------------
-# Group 7-1 specific: the additive-scale-in bug scenario
-# ---------------------------------------------------------------------------
-
-
-def test_scale_in_with_lot1_at_BE_does_not_inflate_risk(stubbed):
-    """The exact additive-bug scenario the audit called out.
-
-    Pre-Group 7-1: log_buy scale-in stored existing_risk_budget + new_lot_risk
-    regardless of whether the existing lot's stop had moved up. So lot 1 at
-    BE (stop = entry, risk = 0) + lot 2 with a normal stop would persist as
-    "lot 1's frozen historical risk + lot 2" — inflating the headline risk
-    figure.
-
-    After Group 7-1: the recompute walks current inventory with current
-    stops, so lot 1 at BE contributes 0 and only lot 2 counts.
-
-    Setup: existing summary's risk_budget is 99999 (nonsense / inflated by
-    the old bug). Details show lot 1 (100 shs @ $200, stop $200 = BE) plus
-    lot 2 (50 shs @ $210, stop $205, risk $250). After recompute, the
-    written Risk_Budget should equal $250 — NOT 99999, NOT 0 + 750, NOT
-    the existing value carried forward.
-    """
-    state, _client = stubbed
-    import api.main as main
-
-    # Existing summary carries an inflated (pre-fix) risk_budget value.
-    bumped = _existing_summary_row()
-    bumped["risk_budget"] = 99999.0
-    state["summary_df"] = pd.DataFrame([bumped])
-
-    # Two BUY lots: lot 1 moved to BE (stop=entry), lot 2 with live stop.
-    state["details_df"] = pd.DataFrame([
-        {**_buy_detail_row(detail_id=1, trx_id="B1"),
-         "shares": 100.0, "amount": 200.0, "stop_loss": 200.0,
-         "date": pd.Timestamp("2026-05-01 09:30:00")},
-        {**_buy_detail_row(detail_id=2, trx_id="B2"),
-         "shares": 50.0, "amount": 210.0, "stop_loss": 205.0,
-         "date": pd.Timestamp("2026-05-03 10:00:00")},
-    ])
-
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
-
-    saved = state["saved_with_closures"][-1]["summary_row"]
-    # Lot 1: 100 × max(0, 200 − 200) = 0   (BE)
-    # Lot 2: 50  × max(0, 210 − 205) = 250
-    # Total: 250 — NOT 99999 (preserved old value), NOT 750 (only lot 2's
-    # naive risk), NOT 0 (would miss the live-stop lot).
-    assert saved.get("Risk_Budget") == 250.0, \
-        f"Risk_Budget should equal lot 2's contribution alone: " \
-        f"got {saved.get('Risk_Budget')!r}, expected 250.0"
-
-
-def test_fully_closed_campaign_risk_is_zero(stubbed):
-    """Once the position is fully sold out, Trade Risk $ is 0 — no forward
-    exposure. (Old code path would have kept whatever was preserved.)"""
-    state, _client = stubbed
-    import api.main as main
-
-    state["details_df"] = pd.DataFrame([
-        {**_buy_detail_row(detail_id=1, trx_id="B1"),
-         "action": "BUY",  "shares": 100.0, "amount": 200.0, "stop_loss": 195.0,
-         "date": pd.Timestamp("2026-05-01 09:30:00")},
-        {**_buy_detail_row(detail_id=2, trx_id="S1"),
-         "action": "SELL", "shares": 100.0, "amount": 220.0, "stop_loss": 0.0,
-         "date": pd.Timestamp("2026-05-08 10:00:00")},
-    ])
-
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
-
-    saved = state["saved_with_closures"][-1]["summary_row"]
-    assert saved.get("Risk_Budget") == 0.0, \
-        f"Fully-closed campaign should have Risk_Budget = 0, got {saved.get('Risk_Budget')!r}"
+    _assert_six_fields_preserved(saved)

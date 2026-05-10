@@ -2879,12 +2879,20 @@ def log_buy(request: Request, body: dict):
         # Populated here because direct-log paths (e.g. IBKR Quick Log) skip
         # the sizing calculator that historically set this column.
         if action_type == "new":
+            # Group 7-1: route risk_budget through compute_trade_risk even
+            # for a single-BUY new campaign so log_buy has one canonical
+            # source of truth for the formula. Mathematically equivalent to
+            # calc_risk_budget(shares, price, stop_loss, multiplier) here.
+            new_buy_df = pd.DataFrame([{
+                "date": pd.to_datetime(date_time), "action": "BUY",
+                "shares": shares, "amount": price, "stop_loss": stop_loss,
+            }])
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                "Risk_Budget": compute_trade_risk(new_buy_df, multiplier),
                 "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 "Strategy": strategy,
             }
@@ -2916,12 +2924,28 @@ def log_buy(request: Request, body: dict):
                 new_total_cost = old_cost + value
                 new_avg_entry = (new_total_cost / new_total_shares / multiplier) if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
-                # Risk_Budget placeholder for the inline write. The post-save
-                # _recompute_summary_lifo below is the canonical recompute and
-                # will overwrite this with compute_trade_risk over the post-
-                # insert detail set. Group 7-1: replaces the prior additive
-                # logic (existing_rb + new_lot_rb) which inflated risk on every
-                # scale-in and never reflected stops moving up.
+                # Group 7-1: risk_budget is the holistic Trade Risk $ over the
+                # full post-insert BUY set (existing details + this new lot),
+                # walked LIFO per-lot with per-lot stops, each contribution
+                # floored at 0. Replaces the prior additive logic
+                # (existing_rb + new_lot_rb) which inflated risk on every
+                # scale-in and never reflected lots whose stops had moved up.
+                df_d_existing = db.load_details(portfolio)
+                if df_d_existing.empty:
+                    existing_txns = pd.DataFrame()
+                else:
+                    df_d_existing = _normalize_trades(df_d_existing)
+                    existing_txns = df_d_existing[df_d_existing["trade_id"] == trade_id]
+                new_buy_df = pd.DataFrame([{
+                    "date": pd.to_datetime(date_time),
+                    "action": "BUY",
+                    "shares": shares,
+                    "amount": price,
+                    "stop_loss": effective_stop,
+                }])
+                post_insert = pd.concat([existing_txns, new_buy_df], ignore_index=True) \
+                    if not existing_txns.empty else new_buy_df
+                holistic_risk = compute_trade_risk(post_insert, multiplier)
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": str(row.get("open_date", date_str))[:10],
@@ -2931,7 +2955,7 @@ def log_buy(request: Request, body: dict):
                     "Stop_Loss": effective_stop,
                     "Rule": db.clean_text_value(row.get("rule")) or db.clean_text_value(rule),
                     "Buy_Notes": db.clean_text_value(notes) or db.clean_text_value(row.get("buy_notes")),
-                    "Risk_Budget": calc_risk_budget(shares, price, effective_stop, multiplier),
+                    "Risk_Budget": holistic_risk,
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
                 }
@@ -2941,12 +2965,17 @@ def log_buy(request: Request, body: dict):
                 valid_strategy_names = {s["name"] for s in db.load_strategies(active_only=True)}
                 if strategy not in valid_strategy_names:
                     return {"error": f"Unknown strategy: {strategy}"}
+                # Same canonical compute_trade_risk path as the "new" branch.
+                orphan_new_buy_df = pd.DataFrame([{
+                    "date": pd.to_datetime(date_time), "action": "BUY",
+                    "shares": shares, "amount": price, "stop_loss": stop_loss,
+                }])
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                    "Risk_Budget": compute_trade_risk(orphan_new_buy_df, multiplier),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
                 }
@@ -2972,16 +3001,6 @@ def log_buy(request: Request, body: dict):
                          f"{trx_id}: {shares} shs @ ${price:.2f}", username="web")
         except Exception:
             pass
-
-        # Group 7-1: canonical Trade Risk $ recompute. Walks LIFO over the
-        # full post-insert detail set and writes the holistic value to
-        # summary.risk_budget. Best-effort like log_sell's same call — a
-        # recompute failure leaves the inline placeholder in place rather
-        # than rolling back the BUY.
-        try:
-            _recompute_summary_lifo(portfolio, trade_id, ticker)
-        except Exception as e:
-            print(f"[risk_budget] post-BUY recompute failed for {trade_id}: {e}")
 
         return {"status": "ok", "detail_id": detail_id, "summary_id": summary_id, "trx_id": trx_id}
     except Exception as e:
@@ -3839,19 +3858,11 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         return
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
-    # Group 7-1: Risk_Budget is a *derived* field — recomputed from the
-    # current LIFO inventory on every state-change path. Independent of any
-    # prior stored value, so the additive scale-in bug and the frozen-after-
-    # sell bug both go away here. Walked over the same txns that
-    # compute_lifo_summary just consumed.
-    summary_row["Risk_Budget"] = compute_trade_risk(txns, multiplier=multiplier)
-    # Preserve *user-authored* fields that LIFO doesn't compute. compute_lifo_summary
+    # Preserve user-entered fields that LIFO doesn't compute. compute_lifo_summary
     # only returns LIFO-derived fields (status, shares, avg_entry, etc.), so passing
     # its output directly to save_summary_with_closures would bind NULL/DEFAULT to
-    # rule, buy_notes, sell_rule, sell_notes, stop_loss — wiping user metadata on
-    # every sell/edit/delete/rebuild. risk_budget is intentionally NOT in this list
-    # post-Group 7-1: it's recomputed above as a derived field, not preserved as if
-    # user-authored.
+    # rule, buy_notes, sell_rule, sell_notes, risk_budget, stop_loss — wiping user
+    # metadata on every sell/edit/delete/rebuild.
     try:
         df_s_existing = db.load_summary(portfolio)
         if not df_s_existing.empty:
@@ -3863,6 +3874,7 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
                                       ("buy_notes", "Buy_Notes"),
                                       ("sell_rule", "Sell_Rule"),
                                       ("sell_notes", "Sell_Notes"),
+                                      ("risk_budget", "Risk_Budget"),
                                       ("stop_loss", "Stop_Loss"),
                                       ("notes", "Notes")):
                     val = existing_row.get(snake)
@@ -4138,13 +4150,6 @@ def update_trade_stops(body: dict):
                          username="web")
         except Exception:
             pass
-        # Group 7-1: stops moved → Trade Risk $ stale until recomputed.
-        # Best-effort; failure leaves stop_loss correct but risk_budget
-        # frozen until the next state change.
-        try:
-            _recompute_summary_lifo(portfolio, trade_id, ticker)
-        except Exception as e:
-            print(f"[risk_budget] post-stop-update recompute failed for {trade_id}: {e}")
         return {"status": "ok", "trade_id": trade_id, "updated_lots": updated_lots,
                 "be_applied": be_applied, "current_price": round(current_price, 4)}
     except Exception as e:
