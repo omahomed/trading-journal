@@ -7,6 +7,7 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
 import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import { formatCurrency } from "@/lib/format";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -593,49 +594,44 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   }, 0);
   const openRiskPct = equity > 0 ? (openRiskTotal / equity) * 100 : 0;
 
-  const fmtMoney = (n: number, opts: Intl.NumberFormatOptions = { minimumFractionDigits: 2, maximumFractionDigits: 2 }) =>
-    `$${n.toLocaleString(undefined, opts)}`;
-  const signedMoney = (n: number) =>
-    `${n >= 0 ? "+" : "−"}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
   const kpis = [
     {
       label: "NLV",
-      value: fmtMoney(equity, { maximumFractionDigits: 2 }),
+      value: formatCurrency(equity),
       sub: equity > 0
-        ? `Holdings Value · ${fmtMoney(equityExposureDollar + optionsExposureDollar, { maximumFractionDigits: 2 })}`
+        ? `Holdings Value · ${formatCurrency(equityExposureDollar + optionsExposureDollar)}`
         : "—",
       gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)",
     },
     {
       label: "EQUITY EXPOSURE",
       value: `${equityExposurePct.toFixed(1)}%`,
-      sub: fmtMoney(equityExposureDollar, { maximumFractionDigits: 2 }),
+      sub: formatCurrency(equityExposureDollar),
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
     {
       label: "OPTIONS EXPOSURE",
       value: `${optionsExposurePct.toFixed(1)}%`,
-      sub: `${fmtMoney(optionsExposureDollar, { maximumFractionDigits: 2 })} · cap ~10%`,
+      sub: `${formatCurrency(optionsExposureDollar)} · cap ~10%`,
       gradient: optionsExposurePct > 10
         ? "linear-gradient(135deg, #e5484d, #f87171)"
         : "linear-gradient(135deg, #f97316, #fb923c)",
     },
     {
       label: "INITIAL RISK",
-      value: fmtMoney(initialRiskTotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      value: formatCurrency(initialRiskTotal),
       sub: `${initialRiskPct.toFixed(2)}% of NLV`,
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
     {
       label: "OPEN RISK (HEAT)",
-      value: signedMoney(openRiskTotal),
+      value: formatCurrency(openRiskTotal, { showSign: true, signGlyph: "unicode" }),
       sub: `${openRiskPct >= 0 ? "+" : ""}${openRiskPct.toFixed(2)}% of NLV`,
       gradient: "linear-gradient(135deg, #e5484d, #f87171)",
     },
     {
       label: "EQUITY P&L",
-      value: signedMoney(equityPlSum),
+      value: formatCurrency(equityPlSum, { showSign: true, signGlyph: "unicode" }),
       sub: equityCostSum > 0 ? `${equityPlPct >= 0 ? "+" : ""}${equityPlPct.toFixed(2)}% vs cost` : "—",
       gradient: equityPlSum >= 0
         ? "linear-gradient(135deg, #10b981, #34d399)"
@@ -643,7 +639,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     },
     {
       label: "OPTIONS P&L",
-      value: signedMoney(optionsPlSum),
+      value: formatCurrency(optionsPlSum, { showSign: true, signGlyph: "unicode" }),
       sub: optionsCostSum > 0 ? `${optionsPlPct >= 0 ? "+" : ""}${optionsPlPct.toFixed(2)}% vs cost` : "—",
       gradient: optionsPlSum >= 0
         ? "linear-gradient(135deg, #10b981, #34d399)"
@@ -662,7 +658,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       monitorAlerts.push({
         type: "warn",
         ticker: p.ticker,
-        msg: `Risk ($${p.risk_dollars.toFixed(0)}) > Budget ($${p.risk_budget.toFixed(0)}). Raise stop to $${rbmStop.toFixed(2)} to stay within budget.`,
+        msg: `Risk (${formatCurrency(p.risk_dollars, { decimals: 0 })}) > Budget (${formatCurrency(p.risk_budget, { decimals: 0 })}). Raise stop to ${formatCurrency(rbmStop)} to stay within budget.`,
       });
     }
     if (p.return_pct <= -7.0) {
@@ -676,7 +672,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       monitorAlerts.push({
         type: "info",
         ticker: p.ticker,
-        msg: `Up ${p.return_pct.toFixed(2)}%. Consider moving stop to BE ($${p.avg_entry.toFixed(2)}). Current stop: $${p.avg_stop.toFixed(2)}.`,
+        msg: `Up ${p.return_pct.toFixed(2)}%. Consider moving stop to BE (${formatCurrency(p.avg_entry)}). Current stop: ${formatCurrency(p.avg_stop)}.`,
       });
     }
     if (p.risk_status === "Free Roll") {
@@ -837,8 +833,8 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     ? Math.max(0, Math.min(100, (1 - Math.abs(p.signed_risk) / p.risk_budget) * 100))
                     : 0;
                   const riskTooltip = isPartiallyClosed
-                    ? `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.projected_pl).toFixed(2)}`
-                    : `Initial budget: $${p.risk_budget.toFixed(2)} · Current: $${Math.abs(p.projected_pl).toFixed(2)} · De-risked: ${dRiskedPct.toFixed(1)}%`;
+                    ? `Initial budget: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))}`
+                    : `Initial budget: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))} · De-risked: ${dRiskedPct.toFixed(1)}%`;
 
                   return (
                     <tr key={p.trade_id} className="transition-colors"
@@ -891,27 +887,27 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {p.shares.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.avg_entry.toFixed(2)}
+                        {formatCurrency(p.avg_entry)}
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: p.avg_stop > 0 ? "var(--ink)" : "var(--ink-4)" }}>
-                        {p.avg_stop > 0 ? `$${p.avg_stop.toFixed(2)}` : "—"}
+                        {p.avg_stop > 0 ? formatCurrency(p.avg_stop) : "—"}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.current_value)}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, color: riskColor, fontWeight: 600 }}
                           title={riskTooltip}>
-                        ${p.projected_pl >= 0 ? "+" : ""}{p.projected_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: riskColor }}>
                         {p.projected_pct >= 0 ? "+" : ""}{p.projected_pct.toFixed(2)}%
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
-                        ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.overall_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: projColor }}>
-                        ${p.projected_pl >= 0 ? "+" : ""}{p.projected_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
                     </tr>
                   );
@@ -1047,14 +1043,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       </td>
                       {/* Entry */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.avg_entry.toFixed(2)}
+                        {formatCurrency(p.avg_entry)}
                       </td>
                       {/* Current Price (inline-editable, pos 9) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, cursor: editingPriceTradeId !== p.trade_id ? "text" : "default" }}
                           onClick={editingPriceTradeId !== p.trade_id ? () => startEditPrice(p) : undefined}
                           title={p.manual_price !== null
-                            ? `Manual override: $${p.manual_price.toFixed(2)}. Click to change or clear.`
+                            ? `Manual override: ${formatCurrency(p.manual_price)}. Click to change or clear.`
                             : "Click to set a manual price (yfinance is unreliable for option chains)."}>
                         {editingPriceTradeId === p.trade_id ? (
                           <input
@@ -1075,7 +1071,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                             fontStyle: p.manual_price !== null ? "italic" : "normal",
                             color: p.manual_price !== null ? "var(--ink-2)" : "inherit",
                           }}>
-                            ${p.current_price.toFixed(2)}
+                            {formatCurrency(p.current_price)}
                             {p.manual_price !== null && (
                               <span className="ml-1 inline-block px-1 rounded-[3px] text-[8px] font-bold align-middle"
                                     style={{ background: "color-mix(in oklab, #3b82f6 15%, transparent)", color: "#3b82f6", letterSpacing: "0.05em" }}
@@ -1086,11 +1082,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       </td>
                       {/* Value (pos 10) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.current_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.current_value)}
                       </td>
                       {/* Cost (pos 11) */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        ${p.total_cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.total_cost)}
                       </td>
                       {/* Cost % (pos 12) — total_cost as a share of NLV. equity may be 0 in pre-load states; guard the divide. */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
@@ -1098,7 +1094,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       </td>
                       {/* Overall P&L (pos 13) — same red/green coloring as the equity column. */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: p.overall_pl >= 0 ? "#08a86b" : "#e5484d" }}>
-                        ${p.overall_pl >= 0 ? "+" : ""}{p.overall_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {formatCurrency(p.overall_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
                       {/* — (pos 14) — Projected P&L is N/A for options. */}
                       <td className="px-2.5 py-2.5 text-center" style={{ fontFamily: mono, color: "var(--ink-4)" }} title="N/A for options">
@@ -1188,8 +1184,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         const sharesAcquired = contracts * multiplier;
         const previewEntry = parsed ? parsed.strike + exerciseTarget.avg_entry : null;
         const previewCost = previewEntry != null ? sharesAcquired * previewEntry : null;
-        const dollarFmt = (n: number) =>
-          `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
                data-testid="exercise-modal"
@@ -1230,11 +1224,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         </div>
                         <div>Entry price:</div>
                         <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
-                          ≈ {dollarFmt(previewEntry || 0)}
+                          ≈ {formatCurrency(previewEntry ?? 0)}
                         </div>
                         <div>Cost basis:</div>
                         <div className="text-right font-medium privacy-mask" style={{ color: "var(--ink)" }}>
-                          ≈ {dollarFmt(previewCost || 0)}
+                          ≈ {formatCurrency(previewCost ?? 0)}
                         </div>
                       </>
                     ) : (
@@ -1414,7 +1408,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     {opt.ticker}
                   </div>
                   <div className="text-[11px] tabular-nums whitespace-nowrap" style={{ color: "var(--ink-4)", fontFamily: mono }}>
-                    Current: {opt.manual_price !== null ? `$${opt.manual_price.toFixed(2)}` : "—"}
+                    Current: {opt.manual_price !== null ? formatCurrency(opt.manual_price) : "—"}
                   </div>
                   <input
                     type="number" step="0.01"
