@@ -412,6 +412,59 @@ def test_registry_no_closed_with_nonzero_shares_check():
     )
 
 
+def test_registry_filters_soft_deletes():
+    """Every check that references a soft-delete-bearing table must
+    include the corresponding `deleted_at IS NULL` filter. Regression
+    guard for the systematic gap caught on 5/10/26 (DOCN orphan
+    summary, NBIS 40-share orphan BUY, FPS 175-share orphan BUYs
+    produced 3 false positives in #12 because the LIFO joins didn't
+    filter d.deleted_at).
+
+    Approach: count references to each soft-delete table in the SQL
+    (after exemptions), and require at least that many `deleted_at
+    IS NULL` filter tokens. Each table reference must be paired with
+    a filter — over-filtering is harmless. This catches a check that
+    references the table but skips the filter, without forcing a
+    full SQL parser into the test harness.
+
+    Soft-delete-bearing tables (per migrations/006_soft_deletes.sql):
+    trades_summary, trades_details, trading_journal. lot_closures
+    and portfolios are NOT in this list — they have no deleted_at
+    column."""
+    from api.drift_checks import DRIFT_CHECKS
+
+    SOFT_DELETE_TABLES = ("trades_summary", "trades_details", "trading_journal")
+
+    EXEMPTIONS = {
+        # #10 LEFT JOINs trades_summary purely for ticker resolution on
+        # orphan closures. We WANT orphan closures to surface even when
+        # their parent summary is soft-deleted — the soft-deleted parent
+        # IS the data integrity signal worth investigating. Audit Part B
+        # special-case decision.
+        ("lot_closures_empty_trx_id", "trades_summary"),
+    }
+
+    for c in DRIFT_CHECKS:
+        sql_lower = c.sql.lower()
+        expected = 0
+        referenced_tables = []
+        for table in SOFT_DELETE_TABLES:
+            if (c.check_id, table) in EXEMPTIONS:
+                continue
+            count = sql_lower.count(table)
+            if count > 0:
+                referenced_tables.append((table, count))
+            expected += count
+        actual = sql_lower.count("deleted_at is null")
+        assert actual >= expected, (
+            f"{c.check_id}: references soft-delete tables "
+            f"{referenced_tables} ({expected} total references after "
+            f"exemptions) but only has {actual} `deleted_at IS NULL` "
+            f"filter(s). At least one reference is unfiltered — "
+            f"soft-deleted rows would be included in the check's scope."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Admin gate
 # ---------------------------------------------------------------------------
