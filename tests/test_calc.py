@@ -11,6 +11,7 @@ import pytest
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns,
@@ -343,3 +344,133 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
         ])
         assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+
+
+class TestComputeTradeRisk:
+    """Unit tests for the Group 7-1 holistic Trade Risk $ helper.
+
+    Formula: Σ over open BUY-lot remainders of
+             lot_shares × max(0, lot_entry − lot_stop) × multiplier.
+    """
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_single_open_buy(self) -> None:
+        """One BUY with a stop below entry: risk = shares × (entry − stop) × mult."""
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 195.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 500.0
+
+    def test_two_open_buys_same_stop_sums(self) -> None:
+        """Two BUYs sharing the same stop: contributions sum.
+
+        Lot 1: 100 × (200 − 195) = 500. Lot 2: 50 × (210 − 195) = 750. Total 1250.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 195.0},
+            {"date": "2026-01-02", "action": "BUY", "shares": 50,  "amount": 210.0, "stop_loss": 195.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 1250.0
+
+    def test_free_roll_lot_contributes_zero(self) -> None:
+        """Stop at-or-above entry contributes 0 (free-roll).
+
+        Lot 1: 100 × (200 − 200) = 0  (stop at entry — free roll).
+        Lot 2: 50 × (210 − 195) = 750.
+        Total: 750 (the BE lot drops out).
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 200.0},
+            {"date": "2026-01-02", "action": "BUY", "shares": 50,  "amount": 210.0, "stop_loss": 195.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 750.0
+
+    def test_stop_above_entry_contributes_zero(self) -> None:
+        """Stop above entry (locked-in profit on this lot) contributes 0."""
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 205.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 0.0
+
+    def test_missing_stop_contributes_zero(self) -> None:
+        """stop_loss=0 / NULL means 'no stop set' → 0 contribution.
+
+        Matches calc_risk_budget's existing convention: unsized lots show 0
+        rather than imply infinite/unbounded risk.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 0.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 0.0
+
+    def test_fully_closed_campaign_returns_zero(self) -> None:
+        """All BUYs matched by SELLs → empty inventory → risk = 0.
+
+        Even if the BUYs had a stop, once the position is gone there's no
+        forward exposure.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 200.0, "stop_loss": 195.0},
+            {"date": "2026-01-05", "action": "SELL", "shares": 100, "amount": 220.0, "stop_loss": 0.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 0.0
+
+    def test_partial_sell_reduces_via_lifo(self) -> None:
+        """Partial SELL eats the most-recent BUY first (LIFO).
+
+        BUY 100 @ 200, stop 195 → contributes 500 fully.
+        BUY 50 @ 210, stop 195 → contributes 750 fully.
+        SELL 30 LIFO-matches the second BUY: 20 remaining @ 210, stop 195
+        contributes 20 × 15 = 300. First BUY untouched, still contributes 500.
+        Total: 800.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 200.0, "stop_loss": 195.0},
+            {"date": "2026-01-02", "action": "BUY",  "shares": 50,  "amount": 210.0, "stop_loss": 195.0},
+            {"date": "2026-01-03", "action": "SELL", "shares": 30,  "amount": 215.0, "stop_loss": 0.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 800.0
+
+    def test_multi_lot_one_at_be_one_with_stop(self) -> None:
+        """The exact additive-bug scenario from the Group 7 audit.
+
+        Pre-Group 7: scale-in additive logic would store
+          lot1_risk(at-original-stop) + lot2_risk(at-new-stop)
+        even after lot1's stop moved to BE. compute_trade_risk on the
+        post-stop-move state shows the correct value: only lot2 contributes.
+
+        Lot 1: 100 × max(0, 200 − 200) = 0  (stop moved to BE)
+        Lot 2: 50  × max(0, 210 − 205) = 250
+        Total: 250 (NOT 0 + 750 = 750 from the additive bug)
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 200.0},
+            {"date": "2026-01-02", "action": "BUY", "shares": 50,  "amount": 210.0, "stop_loss": 205.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 250.0
+
+    def test_option_multiplier_scales_result(self) -> None:
+        """multiplier=100 (equity option contract) scales the dollar result.
+
+        1 contract × (5.00 − 3.00) × 100 = $200 notional.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 1, "amount": 5.0, "stop_loss": 3.0},
+        ])
+        assert compute_trade_risk(df, multiplier=100.0) == 200.0
+
+    def test_empty_dataframe_returns_zero(self) -> None:
+        df = pd.DataFrame(columns=["date", "action", "shares", "amount", "stop_loss"])
+        assert compute_trade_risk(df, multiplier=1.0) == 0.0
+
+    def test_unparseable_dates_dropped(self) -> None:
+        """Rows with bad dates drop out so they don't crash the sort; remaining
+        valid rows still drive the inventory walk."""
+        df = self._txns([
+            {"date": "bogus", "action": "BUY", "shares": 999, "amount": 999.0, "stop_loss": 100.0},
+            {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 195.0},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 500.0

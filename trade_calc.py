@@ -63,10 +63,80 @@ def calc_risk_budget(
     entries from truly zero-risk ones. Multiplier defaults to 1 (stocks); pass
     100 for equity options so dollar risk reflects notional, not premium-per-
     share.
+
+    NOTE: Group 7-1 reframes risk_budget as a *derived* field recomputed on
+    every state change via compute_trade_risk. This single-lot helper remains
+    for log_buy's initial inline write (where it equals compute_trade_risk
+    for the single-BUY case), but the canonical source of trades_summary.
+    risk_budget is now compute_trade_risk called from _recompute_summary_lifo.
     """
     if not (stop_loss and stop_loss > 0 and entry > stop_loss and shares > 0):
         return 0.0
     return round(shares * (entry - stop_loss) * multiplier, 2)
+
+
+def compute_trade_risk(
+    txns: pd.DataFrame, multiplier: float = 1.0
+) -> float:
+    """Holistic Trade Risk $ for a campaign — sum of open-lot stop exposure.
+
+    Formula (per-lot, applied to currently-open LIFO inventory only):
+
+        Σ over open BUY-lot remainders of
+          lot_shares × max(0, lot_entry − lot_stop) × multiplier
+
+    Walks the same LIFO inventory algorithm as compute_lifo_summary, then
+    sums (lot.price − lot.stop) × lot.qty over what remains. Floors per-lot
+    at 0 so free-roll lots (stop ≥ entry) contribute nothing. Returns 0
+    when no inventory remains (fully closed campaign), when the txns
+    DataFrame is empty, or when every remaining lot is free-roll.
+
+    Independent of any prior stored value — every call reads only the
+    current detail rows and produces the answer fresh. This is the property
+    that fixes the Group 7 additive scale-in bug and the frozen-after-sell
+    bug: callers no longer need to know the formula or carry forward state.
+
+    Expects a DataFrame with columns: date, action (BUY/SELL), shares,
+    amount (price per share), stop_loss (per-row stop). Column names must
+    already be normalized (snake_case). Lots with missing/zero stop_loss
+    contribute 0 (treated as free-roll, matching calc_risk_budget's
+    "no stop signal" convention).
+
+    Multiplier scales the result (1 for stocks, 100 for equity options).
+    """
+    if txns.empty:
+        return 0.0
+
+    txns = txns.copy()
+    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
+    txns = txns.dropna(subset=["date"]).sort_values("date")
+    if txns.empty:
+        return 0.0
+
+    inventory: list[dict[str, float]] = []
+    for _, tx in txns.iterrows():
+        action = str(tx.get("action", "")).upper()
+        tx_shares = float(tx.get("shares", 0) or 0)
+        tx_price = float(tx.get("amount", 0) or 0)
+        tx_stop = float(tx.get("stop_loss", 0) or 0)
+        if action == "BUY":
+            inventory.append({"price": tx_price, "shares": tx_shares, "stop": tx_stop})
+        elif action == "SELL":
+            to_sell = tx_shares
+            while to_sell > 0 and inventory:
+                last = inventory[-1]
+                take = min(to_sell, last["shares"])
+                last["shares"] -= take
+                to_sell -= take
+                if last["shares"] < 0.0001:
+                    inventory.pop()
+
+    total_risk = 0.0
+    for lot in inventory:
+        if lot["shares"] > 0 and lot["stop"] > 0 and lot["price"] > lot["stop"]:
+            total_risk += lot["shares"] * (lot["price"] - lot["stop"]) * multiplier
+
+    return round(total_risk, 2)
 
 
 def compute_lifo_summary(

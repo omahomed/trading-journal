@@ -43,6 +43,7 @@ import nlv_service
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns as _normalize_journal,
@@ -2878,12 +2879,20 @@ def log_buy(request: Request, body: dict):
         # Populated here because direct-log paths (e.g. IBKR Quick Log) skip
         # the sizing calculator that historically set this column.
         if action_type == "new":
+            # Group 7-1: route risk_budget through compute_trade_risk even
+            # for a single-BUY new campaign so log_buy has one canonical
+            # source of truth for the formula. Mathematically equivalent to
+            # calc_risk_budget(shares, price, stop_loss, multiplier) here.
+            new_buy_df = pd.DataFrame([{
+                "date": pd.to_datetime(date_time), "action": "BUY",
+                "shares": shares, "amount": price, "stop_loss": stop_loss,
+            }])
             summary_row = {
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
                 "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                "Risk_Budget": compute_trade_risk(new_buy_df, multiplier),
                 "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 "Strategy": strategy,
             }
@@ -2915,9 +2924,28 @@ def log_buy(request: Request, body: dict):
                 new_total_cost = old_cost + value
                 new_avg_entry = (new_total_cost / new_total_shares / multiplier) if new_total_shares > 0 else price
                 effective_stop = float(stop_loss if stop_loss > 0 else row.get("stop_loss", 0) or 0)
-                existing_rb = float(row.get("risk_budget", 0) or 0)
-                added_rb = calc_risk_budget(shares, price, effective_stop, multiplier)
-                new_rb = existing_rb + added_rb if existing_rb > 0 or added_rb > 0 else 0.0
+                # Group 7-1: risk_budget is the holistic Trade Risk $ over the
+                # full post-insert BUY set (existing details + this new lot),
+                # walked LIFO per-lot with per-lot stops, each contribution
+                # floored at 0. Replaces the prior additive logic
+                # (existing_rb + new_lot_rb) which inflated risk on every
+                # scale-in and never reflected lots whose stops had moved up.
+                df_d_existing = db.load_details(portfolio)
+                if df_d_existing.empty:
+                    existing_txns = pd.DataFrame()
+                else:
+                    df_d_existing = _normalize_trades(df_d_existing)
+                    existing_txns = df_d_existing[df_d_existing["trade_id"] == trade_id]
+                new_buy_df = pd.DataFrame([{
+                    "date": pd.to_datetime(date_time),
+                    "action": "BUY",
+                    "shares": shares,
+                    "amount": price,
+                    "stop_loss": effective_stop,
+                }])
+                post_insert = pd.concat([existing_txns, new_buy_df], ignore_index=True) \
+                    if not existing_txns.empty else new_buy_df
+                holistic_risk = compute_trade_risk(post_insert, multiplier)
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": str(row.get("open_date", date_str))[:10],
@@ -2927,7 +2955,7 @@ def log_buy(request: Request, body: dict):
                     "Stop_Loss": effective_stop,
                     "Rule": db.clean_text_value(row.get("rule")) or db.clean_text_value(rule),
                     "Buy_Notes": db.clean_text_value(notes) or db.clean_text_value(row.get("buy_notes")),
-                    "Risk_Budget": round(new_rb, 2),
+                    "Risk_Budget": holistic_risk,
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
                 }
@@ -2937,12 +2965,17 @@ def log_buy(request: Request, body: dict):
                 valid_strategy_names = {s["name"] for s in db.load_strategies(active_only=True)}
                 if strategy not in valid_strategy_names:
                     return {"error": f"Unknown strategy: {strategy}"}
+                # Same canonical compute_trade_risk path as the "new" branch.
+                orphan_new_buy_df = pd.DataFrame([{
+                    "date": pd.to_datetime(date_time), "action": "BUY",
+                    "shares": shares, "amount": price, "stop_loss": stop_loss,
+                }])
                 summary_row = {
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
                     "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
-                    "Risk_Budget": calc_risk_budget(shares, price, stop_loss, multiplier),
+                    "Risk_Budget": compute_trade_risk(orphan_new_buy_df, multiplier),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
                 }
