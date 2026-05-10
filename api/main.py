@@ -2676,6 +2676,74 @@ def ibkr_raw_nav_debug(request: Request):
         return {"success": False, "error": code, "message": msg}
 
 
+@app.get("/api/admin/drift-scan")
+@limiter.limit("12/minute")
+def drift_scan_endpoint(
+    request: Request,
+    portfolio: str | None = Query(None, description="Optional portfolio name; default scans all"),
+    check_id: str | None = Query(None, description="Optional single-check id; default runs all 12"),
+    limit_samples: int = Query(10, ge=1, le=50, description="Sample rows per check (1-50)"),
+):
+    """ADMIN — run drift checks against the database.
+
+    Catalog-driven consistency scan. Each entry in api/drift_checks.DRIFT_CHECKS
+    is a SQL query for a known invariant (rule mismatch, orphan summaries,
+    LIFO drift, tripwires for Migration 022 CHECK constraints, etc.). The
+    runner returns per-check (violation_count, samples) plus a summary.
+
+    Founder-gated. Same {error: forbidden_not_admin} 200-OK contract as the
+    other /api/admin/* endpoints — bearer auth alone isn't enough.
+
+    Read-only: every check is a SELECT, the runner rolls back its implicit
+    transaction at the end. No writes ever land.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id != FOUNDER_USER_ID:
+        return {"error": "forbidden_not_admin"}
+
+    # Validate check_id up-front so a typo returns 400 instead of an
+    # empty-checks response that looks like nothing ran.
+    from api.drift_checks import DRIFT_CHECKS_BY_ID, run_drift_scan
+    if check_id is not None and check_id not in DRIFT_CHECKS_BY_ID:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown check_id: {check_id}",
+        )
+
+    portfolio_id: int | None = None
+    if portfolio:
+        # Resolve the name → int FK once. Unknown name = 400 (vs scanning
+        # everything), since silently treating "typo'd portfolio" as
+        # "scan all" would surprise the caller.
+        try:
+            with db.get_db_connection() as _conn:
+                with _conn.cursor() as _cur:
+                    _cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio,))
+                    row = _cur.fetchone()
+                    if row is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Unknown portfolio: {portfolio}",
+                        )
+                    portfolio_id = int(row[0])
+        except HTTPException:
+            raise
+        except Exception as e:
+            return {"error": f"db_unavailable: {e}"}
+
+    try:
+        with db.get_db_connection() as conn:
+            return run_drift_scan(
+                conn,
+                portfolio_id=portfolio_id,
+                portfolio_name=portfolio,
+                check_id=check_id,
+                sample_limit=limit_samples,
+            )
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/trades/import")
 @limiter.limit("3/minute")
 def import_ibkr_trades(request: Request):

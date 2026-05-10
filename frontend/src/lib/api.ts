@@ -171,6 +171,37 @@ export interface Strategy {
   created_at: string | null;
 }
 
+// Drift-scan response (Phase 2 Commit 8). One entry per check, plus a
+// summary tile. Severity is decided by the runner — a check that errored
+// (e.g. statement timeout) is bucketed as "error" regardless of its
+// declared severity, so the summary count can't be silently misleading.
+export interface DriftScanCheckResult {
+  check_id: string;
+  description: string;
+  severity: "warning" | "error";
+  violation_count: number;
+  // samples have a check-specific column shape — first three are always
+  // (trade_id, ticker, portfolio) when present, then check-specific extras.
+  samples: Array<Record<string, string | number | null>>;
+  remediation: string;
+  duration_ms: number;
+  error: string | null;
+}
+
+export interface DriftScanResponse {
+  scanned_at: string;
+  portfolio_filter: string | null;
+  check_filter: string | null;
+  sample_limit: number;
+  checks: DriftScanCheckResult[];
+  summary: {
+    total_checks: number;
+    passed: number;
+    warnings: number;
+    errors: number;
+  };
+}
+
 // API functions
 export const api = {
   // Journal
@@ -406,6 +437,21 @@ export const api = {
       bars_processed?: number;
       error?: string;
     }>,
+
+  // Phase 2 Commit 8 — drift-scan admin endpoint. Founder-gated server-side;
+  // a non-founder gets { error: "forbidden_not_admin" } at HTTP 200. Each
+  // check is read-only SQL; the response shape is documented inline below.
+  runDriftScan: (opts: { portfolio?: string; checkId?: string; limitSamples?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.portfolio) qs.set("portfolio", opts.portfolio);
+    if (opts.checkId) qs.set("check_id", opts.checkId);
+    if (opts.limitSamples != null) qs.set("limit_samples", String(opts.limitSamples));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return fetchWithAuth(`${API_BASE}/api/admin/drift-scan${suffix}`).then(r => r.json()) as Promise<
+      | DriftScanResponse
+      | { error: string }
+    >;
+  },
 
   // AI Coach
   coachChat: (message: string, preset?: string, portfolio = getActivePortfolio()) => {

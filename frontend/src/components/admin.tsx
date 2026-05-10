@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { api, getActivePortfolio, type Strategy } from "@/lib/api";
+import { useState, useEffect, useCallback, Fragment } from "react";
+import { api, getActivePortfolio, type Strategy, type DriftScanResponse, type DriftScanCheckResult } from "@/lib/api";
 import { StrategyChip } from "./strategy-chip";
 
 // Hex-color regex mirrored from db_layer._HEX_COLOR_RE so client-side
@@ -105,6 +105,18 @@ export function Admin({ navColor }: { navColor: string }) {
   // MCT signal rebuild
   const [rebuildRunning, setRebuildRunning] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<Awaited<ReturnType<typeof api.rebuildMctSignals>> | null>(null);
+
+  // Drift Scan (Phase 2 Commit 8) — admin-gated read-only consistency
+  // sweep across trades_summary / trades_details / lot_closures / journal.
+  // expandedChecks tracks which result rows have their sample table
+  // visible (one expand-toggle per row). runningCheckId is the check_id
+  // currently being re-run via the per-row button (or "*" if the
+  // top-level "Re-run scan" is active); it disables both buttons while
+  // a request is in flight to keep the UI honest.
+  const [driftResult, setDriftResult] = useState<DriftScanResponse | null>(null);
+  const [driftError, setDriftError] = useState<string | null>(null);
+  const [runningCheckId, setRunningCheckId] = useState<string | null>(null);
+  const [expandedChecks, setExpandedChecks] = useState<Set<string>>(new Set());
 
   // Phase 2 — strategies admin. Includes inactive rows (active=false) so
   // the founder can edit any strategy regardless of its toggle state.
@@ -217,6 +229,65 @@ export function Admin({ navColor }: { navColor: string }) {
       setRebuildResult({ error: err.message || "Rebuild failed" });
     }
     setRebuildRunning(false);
+  };
+
+  const runDriftScan = async (checkId?: string) => {
+    setDriftError(null);
+    setRunningCheckId(checkId ?? "*");
+    try {
+      const res = await api.runDriftScan(checkId ? { checkId } : {});
+      if ("error" in res && res.error) {
+        setDriftError(res.error);
+        return;
+      }
+      const next = res as DriftScanResponse;
+      // Re-running a single check: merge the new result into the existing
+      // response so the rest of the table stays put. Re-running all:
+      // replace the whole payload.
+      if (checkId && driftResult) {
+        const merged: DriftScanResponse = {
+          ...next,
+          checks: driftResult.checks.map(c =>
+            c.check_id === checkId ? next.checks[0] ?? c : c
+          ),
+          // summary needs recomputing from the merged checks list since
+          // the server only counted the single re-run.
+          summary: ((): DriftScanResponse["summary"] => {
+            const passed = (cs: DriftScanCheckResult[]) =>
+              cs.filter(c => c.violation_count === 0 && !c.error).length;
+            const warnings = (cs: DriftScanCheckResult[]) =>
+              cs.filter(c => c.violation_count > 0 && c.severity === "warning").length;
+            const errors = (cs: DriftScanCheckResult[]) =>
+              cs.filter(c => (c.violation_count > 0 && c.severity === "error") || c.error).length;
+            const merged_checks = driftResult.checks.map(c =>
+              c.check_id === checkId ? next.checks[0] ?? c : c
+            );
+            return {
+              total_checks: merged_checks.length,
+              passed: passed(merged_checks),
+              warnings: warnings(merged_checks),
+              errors: errors(merged_checks),
+            };
+          })(),
+        };
+        setDriftResult(merged);
+      } else {
+        setDriftResult(next);
+      }
+    } catch (err) {
+      setDriftError(err instanceof Error ? err.message : "Scan failed");
+    } finally {
+      setRunningCheckId(null);
+    }
+  };
+
+  const toggleDriftExpand = (checkId: string) => {
+    setExpandedChecks(prev => {
+      const next = new Set(prev);
+      if (next.has(checkId)) next.delete(checkId);
+      else next.add(checkId);
+      return next;
+    });
   };
 
   const runBackfill = async () => {
@@ -651,6 +722,201 @@ export function Admin({ navColor }: { navColor: string }) {
                 <SaveBtn label={strategyEditing ? "Save Changes" : "Create Strategy"} loading={strategySaving} onClick={submitStrategyForm} />
               </div>
             </div>
+          </div>
+        )}
+      </Section>
+
+      {/* ── 5.7 Drift Scan (Phase 2 Commit 8) ──
+          Read-only consistency sweep across trades_summary, trades_details,
+          lot_closures, and trading_journal. 12 checks codified from the
+          Phase 2 sweep findings; tripwire checks (post-Migration 022) are
+          marked "error" so a non-zero count is loud. */}
+      <Section title="Drift Scan" icon="D">
+        <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Catalog-driven integrity sweep — runs 12 SQL checks against the
+          live database (rule mismatches, orphan summaries, LIFO drift,
+          tripwires for the Migration 022 CHECK constraints, etc.).
+          Read-only; no writes. Per-check timeout is 30s.
+        </div>
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            onClick={() => runDriftScan()}
+            disabled={runningCheckId !== null}
+            className="px-4 py-2 rounded-[8px] text-[12px] font-semibold cursor-pointer"
+            style={{ background: navColor, color: "#fff", opacity: runningCheckId !== null ? 0.6 : 1 }}
+            data-testid="drift-scan-run-all"
+          >
+            {runningCheckId === "*" ? "Scanning..." : "Re-run scan"}
+          </button>
+          {driftResult && (
+            <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+              Last scan: {String(driftResult.scanned_at).slice(0, 19)}
+              {driftResult.portfolio_filter ? ` (${driftResult.portfolio_filter})` : ""}
+            </span>
+          )}
+        </div>
+
+        {driftError && (
+          <div className="mb-3 text-[12px] px-3 py-2 rounded-[8px]"
+               style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                        border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                        color: "#dc2626", fontFamily: mono }}
+               data-testid="drift-scan-error">
+            {driftError}
+          </div>
+        )}
+
+        {driftResult && (
+          <>
+            {/* Summary tile row */}
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              {[
+                { label: "Total",    val: driftResult.summary.total_checks, color: "var(--ink-3)" },
+                { label: "Passed",   val: driftResult.summary.passed,       color: "#08a86b" },
+                { label: "Warnings", val: driftResult.summary.warnings,     color: "#eab308" },
+                { label: "Errors",   val: driftResult.summary.errors,       color: "#e5484d" },
+              ].map(tile => (
+                <div key={tile.label}
+                     data-testid={`drift-scan-tile-${tile.label.toLowerCase()}`}
+                     className="px-3 py-2 rounded-[8px] text-center"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>{tile.label}</div>
+                  <div className="text-[20px] font-bold" style={{ color: tile.color, fontFamily: mono }}>{tile.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {driftResult.summary.warnings === 0 && driftResult.summary.errors === 0 ? (
+              <div className="text-[12px] px-3 py-2 rounded-[8px]"
+                   style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                            border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))",
+                            color: "#08a86b" }}
+                   data-testid="drift-scan-clean">
+                ✓ All checks pass
+              </div>
+            ) : null}
+
+            {/* Per-check rows */}
+            <div className="overflow-auto rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+                <thead className="sticky top-0">
+                  <tr style={{ background: "var(--bg-2)" }}>
+                    {["", "Severity", "Check", "Count", "Duration", "Action"].map(h => (
+                      <th key={h} className="text-left px-3 py-2 text-[9px] uppercase font-semibold"
+                          style={{ color: "var(--ink-4)", borderBottom: "1px solid var(--border)" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {driftResult.checks.map(c => {
+                    const isExpanded = expandedChecks.has(c.check_id);
+                    const isClean = c.violation_count === 0 && !c.error;
+                    // Severity badge color: green on clean, yellow on warning,
+                    // red on error or check-level failure (timeout etc.).
+                    const sevColor = isClean ? "#08a86b" : (c.severity === "error" ? "#e5484d" : "#eab308");
+                    const sevLabel = isClean ? "OK" : c.severity.toUpperCase();
+                    return (
+                      <Fragment key={c.check_id}>
+                        <tr style={{ borderBottom: "1px solid var(--border)" }}
+                            data-testid={`drift-scan-row-${c.check_id}`}>
+                          <td className="px-3 py-1.5">
+                            <button onClick={() => toggleDriftExpand(c.check_id)}
+                                    className="text-[10px] cursor-pointer"
+                                    style={{ color: "var(--ink-4)", background: "transparent", border: "none" }}
+                                    aria-label={`Toggle samples for ${c.check_id}`}
+                                    data-testid={`drift-scan-expand-${c.check_id}`}>
+                              {isExpanded ? "▼" : "▶"}
+                            </button>
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+                                  style={{ background: `color-mix(in oklab, ${sevColor} 18%, transparent)`, color: sevColor }}>
+                              {sevLabel}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <div className="font-semibold" style={{ color: "var(--ink)", fontFamily: mono, fontSize: 10 }}>
+                              {c.check_id}
+                            </div>
+                            <div className="text-[10px]" style={{ color: "var(--ink-4)", maxWidth: 480 }}>
+                              {c.description}
+                            </div>
+                          </td>
+                          <td className="px-3 py-1.5 font-bold"
+                              style={{ color: isClean ? "var(--ink-4)" : sevColor, fontFamily: mono }}>
+                            {c.violation_count}
+                          </td>
+                          <td className="px-3 py-1.5" style={{ color: "var(--ink-4)", fontFamily: mono, fontSize: 10 }}>
+                            {c.duration_ms}ms
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <button onClick={() => runDriftScan(c.check_id)}
+                                    disabled={runningCheckId !== null}
+                                    className="text-[10px] underline cursor-pointer"
+                                    style={{ color: navColor, background: "transparent", border: "none",
+                                             opacity: runningCheckId !== null ? 0.6 : 1 }}
+                                    data-testid={`drift-scan-rerun-${c.check_id}`}>
+                              {runningCheckId === c.check_id ? "Running..." : "Re-run"}
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr style={{ background: "var(--bg)" }}
+                              data-testid={`drift-scan-samples-${c.check_id}`}>
+                            <td colSpan={6} className="px-3 py-2">
+                              {c.error ? (
+                                <div className="text-[11px]" style={{ color: "#e5484d", fontFamily: mono }}>
+                                  Check error: {c.error}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="text-[10px] mb-1" style={{ color: "var(--ink-4)" }}>
+                                    Remediation: {c.remediation}
+                                  </div>
+                                  {c.samples.length === 0 ? (
+                                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>No samples (clean).</div>
+                                  ) : (
+                                    <div className="overflow-auto" style={{ maxHeight: 240 }}>
+                                      <table className="w-full text-[10px]" style={{ borderCollapse: "collapse" }}>
+                                        <thead>
+                                          <tr style={{ background: "var(--bg-2)" }}>
+                                            {Object.keys(c.samples[0]).map(k => (
+                                              <th key={k} className="text-left px-2 py-1 text-[9px] uppercase"
+                                                  style={{ color: "var(--ink-4)", borderBottom: "1px solid var(--border)" }}>{k}</th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {c.samples.map((row, i) => (
+                                            <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                                              {Object.keys(c.samples[0]).map(k => (
+                                                <td key={k} className="px-2 py-1" style={{ color: "var(--ink-3)", fontFamily: mono }}>
+                                                  {row[k] == null ? "—" : String(row[k])}
+                                                </td>
+                                              ))}
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {!driftResult && !driftError && (
+          <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+            Click <strong>Re-run scan</strong> to run all checks now.
           </div>
         )}
       </Section>

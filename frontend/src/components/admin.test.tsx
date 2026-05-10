@@ -33,6 +33,7 @@ vi.mock("@/lib/api", () => ({
     listStrategies: vi.fn(),
     createStrategy: vi.fn(),
     updateStrategy: vi.fn(),
+    runDriftScan: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -163,5 +164,157 @@ describe("Admin — Strategies section", () => {
     const [name, body] = vi.mocked(api.updateStrategy).mock.calls[0];
     expect(name).toBe("CanSlim");
     expect(body.description).toBe("Updated description");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drift Scan section (Phase 2 Commit 8)
+// ---------------------------------------------------------------------------
+
+const DRIFT_CLEAN_RESPONSE = {
+  scanned_at: "2026-05-09T18:00:00Z",
+  portfolio_filter: null,
+  check_filter: null,
+  sample_limit: 10,
+  checks: [
+    { check_id: "summary_detail_rule_mismatch", description: "rule mismatch",
+      severity: "warning", violation_count: 0, samples: [], remediation: "ok",
+      duration_ms: 5, error: null },
+    { check_id: "closed_with_nonzero_shares", description: "closed shares",
+      severity: "error", violation_count: 0, samples: [], remediation: "ok",
+      duration_ms: 6, error: null },
+  ],
+  summary: { total_checks: 2, passed: 2, warnings: 0, errors: 0 },
+};
+
+const DRIFT_MIXED_RESPONSE = {
+  scanned_at: "2026-05-09T18:00:00Z",
+  portfolio_filter: null,
+  check_filter: null,
+  sample_limit: 10,
+  checks: [
+    {
+      check_id: "summary_detail_rule_mismatch",
+      description: "rule mismatch",
+      severity: "warning",
+      violation_count: 1,
+      samples: [{ trade_id: "202604-001", ticker: "NVDA", portfolio: "CanSlim",
+                  summary_rule: "br3.1", detail_rule: "br3.2" }],
+      remediation: "Recompute via Trade Manager",
+      duration_ms: 7,
+      error: null,
+    },
+    {
+      check_id: "closed_with_nonzero_shares",
+      description: "closed shares",
+      severity: "error",
+      violation_count: 2,
+      samples: [
+        { trade_id: "202601-003", ticker: "AAPL", portfolio: "CanSlim", shares: 5 },
+        { trade_id: "202601-004", ticker: "MSFT", portfolio: "CanSlim", shares: 3 },
+      ],
+      remediation: "Recompute LIFO",
+      duration_ms: 9,
+      error: null,
+    },
+  ],
+  summary: { total_checks: 2, passed: 0, warnings: 1, errors: 1 },
+};
+
+async function openDriftSection() {
+  render(<Admin navColor="#6366f1" />);
+  const sectionHeader = await screen.findByText("Drift Scan");
+  await act(async () => { fireEvent.click(sectionHeader); });
+}
+
+describe("Admin — Drift Scan section", () => {
+  test("clean state shows green check after running scan", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+
+    const runBtn = await screen.findByTestId("drift-scan-run-all");
+    await act(async () => { fireEvent.click(runBtn); });
+
+    expect(await screen.findByTestId("drift-scan-clean")).toBeInTheDocument();
+    // Tile counts add up: 2 total / 2 passed / 0 warnings / 0 errors.
+    expect(screen.getByTestId("drift-scan-tile-passed")).toHaveTextContent("2");
+    expect(screen.getByTestId("drift-scan-tile-errors")).toHaveTextContent("0");
+  });
+
+  test("mixed warnings/errors render badges + counts", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_MIXED_RESPONSE as any);
+    await openDriftSection();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    // Each check renders one row, with violation count visible.
+    expect(await screen.findByTestId("drift-scan-row-summary_detail_rule_mismatch")).toBeInTheDocument();
+    expect(screen.getByTestId("drift-scan-row-closed_with_nonzero_shares")).toBeInTheDocument();
+
+    // Summary tile arithmetic.
+    expect(screen.getByTestId("drift-scan-tile-warnings")).toHaveTextContent("1");
+    expect(screen.getByTestId("drift-scan-tile-errors")).toHaveTextContent("1");
+    // Clean banner is NOT shown when there are violations.
+    expect(screen.queryByTestId("drift-scan-clean")).not.toBeInTheDocument();
+  });
+
+  test("Re-run scan button calls api.runDriftScan with no args", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    await waitFor(() => expect(api.runDriftScan).toHaveBeenCalled());
+    // First call goes through the "run all" path with empty options.
+    expect(vi.mocked(api.runDriftScan).mock.calls[0][0]).toEqual({});
+  });
+
+  test("per-row Re-run button calls api.runDriftScan with that check_id", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_MIXED_RESPONSE as any);
+    await openDriftSection();
+
+    // Initial scan to populate the table.
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    // Then mock a single-check response and click that row's Re-run.
+    vi.mocked(api.runDriftScan).mockResolvedValueOnce({
+      ...DRIFT_MIXED_RESPONSE,
+      check_filter: "closed_with_nonzero_shares",
+      checks: [{ ...DRIFT_MIXED_RESPONSE.checks[1], violation_count: 0, samples: [] }],
+      summary: { total_checks: 1, passed: 1, warnings: 0, errors: 0 },
+    } as any);
+
+    const rerunBtn = await screen.findByTestId("drift-scan-rerun-closed_with_nonzero_shares");
+    await act(async () => { fireEvent.click(rerunBtn); });
+
+    await waitFor(() => expect(api.runDriftScan).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.runDriftScan).mock.calls[1][0]).toEqual({
+      checkId: "closed_with_nonzero_shares",
+    });
+  });
+
+  test("expand row reveals samples", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_MIXED_RESPONSE as any);
+    await openDriftSection();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    // Samples are hidden until expanded.
+    expect(screen.queryByTestId("drift-scan-samples-summary_detail_rule_mismatch")).not.toBeInTheDocument();
+
+    const expandBtn = await screen.findByTestId("drift-scan-expand-summary_detail_rule_mismatch");
+    await act(async () => { fireEvent.click(expandBtn); });
+
+    expect(await screen.findByTestId("drift-scan-samples-summary_detail_rule_mismatch")).toBeInTheDocument();
+    // The sample's trade_id appears inside the expanded row.
+    expect(screen.getByText("202604-001")).toBeInTheDocument();
   });
 });
