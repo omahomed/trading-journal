@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, Fragment } from "react";
-import { api, getActivePortfolio, type Strategy, type DriftScanResponse, type DriftScanCheckResult } from "@/lib/api";
+import { api, getActivePortfolio, type Strategy, type DriftScanResponse, type DriftScanCheckResult, type Portfolio } from "@/lib/api";
 import { StrategyChip } from "./strategy-chip";
 
 // Hex-color regex mirrored from db_layer._HEX_COLOR_RE so client-side
@@ -117,6 +117,14 @@ export function Admin({ navColor }: { navColor: string }) {
   const [driftError, setDriftError] = useState<string | null>(null);
   const [runningCheckId, setRunningCheckId] = useState<string | null>(null);
   const [expandedChecks, setExpandedChecks] = useState<Set<string>>(new Set());
+  // Portfolio selector — fetched once on mount via api.listPortfolios()
+  // (already an existing read path, used by PortfolioProvider on app
+  // load). Default selection is the user's active portfolio if it's in
+  // the list, else "" (= All Portfolios). Empty string passes no
+  // ?portfolio= query param to the backend, which scans all portfolios.
+  // Selection does NOT auto-trigger a scan — user clicks Re-run.
+  const [driftPortfolios, setDriftPortfolios] = useState<Portfolio[]>([]);
+  const [selectedDriftPortfolio, setSelectedDriftPortfolio] = useState<string>("");
 
   // Phase 2 — strategies admin. Includes inactive rows (active=false) so
   // the founder can edit any strategy regardless of its toggle state.
@@ -235,7 +243,13 @@ export function Admin({ navColor }: { navColor: string }) {
     setDriftError(null);
     setRunningCheckId(checkId ?? "*");
     try {
-      const res = await api.runDriftScan(checkId ? { checkId } : {});
+      // Build the request opts inline — only include keys with values so
+      // a missing portfolio (= scan all) doesn't add an empty `?portfolio=`
+      // query param the backend would reject as Unknown portfolio: ""
+      const opts: { portfolio?: string; checkId?: string } = {};
+      if (selectedDriftPortfolio) opts.portfolio = selectedDriftPortfolio;
+      if (checkId) opts.checkId = checkId;
+      const res = await api.runDriftScan(opts);
       if ("error" in res && res.error) {
         setDriftError(res.error);
         return;
@@ -343,6 +357,24 @@ export function Admin({ navColor }: { navColor: string }) {
   // table, not app_config, and the admin form mutates them via dedicated
   // endpoints rather than the generic api.setConfig path.
   useEffect(() => { loadStrategies(); }, [loadStrategies]);
+
+  // Drift Scan portfolio list — fetch once on mount. Default the selector
+  // to the user's active portfolio if it appears in the returned list;
+  // otherwise leave at "" (= All Portfolios). Defensive: if the active
+  // portfolio was renamed/deleted between PortfolioProvider's load and
+  // this fetch, we don't want to render a stale selection that the
+  // backend would reject with 400.
+  useEffect(() => {
+    api.listPortfolios()
+      .then(list => {
+        setDriftPortfolios(list);
+        const active = getActivePortfolio();
+        if (active && list.some(p => p.name === active)) {
+          setSelectedDriftPortfolio(active);
+        }
+      })
+      .catch(() => setDriftPortfolios([]));
+  }, []);
 
   const loadEvents = useCallback(() => {
     api.events().then(ev => setEvents(Array.isArray(ev) ? ev : [])).catch(() => {});
@@ -739,6 +771,19 @@ export function Admin({ navColor }: { navColor: string }) {
           etc.). Read-only; no writes. Per-check timeout is 30s.
         </div>
         <div className="flex items-center gap-3 mb-3">
+          <select
+            value={selectedDriftPortfolio}
+            onChange={e => setSelectedDriftPortfolio(e.target.value)}
+            className="h-[34px] px-2.5 rounded-[8px] text-[12px]"
+            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}
+            data-testid="drift-scan-portfolio-select"
+            aria-label="Scan portfolio scope"
+          >
+            <option value="">All Portfolios</option>
+            {driftPortfolios.map(p => (
+              <option key={p.id} value={p.name}>{p.name}</option>
+            ))}
+          </select>
           <button
             onClick={() => runDriftScan()}
             disabled={runningCheckId !== null}
