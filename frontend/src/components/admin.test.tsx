@@ -18,6 +18,12 @@ if (typeof window !== "undefined" && !(window as any).localStorage?.getItem) {
   });
 }
 
+// getActivePortfolio is mocked as a vi.fn so individual tests can override
+// the return value (e.g. for the defensive 'active not in list' test). The
+// module-level default is "CanSlim" — matches the user's primary portfolio
+// and the value PortfolioProvider seeds at app load in production.
+const mockGetActivePortfolio = vi.fn(() => "CanSlim");
+
 vi.mock("@/lib/api", () => ({
   api: {
     config: vi.fn().mockResolvedValue({ value: null }),
@@ -34,8 +40,9 @@ vi.mock("@/lib/api", () => ({
     createStrategy: vi.fn(),
     updateStrategy: vi.fn(),
     runDriftScan: vi.fn(),
+    listPortfolios: vi.fn(),
   },
-  getActivePortfolio: () => "CanSlim",
+  getActivePortfolio: () => mockGetActivePortfolio(),
 }));
 
 import { api } from "@/lib/api";
@@ -47,9 +54,23 @@ const SEED_STRATEGIES = [
   { name: "Retired",   description: "old",       color: "#888888", is_active: false, created_at: "2026-01-03" },
 ];
 
+// Three production portfolios. Drift-scan dropdown defaults to the user's
+// active portfolio if it appears in this list; otherwise falls back to ""
+// (= All Portfolios). Per-test mocks can override the list to exercise
+// the defensive default path.
+const SEED_PORTFOLIOS = [
+  { id: 1, name: "CanSlim",       starting_capital: null, reset_date: null, created_at: "2026-01-01", cash_balance: 0 },
+  { id: 2, name: "TQQQ Strategy", starting_capital: null, reset_date: null, created_at: "2026-01-01", cash_balance: 0 },
+  { id: 3, name: "457B Plan",     starting_capital: null, reset_date: null, created_at: "2026-01-01", cash_balance: 0 },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset the active-portfolio mock to the default. Tests that need a
+  // different value override via mockGetActivePortfolio.mockReturnValue.
+  mockGetActivePortfolio.mockReturnValue("CanSlim");
   vi.mocked(api.listStrategies).mockResolvedValue(SEED_STRATEGIES as any);
+  vi.mocked(api.listPortfolios).mockResolvedValue(SEED_PORTFOLIOS as any);
   vi.mocked(api.createStrategy).mockResolvedValue({
     name: "Momentum", description: "swing", color: "#22c55e",
     is_active: true, created_at: "2026-05-08",
@@ -260,22 +281,32 @@ describe("Admin — Drift Scan section", () => {
     expect(screen.queryByTestId("drift-scan-clean")).not.toBeInTheDocument();
   });
 
-  test("Re-run scan button calls api.runDriftScan with no args", async () => {
+  test("Re-run scan button calls api.runDriftScan with the active portfolio", async () => {
     vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
     await openDriftSection();
+
+    // Wait for portfolio dropdown to populate before clicking Re-run, so
+    // the default-selection effect has a chance to set selectedPortfolio.
+    await screen.findByRole("option", { name: "CanSlim" });
 
     await act(async () => {
       fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
     });
 
     await waitFor(() => expect(api.runDriftScan).toHaveBeenCalled());
-    // First call goes through the "run all" path with empty options.
-    expect(vi.mocked(api.runDriftScan).mock.calls[0][0]).toEqual({});
+    // After this commit, the dropdown defaults to the active portfolio
+    // and the Re-run scan button passes it through to the API. (Was {}
+    // before the portfolio-filter feature; the new contract is
+    // {portfolio: <active>}.)
+    expect(vi.mocked(api.runDriftScan).mock.calls[0][0]).toEqual({
+      portfolio: "CanSlim",
+    });
   });
 
-  test("per-row Re-run button calls api.runDriftScan with that check_id", async () => {
+  test("per-row Re-run button calls api.runDriftScan with check_id + active portfolio", async () => {
     vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_MIXED_RESPONSE as any);
     await openDriftSection();
+    await screen.findByRole("option", { name: "CanSlim" });
 
     // Initial scan to populate the table.
     await act(async () => {
@@ -294,7 +325,9 @@ describe("Admin — Drift Scan section", () => {
     await act(async () => { fireEvent.click(rerunBtn); });
 
     await waitFor(() => expect(api.runDriftScan).toHaveBeenCalledTimes(2));
+    // Per-row Re-run preserves the selected portfolio + adds checkId.
     expect(vi.mocked(api.runDriftScan).mock.calls[1][0]).toEqual({
+      portfolio: "CanSlim",
       checkId: "closed_with_nonzero_shares",
     });
   });
@@ -316,5 +349,132 @@ describe("Admin — Drift Scan section", () => {
     expect(await screen.findByTestId("drift-scan-samples-summary_detail_rule_mismatch")).toBeInTheDocument();
     // The sample's trade_id appears inside the expanded row.
     expect(screen.getByText("202604-001")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drift Scan portfolio selector (post-Commit-8 follow-up)
+// Backend has supported ?portfolio= since Commit 8; this UI exposes it so
+// the user can scope a scan to one portfolio without losing the option to
+// run unfiltered. Default selection is the active portfolio (typically
+// 'CanSlim'), with a defensive fallback to "All Portfolios" when the
+// active portfolio isn't present in the listed set.
+// ---------------------------------------------------------------------------
+
+describe("Admin — Drift Scan portfolio selector", () => {
+  test("renders dropdown with All Portfolios + every listed portfolio", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    // Wait for listPortfolios resolution to populate options.
+    await screen.findByRole("option", { name: "CanSlim" });
+
+    // 4 options: "All Portfolios" + 3 seeded portfolios.
+    const options = Array.from(select.querySelectorAll("option"));
+    expect(options).toHaveLength(4);
+    expect(options.map(o => o.textContent)).toEqual([
+      "All Portfolios", "CanSlim", "TQQQ Strategy", "457B Plan",
+    ]);
+  });
+
+  test("defaults selection to the active portfolio when present in list", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+    await screen.findByRole("option", { name: "CanSlim" });
+
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    expect(select.value).toBe("CanSlim");
+  });
+
+  test("defensive: defaults to All Portfolios when active portfolio not in list", async () => {
+    // Simulate a stale active-portfolio name (renamed/deleted between
+    // PortfolioProvider's load and the drift-scan mount). The dropdown
+    // should NOT preselect a name the backend would reject — it falls
+    // back to "" so the user explicitly picks a valid scope before
+    // running.
+    mockGetActivePortfolio.mockReturnValue("OldGhostPortfolio");
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+    await screen.findByRole("option", { name: "CanSlim" });
+
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    expect(select.value).toBe("");
+  });
+
+  test("changing selection + Re-run scan calls api with the chosen portfolio", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+    await screen.findByRole("option", { name: "TQQQ Strategy" });
+
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "TQQQ Strategy" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    await waitFor(() => expect(api.runDriftScan).toHaveBeenCalled());
+    expect(vi.mocked(api.runDriftScan).mock.calls[0][0]).toEqual({
+      portfolio: "TQQQ Strategy",
+    });
+  });
+
+  test("selecting All Portfolios + Re-run scan calls api without a portfolio key", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_CLEAN_RESPONSE as any);
+    await openDriftSection();
+    await screen.findByRole("option", { name: "CanSlim" });
+
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    await waitFor(() => expect(api.runDriftScan).toHaveBeenCalled());
+    // Empty string ⇒ no portfolio key in the request opts ⇒ backend
+    // scans all portfolios. Pin this contract: the API wrapper should
+    // NOT see a portfolio: "" entry (would surface as ?portfolio= and
+    // backend would reject with Unknown portfolio: "").
+    expect(vi.mocked(api.runDriftScan).mock.calls[0][0]).toEqual({});
+  });
+
+  test("per-row Re-run preserves the selected portfolio", async () => {
+    vi.mocked(api.runDriftScan).mockResolvedValue(DRIFT_MIXED_RESPONSE as any);
+    await openDriftSection();
+    await screen.findByRole("option", { name: "457B Plan" });
+
+    // Switch from default CanSlim to 457B Plan, populate the table,
+    // then click a per-row Re-run.
+    const select = await screen.findByTestId("drift-scan-portfolio-select") as HTMLSelectElement;
+    await act(async () => {
+      fireEvent.change(select, { target: { value: "457B Plan" } });
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("drift-scan-run-all"));
+    });
+
+    vi.mocked(api.runDriftScan).mockResolvedValueOnce({
+      ...DRIFT_MIXED_RESPONSE,
+      portfolio_filter: "457B Plan",
+      check_filter: "closed_with_nonzero_shares",
+      checks: [{ ...DRIFT_MIXED_RESPONSE.checks[1], violation_count: 0, samples: [] }],
+      summary: { total_checks: 1, passed: 1, warnings: 0, errors: 0 },
+    } as any);
+
+    const rerunBtn = await screen.findByTestId("drift-scan-rerun-closed_with_nonzero_shares");
+    await act(async () => { fireEvent.click(rerunBtn); });
+
+    await waitFor(() => expect(api.runDriftScan).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.runDriftScan).mock.calls[1][0]).toEqual({
+      portfolio: "457B Plan",
+      checkId: "closed_with_nonzero_shares",
+    });
   });
 });
