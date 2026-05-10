@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     status VARCHAR(20) DEFAULT 'OPEN',  -- 'OPEN' or 'CLOSED'
     open_date TIMESTAMP,
     closed_date TIMESTAMP,
-    shares NUMERIC(12, 4) DEFAULT 0,  -- Current remaining shares
+    shares NUMERIC(12, 4) DEFAULT 0,  -- Dual-semantic: OPEN = current remaining (post-LIFO); CLOSED = total_buy_shs (lifetime sum, campaign face-card metric). See trade_calc.py:177.
     avg_entry NUMERIC(12, 4) DEFAULT 0,
     avg_exit NUMERIC(12, 4) DEFAULT 0,
     total_cost NUMERIC(15, 2) DEFAULT 0,

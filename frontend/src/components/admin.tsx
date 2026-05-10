@@ -733,10 +733,10 @@ export function Admin({ navColor }: { navColor: string }) {
           marked "error" so a non-zero count is loud. */}
       <Section title="Drift Scan" icon="D">
         <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
-          Catalog-driven integrity sweep — runs 12 SQL checks against the
-          live database (rule mismatches, orphan summaries, LIFO drift,
-          tripwires for the Migration 022 CHECK constraints, etc.).
-          Read-only; no writes. Per-check timeout is 30s.
+          Catalog-driven integrity sweep — runs the registered SQL checks
+          against the live database (rule mismatches, orphan summaries,
+          LIFO drift, tripwires for the Migration 022 CHECK constraints,
+          etc.). Read-only; no writes. Per-check timeout is 30s.
         </div>
         <div className="flex items-center gap-3 mb-3">
           <button
