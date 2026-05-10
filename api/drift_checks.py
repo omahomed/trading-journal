@@ -173,35 +173,6 @@ DRIFT_CHECKS: list[DriftCheck] = [
         ),
     ),
     DriftCheck(
-        check_id="closed_with_nonzero_shares",
-        description=(
-            "Trades marked CLOSED that still report shares > 0. Drift between "
-            "summary.status and the LIFO recompute that should zero out shares "
-            "on full close."
-        ),
-        severity="error",
-        # Numeric(12,4) — exact zero comparison is fine; no rounding tolerance
-        # needed (shares are stored as discrete-share quantities in practice).
-        sql="""
-            SELECT
-                s.trade_id,
-                s.ticker,
-                p.name AS portfolio,
-                s.shares,
-                s.closed_date
-            FROM trades_summary s
-            JOIN portfolios p ON p.id = s.portfolio_id
-            WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
-              AND s.status = 'CLOSED'
-              AND s.shares > 0
-        """,
-        remediation=(
-            "Recompute LIFO via Trade Manager → Database Health for the listed "
-            "trades; status will flip back to OPEN if there are open BUY lots, "
-            "or shares will zero out if the LIFO is genuinely closed."
-        ),
-    ),
-    DriftCheck(
         check_id="string_nan_in_prose",
         description=(
             "trades_summary prose columns (rule, buy_notes, sell_rule, "
@@ -558,9 +529,10 @@ DRIFT_CHECKS: list[DriftCheck] = [
         check_id="summary_shares_vs_open_buy_remaining",
         description=(
             "trades_summary.shares ≠ SUM of open BUY remaining shares "
-            "(buy.shares - SUM(matching lot_closures.shares)). Numeric "
-            "shape-shift between the campaign-level value and the LIFO "
-            "engine's per-buy view. Tolerance is fractional-share (0.0001). "
+            "(buy.shares - SUM(matching lot_closures.shares)). Only "
+            "checked on OPEN trades; for CLOSED trades, summary.shares "
+            "carries total_buy_shs by design (campaign face-card metric), "
+            "not current remaining. Tolerance is fractional-share (0.0001). "
             "Excludes trades with any empty/NULL trx_id (those are flagged "
             "separately by lot_closures_empty_trx_id; recompute LIFO on "
             "those first, then re-run this check)."
@@ -568,6 +540,15 @@ DRIFT_CHECKS: list[DriftCheck] = [
         severity="error",
         # NUMERIC(12,4) for shares — 0.0001 tolerance to catch real drift
         # without flagging quarter-share rounding.
+        #
+        # OPEN-only scope: trades_summary.shares is dual-semantic. For
+        # OPEN trades it carries the LIFO post-sell remaining inventory
+        # (what this check compares against). For CLOSED trades it
+        # carries the lifetime sum of BUY shares (campaign face-card
+        # metric — see compute_lifo_summary in trade_calc.py:177 and
+        # the matching write in api/main.py:3142). Comparing those to
+        # `SUM(open_remaining)=0` for closed trades over-flags every
+        # closed campaign that ever bought shares — pure false positive.
         #
         # Empty-trx-id exclusion: same hazard as #8/#9 — `closed.buy_trx_id
         # = d.trx_id` would falsely match every empty closure to every
@@ -602,6 +583,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               ON br.portfolio_id = s.portfolio_id
              AND br.trade_id     = s.trade_id
             WHERE (s.portfolio_id = %(portfolio_id)s OR %(portfolio_id)s IS NULL)
+              AND s.status = 'OPEN'
               AND ABS(s.shares - COALESCE(br.open_remaining, 0)) > 0.0001
               AND NOT EXISTS (
                   SELECT 1 FROM trades_details d_check
@@ -619,12 +601,15 @@ DRIFT_CHECKS: list[DriftCheck] = [
               )
         """,
         remediation=(
-            "Recompute LIFO for the campaign — both summary.shares and the "
-            "per-buy remaining are derived from the same trades_details "
-            "rows; recompute makes them agree by construction. If the "
-            "trade has empty trx_ids (check #10), recompute LIFO first — "
-            "that rewrites lot_closures with proper trx_ids and this "
-            "check will then evaluate the trade correctly."
+            "Recompute LIFO for the OPEN campaign — both summary.shares "
+            "and the per-buy remaining are derived from the same "
+            "trades_details rows; recompute makes them agree by "
+            "construction. If the trade has empty trx_ids (check #10), "
+            "recompute LIFO first — that rewrites lot_closures with "
+            "proper trx_ids and this check will then evaluate the trade "
+            "correctly. CLOSED trades are intentionally out of scope; "
+            "their summary.shares carries lifetime total_buy_shs by "
+            "design and should not be compared against open_remaining."
         ),
     ),
 ]

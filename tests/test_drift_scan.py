@@ -325,11 +325,14 @@ def stubbed(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_registry_has_twelve_checks():
-    """We declared 12 checks in the design — guard against accidental drift
-    in the registry itself."""
+def test_registry_has_eleven_checks():
+    """11 checks live in the registry. (Originally 12; closed_with_nonzero_shares
+    was dropped after investigation showed trades_summary.shares is dual-semantic
+    by design — for CLOSED trades it carries lifetime total_buy_shs, not 0, so
+    the check's premise was invalid. See trade_calc.py:177 for the canonical
+    write semantics.) Guard against accidental drift in the registry size."""
     from api.drift_checks import DRIFT_CHECKS
-    assert len(DRIFT_CHECKS) == 12
+    assert len(DRIFT_CHECKS) == 11
 
 
 def test_registry_check_ids_unique():
@@ -377,6 +380,38 @@ def test_registry_trx_id_joins_exclude_empty_trades():
             f"{cid} missing empty-string trx-id check"
 
 
+def test_registry_summary_shares_check_is_open_only():
+    """Regression guard: summary_shares_vs_open_buy_remaining (#12) must
+    filter to status='OPEN'. trades_summary.shares is dual-semantic — for
+    CLOSED trades it carries lifetime total_buy_shs by design (see
+    trade_calc.py:177 + api/main.py:3142), so comparing it against
+    SUM(open_remaining)=0 over-flags every closed campaign that ever
+    bought shares (478-of-480 false positives on first prod scan).
+    Without this filter, the check is invalid; with it, the check evaluates
+    only the population where the comparison is meaningful."""
+    from api.drift_checks import DRIFT_CHECKS_BY_ID
+    sql = DRIFT_CHECKS_BY_ID["summary_shares_vs_open_buy_remaining"].sql
+    assert "s.status = 'OPEN'" in sql, (
+        "summary_shares_vs_open_buy_remaining missing status='OPEN' "
+        "filter — would re-introduce the dual-semantic false positive."
+    )
+
+
+def test_registry_no_closed_with_nonzero_shares_check():
+    """Regression guard: closed_with_nonzero_shares was dropped from the
+    registry. It compared status='CLOSED' AND shares>0 as drift, but
+    trades_summary.shares carries lifetime total_buy_shs on closed
+    trades by design — every closed campaign that ever bought shares
+    would (correctly) trip the check. Permanently invalid; not just
+    'temporarily disabled'. If anyone re-adds it, this test fires."""
+    from api.drift_checks import DRIFT_CHECKS_BY_ID
+    assert "closed_with_nonzero_shares" not in DRIFT_CHECKS_BY_ID, (
+        "closed_with_nonzero_shares re-added to registry — its premise is "
+        "invalid given the dual-semantic of trades_summary.shares. See "
+        "trade_calc.py:177 and the rationale in this commit's message."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Admin gate
 # ---------------------------------------------------------------------------
@@ -404,7 +439,7 @@ def test_drift_scan_accepts_founder(stubbed):
     body = r.json()
     assert "checks" in body
     assert "summary" in body
-    assert body["summary"]["total_checks"] == 12
+    assert body["summary"]["total_checks"] == 11
 
 
 # ---------------------------------------------------------------------------
@@ -413,14 +448,14 @@ def test_drift_scan_accepts_founder(stubbed):
 
 
 def test_drift_scan_clean_state_passes_all(stubbed):
-    """Empty fixture → all 12 checks report 0 violations and summary
+    """Empty fixture → all 11 checks report 0 violations and summary
     counts add up correctly."""
     _, client = stubbed
     r = client.get("/api/admin/drift-scan", headers=_founder_headers())
     body = r.json()
     assert body["summary"] == {
-        "total_checks": 12,
-        "passed":   12,
+        "total_checks": 11,
+        "passed":   11,
         "warnings": 0,
         "errors":   0,
     }
@@ -490,21 +525,6 @@ def test_check_risk_budget_null_or_zero_post_021_is_error_severity(stubbed):
     body = r.json()
     assert body["checks"][0]["severity"] == "error"
     assert body["summary"]["errors"] == 1
-
-
-def test_check_closed_with_nonzero_shares(stubbed):
-    state, client = stubbed
-    _seed(state, "closed_with_nonzero_shares", 1, [{
-        "trade_id": "202601-003", "ticker": "AAPL", "portfolio": "CanSlim",
-        "shares": 12, "closed_date": "2026-03-01T00:00:00",
-    }])
-    r = client.get(
-        "/api/admin/drift-scan?check_id=closed_with_nonzero_shares",
-        headers=_founder_headers(),
-    )
-    body = r.json()
-    assert body["checks"][0]["violation_count"] == 1
-    assert body["checks"][0]["samples"][0]["shares"] == 12
 
 
 def test_check_string_nan_in_prose_tripwire(stubbed):
@@ -614,9 +634,14 @@ def test_check_summary_realized_pl_vs_lot_closures_sum(stubbed):
 
 
 def test_check_summary_shares_vs_open_buy_remaining(stubbed):
+    """OPEN trade where summary.shares (200) doesn't match the per-buy
+    LIFO remainder (100) — the actionable drift this check catches.
+    Sample explicitly carries status='OPEN' to document the scope:
+    only OPEN trades are eligible after the dual-semantic correction."""
     state, client = stubbed
     _seed(state, "summary_shares_vs_open_buy_remaining", 1, [{
         "trade_id": "202604-001", "ticker": "NVDA", "portfolio": "CanSlim",
+        "status": "OPEN",
         "summary_shares": 200, "detail_remaining": 100, "diff": 100,
     }])
     r = client.get(
@@ -626,6 +651,7 @@ def test_check_summary_shares_vs_open_buy_remaining(stubbed):
     body = r.json()
     assert body["checks"][0]["severity"] == "error"
     assert body["checks"][0]["samples"][0]["diff"] == 100
+    assert body["checks"][0]["samples"][0]["status"] == "OPEN"
 
 
 # ---------------------------------------------------------------------------
@@ -637,13 +663,13 @@ def test_check_id_filter_runs_only_that_check(stubbed):
     """?check_id=X → response contains exactly that one check."""
     _, client = stubbed
     r = client.get(
-        "/api/admin/drift-scan?check_id=closed_with_nonzero_shares",
+        "/api/admin/drift-scan?check_id=open_with_closed_date",
         headers=_founder_headers(),
     )
     body = r.json()
     assert len(body["checks"]) == 1
-    assert body["checks"][0]["check_id"] == "closed_with_nonzero_shares"
-    assert body["check_filter"] == "closed_with_nonzero_shares"
+    assert body["checks"][0]["check_id"] == "open_with_closed_date"
+    assert body["check_filter"] == "open_with_closed_date"
 
 
 def test_unknown_check_id_returns_400(stubbed):
@@ -710,7 +736,7 @@ def test_limit_samples_default_echoed_in_response(stubbed):
 
 def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     """Simulate a statement timeout on one check; assert (a) the other
-    11 still ran and reported, (b) the timed-out check is bucketed as
+    10 still ran and reported, (b) the timed-out check is bucketed as
     'error' regardless of its declared severity, and (c) the response
     surfaces the underlying error message in the check entry."""
     state, client = stubbed
@@ -719,8 +745,8 @@ def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     r = client.get("/api/admin/drift-scan", headers=_founder_headers())
     body = r.json()
 
-    # 12 entries total — none missing.
-    assert len(body["checks"]) == 12
+    # 11 entries total — none missing.
+    assert len(body["checks"]) == 11
 
     # Find the timed-out check.
     failed = next(
@@ -733,14 +759,14 @@ def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     assert failed["severity"] == "error"
     assert "Check failed to run" in failed["remediation"]
 
-    # Other 11 still passed (no errors injected for them).
+    # Other 10 still passed (no errors injected for them).
     other_passed = sum(
         1 for c in body["checks"]
         if c["check_id"] != "summary_realized_pl_vs_lot_closures_sum"
         and c["violation_count"] == 0
         and c["error"] is None
     )
-    assert other_passed == 11
+    assert other_passed == 10
 
 
 # ---------------------------------------------------------------------------
@@ -757,10 +783,10 @@ def test_summary_buckets_warnings_and_errors_separately(stubbed):
         "trade_id": "202604-001", "ticker": "NVDA", "portfolio": "CanSlim",
         "summary_rule": "a", "detail_rule": "b",
     }])
-    # Error-class: closed with nonzero shares
-    _seed(state, "closed_with_nonzero_shares", 1, [{
+    # Error-class: lot_closures with empty trx_id
+    _seed(state, "lot_closures_empty_trx_id", 1, [{
         "trade_id": "202601-003", "ticker": "AAPL", "portfolio": "CanSlim",
-        "shares": 5, "closed_date": "2026-01-15",
+        "sell_trx_id": "S1", "buy_trx_id": "", "closure_id": 99,
     }])
     # Force a timeout on one more check → counted as 'error'.
     state["timeout_check_ids"] = {"open_summary_no_open_buys"}
@@ -769,8 +795,8 @@ def test_summary_buckets_warnings_and_errors_separately(stubbed):
     body = r.json()
 
     s = body["summary"]
-    assert s["total_checks"] == 12
+    assert s["total_checks"] == 11
     assert s["warnings"] == 1
-    assert s["errors"] == 2  # closed_with_nonzero_shares + open_summary_no_open_buys (timeout)
-    assert s["passed"] == 9
+    assert s["errors"] == 2  # lot_closures_empty_trx_id + open_summary_no_open_buys (timeout)
+    assert s["passed"] == 8
     assert s["warnings"] + s["errors"] + s["passed"] == s["total_checks"]
