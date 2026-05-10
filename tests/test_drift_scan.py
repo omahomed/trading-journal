@@ -109,8 +109,9 @@ class FakeCursor:
         # registered SQL verbatim inside `SELECT ... FROM ({sql}) AS v`,
         # so the entire registered SQL appears as a substring of `sql`.
         # Matching the WHOLE registered SQL avoids ambiguity between
-        # checks that share the same opening column projection (e.g.
-        # rule_mismatch vs buy_notes_mismatch).
+        # checks that share the same opening column projection — first-
+        # line/first-column matching would collide for two checks that
+        # both start with `SELECT s.trade_id, s.ticker, p.name AS portfolio`.
         matched = None
         for c in DRIFT_CHECKS:
             if c.sql in sql:
@@ -325,14 +326,29 @@ def stubbed(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_registry_has_eleven_checks():
-    """11 checks live in the registry. (Originally 12; closed_with_nonzero_shares
-    was dropped after investigation showed trades_summary.shares is dual-semantic
-    by design — for CLOSED trades it carries lifetime total_buy_shs, not 0, so
-    the check's premise was invalid. See trade_calc.py:177 for the canonical
-    write semantics.) Guard against accidental drift in the registry size."""
+def test_registry_has_ten_checks():
+    """10 checks live in the registry. Two checks have been dropped after
+    investigation revealed wrong-premise design:
+
+    - closed_with_nonzero_shares (dropped 5/9/26): assumed
+      trades_summary.shares always means 'current remaining', but the
+      column is dual-semantic — for CLOSED trades it carries lifetime
+      total_buy_shs by design. See trade_calc.py:177 for the canonical
+      write semantics.
+    - summary_detail_buy_notes_mismatch (dropped 5/10/26): assumed
+      summary.buy_notes should mirror the earliest BUY's detail.notes,
+      but user clarified these are independent fields with different
+      purposes. summary.buy_notes is independently authored campaign-
+      level commentary (often written at exit as trade reflection);
+      trades_details.notes is per-trade-action context. Treating
+      'they should mirror' as drift produces only false positives
+      (10/10 sample rows from prod were either NULL-vs-empty-string
+      cosmetic noise or legitimate independent commentary).
+
+    Both drops were premise-invalid, not 'temporarily disabled'.
+    Regression guards below assert each stays out of the registry."""
     from api.drift_checks import DRIFT_CHECKS
-    assert len(DRIFT_CHECKS) == 11
+    assert len(DRIFT_CHECKS) == 10
 
 
 def test_registry_check_ids_unique():
@@ -409,6 +425,36 @@ def test_registry_no_closed_with_nonzero_shares_check():
         "closed_with_nonzero_shares re-added to registry — its premise is "
         "invalid given the dual-semantic of trades_summary.shares. See "
         "trade_calc.py:177 and the rationale in this commit's message."
+    )
+
+
+def test_registry_no_buy_notes_mismatch_check():
+    """Regression guard: summary_detail_buy_notes_mismatch was dropped
+    from the registry on 5/10/26 after first prod scan revealed all
+    sample mismatches were one of two false-positive shapes:
+
+      Pattern A (6/10): summary.buy_notes=NULL, detail.notes=''
+        — cosmetic NULL-vs-empty-string discrepancy only
+      Pattern B (4/10): summary.buy_notes had campaign-level
+        commentary ('Switched shares to options', 'breakout', etc.),
+        detail.notes='' — user authored summary notes as independent
+        campaign-level commentary; BUY detail notes weren't authored
+
+    User clarified: notes are user-discretionary, NOT methodology.
+    summary.buy_notes is independently authored campaign-level
+    commentary (often written at exit as trade reflection).
+    trades_details.notes is per-trade-action context. These are
+    different fields with different purposes; treating 'they should
+    mirror' as drift produces only false positives.
+
+    Permanently invalid; not just 'temporarily disabled'. If anyone
+    re-adds it, this test fires."""
+    from api.drift_checks import DRIFT_CHECKS_BY_ID
+    assert "summary_detail_buy_notes_mismatch" not in DRIFT_CHECKS_BY_ID, (
+        "summary_detail_buy_notes_mismatch re-added to registry — its "
+        "premise is invalid. summary.buy_notes and trades_details.notes "
+        "are independent user-discretionary fields, not mirror copies. "
+        "See the commit message rationale and the 5/10 prod-scan findings."
     )
 
 
@@ -492,7 +538,7 @@ def test_drift_scan_accepts_founder(stubbed):
     body = r.json()
     assert "checks" in body
     assert "summary" in body
-    assert body["summary"]["total_checks"] == 11
+    assert body["summary"]["total_checks"] == 10
 
 
 # ---------------------------------------------------------------------------
@@ -501,14 +547,14 @@ def test_drift_scan_accepts_founder(stubbed):
 
 
 def test_drift_scan_clean_state_passes_all(stubbed):
-    """Empty fixture → all 11 checks report 0 violations and summary
+    """Empty fixture → all 10 checks report 0 violations and summary
     counts add up correctly."""
     _, client = stubbed
     r = client.get("/api/admin/drift-scan", headers=_founder_headers())
     body = r.json()
     assert body["summary"] == {
-        "total_checks": 11,
-        "passed":   11,
+        "total_checks": 10,
+        "passed":   10,
         "warnings": 0,
         "errors":   0,
     }
@@ -544,23 +590,6 @@ def test_check_summary_detail_rule_mismatch(stubbed):
     assert body["checks"][0]["samples"][0]["trade_id"] == "202604-001"
     assert body["summary"]["warnings"] == 1
     assert body["summary"]["passed"] == 0
-
-
-def test_check_summary_detail_buy_notes_mismatch(stubbed):
-    state, client = stubbed
-    _seed(state, "summary_detail_buy_notes_mismatch", 2, [
-        {"trade_id": "202604-001", "ticker": "AVGO", "portfolio": "CanSlim",
-         "summary_buy_notes": "old", "detail_buy_notes": "new"},
-        {"trade_id": "202604-002", "ticker": "META", "portfolio": "CanSlim",
-         "summary_buy_notes": "x", "detail_buy_notes": "y"},
-    ])
-    r = client.get(
-        "/api/admin/drift-scan?check_id=summary_detail_buy_notes_mismatch",
-        headers=_founder_headers(),
-    )
-    body = r.json()
-    assert body["checks"][0]["violation_count"] == 2
-    assert len(body["checks"][0]["samples"]) == 2
 
 
 def test_check_risk_budget_null_or_zero_post_021_is_error_severity(stubbed):
@@ -789,7 +818,7 @@ def test_limit_samples_default_echoed_in_response(stubbed):
 
 def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     """Simulate a statement timeout on one check; assert (a) the other
-    10 still ran and reported, (b) the timed-out check is bucketed as
+    9 still ran and reported, (b) the timed-out check is bucketed as
     'error' regardless of its declared severity, and (c) the response
     surfaces the underlying error message in the check entry."""
     state, client = stubbed
@@ -798,8 +827,8 @@ def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     r = client.get("/api/admin/drift-scan", headers=_founder_headers())
     body = r.json()
 
-    # 11 entries total — none missing.
-    assert len(body["checks"]) == 11
+    # 10 entries total — none missing.
+    assert len(body["checks"]) == 10
 
     # Find the timed-out check.
     failed = next(
@@ -812,14 +841,14 @@ def test_statement_timeout_one_check_does_not_fail_scan(stubbed):
     assert failed["severity"] == "error"
     assert "Check failed to run" in failed["remediation"]
 
-    # Other 10 still passed (no errors injected for them).
+    # Other 9 still passed (no errors injected for them).
     other_passed = sum(
         1 for c in body["checks"]
         if c["check_id"] != "summary_realized_pl_vs_lot_closures_sum"
         and c["violation_count"] == 0
         and c["error"] is None
     )
-    assert other_passed == 10
+    assert other_passed == 9
 
 
 # ---------------------------------------------------------------------------
@@ -848,8 +877,8 @@ def test_summary_buckets_warnings_and_errors_separately(stubbed):
     body = r.json()
 
     s = body["summary"]
-    assert s["total_checks"] == 11
+    assert s["total_checks"] == 10
     assert s["warnings"] == 1
     assert s["errors"] == 2  # lot_closures_empty_trx_id + open_summary_no_open_buys (timeout)
-    assert s["passed"] == 8
+    assert s["passed"] == 7
     assert s["warnings"] + s["errors"] + s["passed"] == s["total_checks"]
