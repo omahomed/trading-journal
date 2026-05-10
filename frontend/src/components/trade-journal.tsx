@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
+import { matchesAnyTradeQuery } from "@/lib/trade-search";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -828,7 +829,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       // Still respect ticker multi-select; everything else is overridden.
       let base = [...allTrades];
       if (selectedTickers.length > 0) {
-        base = base.filter(t => selectedTickers.includes(t.ticker || ""));
+        base = base.filter(t => matchesAnyTradeQuery(t, selectedTickers));
       }
       base.sort((a, b) => activityTs(b) - activityTs(a));
       return base.slice(0, n);
@@ -840,9 +841,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       result = result.filter(t => (t.status || "").toUpperCase() === statusFilter.toUpperCase());
     }
 
-    // Ticker multi-select
+    // Ticker / trade-ID multi-select. Tokens may be equity tickers, option
+    // underlyings (so "DOCN" matches DOCN equity AND every "DOCN ..." option),
+    // exact trade IDs ("202605-013"), or month-prefix trade-ID queries
+    // ("202605"). See lib/trade-search.ts for the full predicate.
     if (selectedTickers.length > 0) {
-      result = result.filter(t => selectedTickers.includes(t.ticker || ""));
+      result = result.filter(t => matchesAnyTradeQuery(t, selectedTickers));
     }
 
     // Date range
