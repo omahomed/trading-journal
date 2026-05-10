@@ -533,7 +533,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
     if (posSizePct > 25) e.push(`Position size ${posSizePct.toFixed(1)}% exceeds 25% max`);
-    if (riskViolation) w.push(`Risk $${riskDollars.toFixed(0)} > Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)}`);
+    if (riskViolation) w.push(`Trade Risk $${riskDollars.toFixed(0)} exceeds Risk Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)} to stay within Risk Budget.`);
     setErrors(e); setWarnings(w);
     return e.length === 0;
   };
@@ -1112,9 +1112,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
                         <span className="font-semibold">Rule check</span>
                         <br />
                         {riskViolation
-                          ? `Risk $${riskDollars.toFixed(0)} > Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)}`
+                          ? `Trade Risk $${riskDollars.toFixed(0)} exceeds Risk Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)} to stay within Risk Budget.`
                           : withinBudget
-                            ? `Risk $${riskDollars.toFixed(0)} within budget $${riskBudget.toFixed(0)} ✓`
+                            ? `Trade Risk $${riskDollars.toFixed(0)} within Risk Budget $${riskBudget.toFixed(0)} ✓`
                             : "Enter stop loss to validate"
                         }
                       </div>

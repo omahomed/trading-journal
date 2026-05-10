@@ -41,7 +41,6 @@ from slowapi.util import get_remote_address
 import db_layer as db
 import nlv_service
 from trade_calc import (
-    calc_risk_budget,
     compute_lifo_summary,
     compute_trade_risk,
     is_option_ticker,
