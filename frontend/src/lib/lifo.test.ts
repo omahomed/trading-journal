@@ -179,6 +179,61 @@ describe("runLifoEngine", () => {
     });
   });
 
+  describe("option lots (multiplier > 1)", () => {
+    it("no closures → projectedPl = -cost (premium paid)", () => {
+      const result = runLifoEngine(
+        [tx({ action: "BUY", date: "2026-01-10", shares: 5, amount: 2.0 })],
+        2.0,
+        5,
+        100,
+      );
+      // 5 × (0 − 2) × 100 = −1000
+      expect(result.projectedPl).toBe(-1000);
+      expect(result.realizedBank).toBe(0);
+    });
+
+    it("full close at profit → projectedPl = realizedBank (× multiplier)", () => {
+      const result = runLifoEngine(
+        [
+          tx({ action: "BUY",  date: "2026-01-10", shares: 5, amount: 2.0 }),
+          tx({ action: "SELL", date: "2026-01-20", shares: 5, amount: 3.0 }),
+        ],
+        2.0,
+        5,
+        100,
+      );
+      // Inventory empty → inventoryProjPl=0; realized = (3-2)*5*100 = 500
+      expect(result.realizedBank).toBe(500);
+      expect(result.projectedPl).toBe(500);
+    });
+
+    it("partial close → projectedPl moves toward zero (realized offsets open-cost)", () => {
+      const result = runLifoEngine(
+        [
+          tx({ action: "BUY",  date: "2026-01-10", shares: 10, amount: 2.0 }),
+          tx({ action: "SELL", date: "2026-01-20", shares: 4,  amount: 3.0 }),
+        ],
+        2.0,
+        10,
+        100,
+      );
+      // Remaining 6 × (0-2) × 100 = -1200; realized (3-2)*4*100 = 400
+      // projectedPl = -1200 + 400 = -800
+      expect(result.realizedBank).toBe(400);
+      expect(result.projectedPl).toBe(-800);
+    });
+
+    it("stock path unaffected when multiplier defaults to 1", () => {
+      const result = runLifoEngine(
+        [tx({ action: "BUY", date: "2026-01-10", shares: 100, amount: 50, stop_loss: 48 })],
+        50,
+        100,
+      );
+      // Regression: same expected projectedPl as the explicit stock test below.
+      expect(result.projectedPl).toBe(-200);
+    });
+  });
+
   describe("projectedPl (floor)", () => {
     it("is the sum of (stop - entry) across open lots plus realizedBank", () => {
       const result = runLifoEngine(

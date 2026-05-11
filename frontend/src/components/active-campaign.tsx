@@ -118,8 +118,8 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
 //   8 Avg Entry    ↔ Entry
 //   9 Avg Stop     ↔ Current Price (inline-editable)
 //  10 Current Value↔ Value
-//  11 Current Risk $ ↔ Cost
-//  12 Current Risk % ↔ Cost %
+//  11 Current Risk $ ↔ Current Risk $
+//  12 Current Risk % ↔ Current Risk %
 //  13 Overall P&L    ↔ Overall P&L
 //  14 Trade Risk $   ↔ Trade Risk $  (both tables — historical risk_budget)
 // Keep the cell counts in lock-step with the body render below — header
@@ -135,8 +135,8 @@ const OPTION_COLS: { key: string; label: string; align: "left" | "center" | "rig
   { key: "avg_entry",     label: "Entry",         align: "right" },
   { key: "current_price", label: "Current Price", align: "right" },
   { key: "current_value", label: "Value",         align: "right" },
-  { key: "total_cost",    label: "Cost",          align: "right" },
-  { key: "cost_pct",      label: "Cost %",        align: "right" },
+  { key: "signed_risk",   label: "Current Risk $", align: "right" },
+  { key: "risk_pct",      label: "Current Risk %", align: "right" },
   { key: "overall_pl",    label: "Overall P&L",   align: "right" },
   { key: "risk_budget",   label: "Trade Risk $",  align: "right" },
 ];
@@ -582,12 +582,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const equityPlPct = equityCostSum > 0 ? (equityPlSum / equityCostSum) * 100 : 0;
   const optionsPlPct = optionsCostSum > 0 ? (optionsPlSum / optionsCostSum) * 100 : 0;
 
-  // Initial Risk + Open Risk (Heat) — equity-only sums to stay consistent
-  // with the Risk Monitor's scope. Initial Risk is the sum of per-trade
-  // risk_budget logged at trade open. Open Risk is current heat: distance
-  // from live price to safe-stop, times shares, times multiplier.
-  const initialRiskTotal = equities.reduce((sum, p) => sum + (p.risk_budget || 0), 0);
-  const initialRiskPct = equity > 0 ? (initialRiskTotal / equity) * 100 : 0;
+  // Capital at Risk + Open Risk (Heat).
+  // Capital at Risk (Group 7-5): currently-at-risk capital across BOTH
+  // equities and options, floored at zero per position. Sums max(0, -projected_pl)
+  // — projected_pl is the LIFO floor (open-to-stop on stocks, premium-paid
+  // on options + realized bank), so its signed negation is the live
+  // exposure dollars. Cross-instrument because options now report a real
+  // Current Risk $ post Group 7-5.
+  // Open Risk (Heat) — equity-only, current heat: distance from live
+  // price to safe-stop, times shares, times multiplier.
+  const capitalAtRiskTotal = [...equities, ...options].reduce(
+    (sum, p) => sum + Math.max(0, -p.projected_pl),
+    0,
+  );
+  const capitalAtRiskPct = equity > 0 ? (capitalAtRiskTotal / equity) * 100 : 0;
   const openRiskTotal = equities.reduce((sum, p) => {
     const safeStop = p.avg_stop > 0 ? p.avg_stop : p.avg_entry;
     return sum + (p.current_price - safeStop) * p.shares * p.multiplier;
@@ -618,9 +626,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
         : "linear-gradient(135deg, #f97316, #fb923c)",
     },
     {
-      label: "INITIAL RISK",
-      value: formatCurrency(initialRiskTotal),
-      sub: `${initialRiskPct.toFixed(2)}% of NLV`,
+      label: "CAPITAL AT RISK",
+      value: formatCurrency(capitalAtRiskTotal),
+      sub: `${capitalAtRiskPct.toFixed(2)}% of NLV`,
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
     {
@@ -1000,6 +1008,21 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     ? p.expiration.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit", timeZone: "UTC" })
                     : "—";
 
+                  // Current Risk $ / % cells — mirror the equity render at
+                  // lines ~810-821. projected_pl is now option-aware (Group
+                  // 7-5: lifo treats option stops as 0, so projected_pl =
+                  // -cost on a fresh open and moves toward zero/positive as
+                  // partial closes bank profits). Divergence flag is
+                  // computed inline against |projected_pl| since
+                  // risk_dollars is intentionally kept open-only for
+                  // equity-row Risk Monitor semantics (audit §D).
+                  const optRiskColor = p.projected_pl > 0 ? "#08a86b" : p.projected_pl < 0 ? "#e5484d" : "var(--ink-3)";
+                  const optRiskDivergent = p.risk_budget > 0 && Math.max(0, -p.projected_pl) > (p.risk_budget + 5);
+                  const optRiskCellBg = optRiskDivergent
+                    ? "color-mix(in oklab, #f59f00 12%, var(--surface))"
+                    : undefined;
+                  const optRiskTooltip = `Trade Risk $: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))}`;
+
                   return (
                     <tr key={p.trade_id} className="transition-colors"
                         style={{ borderBottom: i < sortedOptions.length - 1 ? "1px solid var(--border)" : "none" }}
@@ -1094,13 +1117,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
                         {formatCurrency(p.current_value)}
                       </td>
-                      {/* Cost (pos 11) */}
-                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        {formatCurrency(p.total_cost)}
+                      {/* Current Risk $ (pos 11) — signed projected_pl, multiplier-aware via lifo (Group 7-5). */}
+                      <td className="px-2.5 py-2.5 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: optRiskColor, fontWeight: 600, background: optRiskCellBg }}
+                          title={optRiskTooltip}>
+                        {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
                       </td>
-                      {/* Cost % (pos 12) — total_cost as a share of NLV. equity may be 0 in pre-load states; guard the divide. */}
-                      <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
-                        {equity > 0 ? `${(p.total_cost / equity * 100).toFixed(2)}%` : "—"}
+                      {/* Current Risk % (pos 12) — projected_pct = projected_pl / NLV × 100. Same coloring as pos 11. */}
+                      <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: optRiskColor }}>
+                        {p.projected_pct >= 0 ? "+" : ""}{p.projected_pct.toFixed(2)}%
                       </td>
                       {/* Overall P&L (pos 13) — same red/green coloring as the equity column. */}
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: p.overall_pl >= 0 ? "#08a86b" : "#e5484d" }}>
