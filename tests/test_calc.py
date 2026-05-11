@@ -452,15 +452,51 @@ class TestComputeTradeRisk:
         ])
         assert compute_trade_risk(df, multiplier=1.0) == 250.0
 
-    def test_option_multiplier_scales_result(self) -> None:
-        """multiplier=100 (equity option contract) scales the dollar result.
+    def test_option_with_stop_returns_cost_under_policy_i(self) -> None:
+        """Group 7-3 policy: for long options, Trade Risk $ = premium paid
+        regardless of any stop value. Stops on options no longer drive the
+        math (the prior "50% stop" practice is discontinued).
 
-        1 contract × (5.00 − 3.00) × 100 = $200 notional.
+        Replaces the pre-Group-7-3 test that asserted the distance-to-stop
+        formula on options. 1 contract × $5.00 premium × 100 = $500. The
+        $3.00 stop is ignored.
         """
         df = self._txns([
             {"date": "2026-01-01", "action": "BUY", "shares": 1, "amount": 5.0, "stop_loss": 3.0},
         ])
-        assert compute_trade_risk(df, multiplier=100.0) == 200.0
+        assert compute_trade_risk(df, multiplier=100.0) == 500.0
+
+    def test_option_no_stop_returns_cost(self) -> None:
+        """The common case: option BUY with no stop set. Trade Risk $ =
+        premium = 1 × 5 × 100 = $500. Pre-Group-7-3 the formula returned
+        0 here (stop=0 fell out of the distance-to-stop guard), which
+        Migration 021 then masked by backfilling sizing_mode × NLV — the
+        bug Group 7-3 corrects at the formula level."""
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 1, "amount": 5.0, "stop_loss": 0.0},
+        ])
+        assert compute_trade_risk(df, multiplier=100.0) == 500.0
+
+    def test_option_with_stop_above_entry_returns_cost(self) -> None:
+        """Defensive: a stop above entry (impossible in practice but
+        harmless data) does not crash the formula. Options ignore stops
+        entirely under Policy I, so the answer is still cost.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 1, "amount": 5.0, "stop_loss": 10.0},
+        ])
+        assert compute_trade_risk(df, multiplier=100.0) == 500.0
+
+    def test_option_multi_lot_returns_total_cost(self) -> None:
+        """Scale-in on an option campaign: Trade Risk $ = Σ over open lots
+        of qty × entry × 100. Two BUYs of 1 contract at $5 and 2 contracts
+        at $6 → 1×5×100 + 2×6×100 = 500 + 1200 = $1700.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY", "shares": 1, "amount": 5.0, "stop_loss": 0.0},
+            {"date": "2026-01-03", "action": "BUY", "shares": 2, "amount": 6.0, "stop_loss": 0.0},
+        ])
+        assert compute_trade_risk(df, multiplier=100.0) == 1700.0
 
     def test_empty_dataframe_returns_zero(self) -> None:
         df = pd.DataFrame(columns=["date", "action", "shares", "amount", "stop_loss"])
