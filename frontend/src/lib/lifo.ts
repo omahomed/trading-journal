@@ -20,6 +20,7 @@ export function runLifoEngine(
   tradeDetails: TradeDetail[],
   summaryEntry: number,
   summaryShares: number,
+  multiplier: number = 1,
 ): LifoResult {
   if (tradeDetails.length === 0) {
     return { risk: 0, avgStop: summaryEntry, avgCost: summaryEntry, projectedPl: 0, realizedBank: 0 };
@@ -64,7 +65,10 @@ export function runLifoEngine(
         if (last.qty < 0.00001) inventory.pop();
       }
       const revenue = soldQty * sellPrice;
-      realizedBank += revenue - costBasis;
+      // Multiplier-aware: for options (multiplier=100), realized P&L per
+      // dollar of price-difference is 100× the share-count value. For
+      // stocks (multiplier=1) this is a no-op.
+      realizedBank += (revenue - costBasis) * multiplier;
     }
   }
 
@@ -73,13 +77,19 @@ export function runLifoEngine(
   let weightedCost = 0;
   let weightedStop = 0;
   let inventoryProjPl = 0;
+  const isOption = multiplier > 1;
 
   for (const item of inventory) {
     if (item.qty > 0) {
       totalOpenShares += item.qty;
       weightedCost += item.qty * item.price;
       weightedStop += item.qty * item.stop;
-      inventoryProjPl += (item.stop - item.price) * item.qty;
+      // Option lots: stops are decorative (Group 7-3 policy). Worst-case
+      // floor on a long option is the premium paid — treat stop as 0
+      // regardless of any stored value, then scale by contract multiplier.
+      // Stocks: original (stop - price) × qty formula, multiplier=1 no-op.
+      const effectiveStop = isOption ? 0 : item.stop;
+      inventoryProjPl += (effectiveStop - item.price) * item.qty * multiplier;
     }
   }
 

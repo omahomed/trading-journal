@@ -66,7 +66,7 @@ export function computeEnrichedPositions(
 
     const shares = trade.shares || 0;
     const summaryEntry = trade.avg_entry || 0;
-    const lifo = runLifoEngine(tradeDetails, summaryEntry, shares);
+    const lifo = runLifoEngine(tradeDetails, summaryEntry, shares, multiplier);
 
     const firstDate = tradeDetails.length > 0
       ? new Date(tradeDetails[0].date)
