@@ -78,18 +78,27 @@ def calc_risk_budget(
 def compute_trade_risk(
     txns: pd.DataFrame, multiplier: float = 1.0
 ) -> float:
-    """Holistic Trade Risk $ for a campaign — sum of open-lot stop exposure.
+    """Holistic Trade Risk $ for a campaign — sum of open-lot exposure.
 
-    Formula (per-lot, applied to currently-open LIFO inventory only):
+    Instrument-aware. The formula depends on `multiplier`:
 
+      STOCKS (multiplier == 1):
         Σ over open BUY-lot remainders of
           lot_shares × max(0, lot_entry − lot_stop) × multiplier
+        Lots with no stop contribute 0 (legacy stock "unsized" convention).
+
+      OPTIONS (multiplier > 1):
+        Σ over open BUY-lot remainders of
+          lot_shares × lot_entry × multiplier
+        i.e. premium paid (cost). Stops on options do NOT drive Trade Risk $
+        math — Group 7-3 policy: max loss on a long option is the premium,
+        regardless of whether a stop was set. Decorative "50%" stops from
+        the prior practice are ignored here.
 
     Walks the same LIFO inventory algorithm as compute_lifo_summary, then
-    sums (lot.price − lot.stop) × lot.qty over what remains. Floors per-lot
-    at 0 so free-roll lots (stop ≥ entry) contribute nothing. Returns 0
-    when no inventory remains (fully closed campaign), when the txns
-    DataFrame is empty, or when every remaining lot is free-roll.
+    applies the per-instrument rule above to whatever remains. Returns 0
+    when no inventory remains (fully closed campaign) or when the txns
+    DataFrame is empty.
 
     Independent of any prior stored value — every call reads only the
     current detail rows and produces the answer fresh. This is the property
@@ -98,9 +107,7 @@ def compute_trade_risk(
 
     Expects a DataFrame with columns: date, action (BUY/SELL), shares,
     amount (price per share), stop_loss (per-row stop). Column names must
-    already be normalized (snake_case). Lots with missing/zero stop_loss
-    contribute 0 (treated as free-roll, matching calc_risk_budget's
-    "no stop signal" convention).
+    already be normalized (snake_case).
 
     Multiplier scales the result (1 for stocks, 100 for equity options).
     """
@@ -133,8 +140,18 @@ def compute_trade_risk(
 
     total_risk = 0.0
     for lot in inventory:
-        if lot["shares"] > 0 and lot["stop"] > 0 and lot["price"] > lot["stop"]:
+        if lot["shares"] <= 0:
+            continue
+        if multiplier > 1:
+            # Option-like instrument: Trade Risk $ = premium paid (cost).
+            # Stops on options do not drive Trade Risk $ math (Group 7-3
+            # policy: max loss on a long option is the premium).
+            total_risk += lot["shares"] * lot["price"] * multiplier
+        elif lot["stop"] > 0 and lot["price"] > lot["stop"]:
+            # Stock with a real stop: distance-to-stop formula, floored at 0.
             total_risk += lot["shares"] * (lot["price"] - lot["stop"]) * multiplier
+        # else: stock with no stop set → contributes 0 (legacy "unsized"
+        # convention; preserved for backward compatibility with calc_risk_budget).
 
     return round(total_risk, 2)
 
