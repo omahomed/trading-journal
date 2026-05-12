@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
@@ -20,6 +20,13 @@ import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
+
+// Minimum gap between non-forced loadData calls. The visibility/focus
+// listener fires on tab refocus AND on certain in-page focus shifts
+// (e.g. clicking the Focus Mode sidebar toggle); the throttle keeps
+// those events from triggering a 7-endpoint refetch storm. Forced
+// calls (mount, portfolio switch) bypass it.
+const STALE_THROTTLE_MS = 5_000;
 
 // KPI tile renders one or two subtext lines. `extraSub` is an optional
 // secondary line rendered in smaller, dimmer type below the main `sub`
@@ -70,33 +77,48 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [showEvents, setShowEvents] = useState(true);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
+  // Throttle + in-flight guards so the visibility/focus listener below
+  // can't fire a 7-endpoint refetch storm on every window-focus event.
+  // Forced calls (mount, portfolio switch) bypass the stale window.
+  const lastFetchAtRef = useRef<number>(0);
+  const inFlightRef = useRef<boolean>(false);
+
   const openCount = openTrades.length;
 
-  const loadData = useCallback(async () => {
-    const activeId = activePortfolio?.id;
-    const [lat, hist, open, closed, ev, dash, recent] = await Promise.all([
-      api.journalLatest().catch(() => null),
-      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesOpen().catch(() => []),
-      api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
-      api.events().catch(() => []),
-      activeId != null ? api.dashboardMetrics(activeId).catch(() => null) : Promise.resolve(null),
-      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
-    ]);
-    // Guard: backend can return {error: "..."} at HTTP 200 when something
-    // goes wrong server-side. Don't let that poison the render.
-    const safeMetrics = (dash && typeof dash === "object" && !("error" in dash))
-      ? (dash as DashboardMetrics)
-      : null;
-    setMetrics(safeMetrics);
-    setLatest(lat as JournalEntry);
-    setHistory(hist as JournalHistoryPoint[]);
-    const openArr = (open as TradePosition[]) || [];
-    setOpenTrades(openArr);
-    setClosedTrades(Array.isArray(closed) ? closed : []);
-    setAllDetails((recent && (recent as any).details) || []);
-    setEvents(Array.isArray(ev) ? ev : []);
-    setLoading(false);
+  const loadData = useCallback(async (opts?: { force?: boolean }) => {
+    const force = !!opts?.force;
+    if (!force && Date.now() - lastFetchAtRef.current < STALE_THROTTLE_MS) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const activeId = activePortfolio?.id;
+      const [lat, hist, open, closed, ev, dash, recent] = await Promise.all([
+        api.journalLatest().catch(() => null),
+        api.journalHistory(getActivePortfolio(), 0).catch(() => []),
+        api.tradesOpen().catch(() => []),
+        api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
+        api.events().catch(() => []),
+        activeId != null ? api.dashboardMetrics(activeId).catch(() => null) : Promise.resolve(null),
+        api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
+      ]);
+      // Guard: backend can return {error: "..."} at HTTP 200 when something
+      // goes wrong server-side. Don't let that poison the render.
+      const safeMetrics = (dash && typeof dash === "object" && !("error" in dash))
+        ? (dash as DashboardMetrics)
+        : null;
+      setMetrics(safeMetrics);
+      setLatest(lat as JournalEntry);
+      setHistory(hist as JournalHistoryPoint[]);
+      const openArr = (open as TradePosition[]) || [];
+      setOpenTrades(openArr);
+      setClosedTrades(Array.isArray(closed) ? closed : []);
+      setAllDetails((recent && (recent as any).details) || []);
+      setEvents(Array.isArray(ev) ? ev : []);
+      setLoading(false);
+      lastFetchAtRef.current = Date.now();
+    } finally {
+      inFlightRef.current = false;
+    }
   }, []);
 
   // Live prices for open trades — drives overall_pl on the Last 10 panel.
@@ -116,9 +138,12 @@ export function Dashboard({ navColor }: { navColor: string }) {
     return Object.fromEntries(enriched.map(p => [p.trade_id, p])) as Record<string, ReturnType<typeof computeEnrichedPositions>[number]>;
   }, [openTrades, allDetails, livePrices]);
 
-  useEffect(() => { loadData(); }, [loadData, activePortfolio?.id]);
+  useEffect(() => { loadData({ force: true }); }, [loadData, activePortfolio?.id]);
 
-  // Auto-refresh when tab regains focus
+  // Auto-refresh when tab regains focus. Unforced — respects the
+  // STALE_THROTTLE_MS window so a rapid sequence of focus events
+  // (Focus Mode toggle clicks, alt-tab, etc.) coalesces into at most
+  // one refetch per 5-second window.
   useEffect(() => {
     const onFocus = () => { if (!document.hidden) loadData(); };
     document.addEventListener("visibilitychange", onFocus);
