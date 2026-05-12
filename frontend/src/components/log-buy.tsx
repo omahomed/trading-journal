@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { StrategyChip } from "./strategy-chip";
+import { formatCurrency } from "@/lib/format";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -533,7 +534,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
     if (posSizePct > 25) e.push(`Position size ${posSizePct.toFixed(1)}% exceeds 25% max`);
-    if (riskViolation) w.push(`Trade Risk $${riskDollars.toFixed(0)} exceeds Risk Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)} to stay within Risk Budget.`);
+    if (riskViolation) w.push(`Trade Risk ${formatCurrency(riskDollars, { decimals: 0 })} exceeds Risk Budget ${formatCurrency(riskBudget, { decimals: 0 })}. Move stop to ${formatCurrency(rbmStop)} to stay within Risk Budget.`);
     setErrors(e); setWarnings(w);
     return e.length === 0;
   };
@@ -671,7 +672,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 />
                 {selectedCamp && (
                   <div className="mt-2 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", color: "var(--ink-3)" }}>
-                    Holding: {selectedCamp.shares} shs @ ${parseFloat(String(selectedCamp.avg_entry || 0)).toFixed(2)}
+                    Holding: {selectedCamp.shares} shs @ {formatCurrency(parseFloat(String(selectedCamp.avg_entry || 0)))}
                   </div>
                 )}
               </Field>
@@ -720,7 +721,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
             </div>
             {isOption && sharesNum > 0 && priceNum > 0 && (
               <div className="text-[11px] -mt-2" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                {sharesNum} × ${priceNum.toFixed(2)} × {multiplier} = ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} premium
+                {sharesNum} × {formatCurrency(priceNum)} × {multiplier} = {formatCurrency(totalCost)} premium
               </div>
             )}
 
@@ -851,7 +852,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg Entry</div>
                       <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                        ${scaleIn.avgEntry.toFixed(2)}
+                        {formatCurrency(scaleIn.avgEntry)}
                       </div>
                     </div>
                   </div>
@@ -859,7 +860,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Live Price</div>
                       <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                        ${scaleIn.livePrice.toFixed(2)}
+                        {formatCurrency(scaleIn.livePrice)}
                       </div>
                     </div>
                     <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
@@ -870,7 +871,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     </div>
                   </div>
                   <div className="mt-2.5 text-[12px] font-medium px-3 py-1.5 rounded-[8px] privacy-mask" style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
-                    Position: {scaleIn.currentPosPct.toFixed(1)}% of NLV · ${scaleIn.currentValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    Position: {scaleIn.currentPosPct.toFixed(1)}% of NLV · {formatCurrency(scaleIn.currentValue, { decimals: 0 })}
                   </div>
                 </div>
 
@@ -889,7 +890,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       {scaleIn.pyramidReady ? "Pyramid Ready" : "Not Ready"}
                     </div>
                     <div style={{ color: "var(--ink-3)" }}>
-                      Last lot @ ${scaleIn.lastLotPrice.toFixed(2)} → {scaleIn.lastLotReturn >= 0 ? "+" : ""}{scaleIn.lastLotReturn.toFixed(2)}%
+                      Last lot @ {formatCurrency(scaleIn.lastLotPrice)} → {scaleIn.lastLotReturn >= 0 ? "+" : ""}{scaleIn.lastLotReturn.toFixed(2)}%
                       {!scaleIn.pyramidReady && " (need +5%)"}
                     </div>
                   </div>
@@ -899,7 +900,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
                         {scaleIn.maxPyramidShares} shs
                         <span className="text-[12px] font-normal ml-2 privacy-mask" style={{ color: "var(--ink-4)" }}>
-                          ~${(scaleIn.maxPyramidShares * scaleIn.livePrice).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          ~{formatCurrency(scaleIn.maxPyramidShares * scaleIn.livePrice, { decimals: 0 })}
                         </span>
                       </div>
                     </div>
@@ -924,7 +925,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                         <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                           <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>New Avg Cost</div>
                           <div className="text-[18px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                            ${scaleIn.newAvgCost.toFixed(2)}
+                            {formatCurrency(scaleIn.newAvgCost)}
                           </div>
                         </div>
                       </div>
@@ -934,7 +935,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                              color: scaleIn.newPosPct > 25 ? "#dc2626" : scaleIn.newPosPct > 15 ? "#d97706" : "#16a34a",
                              border: `1px solid ${scaleIn.newPosPct > 25 ? "color-mix(in oklab, #e5484d 30%, var(--border))" : scaleIn.newPosPct > 15 ? "color-mix(in oklab, #f59f00 30%, var(--border))" : "color-mix(in oklab, #08a86b 30%, var(--border))"}`,
                            }}>
-                        New position: {scaleIn.newPosPct.toFixed(1)}% of NLV · ${scaleIn.newValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        New position: {scaleIn.newPosPct.toFixed(1)}% of NLV · {formatCurrency(scaleIn.newValue, { decimals: 0 })}
                       </div>
                     </div>
 
@@ -956,7 +957,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     }}>
                       <div className="font-semibold">Risk-Free Add</div>
                       <div style={{ color: "var(--ink-3)" }}>{scaleIn.stopRule}</div>
-                      <div className="font-semibold mt-1">Min stop: ${scaleIn.minStop.toFixed(2)}</div>
+                      <div className="font-semibold mt-1">Min stop: {formatCurrency(scaleIn.minStop)}</div>
                     </div>
                   )}
 
@@ -964,7 +965,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Combined Stop</div>
                       <div className="text-[18px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                        {scaleIn.combinedStop > 0 ? `$${scaleIn.combinedStop.toFixed(2)}` : "—"}
+                        {scaleIn.combinedStop > 0 ? formatCurrency(scaleIn.combinedStop) : "—"}
                       </div>
                     </div>
                     <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
@@ -973,7 +974,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                         fontFamily: "var(--font-jetbrains), monospace",
                         color: scaleIn.riskFreeAdd ? "#16a34a" : scaleIn.combinedRiskPct > 1 ? "#e5484d" : "var(--ink)",
                       }}>
-                        {scaleIn.riskFreeAdd ? "$0" : scaleIn.combinedRisk > 0 ? `$${scaleIn.combinedRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                        {scaleIn.riskFreeAdd ? "$0" : scaleIn.combinedRisk > 0 ? formatCurrency(scaleIn.combinedRisk, { decimals: 0 }) : "—"}
                       </div>
                       {!scaleIn.riskFreeAdd && scaleIn.combinedRisk > 0 && (
                         <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
@@ -1052,7 +1053,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 <Field label="Account Equity">
                   <div className="h-[42px] px-3.5 rounded-[10px] flex items-center text-[15px] font-semibold privacy-mask"
                        style={{ background: "var(--bg)", border: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                    ${equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {formatCurrency(equity, { decimals: 0 })}
                   </div>
                 </Field>
 
@@ -1061,13 +1062,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                     <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Risk $</div>
                     <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                      ${riskBudget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                      {formatCurrency(riskBudget, { decimals: 0 })}
                     </div>
                   </div>
                   <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                     <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Stop Dist</div>
                     <div className="text-[20px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                      {stopDist > 0 ? `$${stopDist.toFixed(2)}` : "—"}
+                      {stopDist > 0 ? formatCurrency(stopDist) : "—"}
                     </div>
                   </div>
                 </div>
@@ -1083,7 +1084,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                     <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Cost</div>
                     <div className="text-[20px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                      {recommendedCost > 0 ? `$${recommendedCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : totalCost > 0 ? `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                      {recommendedCost > 0 ? formatCurrency(recommendedCost, { decimals: 0 }) : totalCost > 0 ? formatCurrency(totalCost, { decimals: 0 }) : "—"}
                     </div>
                   </div>
                 </div>
@@ -1112,9 +1113,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
                         <span className="font-semibold">Rule check</span>
                         <br />
                         {riskViolation
-                          ? `Trade Risk $${riskDollars.toFixed(0)} exceeds Risk Budget $${riskBudget.toFixed(0)}. Move stop to $${rbmStop.toFixed(2)} to stay within Risk Budget.`
+                          ? `Trade Risk ${formatCurrency(riskDollars, { decimals: 0 })} exceeds Risk Budget ${formatCurrency(riskBudget, { decimals: 0 })}. Move stop to ${formatCurrency(rbmStop)} to stay within Risk Budget.`
                           : withinBudget
-                            ? `Trade Risk $${riskDollars.toFixed(0)} within Risk Budget $${riskBudget.toFixed(0)} ✓`
+                            ? `Trade Risk ${formatCurrency(riskDollars, { decimals: 0 })} within Risk Budget ${formatCurrency(riskBudget, { decimals: 0 })} ✓`
                             : "Enter stop loss to validate"
                         }
                       </div>

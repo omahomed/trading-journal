@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { api, getActivePortfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { formatCurrency } from "@/lib/format";
 
 // IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
 // "request error (1001) — statement could not be generated" intermittently,
@@ -395,8 +396,8 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
             {portNlvN > 0 && (
               <div className="grid grid-cols-2 gap-2 mt-1">
                 {[
-                  { k: "Prev NLV", v: `$${portPrev.toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
-                  { k: "Daily $", v: `${portDailyChg >= 0 ? "+" : ""}$${portDailyChg.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, c: portDailyChg >= 0 ? "#08a86b" : "#e5484d" },
+                  { k: "Prev NLV", v: formatCurrency(portPrev, { decimals: 0 }) },
+                  { k: "Daily $", v: formatCurrency(portDailyChg, { showSign: true, decimals: 0 }), c: portDailyChg >= 0 ? "#08a86b" : "#e5484d" },
                   { k: "Daily %", v: `${portDailyPct >= 0 ? "+" : ""}${portDailyPct.toFixed(2)}%`, c: portDailyPct >= 0 ? "#08a86b" : "#e5484d" },
                   { k: "% Invested", v: `${portInvPct.toFixed(1)}%` },
                 ].map(s => (

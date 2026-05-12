@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { api, getActivePortfolio, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
  *  Supports both two-line form:
@@ -366,12 +367,12 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
           <div className="grid grid-cols-4 gap-3 mb-5">
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
-              <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${(day.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+              <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(day.end_nlv || 0)}</div>
             </div>
             <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
               <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Daily P&L</div>
               <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(day.daily_pct_change || 0) }}>
-                ${(day.daily_dollar_change || 0) >= 0 ? "+" : ""}{(day.daily_dollar_change || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {formatCurrency(day.daily_dollar_change || 0, { showSign: true })}
               </div>
               <div className="text-[11px] mt-0.5" style={{ color: pctColor(day.daily_pct_change || 0) }}>
                 {(day.daily_pct_change || 0) >= 0 ? "+" : ""}{(day.daily_pct_change || 0).toFixed(2)}%
@@ -449,7 +450,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
                   <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayBuys.length - 1 ? "1px solid var(--border)" : "none" }}>
                     <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{b.ticker}</span>
                     <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-                      {b.shares} shs @ ${parseFloat(String(b.amount || 0)).toFixed(2)} · {b.rule}
+                      {b.shares} shs @ {formatCurrency(parseFloat(String(b.amount || 0)))} · {b.rule}
                     </span>
                   </div>
                 )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No new positions opened.</div>}
@@ -466,7 +467,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
                     <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayClosed.length - 1 ? "1px solid var(--border)" : "none" }}>
                       <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
                       <span className="text-[11px]" style={{ color: pctColor(pl) }}>
-                        P&L: ${pl >= 0 ? "+" : ""}{pl.toLocaleString(undefined, { maximumFractionDigits: 2 })} ({ret >= 0 ? "+" : ""}{ret.toFixed(2)}%) · {s.sell_rule || ""}
+                        P&L: {formatCurrency(pl, { showSign: true })} ({ret >= 0 ? "+" : ""}{ret.toFixed(2)}%) · {s.sell_rule || ""}
                       </span>
                     </div>
                   );
@@ -474,7 +475,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
                   <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < daySells.length - 1 ? "1px solid var(--border)" : "none" }}>
                     <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
                     <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-                      Sold {s.shares} shs @ ${parseFloat(String(s.amount || 0)).toFixed(2)}
+                      Sold {s.shares} shs @ {formatCurrency(parseFloat(String(s.amount || 0)))}
                     </span>
                   </div>
                 )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}

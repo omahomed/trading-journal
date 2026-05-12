@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 const SELL_RULES = [
   "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
@@ -191,7 +192,7 @@ export function LogSell({ navColor }: { navColor: string }) {
           }
         }
 
-        const plStr = result.realized_pl != null ? ` | P&L: $${result.realized_pl.toFixed(2)}` : "";
+        const plStr = result.realized_pl != null ? ` | P&L: ${formatCurrency(result.realized_pl)}` : "";
         const closedStr = result.is_closed ? " (CLOSED)" : ` (${result.remaining_shares} remaining)`;
         setSubmitResult({ ok: true, msg: `Sold ${result.trx_id || "S1"}: ${shares} shs of ${selected.ticker} @ $${price}${plStr}${closedStr}` });
 
@@ -241,7 +242,7 @@ export function LogSell({ navColor }: { navColor: string }) {
             <span className="text-[13px] font-semibold">Sell Order</span>
           </div>
           <div className="p-5 flex flex-col gap-5">
-            <FormField label="Select Campaign" hint={selected ? `${selected.shares} ${unitLabel.toLowerCase()} @ $${selected.avg_entry?.toFixed(2)} avg` : undefined}>
+            <FormField label="Select Campaign" hint={selected ? `${selected.shares} ${unitLabel.toLowerCase()} @ ${formatCurrency(selected.avg_entry || 0)} avg` : undefined}>
               <select value={selectedTrade} onChange={e => setSelectedTrade(e.target.value)}
                       className="w-full h-[38px] px-3 rounded-[10px] text-[13px] appearance-none" style={inputStyle}>
                 <option value="">Choose an open campaign...</option>
@@ -374,10 +375,10 @@ export function LogSell({ navColor }: { navColor: string }) {
             </div>
             <div className="p-4 flex flex-col gap-3">
               {[
-                { k: "Proceeds", v: `$${proceeds.toLocaleString(undefined, { maximumFractionDigits: 2 })}` },
-                { k: "Avg Entry", v: avgEntry > 0 ? `$${avgEntry.toFixed(2)}` : "—" },
+                { k: "Proceeds", v: formatCurrency(proceeds) },
+                { k: "Avg Entry", v: avgEntry > 0 ? formatCurrency(avgEntry) : "—" },
                 { k: "Return", v: returnPct !== 0 ? `${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(1)}%` : "—", color: returnPct >= 0 ? "#08a86b" : "#e5484d" },
-                { k: "Realized P&L", v: realizedPl !== 0 ? `$${realizedPl >= 0 ? "+" : ""}${realizedPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—", color: realizedPl >= 0 ? "#08a86b" : "#e5484d" },
+                { k: "Realized P&L", v: realizedPl !== 0 ? formatCurrency(realizedPl, { showSign: true, decimals: 0 }) : "—", color: realizedPl >= 0 ? "#08a86b" : "#e5484d" },
                 { k: "Remaining", v: selected ? `${selected.shares - sharesNum} ${unitLabel.toLowerCase()}` : "—" },
               ].map(s => (
                 <div key={s.k} className="flex items-center justify-between">

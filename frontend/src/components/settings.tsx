@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type CashAction, type CashTransaction, type Portfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { formatCurrency } from "@/lib/format";
 
 export function Settings({ navColor }: { navColor: string }) {
   const { portfolios, refetch, loading } = usePortfolio();
@@ -113,11 +114,11 @@ function PortfolioCard({
   const [cashAction, setCashAction] = useState<CashAction | null>(null);
 
   const capitalDisplay = portfolio.starting_capital != null
-    ? `$${portfolio.starting_capital.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+    ? formatCurrency(portfolio.starting_capital, { decimals: 0 })
     : "—";
   const resetDisplay = portfolio.reset_date ?? "—";
   const cashBalance = portfolio.cash_balance ?? 0;
-  const cashDisplay = `$${cashBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const cashDisplay = formatCurrency(cashBalance, { decimals: 0 });
 
   return (
     <div className="rounded-[14px] p-5"
@@ -419,7 +420,7 @@ export function CashActionForm({
             <span className="block mt-1 text-[11px]" style={{ color: "var(--ink-4)" }}>
               System currently shows{" "}
               <span style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                ${cashBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {formatCurrency(cashBalance)}
               </span>
             </span>
           )}
@@ -588,11 +589,10 @@ function CashRowDisplay({
   const badge = sourceBadge(tx.source);
   const dateOnly = (tx.date || "").slice(0, 10);
   const amountAbs = Math.abs(tx.amount);
-  const sign = tx.amount >= 0 ? "+" : "−";
   const amountColor = tx.amount >= 0 ? "#08a86b" : "#e5484d";
 
   async function remove() {
-    if (!window.confirm(`Delete this ${badge.label.toLowerCase()} of $${amountAbs.toLocaleString(undefined, { maximumFractionDigits: 2 })} on ${dateOnly}?`)) return;
+    if (!window.confirm(`Delete this ${badge.label.toLowerCase()} of ${formatCurrency(amountAbs)} on ${dateOnly}?`)) return;
     setBusy(true); setErr(null);
     const res = await api.deleteCashTransaction(portfolioId, tx.id);
     if ("error" in res) {
@@ -616,7 +616,7 @@ function CashRowDisplay({
       <div className="flex-1 min-w-0">
         <div className="text-[12px] privacy-mask"
              style={{ color: amountColor, fontFamily: "var(--font-jetbrains), monospace", fontWeight: 600 }}>
-          {sign}${amountAbs.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          {formatCurrency(tx.amount, { showSign: true, signGlyph: "unicode" })}
         </div>
         {tx.note && (
           <div className="text-[11px] truncate" style={{ color: "var(--ink-4)" }}>{tx.note}</div>
