@@ -34,15 +34,35 @@ export interface FormatCurrencyOptions {
   nullDisplay?: string;
 }
 
-// Module-level mirror updated by DesktopShell's useEffect when the user
-// toggles Focus Mode in the sidebar. Read by formatCurrency to decide
-// whether to substitute "$•••" for the digits. Lives at module scope so
-// formatCurrency stays a pure function — callers don't need to pass
-// context, and non-React consumers (tests, error strings) see the same
-// state without plumbing.
+// Module-level Focus Mode store. setFocusModeActive is the canonical
+// setter — called by DesktopShell's toggle handler and load effect.
+// It notifies subscribers synchronously so React components using
+// useFocusMode() below re-render with the new state.
+//
+// Why a subscribable store, not just a useEffect bridge: in Next.js
+// App Router, a client-component layout (DesktopShell) re-rendering
+// from local state doesn't reliably propagate into its {children}
+// subtree — the pass-through children element reference is stable
+// across the parent's renders, so descendant client components don't
+// re-render. The store + useSyncExternalStore pattern bypasses the
+// tree-walk entirely: any subscribing component re-renders when the
+// store changes, regardless of where it sits in the layout.
 let _focusModeActive = false;
+const _focusModeListeners = new Set<() => void>();
+
 export function setFocusModeActive(on: boolean): void {
+  if (_focusModeActive === on) return;
   _focusModeActive = on;
+  _focusModeListeners.forEach(l => l());
+}
+
+export function subscribeFocusMode(listener: () => void): () => void {
+  _focusModeListeners.add(listener);
+  return () => { _focusModeListeners.delete(listener); };
+}
+
+export function getFocusModeSnapshot(): boolean {
+  return _focusModeActive;
 }
 
 /**
