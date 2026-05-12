@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, Lock } from "lucide-react";
+import { formatCurrency } from "@/lib/format";
 
 /**
  * Phase 1 stub of the mobile Position Sizer screen. Translates
@@ -35,8 +36,6 @@ const MOCK = {
   },
 } as const;
 
-const fmtUsd = (n: number) => "$" + n.toLocaleString("en-US");
-
 export function MobilePositionSizer() {
   return (
     <div className="flex flex-col gap-2.5 pt-2">
@@ -67,13 +66,13 @@ export function MobilePositionSizer() {
 
       {/* 2x2 input grid — Entry / NLV (locked) / Key MA / Buffer */}
       <div className="grid grid-cols-2 gap-2">
-        <FieldCell label="Entry" value={fmtUsd(MOCK.entry)} />
+        <FieldCell label="Entry" value={formatCurrency(MOCK.entry, { decimals: 0 })} />
         <FieldCell
           label="NLV"
           labelIcon={<Lock size={9} strokeWidth={1} className="text-m-text-dim" aria-hidden="true" />}
-          value={fmtUsd(MOCK.nlv)}
+          value={formatCurrency(MOCK.nlv, { decimals: 0 })}
         />
-        <FieldCell label="Key MA" value={fmtUsd(MOCK.keyMa)} />
+        <FieldCell label="Key MA" value={formatCurrency(MOCK.keyMa, { decimals: 0 })} />
         <FieldCell label="Buffer" value={`${MOCK.bufferPct.toFixed(2)}%`} />
       </div>
 
@@ -102,12 +101,12 @@ export function MobilePositionSizer() {
           <span className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text">
             {MOCK.audit.shares}
           </span>
-          <span className="text-[15px] text-m-text-muted">shares · {fmtUsd(MOCK.audit.notional)}</span>
+          <span className="text-[15px] text-m-text-muted">shares · {formatCurrency(MOCK.audit.notional, { decimals: 0 })}</span>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2.5 border-t-[0.5px] border-m-border pt-3">
-          <Stat label="Total risk" value={fmtUsd(MOCK.audit.totalRisk)} tone="down" />
-          <Stat label="ATR stop" value={fmtUsd(MOCK.audit.atrStop)} />
-          <Stat label="2R target" value={fmtUsd(MOCK.audit.target2r)} tone="up" />
+          <Stat label="Total risk" value={formatCurrency(MOCK.audit.totalRisk, { decimals: 0 })} tone="down" />
+          <Stat label="ATR stop" value={formatCurrency(MOCK.audit.atrStop, { decimals: 0 })} />
+          <Stat label="2R target" value={formatCurrency(MOCK.audit.target2r, { decimals: 0 })} tone="up" />
         </div>
       </div>
 
