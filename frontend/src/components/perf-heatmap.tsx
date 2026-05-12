@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type JournalHistoryPoint } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function heatColor(val: number, zMin: number, zMax: number): string {
@@ -260,7 +261,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                 </div>
                 <div className="text-right">
                   <div className="text-[20px] font-extrabold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>
-                    ${pl >= 0 ? "+" : ""}{pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {formatCurrency(pl, { showSign: true, decimals: 0 })}
                   </div>
                   <button onClick={() => setSelectedTrade(null)} className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>Close ×</button>
                 </div>
@@ -282,15 +283,15 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                   <div className="grid grid-cols-5 gap-4 py-3" style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
                     <div>
                       <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Entry</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono }}>{avgEntry > 0 ? `$${avgEntry.toFixed(2)}` : "—"}</div>
+                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono }}>{avgEntry > 0 ? formatCurrency(avgEntry) : "—"}</div>
                     </div>
                     <div>
                       <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Exit</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: isOpen ? "#08a86b" : "var(--ink)" }}>{avgExit > 0 ? `$${avgExit.toFixed(2)}` : isOpen ? "Active" : "—"}</div>
+                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: isOpen ? "#08a86b" : "var(--ink)" }}>{avgExit > 0 ? formatCurrency(avgExit) : isOpen ? "Active" : "—"}</div>
                     </div>
                     <div>
                       <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>P&L</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>${pl >= 0 ? "+" : ""}{pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>{formatCurrency(pl, { showSign: true, decimals: 0 })}</div>
                     </div>
                     <div>
                       <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Return</div>
@@ -331,8 +332,8 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                                 </span>
                               </td>
                               <td className="px-2.5 py-1.5" style={{ fontFamily: mono, color: isSell ? "#e5484d" : "var(--ink)" }}>{isSell ? -shs : shs}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${px.toFixed(2)}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${(shs * px * multiplier).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(px)}</td>
+                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(shs * px * multiplier, { decimals: 0 })}</td>
                               <td className="px-2.5 py-1.5 text-[9px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
                             </tr>
                           );

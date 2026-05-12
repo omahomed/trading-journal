@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -167,9 +168,9 @@ export function RiskManager({ navColor }: { navColor: string }) {
 
       {/* KPI tiles */}
       <div className="grid grid-cols-3 gap-3.5 mb-6">
-        <KPITile label="CURRENT PEAK (HWM)" value={`$${m.peak.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub="All-Time High Water Mark" gradient="linear-gradient(135deg, #6366f1, #818cf8)" />
-        <KPITile label="CURRENT DRAWDOWN" value={`-${m.ddPct.toFixed(2)}%`} sub={`-$${m.ddDol.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} gradient={m.ddGradient} />
-        <KPITile label="REQUIRED ACTION" value={m.status} sub={m.ddPct < HARD_DECKS[0].pct ? `Buffer: $${m.distL1.toLocaleString(undefined, { maximumFractionDigits: 0 })} to L1` : ""} gradient={m.statusGradient} />
+        <KPITile label="CURRENT PEAK (HWM)" value={formatCurrency(m.peak, { decimals: 0 })} sub="All-Time High Water Mark" gradient="linear-gradient(135deg, #6366f1, #818cf8)" />
+        <KPITile label="CURRENT DRAWDOWN" value={`-${m.ddPct.toFixed(2)}%`} sub={`-${formatCurrency(m.ddDol, { decimals: 0 })}`} gradient={m.ddGradient} />
+        <KPITile label="REQUIRED ACTION" value={m.status} sub={m.ddPct < HARD_DECKS[0].pct ? `Buffer: ${formatCurrency(m.distL1, { decimals: 0 })} to L1` : ""} gradient={m.statusGradient} />
       </div>
 
       {/* Charts: Hard Deck + Heat Tape side by side */}
@@ -204,14 +205,14 @@ export function RiskManager({ navColor }: { navColor: string }) {
                          interval={Math.max(Math.floor(chartData.length / 6), 1)}
                          tickFormatter={(v: string) => new Date(v).toLocaleDateString("en-US", { month: "short", year: "2-digit" })} />
                   <YAxis tick={{ fontSize: 9, fill: "var(--ink-4)" }} tickLine={false} axisLine={false}
-                         tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} width={48}
+                         tickFormatter={(v: number) => formatCurrency(v, { compact: true, decimals: 0 })} width={48}
                          domain={[(dm: number) => Math.min(dm, m.deckL3) * 0.97, (dm: number) => dm * 1.02]} />
                   <Tooltip
                     contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, fontSize: 10, fontFamily: "var(--font-jetbrains), monospace" }}
                     formatter={(value: any, name: any) => {
                       if (value == null) return [null, null];
                       const labels: Record<string, string> = { nlv: "NLV", hwm: "Peak", cashIn: "Cash In", cashOut: "Cash Out" };
-                      return [`$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, labels[String(name)] || String(name)];
+                      return [formatCurrency(Number(value), { decimals: 0 }), labels[String(name)] || String(name)];
                     }}
                     labelFormatter={(l: any) => new Date(String(l)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                   />
@@ -339,10 +340,10 @@ export function RiskManager({ navColor }: { navColor: string }) {
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-semibold" style={{ color: breached ? deck.color : "var(--ink)" }}>-{deck.pct}%</span>
                     <span className="text-[12px]" style={{ color: "var(--ink-3)" }}>{deck.action}</span>
-                    <span className="text-[11px] privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>${deckVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    <span className="text-[11px] privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>{formatCurrency(deckVal, { decimals: 0 })}</span>
                   </div>
                   <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
-                    {breached ? "ACTIVE — Action required" : `$${Math.abs(distance).toLocaleString(undefined, { maximumFractionDigits: 0 })} buffer`}
+                    {breached ? "ACTIVE — Action required" : `${formatCurrency(Math.abs(distance), { decimals: 0 })} buffer`}
                   </div>
                 </div>
                 <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"

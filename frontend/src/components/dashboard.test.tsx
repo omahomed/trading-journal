@@ -150,7 +150,7 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     // The literal " cash" / " positions" copy from the row should also
     // be gone — guards against someone re-introducing the breakdown
     // without the testid.
-    expect(screen.queryByText(/^\$-430,868$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^-\$430,868$/)).not.toBeInTheDocument();
   });
 
   test("Drawdown tile reads from dashboard-metrics, not from history.max(end_nlv)", async () => {
@@ -241,8 +241,8 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     render(<Dashboard navColor="#6366f1" />);
 
     expect(await screen.findByText("286.51%")).toBeInTheDocument();
-    // The "$+339,829" copy must be present somewhere in the LTD tile area.
-    expect(await screen.findByText("$+339,829")).toBeInTheDocument();
+    // The "+$339,829" copy must be present somewhere in the LTD tile area.
+    expect(await screen.findByText("+$339,829")).toBeInTheDocument();
     // Old copy is gone
     expect(screen.queryByText(/Time-weighted, since reset/)).not.toBeInTheDocument();
   });
@@ -250,18 +250,18 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
   test("LTD tile sub falls back to descriptive text when ledger lookup fails", async () => {
     // Edge: db.get_net_contributions blew up → backend sets
     // ltd_pl_dollar=null. Tile renders the static fallback rather than
-    // an inaccurate "$+0".
+    // an inaccurate "+$0".
     mDash.mockResolvedValue(fullMetrics({ ltd_pl_dollar: null }));
 
     render(<Dashboard navColor="#6366f1" />);
 
     expect(await screen.findByText("286.51%")).toBeInTheDocument();
     expect(await screen.findByText(/Time-weighted, since reset/i)).toBeInTheDocument();
-    expect(screen.queryByText("$+339,829")).not.toBeInTheDocument();
+    expect(screen.queryByText("+$339,829")).not.toBeInTheDocument();
   });
 
   test("YTD tile renders two-line sub: dollar P&L primary + SPY/NDX as extraSub", async () => {
-    // Spec: "Two-line sub-label: $+124,363 / SPY +4.50% | NDX +6.89%".
+    // Spec: "Two-line sub-label: +$124,363 / SPY +4.50% | NDX +6.89%".
     // The benchmarks need history data to compute — provide a minimal
     // pair with prior-year + current-year SPY/NDX values.
     const yr = new Date().getFullYear();
@@ -279,7 +279,7 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
 
     // Headline + dollar primary sub
     expect(await screen.findByText("57.16%")).toBeInTheDocument();
-    expect(await screen.findByText("$+124,363")).toBeInTheDocument();
+    expect(await screen.findByText("+$124,363")).toBeInTheDocument();
     // SPY/NDX line lives in the extraSub slot. It says "SPY +X.XX% | NDX +X.XX%"
     // (without the colon now). Lookup by partial regex so we don't depend on
     // exact percentages.
@@ -298,7 +298,7 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
     render(<Dashboard navColor="#6366f1" />);
 
     expect(await screen.findByText("57.16%")).toBeInTheDocument();
-    expect(screen.queryByText("$+124,363")).not.toBeInTheDocument();
+    expect(screen.queryByText("+$124,363")).not.toBeInTheDocument();
     // No extraSub row on the YTD tile in this case
     const benchmarkText = await screen.findByText(/SPY:.*NDX:/);
     expect(benchmarkText).toBeInTheDocument();
@@ -498,7 +498,7 @@ describe("Dashboard — Last 10 Trades + Discipline Pulse panels", () => {
 
     const tooltip = await screen.findByTestId("last10-tooltip-0");
     expect(tooltip).toHaveTextContent("RICH");
-    expect(tooltip).toHaveTextContent("$+2,500");
+    expect(tooltip).toHaveTextContent("+$2,500");
     expect(tooltip).toHaveTextContent("CLOSED");
     expect(tooltip).toHaveTextContent("2026-04-01");
     expect(tooltip).toHaveTextContent("br1.1 Consolidation");

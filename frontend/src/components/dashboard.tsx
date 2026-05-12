@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { computeEnrichedPositions } from "@/lib/positions";
 import {
@@ -19,15 +20,6 @@ import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
-
-// "$+339,829" / "$-50,000" — explicit sign, whole-dollar precision. Matches
-// the visual treatment of the NLV tile's daily-delta line so the dollar
-// P&L sub-labels on LTD/YTD read as native to the same family.
-function formatSignedDollars(n: number): string {
-  const sign = n >= 0 ? "+" : "-";
-  const abs = Math.abs(n);
-  return `$${sign}${abs.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
 
 // KPI tile renders one or two subtext lines. `extraSub` is an optional
 // secondary line rendered in smaller, dimmer type below the main `sub`
@@ -246,13 +238,13 @@ export function Dashboard({ navColor }: { navColor: string }) {
   // NLV tile sub: daily delta when available; first-entry / no-journal cases
   // yield no sub-line (don't fake "+$0" — the spec's "no comparison" rule).
   const nlvSub = (dailyDol != null && dailyPct != null)
-    ? `${dailyDol >= 0 ? "+" : ""}$${dailyDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`
+    ? `${formatCurrency(dailyDol, { showSign: true, decimals: 0 })} (${dailyPct >= 0 ? "+" : ""}${dailyPct.toFixed(2)}%)`
     : (journalAvailable ? "First entry — no prior day" : "Save your first daily routine");
 
   const kpis = [
     {
       label: "NET LIQ VALUE",
-      value: journalAvailable ? `$${nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—",
+      value: journalAvailable ? formatCurrency(nlv, { decimals: 0 }) : "—",
       sub: nlvSub,
       gradient: "linear-gradient(135deg, #6366f1, #818cf8)",
     },
@@ -265,7 +257,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       sub: !journalAvailable
         ? "Save your first daily routine"
         : metrics?.ltd_pl_dollar != null
-          ? formatSignedDollars(metrics.ltd_pl_dollar)
+          ? formatCurrency(metrics.ltd_pl_dollar, { showSign: true, decimals: 0 })
           : "Time-weighted, since reset",
       gradient: "linear-gradient(135deg, #ec4899, #f472b6)",
     },
@@ -278,7 +270,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       sub: !ytdAvailable
         ? "Available once current-year EOD entries exist"
         : metrics?.ytd_pl_dollar != null
-          ? formatSignedDollars(metrics.ytd_pl_dollar)
+          ? formatCurrency(metrics.ytd_pl_dollar, { showSign: true, decimals: 0 })
           : `SPY: ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX: ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`,
       extraSub: ytdAvailable && metrics?.ytd_pl_dollar != null
         ? `SPY ${ytdSpy >= 0 ? "+" : ""}${ytdSpy.toFixed(2)}% | NDX ${ytdNdx >= 0 ? "+" : ""}${ytdNdx.toFixed(2)}%`
@@ -298,7 +290,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
         ? "Save your first daily routine"
         : ddPct >= -0.01
           ? "Clear"
-          : `from peak $${peakNlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+          : `from peak ${formatCurrency(peakNlv, { decimals: 0 })}`,
       gradient: "linear-gradient(135deg, #1e40af, #3b82f6)",
     },
   ];
@@ -644,8 +636,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
             : trailing30.length < 30 ? `trailing ${trailing30.length} closed`
             : "trailing 30 closed";
 
-          const fmt$ = (n: number) =>
-            `$${n >= 0 ? "+" : "-"}${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
           const outcomeColor = (o: "win" | "loss" | "be") =>
             o === "win" ? "#08a86b" : o === "loss" ? "#e5484d" : "var(--ink-4)";
           const pctColor = (n: number) => (n > 0 ? "#08a86b" : n < 0 ? "#e5484d" : "var(--ink-3)");
@@ -689,16 +679,16 @@ export function Dashboard({ navColor }: { navColor: string }) {
                         <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                           <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Net P&L</div>
                           <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(last10.netPl) }}>
-                            {fmt$(last10.netPl)}
+                            {formatCurrency(last10.netPl, { showSign: true, decimals: 0 })}
                           </div>
                           <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>across {last10.count} trades</div>
                         </div>
                         <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                           <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg W / L</div>
                           <div className="text-[14px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                            <span style={{ color: "#08a86b" }}>{fmt$(last10.avgWin)}</span>
+                            <span style={{ color: "#08a86b" }}>{formatCurrency(last10.avgWin, { showSign: true, decimals: 0 })}</span>
                             <span style={{ color: "var(--ink-4)" }}> / </span>
-                            <span style={{ color: "#e5484d" }}>{fmt$(last10.avgLoss)}</span>
+                            <span style={{ color: "#e5484d" }}>{formatCurrency(last10.avgLoss, { showSign: true, decimals: 0 })}</span>
                           </div>
                         </div>
                         <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
@@ -730,7 +720,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
                                     onMouseLeave={() => setHoveredSquareIdx(null)}
                                     className="relative w-7 h-7 rounded-[4px] cursor-pointer transition-transform hover:scale-110"
                                     style={{ background: outcomeColor(t.outcome) }}
-                                    aria-label={`${t.ticker} ${t.status}, P&L ${fmt$(t.pl)}`}>
+                                    aria-label={`${t.ticker} ${t.status}, P&L ${formatCurrency(t.pl, { showSign: true, decimals: 0 })}`}>
                                 {hoveredSquareIdx === i && (
                                   <div className="absolute z-50 p-2.5 rounded-[8px] text-left whitespace-nowrap pointer-events-none"
                                        data-testid={`last10-tooltip-${i}`}
@@ -743,7 +733,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
                                          minWidth: 140,
                                        }}>
                                     <div className="text-[12px] font-bold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.ticker}</div>
-                                    <div className="text-[12px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: outcomeColor(t.outcome) }}>{fmt$(t.pl)}</div>
+                                    <div className="text-[12px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: outcomeColor(t.outcome) }}>{formatCurrency(t.pl, { showSign: true, decimals: 0 })}</div>
                                     <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>{t.status}</div>
                                     <div className="text-[10px] mt-0.5" style={{ color: "var(--ink-4)" }}>
                                       {String(t.open_date || "").slice(0, 10)}{daysHeld != null ? ` · ${daysHeld}d held` : ""}
