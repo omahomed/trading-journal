@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { TapeStatusPill } from "@/components/tape-status-pill";
+import { FocusModeBridge } from "@/components/focus-mode-bridge";
 import { getGroupForHref, getNavItemForHref } from "@/lib/nav";
 import { setFocusModeActive } from "@/lib/format";
 
@@ -101,7 +102,7 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
           </button>
         </header>
         <div className="flex-1 overflow-auto px-7 py-6">
-          {children}
+          <FocusModeBridge>{children}</FocusModeBridge>
         </div>
       </main>
       <CommandPalette />
