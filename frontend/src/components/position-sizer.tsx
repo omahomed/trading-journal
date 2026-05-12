@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 type SizerTab = "normal" | "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
@@ -298,7 +299,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       }
       const stop = ma * (1 - buf / 100);
       if (stop >= entry) {
-        setErrorMsg(`Stop ($${stop.toFixed(2)}) is at or above entry price ($${entry.toFixed(2)}).`);
+        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above entry price (${formatCurrency(entry)}).`);
         return;
       }
     } else if (tab === "volatility") {
@@ -320,7 +321,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       }
       const stop = ma * (1 - buf / 100);
       if (stop >= entry) {
-        setErrorMsg(`Stop ($${stop.toFixed(2)}) is at or above current price ($${entry.toFixed(2)}).`);
+        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above current price (${formatCurrency(entry)}).`);
         return;
       }
       if (!holdingData) {
@@ -361,7 +362,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     const finalPctNlv = equity > 0 ? (finalVal / equity) * 100 : 0;
     const limitFactor = finalShares === targetShares && targetShares < riskShares
       ? `Target Size (${targetPct}%)`
-      : `MA Support ($${ma})`;
+      : `MA Support (${formatCurrency(ma)})`;
 
     return { riskShares, targetShares, finalShares, finalVal, finalPctNlv, limitFactor, stop, riskPerShare };
   }, [calculated, tab, ma, buf, entry, riskBudget, targetSize, equity]);
@@ -430,7 +431,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     } else if (finalMaxShares === maxSharesCap) {
       limitReason = "Hard Cap (20%)";
     } else if (finalMaxShares === maxSharesTech) {
-      limitReason = `MA Support ($${ma})`;
+      limitReason = `MA Support (${formatCurrency(ma)})`;
     }
 
     // Trade Risk $
@@ -438,7 +439,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     let riskLabel: string;
     if (effectiveStop > 0 && effectiveStop < entry) {
       riskPerShare = entry - effectiveStop;
-      riskLabel = `Stop $${effectiveStop.toFixed(2)} (${(riskPerShare / entry * 100).toFixed(1)}%)`;
+      riskLabel = `Stop ${formatCurrency(effectiveStop)} (${(riskPerShare / entry * 100).toFixed(1)}%)`;
     } else {
       riskPerShare = entry * atrDecimal;
       riskLabel = `1 ATR (${atr.toFixed(1)}%)`;
@@ -500,9 +501,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       ? Math.floor(remainingBudget / (newAddRiskPerShare * multiplier))
       : 0;
 
-    if (targetAdd <= 0) return { error: `You are already at or above the target weight! (Current: $${currValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} vs Target: $${targetValue.toLocaleString(undefined, { maximumFractionDigits: 0 })})` };
+    if (targetAdd <= 0) return { error: `You are already at or above the target weight! (Current: ${formatCurrency(currValue, { decimals: 0 })} vs Target: ${formatCurrency(targetValue, { decimals: 0 })})` };
     if (affordableAdd <= 0) {
-      return { error: `NO ADD - Existing ${currShares} shares risk $${existingRisk.toLocaleString(undefined, { maximumFractionDigits: 0 })} of capital below stop, exhausting the $${maxRiskDol.toLocaleString(undefined, { maximumFractionDigits: 0 })} budget. Tighten your stop above your $${avgEntry.toFixed(2)} avg cost or reduce position.` };
+      return { error: `NO ADD - Existing ${currShares} shares risk ${formatCurrency(existingRisk, { decimals: 0 })} of capital below stop, exhausting the ${formatCurrency(maxRiskDol, { decimals: 0 })} budget. Tighten your stop above your ${formatCurrency(avgEntry)} avg cost or reduce position.` };
     }
 
     const recommendedAdd = Math.min(targetAdd, affordableAdd);
@@ -664,9 +665,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     }
   }, [calculated, tab, costPerContract, equity, riskBudget, optMode, entryPrice, sizingMode]);
 
-  // --- Helpers ---
-  const fmtDol = (v: number, digits = 0) => `$${v.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits })}`;
-
   const needsHolding = ["scalein", "pyramid", "trim"].includes(tab);
   const needsMaBuffer = ["normal", "scalein"].includes(tab) || (tab === "volatility" && volSizerMode === "new");
   const needsTarget = tab === "normal" || tab === "trim" || (tab === "volatility" && volSizerMode === "new") || tab === "scalein" || (tab === "options" && optMode === "equivalent");
@@ -812,10 +810,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             </select>
             {holdingData && (
               <div className="mt-2 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", color: "var(--ink-3)" }}>
-                {holdingData.shares} shs @ ${parseFloat(String(holdingData.avg_entry || 0)).toFixed(2)}
+                {holdingData.shares} shs @ {formatCurrency(parseFloat(String(holdingData.avg_entry || 0)))}
                 {holdingData.rule ? ` · ${holdingData.rule}` : ""}
                 {tab === "volatility" && volSizerMode === "audit" && holdingAvgCost > 0 && (
-                  <span className="ml-2">(LIFO Avg: ${holdingAvgCost.toFixed(2)})</span>
+                  <span className="ml-2">(LIFO Avg: {formatCurrency(holdingAvgCost)})</span>
                 )}
               </div>
             )}
@@ -853,7 +851,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         {/* Calculated stop info banner */}
         {needsMaBuffer && calcStop > 0 && entry > 0 && (
           <Banner type="info">
-            Calculated Stop: <strong>${calcStop.toFixed(2)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
+            Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
           </Banner>
         )}
 
@@ -1002,21 +1000,21 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             <>
               <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {ticker || "—"}</h3>
               <div className="grid grid-cols-3 gap-3 mb-4">
-                <MetricCard label="Risk Budget" value={fmtDol(riskBudget)}
+                <MetricCard label="Risk Budget" value={formatCurrency(riskBudget, { decimals: 0 })}
                             sub={`${riskPct}% Risk (${SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)} Mode)`}
                             accent="#6366f1" />
                 <MetricCard label="Stop Distance" value={`${stopDistPct.toFixed(1)}%`}
-                            sub={`$${normalResults.riskPerShare.toFixed(2)}/share`}
+                            sub={`${formatCurrency(normalResults.riskPerShare)}/share`}
                             accent="#f59f00" />
                 <MetricCard label="Target Size" value={`${targetSize}%`}
-                            sub={fmtDol(equity * targetSize / 100)}
+                            sub={formatCurrency(equity * targetSize / 100, { decimals: 0 })}
                             accent="#3b82f6" />
               </div>
               <div className="grid grid-cols-3 gap-3 mb-6">
                 <MetricCard label="Risk-Based Limit" value={`${normalResults.riskShares} shs`}
-                            sub={`${fmtDol(normalResults.riskShares * entry)} (${(normalResults.riskShares * entry / equity * 100).toFixed(1)}% NLV)`} />
+                            sub={`${formatCurrency(normalResults.riskShares * entry, { decimals: 0 })} (${(normalResults.riskShares * entry / equity * 100).toFixed(1)}% NLV)`} />
                 <MetricCard label="Target Limit" value={`${normalResults.targetShares} shs`}
-                            sub={`${fmtDol(normalResults.targetShares * entry)} (${targetSize}% NLV)`} />
+                            sub={`${formatCurrency(normalResults.targetShares * entry, { decimals: 0 })} (${targetSize}% NLV)`} />
                 <MetricCard label="Limiting Factor" value={normalResults.limitFactor}
                             sub="Determines Final Size" />
               </div>
@@ -1030,7 +1028,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 <button onClick={() => sendToLogBuy({ ticker, shares: normalResults.finalShares, price: entry, stop: normalResults.stop, action: "new" })}
                         className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                  📝 Send to Log Buy — {ticker || "—"} ({normalResults.finalShares} shs @ ${entry.toFixed(2)})
+                  📝 Send to Log Buy — {ticker || "—"} ({normalResults.finalShares} shs @ {formatCurrency(entry)})
                 </button>
               </div>
             </>
@@ -1041,7 +1039,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             <>
               <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {volSizerMode === "audit" ? holdingData?.ticker : ticker || "—"}</h3>
               <div className="grid grid-cols-3 gap-3 mb-4">
-                <MetricCard label="Risk Budget" value={fmtDol(volResults.dailyRiskBudget)}
+                <MetricCard label="Risk Budget" value={formatCurrency(volResults.dailyRiskBudget, { decimals: 0 })}
                             sub={`${volResults.tolPct}% Risk (${volResults.tierName})`}
                             accent="#6366f1" />
                 <MetricCard label="Volatility Risk" value={`${atr.toFixed(2)}%`}
@@ -1056,11 +1054,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                     <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Buy Cost</div>
                     <div className="flex items-baseline justify-between mt-1.5">
                       <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>ATR Limit</span>
-                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(volResults.maxSharesVol * entry)}</span>
+                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(volResults.maxSharesVol * entry, { decimals: 0 })}</span>
                     </div>
                     <div className="flex items-baseline justify-between mt-1">
                       <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{volResults.effectiveStop > 0 ? "Tech Stop" : "Hard Cap"}</span>
-                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol((volResults.effectiveStop > 0 ? volResults.maxSharesTech : volResults.maxSharesCap) * entry)}</span>
+                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency((volResults.effectiveStop > 0 ? volResults.maxSharesTech : volResults.maxSharesCap) * entry, { decimals: 0 })}</span>
                     </div>
                   </div>
                 ) : (
@@ -1075,8 +1073,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 <div className="mb-4">
                   <Banner type="info">
                     {volSizerMode === "new"
-                      ? `ATR Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${fmtDol(volResults.atrRiskBudget)}) — stock volatility profile`
-                      : `Confidence Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${fmtDol(volResults.atrRiskBudget)}) — earned by ${volResults.cushionPct.toFixed(1)}% profit cushion`
+                      ? `ATR Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${formatCurrency(volResults.atrRiskBudget, { decimals: 0 })}) — stock volatility profile`
+                      : `Confidence Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${formatCurrency(volResults.atrRiskBudget, { decimals: 0 })}) — earned by ${volResults.cushionPct.toFixed(1)}% profit cushion`
                     }
                   </Banner>
                 </div>
@@ -1084,16 +1082,16 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
               <div className="grid grid-cols-3 gap-3 mb-6">
                 <MetricCard label="ATR Limit" value={`${volResults.maxSharesVol} shs`}
-                            sub={`Risk ${fmtDol(volResults.atrRiskAtVol)} · ${volResults.atrCostPct.toFixed(1)}% NLV`} />
+                            sub={`Risk ${formatCurrency(volResults.atrRiskAtVol, { decimals: 0 })} · ${volResults.atrCostPct.toFixed(1)}% NLV`} />
                 {volSizerMode === "new" && volResults.effectiveStop > 0 ? (
                   <MetricCard label="Tech Stop Limit" value={`${volResults.maxSharesTech} shs`}
-                              sub={`Risk ${fmtDol(volResults.techRiskAtMax)} · ${volResults.techCostPct.toFixed(1)}% NLV`}
+                              sub={`Risk ${formatCurrency(volResults.techRiskAtMax, { decimals: 0 })} · ${volResults.techCostPct.toFixed(1)}% NLV`}
                               accent={volResults.maxSharesTech < volResults.maxSharesVol ? "#f59f00" : undefined} />
                 ) : (
                   <MetricCard label="Hard Cap Limit" value={`${volResults.maxSharesCap} shs`}
                               sub="20% Max Alloc" />
                 )}
-                <MetricCard label="Trade Risk $" value={fmtDol(volResults.finalRiskDol)}
+                <MetricCard label="Trade Risk $" value={formatCurrency(volResults.finalRiskDol, { decimals: 0 })}
                             sub={volResults.riskLabel} />
               </div>
 
@@ -1107,7 +1105,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                   {volResults.limitReason.startsWith("MA") && (
                     <div className="mt-2">
                       <Banner type="info">
-                        Note: Sized for technicals. Your stop (${volResults.effectiveStop.toFixed(2)}) is {volResults.techDistPct.toFixed(1)}% away (including buffer).
+                        Note: Sized for technicals. Your stop ({formatCurrency(volResults.effectiveStop)}) is {volResults.techDistPct.toFixed(1)}% away (including buffer).
                       </Banner>
                     </div>
                   )}
@@ -1115,7 +1113,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                     <button onClick={() => sendToLogBuy({ ticker, shares: volResults.finalMaxShares, price: entry, stop: volResults.effectiveStop || entry * 0.92, action: "new" })}
                             className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                             style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                      📝 Send to Log Buy — {ticker || "—"} ({volResults.finalMaxShares} shs @ ${entry.toFixed(2)})
+                      📝 Send to Log Buy — {ticker || "—"} ({volResults.finalMaxShares} shs @ {formatCurrency(entry)})
                     </button>
                   </div>
                 </>
@@ -1131,10 +1129,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                       const diff = volResults.shares - volResults.finalMaxShares;
                       if (diff > 0) {
                         return <MetricCard label="Action Required" value={`TRIM ${Math.floor(diff)}`}
-                                           sub={`Sell ${fmtDol(diff * entry)}`} color="#e5484d" accent="#e5484d" />;
+                                           sub={`Sell ${formatCurrency(diff * entry, { decimals: 0 })}`} color="#e5484d" accent="#e5484d" />;
                       } else if (diff < 0) {
                         return <MetricCard label="Action Required" value={`CAN ADD ${Math.abs(Math.floor(diff))}`}
-                                           sub={`Buy up to ${fmtDol(Math.abs(diff) * entry)}`} color="#08a86b" accent="#08a86b" />;
+                                           sub={`Buy up to ${formatCurrency(Math.abs(diff) * entry, { decimals: 0 })}`} color="#08a86b" accent="#08a86b" />;
                       } else {
                         return <MetricCard label="Action Required" value="AT LIMIT" sub="No room to add" />;
                       }
@@ -1168,32 +1166,32 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                          style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
                                   color: "#08a86b",
                                   border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
-                      ✓ Position is risk-free — stop ${scaleResults.stop.toFixed(2)} sits above your ${scaleResults.avgEntry.toFixed(2)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
+                      ✓ Position is risk-free — stop {formatCurrency(scaleResults.stop)} sits above your {formatCurrency(scaleResults.avgEntry)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
                     </div>
                   )}
                   <h3 className="text-[15px] font-semibold mb-4">PYRAMID TICKET</h3>
                   <div className="grid grid-cols-4 gap-3 mb-4">
                     <MetricCard label="ADD SHARES" value={`+${scaleResults.recommendedAdd}`}
                                 accent="#08a86b" color="#08a86b" />
-                    <MetricCard label="EST. COST" value={fmtDol(scaleResults.costOfAdd, 2)}
+                    <MetricCard label="EST. COST" value={formatCurrency(scaleResults.costOfAdd)}
                                 accent="#6366f1" />
                     <MetricCard label="NEW TOTAL" value={`${scaleResults.newTotal} shs`}
                                 sub={`${scaleResults.newWeight.toFixed(1)}% Weight`}
                                 accent="#3b82f6" />
-                    <MetricCard label="NEW AVG COST" value={`$${scaleResults.newAvgCost.toFixed(2)}`}
-                                sub={`From $${scaleResults.avgEntry.toFixed(2)}`}
+                    <MetricCard label="NEW AVG COST" value={formatCurrency(scaleResults.newAvgCost)}
+                                sub={`From ${formatCurrency(scaleResults.avgEntry)}`}
                                 accent="#f59f00" />
                   </div>
 
                   <h3 className="text-[15px] font-semibold mb-4">RISK MANAGEMENT</h3>
                   <div className="grid grid-cols-3 gap-3 mb-6">
-                    <MetricCard label="Global Stop" value={`$${scaleResults.stop.toFixed(2)}`}
+                    <MetricCard label="Global Stop" value={formatCurrency(scaleResults.stop)}
                                 sub={`-${(scaleResults.riskPerShare / entry * 100).toFixed(1)}% from price`}
                                 accent="#e5484d" />
-                    <MetricCard label="Total Risk at New Size" value={fmtDol(scaleResults.totalRiskAtNew)}
+                    <MetricCard label="Total Risk at New Size" value={formatCurrency(scaleResults.totalRiskAtNew, { decimals: 0 })}
                                 sub={`${(scaleResults.totalRiskAtNew / equity * 100).toFixed(2)}% of NLV`}
                                 accent="#f59f00" />
-                    <MetricCard label="Risk Budget" value={fmtDol(scaleResults.maxRiskDol)}
+                    <MetricCard label="Risk Budget" value={formatCurrency(scaleResults.maxRiskDol, { decimals: 0 })}
                                 sub={`${scaleResults.maxRisk}% of Equity`}
                                 accent="#6366f1" />
                   </div>
@@ -1201,7 +1199,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                   <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
                   {scaleResults.verdict === "success" ? (
                     <Banner type="success">
-                      ADD {scaleResults.recommendedAdd} shares to reach {scaleResults.newWeight.toFixed(1)}% — Total risk {fmtDol(scaleResults.totalRiskAtNew)} within {fmtDol(scaleResults.maxRiskDol)} budget.
+                      ADD {scaleResults.recommendedAdd} shares to reach {scaleResults.newWeight.toFixed(1)}% — Total risk {formatCurrency(scaleResults.totalRiskAtNew, { decimals: 0 })} within {formatCurrency(scaleResults.maxRiskDol, { decimals: 0 })} budget.
                     </Banner>
                   ) : (
                     <Banner type="warning">
@@ -1213,7 +1211,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                     <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: scaleResults.recommendedAdd, price: entry, stop: scaleResults.stop, trade_id: holdingData?.trade_id, action: "scale_in" })}
                             className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                             style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                      📝 Send to Log Buy — {holdingData?.ticker} (+{scaleResults.recommendedAdd} shs @ ${entry.toFixed(2)})
+                      📝 Send to Log Buy — {holdingData?.ticker} (+{scaleResults.recommendedAdd} shs @ {formatCurrency(entry)})
                     </button>
                   </div>
                 </>
@@ -1228,14 +1226,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
               {/* Last Buy Info */}
               <div className="grid grid-cols-3 gap-3 mb-4">
-                <MetricCard label="Last Buy Price" value={`$${pyramidResults.lastBuyPrice.toFixed(2)}`}
+                <MetricCard label="Last Buy Price" value={formatCurrency(pyramidResults.lastBuyPrice)}
                             accent="#3b82f6" />
                 <MetricCard label="Last Buy P&L" value={`${pyramidResults.lastBuyProfitPct.toFixed(2)}%`}
-                            sub={`$${(entry - pyramidResults.lastBuyPrice).toFixed(2)}/share`}
+                            sub={`${formatCurrency(entry - pyramidResults.lastBuyPrice)}/share`}
                             color={pyramidResults.lastBuyProfitPct >= 0 ? "#08a86b" : "#e5484d"}
                             accent={pyramidResults.lastBuyProfitPct >= 0 ? "#08a86b" : "#e5484d"} />
                 <MetricCard label="Total Cushion" value={`${pyramidResults.cushionPct.toFixed(2)}%`}
-                            sub={`Avg Cost: $${pyramidResults.avgCost.toFixed(2)}`}
+                            sub={`Avg Cost: ${formatCurrency(pyramidResults.avgCost)}`}
                             accent="#f59f00" />
               </div>
 
@@ -1273,21 +1271,21 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               ) : pyramidResults.pyramidAllowed > 0 ? (
                 <>
                   <Banner type="success">
-                    ADD {pyramidResults.pyramidAllowed} shares ({fmtDol(pyramidResults.pyramidValue)}) — Limited by: {pyramidResults.pyramidAllowed === pyramidResults.pyramidMaxShares ? "Pyramid pace" : "ATR/Cap ceiling"}
+                    ADD {pyramidResults.pyramidAllowed} shares ({formatCurrency(pyramidResults.pyramidValue, { decimals: 0 })}) — Limited by: {pyramidResults.pyramidAllowed === pyramidResults.pyramidMaxShares ? "Pyramid pace" : "ATR/Cap ceiling"}
                   </Banner>
                   <div className="grid grid-cols-3 gap-3 mt-4">
                     <MetricCard label="Add Shares" value={`${pyramidResults.pyramidAllowed} shs`}
-                                sub={fmtDol(pyramidResults.pyramidValue)} accent="#08a86b" />
+                                sub={formatCurrency(pyramidResults.pyramidValue, { decimals: 0 })} accent="#08a86b" />
                     <MetricCard label="New Total" value={`${Math.floor(pyramidResults.shares) + pyramidResults.pyramidAllowed} shs`}
                                 sub={`${((Math.floor(pyramidResults.shares) + pyramidResults.pyramidAllowed) * entry / equity * 100).toFixed(1)}% Weight`} />
-                    <MetricCard label="New Avg Cost" value={`$${((pyramidResults.avgCost * pyramidResults.shares + entry * pyramidResults.pyramidAllowed) / (pyramidResults.shares + pyramidResults.pyramidAllowed)).toFixed(2)}`}
-                                sub={`From $${pyramidResults.avgCost.toFixed(2)}`} />
+                    <MetricCard label="New Avg Cost" value={formatCurrency((pyramidResults.avgCost * pyramidResults.shares + entry * pyramidResults.pyramidAllowed) / (pyramidResults.shares + pyramidResults.pyramidAllowed))}
+                                sub={`From ${formatCurrency(pyramidResults.avgCost)}`} />
                   </div>
                   <div className="mt-4">
                     <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: pyramidResults.pyramidAllowed, price: entry, trade_id: holdingData?.trade_id, action: "scale_in" })}
                             className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                             style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                      📝 Send to Log Buy — {holdingData?.ticker} (+{pyramidResults.pyramidAllowed} shs @ ${entry.toFixed(2)})
+                      📝 Send to Log Buy — {holdingData?.ticker} (+{pyramidResults.pyramidAllowed} shs @ {formatCurrency(entry)})
                     </button>
                   </div>
                 </>
@@ -1317,12 +1315,12 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
                   <h3 className="text-[15px] font-semibold mb-4">Financial Impact (LIFO)</h3>
                   <div className="grid grid-cols-3 gap-3 mb-6">
-                    <MetricCard label="Cash Generated" value={fmtDol(trimResults.cashGenerated, 2)}
+                    <MetricCard label="Cash Generated" value={formatCurrency(trimResults.cashGenerated)}
                                 accent="#08a86b" />
-                    <MetricCard label="Cost Basis (Sold)" value={fmtDol(trimResults.costBasisTrimmed, 2)}
-                                sub={`Avg: $${trimResults.avgCostSold.toFixed(2)}/sh`}
+                    <MetricCard label="Cost Basis (Sold)" value={formatCurrency(trimResults.costBasisTrimmed)}
+                                sub={`Avg: ${formatCurrency(trimResults.avgCostSold)}/sh`}
                                 accent="#6366f1" />
-                    <MetricCard label="Realized P&L" value={fmtDol(trimResults.lifoPnl, 2)}
+                    <MetricCard label="Realized P&L" value={formatCurrency(trimResults.lifoPnl)}
                                 sub={trimResults.costBasisTrimmed > 0 ? `${(trimResults.lifoPnl / trimResults.costBasisTrimmed * 100).toFixed(2)}% Return` : undefined}
                                 color={trimResults.lifoPnl >= 0 ? "#08a86b" : "#e5484d"}
                                 accent={trimResults.lifoPnl >= 0 ? "#08a86b" : "#e5484d"} />
@@ -1331,11 +1329,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                   <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
                   {trimResults.lifoPnl >= 0 ? (
                     <Banner type="success">
-                      Profit Lock: This trim locks in {fmtDol(trimResults.lifoPnl, 2)} profit.
+                      Profit Lock: This trim locks in {formatCurrency(trimResults.lifoPnl)} profit.
                     </Banner>
                   ) : (
                     <Banner type="warning">
-                      Note: This trim realizes a loss of {fmtDol(Math.abs(trimResults.lifoPnl), 2)} based on your most recent purchases (LIFO).
+                      Note: This trim realizes a loss of {formatCurrency(Math.abs(trimResults.lifoPnl))} based on your most recent purchases (LIFO).
                     </Banner>
                   )}
 
@@ -1344,7 +1342,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                       <button onClick={() => sendToLogSell({ ticker: holdingData?.ticker || "", shares: trimResults.sharesToSell, price: entry, trade_id: holdingData?.trade_id })}
                               className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                               style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                        📝 Send to Log Sell — {holdingData?.ticker} ({trimResults.sharesToSell} shs @ ${entry.toFixed(2)})
+                        📝 Send to Log Sell — {holdingData?.ticker} ({trimResults.sharesToSell} shs @ {formatCurrency(entry)})
                       </button>
                     </div>
                   )}
@@ -1360,21 +1358,21 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 <>
                   <h3 className="text-[15px] font-semibold mb-4">Risk-Based Options Sizing</h3>
                   <div className="grid grid-cols-3 gap-3 mb-4">
-                    <MetricCard label="Selected Risk Budget" value={fmtDol(optResults.recBudget)}
+                    <MetricCard label="Selected Risk Budget" value={formatCurrency(optResults.recBudget, { decimals: 0 })}
                                 sub={`${SIZING_MODES[sizingMode].pct}% of equity (${SIZING_MODES[sizingMode].label.split(" ")[0]})`}
                                 accent="#6366f1" />
-                    <MetricCard label="Cost per Contract" value={fmtDol(optResults.cpc)}
+                    <MetricCard label="Cost per Contract" value={formatCurrency(optResults.cpc, { decimals: 0 })}
                                 sub={`$${costPerContract} x 100 shares`}
                                 accent="#f59f00" />
                     <MetricCard label="Recommended" value={`${optResults.recContracts} contract${optResults.recContracts !== 1 ? "s" : ""}`}
-                                sub={`${fmtDol(optResults.recTotal)} (${optResults.recPct.toFixed(1)}% NLV) · ${optResults.recLimiting}`}
+                                sub={`${formatCurrency(optResults.recTotal, { decimals: 0 })} (${optResults.recPct.toFixed(1)}% NLV) · ${optResults.recLimiting}`}
                                 color={navColor} accent="#08a86b" />
                   </div>
 
                   {optResults.recContracts === 0 && (
                     <div className="mb-4">
                       <Banner type="warning">
-                        A single contract ({fmtDol(optResults.cpc)}) exceeds your risk budget ({fmtDol(optResults.recBudget)}). Consider a cheaper strike or spread.
+                        A single contract ({formatCurrency(optResults.cpc, { decimals: 0 })}) exceeds your risk budget ({formatCurrency(optResults.recBudget, { decimals: 0 })}). Consider a cheaper strike or spread.
                       </Banner>
                     </div>
                   )}
@@ -1396,9 +1394,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                           <tr key={r.label} style={{ borderBottom: i < optResults.rows.length - 1 ? "1px solid var(--border)" : "none" }}>
                             <td className="px-3 py-2.5 font-medium">{r.label}</td>
                             <td className="px-3 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.pct}%</td>
-                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(r.budget)}</td>
+                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(r.budget, { decimals: 0 })}</td>
                             <td className="px-3 py-2.5 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.contracts}</td>
-                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(r.totalCost)}</td>
+                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(r.totalCost, { decimals: 0 })}</td>
                             <td className="px-3 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.pctNlv.toFixed(2)}%</td>
                           </tr>
                         ))}
@@ -1406,7 +1404,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                     </table>
                   </div>
                   <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
-                    Hard cap: 5% of NLV ({fmtDol(optResults.hardCapBudget)}) — no tier can exceed this.
+                    Hard cap: 5% of NLV ({formatCurrency(optResults.hardCapBudget, { decimals: 0 })}) — no tier can exceed this.
                   </div>
                 </>
               ) : (
@@ -1417,9 +1415,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                   </div>
 
                   <div className="grid grid-cols-3 gap-3 mb-4">
-                    <MetricCard label="Stock Price" value={`$${(optResults.price || 0).toFixed(2)}`} sub={ticker || "—"} accent="#6366f1" />
-                    <MetricCard label="Cost per Contract" value={fmtDol(optResults.cpc)} sub={`$${costPerContract} x 100 shares`} accent="#f59f00" />
-                    <MetricCard label="Account Equity" value={fmtDol(equity)} accent="#08a86b" />
+                    <MetricCard label="Stock Price" value={formatCurrency(optResults.price || 0)} sub={ticker || "—"} accent="#6366f1" />
+                    <MetricCard label="Cost per Contract" value={formatCurrency(optResults.cpc, { decimals: 0 })} sub={`$${costPerContract} x 100 shares`} accent="#f59f00" />
+                    <MetricCard label="Account Equity" value={formatCurrency(equity, { decimals: 0 })} accent="#08a86b" />
                   </div>
 
                   <div className="rounded-[10px] overflow-hidden mb-4" style={{ border: "1px solid var(--border)" }}>
@@ -1437,10 +1435,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                           <tr key={t.label} style={{ borderBottom: i < (optResults.positionTiers || []).length - 1 ? "1px solid var(--border)" : "none",
                                                      background: t.pct === targetSize ? "var(--surface-2)" : "transparent" }}>
                             <td className="px-3 py-2.5 font-medium">{t.label}{t.pct === targetSize ? " ←" : ""}</td>
-                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.positionValue)}</td>
+                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.positionValue, { decimals: 0 })}</td>
                             <td className="px-3 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.sharesEquiv}</td>
                             <td className="px-3 py-2.5 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.contracts}</td>
-                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.totalCost)}</td>
+                            <td className="px-3 py-2.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.totalCost, { decimals: 0 })}</td>
                             <td className="px-3 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.pctNlv.toFixed(2)}%</td>
                           </tr>
                         ))}
@@ -1453,7 +1451,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                     if (!sel) return null;
                     return (
                       <Banner type="success">
-                        At <strong>{targetSize}%</strong> target: Buy <strong>{sel.contracts} contract{sel.contracts !== 1 ? "s" : ""}</strong> ({sel.sharesEquiv} share equivalent) for {fmtDol(sel.totalCost)} ({sel.pctNlv.toFixed(1)}% of NLV).
+                        At <strong>{targetSize}%</strong> target: Buy <strong>{sel.contracts} contract{sel.contracts !== 1 ? "s" : ""}</strong> ({sel.sharesEquiv} share equivalent) for {formatCurrency(sel.totalCost, { decimals: 0 })} ({sel.pctNlv.toFixed(1)}% of NLV).
                       </Banner>
                     );
                   })()}
