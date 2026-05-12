@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
   return (
@@ -200,7 +201,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
             />
             <KPITile
               label="EQUITY BASIS"
-              value={`$${equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+              value={formatCurrency(equity, { decimals: 0 })}
               sub=""
               gradient="linear-gradient(135deg, #1e40af, #3b82f6)"
             />

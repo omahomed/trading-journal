@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
@@ -238,7 +239,7 @@ export function MFactor({ navColor }: { navColor: string }) {
                 <div key={ma.label} className="flex items-center justify-between py-2" style={{ borderBottom: "1px dashed var(--border)" }}>
                   <span className="text-[13px] font-medium">{ma.label}</span>
                   <div className="flex items-center gap-3">
-                    <span className="text-[13px] privacy-mask" style={{ fontFamily: mono }}>${(ma.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <span className="text-[13px] privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(ma.value || 0)}</span>
                     <span className="text-[12px] font-semibold" style={{ fontFamily: mono, color: ma.dist >= 0 ? "#08a86b" : "#e5484d" }}>
                       {ma.dist >= 0 ? "+" : ""}{ma.dist.toFixed(2)}%
                     </span>

@@ -909,7 +909,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                             )}
                           </div>
                           <span className="text-[11px] font-bold shrink-0 privacy-mask" style={{ width: 65, textAlign: "right", fontFamily: mono, color: isPos ? "#08a86b" : "#e5484d" }}>
-                            ${(r.totalPl / 1000).toFixed(1)}k
+                            {formatCurrency(r.totalPl, { compact: true })}
                           </span>
                         </div>
                       );

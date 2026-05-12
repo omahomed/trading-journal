@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, API_BASE, fetchWithAuth } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, Legend,
@@ -168,7 +169,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
           <div className="p-4 flex flex-col gap-3">
             {[
               { k: "Rally Day", v: `Day ${currentDay} of 25` },
-              { k: "Current Gain", v: `${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}%`, color: currentPct >= 0 ? "#08a86b" : "#e5484d", sub: `from pre-FTD close $${dayBeforeFtdClose.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
+              { k: "Current Gain", v: `${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(2)}%`, color: currentPct >= 0 ? "#08a86b" : "#e5484d", sub: `from pre-FTD close ${formatCurrency(dayBeforeFtdClose)}` },
               { k: "Tracking Toward", v: tracking, color: tracking === "Life Changer" ? "#08a86b" : tracking === "Whipsaw" ? "#e5484d" : "var(--ink)" },
               { k: "FTD Date", v: ftdDate },
             ].map(s => (
@@ -207,7 +208,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
                   {rallyPoints.map((p: any, i: number) => (
                     <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td className="px-3 py-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10 }}>{p.day}</td>
-                      <td className="px-3 py-1.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10 }}>${p.close.toFixed(2)}</td>
+                      <td className="px-3 py-1.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10 }}>{formatCurrency(p.close)}</td>
                       <td className="px-3 py-1.5 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10, color: p.pct >= 0 ? "#08a86b" : "#e5484d" }}>
                         {p.pct >= 0 ? "+" : ""}{p.pct.toFixed(2)}%
                       </td>

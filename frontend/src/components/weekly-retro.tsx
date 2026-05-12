@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradeDetail } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
 const BEHAVIOR_TAGS = [
@@ -300,7 +301,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                                 </span>
                                 <span style={{ fontFamily: mono }}>{tx.trx_id || ""}</span>
                                 <span style={{ fontFamily: mono }}>{tx.shares} shs</span>
-                                <span className="privacy-mask" style={{ fontFamily: mono }}>@ ${parseFloat(String(tx.amount || 0)).toFixed(2)}</span>
+                                <span className="privacy-mask" style={{ fontFamily: mono }}>@ {formatCurrency(parseFloat(String(tx.amount || 0)))}</span>
                                 <span style={{ color: "var(--ink-4)" }}>{tx.rule || ""}</span>
                               </div>
                             );
