@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
 import { matchesAnyTradeQuery } from "@/lib/trade-search";
 import { CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
+import { formatCurrency } from "@/lib/format";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -1213,7 +1214,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   </div>
                   <div className="text-right">
                     <div className="text-[20px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: PLColor(totalPl) }}>
-                      ${totalPl >= 0 ? "+" : ""}{totalPl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {formatCurrency(totalPl, { showSign: true })}
                     </div>
                     <div className="text-[12px] font-medium" style={{ color: PLColor(retPct) }}>
                       {retPct >= 0 ? "+" : ""}{retPct.toFixed(2)}%
@@ -1223,8 +1224,8 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
                 {/* Key metrics row */}
                 <div className="grid grid-cols-4 gap-4 py-3" style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
-                  <CardMetric label="Entry" value={`$${avgEntry.toFixed(2)}`} />
-                  <CardMetric label={isOpen ? "Status" : "Exit"} value={isOpen ? "Active" : `$${avgExit.toFixed(2)}`} color={isOpen ? "#08a86b" : undefined} />
+                  <CardMetric label="Entry" value={formatCurrency(avgEntry)} />
+                  <CardMetric label={isOpen ? "Status" : "Exit"} value={isOpen ? "Active" : formatCurrency(avgExit)} color={isOpen ? "#08a86b" : undefined} />
                   <CardMetric label={unitLabel} value={String(shares)} />
                   <CardMetric label="Days Held" value={String(daysHeld)} />
                 </div>
@@ -1232,10 +1233,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                 {/* Core/Add-on P&L (if multi-tranche) */}
                 {hasAddons && b1Price > 0 && !isOpen && (
                   <div className="grid grid-cols-4 gap-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-                    <CardMetric label="Core P&L" value={`$${corePl >= 0 ? "+" : ""}${corePl.toFixed(0)}`} color={PLColor(corePl)} />
-                    <CardMetric label="Add P&L" value={`$${(totalPl - corePl) >= 0 ? "+" : ""}${(totalPl - corePl).toFixed(0)}`} color={PLColor(totalPl - corePl)} />
-                    <CardMetric label="Core Band" value={`$${bandLow.toFixed(0)} – $${bandHigh.toFixed(0)}`} />
-                    <CardMetric label="B1 Price" value={`$${b1Price.toFixed(2)}`} />
+                    <CardMetric label="Core P&L" value={formatCurrency(corePl, { showSign: true, decimals: 0 })} color={PLColor(corePl)} />
+                    <CardMetric label="Add P&L" value={formatCurrency(totalPl - corePl, { showSign: true, decimals: 0 })} color={PLColor(totalPl - corePl)} />
+                    <CardMetric label="Core Band" value={`${formatCurrency(bandLow, { decimals: 0 })} – ${formatCurrency(bandHigh, { decimals: 0 })}`} />
+                    <CardMetric label="B1 Price" value={formatCurrency(b1Price)} />
                   </div>
                 )}
 
@@ -1257,19 +1258,19 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                           <div>
                             <span className="font-semibold">T1 (-3%)</span>
                             <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {Math.ceil(shares * 0.25)} shs @ ${(avgEntry * 0.97).toFixed(2)}
+                              {Math.ceil(shares * 0.25)} shs @ {formatCurrency(avgEntry * 0.97)}
                             </span>
                           </div>
                           <div>
                             <span className="font-semibold">T2 (-5%)</span>
                             <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {Math.ceil(shares * 0.25)} shs @ ${(avgEntry * 0.95).toFixed(2)}
+                              {Math.ceil(shares * 0.25)} shs @ {formatCurrency(avgEntry * 0.95)}
                             </span>
                           </div>
                           <div>
                             <span className="font-semibold">T3 (-7%)</span>
                             <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {shares - Math.ceil(shares * 0.25) * 2} shs @ ${(avgEntry * 0.93).toFixed(2)}
+                              {shares - Math.ceil(shares * 0.25) * 2} shs @ {formatCurrency(avgEntry * 0.93)}
                             </span>
                           </div>
                         </div>
@@ -1335,16 +1336,16 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                         const posSizePct = equity > 0 ? (mktVal / equity) * 100 : 0;
                         const riskBudget = parseFloat(String(trade.risk_budget || 0));
                         return [
-                        { label: "Current Price", value: `$${curPrice.toFixed(2)}`, sub: undefined },
-                        { label: "Orig Cost", value: b1Price > 0 ? `$${b1Price.toFixed(2)}` : `$${avgEntry.toFixed(2)}`, sub: undefined },
-                        { label: "Avg Cost", value: `$${avgEntry.toFixed(2)}`, sub: isOption ? `×${multiplier}` : undefined },
-                        { label: "Trade Risk $", value: `$${riskBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined },
+                        { label: "Current Price", value: formatCurrency(curPrice), sub: undefined },
+                        { label: "Orig Cost", value: b1Price > 0 ? formatCurrency(b1Price) : formatCurrency(avgEntry), sub: undefined },
+                        { label: "Avg Cost", value: formatCurrency(avgEntry), sub: isOption ? `×${multiplier}` : undefined },
+                        { label: "Trade Risk $", value: formatCurrency(riskBudget), sub: undefined },
                         { label: `${unitLabel} Held`, value: String(isOpen ? shares : 0), sub: undefined },
-                        { label: "Unrealized P&L", value: `$${unreal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: isOpen ? `${unrealPct.toFixed(2)}%` : undefined, color: PLColor(unreal) },
-                        { label: "Realized P&L", value: `$${realizedBank.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, sub: undefined, color: PLColor(realizedBank) },
+                        { label: "Unrealized P&L", value: formatCurrency(unreal), sub: isOpen ? `${unrealPct.toFixed(2)}%` : undefined, color: PLColor(unreal) },
+                        { label: "Realized P&L", value: formatCurrency(realizedBank), sub: undefined, color: PLColor(realizedBank) },
                         { label: isOpen ? "Total Equity" : "Final Cost Basis", value: isOpen
-                            ? `$${mktVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-                            : `$${totalCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                            ? formatCurrency(mktVal, { decimals: 0 })
+                            : formatCurrency(totalCost, { decimals: 0 }),
                           sub: isOpen ? `${posSizePct.toFixed(1)}% Size` : "Closed" },
                         ];
                       })().map(m => (
@@ -1432,12 +1433,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: row.status === "Open" ? "#08a86b" : "var(--ink-4)" }}>{row.status}</td>
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, color: row.displayShares < 0 ? "#e5484d" : "var(--ink)" }}>{row.displayShares}</td>
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{!row.isSell ? (row.remaining > 0 ? row.remaining : 0) : ""}</td>
-                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>${parseFloat(String(tx.amount || 0)).toFixed(2)}</td>
-                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{!row.isSell && row.exitPrice > 0 ? `$${row.exitPrice.toFixed(2)}` : "—"}</td>
-                                  <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{txStop > 0 ? `$${txStop.toFixed(2)}` : "—"}</td>
-                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: row.value < 0 ? "#e5484d" : "var(--ink)" }}>${Math.abs(row.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.realizedPl) }}>{!row.isSell && row.realizedPl !== 0 ? `$${row.realizedPl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : !row.isSell ? "$0.00" : ""}</td>
-                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: PLColor(row.unrealizedPl || 0) }}>{!row.isSell && row.unrealizedPl !== 0 ? `$${row.unrealizedPl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : !row.isSell ? "$0.00" : ""}</td>
+                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(parseFloat(String(tx.amount || 0)))}</td>
+                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{!row.isSell && row.exitPrice > 0 ? formatCurrency(row.exitPrice) : "—"}</td>
+                                  <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{txStop > 0 ? formatCurrency(txStop) : "—"}</td>
+                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: row.value < 0 ? "#e5484d" : "var(--ink)" }}>{formatCurrency(Math.abs(row.value))}</td>
+                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.realizedPl) }}>{!row.isSell && row.realizedPl !== 0 ? formatCurrency(row.realizedPl) : !row.isSell ? "$0.00" : ""}</td>
+                                  <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: PLColor(row.unrealizedPl || 0) }}>{!row.isSell && row.unrealizedPl !== 0 ? formatCurrency(row.unrealizedPl) : !row.isSell ? "$0.00" : ""}</td>
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.returnPct) }}>{!row.isSell ? `${row.returnPct.toFixed(2)}%` : ""}</td>
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-4)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(tx as any).notes || ""}</td>
