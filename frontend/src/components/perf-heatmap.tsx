@@ -23,6 +23,19 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"all" | "open" | "closed">("all");
   const [metricMode, setMetricMode] = useState<"return" | "rmult" | "impact">("return");
+  // Group 8: Stocks vs Options live on disjoint color scales. Default Stocks
+  // (primary instrument, hides premium-on-premium outliers like AMD +196.7%).
+  // Persisted because the filter is sticky — a user who works mostly in
+  // options shouldn't have to re-select on every page load.
+  const [instrumentMode, setInstrumentMode] = useState<"stocks" | "options">(() => {
+    try {
+      const stored = localStorage.getItem("perf-heatmap-instrument");
+      return stored === "options" ? "options" : "stocks";
+    } catch { return "stocks"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("perf-heatmap-instrument", instrumentMode); } catch {}
+  }, [instrumentMode]);
   const [selectedTrade, setSelectedTrade] = useState<string | null>(null);
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
 
@@ -53,6 +66,16 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
     if (viewMode === "open") all = all.filter(t => (t.status || "").toUpperCase() === "OPEN");
     else if (viewMode === "closed") all = all.filter(t => (t.status || "").toUpperCase() === "CLOSED");
 
+    // Instrument filter (Group 8). Mirrors the canonical isOption pattern
+    // from trade-journal.tsx:1095 — instrument_type column first, ticker-
+    // shape fallback for any legacy row that pre-dates Migration 016.
+    const isOptionRow = (t: TradePosition) =>
+      String(t.instrument_type || "").toUpperCase() === "OPTION"
+      || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(t.ticker || ""));
+    all = instrumentMode === "options"
+      ? all.filter(isOptionRow)
+      : all.filter(t => !isOptionRow(t));
+
     // Compute metrics
     const jSorted = [...journal].sort((a, b) => String(a.day).localeCompare(String(b.day)));
 
@@ -77,7 +100,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
       const key = metricMode === "return" ? "retPct" : metricMode === "rmult" ? "rMult" : "impact";
       return (b as any)[key] - (a as any)[key];
     });
-  }, [trades, openTrades, journal, viewMode, metricMode]);
+  }, [trades, openTrades, journal, viewMode, metricMode, instrumentMode]);
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
 
@@ -87,6 +110,21 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
     : metricMode === "rmult"
     ? { key: "rMult" as const, zMin: -1.2, zMax: 3, fmt: (v: number) => `${v.toFixed(2)}R`, label: "R-Multiple" }
     : { key: "impact" as const, zMin: -1, zMax: 2, fmt: (v: number) => `${v.toFixed(2)}%`, label: "Account Impact %" };
+
+  // Cohort-aware bounds (Group 8). Stocks keep fixed bounds — calibrated
+  // for equity-scale returns. Options expand the gradient to fit outliers
+  // (premium-on-premium can hit +200%; clamping would paint every winner
+  // solid green and wash out within-cohort variance). Fixed bounds remain
+  // a FLOOR — the gradient never contracts below the equity-tuned range.
+  let zMin = cfg.zMin;
+  let zMax = cfg.zMax;
+  if (instrumentMode === "options" && heatData.length > 0) {
+    const vals = heatData.map(d => (d as any)[cfg.key] as number).filter(v => Number.isFinite(v));
+    if (vals.length > 0) {
+      zMin = Math.min(cfg.zMin, ...vals);
+      zMax = Math.max(cfg.zMax, ...vals);
+    }
+  }
 
   const cols = 8;
   const fatalities = heatData.filter(d => d.impact < -1).length;
@@ -126,6 +164,15 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
             </button>
           ))}
         </div>
+        <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {(["stocks", "options"] as const).map(m => (
+            <button key={m} onClick={() => setInstrumentMode(m)}
+                    className="px-3 py-1 rounded-md text-[11px] font-medium transition-all capitalize"
+                    style={{ background: instrumentMode === m ? "var(--surface)" : "transparent", color: instrumentMode === m ? "var(--ink)" : "var(--ink-4)" }}>
+              {m}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Heatmap grid */}
@@ -134,8 +181,8 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
           <div className="grid gap-[4px]" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
             {heatData.map((d, i) => {
               const val = (d as any)[cfg.key] as number;
-              const bg = heatColor(val, cfg.zMin, cfg.zMax);
-              const textColor = Math.abs(val) > (cfg.zMax - cfg.zMin) * 0.3 ? "#fff" : "var(--ink)";
+              const bg = heatColor(val, zMin, zMax);
+              const textColor = Math.abs(val) > (zMax - zMin) * 0.3 ? "#fff" : "var(--ink)";
               return (
                 <div key={i} className="rounded-[8px] p-3 text-center transition-transform duration-150 hover:scale-105 cursor-pointer"
                      style={{ background: bg, minHeight: 70, outline: selectedTrade === d.tradeId ? `2px solid ${navColor}` : "none", outlineOffset: 1 }}
@@ -184,6 +231,15 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
         const rb = parseFloat(String(trade.risk_budget || 0));
         const rMult = rb > 0 ? pl / rb : null;
         const isOpen = (trade.status || "").toUpperCase() === "OPEN";
+        // Group 8 — Migration 016 option formatting. Notional = shares ×
+        // price × 100; unit label is "Contracts" not "Shares". Mirrors the
+        // canonical pattern at trade-journal.tsx:1095.
+        const isOption = String((trade as any).instrument_type || "").toUpperCase() === "OPTION"
+          || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
+        const multiplier = isOption
+          ? Math.max(parseFloat(String((trade as any).multiplier || 0)) || 100, 1)
+          : 1;
+        const unitLabel = isOption ? "Contracts" : "Shares";
         const avgEntry = parseFloat(String(trade.avg_entry || 0)) || (buys.length > 0 ? buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)) * parseFloat(String(d.amount || 0)), 0) / buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0) : 0);
         const avgExit = parseFloat(String(trade.avg_exit || 0)) || (sells.length > 0 ? sells.reduce((a, d) => a + parseFloat(String(d.shares || 0)) * parseFloat(String(d.amount || 0)), 0) / sells.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0) : 0);
         const totalShares = trade.shares || buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0);
@@ -218,7 +274,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                       <div className="text-[12px] font-medium" style={{ color: "var(--ink-3)" }}>{trade.rule || ""}</div>
                       <div className="text-[12px] font-medium" style={{ color: "var(--ink-3)" }}>
                         {String(trade.open_date || "").slice(0, 10)} → {String(trade.closed_date || "").slice(0, 10) || (isOpen ? "Active" : "—")}
-                        {' · '}{totalShares} shares
+                        {' · '}{totalShares} {unitLabel.toLowerCase()}
                       </div>
                     </div>
                   </div>
@@ -256,7 +312,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                     <div className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)" }}>
                       <table className="w-full text-[10px]" style={{ borderCollapse: "collapse" }}>
                         <thead><tr>
-                          {["Date", "Action", "Shares", "Price", "Value", "Rule"].map(h => (
+                          {["Date", "Action", unitLabel, "Price", "Value", "Rule"].map(h => (
                             <th key={h} className="text-left px-2.5 py-1.5 text-[9px] uppercase font-semibold"
                                 style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                           ))}
@@ -276,7 +332,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
                               </td>
                               <td className="px-2.5 py-1.5" style={{ fontFamily: mono, color: isSell ? "#e5484d" : "var(--ink)" }}>{isSell ? -shs : shs}</td>
                               <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${px.toFixed(2)}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${(shs * px).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${(shs * px * multiplier).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                               <td className="px-2.5 py-1.5 text-[9px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
                             </tr>
                           );
