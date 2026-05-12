@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -197,9 +198,9 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
 
           <Field label="Select Position">
             <SearchSelect
-              value={selectedStop ? (() => { const t = openTrades.find(x => x.trade_id === selectedStop); return t ? `${t.ticker} | ${t.trade_id} (${t.shares} shs @ $${parseFloat(String(t.avg_entry || 0)).toFixed(2)})` : ""; })() : ""}
+              value={selectedStop ? (() => { const t = openTrades.find(x => x.trade_id === selectedStop); return t ? `${t.ticker} | ${t.trade_id} (${t.shares} shs @ ${formatCurrency(parseFloat(String(t.avg_entry || 0)))})` : ""; })() : ""}
               onChange={(v) => { const id = v.split(" | ")[1]?.split(" (")[0]?.trim() || ""; setSelectedStop(id); setNewStop(""); }}
-              options={openTrades.map(t => `${t.ticker} | ${t.trade_id} (${t.shares} shs @ $${parseFloat(String(t.avg_entry || 0)).toFixed(2)})`)}
+              options={openTrades.map(t => `${t.ticker} | ${t.trade_id} (${t.shares} shs @ ${formatCurrency(parseFloat(String(t.avg_entry || 0)))})`)}
               placeholder="Search positions..."
             />
           </Field>
@@ -226,9 +227,9 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                         <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10 }}>{d.trx_id || "—"}</td>
                         <td className="px-3 py-2" style={{ fontFamily: "var(--font-jetbrains), monospace", fontSize: 10, color: "var(--ink-4)" }}>{String(d.date || "").slice(0, 16)}</td>
                         <td className="px-3 py-2" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{d.shares}</td>
-                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${parseFloat(String(d.amount || 0)).toFixed(2)}</td>
+                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(parseFloat(String(d.amount || 0)))}</td>
                         <td className="px-3 py-2" style={{ fontFamily: "var(--font-jetbrains), monospace", color: parseFloat(String(d.stop_loss || 0)) > 0 ? "var(--ink)" : "var(--ink-4)" }}>
-                          {parseFloat(String(d.stop_loss || 0)) > 0 ? `$${parseFloat(String(d.stop_loss)).toFixed(2)}` : "—"}
+                          {parseFloat(String(d.stop_loss || 0)) > 0 ? formatCurrency(parseFloat(String(d.stop_loss))) : "—"}
                         </td>
                         <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-4)" }}>{d.notes || ""}</td>
                       </tr>
@@ -289,10 +290,10 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                 return (
                   <div className="px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
                        style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
-                    Will update stop to <strong>${parseFloat(newStop).toFixed(2)}</strong> for all {stopDetails.length} lot(s) of {stopTrade.ticker}
+                    Will update stop to <strong>{formatCurrency(parseFloat(newStop))}</strong> for all {stopDetails.length} lot(s) of {stopTrade.ticker}
                     {nearBe && (
                       <div className="mt-1 text-[11px]" style={{ color: "#8b5cf6" }}>
-                        🎯 Near breakeven (${avgEntry.toFixed(2)}) — if stock is up ≥10% from entry, this will flag the <strong>+10% BE rule</strong>.
+                        🎯 Near breakeven ({formatCurrency(avgEntry)}) — if stock is up ≥10% from entry, this will flag the <strong>+10% BE rule</strong>.
                       </div>
                     )}
                   </div>
@@ -403,7 +404,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                       className={inputCls} style={{ ...inputStyle, appearance: "none" as any }}>
                 <option value="-1">Select...</option>
                 {editTxns.map((tx, i) => (
-                  <option key={i} value={i}>{tx.trx_id || `#${i + 1}`} — {tx.action} {tx.shares} shs @ ${parseFloat(String(tx.amount || 0)).toFixed(2)}</option>
+                  <option key={i} value={i}>{tx.trx_id || `#${i + 1}`} — {tx.action} {tx.shares} shs @ {formatCurrency(parseFloat(String(tx.amount || 0)))}</option>
                 ))}
               </select>
             </Field>
@@ -505,7 +506,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                   <button disabled={editSaving}
                           onClick={async () => {
                             if (!editTx) return;
-                            const label = `${editTx.action} ${editTx.shares} ${editTx.ticker} @ $${parseFloat(String(editTx.amount || 0)).toFixed(2)}`;
+                            const label = `${editTx.action} ${editTx.shares} ${editTx.ticker} @ ${formatCurrency(parseFloat(String(editTx.amount || 0)))}`;
                             const confirmed = window.confirm(
                               `Delete this transaction?\n\n${label}\n${editTx.trx_id ? `Trx ID: ${editTx.trx_id}` : ""}\n\nThe campaign's avg entry / realized P&L / status will be recomputed from the remaining transactions. If this is the only transaction, the entire campaign is removed. Soft-delete — recoverable from the DB by clearing deleted_at.`
                             );

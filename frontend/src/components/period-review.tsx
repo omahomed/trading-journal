@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
 } from "recharts";
 
 /* ── helpers ── */
-function fmt$(v: number) { return v >= 0 ? `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `-$${Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function fmtPct(v: number) { return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`; }
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
@@ -64,11 +64,11 @@ function CapitalDeployed({ data }: { data: any[] }) {
         <div className="px-4 pb-4">
           {/* Top row: 5 capital metrics */}
           <div className="grid grid-cols-5 gap-3 mb-4">
-            <MetricTile label="Starting Capital" value={`$${stats.firstBeg.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
-            <MetricTile label="Total Deposited" value={`$${stats.totalDeposits.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
-            <MetricTile label="Total Withdrawn" value={`$${stats.totalWithdrawals.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
-            <MetricTile label="Net Capital Deployed" value={`$${stats.netInvested.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} sub="Starting + deposits − withdrawals" />
-            <MetricTile label="Current Value" value={`$${stats.currentValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} color={stats.currentValue >= stats.netInvested ? "#08a86b" : "#e5484d"} />
+            <MetricTile label="Starting Capital" value={formatCurrency(stats.firstBeg, { decimals: 0 })} />
+            <MetricTile label="Total Deposited" value={formatCurrency(stats.totalDeposits, { decimals: 0 })} />
+            <MetricTile label="Total Withdrawn" value={formatCurrency(stats.totalWithdrawals, { decimals: 0 })} />
+            <MetricTile label="Net Capital Deployed" value={formatCurrency(stats.netInvested, { decimals: 0 })} sub="Starting + deposits − withdrawals" />
+            <MetricTile label="Current Value" value={formatCurrency(stats.currentValue, { decimals: 0 })} color={stats.currentValue >= stats.netInvested ? "#08a86b" : "#e5484d"} />
           </div>
 
           {/* Divider */}
@@ -78,7 +78,7 @@ function CapitalDeployed({ data }: { data: any[] }) {
           <div className="grid grid-cols-3 gap-3 mb-3">
             <MetricTile
               label="Straight P&L"
-              value={fmt$(stats.straightPnl)}
+              value={formatCurrency(stats.straightPnl)}
               sub={stats.straightPnl >= 0 ? "Profit" : "Loss"}
               color={pctColor(stats.straightPnl)}
             />
@@ -98,7 +98,7 @@ function CapitalDeployed({ data }: { data: any[] }) {
 
           {/* Caption */}
           <div className="text-[11px] leading-relaxed px-1" style={{ color: "var(--ink-4)" }}>
-            <b>Straight Return</b> answers: &ldquo;I deployed {fmt$(stats.netInvested)} and now have {fmt$(stats.currentValue)} — that&apos;s a {fmtPct(stats.straightReturn)} return on capital.&rdquo;
+            <b>Straight Return</b> answers: &ldquo;I deployed {formatCurrency(stats.netInvested)} and now have {formatCurrency(stats.currentValue)} — that&apos;s a {fmtPct(stats.straightReturn)} return on capital.&rdquo;
             <br />
             <b>TWR Return</b> answers: &ldquo;My trading decisions generated {fmtPct(stats.twrLtd)} regardless of deposits/withdrawals.&rdquo;
           </div>
@@ -361,10 +361,10 @@ function FinancialTable({ rows, mode }: { rows: PeriodRow[]; mode: Tab }) {
             {visible.map((r, i) => (
               <tr key={i} style={{ borderTop: "1px solid var(--border)" }} className="hover:brightness-95 transition-colors">
                 <td className="p-3 font-semibold" style={{ color: "var(--ink)" }}>{r.label}</td>
-                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>{fmt$(r.begNlv)}</td>
-                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: r.cashFlow !== 0 ? "#0d6efd" : "var(--ink-3)" }}>{fmt$(r.cashFlow)}</td>
-                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>{fmt$(r.endNlv)}</td>
-                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.periodPnl) }}>{fmt$(r.periodPnl)}</td>
+                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>{formatCurrency(r.begNlv)}</td>
+                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: r.cashFlow !== 0 ? "#0d6efd" : "var(--ink-3)" }}>{formatCurrency(r.cashFlow)}</td>
+                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-2)" }}>{formatCurrency(r.endNlv)}</td>
+                <td className="text-right p-3 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.periodPnl) }}>{formatCurrency(r.periodPnl)}</td>
                 <td className="text-right p-3" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.periodReturn) }}>{fmtPct(r.periodReturn)}</td>
                 <td className="text-right p-3" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.portfolioLtd) }}>{fmtPct(r.portfolioLtd)}</td>
               </tr>
@@ -426,7 +426,7 @@ function PeriodTab({ data, closedTrades, mode }: { data: any[]; closedTrades: Tr
     <div>
       {/* Top metrics row */}
       <div className="grid grid-cols-4 gap-3 mb-6">
-        <MetricTile label={`Latest ${modeLabel} P&L`} value={fmt$(latest.periodPnl)} color={pctColor(latest.periodPnl)} />
+        <MetricTile label={`Latest ${modeLabel} P&L`} value={formatCurrency(latest.periodPnl)} color={pctColor(latest.periodPnl)} />
         <MetricTile label={`${modeLabel} Return %`} value={fmtPct(latest.periodReturn)} color={pctColor(latest.periodReturn)} />
         <MetricTile label="Trades Closed" value={String(tradeCount)} />
         <MetricTile label="Win Rate" value={`${winRate.toFixed(1)}%`} color={winRate >= 50 ? "#08a86b" : "#e5484d"} />

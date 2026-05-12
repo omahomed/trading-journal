@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -133,7 +134,7 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
                   className={inputCls} style={{ ...inputStyle, appearance: "none" as any }}>
             <option value="">Select position...</option>
             {openTrades.map(t => (
-              <option key={t.trade_id} value={t.ticker}>{t.ticker} — {t.shares} shs @ ${parseFloat(String(t.avg_entry || 0)).toFixed(2)}</option>
+              <option key={t.trade_id} value={t.ticker}>{t.ticker} — {t.shares} shs @ {formatCurrency(parseFloat(String(t.avg_entry || 0)))}</option>
             ))}
           </select>
         </Field>
@@ -158,7 +159,7 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
             </Field>
             <Field label="Avg Cost ($)">
               <div className={inputCls + " flex items-center"} style={{ ...inputStyle, background: "var(--bg)" }}>
-                ${avgCost.toFixed(2)}
+                {formatCurrency(avgCost)}
               </div>
             </Field>
           </div>
@@ -171,9 +172,9 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
                    color: cushionPass ? "#16a34a" : cushionFail ? "#dc2626" : "#d97706",
                    border: `1px solid ${cushionPass ? "color-mix(in oklab, #08a86b 30%, var(--border))" : cushionFail ? "color-mix(in oklab, #e5484d 30%, var(--border))" : "color-mix(in oklab, #f59f00 30%, var(--border))"}`,
                  }}>
-              {cushionPass && `PASS: Cushion is ${unrealizedPct.toFixed(2)}% ($${unrealizedDlr.toLocaleString(undefined, { maximumFractionDigits: 0 })}). You have earned the right to hold.`}
+              {cushionPass && `PASS: Cushion is ${unrealizedPct.toFixed(2)}% (${formatCurrency(unrealizedDlr, { decimals: 0 })}). You have earned the right to hold.`}
               {!cushionPass && !cushionFail && `THIN ICE: Cushion is only ${unrealizedPct.toFixed(2)}%. Any gap will likely eat principal.`}
-              {cushionFail && `FAIL: You are underwater (-$${Math.abs(unrealizedDlr).toLocaleString(undefined, { maximumFractionDigits: 0 })}). Strategy Rule: SELL ALL before earnings.`}
+              {cushionFail && `FAIL: You are underwater (${formatCurrency(unrealizedDlr, { decimals: 0 })}). Strategy Rule: SELL ALL before earnings.`}
             </div>
           )}
 
@@ -217,10 +218,10 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
             <div style={{ animation: "slide-up 0.15s ease-out" }}>
               <h3 className="text-[14px] font-semibold mb-3">3. The Verdict</h3>
               <div className="grid grid-cols-4 gap-3 mb-5">
-                <MetricCard label="Disaster Price" value={`$${disasterPrice.toFixed(2)}`} sub={`-$${gapDlr.toFixed(2)} Gap`} />
-                <MetricCard label="Profit Buffer" value={`$${unrealizedDlr.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub="Your Cushion" />
-                <MetricCard label="Projected Drawdown" value={`-$${totalDropEquity.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub="Equity Drop" color="#e5484d" />
-                <MetricCard label="Risk to Principal" value={`$${principalRiskDlr.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                <MetricCard label="Disaster Price" value={formatCurrency(disasterPrice)} sub={`-${formatCurrency(gapDlr)} Gap`} />
+                <MetricCard label="Profit Buffer" value={formatCurrency(unrealizedDlr, { decimals: 0 })} sub="Your Cushion" />
+                <MetricCard label="Projected Drawdown" value={`-${formatCurrency(totalDropEquity, { decimals: 0 })}`} sub="Equity Drop" color="#e5484d" />
+                <MetricCard label="Risk to Principal" value={formatCurrency(principalRiskDlr, { decimals: 0 })}
                             sub={`${pctImpactPrincipal.toFixed(2)}% of NLV`}
                             color={principalRiskDlr === 0 ? "#08a86b" : "#e5484d"} />
               </div>
@@ -229,13 +230,13 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
               {verdict === "safe" && (
                 <div className="px-4 py-3 rounded-[10px] text-[13px] font-medium mb-4"
                      style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#16a34a", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
-                  <strong>SAFE (HOUSE MONEY):</strong> Even with a ${gapDlr.toFixed(2)} gap, price (${disasterPrice.toFixed(2)}) stays above your cost (${avgCost.toFixed(2)}). No principal at risk.
+                  <strong>SAFE (HOUSE MONEY):</strong> Even with a {formatCurrency(gapDlr)} gap, price ({formatCurrency(disasterPrice)}) stays above your cost ({formatCurrency(avgCost)}). No principal at risk.
                 </div>
               )}
               {verdict === "approved" && (
                 <div className="px-4 py-3 rounded-[10px] text-[13px] font-medium mb-4"
                      style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))", color: "#16a34a", border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
-                  <strong>APPROVED:</strong> Principal risk is ${principalRiskDlr.toLocaleString(undefined, { maximumFractionDigits: 0 })} ({pctImpactPrincipal.toFixed(2)}%), which is within your {riskTolPct}% budget.
+                  <strong>APPROVED:</strong> Principal risk is {formatCurrency(principalRiskDlr, { decimals: 0 })} ({pctImpactPrincipal.toFixed(2)}%), which is within your {riskTolPct}% budget.
                 </div>
               )}
               {verdict === "exceeded" && (
