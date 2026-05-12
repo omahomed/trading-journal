@@ -43,15 +43,14 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
 
   // Load saved Focus Mode (currency masking). Defaults ON for new users
   // — discoverable via the visible sidebar toggle, and the safer default
-  // for shoulder-surfing scenarios.
+  // for shoulder-surfing scenarios. Update the module mirror *before*
+  // setFocusMode so the first render reads the correct masking state.
   useEffect(() => {
     const saved = localStorage.getItem("mo-focus-mode");
-    setFocusMode(saved === null ? true : saved === "on");
+    const initial = saved === null ? true : saved === "on";
+    setFocusModeActive(initial);
+    setFocusMode(initial);
   }, []);
-
-  // Bridge Focus Mode state to the format.ts module mirror so
-  // formatCurrency picks up the toggle on every render path.
-  useEffect(() => { setFocusModeActive(focusMode); }, [focusMode]);
 
   const toggleDark = () => {
     const next = !dark;
@@ -68,6 +67,10 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
 
   const toggleFocus = () => {
     const next = !focusMode;
+    // Update the module mirror synchronously *before* triggering the
+    // React re-render — otherwise formatCurrency reads the stale value
+    // during the render and the UI lags by one tick (or one refresh).
+    setFocusModeActive(next);
     setFocusMode(next);
     localStorage.setItem("mo-focus-mode", next ? "on" : "off");
   };
