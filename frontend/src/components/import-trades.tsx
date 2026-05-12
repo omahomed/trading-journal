@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -294,8 +295,6 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
   const stockRows = executions.map((t, i) => ({ t, i })).filter(({ t }) => !isOption(t));
   const optionRows = executions.map((t, i) => ({ t, i })).filter(({ t }) => isOption(t));
 
-  const fmtDol = (v: number, d = 2) => `$${v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
-
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
@@ -470,10 +469,10 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.quantity}</td>
-                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.price)}</td>
-                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.amount)}</td>
-                        <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.commission)}</td>
-                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.net_cash)}</td>
+                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.price)}</td>
+                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.amount)}</td>
+                        <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.commission)}</td>
+                        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.net_cash)}</td>
                         <td className="px-3 py-2.5">
                           <div className="flex gap-1.5">
                             <button onClick={() => t.action === "BUY" ? sendToLogBuy(t) : sendToLogSell(t)}
@@ -630,9 +629,9 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{t.quantity}</td>
-                      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.price)}</td>
-                      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(totalCost)}</td>
-                      <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{fmtDol(t.commission)}</td>
+                      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.price)}</td>
+                      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(totalCost)}</td>
+                      <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(t.commission)}</td>
                       <td className="px-3 py-2.5">
                         <div className="flex gap-1.5">
                           <button onClick={() => t.action === "BUY" ? sendToLogBuy(t) : sendToLogSell(t)}

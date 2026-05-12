@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 
 type ViewFilter = "week" | "month" | "all";
 type Tab = "view" | "manage";
@@ -326,12 +327,11 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           {(() => {
                             const cf = Number((h as any).cash_change ?? (h as any).cash_flow ?? 0);
                             if (!cf) return <span style={{ color: "var(--ink-5)" }}>—</span>;
-                            const sign = cf > 0 ? "+" : "−";
                             const color = cf > 0 ? "#08a86b" : "#e5484d";
-                            return <span style={{ color }}>{sign}${Math.abs(cf).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>;
+                            return <span style={{ color }}>{formatCurrency(cf, { showSign: true, signGlyph: "unicode", decimals: 0 })}</span>;
                           })()}
                         </td>
-                        <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>${(h.end_nlv || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(h.end_nlv || 0, { decimals: 0 })}</td>
                         {/* Grade + metrics + report card */}
                         {(() => {
                           const rc = parseReportCard((h as any).highlights || "");

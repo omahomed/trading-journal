@@ -1,6 +1,7 @@
 "use client";
 
 import { Search, ListOrdered, TriangleAlert } from "lucide-react";
+import { formatCurrency } from "@/lib/format";
 
 /**
  * Phase 1 stub of the mobile Trade Journal. Translates
@@ -162,8 +163,6 @@ const FILTERS = [
   { label: "Options", count: 3, tone: "neutral" as const },
 ];
 
-const fmtUsd = (n: number) =>
-  (n < 0 ? "−$" : "$") + Math.abs(n).toLocaleString("en-US");
 const fmtPctSigned = (n: number) =>
   (n >= 0 ? "+" : "−") + Math.abs(n).toFixed(1) + "%";
 const fmtPctSignedSmall = (n: number) =>
@@ -200,11 +199,11 @@ export function MobileTradeJournal() {
       <div className="mx-5">
         <div className="mb-1 text-[11px] font-medium text-m-text-dim">Holdings</div>
         <div className="font-m-num text-[32px] font-medium tabular-nums tracking-[-0.02em] text-m-text">
-          {fmtUsd(MOCK_HOLDINGS.totalUsd)}
+          {formatCurrency(MOCK_HOLDINGS.totalUsd, { decimals: 0 })}
         </div>
         <div className="mb-2 mt-1 flex items-baseline gap-2">
           <span className="font-m-num text-sm font-medium tabular-nums text-m-accent">
-            {fmtUsd(MOCK_HOLDINGS.todayPnlUsd).replace("$", "+$")}
+            {formatCurrency(MOCK_HOLDINGS.todayPnlUsd, { showSign: true, signGlyph: "unicode", decimals: 0 })}
           </span>
           <span className="font-m-num text-[13px] tabular-nums text-m-accent">
             +{MOCK_HOLDINGS.todayPnlPct.toFixed(2)}%
@@ -344,13 +343,13 @@ function PositionCard({ position }: { position: MobileTradeJournalPosition }) {
       {/* Row 2: notional · units | pnl $ */}
       <div className="mb-1.5 flex items-baseline justify-between">
         <span className="font-m-num text-[13px] tabular-nums text-m-text-muted">
-          {fmtUsd(position.notional)} ·{" "}
+          {formatCurrency(position.notional, { decimals: 0 })} ·{" "}
           {position.kind === "OPTIONS_CALL"
             ? `${position.contracts} contracts`
             : `${position.shares.toLocaleString("en-US")} sh`}
         </span>
         <span className={`font-m-num text-[13px] font-medium tabular-nums ${pnlUsdClass}`}>
-          {fmtUsd(position.pnlUsd).replace("$", pnlIsPositive ? "+$" : "$")}
+          {formatCurrency(position.pnlUsd, { showSign: true, signGlyph: "unicode", decimals: 0 })}
         </span>
       </div>
 
@@ -369,7 +368,7 @@ function PositionFooter({ position }: { position: MobileTradeJournalPosition }) 
             Day {position.dayNum} · B1 only
           </span>
           <span className="font-m-num text-[11px] tabular-nums text-m-text-dim">
-            stop {fmtUsd(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
+            stop {formatCurrency(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
           </span>
         </div>
       );
@@ -380,7 +379,7 @@ function PositionFooter({ position }: { position: MobileTradeJournalPosition }) 
             A{position.lastAddNum} last add {fmtPctSignedSmall(position.lastAddPct)}
           </span>
           <span className="font-m-num text-[11px] tabular-nums text-m-text-dim">
-            stop {fmtUsd(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
+            stop {formatCurrency(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
           </span>
         </div>
       );
@@ -391,7 +390,7 @@ function PositionFooter({ position }: { position: MobileTradeJournalPosition }) 
             A{position.lastAddNum} last add {fmtPctSignedSmall(position.lastAddPct)}
           </span>
           <span className="font-m-num text-[11px] tabular-nums text-m-text-dim">
-            stop {fmtUsd(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
+            stop {formatCurrency(position.stopPrice)} · {fmtPctSignedSmall(position.stopPct)}
           </span>
         </div>
       );
