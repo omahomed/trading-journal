@@ -13,11 +13,13 @@ interface SidebarProps {
   onToggleRail?: () => void;
   privacy?: boolean;
   onTogglePrivacy?: () => void;
+  focusMode?: boolean;
+  onToggleFocus?: () => void;
   dark?: boolean;
   onToggleDark?: () => void;
 }
 
-export function Sidebar({ rail = false, onToggleRail, privacy = false, onTogglePrivacy, dark = false, onToggleDark }: SidebarProps) {
+export function Sidebar({ rail = false, onToggleRail, privacy = false, onTogglePrivacy, focusMode = false, onToggleFocus, dark = false, onToggleDark }: SidebarProps) {
   const pathname = usePathname();
   const activePage = getNavItemForHref(pathname)?.id || "";
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
@@ -285,6 +287,17 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
               </div>
               {Icons.lock()}
               <span className="flex-1">Privacy Mode</span>
+            </div>
+            {/* Focus Mode toggle — masks only $ amounts via formatCurrency */}
+            <div className="flex items-center gap-2.5 text-xs" style={{ color: "var(--ink-3)" }}>
+              <div className="w-7 h-4 rounded-full relative cursor-pointer transition-colors"
+                   style={{ background: focusMode ? "#6366f1" : "var(--border-2)" }}
+                   onClick={onToggleFocus}>
+                <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
+                      style={{ left: focusMode ? 14 : 2 }} />
+              </div>
+              {Icons.eye()}
+              <span className="flex-1">Focus Mode</span>
             </div>
           </>
         )}

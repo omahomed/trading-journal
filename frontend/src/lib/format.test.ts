@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { formatCurrency } from "./format";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { formatCurrency, setFocusModeActive } from "./format";
 
 describe("formatCurrency — defaults (2 decimals, sign before $)", () => {
   it("renders a positive value with comma separators", () => {
@@ -109,5 +109,43 @@ describe("formatCurrency — combinations", () => {
   });
   it("respects an explicit decimals: 2 in compact mode (1500 → $1.50k)", () => {
     expect(formatCurrency(1500, { compact: true, decimals: 2 })).toBe("$1.50k");
+  });
+});
+
+describe("formatCurrency — focusMode", () => {
+  beforeEach(() => setFocusModeActive(false));
+  afterEach(() => setFocusModeActive(false));
+
+  it("masks positive values to '$•••'", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(1234.56)).toBe("$•••");
+  });
+  it("preserves negative sign before masked digits", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(-1234.56)).toBe("-$•••");
+  });
+  it("preserves +sign on showSign:true", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(1234, { showSign: true })).toBe("+$•••");
+  });
+  it("preserves unicode minus glyph", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(-1234, { signGlyph: "unicode" })).toBe("−$•••");
+  });
+  it("drops compact suffix when masking", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(1500, { compact: true })).toBe("$•••");
+  });
+  it("leaves zero unmasked (info-free)", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(0)).toBe("$0.00");
+  });
+  it("leaves null unmasked (info-free)", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(null)).toBe("—");
+  });
+  it("respects zeroAsDash even with focus on", () => {
+    setFocusModeActive(true);
+    expect(formatCurrency(0, { zeroAsDash: true })).toBe("—");
   });
 });
