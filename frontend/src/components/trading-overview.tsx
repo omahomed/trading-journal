@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type JournalHistoryPoint, type TradePosition } from "@/lib/api";
+import { formatCurrency } from "@/lib/format";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -171,8 +172,8 @@ export function TradingOverview({ navColor }: { navColor: string }) {
     },
     {
       label: "P&L (ALL TIME)",
-      value: `$${m.periodPl >= 0 ? "+" : ""}${m.periodPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      sub: `Realized: $${m.periodRealized >= 0 ? "+" : ""}${m.periodRealized.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      value: formatCurrency(m.periodPl, { showSign: true, decimals: 0 }),
+      sub: `Realized: ${formatCurrency(m.periodRealized, { showSign: true, decimals: 0 })}`,
       gradient: m.periodPl >= 0 ? "linear-gradient(135deg, #10b981, #34d399)" : "linear-gradient(135deg, #e5484d, #f87171)",
     },
     {
@@ -294,11 +295,11 @@ export function TradingOverview({ navColor }: { navColor: string }) {
             <div className="grid grid-cols-2 gap-2.5 mb-4">
               <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                 <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg Win</div>
-                <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}>${m.avgWin.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}>{formatCurrency(m.avgWin, { decimals: 0 })}</div>
               </div>
               <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                 <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Avg Loss</div>
-                <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#e5484d" }}>${m.avgLoss.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                <div className="text-[18px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#e5484d" }}>{formatCurrency(m.avgLoss, { decimals: 0 })}</div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2.5">
@@ -350,8 +351,8 @@ export function TradingOverview({ navColor }: { navColor: string }) {
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{parseInt(t.shares)}</td>
-                  <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${parseFloat(t.amount || 0).toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>${parseFloat(t.value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                  <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(parseFloat(t.amount || 0))}</td>
+                  <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(parseFloat(t.value || 0))}</td>
                   <td className="px-3 py-2.5 text-[11px]" style={{ color: "var(--ink-3)" }}>{t.rule || ""}</td>
                 </tr>
               ))}
