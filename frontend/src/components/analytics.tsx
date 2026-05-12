@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { LESSON_CATEGORIES, CAT_COLORS } from "@/lib/lesson-categories";
+import { formatCurrency } from "@/lib/format";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import {
@@ -432,10 +433,10 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 
           {/* Hero Row */}
           <div className="grid grid-cols-4 gap-3 mb-4">
-            <HeroCard label="Total P&L" value={`$${s.netPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub={`${s.total} closed trades`} ok={s.netPl >= 0} />
+            <HeroCard label="Total P&L" value={formatCurrency(s.netPl, { decimals: 0 })} sub={`${s.total} closed trades`} ok={s.netPl >= 0} />
             <HeroCard label="Win Rate" value={`${s.winRate.toFixed(1)}%`} sub={`${s.wins}W · ${s.losses}L`} ok={s.winRate >= 40} />
             <HeroCard label="Profit Factor" value={s.pf.toFixed(2)} sub={s.pf >= 1.5 ? "≥1.5 healthy" : "target ≥1.5"} ok={s.pf >= 1.5} />
-            <HeroCard label="Expectancy / Trade" value={`$${s.expectancy.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} sub="avg $ per trade" ok={s.expectancy >= 0} />
+            <HeroCard label="Expectancy / Trade" value={formatCurrency(s.expectancy, { decimals: 0 })} sub="avg $ per trade" ok={s.expectancy >= 0} />
           </div>
 
           {/* Win/Loss visual bar */}
@@ -461,8 +462,8 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                 <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                   {[
                     { k: "Count", v: String(side.count) },
-                    { k: "Avg", v: `$${side.avg.toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
-                    { k: "Largest", v: `$${side.largest.toLocaleString(undefined, { maximumFractionDigits: 0 })}` },
+                    { k: "Avg", v: formatCurrency(side.avg, { decimals: 0 }) },
+                    { k: "Largest", v: formatCurrency(side.largest, { decimals: 0 }) },
                     { k: "Avg Hold", v: `${side.hold.toFixed(0)}d` },
                   ].map(m => (
                     <div key={m.k}>
@@ -480,7 +481,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
           <div className="grid grid-cols-4 gap-3 mb-4">
             <QualityTile label="Win/Loss Ratio" value={`${s.wlRatio.toFixed(2)}x`} status="≥2.0 target" ok={s.wlRatio >= 2} />
             <QualityTile label="Hold Ratio (W/L)" value={`${s.holdRatio.toFixed(2)}x`} status={s.holdRatio >= 1 ? "letting winners run" : "holding losers too long"} ok={s.holdRatio >= 1} />
-            <QualityTile label="Avg Trade" value={`$${s.avgTrade.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} status={s.avgTrade >= 0 ? "positive" : "negative"} ok={s.avgTrade >= 0} />
+            <QualityTile label="Avg Trade" value={formatCurrency(s.avgTrade, { decimals: 0 })} status={s.avgTrade >= 0 ? "positive" : "negative"} ok={s.avgTrade >= 0} />
             <QualityTile label="Avg R-Multiple" value={`${s.avgR.toFixed(2)}R`} status={`max ${s.maxR.toFixed(1)}R`} ok={s.avgR >= 1} />
           </div>
 
@@ -547,7 +548,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                         <div className="text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: "var(--ink-4)" }}>{b.label}</div>
                         <div className="text-[26px] font-extrabold mt-1">{count}</div>
                         <div className="text-[12px] font-semibold" style={{ color: b.color }}>{b.sub}</div>
-                        <div className="text-[11px] mt-1 privacy-mask" style={{ color: "var(--ink-4)" }}>${dollarSum.toLocaleString(undefined, { maximumFractionDigits: 0 })} total</div>
+                        <div className="text-[11px] mt-1 privacy-mask" style={{ color: "var(--ink-4)" }}>{formatCurrency(dollarSum, { decimals: 0 })} total</div>
                       </div>
                     );
                   })}
@@ -570,7 +571,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                               <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                               <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{t.trade_id}</td>
                               <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.closed_date || "").slice(0, 10)}</td>
-                              <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono, color: "#e5484d" }}>${parseFloat(String(t.realized_pl || 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono, color: "#e5484d" }}>{formatCurrency(parseFloat(String(t.realized_pl || 0)))}</td>
                               <td className="px-3 py-2 font-bold" style={{ fontFamily: mono, color: "#e5484d" }}>{(t.impactPct || 0).toFixed(2)}%</td>
                             </tr>
                           ))}
@@ -609,9 +610,9 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
           <div className="text-[13px] font-semibold mb-3">📅 Monthly Performance</div>
           <div className="grid grid-cols-3 gap-4 mb-5">
             {[
-              { k: "Best Month", v: `$${s.bestMonth.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: s.bestMonthKey, color: "#08a86b", icon: "📈" },
-              { k: "Worst Month", v: `$${s.worstMonth.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: s.worstMonthKey, color: "#e5484d", icon: "📉" },
-              { k: "Average Month", v: `$${s.avgMonth.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, sub: undefined, color: "var(--ink)", icon: "📊" },
+              { k: "Best Month", v: formatCurrency(s.bestMonth, { decimals: 0 }), sub: s.bestMonthKey, color: "#08a86b", icon: "📈" },
+              { k: "Worst Month", v: formatCurrency(s.worstMonth, { decimals: 0 }), sub: s.worstMonthKey, color: "#e5484d", icon: "📉" },
+              { k: "Average Month", v: formatCurrency(s.avgMonth, { decimals: 0 }), sub: undefined, color: "var(--ink)", icon: "📊" },
             ].map(m => (
               <div key={m.k} className="p-5 rounded-[14px] transition-all duration-200 hover:shadow-md"
                    style={{ background: `color-mix(in oklab, ${m.color === "var(--ink)" ? "#888" : m.color} 5%, var(--surface))`, border: "1px solid var(--border)" }}>
@@ -670,13 +671,13 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #08a86b 8%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-bold" style={{ color: "#08a86b" }}>💰 Best Rule</div>
                       <div className="text-[14px] font-bold mt-1">{best?.rule || "—"}</div>
-                      {best && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#08a86b" }}>${best.totalPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      {best && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#08a86b" }}>{formatCurrency(best.totalPl, { decimals: 0 })}</div>
                       <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{best.count} trades · {best.winRate.toFixed(0)}% win rate</div></>}
                     </div>
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #e5484d 8%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-bold" style={{ color: "#e5484d" }}>🚨 Worst Rule</div>
                       <div className="text-[14px] font-bold mt-1">{worst?.rule || "—"}</div>
-                      {worst && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#e5484d" }}>${worst.totalPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      {worst && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#e5484d" }}>{formatCurrency(worst.totalPl, { decimals: 0 })}</div>
                       <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{worst.count} trades · {worst.winRate.toFixed(0)}% win rate</div></>}
                     </div>
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #3b82f6 8%, var(--surface))`, border: "1px solid var(--border)" }}>
@@ -756,11 +757,11 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                       <div className="p-5">
                         <div className="grid grid-cols-2 gap-3 mb-4">
                           {[
-                            { k: "Total P&L", v: `$${totalPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(totalPl) },
+                            { k: "Total P&L", v: formatCurrency(totalPl, { decimals: 0 }), color: pctColor(totalPl) },
                             { k: "Trades", v: String(rt.length) },
                             { k: "Win Rate", v: `${winRate.toFixed(0)}%`, color: winRate >= 50 ? "#08a86b" : "#e5484d" },
                             { k: "Profit Factor", v: pf.toFixed(2) },
-                            { k: "Avg P&L", v: `$${avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(avgPl) },
+                            { k: "Avg P&L", v: formatCurrency(avgPl, { decimals: 0 }), color: pctColor(avgPl) },
                             { k: "Avg R", v: avgR != null ? `${avgR.toFixed(2)}R` : "—" },
                             { k: "Winners", v: String(wins.length), color: "#08a86b" },
                             { k: "Losers", v: String(losses.length), color: "#e5484d" },
@@ -817,7 +818,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                                 <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                                 <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(5, 10)}</td>
                                 <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.closed_date || "").slice(5, 10)}</td>
-                                <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>${pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>{formatCurrency(pl, { decimals: 0 })}</td>
                                 <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
                               </tr>
                             );
@@ -855,20 +856,20 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #08a86b 8%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-bold" style={{ color: "#08a86b" }}>🛡️ Best Protector</div>
                       <div className="text-[14px] font-bold mt-1">{negRules[0]?.rule || "No losing exits yet"}</div>
-                      {negRules[0] && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#08a86b" }}>${negRules[0].avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      {negRules[0] && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#08a86b" }}>{formatCurrency(negRules[0].avgPl, { decimals: 0 })}</div>
                       <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>smallest avg loss · {negRules[0].count} uses</div></>}
                     </div>
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #3b82f6 8%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-bold" style={{ color: "#3b82f6" }}>💰 Top Profit Capture</div>
                       <div className="text-[14px] font-bold mt-1">{posRules[0]?.rule || "No winning exits yet"}</div>
-                      {posRules[0] && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#3b82f6" }}>${posRules[0].totalPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>avg ${posRules[0].avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })} · {posRules[0].count} uses</div></>}
+                      {posRules[0] && <><div className="text-[18px] font-bold privacy-mask" style={{ color: "#3b82f6" }}>{formatCurrency(posRules[0].totalPl, { decimals: 0 })}</div>
+                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>avg {formatCurrency(posRules[0].avgPl, { decimals: 0 })} · {posRules[0].count} uses</div></>}
                     </div>
                     <div className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, #64748b 6%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-3)" }}>📊 Most Used Exit</div>
                       <div className="text-[14px] font-bold mt-1">{mostUsed?.rule || "—"}</div>
                       {mostUsed && <><div className="text-[28px] font-extrabold">{mostUsed.count} uses</div>
-                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>avg ${mostUsed.avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div></>}
+                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>avg {formatCurrency(mostUsed.avgPl, { decimals: 0 })}</div></>}
                     </div>
                   </div>
                 );
@@ -955,11 +956,11 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                         </div>
                         <div className="grid grid-cols-2 gap-3 mb-4">
                           {[
-                            { k: "Total P&L", v: `$${totalPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(totalPl) },
+                            { k: "Total P&L", v: formatCurrency(totalPl, { decimals: 0 }), color: pctColor(totalPl) },
                             { k: "Uses", v: String(rt.length) },
                             { k: "Win Rate", v: `${winRate.toFixed(0)}%`, color: winRate >= 50 ? "#08a86b" : "#e5484d" },
                             { k: "Profit Factor", v: pf.toFixed(2) },
-                            { k: "Avg P&L", v: `$${avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, color: pctColor(avgPl) },
+                            { k: "Avg P&L", v: formatCurrency(avgPl, { decimals: 0 }), color: pctColor(avgPl) },
                             { k: "Avg R", v: rs?.avgR != null ? `${rs.avgR.toFixed(2)}R` : "—" },
                             { k: "Avg Hold", v: rs?.avgHold != null ? `${rs.avgHold.toFixed(0)}d` : "—" },
                             { k: "Winners", v: `${wins.length}W / ${losses.length}L` },
@@ -1013,7 +1014,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                                 <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                                 <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{oStr.slice(5, 10)}</td>
                                 <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{cStr.slice(5, 10)}</td>
-                                <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>${pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                                <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>{formatCurrency(pl, { decimals: 0 })}</td>
                                 <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
                                 <td className="px-3 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{hold != null ? `${hold}d` : "—"}</td>
                               </tr>
@@ -1116,7 +1117,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
               })}
             </div>
             <div className="text-[12px] mb-5 px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", color: "var(--ink-3)" }}>
-              Current DD: <strong>{curr.ddPct.toFixed(2)}%</strong> · NLV: <strong className="privacy-mask">${curr.nlv.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> · Peak: <strong className="privacy-mask">${curr.peak.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> · Exposure: <strong>{curr.exposure.toFixed(1)}%</strong>
+              Current DD: <strong>{curr.ddPct.toFixed(2)}%</strong> · NLV: <strong className="privacy-mask">{formatCurrency(curr.nlv, { decimals: 0 })}</strong> · Peak: <strong className="privacy-mask">{formatCurrency(curr.peak, { decimals: 0 })}</strong> · Exposure: <strong>{curr.exposure.toFixed(1)}%</strong>
             </div>
 
             {/* Crossings Log */}
@@ -1137,7 +1138,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                         <div><div className="text-[9px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Max Depth</div><div className="text-[15px] font-bold" style={{ color: "#e5484d" }}>{c.maxDepth.toFixed(2)}%</div></div>
                         <div><div className="text-[9px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Exposure</div><div className="text-[15px] font-bold">{c.expStart.toFixed(0)}% → {c.expTrough.toFixed(0)}%</div><div className="text-[10px]" style={{ color: "var(--ink-4)" }}>Δ {(c.expStart - c.expTrough).toFixed(0)}pp</div></div>
                         <div><div className="text-[9px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Recovery</div><div className="text-[15px] font-bold">{c.recoveryDays != null ? `${c.recoveryDays}d` : "ongoing"}</div></div>
-                        <div><div className="text-[9px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Realized</div><div className="text-[15px] font-bold privacy-mask" style={{ color: "#e5484d" }}>${c.lossesInWindow.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div></div>
+                        <div><div className="text-[9px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Realized</div><div className="text-[15px] font-bold privacy-mask" style={{ color: "#e5484d" }}>{formatCurrency(c.lossesInWindow, { decimals: 0 })}</div></div>
                       </div>
                       {/* Lessons & notes */}
                       <details className="mx-4 mb-3">
@@ -1174,7 +1175,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                   ].map(g => (
                     <div key={g.label} className="p-4 rounded-[12px]" style={{ background: `color-mix(in oklab, ${g.color} 6%, var(--surface))`, border: "1px solid var(--border)" }}>
                       <div className="text-[10px] uppercase font-bold" style={{ color: g.color }}>{g.label}</div>
-                      <div className="text-[24px] font-extrabold mt-1 privacy-mask" style={{ color: g.color }}>${Math.abs(g.data.reduce((a: number, c: any) => a + c.lossesInWindow, 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                      <div className="text-[24px] font-extrabold mt-1 privacy-mask" style={{ color: g.color }}>{formatCurrency(Math.abs(g.data.reduce((a: number, c: any) => a + c.lossesInWindow, 0)), { decimals: 0 })}</div>
                       <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{g.data.length} crossing(s)</div>
                     </div>
                   ))}
@@ -1266,7 +1267,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
               <div className="px-4 py-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-[15px] font-extrabold">{rank != null ? `#${rank} · ` : ""}{t.ticker} <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>({t.trade_id})</span></div>
-                  <div className="text-[18px] font-extrabold privacy-mask" style={{ color: plColor }}>{pl >= 0 ? "+" : ""}${pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                  <div className="text-[18px] font-extrabold privacy-mask" style={{ color: plColor }}>{formatCurrency(pl, { showSign: true, decimals: 0 })}</div>
                 </div>
                 {/* Category pills */}
                 {(() => { const cats = (lessons[t.trade_id]?.category || "").split("|").filter(Boolean); return cats.length > 0 ? (
@@ -1337,11 +1338,11 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                               <td className="px-2.5 py-1.5 font-semibold" style={{ fontFamily: mono }}>{tx.trx_id || ""}</td>
                               <td className="px-2.5 py-1.5"><span className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: `color-mix(in oklab, ${isSell ? "#e5484d" : "#08a86b"} 12%, var(--surface))`, color: isSell ? "#e5484d" : "#08a86b" }}>{tx.action}</span></td>
                               <td className="px-2.5 py-1.5" style={{ fontFamily: mono, color: isSell ? "#e5484d" : "var(--ink)" }}>{isSell ? -shs : shs}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${px.toFixed(2)}</td>
+                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(px)}</td>
                               <td className="px-2.5 py-1.5 font-semibold" style={{ fontFamily: mono, color: !isSell && retPct !== 0 ? pctColor(retPct) : "var(--ink-4)" }}>
                                 {!isSell && retPct !== 0 ? `${retPct >= 0 ? "+" : ""}${retPct.toFixed(2)}%` : isSell ? "" : "0.00%"}
                               </td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>${(shs * px).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(shs * px)}</td>
                               <td className="px-2.5 py-1.5 text-[9px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
                             </tr>
                           );
@@ -1514,7 +1515,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                   <div className="text-[11px] uppercase font-bold mb-2" style={{ color: p.color }}>{p.title}</div>
                   {p.data ? (
                     <div className="grid grid-cols-2 gap-2 text-[12px]">
-                      <div><span style={{ color: "var(--ink-4)" }}>Avg P&L:</span> <strong className="privacy-mask">${p.data.avgPl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                      <div><span style={{ color: "var(--ink-4)" }}>Avg P&L:</span> <strong className="privacy-mask">{formatCurrency(p.data.avgPl, { decimals: 0 })}</strong></div>
                       <div><span style={{ color: "var(--ink-4)" }}>Avg Hold:</span> <strong>{p.data.avgHold.toFixed(0)}d</strong></div>
                       <div><span style={{ color: "var(--ink-4)" }}>Avg R:</span> <strong>{p.data.avgR != null ? `${p.data.avgR.toFixed(2)}R` : "—"}</strong></div>
                       <div><span style={{ color: "var(--ink-4)" }}>Top Buy Rule:</span> <strong>{p.data.topBuy}</strong></div>
@@ -1668,33 +1669,28 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
         const mUnrealized = enrichedFilteredOpen.reduce((a, p) => a + p.unrealized_pl, 0);
         const mTotal = mRealized + mUnrealized;
 
-        const fmt$ = (n: number) =>
-          `$${n >= 0 ? "+" : ""}${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-        const fmt$Plain = (n: number) =>
-          `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-
         type Tile = { k: string; v: string; sub?: string; color?: string };
         const tiles: Tile[] = fdMode === "closed" ? [
           { k: "Trades",        v: String(filtered.length) },
-          { k: "Net P&L",       v: fmt$(cPl), color: pctColor(cPl) },
+          { k: "Net P&L",       v: formatCurrency(cPl, { showSign: true, decimals: 0 }), color: pctColor(cPl) },
           { k: "Win Rate",      v: `${cWinRate.toFixed(0)}%`, color: cWinRate >= 50 ? "#08a86b" : "#e5484d" },
-          { k: "Avg P&L",       v: fmt$(cAvgPl), color: pctColor(cAvgPl) },
+          { k: "Avg P&L",       v: formatCurrency(cAvgPl, { showSign: true, decimals: 0 }), color: pctColor(cAvgPl) },
           { k: "Profit Factor", v: cPf.toFixed(2) },
           { k: "W / L",         v: `${cWins.length}W · ${cLosses.length}L` },
         ] : fdMode === "open" ? [
           { k: "Trades",             v: String(filtered.length) },
-          { k: "Unrealized P&L",     v: fmt$(oUnrealized), color: pctColor(oUnrealized) },
+          { k: "Unrealized P&L",     v: formatCurrency(oUnrealized, { showSign: true, decimals: 0 }), color: pctColor(oUnrealized) },
           { k: "In Profit / Loss",   v: `${oInProfit} · ${oInLoss}` },
-          { k: "Avg Unrealized P&L", v: fmt$(oAvgUnrl), color: pctColor(oAvgUnrl) },
-          { k: "Total Value",        v: fmt$Plain(oCurrentVal) },
+          { k: "Avg Unrealized P&L", v: formatCurrency(oAvgUnrl, { showSign: true, decimals: 0 }), color: pctColor(oAvgUnrl) },
+          { k: "Total Value",        v: formatCurrency(oCurrentVal, { decimals: 0 }) },
           { k: "Avg Days Held",      v: oAvgDays.toFixed(0) },
         ] : [
           { k: "Trades",         v: String(filtered.length) },
-          { k: "Total P&L",      v: fmt$(mTotal), color: pctColor(mTotal) },
+          { k: "Total P&L",      v: formatCurrency(mTotal, { showSign: true, decimals: 0 }), color: pctColor(mTotal) },
           { k: "Closed / Open",  v: `${filteredClosed.length} · ${filteredOpen.length}` },
           { k: "Win Rate",       v: `${cWinRate.toFixed(0)}%`, sub: "closed only", color: cWinRate >= 50 ? "#08a86b" : "#e5484d" },
-          { k: "Net Realized",   v: fmt$(mRealized), color: pctColor(mRealized) },
-          { k: "Net Unrealized", v: fmt$(mUnrealized), color: pctColor(mUnrealized) },
+          { k: "Net Realized",   v: formatCurrency(mRealized, { showSign: true, decimals: 0 }), color: pctColor(mRealized) },
+          { k: "Net Unrealized", v: formatCurrency(mUnrealized, { showSign: true, decimals: 0 }), color: pctColor(mUnrealized) },
         ];
 
         // Unique tickers for filter dropdown
@@ -2008,10 +2004,10 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                         <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(0, 10)}</td>
                         <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{isOpen ? "—" : (displayCloseDate || "—")}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{displayShares > 0 ? displayShares : "—"}</td>
-                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{displayEntry > 0 ? `$${displayEntry.toFixed(2)}` : "—"}</td>
-                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{!isOpen && displayExit > 0 ? `$${displayExit.toFixed(2)}` : "—"}</td>
+                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{displayEntry > 0 ? formatCurrency(displayEntry) : "—"}</td>
+                        <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{!isOpen && displayExit > 0 ? formatCurrency(displayExit) : "—"}</td>
                         <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>
-                          ${pl >= 0 ? "+" : ""}{pl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          {formatCurrency(pl, { showSign: true, decimals: 0 })}
                         </td>
                         <td className="px-3 py-2" style={{ fontFamily: mono, color: pctColor(isOpen ? 0 : displayRet) }}>{!isOpen && displayRet !== 0 ? `${displayRet >= 0 ? "+" : ""}${displayRet.toFixed(1)}%` : "—"}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
