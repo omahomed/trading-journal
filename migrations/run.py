@@ -71,18 +71,32 @@ def pending_files(applied: set[str]) -> list[Path]:
     )
 
 
+# Founder UUID — single-tenant attribution for audit_trail rows written by
+# triggers that fire during a migration. Mirrors the literal in migration 024.
+# When Tier 2 multi-tenancy lands, replace with a dedicated 'system' user.
+_FOUNDER_USER_ID = "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a"
+
+
 def apply_one(conn, path: Path) -> None:
     sql = path.read_text()
     try:
         with conn.cursor() as cur:
+            # Migration self-attribution: causes audit_trail.user_id DEFAULT
+            # to resolve to founder UUID when triggers fire during the
+            # migration. SET LOCAL scopes to this transaction only.
+            cur.execute("SET LOCAL app.user_id = %s", (_FOUNDER_USER_ID,))
             cur.execute(sql)
             cur.execute(
                 "INSERT INTO schema_migrations (filename) VALUES (%s)",
                 (path.name,),
             )
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        print(
+            f"  ✗ FAILED: {path.name} — {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
         raise
 
 
@@ -109,7 +123,10 @@ def main() -> int:
             apply_one(conn, path)
             print(f"  applied")
 
-        print(f"\nDone. {len(pending)} migration(s) applied.")
+        print(
+            f"\nDone. {len(pending)} applied: "
+            f"{', '.join(p.name for p in pending)}."
+        )
         return 0
     finally:
         conn.close()

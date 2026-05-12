@@ -75,3 +75,21 @@ requirements.txt    - Python dependencies
 - Trade IDs: Format `YYYYMM-NNN` (e.g., `202602-001`)
 - Transaction IDs: `B1`, `B2` for buys, `A1`, `A2` for add-ons, `S1` for sells
 - TWR (Time-Weighted Return) used for performance calculation, immune to cash flows
+
+## Audit triggers and migrations
+Any trigger that INSERTs into a tenant-scoped table (one with NOT NULL `user_id`
++ the migration-003 DEFAULT) must source `user_id` explicitly with a founder
+fallback:
+
+```sql
+COALESCE(
+    NULLIF(current_setting('app.user_id', true), '')::uuid,
+    'd7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a'::uuid
+)
+```
+
+Migration sessions don't have `app.user_id` set; without the fallback the
+trigger NOT NULL-violates and aborts the migration that fired it. See
+[migrations/024_audit_trigger_migration_safe.sql](migrations/024_audit_trigger_migration_safe.sql)
+for the canonical pattern. `migrations/run.py` also `SET LOCAL`s the founder
+UUID per migration as defense in depth.
