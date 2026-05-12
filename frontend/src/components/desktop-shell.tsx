@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { TapeStatusPill } from "@/components/tape-status-pill";
 import { getGroupForHref, getNavItemForHref } from "@/lib/nav";
+import { setFocusModeActive } from "@/lib/format";
 
 /**
  * Desktop chrome — extracted verbatim from the former `AppShell` in
@@ -18,6 +19,7 @@ import { getGroupForHref, getNavItemForHref } from "@/lib/nav";
 export function DesktopShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [privacy, setPrivacy] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
   const [dark, setDark] = useState(false);
   const [rail, setRail] = useState(false);
 
@@ -32,6 +34,25 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
     if (saved === "dark") { setDark(true); document.documentElement.classList.add("dark"); }
   }, []);
 
+  // Load saved Privacy Mode (full-blur). Defaults OFF — previously
+  // ephemeral; now persisted for consistency with Dark Mode + Focus Mode.
+  useEffect(() => {
+    const saved = localStorage.getItem("mo-privacy-full");
+    if (saved === "on") setPrivacy(true);
+  }, []);
+
+  // Load saved Focus Mode (currency masking). Defaults ON for new users
+  // — discoverable via the visible sidebar toggle, and the safer default
+  // for shoulder-surfing scenarios.
+  useEffect(() => {
+    const saved = localStorage.getItem("mo-focus-mode");
+    setFocusMode(saved === null ? true : saved === "on");
+  }, []);
+
+  // Bridge Focus Mode state to the format.ts module mirror so
+  // formatCurrency picks up the toggle on every render path.
+  useEffect(() => { setFocusModeActive(focusMode); }, [focusMode]);
+
   const toggleDark = () => {
     const next = !dark;
     setDark(next);
@@ -39,10 +60,23 @@ export function DesktopShell({ children }: { children: React.ReactNode }) {
     localStorage.setItem("mo-theme", next ? "dark" : "light");
   };
 
+  const togglePrivacy = () => {
+    const next = !privacy;
+    setPrivacy(next);
+    localStorage.setItem("mo-privacy-full", next ? "on" : "off");
+  };
+
+  const toggleFocus = () => {
+    const next = !focusMode;
+    setFocusMode(next);
+    localStorage.setItem("mo-focus-mode", next ? "on" : "off");
+  };
+
   return (
     <div className={`flex h-screen ${privacy ? "privacy" : ""}`}>
       <Sidebar
-        privacy={privacy} onTogglePrivacy={() => setPrivacy(!privacy)}
+        privacy={privacy} onTogglePrivacy={togglePrivacy}
+        focusMode={focusMode} onToggleFocus={toggleFocus}
         dark={dark} onToggleDark={toggleDark}
         rail={rail} onToggleRail={() => setRail(!rail)}
       />

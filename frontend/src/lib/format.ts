@@ -34,6 +34,17 @@ export interface FormatCurrencyOptions {
   nullDisplay?: string;
 }
 
+// Module-level mirror updated by DesktopShell's useEffect when the user
+// toggles Focus Mode in the sidebar. Read by formatCurrency to decide
+// whether to substitute "$•••" for the digits. Lives at module scope so
+// formatCurrency stays a pure function — callers don't need to pass
+// context, and non-React consumers (tests, error strings) see the same
+// state without plumbing.
+let _focusModeActive = false;
+export function setFocusModeActive(on: boolean): void {
+  _focusModeActive = on;
+}
+
 /**
  * Format a numeric USD value for display.
  *
@@ -68,6 +79,14 @@ export function formatCurrency(
   let signStr = "";
   if (value < 0) signStr = minus;
   else if (showSign && value > 0) signStr = "+";
+
+  // Focus Mode: substitute "$•••" for the digits but preserve sign and
+  // dollar prefix. Null is already short-circuited above; zero is kept
+  // visible here (no information value in masking it). Compact suffix
+  // (k/M/B) is intentionally dropped — including it would leak magnitude.
+  if (_focusModeActive && value !== 0) {
+    return `${signStr}$•••`;
+  }
 
   const abs = Math.abs(value);
 
