@@ -6,6 +6,7 @@ can fetch real data via REST endpoints.
 
 import sys
 import os
+import time
 
 # Add parent directory to path so we can import existing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -429,7 +430,13 @@ def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
 
 
 def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> float:
-    """Portfolio heat = sum(weight% * atr%/100) for all open positions."""
+    """Portfolio heat = sum(weight% * atr%/100) for stock positions only.
+
+    Option positions are excluded — yfinance has no ATR data for OCC option
+    tickers, so they always contributed 0 heat anyway. Excluding them keeps
+    the metric a clean "volatility check on equity exposure" rather than a
+    diluted average across instruments with incommensurate risk profiles.
+    """
     try:
         summary_df = db.load_summary(portfolio)
         if summary_df.empty or equity <= 0:
@@ -437,6 +444,17 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
         summary_df = _normalize_trades(summary_df)
         status_col = "status" if "status" in summary_df.columns else "Status"
         open_df = summary_df[summary_df[status_col].str.upper() == "OPEN"]
+        if open_df.empty:
+            return 0.0
+        # Filter to stocks. Prefer the instrument_type column (Migration 016).
+        # Fall back to the option-ticker regex pattern matching the canonical
+        # isOptionRow helper on the frontend (perf-heatmap.tsx:73-75) so any
+        # pre-016 legacy row without instrument_type set is still filtered.
+        if "instrument_type" in open_df.columns:
+            open_df = open_df[open_df["instrument_type"].astype(str).str.upper() == "STOCK"]
+        else:
+            option_pattern = r"^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$"
+            open_df = open_df[~open_df["ticker"].astype(str).str.match(option_pattern)]
         if open_df.empty:
             return 0.0
         heat = 0.0
@@ -1115,25 +1133,41 @@ def _fetch_historical_closes(tickers: list[str], target_date) -> dict[str, float
     return out
 
 
+# In-memory cache for /api/prices/lookup. Each entry is (timestamp, payload).
+# 5-minute TTL is enough to coalesce the 24-call burst Portfolio Heat fires
+# per page load down to ~24 calls per 5 minutes — well under yfinance's
+# undocumented per-IP throttle. Errors are NOT cached; transient failures
+# retry cleanly on the next page load.
+_atr_cache: dict[str, tuple[float, dict]] = {}
+_ATR_CACHE_TTL_S = 300
+
+
 @app.get("/api/prices/lookup")
 @limiter.limit("30/minute")
 def price_lookup(request: Request, ticker: str = ""):
     """Get live price + ATR for a single ticker. Used by Position Sizer and Log Buy."""
     if not ticker.strip():
-        return {"error": "No ticker provided"}
+        raise HTTPException(status_code=400, detail="No ticker provided")
     import yfinance as yf
 
+    t = ticker.strip().upper()
+    cached = _atr_cache.get(t)
+    if cached is not None and (time.time() - cached[0]) < _ATR_CACHE_TTL_S:
+        return cached[1]
+
     try:
-        t = ticker.strip().upper()
         stock = yf.Ticker(t)
         df = stock.history(period="40d")
         if df.empty:
-            return {"error": f"No data for {t}"}
+            raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}")
 
         price = float(df["Close"].iloc[-1])
 
-        # ATR calculation — matches Streamlit: ATR% = SMA(TR,21) / SMA(Low,21) * 100
-        atr_pct = 5.0
+        # ATR calculation — matches Streamlit: ATR% = SMA(TR,21) / SMA(Low,21) * 100.
+        # When fewer than 21 bars are available we now return 0.0 instead of the
+        # legacy 5.0 default — aligns with _compute_ticker_atr_pct so the snapshot
+        # and live paths agree on sparse-history tickers.
+        atr_pct = 0.0
         atr_21 = 0.0
         if len(df) >= 21:
             tr = pd.concat([
@@ -1147,14 +1181,18 @@ def price_lookup(request: Request, ticker: str = ""):
             if sma_low > 0:
                 atr_pct = (sma_tr / sma_low) * 100
 
-        return {
+        result = {
             "ticker": t,
             "price": round(price, 2),
             "atr": round(atr_21, 2),
             "atr_pct": round(atr_pct, 2),
         }
+        _atr_cache[t] = (time.time(), result)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}: {e}")
 
 
 @app.get("/api/charts/ohlcv/{ticker}")
