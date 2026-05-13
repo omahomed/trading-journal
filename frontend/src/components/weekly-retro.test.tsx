@@ -169,4 +169,58 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
     // Save button still present — local state preserved for retry.
     expect(screen.getByRole("button", { name: /save weekly retro/i })).toBeInTheDocument();
   });
+
+  // Regression: a stale weeklyRetroList response (server snapshot taken
+  // before the user's save reached the DB) used to overwrite the
+  // just-saved row in local state, then the hydration useEffect ran on
+  // the retros change and wiped every field. Two fixes applied: the
+  // mount fetch now functionally merges with prev (local wins on shared
+  // keys), and hydration deps no longer include retros (so post-save
+  // setRetros doesn't retrigger the effect at all).
+  test("preserves locally-saved row when stale list response arrives after save", async () => {
+    let resolveList: (rows: any[]) => void = () => { /* placeholder */ };
+    const listPromise = new Promise<any[]>(r => { resolveList = r; });
+    mWeeklyList.mockReturnValueOnce(listPromise as any);
+
+    // Echo whatever was saved so the response shape matches the typed input.
+    mWeeklyUpsert.mockImplementation(async (p: any) => ({
+      id: 42,
+      portfolio: p.portfolio,
+      week_start: p.week_start,
+      week_grade: p.week_grade,
+      best_decision: p.best_decision,
+      worst_decision: p.worst_decision,
+      rule_change: p.rule_change,
+      rule_change_text: p.rule_change_text,
+      ticker_grades: p.ticker_grades,
+      created_at: "2026-05-13T00:00:00Z",
+      updated_at: "2026-05-13T00:00:00Z",
+    }));
+
+    await mountAndSettle();
+
+    // Type while the list fetch is still pending. Labels aren't formally
+    // linked in this component, so query by the unique placeholder text.
+    const input = await screen.findByPlaceholderText(/one win to repeat/i);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "saved before list" } });
+    });
+
+    // Debounced save fires (~800ms idle) — wait for the PUT.
+    await waitFor(
+      () => expect(mWeeklyUpsert).toHaveBeenCalledTimes(1),
+      { timeout: 2000 },
+    );
+    expect(mWeeklyUpsert.mock.calls[0][0].best_decision).toBe("saved before list");
+
+    // NOW the stale list response arrives — empty (snapshot taken
+    // before the save reached the DB). Pre-fix this would clobber the
+    // saved row and trigger hydration's else-branch wipe.
+    await act(async () => { resolveList([]); });
+
+    // Field must still show the typed value — not be wiped.
+    await waitFor(() => {
+      expect((input as HTMLInputElement).value).toBe("saved before list");
+    });
+  });
 });

@@ -67,19 +67,31 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   // localStorage.getItem("mo-weekly-retros"). On first successful load we
   // also clear the old localStorage key so stale data doesn't resurface in
   // a new browser context — Phase 0 cleanup, fresh start.
+  //
+  // Functional MERGE (not replace): if a save completed while this list
+  // request was in flight, the server snapshot is stale and would clobber
+  // the just-saved row. Spreading prev LAST means any locally-saved row
+  // wins on a shared key.
   useEffect(() => {
     if (!portfolio) return;
     api.weeklyRetroList(portfolio).then(rows => {
-      const byWeek: Record<string, WeeklyRetro> = {};
-      for (const r of rows) byWeek[r.week_start] = r;
-      setRetros(byWeek);
+      setRetros(prev => {
+        const byWeek: Record<string, WeeklyRetro> = {};
+        for (const r of rows) byWeek[r.week_start] = r;
+        return { ...byWeek, ...prev };
+      });
       try { localStorage.removeItem("mo-weekly-retros"); } catch { /* incognito */ }
     }).catch(() => { /* silent — render blank state */ });
   }, [portfolio]);
 
-  // Hydrate per-week local state when the user picks a different week. We
-  // mark this an intentional non-dirty mutation by clearing dirtyRef AFTER
-  // the state writes settle (see the debounced save guard below).
+  // Hydrate per-week local state when the user picks a different week.
+  //
+  // Hydration is a week-change event. It must NOT re-run on retros
+  // mutation, or post-save setRetros (and stale list responses arriving
+  // after a save) would overwrite in-flight local edits — see commit
+  // history for the regression. The body still reads retros[monStr]
+  // intentionally; we just don't want retros changes to RETRIGGER the
+  // effect.
   useEffect(() => {
     const existing = retros[monStr];
     if (existing) {
@@ -97,7 +109,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     // debounce useEffect sees dirtyRef.current = false and skips firing.
     dirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekDate, retros]);
+  }, [weekDate]);
 
   // Week range — always snap to Monday (Mon=1...Sun=0→treat as previous week's end)
   const _wd = new Date(weekDate + "T12:00:00");
