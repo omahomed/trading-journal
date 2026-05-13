@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { api, getActivePortfolio, type TradeDetail } from "@/lib/api";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
@@ -12,44 +12,13 @@ const BEHAVIOR_TAGS = [
 const WEEK_GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
 type Tab = "grade" | "history";
+type TickerGradeMap = Record<string, WeeklyRetroTickerGrade>;
 
 function gradeColor(g: string) {
   if (g.startsWith("A")) return "#08a86b";
   if (g.startsWith("B")) return "#3b82f6";
   if (g.startsWith("C")) return "#f59f00";
   return "#e5484d";
-}
-
-// Persist retros to localStorage
-function getMonday(dateStr: string): string {
-  const d = new Date(dateStr + "T12:00:00");
-  const day = d.getDay();
-  const offset = day === 0 ? -6 : 1 - day;
-  const mon = new Date(d);
-  mon.setDate(d.getDate() + offset);
-  return `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, "0")}-${String(mon.getDate()).padStart(2, "0")}`;
-}
-
-function loadRetros(): Record<string, any> {
-  try {
-    const raw = JSON.parse(localStorage.getItem("mo-weekly-retros") || "{}");
-    // Deduplicate: normalize all keys to Monday
-    const cleaned: Record<string, any> = {};
-    for (const [key, val] of Object.entries(raw)) {
-      const monKey = getMonday(key);
-      // Keep the one with more data (later savedAt wins)
-      if (!cleaned[monKey] || (val as any).savedAt > (cleaned[monKey] as any).savedAt) {
-        cleaned[monKey] = val;
-      }
-    }
-    if (Object.keys(cleaned).length !== Object.keys(raw).length) {
-      localStorage.setItem("mo-weekly-retros", JSON.stringify(cleaned));
-    }
-    return cleaned;
-  } catch { return {}; }
-}
-function saveRetros(data: Record<string, any>) {
-  localStorage.setItem("mo-weekly-retros", JSON.stringify(data));
 }
 
 export function WeeklyRetro({ navColor }: { navColor: string }) {
@@ -66,44 +35,69 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   });
 
   // Ticker-level grades
-  const [tickerGrades, setTickerGrades] = useState<Record<string, { grade: string; behavior: string; notes: string }>>({});
+  const [ticker_grades, setTickerGrades] = useState<TickerGradeMap>({});
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
 
-  // Week summary
-  const [weekGrade, setWeekGrade] = useState("");
-  const [bestDecision, setBestDecision] = useState("");
-  const [worstDecision, setWorstDecision] = useState("");
-  const [ruleChange, setRuleChange] = useState(false);
-  const [ruleChangeText, setRuleChangeText] = useState("");
+  // Week summary — snake_case mirrors the wire shape (Phase 0).
+  const [week_grade, setWeekGrade] = useState<string>("");
+  const [best_decision, setBestDecision] = useState("");
+  const [worst_decision, setWorstDecision] = useState("");
+  const [rule_change, setRuleChange] = useState(false);
+  const [rule_change_text, setRuleChangeText] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
 
-  // History
-  const [retros, setRetros] = useState<Record<string, any>>({});
+  // History — full retro rows keyed by week_start, populated from the API.
+  const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
+
+  // Dirty flag gates the debounced auto-save effect so the initial mount
+  // and every cross-week hydration don't fire a wasteful PUT. Mutated by
+  // user-driven setters below.
+  const dirtyRef = useRef(false);
+
+  const portfolio = getActivePortfolio();
 
   useEffect(() => {
-    api.tradesRecent(getActivePortfolio(), 1000).then(d => {
+    api.tradesRecent(portfolio, 1000).then(d => {
       setDetails(d.details);
       setLoading(false);
     }).catch(() => setLoading(false));
-    setRetros(loadRetros());
-  }, []);
+  }, [portfolio]);
 
-  // Load existing retro when week changes
+  // Server fetch of all retros for this portfolio. Replaces the old
+  // localStorage.getItem("mo-weekly-retros"). On first successful load we
+  // also clear the old localStorage key so stale data doesn't resurface in
+  // a new browser context — Phase 0 cleanup, fresh start.
+  useEffect(() => {
+    if (!portfolio) return;
+    api.weeklyRetroList(portfolio).then(rows => {
+      const byWeek: Record<string, WeeklyRetro> = {};
+      for (const r of rows) byWeek[r.week_start] = r;
+      setRetros(byWeek);
+      try { localStorage.removeItem("mo-weekly-retros"); } catch { /* incognito */ }
+    }).catch(() => { /* silent — render blank state */ });
+  }, [portfolio]);
+
+  // Hydrate per-week local state when the user picks a different week. We
+  // mark this an intentional non-dirty mutation by clearing dirtyRef AFTER
+  // the state writes settle (see the debounced save guard below).
   useEffect(() => {
     const existing = retros[monStr];
     if (existing) {
-      setWeekGrade(existing.weekGrade || "");
-      setBestDecision(existing.bestDecision || "");
-      setWorstDecision(existing.worstDecision || "");
-      setRuleChange(existing.ruleChange || false);
-      setRuleChangeText(existing.ruleChangeText || "");
-      setTickerGrades(existing.tickerGrades || {});
+      setWeekGrade(existing.week_grade || "");
+      setBestDecision(existing.best_decision || "");
+      setWorstDecision(existing.worst_decision || "");
+      setRuleChange(existing.rule_change || false);
+      setRuleChangeText(existing.rule_change_text || "");
+      setTickerGrades(existing.ticker_grades || {});
     } else {
       setWeekGrade(""); setBestDecision(""); setWorstDecision("");
       setRuleChange(false); setRuleChangeText(""); setTickerGrades({});
     }
+    // Reset dirty flag — hydration is not a user edit. The next render's
+    // debounce useEffect sees dirtyRef.current = false and skips firing.
+    dirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekDate]);
+  }, [weekDate, retros]);
 
   // Week range — always snap to Monday (Mon=1...Sun=0→treat as previous week's end)
   const _wd = new Date(weekDate + "T12:00:00");
@@ -141,24 +135,55 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   const buys = weekTxns.filter(d => String(d.action).toUpperCase() === "BUY");
   const sells = weekTxns.filter(d => String(d.action).toUpperCase() === "SELL");
   const isOveractive = totalTx > 15;
-  const gradedTickers = Object.values(tickerGrades).filter(g => g.grade).length;
+  const gradedTickers = Object.values(ticker_grades).filter(g => g.grade).length;
 
-  const getGrade = (ticker: string) => tickerGrades[ticker] || { grade: "", behavior: "", notes: "" };
-  const setGradeField = (ticker: string, field: string, value: string) => {
+  const getGrade = (ticker: string): WeeklyRetroTickerGrade =>
+    ticker_grades[ticker] || { grade: "", behavior: "", notes: "" };
+  const setGradeField = (ticker: string, field: keyof WeeklyRetroTickerGrade, value: string) => {
+    dirtyRef.current = true;
     setTickerGrades(prev => ({ ...prev, [ticker]: { ...getGrade(ticker), [field]: value } }));
   };
 
-  const handleSave = () => {
-    const data = {
-      weekGrade, bestDecision, worstDecision, ruleChange, ruleChangeText,
-      tickerGrades, savedAt: new Date().toISOString(),
+  // Optimistic save: state already reflects user input; PUT writes through
+  // and we merge the authoritative response into the local cache. Errors
+  // surface as a non-blocking saveMsg and the local state is preserved so
+  // the explicit Save button (or next keystroke) can retry.
+  const handleSave = useCallback(async () => {
+    const payload: Omit<WeeklyRetro, "id" | "created_at" | "updated_at"> = {
+      portfolio,
+      week_start: monStr,
+      week_grade: week_grade || null,
+      best_decision,
+      worst_decision,
+      rule_change,
+      rule_change_text,
+      ticker_grades,
     };
-    const all = { ...retros, [monStr]: data };
-    saveRetros(all);
-    setRetros(all);
+    const result = await api.weeklyRetroUpsert(payload);
+    if ("error" in result) {
+      setSaveMsg(`Save failed: ${result.error}`);
+      setTimeout(() => setSaveMsg(""), 4000);
+      throw new Error(result.error);
+    }
+    setRetros(prev => ({ ...prev, [result.week_start]: result }));
     setSaveMsg("Weekly retro saved!");
     setTimeout(() => setSaveMsg(""), 3000);
-  };
+    return result;
+  }, [portfolio, monStr, week_grade, best_decision, worst_decision,
+      rule_change, rule_change_text, ticker_grades]);
+
+  // Debounced auto-save. dirtyRef gates the effect so the initial hydration
+  // pass (and every cross-week switch) doesn't fire a wasteful PUT. Mirrors
+  // the priceLookup debounce in log-buy.tsx — 800ms idle window. The flag is
+  // set by user-driven setters (Save button stays as a "force save now").
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    const t = setTimeout(() => {
+      handleSave().catch(() => { /* surfaced via saveMsg already */ });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [week_grade, best_decision, worst_decision, rule_change, rule_change_text,
+      ticker_grades, handleSave]);
 
   // History entries sorted newest first
   const historyEntries = useMemo(() => {
@@ -188,9 +213,10 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
           { key: "history" as Tab, label: "Review History" },
         ]).map(t => (
           <button key={t.key} onClick={() => {
-            // Auto-save when switching away from grade tab
-            if (tab === "grade" && t.key === "history" && (weekGrade || gradedTickers > 0)) {
-              handleSave();
+            // Auto-save when switching away from grade tab. Fire-and-forget
+            // so the tab switch is not blocked on the network round-trip.
+            if (tab === "grade" && t.key === "history" && (week_grade || gradedTickers > 0)) {
+              handleSave().catch(() => { /* saveMsg already shown */ });
             }
             setTab(t.key);
           }}
@@ -358,17 +384,17 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Overall Week Grade</label>
-                  <select value={weekGrade} onChange={e => setWeekGrade(e.target.value)}
+                  <select value={week_grade} onChange={e => { dirtyRef.current = true; setWeekGrade(e.target.value); }}
                           className="w-full h-[42px] px-3 rounded-[10px] text-[14px] font-semibold outline-none"
-                          style={{ ...inputStyle, appearance: "none" as any, color: weekGrade ? gradeColor(weekGrade) : "var(--ink)" }}>
+                          style={{ ...inputStyle, appearance: "none" as any, color: week_grade ? gradeColor(week_grade) : "var(--ink)" }}>
                     <option value="">Select grade...</option>
                     {WEEK_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
                 </div>
                 <div className="flex items-end">
-                  {weekGrade && (
-                    <span className="text-[36px] font-semibold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor(weekGrade), lineHeight: 1 }}>
-                      {weekGrade}
+                  {week_grade && (
+                    <span className="text-[36px] font-semibold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor(week_grade), lineHeight: 1 }}>
+                      {week_grade}
                     </span>
                   )}
                 </div>
@@ -376,24 +402,24 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Best Decision This Week</label>
-                  <input type="text" value={bestDecision} onChange={e => setBestDecision(e.target.value)}
+                  <input type="text" value={best_decision} onChange={e => { dirtyRef.current = true; setBestDecision(e.target.value); }}
                          placeholder="One win to repeat..." className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
                          style={{ ...inputStyle, fontFamily: "inherit" }} />
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Worst Decision This Week</label>
-                  <input type="text" value={worstDecision} onChange={e => setWorstDecision(e.target.value)}
+                  <input type="text" value={worst_decision} onChange={e => { dirtyRef.current = true; setWorstDecision(e.target.value); }}
                          placeholder="One mistake to fix..." className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
                          style={{ ...inputStyle, fontFamily: "inherit" }} />
                 </div>
               </div>
               <div>
                 <label className="flex items-center gap-2 mb-2 cursor-pointer text-[13px]">
-                  <input type="checkbox" checked={ruleChange} onChange={e => setRuleChange(e.target.checked)} className="rounded" />
+                  <input type="checkbox" checked={rule_change} onChange={e => { dirtyRef.current = true; setRuleChange(e.target.checked); }} className="rounded" />
                   <span className="font-medium">Rule Change Needed?</span>
                 </label>
-                {ruleChange && (
-                  <input type="text" value={ruleChangeText} onChange={e => setRuleChangeText(e.target.value)}
+                {rule_change && (
+                  <input type="text" value={rule_change_text} onChange={e => { dirtyRef.current = true; setRuleChangeText(e.target.value); }}
                          placeholder="e.g., New rule: no buying on Day 1 of FTD..."
                          className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
                          style={{ ...inputStyle, fontFamily: "inherit" }} />
@@ -409,7 +435,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             </div>
           )}
 
-          <button onClick={handleSave}
+          <button onClick={() => handleSave().catch(() => { /* saveMsg shown */ })}
                   className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110"
                   style={{ background: "#6366f1" }}>
             Save Weekly Retro
@@ -435,8 +461,8 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                 </thead>
                 <tbody>
                   {historyEntries.map(([weekKey, data], i) => {
-                    const tg = data.tickerGrades || {};
-                    const gradedList = Object.entries(tg).filter(([, v]: [string, any]) => v.grade);
+                    const tg = data.ticker_grades || {};
+                    const gradedList = Object.entries(tg).filter(([, v]) => v.grade);
                     return (
                       <tr key={weekKey} style={{ borderBottom: i < historyEntries.length - 1 ? "1px solid var(--border)" : "none" }}
                           className="transition-colors"
@@ -444,22 +470,22 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td className="px-4 py-3 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{weekKey}</td>
                         <td className="px-4 py-3">
-                          {data.weekGrade && (
-                            <span className="text-[14px] font-bold" style={{ color: gradeColor(data.weekGrade) }}>{data.weekGrade}</span>
+                          {data.week_grade && (
+                            <span className="text-[14px] font-bold" style={{ color: gradeColor(data.week_grade) }}>{data.week_grade}</span>
                           )}
                         </td>
                         <td className="px-4 py-3" style={{ color: "var(--ink-3)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {data.bestDecision || "—"}
+                          {data.best_decision || "—"}
                         </td>
                         <td className="px-4 py-3" style={{ color: "#e5484d", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {data.worstDecision || "—"}
+                          {data.worst_decision || "—"}
                         </td>
-                        <td className="px-4 py-3 text-[11px]" style={{ color: data.ruleChange ? "#e5484d" : "var(--ink-4)" }}>
-                          {data.ruleChange ? data.ruleChangeText || "Yes" : "—"}
+                        <td className="px-4 py-3 text-[11px]" style={{ color: data.rule_change ? "#e5484d" : "var(--ink-4)" }}>
+                          {data.rule_change ? data.rule_change_text || "Yes" : "—"}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex gap-1 flex-wrap">
-                            {gradedList.map(([t, v]: [string, any]) => (
+                            {gradedList.map(([t, v]) => (
                               <span key={t} className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
                                     style={{ background: `${gradeColor(v.grade)}15`, color: gradeColor(v.grade) }}>
                                 {t}: {v.grade.split(" ")[0]}
