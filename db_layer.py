@@ -2740,6 +2740,319 @@ def soft_delete_weekly_retro(retro_id: int) -> bool:
 
 
 # ============================================
+# TAG SYSTEM (Migration 026, Phase 1)
+# ============================================
+# Polymorphic, portfolio-scoped, user-created tags. Two tables: `tags` (the
+# palette) and `tag_assignments` (the polymorphic many-to-many to entities
+# like weekly_retro). Helpers accept the portfolio NAME (matches the rest of
+# this module) and return dicts shaped for direct API serialization.
+#
+# Soft-delete semantics: a soft-deleted tag's assignments stay live in the DB
+# but become invisible to the UI because load_tag_assignments LEFT JOINs
+# tags filtered by tags.deleted_at IS NULL. Un-deleting a tag (clearing
+# deleted_at) reactivates every historical assignment automatically.
+
+# Closed palette (matches the design TAG_PALETTE: rose, amber, emerald, sky,
+# violet). Server-side validation rejects anything else with
+# {"error": "invalid_color"} so the frontend's TAG_PALETTE fallback never
+# silently maps an unknown tone to sky.
+_TAG_COLOR_VOCAB = ("rose", "amber", "emerald", "sky", "violet")
+_TAG_ENTITY_TYPES = ("weekly_retro", "daily_journal", "trades_summary")
+
+
+def _serialize_tag(row: dict) -> dict:
+    """Shared serialization for tags. Used by load/create/update so reads and
+    writes return identical shapes."""
+    return {
+        "id": row["id"],
+        "portfolio": row["portfolio"],
+        "name": row["name"],
+        "color": row["color"],
+        "created_at": (
+            row["created_at"].isoformat()
+            if row.get("created_at") and hasattr(row["created_at"], "isoformat")
+            else row.get("created_at")
+        ),
+        "updated_at": (
+            row["updated_at"].isoformat()
+            if row.get("updated_at") and hasattr(row["updated_at"], "isoformat")
+            else row.get("updated_at")
+        ),
+    }
+
+
+def _serialize_tag_assignment(row: dict) -> dict:
+    """Shared serialization for assignment rows joined with their tag's
+    display fields (tag_name, tag_color)."""
+    return {
+        "id": row["id"],
+        "tag_id": row["tag_id"],
+        "tag_name": row["tag_name"],
+        "tag_color": row["tag_color"],
+        "entity_type": row["entity_type"],
+        "entity_id": row["entity_id"],
+        "created_at": (
+            row["created_at"].isoformat()
+            if row.get("created_at") and hasattr(row["created_at"], "isoformat")
+            else row.get("created_at")
+        ),
+    }
+
+
+def load_tags(portfolio_name: str) -> list[dict]:
+    """Return live tags for the given portfolio, oldest first. RLS scopes by
+    user_id so this is safe to call without an explicit user filter."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT t.id, p.name AS portfolio, t.name, t.color, "
+                "       t.created_at, t.updated_at "
+                "FROM tags t JOIN portfolios p ON p.id = t.portfolio_id "
+                "WHERE p.name = %s AND t.deleted_at IS NULL "
+                "ORDER BY t.created_at ASC",
+                (portfolio_name,),
+            )
+            return [_serialize_tag(dict(r)) for r in cur.fetchall()]
+
+
+def create_tag(portfolio_name: str, name: str, color: str) -> dict:
+    """Insert a new tag. Validates name (1-60 chars after strip) and color
+    (must be in the closed palette). Raises ValueError on bad input. Lets
+    psycopg2.errors.UniqueViolation propagate on case-insensitive collision
+    so the endpoint can translate to a clean error response."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Tag name cannot be empty")
+    if len(name) > 60:
+        raise ValueError("Tag name must be 1-60 characters")
+    if color not in _TAG_COLOR_VOCAB:
+        raise ValueError("invalid_color")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            prow = cur.fetchone()
+            if not prow:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = prow["id"]
+            cur.execute(
+                "INSERT INTO tags (portfolio_id, name, color) "
+                "VALUES (%s, %s, %s) "
+                "RETURNING id, %s AS portfolio, name, color, created_at, updated_at",
+                (portfolio_id, name, color, portfolio_name),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+            return _serialize_tag(row)
+
+
+def update_tag(
+    tag_id: int, *, name: str | None = None, color: str | None = None
+) -> dict | None:
+    """Patch a tag's name and/or color. Returns the updated row, or None if
+    not found / already soft-deleted. Whitelist-only — unknown kwargs are
+    ignored. Stamps updated_at = NOW() whenever any field changes."""
+    sets: list[str] = []
+    params: list = []
+    if name is not None:
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValueError("Tag name cannot be empty")
+        if len(cleaned) > 60:
+            raise ValueError("Tag name must be 1-60 characters")
+        sets.append("name = %s")
+        params.append(cleaned)
+    if color is not None:
+        if color not in _TAG_COLOR_VOCAB:
+            raise ValueError("invalid_color")
+        sets.append("color = %s")
+        params.append(color)
+    if not sets:
+        # No-op update — return the current row for caller convenience.
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT t.id, p.name AS portfolio, t.name, t.color, "
+                    "       t.created_at, t.updated_at "
+                    "FROM tags t JOIN portfolios p ON p.id = t.portfolio_id "
+                    "WHERE t.id = %s AND t.deleted_at IS NULL",
+                    (tag_id,),
+                )
+                row = cur.fetchone()
+                return _serialize_tag(dict(row)) if row else None
+    sets.append("updated_at = NOW()")
+    params.append(tag_id)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"UPDATE tags SET {', '.join(sets)} "
+                f"WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                tuple(params),
+            )
+            hit = cur.fetchone()
+            if not hit:
+                return None
+            cur.execute(
+                "SELECT t.id, p.name AS portfolio, t.name, t.color, "
+                "       t.created_at, t.updated_at "
+                "FROM tags t JOIN portfolios p ON p.id = t.portfolio_id "
+                "WHERE t.id = %s",
+                (tag_id,),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+            return _serialize_tag(row)
+
+
+def soft_delete_tag(tag_id: int) -> bool:
+    """Soft-delete a tag (sets deleted_at = NOW()). Assignments are LEFT
+    untouched in the DB; load_tag_assignments hides them via the JOIN
+    filter on tags.deleted_at IS NULL, so un-deleting a tag reactivates
+    every historical assignment without a follow-up write."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tags SET deleted_at = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                (tag_id,),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return hit is not None
+
+
+def load_tag_assignments(entity_type: str, entity_id: int) -> list[dict]:
+    """Return live assignments for one entity, joined with each tag's
+    display fields. Soft-deleted tags' assignments are filtered out via the
+    JOIN predicate on tags.deleted_at IS NULL — that's how a soft-deleted
+    tag visually disappears without us having to mass-update its children."""
+    if entity_type not in _TAG_ENTITY_TYPES:
+        raise ValueError(f"Unknown entity_type: {entity_type}")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT a.id, a.tag_id, t.name AS tag_name, t.color AS tag_color, "
+                "       a.entity_type, a.entity_id, a.created_at "
+                "FROM tag_assignments a "
+                "JOIN tags t ON t.id = a.tag_id AND t.deleted_at IS NULL "
+                "WHERE a.entity_type = %s AND a.entity_id = %s "
+                "  AND a.deleted_at IS NULL "
+                "ORDER BY a.created_at ASC",
+                (entity_type, entity_id),
+            )
+            return [_serialize_tag_assignment(dict(r)) for r in cur.fetchall()]
+
+
+def count_live_tag_assignments(entity_type: str, entity_id: int) -> int:
+    """Count of currently-live assignments on an entity. Used by the API to
+    enforce the max-10-per-entity cap. Counts only rows whose tag is also
+    live (mirrors what load_tag_assignments returns to the client)."""
+    if entity_type not in _TAG_ENTITY_TYPES:
+        raise ValueError(f"Unknown entity_type: {entity_type}")
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM tag_assignments a "
+                "JOIN tags t ON t.id = a.tag_id AND t.deleted_at IS NULL "
+                "WHERE a.entity_type = %s AND a.entity_id = %s "
+                "  AND a.deleted_at IS NULL",
+                (entity_type, entity_id),
+            )
+            return int(cur.fetchone()[0])
+
+
+def create_tag_assignment(
+    tag_id: int, entity_type: str, entity_id: int
+) -> dict:
+    """Attach a tag to an entity. Idempotent restore semantics:
+      - If a LIVE assignment already exists for the same triple → return it
+        (re-attach is a no-op, not an error).
+      - If a SOFT-DELETED assignment exists → UPDATE deleted_at = NULL and
+        return it. ID stability matters for any future per-assignment
+        metadata.
+      - Otherwise INSERT a new row.
+
+    portfolio_id is sourced from the parent tag (RLS enforces tenant
+    isolation; the tag's portfolio is the assignment's portfolio).
+
+    Raises ValueError if entity_type is unknown or the tag doesn't exist
+    (or has been soft-deleted)."""
+    if entity_type not in _TAG_ENTITY_TYPES:
+        raise ValueError(f"Unknown entity_type: {entity_type}")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Resolve the tag's portfolio_id. Reject if tag is missing or
+            # soft-deleted — attaching a deleted tag would create an
+            # invisible assignment.
+            cur.execute(
+                "SELECT portfolio_id FROM tags "
+                "WHERE id = %s AND deleted_at IS NULL",
+                (tag_id,),
+            )
+            trow = cur.fetchone()
+            if not trow:
+                raise ValueError(f"Tag {tag_id} not found")
+            portfolio_id = trow["portfolio_id"]
+
+            # Look for any existing row (live OR soft-deleted) for this
+            # triple. The partial unique guarantees at most one live row;
+            # if multiple soft-deleted rows somehow exist we revive the
+            # newest.
+            cur.execute(
+                "SELECT id, deleted_at FROM tag_assignments "
+                "WHERE tag_id = %s AND entity_type = %s AND entity_id = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (tag_id, entity_type, entity_id),
+            )
+            existing = cur.fetchone()
+
+            if existing and existing["deleted_at"] is None:
+                assignment_id = existing["id"]
+            elif existing and existing["deleted_at"] is not None:
+                cur.execute(
+                    "UPDATE tag_assignments SET deleted_at = NULL "
+                    "WHERE id = %s RETURNING id",
+                    (existing["id"],),
+                )
+                assignment_id = cur.fetchone()["id"]
+            else:
+                cur.execute(
+                    "INSERT INTO tag_assignments "
+                    "  (portfolio_id, tag_id, entity_type, entity_id) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    (portfolio_id, tag_id, entity_type, entity_id),
+                )
+                assignment_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "SELECT a.id, a.tag_id, t.name AS tag_name, t.color AS tag_color, "
+                "       a.entity_type, a.entity_id, a.created_at "
+                "FROM tag_assignments a "
+                "JOIN tags t ON t.id = a.tag_id "
+                "WHERE a.id = %s",
+                (assignment_id,),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+            return _serialize_tag_assignment(row)
+
+
+def soft_delete_tag_assignment(assignment_id: int) -> bool:
+    """Detach a tag (soft-delete the assignment row). Returns True on hit.
+    Soft-delete preserves the row so a subsequent re-attach can revive it
+    (idempotent restore in create_tag_assignment), keeping ids stable."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE tag_assignments SET deleted_at = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                (assignment_id,),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return hit is not None
+
+
+# ============================================
 # PRICE REFRESH OPERATIONS
 # ============================================
 

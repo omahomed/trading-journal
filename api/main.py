@@ -953,6 +953,165 @@ def weekly_retro_delete(retro_id: int, request: Request):
         return {"error": str(e)}
 
 
+# ============================================================
+# TAG SYSTEM (Migration 026 — Phase 1)
+# ============================================================
+# User-created, portfolio-scoped, polymorphic tags. Phase 1 mounts on Weekly
+# Retro only; daily journals (Phase 7) and trade summaries (Phase 8) reuse
+# the same endpoints with different entity_type values. Standard project
+# conventions: body: dict + Body(...), no Pydantic, HTTP 200 with
+# {"error": "..."} for business errors, slowapi rate-limits on writes.
+#
+# Closed color palette and the max-10-per-entity cap are enforced API-side
+# so the wire contract is stable regardless of frontend client.
+
+_TAG_VALID_COLORS = {"rose", "amber", "emerald", "sky", "violet"}
+_TAG_VALID_ENTITY_TYPES = {"weekly_retro", "daily_journal", "trades_summary"}
+_TAG_MAX_PER_ENTITY = 10
+
+
+@app.get("/api/tags")
+def list_tags_endpoint(portfolio: str = Query("CanSlim")):
+    """List the user's live tags for a portfolio. RLS scopes to the caller;
+    no separate user filter is needed."""
+    try:
+        return db.load_tags(portfolio)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/tags")
+@limiter.limit("10/minute")
+def create_tag_endpoint(request: Request, body: dict = Body(...)):
+    """Create a new tag. Body: { portfolio, name, color }. Color must be
+    in the closed palette (rose|amber|emerald|sky|violet). Case-insensitive
+    name collision returns {"error": "tag_name_exists"} so the frontend
+    can surface a clean message instead of the raw IntegrityError."""
+    portfolio = body.get("portfolio") or "CanSlim"
+    name = (body.get("name") or "").strip()
+    color = body.get("color") or ""
+    if not name:
+        return {"error": "name required"}
+    if color not in _TAG_VALID_COLORS:
+        return {"error": "invalid_color"}
+    try:
+        return db.create_tag(portfolio, name, color)
+    except ValueError as e:
+        return {"error": str(e)}
+    except psycopg2.errors.UniqueViolation:
+        return {"error": "tag_name_exists"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.patch("/api/tags/{tag_id}")
+@limiter.limit("30/minute")
+def update_tag_endpoint(tag_id: int, request: Request, body: dict = Body(...)):
+    """Patch a tag's name and/or color. Whitelisted to those two fields;
+    unknown body keys are silently ignored. Returns the updated row, or
+    {"error": "not_found"} if the tag is missing or already soft-deleted."""
+    fields: dict = {}
+    if "name" in body:
+        fields["name"] = body["name"]
+    if "color" in body:
+        if body["color"] not in _TAG_VALID_COLORS:
+            return {"error": "invalid_color"}
+        fields["color"] = body["color"]
+    try:
+        row = db.update_tag(tag_id, **fields)
+        if row is None:
+            return {"error": "not_found"}
+        return row
+    except ValueError as e:
+        return {"error": str(e)}
+    except psycopg2.errors.UniqueViolation:
+        return {"error": "tag_name_exists"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/tags/{tag_id}")
+@limiter.limit("10/minute")
+def delete_tag_endpoint(tag_id: int, request: Request):
+    """Soft-delete a tag. Assignments are left in place but become
+    invisible (load_tag_assignments filters tags.deleted_at IS NULL).
+    Un-deleting reactivates every historical assignment."""
+    try:
+        ok = db.soft_delete_tag(tag_id)
+        if not ok:
+            return {"error": "not_found"}
+        return {"status": "ok", "id": tag_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/tags/assignments")
+def list_tag_assignments_endpoint(
+    entity_type: str = Query(...),
+    entity_id: int = Query(...),
+):
+    """List the tags currently attached to one entity. Joined with each
+    tag's display fields (tag_name, tag_color) so the frontend doesn't
+    need a second fetch."""
+    if entity_type not in _TAG_VALID_ENTITY_TYPES:
+        return {"error": "invalid_entity_type"}
+    try:
+        return db.load_tag_assignments(entity_type, entity_id)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/tags/assignments")
+@limiter.limit("30/minute")
+def create_tag_assignment_endpoint(request: Request, body: dict = Body(...)):
+    """Attach a tag to an entity. Body: { tag_id, entity_type, entity_id }.
+    Idempotent: re-attaching a tag is a no-op; re-attaching a previously-
+    detached tag REVIVES the soft-deleted assignment (preserves id).
+
+    Enforces the hard cap of 10 live assignments per (entity_type,
+    entity_id) — counted via count_live_tag_assignments. The cap doesn't
+    block restoring an already-counted assignment (idempotent path checks
+    happen first inside the helper)."""
+    tag_id = body.get("tag_id")
+    entity_type = body.get("entity_type")
+    entity_id = body.get("entity_id")
+    if not isinstance(tag_id, int):
+        return {"error": "tag_id required"}
+    if entity_type not in _TAG_VALID_ENTITY_TYPES:
+        return {"error": "invalid_entity_type"}
+    if not isinstance(entity_id, int):
+        return {"error": "entity_id required"}
+    try:
+        # Cap check: count current live assignments. Reject if >= 10 AND
+        # this would be a NEW or REVIVED row (not a no-op re-attach of a
+        # tag already in the count). The cleanest test: if the cap is hit
+        # AND no live assignment for this tag exists, reject.
+        if db.count_live_tag_assignments(entity_type, entity_id) >= _TAG_MAX_PER_ENTITY:
+            existing = [a for a in db.load_tag_assignments(entity_type, entity_id)
+                        if a["tag_id"] == tag_id]
+            if not existing:
+                return {"error": "tag_limit_reached"}
+        return db.create_tag_assignment(tag_id, entity_type, entity_id)
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/tags/assignments/{assignment_id}")
+@limiter.limit("30/minute")
+def delete_tag_assignment_endpoint(assignment_id: int, request: Request):
+    """Detach a tag from an entity (soft-delete the assignment). Returns
+    not_found if the row doesn't exist or has already been detached."""
+    try:
+        ok = db.soft_delete_tag_assignment(assignment_id)
+        if not ok:
+            return {"error": "not_found"}
+        return {"status": "ok", "id": assignment_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/journal/backfill-metrics")
 @limiter.limit("2/minute")
 def journal_backfill_metrics(request: Request, body: dict = Body(...)):

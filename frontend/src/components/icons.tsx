@@ -34,6 +34,11 @@ export const Icons = {
   chevronRight: (p?: any) => <svg {...iconProps} width={12} height={12} strokeWidth={2.5} {...p}><polyline points="9 18 15 12 9 6"/></svg>,
   chevronDown: (p?: any) => <svg {...iconProps} width={12} height={12} strokeWidth={2.5} {...p}><polyline points="6 9 12 15 18 9"/></svg>,
   history: (p?: any) => <svg {...iconProps} {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>,
+  // Standalone glyphs used by the Phase 1 tag system. Sizes/strokeWidths
+  // mirror Design/design_handoff_weekly_retro/design/Icons.jsx WIcon.x and
+  // WIcon.plus exactly.
+  x: (p?: any) => <svg {...iconProps} width={10} height={10} strokeWidth={2.5} {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  plus: (p?: any) => <svg {...iconProps} width={12} height={12} strokeWidth={2.5} {...p}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
 };
 
 // Map nav item IDs to icons
