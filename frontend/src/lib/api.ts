@@ -59,6 +59,29 @@ export interface JournalEntry {
   [key: string]: any;
 }
 
+// Weekly retro (Migration 025 — Phase 0). Persisted server-side via
+// /api/weekly-retros. Both top-level fields and the nested ticker_grades
+// shape mirror the DB columns one-for-one.
+export interface WeeklyRetroTickerGrade {
+  grade: string;
+  behavior: string;
+  notes: string;
+}
+
+export interface WeeklyRetro {
+  id: number;
+  portfolio: string;
+  week_start: string;
+  week_grade: string | null;
+  best_decision: string;
+  worst_decision: string;
+  rule_change: boolean;
+  rule_change_text: string;
+  ticker_grades: Record<string, WeeklyRetroTickerGrade>;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface JournalHistoryPoint {
   day: string;
   end_nlv: number;
@@ -299,6 +322,34 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<{ status: string; checked?: number; updated?: number; errors?: string[]; detail?: string }>,
+
+  // Weekly retros (Migration 025 — Phase 0). Server-side replacement for the
+  // old "mo-weekly-retros" localStorage key. The GET endpoint returns
+  // { error: "not_found" } for a missing week — callers treat that as a
+  // fresh blank retro, not an error UI state.
+  weeklyRetroGet: (portfolio: string, weekStart: string) =>
+    fetchJSON<WeeklyRetro | { error: string }>(
+      `/api/weekly-retros?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
+    ),
+
+  weeklyRetroList: (portfolio: string, limit = 200) =>
+    fetchJSON<WeeklyRetro[]>(
+      `/api/weekly-retros/list?portfolio=${encodeURIComponent(portfolio)}&limit=${limit}`
+    ),
+
+  weeklyRetroUpsert: (
+    payload: Omit<WeeklyRetro, "id" | "created_at" | "updated_at">,
+  ) =>
+    fetchWithAuth(`${API_BASE}/api/weekly-retros`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()) as Promise<WeeklyRetro | { error: string }>,
+
+  weeklyRetroDelete: (retroId: number) =>
+    fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
 
   // IBKR — broker NAV pull for Daily Routine auto-fill. The endpoint always
   // returns 200 OK; success/error is read from the body, never the HTTP code.

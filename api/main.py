@@ -833,6 +833,126 @@ def journal_delete(portfolio: str = Query("CanSlim"), day: str = Query(...)):
         return {"status": "error", "detail": str(e)}
 
 
+# ============================================================
+# WEEKLY RETROS (Migration 025 — Phase 0)
+# ============================================================
+# Move weekly retros out of localStorage into Postgres so subsequent phases
+# (tags, snapshots, cross-entity search) have a real entity to attach to.
+# Endpoints follow the project's body: dict + RLS + slowapi conventions.
+# Business errors return HTTP 200 with {"error": "..."} — auth/rate-limit
+# remain HTTP 401/429 as middleware enforces.
+
+def _parse_week_start(raw) -> date:
+    """Parse a YYYY-MM-DD string into a date. Raises ValueError on bad
+    input — caller surfaces as {"error": "bad week_start"}."""
+    if not raw:
+        raise ValueError("week_start required")
+    s = str(raw).strip()[:10]
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+
+@app.get("/api/weekly-retros")
+def weekly_retro_get(
+    portfolio: str = Query("CanSlim"),
+    week_start: str = Query(...),
+):
+    """Return the live retro for a given portfolio + Monday, or
+    {"error": "not_found"} if no row exists. The frontend treats
+    not_found as "fresh blank retro" — not a UI error."""
+    try:
+        ws = _parse_week_start(week_start)
+    except ValueError as e:
+        return {"error": f"bad week_start: {e}"}
+    try:
+        row = db.load_weekly_retro(portfolio, ws)
+        if row is None:
+            return {"error": "not_found"}
+        return row
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/weekly-retros/list")
+def weekly_retro_list(
+    portfolio: str = Query("CanSlim"),
+    limit: int = Query(200),
+):
+    """Return all live retros for the portfolio, newest first. Used by the
+    History tab today and the Phase 6 left rail later."""
+    try:
+        return db.list_weekly_retros(portfolio, limit=limit)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.put("/api/weekly-retros")
+@limiter.limit("30/minute")
+def weekly_retro_upsert(request: Request, body: dict = Body(...)):
+    """Upsert a retro keyed by (portfolio, week_start). Body shape:
+
+      { portfolio, week_start, week_grade?, best_decision?,
+        worst_decision?, rule_change?, rule_change_text?,
+        ticker_grades?: { ticker: { grade, behavior, notes } } }
+
+    Returns the persisted row (with id) on success so the frontend can
+    attach Phase 1 tags immediately after first save. A soft-deleted row
+    for the same key is REVIVED, not duplicated, so attached tag IDs
+    survive an accidental delete-then-recreate."""
+    portfolio = body.get("portfolio") or "CanSlim"
+    try:
+        ws = _parse_week_start(body.get("week_start"))
+    except ValueError as e:
+        return {"error": f"bad week_start: {e}"}
+
+    week_grade = body.get("week_grade")
+    if week_grade == "":
+        week_grade = None
+
+    tg_in = body.get("ticker_grades")
+    if tg_in is not None and not isinstance(tg_in, dict):
+        return {"error": "ticker_grades must be an object"}
+
+    try:
+        return db.upsert_weekly_retro(
+            portfolio,
+            ws,
+            week_grade=week_grade,
+            best_decision=str(body.get("best_decision") or ""),
+            worst_decision=str(body.get("worst_decision") or ""),
+            rule_change=bool(body.get("rule_change", False)),
+            rule_change_text=str(body.get("rule_change_text") or ""),
+            ticker_grades=tg_in or {},
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+    except psycopg2.errors.CheckViolation as e:
+        # Most likely the Monday CHECK or grade vocab CHECK firing — give a
+        # concrete message instead of leaking the trigger text.
+        msg = str(e).lower()
+        if "monday" in msg or "isodow" in msg:
+            return {"error": "week_start must be a Monday"}
+        if "week_grade" in msg:
+            return {"error": "invalid week_grade"}
+        return {"error": "constraint violation"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.delete("/api/weekly-retros/{retro_id}")
+@limiter.limit("10/minute")
+def weekly_retro_delete(retro_id: int, request: Request):
+    """Soft-delete a retro (sets deleted_at = NOW()). Children are left
+    intact so a future upsert for the same week revives the row with its
+    full picture."""
+    try:
+        ok = db.soft_delete_weekly_retro(retro_id)
+        if not ok:
+            return {"error": "not_found"}
+        return {"status": "ok", "id": retro_id}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/journal/backfill-metrics")
 @limiter.limit("2/minute")
 def journal_backfill_metrics(request: Request, body: dict = Body(...)):

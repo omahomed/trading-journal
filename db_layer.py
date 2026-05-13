@@ -2480,6 +2480,266 @@ def delete_journal_entry(portfolio_name, day):
 
 
 # ============================================
+# WEEKLY RETROS (Migration 025)
+# ============================================
+# Parent + child pair: weekly_retros (one per Monday) and
+# weekly_retro_ticker_grades (delete-then-insert on every parent save, like
+# lot_closures). Helpers accept the portfolio NAME (matches the rest of the
+# module — every public helper takes a string portfolio name and resolves to
+# the integer id internally) and return dicts shaped for direct API
+# serialization, including the ticker_grades child rows expanded into a
+# {ticker: {grade, behavior, notes}} sub-dict.
+
+_WEEK_GRADE_VOCAB = (
+    "A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F",
+)
+
+
+def _serialize_weekly_retro(parent_row: dict, ticker_grades: dict) -> dict:
+    """Shared serialization for weekly_retros parent rows + children.
+
+    Used by load_weekly_retro, list_weekly_retros, and upsert_weekly_retro
+    so the wire shape is consistent across reads and writes.
+    """
+    return {
+        "id": parent_row["id"],
+        "portfolio": parent_row["portfolio"],
+        "week_start": (
+            parent_row["week_start"].isoformat()
+            if hasattr(parent_row["week_start"], "isoformat")
+            else parent_row["week_start"]
+        ),
+        "week_grade": parent_row.get("week_grade"),
+        "best_decision": parent_row.get("best_decision") or "",
+        "worst_decision": parent_row.get("worst_decision") or "",
+        "rule_change": bool(parent_row.get("rule_change")),
+        "rule_change_text": parent_row.get("rule_change_text") or "",
+        "ticker_grades": ticker_grades,
+        "created_at": (
+            parent_row["created_at"].isoformat()
+            if parent_row.get("created_at") and hasattr(parent_row["created_at"], "isoformat")
+            else parent_row.get("created_at")
+        ),
+        "updated_at": (
+            parent_row["updated_at"].isoformat()
+            if parent_row.get("updated_at") and hasattr(parent_row["updated_at"], "isoformat")
+            else parent_row.get("updated_at")
+        ),
+    }
+
+
+def _fetch_ticker_grades_for_retros(cur, retro_ids: list[int]) -> dict[int, dict]:
+    """Bulk-fetch children for a list of retro ids. Returns
+    {retro_id: {ticker: {grade, behavior, notes}}}. Empty dict for retros
+    with no children."""
+    out: dict[int, dict] = {rid: {} for rid in retro_ids}
+    if not retro_ids:
+        return out
+    cur.execute(
+        "SELECT weekly_retro_id, ticker, grade, behavior, notes "
+        "FROM weekly_retro_ticker_grades "
+        "WHERE weekly_retro_id = ANY(%s)",
+        (retro_ids,),
+    )
+    for row in cur.fetchall():
+        out.setdefault(row["weekly_retro_id"], {})[row["ticker"]] = {
+            "grade": row.get("grade") or "",
+            "behavior": row.get("behavior") or "",
+            "notes": row.get("notes") or "",
+        }
+    return out
+
+
+def _replace_weekly_retro_ticker_grades(
+    cur, weekly_retro_id: int, ticker_grades: dict
+) -> None:
+    """Delete-then-insert the full child set for a retro. Mirrors the
+    lot_closures recompute pattern: the helper deletes every existing child
+    row for the parent and re-inserts the current set, so callers don't
+    have to diff additions vs removals.
+
+    Skips entries that are fully empty (no grade, no behavior, no notes) so
+    a ticker with all three blanks doesn't persist a useless row.
+    """
+    cur.execute(
+        "DELETE FROM weekly_retro_ticker_grades WHERE weekly_retro_id = %s",
+        (weekly_retro_id,),
+    )
+    if not ticker_grades:
+        return
+    rows: list[tuple] = []
+    for ticker, g in ticker_grades.items():
+        ticker_clean = str(ticker or "").strip().upper()[:20]
+        if not ticker_clean:
+            continue
+        if not isinstance(g, dict):
+            continue
+        grade = (g.get("grade") or "").strip()[:20] or None
+        behavior = (g.get("behavior") or "").strip()[:40] or None
+        notes = g.get("notes") or ""
+        if not grade and not behavior and not notes:
+            continue
+        rows.append((weekly_retro_id, ticker_clean, grade, behavior, notes))
+    if rows:
+        execute_values(
+            cur,
+            "INSERT INTO weekly_retro_ticker_grades "
+            "(weekly_retro_id, ticker, grade, behavior, notes) VALUES %s",
+            rows,
+        )
+
+
+def load_weekly_retro(portfolio_name: str, week_start) -> dict | None:
+    """Return the live (non-deleted) retro for the given portfolio + Monday,
+    with ticker_grades expanded as a {ticker: {grade, behavior, notes}} dict.
+    Returns None if no row exists."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
+                "       r.best_decision, r.worst_decision, r.rule_change, "
+                "       r.rule_change_text, r.created_at, r.updated_at "
+                "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
+                "WHERE p.name = %s AND r.week_start = %s AND r.deleted_at IS NULL",
+                (portfolio_name, week_start),
+            )
+            parent = cur.fetchone()
+            if not parent:
+                return None
+            parent = dict(parent)
+            tg_map = _fetch_ticker_grades_for_retros(cur, [parent["id"]])
+            return _serialize_weekly_retro(parent, tg_map.get(parent["id"], {}))
+
+
+def list_weekly_retros(portfolio_name: str, limit: int = 200) -> list[dict]:
+    """Return all live retros for the portfolio, newest first, each with its
+    ticker_grades expanded. Used by the History tab today and the Phase 6
+    left rail later."""
+    limit = max(1, min(int(limit), 1000))
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
+                "       r.best_decision, r.worst_decision, r.rule_change, "
+                "       r.rule_change_text, r.created_at, r.updated_at "
+                "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
+                "WHERE p.name = %s AND r.deleted_at IS NULL "
+                "ORDER BY r.week_start DESC LIMIT %s",
+                (portfolio_name, limit),
+            )
+            parents = [dict(r) for r in cur.fetchall()]
+            if not parents:
+                return []
+            tg_map = _fetch_ticker_grades_for_retros(cur, [p["id"] for p in parents])
+            return [_serialize_weekly_retro(p, tg_map.get(p["id"], {})) for p in parents]
+
+
+def upsert_weekly_retro(
+    portfolio_name: str,
+    week_start,
+    *,
+    week_grade: str | None = None,
+    best_decision: str = "",
+    worst_decision: str = "",
+    rule_change: bool = False,
+    rule_change_text: str = "",
+    ticker_grades: dict | None = None,
+) -> dict:
+    """Upsert by (portfolio_id, week_start). If a soft-deleted row exists
+    for the same key, REVIVES it (sets deleted_at = NULL and updates the
+    fields) so any tag rows that pointed at the original id survive.
+    Children are replaced wholesale via _replace_weekly_retro_ticker_grades.
+
+    Returns the persisted row in the same shape as load_weekly_retro().
+    Raises ValueError on unknown portfolio name or invalid week_grade.
+    The DB enforces the Monday CHECK and grade vocab — IntegrityError
+    propagates if the caller bypasses validation.
+    """
+    if week_grade is not None and week_grade != "" and week_grade not in _WEEK_GRADE_VOCAB:
+        raise ValueError(f"Invalid week_grade: {week_grade}")
+    week_grade_val = week_grade or None
+    best_decision = best_decision or ""
+    worst_decision = worst_decision or ""
+    rule_change_text = rule_change_text or ""
+    rule_change = bool(rule_change)
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            prow = cur.fetchone()
+            if not prow:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = prow["id"]
+
+            # Find existing row (live OR soft-deleted). The partial unique
+            # index guarantees at most one live row; if a deleted row also
+            # exists we revive it instead of inserting a duplicate.
+            cur.execute(
+                "SELECT id FROM weekly_retros "
+                "WHERE portfolio_id = %s AND week_start = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (portfolio_id, week_start),
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                cur.execute(
+                    "UPDATE weekly_retros SET "
+                    "  week_grade = %s, best_decision = %s, worst_decision = %s, "
+                    "  rule_change = %s, rule_change_text = %s, "
+                    "  deleted_at = NULL, updated_at = NOW() "
+                    "WHERE id = %s "
+                    "RETURNING id",
+                    (week_grade_val, best_decision, worst_decision,
+                     rule_change, rule_change_text, existing["id"]),
+                )
+                retro_id = cur.fetchone()["id"]
+            else:
+                cur.execute(
+                    "INSERT INTO weekly_retros "
+                    "  (portfolio_id, week_start, week_grade, best_decision, "
+                    "   worst_decision, rule_change, rule_change_text) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (portfolio_id, week_start, week_grade_val, best_decision,
+                     worst_decision, rule_change, rule_change_text),
+                )
+                retro_id = cur.fetchone()["id"]
+
+            _replace_weekly_retro_ticker_grades(cur, retro_id, ticker_grades or {})
+
+            # Re-fetch the persisted row + children in the same transaction
+            # so the return shape is authoritative (post-trigger, post-default).
+            cur.execute(
+                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
+                "       r.best_decision, r.worst_decision, r.rule_change, "
+                "       r.rule_change_text, r.created_at, r.updated_at "
+                "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
+                "WHERE r.id = %s",
+                (retro_id,),
+            )
+            parent = dict(cur.fetchone())
+            tg_map = _fetch_ticker_grades_for_retros(cur, [retro_id])
+            conn.commit()
+            return _serialize_weekly_retro(parent, tg_map.get(retro_id, {}))
+
+
+def soft_delete_weekly_retro(retro_id: int) -> bool:
+    """Set deleted_at = NOW() on the parent retro. Children are left in
+    place (CASCADE only fires on hard delete) so a future revive via
+    upsert restores the full picture intact. Returns True on row hit."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE weekly_retros SET deleted_at = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                (retro_id,),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return hit is not None
+
+
+# ============================================
 # PRICE REFRESH OPERATIONS
 # ============================================
 
