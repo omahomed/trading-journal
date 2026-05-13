@@ -33,6 +33,11 @@ vi.mock("@/lib/api", () => ({
     tradesRecent: vi.fn(),
     weeklyRetroList: vi.fn(),
     weeklyRetroUpsert: vi.fn(),
+    // Phase 1: WeeklyRetro mounts <TagPicker> which fetches these on mount
+    // once a retro has been saved (entityId != null). Stub to empty arrays
+    // so the picker's mount fetch doesn't blow up these unrelated tests.
+    listTags: vi.fn(),
+    listTagAssignments: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -43,6 +48,8 @@ import { WeeklyRetro } from "./weekly-retro";
 const mTradesRecent = vi.mocked(api.tradesRecent);
 const mWeeklyList   = vi.mocked(api.weeklyRetroList);
 const mWeeklyUpsert = vi.mocked(api.weeklyRetroUpsert);
+const mListTags        = vi.mocked(api.listTags);
+const mListAssignments = vi.mocked(api.listTagAssignments);
 
 function setupDefaults() {
   mTradesRecent.mockResolvedValue({ details: [], lot_closures: [] } as any);
@@ -54,6 +61,8 @@ function setupDefaults() {
     ticker_grades: {},
     created_at: "2026-05-13T00:00:00", updated_at: "2026-05-13T00:00:00",
   } as any);
+  mListTags.mockResolvedValue([]);
+  mListAssignments.mockResolvedValue([]);
 }
 
 // Wait for the component's two-step mount: tradesRecent resolves and flips

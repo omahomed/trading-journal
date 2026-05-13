@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { TagPicker } from "./tag-picker";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
 const BEHAVIOR_TAGS = [
@@ -216,6 +217,13 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
           Weekly <em className="italic" style={{ color: navColor }}>Retro</em>
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Grade execution · Identify patterns · Refine rules</div>
+        {/* Tag bar (Phase 1). entityId is null until the retro has been
+            saved at least once — the picker handles the disabled state. */}
+        <TagPicker
+          entityType="weekly_retro"
+          entityId={retros[monStr]?.id ?? null}
+          portfolio={portfolio}
+        />
       </div>
 
       {/* Tabs */}

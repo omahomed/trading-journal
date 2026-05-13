@@ -82,6 +82,29 @@ export interface WeeklyRetro {
   updated_at: string;
 }
 
+// Tags — Phase 1 (Migration 026). Portfolio-scoped, polymorphic
+// (entity_type ∈ {weekly_retro, daily_journal, trades_summary}). Color is a
+// closed-palette key matching TAG_PALETTE in src/lib/tag-palette.ts; see
+// that file's header for the lockstep contract with the backend.
+export interface Tag {
+  id: number;
+  portfolio: string;
+  name: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TagAssignment {
+  id: number;
+  tag_id: number;
+  tag_name: string;
+  tag_color: string;
+  entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+  entity_id: number;
+  created_at: string;
+}
+
 export interface JournalHistoryPoint {
   day: string;
   end_nlv: number;
@@ -348,6 +371,55 @@ export const api = {
 
   weeklyRetroDelete: (retroId: number) =>
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
+
+  // Tag system (Migration 026 — Phase 1). Polymorphic: assignments use
+  // entity_type to discriminate weekly_retro / daily_journal / trades_summary.
+  // Phase 1 mounts on weekly_retro only; later phases reuse these endpoints.
+  listTags: (portfolio: string) =>
+    fetchJSON<Tag[]>(`/api/tags?portfolio=${encodeURIComponent(portfolio)}`),
+
+  createTag: (payload: { portfolio: string; name: string; color: string }) =>
+    fetchWithAuth(`${API_BASE}/api/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()) as Promise<Tag | { error: string }>,
+
+  updateTag: (id: number, payload: { name?: string; color?: string }) =>
+    fetchWithAuth(`${API_BASE}/api/tags/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()) as Promise<Tag | { error: string }>,
+
+  deleteTag: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/tags/${id}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
+
+  listTagAssignments: (query: {
+    entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+    entity_id: number;
+  }) =>
+    fetchJSON<TagAssignment[]>(
+      `/api/tags/assignments?entity_type=${encodeURIComponent(query.entity_type)}&entity_id=${query.entity_id}`,
+    ),
+
+  createTagAssignment: (payload: {
+    tag_id: number;
+    entity_type: "weekly_retro" | "daily_journal" | "trades_summary";
+    entity_id: number;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/tags/assignments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(r => r.json()) as Promise<TagAssignment | { error: string }>,
+
+  deleteTagAssignment: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/tags/assignments/${id}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
 
