@@ -25,6 +25,7 @@ vi.mock("@/lib/api", () => ({
     createTag: vi.fn(),
     createTagAssignment: vi.fn(),
     deleteTagAssignment: vi.fn(),
+    deleteTag: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -37,6 +38,7 @@ const mListAssignments = vi.mocked(api.listTagAssignments);
 const mCreateTag       = vi.mocked(api.createTag);
 const mCreateAssign    = vi.mocked(api.createTagAssignment);
 const mDeleteAssign    = vi.mocked(api.deleteTagAssignment);
+const mDeleteTag       = vi.mocked(api.deleteTag);
 
 function tag(id: number, name: string, color = "rose"): Tag {
   return {
@@ -59,6 +61,7 @@ function setupDefaults() {
   mCreateTag.mockResolvedValue(tag(99, "x", "sky"));
   mCreateAssign.mockResolvedValue(assignment(999, 99, "x", "sky"));
   mDeleteAssign.mockResolvedValue({ status: "ok", id: 1 });
+  mDeleteTag.mockResolvedValue({ status: "ok", id: 1 });
 }
 
 describe("TagPicker", () => {
@@ -328,5 +331,135 @@ describe("TagPicker", () => {
     await act(async () => { fireEvent.click(btn); });
     expect(screen.queryByPlaceholderText(/search or create tag/i)).not.toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent(/Maximum 10 tags/i);
+  });
+
+  // ─── Tag-palette deletion (follow-up) ──────────────────────────────────
+  // These tests cover the in-dropdown trash affordance and its two-click
+  // armed → confirm UX. The row was restructured from a single <button>
+  // (assign) to a <div> with two sibling clickable areas (assign + trash)
+  // so nested interactive elements stay valid HTML.
+
+  // Helper: opens the dropdown and returns the row <div> for a tag name,
+  // located via its trash button's aria-label.
+  async function openAndGetRow(tagName: string): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /add tag/i }));
+    });
+    const trash = await screen.findByRole("button", { name: new RegExp(`Delete tag ${tagName}`, "i") });
+    // Walk up to the row <div> (parent of the trash + assign sibling).
+    const row = trash.closest("div.flex.items-center.justify-between");
+    if (!row) throw new Error(`Could not locate row for tag ${tagName}`);
+    return row as HTMLElement;
+  }
+
+  test("trash icon is hidden by default and revealed on row hover", async () => {
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+    const row = await openAndGetRow("drawdown");
+    const trash = row.querySelector('button[aria-label="Delete tag drawdown"]') as HTMLButtonElement;
+    // Inline opacity reflects hover state; React-tracked, not CSS-only.
+    expect(trash.style.opacity).toBe("0");
+    await act(async () => { fireEvent.mouseEnter(row); });
+    expect(trash.style.opacity).toBe("0.7");
+    await act(async () => { fireEvent.mouseLeave(row); });
+    expect(trash.style.opacity).toBe("0");
+  });
+
+  test("first click on trash arms the row (Cancel + Confirm + caveat); api.deleteTag NOT called", async () => {
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+    const row = await openAndGetRow("drawdown");
+    const trash = row.querySelector('button[aria-label="Delete tag drawdown"]') as HTMLButtonElement;
+
+    await act(async () => { fireEvent.click(trash); });
+
+    // Confirm strip rendered.
+    expect(screen.getByRole("button", { name: /Confirm delete drawdown/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Cancel delete drawdown/i })).toBeInTheDocument();
+    expect(screen.getByText(/hides everywhere it.s used/i)).toBeInTheDocument();
+    // No DB write yet.
+    expect(mDeleteTag).not.toHaveBeenCalled();
+  });
+
+  test("second click (Confirm) deletes the tag and removes it from the dropdown", async () => {
+    // Tag must be UNASSIGNED to appear in the dropdown's existing-tag
+    // list — trash is only available there. To delete an assigned tag the
+    // user detaches first, then the row reappears in the dropdown.
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose"), tag(8, "FOMC", "sky")]);
+    mListAssignments.mockResolvedValue([]);
+    mDeleteTag.mockResolvedValue({ status: "ok", id: 7 });
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
+    });
+    const trash = await screen.findByRole("button", { name: /Delete tag drawdown/i });
+    await act(async () => { fireEvent.click(trash); });
+    const confirm = screen.getByRole("button", { name: /Confirm delete drawdown/i });
+    await act(async () => { fireEvent.click(confirm); });
+
+    await waitFor(() => expect(mDeleteTag).toHaveBeenCalledWith(7));
+    // drawdown gone from the dropdown.
+    expect(screen.queryByRole("button", { name: /Delete tag drawdown/i })).not.toBeInTheDocument();
+    // Other tag (FOMC) still in dropdown — proves we filtered by id, not nuked.
+    expect(screen.getByText("FOMC")).toBeInTheDocument();
+  });
+
+  test("API error rolls back the tag (snapshot-restore)", async () => {
+    // The cascade-to-pills branch in handleDeleteTag is defensive: in
+    // practice it doesn't fire from this UI path because the dropdown only
+    // shows unassigned tags. The user-visible rollback we test here is the
+    // tag itself returning to the palette.
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    mListAssignments.mockResolvedValue([]);
+    mDeleteTag.mockResolvedValue({ error: "boom" } as any);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add tag/i }));
+    });
+    const trash = await screen.findByRole("button", { name: /Delete tag drawdown/i });
+    await act(async () => { fireEvent.click(trash); });
+    const confirm = screen.getByRole("button", { name: /Confirm delete drawdown/i });
+    await act(async () => { fireEvent.click(confirm); });
+
+    await waitFor(() => expect(mDeleteTag).toHaveBeenCalled());
+    // Tag restored — row reappears in the dropdown with its trash icon.
+    expect(await screen.findByRole("button", { name: /Delete tag drawdown/i })).toBeInTheDocument();
+    // Error toast surfaced.
+    expect(await screen.findByRole("status")).toHaveTextContent(/Couldn.t delete tag.*boom/i);
+  });
+
+  test("arming a different row clears the prior armed row; hover-out un-arms", async () => {
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose"), tag(8, "FOMC", "sky")]);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /add tag/i }));
+    });
+    // Capture row B's container BEFORE arming, since the trash button
+    // unmounts when its row becomes armed (replaced by Cancel/Confirm).
+    const trashB = await screen.findByRole("button", { name: /Delete tag FOMC/i });
+    const rowB = trashB.closest("div.flex.items-center.justify-between") as HTMLElement;
+    expect(rowB).not.toBeNull();
+
+    // Arm row A first.
+    const trashA = screen.getByRole("button", { name: /Delete tag drawdown/i });
+    await act(async () => { fireEvent.click(trashA); });
+    expect(screen.getByRole("button", { name: /Confirm delete drawdown/i })).toBeInTheDocument();
+
+    // Click trash on row B — row A's confirm should disappear, row B's appear.
+    await act(async () => { fireEvent.click(trashB); });
+    expect(screen.queryByRole("button", { name: /Confirm delete drawdown/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Confirm delete FOMC/i })).toBeInTheDocument();
+
+    // Hover out of row B → un-arms it. Use the captured row reference.
+    await act(async () => { fireEvent.mouseLeave(rowB); });
+    expect(screen.queryByRole("button", { name: /Confirm delete FOMC/i })).not.toBeInTheDocument();
   });
 });

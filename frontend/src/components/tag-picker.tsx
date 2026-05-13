@@ -44,6 +44,14 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
 
+  // Tag-palette delete affordance. armedDeleteTagId tracks which row (if
+  // any) is in its second-click "Confirm" state — single-value so only one
+  // row can be armed at a time. hoveredTagId drives trash-icon visibility
+  // (React-tracked rather than CSS-only to match this file's onMouseEnter/
+  // Leave style; see follow-up audit for rationale).
+  const [armedDeleteTagId, setArmedDeleteTagId] = useState<number | null>(null);
+  const [hoveredTagId, setHoveredTagId] = useState<number | null>(null);
+
   const wrapperRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -222,6 +230,33 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
     }
   }, [showError]);
 
+  // Permanently delete a tag from the user's palette. Different from
+  // detach: this removes the tag itself (soft-deletes server-side via
+  // DELETE /api/tags/{id}), which also hides every assignment that points
+  // at it from every entity. The server-side LEFT JOIN by tags.deleted_at
+  // IS NULL handles the visibility; locally we mirror by filtering both
+  // tags and assignments slots.
+  //
+  // Snapshot-restore covers BOTH state slots: if the API call fails, the
+  // tag and any matching assignments come back. assignments must be in the
+  // deps array so the snapshot captures the current set, not stale.
+  const handleDeleteTag = useCallback(async (tag: Tag) => {
+    const tagSnapshot = tag;
+    const assignmentSnapshot = assignments.filter(a => a.tag_id === tag.id);
+    setTags(prev => prev.filter(t => t.id !== tag.id));
+    setAssignments(prev => prev.filter(a => a.tag_id !== tag.id));
+    setArmedDeleteTagId(null);
+    try {
+      const result = await api.deleteTag(tag.id);
+      if ("error" in result) throw new Error(result.error);
+    } catch (e) {
+      setTags(prev => [...prev, tagSnapshot]);
+      setAssignments(prev => [...prev, ...assignmentSnapshot]);
+      const msg = e instanceof Error ? e.message : "Failed to delete tag";
+      showError(`Couldn't delete tag: ${msg}`);
+    }
+  }, [assignments, showError]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -363,29 +398,125 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
               </div>
             )}
 
-            {filteredUnassigned.map(t => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => void handleAssign(t)}
-                className="w-full text-left flex items-center"
-                style={{
-                  gap: 6,
-                  height: 28,
-                  padding: "0 6px",
-                  fontSize: 12,
-                  background: "transparent",
-                  border: "none",
-                  borderRadius: 6,
-                  color: "var(--ink)",
-                  cursor: "pointer",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "var(--surface-2)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <TagPill label={t.name} tone={t.color as TagTone} />
-              </button>
-            ))}
+            {filteredUnassigned.map(t => {
+              const armed = armedDeleteTagId === t.id;
+              const showTrash = hoveredTagId === t.id || armed;
+              const rowBg =
+                hoveredTagId === t.id ? "var(--surface-2)" : "transparent";
+              return (
+                <div
+                  key={t.id}
+                  className="flex items-center justify-between"
+                  style={{
+                    minHeight: 28,
+                    padding: "0 6px",
+                    borderRadius: 6,
+                    background: rowBg,
+                  }}
+                  onMouseEnter={() => setHoveredTagId(t.id)}
+                  onMouseLeave={() => {
+                    setHoveredTagId(prev => (prev === t.id ? null : prev));
+                    // Hover-out un-arms — prevents a stale armed row from
+                    // sitting in the dropdown if the user moves on.
+                    setArmedDeleteTagId(prev => (prev === t.id ? null : prev));
+                  }}
+                >
+                  {/* Left: assign click area */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArmedDeleteTagId(null);
+                      void handleAssign(t);
+                    }}
+                    className="flex items-center text-left"
+                    style={{
+                      flex: 1,
+                      gap: 6,
+                      minWidth: 0,
+                      height: 28,
+                      background: "transparent",
+                      border: "none",
+                      borderRadius: 6,
+                      color: "var(--ink)",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    <TagPill label={t.name} tone={t.color as TagTone} />
+                  </button>
+
+                  {/* Right: trash icon (hover-revealed) OR armed confirm strip */}
+                  {armed ? (
+                    <div className="flex items-center" style={{ gap: 6, paddingLeft: 8 }}>
+                      <span
+                        style={{
+                          fontSize: 9,
+                          color: "var(--ink-4)",
+                          fontStyle: "italic",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Hides everywhere it&rsquo;s used
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setArmedDeleteTagId(null)}
+                        aria-label={`Cancel delete ${t.name}`}
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          color: "var(--ink-3)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteTag(t)}
+                        aria-label={`Confirm delete ${t.name}`}
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          background: "#e5484d",
+                          border: "1px solid #e5484d",
+                          color: "white",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Confirm
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setArmedDeleteTagId(t.id)}
+                      aria-label={`Delete tag ${t.name}`}
+                      style={{
+                        opacity: showTrash ? 0.7 : 0,
+                        transition: "opacity 0.12s",
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--ink-4)",
+                        cursor: "pointer",
+                        padding: "0 4px",
+                        height: 24,
+                        display: "grid",
+                        placeItems: "center",
+                      }}
+                    >
+                      <Icons.trash />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
 
             {query.trim() && !exactMatch && (
               <div
