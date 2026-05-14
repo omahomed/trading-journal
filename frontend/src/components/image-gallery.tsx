@@ -4,6 +4,15 @@
 // delete affordance pulled out of Trade Journal's chart section pattern
 // (rule of two: Trade Journal + Weekly Snapshot now share this).
 //
+// Phase 4.5 — replaced the native window.confirm() delete with a
+// two-click inline confirm pattern. The button text swaps "Delete"
+// → "Confirm?" on first click; second click within 2s commits.
+// A 2s setTimeout auto-resets the armed state. Clicking Delete on a
+// different item while one is already armed swaps the armed item
+// (only one armed at a time). No mouse-leave un-arm — the button
+// lives in the always-visible caption row, not a hover-revealed
+// control, so leaving the row shouldn't cancel the user's intent.
+//
 // Card chrome mirrors trade-journal.tsx:330-358 exactly:
 //   - 8px border-radius
 //   - 1px solid var(--border)
@@ -11,7 +20,7 @@
 //   - Image area: w-full, h-auto, max-height: 300px, object-fit: contain,
 //     bg: var(--bg)
 //   - Caption row: bg: var(--surface-2), filename truncated left,
-//     "Delete" button right (native confirm())
+//     "Delete" / "Confirm?" button right
 //
 // Auto-detects PDFs by URL/filename extension and renders the Trade
 // Journal PDF variant — clickable <a> card with 📄 + "Open PDF" — so
@@ -28,10 +37,10 @@
 //     state they own — Trade Journal has its own local one,
 //     Weekly Snapshot uses the shared ImageLightbox from Phase 4.2)
 //   - Empty state copy (passed via emptyState prop)
-//   - Optimistic upload placeholders (consumer renders alongside
-//     the gallery; the gallery is for SETTLED items only)
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+const ARM_TIMEOUT_MS = 2000;
 
 export interface ImageGalleryItem {
   /** Stable identifier — used as React key and as the argument to
@@ -59,8 +68,6 @@ interface ImageGalleryProps {
    *  renders for empty state (consumer handles the empty case
    *  elsewhere). */
   emptyState?: React.ReactNode;
-  /** Override the "Delete this image?" confirm message. */
-  deleteConfirmMessage?: string;
   /** Single-column mode (1-image grids look weird in 2-col).
    *  Default behavior matches Trade Journal: 1 column when
    *  items.length === 1, 2 columns otherwise. Caller can force
@@ -78,9 +85,46 @@ export function ImageGallery({
   onDelete,
   onImageClick,
   emptyState,
-  deleteConfirmMessage = "Delete this image?",
   forceColumns,
 }: ImageGalleryProps) {
+  // Phase 4.5 — two-click inline confirm state. Single source of truth
+  // across all gallery items (only one armed at a time). The timer ref
+  // tracks the auto-reset countdown; cleared on commit, on arming a
+  // different item, and on unmount.
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const armDelete = useCallback((id: number) => {
+    setPendingDeleteId(id);
+    if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current);
+    pendingDeleteTimer.current = setTimeout(() => {
+      setPendingDeleteId(null);
+      pendingDeleteTimer.current = null;
+    }, ARM_TIMEOUT_MS);
+  }, []);
+
+  const handleDeleteClick = useCallback((id: number) => {
+    if (pendingDeleteId === id) {
+      // Second click — commit. Clear timer + armed state, then fire.
+      if (pendingDeleteTimer.current) {
+        clearTimeout(pendingDeleteTimer.current);
+        pendingDeleteTimer.current = null;
+      }
+      setPendingDeleteId(null);
+      onDelete?.(id);
+    } else {
+      // First click (or click on a different item while another is
+      // armed — rearm to the new id, old timer is cleared inside
+      // armDelete).
+      armDelete(id);
+    }
+  }, [pendingDeleteId, onDelete, armDelete]);
+
+  // Cleanup pending timer on unmount.
+  useEffect(() => () => {
+    if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current);
+  }, []);
+
   // Trade Journal pattern: single-image grids collapse to one column
   // for visual balance; multi-image grids use two.
   const columns = forceColumns ?? (items.length === 1 ? 1 : 2);
@@ -130,6 +174,7 @@ export function ImageGallery({
             </div>
           );
         }
+        const armed = pendingDeleteId === item.id;
         return (
           <div
             key={item.id}
@@ -186,19 +231,29 @@ export function ImageGallery({
               {onDelete && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (typeof window !== "undefined" && !window.confirm(deleteConfirmMessage)) return;
-                    onDelete(item.id);
-                  }}
-                  aria-label={`Delete ${item.filename || `image ${index + 1}`}`}
+                  onClick={() => handleDeleteClick(item.id)}
+                  // aria-label differs across armed/unarmed so screen
+                  // readers (and tests) can distinguish the two states.
+                  aria-label={
+                    armed
+                      ? `Confirm delete ${item.filename || `image ${index + 1}`}`
+                      : `Delete ${item.filename || `image ${index + 1}`}`
+                  }
+                  title={armed ? "Click again to confirm" : "Delete"}
                   className="ml-2 px-1.5 py-0.5 rounded text-[9px] cursor-pointer transition-colors hover:brightness-90"
                   style={{
-                    color: "#e5484d",
-                    background: "color-mix(in oklab, #e5484d 8%, var(--surface))",
+                    // Armed state inverts the colors: red bg + white
+                    // text instead of red-on-tinted-bg. Visually
+                    // unambiguous "this click commits".
+                    color: armed ? "#fff" : "#e5484d",
+                    background: armed
+                      ? "#e5484d"
+                      : "color-mix(in oklab, #e5484d 8%, var(--surface))",
                     border: "none",
+                    fontWeight: armed ? 600 : 400,
                   }}
                 >
-                  Delete
+                  {armed ? "Confirm?" : "Delete"}
                 </button>
               )}
             </div>

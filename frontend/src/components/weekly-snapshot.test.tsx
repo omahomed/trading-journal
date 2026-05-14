@@ -168,42 +168,33 @@ describe("WeeklySnapshot — Phase 4", () => {
     });
   });
 
-  // ─── Two-click delete ──────────────────────────────────────────────────
+  // ─── Delete wiring ─────────────────────────────────────────────────────
+  // Phase 4.5: delete UX is owned by <ImageGallery> (two-click inline
+  // confirm) — fully covered in image-gallery.test.tsx. The single test
+  // here just verifies that WeeklySnapshot wires onDelete → the
+  // deleteWeeklyRetroSnapshot API correctly. Going through the full
+  // two-click sequence is the cleanest way to reach that wire without
+  // duplicating coverage.
 
-  test("Delete: first click arms, second click commits", async () => {
+  test("Confirmed delete calls deleteWeeklyRetroSnapshot and removes the snapshot", async () => {
     mockApi.listWeeklyRetroSnapshots.mockResolvedValueOnce([
       makeRow({ id: 1, file_name: "a.png" }),
     ]);
     mockApi.deleteWeeklyRetroSnapshot.mockResolvedValueOnce({ deleted: true, id: 1 });
-    // Phase 4.4: ImageGallery's Delete button uses window.confirm() —
-    // stub it to auto-accept so the test exercises the deletion path.
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
     await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
 
-    const delBtn = screen.getByRole("button", { name: /Delete a.png/i });
-    await act(async () => { fireEvent.click(delBtn); });
+    // First click — arms.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Delete a.png$/i }));
+    });
+    // Second click on the now-armed button — commits.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Confirm delete a.png/i }));
+    });
 
-    expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => expect(mockApi.deleteWeeklyRetroSnapshot).toHaveBeenCalledWith(1));
     await waitFor(() => expect(screen.queryByAltText("a.png")).not.toBeInTheDocument());
-  });
-
-  test("Delete cancelled at confirm() does NOT delete the snapshot", async () => {
-    mockApi.listWeeklyRetroSnapshots.mockResolvedValueOnce([
-      makeRow({ id: 1, file_name: "a.png" }),
-    ]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
-    await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
-
-    const delBtn = screen.getByRole("button", { name: /Delete a.png/i });
-    await act(async () => { fireEvent.click(delBtn); });
-
-    expect(confirmSpy).toHaveBeenCalled();
-    expect(mockApi.deleteWeeklyRetroSnapshot).not.toHaveBeenCalled();
-    // Snapshot still in the gallery.
-    expect(screen.getByAltText("a.png")).toBeInTheDocument();
   });
 
   // ─── Lightbox ──────────────────────────────────────────────────────────

@@ -346,7 +346,6 @@ export function WeeklySnapshot({
           // after). Only open lightbox for real items.
           if (index < snapshots.length) openLightbox(index);
         }}
-        deleteConfirmMessage="Delete this snapshot?"
       />
 
       {/* Lightbox — shared component handles backdrop click, Esc,
