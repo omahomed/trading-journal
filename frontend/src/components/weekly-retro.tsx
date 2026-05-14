@@ -5,10 +5,12 @@ import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type Weekl
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
+import { SectionExpander } from "./section-expander";
 import { Icons } from "./icons";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
-// (not portfolio- or week-scoped) — one global toggle stored in localStorage.
+// (not portfolio- or week-scoped). Owned by <SectionExpander>; the key is
+// held here so future tests/migrations can find the canonical name.
 const TICKETS_EXPANDED_KEY = "mo-weekly-retro-tickets-expanded";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
@@ -58,23 +60,6 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
 
   // History — full retro rows keyed by week_start, populated from the API.
   const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
-
-  // Phase 2: Per-Ticker Details collapsible. Default collapsed. Open/closed
-  // state persists per-USER (not per-portfolio or per-week) via localStorage
-  // — the lazy-init pattern reads on first render so SSR doesn't crash and a
-  // missing key falls back to false (collapsed).
-  const [ticketsExpanded, setTicketsExpanded] = useState<boolean>(() => {
-    try { return localStorage.getItem(TICKETS_EXPANDED_KEY) === "true"; }
-    catch { return false; }
-  });
-  const toggleTickets = useCallback(() => {
-    setTicketsExpanded(prev => {
-      const next = !prev;
-      try { localStorage.setItem(TICKETS_EXPANDED_KEY, String(next)); }
-      catch { /* incognito quota — UI still works, just not persisted */ }
-      return next;
-    });
-  }, []);
 
   // Dirty flag gates the debounced auto-save effect so the initial mount
   // and every cross-week hydration don't fire a wasteful PUT. Mutated by
@@ -312,54 +297,29 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             ))}
           </div>
 
-          {/* Per-Ticker Details — collapsible (Phase 2). Header is always
-              visible; body only renders when expanded. The header itself
-              shows the count + grading caption so users can see status
-              without expanding. Per-row expand is orthogonal and unaffected. */}
-          <section className="mb-6">
-            <button
-              type="button"
-              onClick={toggleTickets}
-              aria-expanded={ticketsExpanded}
-              aria-controls="per-ticker-body"
-              className="w-full flex items-center justify-between"
-              style={{
-                padding: "12px 16px",
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-                color: "var(--ink)",
-              }}
-            >
-              <span className="flex items-center" style={{ gap: 8 }}>
-                <span
-                  aria-hidden
-                  style={{
-                    display: "inline-flex",
-                    transform: ticketsExpanded ? "rotate(90deg)" : "none",
-                    transition: "transform 0.15s",
-                    color: "var(--ink-4)",
-                  }}
-                >
-                  <Icons.chevronRight />
-                </span>
-                <span>Per-Ticker Details</span>
-                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>
-                  ({uniqueTickers})
-                </span>
-              </span>
-              <span
-                style={{ fontSize: 11, color: "var(--ink-4)", fontWeight: 400 }}
-              >
-                {gradedTickers}/{uniqueTickers} tickers graded
-              </span>
-            </button>
-
-            {ticketsExpanded && (
-              <div id="per-ticker-body" style={{ marginTop: 12 }}>
+          {/* Per-Ticker Details — collapsible. Migrated to the shared
+              <SectionExpander> in the SectionExpander extraction commit;
+              previously this was a flat bordered-button + separate body.
+              Now it shares the card chrome with Weekly Thoughts (Phase 3)
+              and Weekly Snapshot (Phase 4).
+              The headerCaption is unconditional (returns the same string
+              for both expanded and collapsed) — preserves the Phase 2
+              behavior asserted by weekly-retro.test.tsx:300 "Header
+              caption stays in sync independent of expand state". The
+              prompt suggested hiding it when expanded, but the existing
+              test treats always-on as the contract. */}
+          <SectionExpander
+            title={`Per-Ticker Details (${uniqueTickers})`}
+            defaultExpanded={false}
+            localStorageKey={TICKETS_EXPANDED_KEY}
+            bodyId="per-ticker-body"
+            headerCaption={() => `${gradedTickers}/${uniqueTickers} tickers graded`}
+          >
+              {/* Internal body padding — the card chrome puts the body
+                  flush against the header divider; this wrapper restores
+                  the 16px breathing room that the pre-refactor
+                  marginTop: 12 + the unbordered section gave. */}
+              <div style={{ padding: 16 }}>
                 {/* Progress bar — visual companion to the header caption.
                     Only renders when there are tickers to grade. */}
                 {uniqueTickers > 0 && (
@@ -486,8 +446,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                   </div>
                 )}
               </div>
-            )}
-          </section>
+          </SectionExpander>
 
           {/* Weekly Thoughts (Phase 3). HTML rich text editor with the
               Phase 0 dirtyRef debounced save pattern. */}

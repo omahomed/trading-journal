@@ -37,6 +37,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Icons } from "./icons";
+import { SectionExpander } from "./section-expander";
 import { ToolbarDropdown, type ToolbarDropdownOption } from "./weekly-thoughts/toolbar-dropdown";
 import { UrlPopover } from "./weekly-thoughts/url-popover";
 
@@ -45,6 +46,9 @@ interface WeeklyThoughtsProps {
   onChange: (html: string) => void;
 }
 
+// Persisted under this key by <SectionExpander>. The constant is held here
+// (not inlined at the call site) so a future test or migration can find
+// the canonical name without reading the JSX prop tree.
 const EXPANDED_KEY = "mo-weekly-retro-thoughts-expanded";
 
 // =============================================================================
@@ -255,17 +259,6 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   // Register DOMPurify hooks on first component construction. Idempotent.
   ensureSanitizerHooks();
 
-  // Default EXPANDED — different from Per-Ticker (which defaults
-  // collapsed). Thoughts is the active reflection workspace.
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem(EXPANDED_KEY);
-      return stored == null ? true : stored === "true";
-    } catch {
-      return true;
-    }
-  });
-
   // Phase 3.5 popovers + selection tracking state.
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [videoPopoverOpen, setVideoPopoverOpen] = useState(false);
@@ -290,15 +283,6 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   // selection. We restore on submit so insertHTML lands in the right
   // place.
   const savedRangeRef = useRef<Range | null>(null);
-
-  const toggle = useCallback(() => {
-    setExpanded(prev => {
-      const next = !prev;
-      try { localStorage.setItem(EXPANDED_KEY, String(next)); }
-      catch { /* incognito quota — UI still works */ }
-      return next;
-    });
-  }, []);
 
   // Word count for the collapsed-header caption. Strips HTML tags,
   // splits on whitespace, filters empties.
@@ -685,60 +669,20 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   // ---------------------------------------------------------------------------
 
   return (
-    <div
-      style={{
-        borderRadius: 14,
-        overflow: "hidden",
-        marginBottom: 24,
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        boxShadow: "var(--card-shadow)",
-      }}
+    <SectionExpander
+      title="Weekly Thoughts"
+      showDot
+      defaultExpanded={true}
+      localStorageKey={EXPANDED_KEY}
+      bodyId="weekly-thoughts-body"
+      headerCaption={(open) =>
+        open
+          ? "Synthesize what you learned this week"
+          : wordCount > 0
+            ? `${wordCount} words`
+            : ""
+      }
     >
-      {/* Header — always visible. Click toggles open/close. */}
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={expanded}
-        aria-controls="weekly-thoughts-body"
-        className="w-full flex items-center text-left"
-        style={{
-          gap: 10,
-          padding: "12px 18px",
-          background: "transparent",
-          border: "none",
-          borderBottom: expanded ? "1px solid var(--border)" : "none",
-          cursor: "pointer",
-        }}
-      >
-        <span
-          aria-hidden
-          style={{
-            display: "inline-flex",
-            transition: "transform 150ms",
-            transform: expanded ? "rotate(90deg)" : "none",
-            color: "var(--ink-4)",
-          }}
-        >
-          <Icons.chevronRight />
-        </span>
-        <span
-          aria-hidden
-          style={{ width: 6, height: 6, borderRadius: 999, background: "#f59f00" }}
-        />
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Weekly Thoughts</span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "var(--ink-4)" }}>
-          {expanded
-            ? "Synthesize what you learned this week"
-            : wordCount > 0
-              ? `${wordCount} words`
-              : ""}
-        </span>
-      </button>
-
-      {expanded && (
-        <div id="weekly-thoughts-body">
           {/* Toolbar */}
           <div
             role="toolbar"
@@ -934,9 +878,7 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
               />
             )}
           </div>
-        </div>
-      )}
-    </div>
+    </SectionExpander>
   );
 }
 
