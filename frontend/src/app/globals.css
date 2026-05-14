@@ -311,30 +311,43 @@ body {
 }
 .weekly-thoughts-editor a { color: #3b82f6; text-decoration: underline; }
 
-/* Phase 4.1 — inline images (pasted into the editor body). Sized to
-   fit the editor width naturally; height auto-derives.
-   Phase 4.2 — added max-height: 500px cap so tall vertical
-   screenshots don't dominate the editor; click opens the lightbox
-   for full-size view. cursor: zoom-in signals the affordance. */
+/* Phase 4.3 — inline images get a "card" treatment matching the
+   Trade Journal image grid: subtle border + rounded corners +
+   light bg inside the frame + hover-only shadow. Values mirror
+   the trade-journal.tsx wrapper (border-radius: 8px, 1px var(--border),
+   hover:shadow-md) but applied directly to the <img> so we don't
+   need to wrap the img in a span (avoids DOMPurify config changes
+   and keeps saved HTML clean — just <img> tags).
+   max-width: 600px keeps wide screenshots from dominating; the
+   lightbox is available on click for full-size view. */
 .weekly-thoughts-editor img {
-  max-width: 100%;
+  max-width: 600px;
   max-height: 500px;
   height: auto;
-  margin: 12px 0;
+  width: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 8px;
+  padding: 8px;
   display: block;
+  margin: 16px auto;
   cursor: zoom-in;
+  transition: box-shadow 150ms ease;
 }
-/* In-flight upload placeholders shouldn't suggest they're clickable. */
-.weekly-thoughts-editor img.wt-uploading { cursor: progress; }
-/* While the upload is in flight (blob URL + data-upload-id present),
-   render with reduced opacity + dashed outline so the user sees that
-   the image hasn't been persisted yet. .wt-uploading is removed in
-   the editor's onSuccess swap. */
+.weekly-thoughts-editor img:hover {
+  box-shadow: var(--card-shadow);
+}
+/* In-flight upload placeholders shouldn't suggest they're clickable
+   or hover-styled; the dashed outline + reduced opacity from
+   .wt-uploading takes precedence. */
 .weekly-thoughts-editor img.wt-uploading {
   opacity: 0.6;
   outline: 2px dashed var(--ink-4);
   outline-offset: 2px;
+  cursor: progress;
+}
+.weekly-thoughts-editor img.wt-uploading:hover {
+  box-shadow: none;
 }
 
 /* Tables — .wt-table is applied at insert; CSS targets any table inside

@@ -361,6 +361,17 @@ export function WeeklyThoughts({
   // click as a discrete preview).
   const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
 
+  // Phase 4.3: hover-reveal × delete overlay for inline images.
+  // Floating-overlay approach (Approach 2 from the audit) — single
+  // absolutely-positioned button anchored to the hovered image's
+  // top-right corner. No HTML changes inside the editor content,
+  // so saved HTML stays clean (<img> only, no wrapper spans or
+  // delete buttons).
+  const [hoveredImageEl, setHoveredImageEl] = useState<HTMLImageElement | null>(null);
+  const [armedImageEl, setArmedImageEl] = useState<HTMLImageElement | null>(null);
+  const [imageOverlayPos, setImageOverlayPos] = useState<{ top: number; left: number } | null>(null);
+  const imageArmTimer = useRef<number | null>(null);
+
   const editorRef = useRef<HTMLDivElement | null>(null);
 
   // Tracks the last HTML we wrote to the DOM. Used by the cursor-
@@ -740,6 +751,95 @@ export function WeeklyThoughts({
     emitChange();
   }, [emitChange]);
 
+  // Phase 4.3 — image overlay positioning. Computes the × button's
+  // (top, left) relative to the editor's position: relative parent
+  // wrapper so the button sits at the image's top-right corner.
+  const updateImageOverlayPos = useCallback((img: HTMLImageElement) => {
+    const editorEl = editorRef.current;
+    if (!editorEl) return;
+    const wrapper = editorEl.parentElement;
+    if (!wrapper) return;
+    const imgRect = img.getBoundingClientRect();
+    const wrapRect = wrapper.getBoundingClientRect();
+    setImageOverlayPos({
+      top: imgRect.top - wrapRect.top + 6,
+      left: imgRect.right - wrapRect.left - 30,
+    });
+  }, []);
+
+  // Editor-level mouseover delegation. When the mouse enters an img
+  // (not in the .wt-uploading state), record it as hovered and
+  // position the × overlay. Uses bubbling onMouseOver so a single
+  // listener catches every nested image.
+  const handleEditorMouseOver = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (!target || target.tagName !== "IMG") return;
+    const img = target as HTMLImageElement;
+    if (img.classList.contains("wt-uploading")) return;
+    setHoveredImageEl(img);
+    updateImageOverlayPos(img);
+  }, [updateImageOverlayPos]);
+
+  // Editor-level mouseout delegation. When the mouse leaves an img,
+  // hide the overlay UNLESS it moved into the × button (we want the
+  // hover region to include the floating button).
+  const handleEditorMouseOut = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (!target || target.tagName !== "IMG") return;
+    const related = e.relatedTarget as HTMLElement | null;
+    if (related?.dataset?.wtImageDelete === "true") return;
+    setHoveredImageEl(null);
+    setArmedImageEl(null);
+    setImageOverlayPos(null);
+  }, []);
+
+  // Two-click delete handler. First click arms (button turns red,
+  // 2s auto-reset); second click within the window commits — removes
+  // the img from the DOM and emits change so the parent persists
+  // the new HTML.
+  const handleImageDeleteClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();  // don't trigger the lightbox click handler
+    const img = hoveredImageEl;
+    if (!img) return;
+    if (armedImageEl === img) {
+      img.remove();
+      setHoveredImageEl(null);
+      setArmedImageEl(null);
+      setImageOverlayPos(null);
+      if (imageArmTimer.current) {
+        window.clearTimeout(imageArmTimer.current);
+        imageArmTimer.current = null;
+      }
+      emitChange();
+    } else {
+      setArmedImageEl(img);
+      if (imageArmTimer.current) window.clearTimeout(imageArmTimer.current);
+      imageArmTimer.current = window.setTimeout(() => {
+        setArmedImageEl(null);
+        imageArmTimer.current = null;
+      }, 2000);
+    }
+  }, [hoveredImageEl, armedImageEl, emitChange]);
+
+  // Hide the overlay on scroll — easiest correct behavior. The
+  // alternative (re-position on scroll) is more code for a minor
+  // UX gain; user can re-hover after scrolling.
+  useEffect(() => {
+    if (!hoveredImageEl) return;
+    const onScroll = () => {
+      setHoveredImageEl(null);
+      setArmedImageEl(null);
+      setImageOverlayPos(null);
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [hoveredImageEl]);
+
+  // Cleanup the arm timer on unmount.
+  useEffect(() => () => {
+    if (imageArmTimer.current) window.clearTimeout(imageArmTimer.current);
+  }, []);
+
   // Editor-level delegated click for checkboxes AND inline images.
   // contentEditable swallows the native click behavior of <input>, so
   // we manually toggle the attribute (not the property — innerHTML
@@ -1105,6 +1205,8 @@ export function WeeklyThoughts({
               onInput={handleInput}
               onPaste={handlePaste}
               onClick={handleEditorClick}
+              onMouseOver={handleEditorMouseOver}
+              onMouseOut={handleEditorMouseOut}
               className="weekly-thoughts-editor"
               style={{
                 width: "100%",
@@ -1135,6 +1237,50 @@ export function WeeklyThoughts({
                 onDeleteCol={tableDeleteCol}
                 onDeleteTable={tableDelete}
               />
+            )}
+            {/* Phase 4.3 — image × delete overlay. Floats above the
+                editor at the hovered image's top-right; first click
+                arms (red bg), second click deletes. */}
+            {hoveredImageEl && imageOverlayPos && (
+              <button
+                type="button"
+                data-wt-image-delete="true"
+                onClick={handleImageDeleteClick}
+                onMouseLeave={() => {
+                  setHoveredImageEl(null);
+                  setArmedImageEl(null);
+                  setImageOverlayPos(null);
+                }}
+                aria-label={armedImageEl === hoveredImageEl
+                  ? "Confirm delete image"
+                  : "Delete image"}
+                title={armedImageEl === hoveredImageEl
+                  ? "Click again to confirm"
+                  : "Delete image"}
+                style={{
+                  position: "absolute",
+                  top: imageOverlayPos.top,
+                  left: imageOverlayPos.left,
+                  width: 24,
+                  height: 24,
+                  borderRadius: 999,
+                  background: armedImageEl === hoveredImageEl
+                    ? "#dc2626"
+                    : "rgba(15,21,36,0.72)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  display: "grid",
+                  placeItems: "center",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  zIndex: 20,
+                  transition: "background 120ms",
+                }}
+              >
+                ×
+              </button>
             )}
           </div>
           {/* Phase 4.2 — inline image lightbox. Single-image mode

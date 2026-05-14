@@ -1132,3 +1132,133 @@ describe("WeeklyThoughts — Phase 4.2 lightbox + color pickers", () => {
     expect(document.execCommand).toHaveBeenCalledWith("foreColor", false, "inherit");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4.3 — inline image hover overlay + two-click delete.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("WeeklyThoughts — Phase 4.3 image hover overlay + delete", () => {
+  beforeEach(() => {
+    try { localStorage.clear(); } catch { /* shim */ }
+    vi.spyOn(document, "execCommand").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const IMG_VALUE =
+    '<p><img src="https://r2.example.com/weekly_retros/7/thoughts/abc.png" alt="chart" /></p>';
+
+  // ─── Hover surfacing the overlay ──────────────────────────────────────
+
+  test("Mouseover on inline img surfaces the × delete overlay", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).not.toBeInTheDocument();
+    await act(async () => { fireEvent.mouseOver(img); });
+    expect(screen.getByRole("button", { name: /^Delete image$/i })).toBeInTheDocument();
+  });
+
+  test("Mouseover on a .wt-uploading img does NOT surface the overlay", async () => {
+    render(
+      <WeeklyThoughts
+        value='<p><img src="blob:fake" class="wt-uploading" alt="" /></p>'
+        onChange={() => {}}
+        retroId={7}
+        portfolio="CanSlim"
+      />,
+    );
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.mouseOver(img); });
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).not.toBeInTheDocument();
+  });
+
+  test("Mouseout from img (leaving editor) hides the overlay", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.mouseOver(img); });
+    expect(screen.getByRole("button", { name: /^Delete image$/i })).toBeInTheDocument();
+    // Mouseout with no relatedTarget → mouse left editor area entirely
+    await act(async () => { fireEvent.mouseOut(img, { relatedTarget: null }); });
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).not.toBeInTheDocument();
+  });
+
+  // ─── Two-click delete ─────────────────────────────────────────────────
+
+  test("First click on × arms (button label switches); second click commits", async () => {
+    const onChange = vi.fn();
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={onChange} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+
+    await act(async () => { fireEvent.mouseOver(img); });
+    const xBtn = screen.getByRole("button", { name: /^Delete image$/i });
+
+    // First click — arms (aria-label switches to "Confirm delete image")
+    await act(async () => { fireEvent.click(xBtn); });
+    expect(editor.querySelector("img")).not.toBeNull();  // still present
+    expect(screen.getByRole("button", { name: /Confirm delete image/i })).toBeInTheDocument();
+
+    // Second click — commits delete
+    const confirmBtn = screen.getByRole("button", { name: /Confirm delete image/i });
+    await act(async () => { fireEvent.click(confirmBtn); });
+    expect(editor.querySelector("img")).toBeNull();
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  test("Clicking × does NOT open the lightbox (stopPropagation)", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+
+    await act(async () => { fireEvent.mouseOver(img); });
+    const xBtn = screen.getByRole("button", { name: /^Delete image$/i });
+    await act(async () => { fireEvent.click(xBtn); });
+    // Lightbox dialog must NOT have opened.
+    expect(screen.queryByRole("dialog", { name: /Image preview/i })).not.toBeInTheDocument();
+  });
+
+  test("Mouse leaves the × button → overlay hides", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.mouseOver(img); });
+    const xBtn = screen.getByRole("button", { name: /^Delete image$/i });
+    await act(async () => { fireEvent.mouseLeave(xBtn); });
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).not.toBeInTheDocument();
+  });
+
+  test("Scroll while hovering hides the overlay", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.mouseOver(img); });
+    expect(screen.getByRole("button", { name: /^Delete image$/i })).toBeInTheDocument();
+    await act(async () => { fireEvent.scroll(window); });
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).not.toBeInTheDocument();
+  });
+
+  test("Moving from img to × button keeps the overlay (relatedTarget guard)", async () => {
+    render(<WeeklyThoughts value={IMG_VALUE} onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.mouseOver(img); });
+    const xBtn = screen.getByRole("button", { name: /^Delete image$/i });
+    // Mouseout from img with relatedTarget = the × button → DO NOT hide
+    await act(async () => { fireEvent.mouseOut(img, { relatedTarget: xBtn }); });
+    expect(screen.queryByRole("button", { name: /^Delete image$/i })).toBeInTheDocument();
+  });
+});
