@@ -39,7 +39,9 @@ import DOMPurify from "dompurify";
 import { api } from "@/lib/api";
 import { Icons } from "./icons";
 import { SectionExpander } from "./section-expander";
+import { ImageLightbox, type LightboxImage } from "./image-lightbox";
 import { ToolbarDropdown, type ToolbarDropdownOption } from "./weekly-thoughts/toolbar-dropdown";
+import { ColorPicker } from "./weekly-thoughts/color-picker";
 import { UrlPopover } from "./weekly-thoughts/url-popover";
 
 interface WeeklyThoughtsProps {
@@ -260,8 +262,38 @@ function closestEl<T extends Element>(node: Node | null, selector: string): T | 
 // Fixed swatch colors per Phase 3. Highlight is the design's amber
 // (#f59f00 → matches the orange dot on the section header). Text
 // color is the design's emerald.
+// Phase 3 legacy single-color constants. Retained only as the
+// "default first swatch" of the Phase 4.2 palettes. The ToolbarColorBtn
+// behavior was replaced with ColorPicker popovers.
 const HIGHLIGHT_COLOR = "#ffeaa7";
 const TEXT_COLOR = "#08a86b";
+
+// Phase 4.2 — color picker palettes. The trailing entry of each
+// palette is the "reset" sentinel: "transparent" for highlight clears
+// the background; "inherit" for text color resets to the editor's
+// default ink. ColorPicker renders the reset swatch with a diagonal-
+// slash visual instead of a solid fill.
+const HIGHLIGHT_PALETTE = [
+  HIGHLIGHT_COLOR,    // amber (default — matches Phase 3 fixed color)
+  "#fef3c7",          // amber-100
+  "#dbeafe",          // blue-100
+  "#dcfce7",          // green-100
+  "#fee2e2",          // red-100
+  "#e0e7ff",          // indigo-100
+  "#fce7f3",          // pink-100
+  "transparent",      // reset
+];
+
+const TEXT_COLOR_PALETTE = [
+  TEXT_COLOR,         // emerald (default — matches Phase 3 fixed color)
+  "#0f172a",          // slate-900
+  "#475569",          // slate-600
+  "#dc2626",          // red-600
+  "#ea580c",          // orange-600
+  "#2563eb",          // blue-600
+  "#7c3aed",          // violet-600
+  "inherit",          // reset
+];
 
 const HEADING_OPTIONS: ToolbarDropdownOption[] = [
   { value: "<p>",  label: "Normal" },
@@ -323,6 +355,11 @@ export function WeeklyThoughts({
   // Phase 4.1: inline error for paste rejections (oversize, bad MIME,
   // retroId missing). Auto-dismisses after 3s.
   const [inlineError, setInlineError] = useState<string | null>(null);
+  // Phase 4.2: lightbox for inline editor images. Click on an <img>
+  // in the editor body opens a single-image lightbox (no prev/next —
+  // there's no ordered list of "all images in the editor"; treat each
+  // click as a discrete preview).
+  const [lightboxImage, setLightboxImage] = useState<LightboxImage | null>(null);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
 
@@ -703,18 +740,33 @@ export function WeeklyThoughts({
     emitChange();
   }, [emitChange]);
 
-  // Editor-level delegated click for checkboxes. contentEditable
-  // swallows the native click behavior of <input>, so we manually
-  // toggle the attribute (not the property — innerHTML serializes the
-  // attribute) and emit a change so the value round-trips through save.
+  // Editor-level delegated click for checkboxes AND inline images.
+  // contentEditable swallows the native click behavior of <input>, so
+  // we manually toggle the attribute (not the property — innerHTML
+  // serializes the attribute) and emit a change so the value
+  // round-trips through save. Same delegation pattern picks up clicks
+  // on inline images (Phase 4.2) and opens the lightbox.
   const handleEditorClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (!target || target.tagName !== "INPUT") return;
-    const input = target as HTMLInputElement;
-    if (input.type !== "checkbox") return;
-    e.preventDefault();
-    input.toggleAttribute("checked");
-    emitChange();
+    if (!target) return;
+    if (target.tagName === "INPUT") {
+      const input = target as HTMLInputElement;
+      if (input.type !== "checkbox") return;
+      e.preventDefault();
+      input.toggleAttribute("checked");
+      emitChange();
+      return;
+    }
+    if (target.tagName === "IMG") {
+      const img = target as HTMLImageElement;
+      // Skip the in-flight upload placeholder — clicking a blob URL
+      // would just open a useless local preview.
+      if (img.classList.contains("wt-uploading")) return;
+      const src = img.getAttribute("src") || "";
+      if (!src) return;
+      e.preventDefault();
+      setLightboxImage({ url: src, alt: img.getAttribute("alt") || "" });
+    }
   }, [emitChange]);
 
   // ---------------------------------------------------------------------------
@@ -935,17 +987,25 @@ export function WeeklyThoughts({
 
             <Divider />
 
-            <ToolbarColorBtn
-              label="Highlight color"
-              swatch={HIGHLIGHT_COLOR}
-              onClick={() => exec("hiliteColor", HIGHLIGHT_COLOR)}
-              glyph={<Icons.highlight />}
+            {/* Phase 4.2: Highlight + Text color now open popover
+                pickers instead of applying a single fixed color. */}
+            <ColorPicker
+              ariaLabel="Highlight color"
+              triggerGlyph={<Icons.highlight />}
+              triggerSwatch={HIGHLIGHT_COLOR}
+              palette={HIGHLIGHT_PALETTE}
+              resetLabel="None"
+              onPick={(color) => exec("hiliteColor", color)}
+              editorRef={editorRef}
             />
-            <ToolbarColorBtn
-              label="Text color"
-              swatch={TEXT_COLOR}
-              onClick={() => exec("foreColor", TEXT_COLOR)}
-              glyph={<Icons.textColor />}
+            <ColorPicker
+              ariaLabel="Text color"
+              triggerGlyph={<Icons.textColor />}
+              triggerSwatch={TEXT_COLOR}
+              palette={TEXT_COLOR_PALETTE}
+              resetLabel="Default"
+              onPick={(color) => exec("foreColor", color)}
+              editorRef={editorRef}
             />
 
             <Divider />
@@ -1077,6 +1137,14 @@ export function WeeklyThoughts({
               />
             )}
           </div>
+          {/* Phase 4.2 — inline image lightbox. Single-image mode
+              (no prev/next); each click on an inline <img> opens
+              its own preview. */}
+          <ImageLightbox
+            images={lightboxImage ? [lightboxImage] : []}
+            activeIndex={lightboxImage ? 0 : null}
+            onClose={() => setLightboxImage(null)}
+          />
     </SectionExpander>
   );
 }
@@ -1114,47 +1182,6 @@ function ToolbarBtn({ label, onClick, inert, children }: ToolbarBtnProps) {
       }}
     >
       {children}
-    </button>
-  );
-}
-
-interface ToolbarColorBtnProps {
-  label: string;
-  swatch: string;
-  glyph: React.ReactNode;
-  onClick: () => void;
-}
-
-function ToolbarColorBtn({ label, swatch, glyph, onClick }: ToolbarColorBtnProps) {
-  return (
-    <button
-      type="button"
-      onMouseDown={e => e.preventDefault()}
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      style={{
-        display: "inline-flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: 1,
-        height: 26,
-        padding: "0 6px",
-        background: "transparent",
-        border: "none",
-        borderRadius: 6,
-        color: "var(--ink-3)",
-        cursor: "pointer",
-      }}
-    >
-      <span style={{ display: "inline-flex" }}>{glyph}</span>
-      <span style={{
-        display: "block",
-        width: 14,
-        height: 3,
-        borderRadius: 1,
-        background: swatch,
-      }} />
     </button>
   );
 }

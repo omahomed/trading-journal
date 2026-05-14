@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type SnapshotRow } from "@/lib/api";
+import { ImageLightbox, type LightboxImage } from "./image-lightbox";
 
 interface WeeklySnapshotProps {
   retroId: number | null;
@@ -235,26 +236,20 @@ export function WeeklySnapshot({
   }, []);
 
   // --- Lightbox ---------------------------------------------------------
+  // Keyboard nav + backdrop click + Esc closing all live inside the shared
+  // <ImageLightbox> now. We just track the active index here and map
+  // snapshots → LightboxImage[] for the consumer.
 
   const openLightbox = useCallback((idx: number) => { setLightboxIndex(idx); }, []);
   const closeLightbox = useCallback(() => { setLightboxIndex(null); }, []);
 
-  // Keyboard nav inside the lightbox.
-  useEffect(() => {
-    if (lightboxIndex == null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); closeLightbox(); }
-      else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        setLightboxIndex(i => (i == null ? null : (i + 1) % snapshots.length));
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        setLightboxIndex(i => (i == null ? null : (i - 1 + snapshots.length) % snapshots.length));
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxIndex, snapshots.length, closeLightbox]);
+  const lightboxImages: LightboxImage[] = useMemo(
+    () => snapshots.map(s => ({
+      url: s.view_url,
+      alt: s.file_name || `Snapshot ${s.id}`,
+    })),
+    [snapshots],
+  );
 
   // --- Render -----------------------------------------------------------
 
@@ -457,36 +452,18 @@ export function WeeklySnapshot({
         </div>
       )}
 
-      {/* Lightbox */}
-      {lightboxIndex != null && snapshots[lightboxIndex] && (
-        <div
-          role="dialog"
-          aria-label="Snapshot preview"
-          onClick={closeLightbox}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 50,
-            background: "rgba(0,0,0,0.85)",
-            display: "grid",
-            placeItems: "center",
-            padding: 32,
-          }}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={snapshots[lightboxIndex].view_url}
-            alt={snapshots[lightboxIndex].file_name || `Snapshot ${snapshots[lightboxIndex].id}`}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: "100%",
-              maxHeight: "100%",
-              objectFit: "contain",
-              borderRadius: 8,
-            }}
-          />
-        </div>
-      )}
+      {/* Lightbox — shared component handles backdrop click, Esc,
+          ← / → with wrap-around. Pass onNavigate so multi-snapshot
+          galleries get arrow-key navigation. ariaLabel preserved as
+          "Snapshot preview" so existing accessibility tests don't
+          regress from the refactor. */}
+      <ImageLightbox
+        images={lightboxImages}
+        activeIndex={lightboxIndex}
+        onClose={closeLightbox}
+        onNavigate={setLightboxIndex}
+        ariaLabel="Snapshot preview"
+      />
     </div>
   );
 }

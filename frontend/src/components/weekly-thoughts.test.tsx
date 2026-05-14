@@ -810,9 +810,7 @@ describe("WeeklyThoughts — Phase 4.1 polish + image paste", () => {
     // Stub URL.createObjectURL / revokeObjectURL — jsdom has it but
     // resetting per-test isolates side effects.
     if (typeof URL.createObjectURL !== "function") {
-      // @ts-expect-error jsdom shim
       URL.createObjectURL = vi.fn(() => "blob:fake-preview-url");
-      // @ts-expect-error jsdom shim
       URL.revokeObjectURL = vi.fn();
     }
   });
@@ -987,5 +985,150 @@ describe("WeeklyThoughts — Phase 4.1 polish + image paste", () => {
     const cleaned = insertCalls.at(-1)![2] as string;
     expect(cleaned).toContain("<img");
     expect(cleaned).toContain("weekly_retros/7/thoughts/abc.png");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4.2 — inline image lightbox + color picker integration.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("WeeklyThoughts — Phase 4.2 lightbox + color pickers", () => {
+  beforeEach(() => {
+    try { localStorage.clear(); } catch { /* shim */ }
+    vi.spyOn(document, "execCommand").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // ─── Inline image lightbox ────────────────────────────────────────────
+
+  test("Click on inline <img> opens the lightbox dialog", async () => {
+    render(
+      <WeeklyThoughts
+        value='<p>before <img src="https://r2.example.com/weekly_retros/7/thoughts/abc.png" alt="chart" /> after</p>'
+        onChange={() => {}}
+        retroId={7}
+        portfolio="CanSlim"
+      />,
+    );
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.click(img); });
+    // ImageLightbox renders a dialog with aria-label "Image preview".
+    expect(screen.getByRole("dialog", { name: /Image preview/i })).toBeInTheDocument();
+  });
+
+  test("Click on a non-img element does NOT open the lightbox", async () => {
+    render(
+      <WeeklyThoughts
+        value="<p>some text without an image</p>"
+        onChange={() => {}}
+        retroId={7}
+        portfolio="CanSlim"
+      />,
+    );
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.innerHTML).toContain("some text"));
+    await act(async () => { fireEvent.click(editor); });
+    expect(screen.queryByRole("dialog", { name: /Image preview/i })).not.toBeInTheDocument();
+  });
+
+  test("Click on an uploading image (wt-uploading class) does NOT open the lightbox", async () => {
+    render(
+      <WeeklyThoughts
+        value='<p><img src="blob:fake" class="wt-uploading" alt="" /></p>'
+        onChange={() => {}}
+        retroId={7}
+        portfolio="CanSlim"
+      />,
+    );
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    const img = editor.querySelector("img")!;
+    await act(async () => { fireEvent.click(img); });
+    expect(screen.queryByRole("dialog", { name: /Image preview/i })).not.toBeInTheDocument();
+  });
+
+  test("Esc closes the inline image lightbox", async () => {
+    render(
+      <WeeklyThoughts
+        value='<p><img src="https://r2.example.com/weekly_retros/7/thoughts/x.png" alt="x" /></p>'
+        onChange={() => {}}
+        retroId={7}
+        portfolio="CanSlim"
+      />,
+    );
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    await waitFor(() => expect(editor.querySelector("img")).not.toBeNull());
+    await act(async () => { fireEvent.click(editor.querySelector("img")!); });
+    expect(screen.getByRole("dialog", { name: /Image preview/i })).toBeInTheDocument();
+    await act(async () => { fireEvent.keyDown(window, { key: "Escape" }); });
+    expect(screen.queryByRole("dialog", { name: /Image preview/i })).not.toBeInTheDocument();
+  });
+
+  // ─── Highlight color picker ───────────────────────────────────────────
+
+  test("Highlight button opens picker with palette swatches", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    const trigger = screen.getByRole("button", { name: /Highlight color/i });
+    await act(async () => { fireEvent.click(trigger); });
+    expect(screen.getByRole("dialog", { name: /Highlight color/i })).toBeInTheDocument();
+  });
+
+  test("Pick a highlight swatch → execCommand('hiliteColor', color)", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Highlight color/i }));
+    });
+    // First palette entry — the amber default (#ffeaa7).
+    const swatch = screen.getByRole("button", { name: "#ffeaa7" });
+    await act(async () => { fireEvent.click(swatch); });
+    expect(document.execCommand).toHaveBeenCalledWith("hiliteColor", false, "#ffeaa7");
+  });
+
+  test("Pick the highlight reset swatch → hiliteColor 'transparent'", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Highlight color/i }));
+    });
+    // Reset swatch labeled "None" via resetLabel prop.
+    const reset = screen.getByRole("button", { name: /^None$/i });
+    await act(async () => { fireEvent.click(reset); });
+    expect(document.execCommand).toHaveBeenCalledWith("hiliteColor", false, "transparent");
+  });
+
+  // ─── Text color picker ────────────────────────────────────────────────
+
+  test("Text color button opens picker", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    const trigger = screen.getByRole("button", { name: /Text color/i });
+    await act(async () => { fireEvent.click(trigger); });
+    expect(screen.getByRole("dialog", { name: /Text color/i })).toBeInTheDocument();
+  });
+
+  test("Pick a text-color swatch → execCommand('foreColor', color)", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Text color/i }));
+    });
+    // Second entry of TEXT_COLOR_PALETTE is slate-900.
+    const swatch = screen.getByRole("button", { name: "#0f172a" });
+    await act(async () => { fireEvent.click(swatch); });
+    expect(document.execCommand).toHaveBeenCalledWith("foreColor", false, "#0f172a");
+  });
+
+  test("Pick the text-color reset swatch → foreColor 'inherit'", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Text color/i }));
+    });
+    const reset = screen.getByRole("button", { name: /^Default$/i });
+    await act(async () => { fireEvent.click(reset); });
+    expect(document.execCommand).toHaveBeenCalledWith("foreColor", false, "inherit");
   });
 });
