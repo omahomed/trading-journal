@@ -168,6 +168,66 @@ def upload_image(
         return None
 
 
+def upload_blob(file_obj, object_key: str, content_type: Optional[str] = None) -> Optional[str]:
+    """
+    Generic blob upload — Phase 4 Weekly Snapshot.
+
+    Unlike upload_image() which is locked to the
+    `{portfolio}/{trade_id}/{image_type}_{ts}.{ext}` key shape, this accepts
+    any caller-composed object_key. Phase 4 uses it for
+    `weekly_retros/{retro_id}/{uuid4}.{ext}` so snapshots don't have to
+    piggyback on the trade_images trade_id-overloading anti-pattern.
+
+    Args:
+        file_obj: file-like with .read() (BytesIO, UploadFile.file, etc.)
+        object_key: full R2 key path. Caller composes it.
+        content_type: explicit MIME, derived from extension if omitted.
+
+    Returns:
+        The object_key on success, None on failure.
+    """
+    try:
+        client = get_r2_client()
+        if not client:
+            print("[R2 ERROR] upload_blob: client initialization failed")
+            return None
+        bucket_name = _get_r2_config().get("bucket_name")
+        if not bucket_name:
+            print("[R2 ERROR] upload_blob: bucket_name not configured")
+            return None
+
+        # Read bytes. Reset cursor first in case the caller already read.
+        if hasattr(file_obj, "seek"):
+            try: file_obj.seek(0)
+            except Exception: pass
+        body = file_obj.read()
+
+        # Derive content_type from extension when not supplied. Matches
+        # upload_image's map so MIME is consistent across both helpers.
+        if not content_type:
+            ext = object_key.rsplit(".", 1)[-1].lower() if "." in object_key else ""
+            content_type_map = {
+                "png": "image/png",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "webp": "image/webp",
+                "pdf": "application/pdf",
+            }
+            content_type = content_type_map.get(ext, "application/octet-stream")
+
+        client.put_object(
+            Bucket=bucket_name,
+            Key=object_key,
+            Body=body,
+            ContentType=content_type,
+        )
+        return object_key
+    except Exception as e:
+        print(f"[R2 ERROR] upload_blob failed: {type(e).__name__}: {e}")
+        return None
+
+
 def download_image(object_key: str) -> Optional[bytes]:
     """
     Download an image from R2 storage

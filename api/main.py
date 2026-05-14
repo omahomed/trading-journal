@@ -4678,6 +4678,104 @@ def r2_status():
     return {"available": _is_r2_available()}
 
 
+# ============================================================
+# WEEKLY RETRO SNAPSHOTS (Migration 028 — Phase 4)
+# ============================================================
+# URL-grouped under /api/weekly-retros/{retro_id}/snapshots even though the
+# code lives in the R2 endpoint section here, to share the UploadFile
+# imports. Browser fetches bytes directly from R2 via the view_url returned
+# in row dicts; backend is not in the serving hot path.
+
+import uuid as _uuid
+
+# Audit §5: 5MB upload cap, image MIME whitelist.
+_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
+_SNAPSHOT_ALLOWED_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_SNAPSHOT_MIME_TO_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+
+@app.post("/api/weekly-retros/{retro_id}/snapshots")
+@limiter.limit("10/minute")
+async def upload_weekly_retro_snapshot(
+    retro_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+):
+    """Upload an image snapshot attached to a weekly retro.
+
+    Rejects:
+      - non-image MIME (allow: png/jpeg/gif/webp) → 415
+      - size > 5MB → 413
+      - retro not owned by caller (RLS miss) → 404
+    Bytes upload to R2 via r2.upload_blob; metadata row INSERTed into
+    weekly_retro_snapshots. Returns row dict with precomputed view_url.
+    """
+    if not _is_r2_available():
+        return {"error": "R2 storage not configured"}
+
+    mime = (file.content_type or "").lower()
+    if mime not in _SNAPSHOT_ALLOWED_MIMES:
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "unsupported_media_type",
+                    "allowed": sorted(_SNAPSHOT_ALLOWED_MIMES)},
+        )
+
+    content = await file.read()
+    if len(content) > _SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "limit_bytes": _SNAPSHOT_MAX_BYTES},
+        )
+
+    ext = _SNAPSHOT_MIME_TO_EXT.get(mime, "bin")
+    object_key = f"weekly_retros/{retro_id}/{_uuid.uuid4().hex}.{ext}"
+    file_like = io.BytesIO(content)
+    storage_ref = r2.upload_blob(file_like, object_key, content_type=mime)
+    if not storage_ref:
+        return {"error": "Upload to R2 failed"}
+
+    row = db.save_weekly_retro_snapshot(
+        portfolio, retro_id, storage_ref,
+        file_name=file.filename, mime_type=mime,
+        file_size_bytes=len(content),
+    )
+    if row is None:
+        # Retro not owned by caller (RLS miss). R2 bytes are orphaned;
+        # the future sweep job reclaims by stuffed-key scan.
+        raise HTTPException(status_code=404, detail={"error": "retro_not_found"})
+    return row
+
+
+@app.get("/api/weekly-retros/{retro_id}/snapshots")
+def list_weekly_retro_snapshots_endpoint(retro_id: int, portfolio: str = Query("CanSlim")):
+    """List all live snapshots for a retro, ordered by sort_order then
+    created_at. 404 if the retro is missing or not owned by the caller."""
+    rows = db.list_weekly_retro_snapshots(portfolio, retro_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail={"error": "retro_not_found"})
+    return rows
+
+
+@app.delete("/api/weekly-retros/snapshots/{snapshot_id}")
+@limiter.limit("30/minute")
+def delete_weekly_retro_snapshot(snapshot_id: int, request: Request):
+    """Soft-delete a snapshot. RLS scopes the UPDATE to the current
+    tenant — a cross-tenant snapshot_id misses and returns 404 (NOT 403,
+    to avoid leaking existence). R2 bytes are NOT deleted synchronously;
+    the future cleanup sweep handles tombstone reclamation."""
+    ok = db.soft_delete_weekly_retro_snapshot(snapshot_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail={"error": "snapshot_not_found"})
+    return {"deleted": True, "id": snapshot_id}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

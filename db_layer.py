@@ -2752,6 +2752,138 @@ def soft_delete_weekly_retro(retro_id: int) -> bool:
 
 
 # ============================================
+# WEEKLY RETRO SNAPSHOTS (Migration 028, Phase 4)
+# ============================================
+# Image attachments on weekly retros. Metadata lives in
+# weekly_retro_snapshots; bytes live in Cloudflare R2 via the upload_blob
+# helper in r2_storage.py. Helpers below take portfolio_name as the first
+# arg to match the convention of every other public helper in this module,
+# even though the retro_id alone is sufficient to identify the row (the
+# portfolio is enforced via the parent retro's portfolio_id FK and RLS by
+# user_id). Soft-delete via deleted_at — the bytes intentionally remain in
+# R2 for v1 (storage is cheap; a future sweep job can reclaim).
+
+
+def _serialize_snapshot(row: dict, r2_public_url: str) -> dict:
+    """Serialize a snapshots row for the wire. Composes view_url from the
+    R2_PUBLIC_URL env value + storage_ref. If R2_PUBLIC_URL is unset (local
+    dev without R2 configured), view_url falls back to the bare storage_ref
+    so the frontend doesn't render a broken absolute URL pointing at
+    nothing."""
+    storage_ref = row.get("storage_ref") or ""
+    if r2_public_url and storage_ref:
+        view_url = f"{r2_public_url.rstrip('/')}/{storage_ref}"
+    else:
+        view_url = storage_ref
+    return {
+        "id": row["id"],
+        "weekly_retro_id": row["weekly_retro_id"],
+        "storage_ref": storage_ref,
+        "view_url": view_url,
+        "file_name": row.get("file_name"),
+        "mime_type": row.get("mime_type"),
+        "file_size_bytes": row.get("file_size_bytes"),
+        "width": row.get("width"),
+        "height": row.get("height"),
+        "sort_order": row.get("sort_order") or 0,
+        "caption": row.get("caption") or "",
+        "created_at": (
+            row["created_at"].isoformat()
+            if row.get("created_at") and hasattr(row["created_at"], "isoformat")
+            else row.get("created_at")
+        ),
+    }
+
+
+def _resolve_retro_owned_by_portfolio(cur, retro_id: int, portfolio_name: str) -> bool:
+    """Verify that retro_id exists, belongs to the given portfolio, and is
+    visible to the current app.user_id via RLS. Returns True on hit, False
+    on miss (used to surface a 404 instead of leaking parent retro info via
+    a constraint error during INSERT)."""
+    cur.execute(
+        "SELECT 1 FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
+        "WHERE r.id = %s AND p.name = %s AND r.deleted_at IS NULL",
+        (retro_id, portfolio_name),
+    )
+    return cur.fetchone() is not None
+
+
+def save_weekly_retro_snapshot(
+    portfolio_name: str,
+    retro_id: int,
+    storage_ref: str,
+    *,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+    file_size_bytes: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict | None:
+    """INSERT a snapshot row attached to the given retro. Returns the
+    serialized row (including view_url) on success, or None if the retro
+    doesn't exist / isn't visible to the current tenant."""
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if not _resolve_retro_owned_by_portfolio(cur, retro_id, portfolio_name):
+                return None
+            cur.execute(
+                "INSERT INTO weekly_retro_snapshots "
+                "  (weekly_retro_id, storage_ref, file_name, mime_type, "
+                "   file_size_bytes, width, height) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING id, weekly_retro_id, storage_ref, file_name, "
+                "          mime_type, file_size_bytes, width, height, "
+                "          sort_order, caption, created_at",
+                (retro_id, storage_ref, file_name, mime_type,
+                 file_size_bytes, width, height),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+            return _serialize_snapshot(row, r2_public)
+
+
+def list_weekly_retro_snapshots(portfolio_name: str, retro_id: int) -> list[dict] | None:
+    """Return all live snapshots for the retro, ordered by (sort_order,
+    created_at). Returns None if the retro is missing / not visible to the
+    current tenant (caller maps to 404). Returns [] if the retro exists
+    but has no snapshots."""
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if not _resolve_retro_owned_by_portfolio(cur, retro_id, portfolio_name):
+                return None
+            cur.execute(
+                "SELECT id, weekly_retro_id, storage_ref, file_name, "
+                "       mime_type, file_size_bytes, width, height, "
+                "       sort_order, caption, created_at "
+                "FROM weekly_retro_snapshots "
+                "WHERE weekly_retro_id = %s AND deleted_at IS NULL "
+                "ORDER BY sort_order, created_at",
+                (retro_id,),
+            )
+            return [_serialize_snapshot(dict(r), r2_public) for r in cur.fetchall()]
+
+
+def soft_delete_weekly_retro_snapshot(snapshot_id: int) -> bool:
+    """Set deleted_at = NOW() on a snapshot row. Returns True on row hit.
+    RLS scopes the UPDATE to the current tenant — a cross-tenant snapshot_id
+    misses the WHERE clause and returns False, which the caller surfaces as
+    404 (NOT a 403 — would leak existence). Bytes remain in R2; future
+    sweep job can reclaim."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE weekly_retro_snapshots SET deleted_at = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                (snapshot_id,),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return hit is not None
+
+
+# ============================================
 # TAG SYSTEM (Migration 026, Phase 1)
 # ============================================
 # Polymorphic, portfolio-scoped, user-created tags. Two tables: `tags` (the
