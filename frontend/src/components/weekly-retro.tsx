@@ -5,6 +5,7 @@ import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type Weekl
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
+import { WeeklySnapshot } from "./weekly-snapshot";
 import { SectionExpander } from "./section-expander";
 import { Icons } from "./icons";
 
@@ -12,6 +13,8 @@ import { Icons } from "./icons";
 // (not portfolio- or week-scoped). Owned by <SectionExpander>; the key is
 // held here so future tests/migrations can find the canonical name.
 const TICKETS_EXPANDED_KEY = "mo-weekly-retro-tickets-expanded";
+// Phase 4: Weekly Snapshot expander key.
+const SNAPSHOT_EXPANDED_KEY = "mo-weekly-retro-snapshot-expanded";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
 const BEHAVIOR_TAGS = [
@@ -57,6 +60,13 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   // parity. Stored as HTML string; sanitized in the editor before send.
   const [weekly_thoughts, setWeeklyThoughts] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
+
+  // Phase 4: Weekly Snapshot count, lifted up so the SectionExpander
+  // header caption can render "N attached" without exposing the list.
+  // WeeklySnapshot fires onCountChange whenever its visible-count changes
+  // (uploads, deletes, fetch). Reset on week change via the same
+  // hydration effect that resets the other per-week local state.
+  const [snapshotCount, setSnapshotCount] = useState(0);
 
   // History — full retro rows keyed by week_start, populated from the API.
   const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
@@ -454,6 +464,29 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             value={weekly_thoughts}
             onChange={(next) => { dirtyRef.current = true; setWeeklyThoughts(next); }}
           />
+
+          {/* Weekly Snapshot (Phase 4). Image gallery — drop / paste /
+              pick-from-disk images, view in lightbox, two-click delete.
+              Third consumer of <SectionExpander>. retroId is null until
+              the parent retro has been saved at least once; the component
+              shows a disabled drop zone in that state (same idiom as
+              TagPicker). */}
+          <SectionExpander
+            title="Weekly Snapshot"
+            showDot
+            defaultExpanded={false}
+            localStorageKey={SNAPSHOT_EXPANDED_KEY}
+            bodyId="weekly-snapshot-body"
+            headerCaption={(open) => open ? null : (
+              snapshotCount > 0 ? `${snapshotCount} attached` : ""
+            )}
+          >
+            <WeeklySnapshot
+              retroId={retros[monStr]?.id ?? null}
+              portfolio={portfolio}
+              onCountChange={setSnapshotCount}
+            />
+          </SectionExpander>
 
           {/* Weekly Summary */}
           <div className="rounded-[14px] overflow-hidden mb-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>

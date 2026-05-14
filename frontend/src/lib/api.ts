@@ -86,6 +86,26 @@ export interface WeeklyRetro {
   updated_at: string;
 }
 
+// Phase 4 — Weekly Retro Snapshots (Migration 028). Image attachments on
+// weekly retros. storage_ref is the R2 object key; view_url is the public
+// CDN URL pre-composed by the server (so the frontend never has to know
+// R2_PUBLIC_URL). caption / sort_order are pre-provisioned for Phase
+// 4-followup features (captions, drag-reorder); v1 always sends defaults.
+export interface SnapshotRow {
+  id: number;
+  weekly_retro_id: number;
+  storage_ref: string;
+  view_url: string;
+  file_name: string | null;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  width: number | null;
+  height: number | null;
+  sort_order: number;
+  caption: string;
+  created_at: string;
+}
+
 // Tags — Phase 1 (Migration 026). Portfolio-scoped, polymorphic
 // (entity_type ∈ {weekly_retro, daily_journal, trades_summary}). Color is a
 // closed-palette key matching TAG_PALETTE in src/lib/tag-palette.ts; see
@@ -377,6 +397,34 @@ export const api = {
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
+
+  // Phase 4 — Weekly Retro Snapshots (Migration 028). Image attachments
+  // on weekly retros. Bytes live in R2; metadata + view_url come from the
+  // server. Browser fetches bytes directly from view_url (public R2 CDN).
+  uploadWeeklyRetroSnapshot: (
+    retroId: number,
+    file: File,
+    portfolio: string = getActivePortfolio(),
+  ) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("portfolio", portfolio);
+    return fetchWithAuth(
+      `${API_BASE}/api/weekly-retros/${retroId}/snapshots`,
+      { method: "POST", body: form },
+    ).then(r => r.json()) as Promise<SnapshotRow | { error: string; detail?: any }>;
+  },
+
+  listWeeklyRetroSnapshots: (retroId: number, portfolio: string = getActivePortfolio()) =>
+    fetchJSON<SnapshotRow[] | { error: string }>(
+      `/api/weekly-retros/${retroId}/snapshots?portfolio=${encodeURIComponent(portfolio)}`,
+    ),
+
+  deleteWeeklyRetroSnapshot: (snapshotId: number) =>
+    fetchWithAuth(
+      `${API_BASE}/api/weekly-retros/snapshots/${snapshotId}`,
+      { method: "DELETE" },
+    ).then(r => r.json()) as Promise<{ deleted: true; id: number } | { error: string }>,
 
   // Tag system (Migration 026 — Phase 1). Polymorphic: assignments use
   // entity_type to discriminate weekly_retro / daily_journal / trades_summary.
