@@ -9,6 +9,7 @@ import { formatCurrency } from "@/lib/format";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
+import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
 
 // Rule dropdowns for the closed-trade edit modal. Duplicated from
 // trade-manager.tsx / log-buy.tsx / log-sell.tsx / import-trades.tsx —
@@ -320,44 +321,26 @@ function TradeCharts({ tradeId, ticker }: { tradeId: string; ticker: string }) {
                     </label>
                   </div>
 
-                  {/* Expanded: show images */}
+                  {/* Expanded: show images. Phase 4.4 — extracted the
+                      grid + card rendering into <ImageGallery> so
+                      Weekly Snapshot can reuse the same chrome. Label
+                      fallback ("{label} {i+1}") is preserved by mapping
+                      to ImageGalleryItem.filename. Lightbox stays local
+                      to Trade Journal (its own setLightbox state — not
+                      the shared ImageLightbox from Phase 4.2). */}
                   {isOpen && (
-                    <div className="p-3 grid gap-3" style={{ gridTemplateColumns: imgs.length === 1 ? "1fr" : "1fr 1fr" }}>
-                      {imgs.map((img, i) => {
-                        const url = img.view_url || "";
-                        const isPdf = /\.pdf($|\?)/i.test(String(img.file_name || "")) || /\.pdf($|\?)/i.test(url);
-                        return (
-                          <div key={img.id || i} className="rounded-[8px] overflow-hidden transition-all hover:shadow-md"
-                               style={{ border: "1px solid var(--border)" }}>
-                            {isPdf ? (
-                              <a href={url} target="_blank" rel="noopener noreferrer"
-                                 className="flex flex-col items-center justify-center p-8 gap-2 no-underline"
-                                 style={{ background: "var(--bg)", color: "var(--ink)", minHeight: 140 }}>
-                                <span className="text-[32px]">📄</span>
-                                <span className="text-[12px] font-semibold">Open PDF</span>
-                                <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>{img.file_name || "document.pdf"}</span>
-                              </a>
-                            ) : (
-                              <div className="cursor-pointer" onClick={() => url && setLightbox(url)}>
-                                {url ? (
-                                  <img src={url} alt={`${label} ${i + 1}`} className="w-full h-auto" style={{ maxHeight: 300, objectFit: "contain", background: "var(--bg)" }} />
-                                ) : (
-                                  <div className="p-4 text-center text-[11px]" style={{ color: "var(--ink-4)" }}>No URL</div>
-                                )}
-                              </div>
-                            )}
-                            <div className="px-2.5 py-1.5 text-[10px] flex items-center justify-between" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
-                              <span className="truncate flex-1">{img.file_name || `${label} ${i + 1}`}</span>
-                              <button onClick={() => { if (confirm("Delete this image?")) handleDelete(img.id); }}
-                                      className="ml-2 px-1.5 py-0.5 rounded text-[9px] cursor-pointer transition-colors hover:brightness-90"
-                                      style={{ color: "#e5484d", background: "color-mix(in oklab, #e5484d 8%, var(--surface))" }}>
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <ImageGallery
+                      items={imgs.map((img, i): ImageGalleryItem => ({
+                        id: img.id || i,
+                        url: img.view_url || "",
+                        filename: img.file_name || `${label} ${i + 1}`,
+                      }))}
+                      onDelete={(id) => handleDelete(id)}
+                      onImageClick={(index) => {
+                        const url = imgs[index]?.view_url;
+                        if (url) setLightbox(url);
+                      }}
+                    />
                   )}
 
                   {/* Empty state with upload prompt */}

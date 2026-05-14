@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type SnapshotRow } from "@/lib/api";
 import { ImageLightbox, type LightboxImage } from "./image-lightbox";
+import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
 
 interface WeeklySnapshotProps {
   retroId: number | null;
@@ -44,7 +45,6 @@ const ALLOWED_MIMES = new Set([
   "image/gif",
   "image/webp",
 ]);
-const DELETE_ARM_TIMEOUT_MS = 2000;
 
 // Internal placeholder type for optimistic-upload UI. Distinguishable
 // from a real SnapshotRow by the presence of `tempId` and absence of
@@ -74,13 +74,10 @@ export function WeeklySnapshot({
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
   const [uploading, setUploading] = useState<PlaceholderRow[]>([]);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [armedDeleteId, setArmedDeleteId] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [inlineError, setInlineError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const armResetTimer = useRef<number | null>(null);
 
   // Count change callback. Run when snapshots or uploading length changes.
   // Wrapped in a ref-style guard to avoid spurious calls on every render.
@@ -197,43 +194,24 @@ export function WeeklySnapshot({
     return () => window.removeEventListener("paste", onPaste);
   }, [retroId, uploadFiles]);
 
-  // --- Delete (two-click + 2s auto-reset) -------------------------------
+  // --- Delete -----------------------------------------------------------
+  // Phase 4.4: simplified to a single-click + native confirm() flow,
+  // matching the Trade Journal pattern (handled inside <ImageGallery>'s
+  // delete button). Optimistic removal with rollback-on-error stays.
 
   const handleDeleteClick = useCallback((id: number) => {
-    if (armedDeleteId === id) {
-      // Second click — commit.
-      setArmedDeleteId(null);
-      if (armResetTimer.current) {
-        window.clearTimeout(armResetTimer.current);
-        armResetTimer.current = null;
-      }
-      // Optimistic remove; rollback on failure.
-      const removed = snapshots.find(s => s.id === id);
-      setSnapshots(prev => prev.filter(s => s.id !== id));
-      api.deleteWeeklyRetroSnapshot(id).then(res => {
-        if (!res || (typeof res === "object" && "error" in res)) {
-          if (removed) setSnapshots(prev => [...prev, removed]);
-          showInlineError("Delete failed");
-        }
-      }).catch(() => {
+    const removed = snapshots.find(s => s.id === id);
+    setSnapshots(prev => prev.filter(s => s.id !== id));
+    api.deleteWeeklyRetroSnapshot(id).then(res => {
+      if (!res || (typeof res === "object" && "error" in res)) {
         if (removed) setSnapshots(prev => [...prev, removed]);
         showInlineError("Delete failed");
-      });
-    } else {
-      // First click — arm.
-      setArmedDeleteId(id);
-      if (armResetTimer.current) window.clearTimeout(armResetTimer.current);
-      armResetTimer.current = window.setTimeout(() => {
-        setArmedDeleteId(null);
-        armResetTimer.current = null;
-      }, DELETE_ARM_TIMEOUT_MS);
-    }
-  }, [armedDeleteId, snapshots, showInlineError]);
-
-  // Cleanup the arm timer on unmount.
-  useEffect(() => () => {
-    if (armResetTimer.current) window.clearTimeout(armResetTimer.current);
-  }, []);
+      }
+    }).catch(() => {
+      if (removed) setSnapshots(prev => [...prev, removed]);
+      showInlineError("Delete failed");
+    });
+  }, [snapshots, showInlineError]);
 
   // --- Lightbox ---------------------------------------------------------
   // Keyboard nav + backdrop click + Esc closing all live inside the shared
@@ -339,118 +317,37 @@ export function WeeklySnapshot({
         </div>
       )}
 
-      {/* Thumbnail grid */}
-      {(snapshots.length > 0 || uploading.length > 0) && (
-        <div
-          className="grid grid-cols-1 sm:grid-cols-3"
-          style={{ gap: 12, marginTop: 12 }}
-        >
-          {snapshots.map((s, idx) => {
-            const armed = armedDeleteId === s.id;
-            const showDelete = hoveredId === s.id || armed;
-            return (
-              <div
-                key={s.id}
-                onMouseEnter={() => setHoveredId(s.id)}
-                onMouseLeave={() => {
-                  setHoveredId(prev => (prev === s.id ? null : prev));
-                  // Hover-out un-arms — prevents a stale armed thumb from
-                  // sitting in the grid if the user moves on.
-                  setArmedDeleteId(prev => (prev === s.id ? null : prev));
-                }}
-                style={{
-                  position: "relative",
-                  borderRadius: 10,
-                  overflow: "hidden",
-                  border: "1px solid var(--border)",
-                  background: "var(--bg-2)",
-                  cursor: "pointer",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => openLightbox(idx)}
-                  aria-label={`Open snapshot ${s.file_name || s.id}`}
-                  style={{
-                    display: "block",
-                    width: "100%",
-                    padding: 0,
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={s.view_url}
-                    alt={s.file_name || `Snapshot ${s.id}`}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      height: 140,
-                      objectFit: "cover",
-                    }}
-                  />
-                </button>
-
-                {/* Hover × — two-click delete */}
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); handleDeleteClick(s.id); }}
-                  aria-label={armed
-                    ? `Confirm delete snapshot ${s.file_name || s.id}`
-                    : `Delete snapshot ${s.file_name || s.id}`}
-                  title={armed ? "Click again to confirm" : "Delete"}
-                  style={{
-                    position: "absolute",
-                    top: 6,
-                    right: 6,
-                    width: 22,
-                    height: 22,
-                    borderRadius: 999,
-                    background: armed
-                      ? "#dc2626"
-                      : "rgba(15,21,36,0.72)",
-                    color: "#fff",
-                    display: "grid",
-                    placeItems: "center",
-                    opacity: showDelete ? 1 : 0,
-                    transition: "opacity 120ms, background 120ms",
-                    border: "1px solid rgba(255,255,255,0.18)",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    fontWeight: 700,
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-
-          {/* Optimistic placeholders */}
-          {uploading.map(p => (
-            <div
-              key={p.tempId}
-              data-testid="upload-placeholder"
-              style={{
-                position: "relative",
-                borderRadius: 10,
-                overflow: "hidden",
-                border: "1px dashed var(--border-2)",
-                background: "var(--bg-2)",
-                height: 140,
-                display: "grid",
-                placeItems: "center",
-                fontSize: 11,
-                color: "var(--ink-4)",
-              }}
-            >
-              Uploading {p.name}…
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Thumbnail grid — Phase 4.4 uses the shared <ImageGallery>
+          that powers Trade Journal's chart section. Real snapshots
+          map by id; in-flight placeholders get synthetic negative
+          ids derived from their tempId hash so they're stable
+          React keys and won't collide with real DB ids. */}
+      <ImageGallery
+        items={[
+          ...snapshots.map((s): ImageGalleryItem => ({
+            id: s.id,
+            url: s.view_url,
+            filename: s.file_name || `Snapshot ${s.id}`,
+          })),
+          ...uploading.map((p): ImageGalleryItem => ({
+            // Hash tempId to a negative integer — distinct space
+            // from positive DB ids; React keys stay stable.
+            id: -Math.abs(Array.from(p.tempId).reduce(
+              (h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0,
+            )),
+            url: "",
+            filename: p.name,
+            uploading: true,
+          })),
+        ]}
+        onDelete={handleDeleteClick}
+        onImageClick={(index) => {
+          // Index aligns with the snapshots array (placeholders come
+          // after). Only open lightbox for real items.
+          if (index < snapshots.length) openLightbox(index);
+        }}
+        deleteConfirmMessage="Delete this snapshot?"
+      />
 
       {/* Lightbox — shared component handles backdrop click, Esc,
           ← / → with wrap-around. Pass onNavigate so multi-snapshot
