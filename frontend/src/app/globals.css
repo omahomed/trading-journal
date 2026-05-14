@@ -245,3 +245,118 @@ body {
 }
 .prose-custom .callout-danger .callout-title,
 .prose-custom .callout-error .callout-title { color: #dc2626; }
+
+/* ============================================================================
+   Phase 3.5: Weekly Thoughts editor — scoped content rendering
+   ============================================================================
+   These rules render the structural HTML produced by the contentEditable
+   editor (execCommand output + custom inserts: tables, task lists, video
+   embeds). Scoped to .weekly-thoughts-editor so they don't bleed into
+   markdown-rendered prose elsewhere (which uses .prose-custom). The
+   editor base font is sans-serif (set inline on the contentEditable div);
+   monospace is scoped here to <pre>/<code> only.
+   ========================================================================= */
+.weekly-thoughts-editor h1 { font-size: 22px; font-weight: 700; margin: 14px 0 8px; line-height: 1.25; }
+.weekly-thoughts-editor h2 { font-size: 18px; font-weight: 700; margin: 12px 0 6px; line-height: 1.3; color: var(--ink); }
+.weekly-thoughts-editor h3 { font-size: 15px; font-weight: 700; margin: 10px 0 4px; line-height: 1.35; color: var(--ink); }
+.weekly-thoughts-editor p  { margin: 6px 0; }
+.weekly-thoughts-editor ul,
+.weekly-thoughts-editor ol { margin: 6px 0; padding-left: 24px; }
+.weekly-thoughts-editor li { margin: 2px 0; }
+.weekly-thoughts-editor blockquote {
+  border-left: 3px solid var(--border-2);
+  padding-left: 12px;
+  margin: 8px 0;
+  color: var(--ink-3);
+}
+.weekly-thoughts-editor pre,
+.weekly-thoughts-editor code {
+  font-family: var(--font-jetbrains), ui-monospace, Menlo, monospace;
+}
+.weekly-thoughts-editor pre {
+  background: var(--bg-2);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+.weekly-thoughts-editor code {
+  background: var(--bg-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.weekly-thoughts-editor hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+.weekly-thoughts-editor a { color: #3b82f6; text-decoration: underline; }
+
+/* Tables — .wt-table is applied at insert; CSS targets any table inside
+   the editor in case pasted content lacks the class. */
+.weekly-thoughts-editor table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  table-layout: auto;
+  width: 100%;
+  font-size: 13px;
+}
+.weekly-thoughts-editor th,
+.weekly-thoughts-editor td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.weekly-thoughts-editor th {
+  background: var(--bg-2);
+  font-weight: 600;
+}
+
+/* Task list — GFM-flavored class names. Removes the default bullet so
+   the checkbox is the only marker. */
+.weekly-thoughts-editor ul.contains-task-list {
+  list-style: none;
+  padding-left: 4px;
+}
+.weekly-thoughts-editor li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0;
+}
+.weekly-thoughts-editor li.task-list-item > input[type="checkbox"] {
+  margin-top: 4px;
+  cursor: pointer;
+}
+
+/* Video embed — responsive 16:9 wrapper. The iframe is absolutely
+   positioned to fill it. */
+.weekly-thoughts-editor .wt-video-embed {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  margin: 12px 0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.weekly-thoughts-editor .wt-video-embed iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Indent levels — produced by normalizeIndentation() converting
+   execCommand("indent")'s inline margin-left to class-based, so
+   indentation survives the style-attribute-disallowed DOMPurify pass. */
+.weekly-thoughts-editor .indent-1 { margin-left: 40px; }
+.weekly-thoughts-editor .indent-2 { margin-left: 80px; }
+.weekly-thoughts-editor .indent-3 { margin-left: 120px; }
+.weekly-thoughts-editor .indent-4 { margin-left: 160px; }
+.weekly-thoughts-editor .indent-5 { margin-left: 200px; }
+.weekly-thoughts-editor .indent-6 { margin-left: 240px; }
