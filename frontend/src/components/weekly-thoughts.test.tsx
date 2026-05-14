@@ -771,3 +771,221 @@ describe("WeeklyThoughts — Phase 3.5 expansion", () => {
     expect(editor.innerHTML).not.toContain("server update");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4.1 — undo/redo, image paste inline, DOMPurify img filter.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Mock the api module — needed by uploadAndInsertImage. Hoisted by vitest.
+vi.mock("@/lib/api", () => ({
+  api: {
+    uploadWeeklyThoughtsImage: vi.fn(),
+  },
+}));
+
+import { api as _phase41Api } from "@/lib/api";
+const mockApi = vi.mocked(_phase41Api);
+
+function makeImageFile(name: string, size: number, type: string): File {
+  const blob = new Blob([new Uint8Array(size)], { type });
+  return new File([blob], name, { type });
+}
+
+function dispatchPasteWithImage(editor: HTMLElement, file: File) {
+  const ev = new Event("paste", { bubbles: true, cancelable: true }) as any;
+  ev.clipboardData = {
+    items: [
+      { kind: "file", type: file.type, getAsFile: () => file },
+    ],
+    getData: () => "",
+  };
+  editor.dispatchEvent(ev);
+}
+
+describe("WeeklyThoughts — Phase 4.1 polish + image paste", () => {
+  beforeEach(() => {
+    try { localStorage.clear(); } catch { /* shim */ }
+    vi.spyOn(document, "execCommand").mockReturnValue(true);
+    mockApi.uploadWeeklyThoughtsImage.mockReset();
+    // Stub URL.createObjectURL / revokeObjectURL — jsdom has it but
+    // resetting per-test isolates side effects.
+    if (typeof URL.createObjectURL !== "function") {
+      // @ts-expect-error jsdom shim
+      URL.createObjectURL = vi.fn(() => "blob:fake-preview-url");
+      // @ts-expect-error jsdom shim
+      URL.revokeObjectURL = vi.fn();
+    }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // ─── Undo / Redo ──────────────────────────────────────────────────────
+
+  test("Undo button fires execCommand('undo')", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Undo$/i }));
+    });
+    expect(document.execCommand).toHaveBeenCalledWith("undo", false, undefined);
+  });
+
+  test("Redo button fires execCommand('redo')", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Redo$/i }));
+    });
+    expect(document.execCommand).toHaveBeenCalledWith("redo", false, undefined);
+  });
+
+  // ─── Paste fall-through (non-image) ───────────────────────────────────
+
+  test("Paste with non-image clipboard items falls through to HTML path", async () => {
+    const onChange = vi.fn();
+    render(<WeeklyThoughts value="" onChange={onChange} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    // Synthesize a paste with text/html only — no image items.
+    const ev = new Event("paste", { bubbles: true, cancelable: true }) as any;
+    ev.clipboardData = {
+      items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
+      getData: (type: string) => (type === "text/html" ? "<p>hello</p>" : ""),
+    };
+    await act(async () => { editor.dispatchEvent(ev); });
+    // The HTML path calls execCommand("insertHTML", ...) — and does NOT
+    // call the image upload api.
+    expect(mockApi.uploadWeeklyThoughtsImage).not.toHaveBeenCalled();
+    expect(document.execCommand).toHaveBeenCalledWith(
+      "insertHTML", false, expect.stringContaining("<p>hello</p>"),
+    );
+  });
+
+  // ─── Image paste — retroId null shows error ──────────────────────────
+
+  test("Image paste with retroId=null shows inline error, no upload", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={null} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const file = makeImageFile("paste.png", 1024, "image/png");
+    await act(async () => { dispatchPasteWithImage(editor, file); });
+    expect(mockApi.uploadWeeklyThoughtsImage).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Save the retro first/i);
+  });
+
+  // ─── Image paste — happy path ────────────────────────────────────────
+
+  test("Image paste triggers upload and inserts <img> with blob URL", async () => {
+    mockApi.uploadWeeklyThoughtsImage.mockResolvedValueOnce({
+      view_url: "https://cdn.example.com/weekly_retros/7/thoughts/abc.png",
+    });
+    const onChange = vi.fn();
+    render(<WeeklyThoughts value="" onChange={onChange} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const file = makeImageFile("ok.png", 1024, "image/png");
+
+    await act(async () => { dispatchPasteWithImage(editor, file); });
+
+    // Optimistic insertion happened — an insertHTML call with the img
+    // markup. Verify the img tag was inserted (with blob URL + class).
+    const insertCalls = (document.execCommand as any).mock.calls.filter(
+      (c: any[]) => c[0] === "insertHTML",
+    );
+    expect(insertCalls.length).toBeGreaterThan(0);
+    expect(insertCalls[0][2]).toContain('<img src="blob:');
+    expect(insertCalls[0][2]).toContain('class="wt-uploading"');
+
+    // Upload was invoked.
+    await waitFor(() => {
+      expect(mockApi.uploadWeeklyThoughtsImage).toHaveBeenCalledWith(7, file, "CanSlim");
+    });
+  });
+
+  // ─── Image paste — size rejection ────────────────────────────────────
+
+  test("Image paste >5MB shows inline error, no upload call", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const big = makeImageFile("big.png", 5 * 1024 * 1024 + 1, "image/png");
+    await act(async () => { dispatchPasteWithImage(editor, big); });
+    expect(mockApi.uploadWeeklyThoughtsImage).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/5MB/i);
+  });
+
+  // ─── Image paste — MIME rejection ────────────────────────────────────
+
+  test("Image paste with non-allowed MIME (e.g. svg) shows inline error", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const svg = makeImageFile("bad.svg", 1024, "image/svg+xml");
+    await act(async () => { dispatchPasteWithImage(editor, svg); });
+    expect(mockApi.uploadWeeklyThoughtsImage).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/PNG/i);
+  });
+
+  // ─── Image paste — upload failure removes the placeholder ────────────
+
+  test("Image paste upload failure removes the placeholder + shows error", async () => {
+    mockApi.uploadWeeklyThoughtsImage.mockRejectedValueOnce(new Error("network"));
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const file = makeImageFile("fail.png", 1024, "image/png");
+
+    // Pre-populate the editor with a placeholder element matching the
+    // shape our handler would have inserted, so the cleanup logic has
+    // something to find. (The actual handler does the same insert
+    // via execCommand, which is stubbed, so the DOM doesn't reflect
+    // it. We approximate the post-insert DOM here.)
+    editor.innerHTML =
+      '<img src="blob:fake" data-upload-id="wt-img-fake" class="wt-uploading">';
+
+    await act(async () => { dispatchPasteWithImage(editor, file); });
+
+    // Wait for the rejected promise to flush.
+    await waitFor(() => expect(mockApi.uploadWeeklyThoughtsImage).toHaveBeenCalled());
+    // Error toast appears.
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeNull());
+  });
+
+  // ─── DOMPurify img filter ────────────────────────────────────────────
+
+  test("Paste HTML with img from non-R2 src has img stripped", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    const dirty = '<p>kept</p><img src="https://evil.example/x.png" /><p>also kept</p>';
+    const ev = new Event("paste", { bubbles: true, cancelable: true }) as any;
+    ev.clipboardData = {
+      items: [],   // no image file items — falls into HTML path
+      getData: (type: string) => (type === "text/html" ? dirty : ""),
+    };
+    await act(async () => { editor.dispatchEvent(ev); });
+
+    const insertCalls = (document.execCommand as any).mock.calls.filter(
+      (c: any[]) => c[0] === "insertHTML",
+    );
+    const cleaned = insertCalls.at(-1)![2] as string;
+    expect(cleaned).toContain("kept");
+    expect(cleaned).toContain("also kept");
+    expect(cleaned).not.toContain("evil.example");
+    expect(cleaned).not.toContain("<img");
+  });
+
+  test("Paste HTML with img from R2 src is preserved", async () => {
+    render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
+    const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
+    // Use a URL that matches the fallback IMG_SRC_PATTERN (HTTPS + /weekly_retros/ path + image ext).
+    const dirty = '<p>x</p><img src="https://r2.example.com/weekly_retros/7/thoughts/abc.png" />';
+    const ev = new Event("paste", { bubbles: true, cancelable: true }) as any;
+    ev.clipboardData = {
+      items: [],
+      getData: (type: string) => (type === "text/html" ? dirty : ""),
+    };
+    await act(async () => { editor.dispatchEvent(ev); });
+
+    const insertCalls = (document.execCommand as any).mock.calls.filter(
+      (c: any[]) => c[0] === "insertHTML",
+    );
+    const cleaned = insertCalls.at(-1)![2] as string;
+    expect(cleaned).toContain("<img");
+    expect(cleaned).toContain("weekly_retros/7/thoughts/abc.png");
+  });
+});

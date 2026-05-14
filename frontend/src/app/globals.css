@@ -260,8 +260,25 @@ body {
 .weekly-thoughts-editor h2 { font-size: 18px; font-weight: 700; margin: 12px 0 6px; line-height: 1.3; color: var(--ink); }
 .weekly-thoughts-editor h3 { font-size: 15px; font-weight: 700; margin: 10px 0 4px; line-height: 1.35; color: var(--ink); }
 .weekly-thoughts-editor p  { margin: 6px 0; }
-.weekly-thoughts-editor ul,
-.weekly-thoughts-editor ol { margin: 6px 0; padding-left: 24px; }
+/* List rendering — restore the bullet/number markers that Tailwind v4's
+   preflight zeroes out globally (list-style: none on ul, ol). Without
+   these, execCommand("insertUnorderedList") / insertOrderedList produce
+   a <ul>/<ol> that renders with no visible marker. */
+.weekly-thoughts-editor ul {
+  list-style-type: disc;
+  margin: 6px 0;
+  padding-left: 24px;
+}
+.weekly-thoughts-editor ol {
+  list-style-type: decimal;
+  margin: 6px 0;
+  padding-left: 24px;
+}
+/* Nested list markers — match conventional Word/Google Docs hierarchy. */
+.weekly-thoughts-editor ul ul { list-style-type: circle; }
+.weekly-thoughts-editor ul ul ul { list-style-type: square; }
+.weekly-thoughts-editor ol ol { list-style-type: lower-alpha; }
+.weekly-thoughts-editor ol ol ol { list-style-type: lower-roman; }
 .weekly-thoughts-editor li { margin: 2px 0; }
 .weekly-thoughts-editor blockquote {
   border-left: 3px solid var(--border-2);
@@ -293,6 +310,25 @@ body {
   margin: 16px 0;
 }
 .weekly-thoughts-editor a { color: #3b82f6; text-decoration: underline; }
+
+/* Phase 4.1 — inline images (pasted into the editor body). Sized to
+   fit the editor width naturally; height auto-derives. */
+.weekly-thoughts-editor img {
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: 8px;
+  display: block;
+}
+/* While the upload is in flight (blob URL + data-upload-id present),
+   render with reduced opacity + dashed outline so the user sees that
+   the image hasn't been persisted yet. .wt-uploading is removed in
+   the editor's onSuccess swap. */
+.weekly-thoughts-editor img.wt-uploading {
+  opacity: 0.6;
+  outline: 2px dashed var(--ink-4);
+  outline-offset: 2px;
+}
 
 /* Tables — .wt-table is applied at insert; CSS targets any table inside
    the editor in case pasted content lacks the class. */

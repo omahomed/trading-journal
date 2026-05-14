@@ -2865,6 +2865,17 @@ def list_weekly_retro_snapshots(portfolio_name: str, retro_id: int) -> list[dict
             return [_serialize_snapshot(dict(r), r2_public) for r in cur.fetchall()]
 
 
+def verify_retro_ownership(portfolio_name: str, retro_id: int) -> bool:
+    """Phase 4.1 — public wrapper around _resolve_retro_owned_by_portfolio
+    for endpoints (e.g., POST /api/weekly-retros/{retro_id}/thoughts-images)
+    that need an ownership check without an accompanying INSERT/SELECT.
+    Opens its own connection. Returns True if the retro exists, is not
+    soft-deleted, and is visible to the current tenant via RLS."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            return _resolve_retro_owned_by_portfolio(cur, retro_id, portfolio_name)
+
+
 def soft_delete_weekly_retro_snapshot(snapshot_id: int) -> bool:
     """Set deleted_at = NOW() on a snapshot row. Returns True on row hit.
     RLS scopes the UPDATE to the current tenant — a cross-tenant snapshot_id

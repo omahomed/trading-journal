@@ -459,10 +459,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
           </SectionExpander>
 
           {/* Weekly Thoughts (Phase 3). HTML rich text editor with the
-              Phase 0 dirtyRef debounced save pattern. */}
+              Phase 0 dirtyRef debounced save pattern. Phase 4.1 added
+              inline image paste — retroId + portfolio threaded through
+              so the upload endpoint knows which retro to attach to. */}
           <WeeklyThoughts
             value={weekly_thoughts}
             onChange={(next) => { dirtyRef.current = true; setWeeklyThoughts(next); }}
+            retroId={retros[monStr]?.id ?? null}
+            portfolio={portfolio}
           />
 
           {/* Weekly Snapshot (Phase 4). Image gallery — drop / paste /

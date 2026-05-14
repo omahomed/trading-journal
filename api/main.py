@@ -4776,6 +4776,67 @@ def delete_weekly_retro_snapshot(snapshot_id: int, request: Request):
     return {"deleted": True, "id": snapshot_id}
 
 
+# ============================================================
+# PHASE 4.1 — INLINE THOUGHTS IMAGES
+# ============================================================
+# Separate from the gallery snapshots: these are <img> tags pasted /
+# dragged inline into the Weekly Thoughts editor body. No DB row — the
+# editor's HTML already encodes which image exists (as <img src=R2URL>).
+# Future cleanup is by R2-prefix scan vs current weekly_thoughts HTML.
+#
+# Reuses Phase 4's MIME/size constants and r2.upload_blob helper.
+
+
+@app.post("/api/weekly-retros/{retro_id}/thoughts-images")
+@limiter.limit("20/minute")
+async def upload_weekly_thoughts_image(
+    retro_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+):
+    """Upload an inline image for the Weekly Thoughts editor. No DB row —
+    the editor body's HTML is the source of truth for which images exist.
+    Returns {"view_url": "..."} so the editor can swap the optimistic
+    blob URL for the real R2 URL."""
+    if not _is_r2_available():
+        return {"error": "R2 storage not configured"}
+
+    mime = (file.content_type or "").lower()
+    if mime not in _SNAPSHOT_ALLOWED_MIMES:
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "unsupported_media_type",
+                    "allowed": sorted(_SNAPSHOT_ALLOWED_MIMES)},
+        )
+
+    content = await file.read()
+    if len(content) > _SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "limit_bytes": _SNAPSHOT_MAX_BYTES},
+        )
+
+    # Ownership check — fail closed before touching R2 so an unauthorized
+    # caller can't burn bucket quota by upload-then-orphan.
+    if not db.verify_retro_ownership(portfolio, retro_id):
+        raise HTTPException(status_code=404, detail={"error": "retro_not_found"})
+
+    ext = _SNAPSHOT_MIME_TO_EXT.get(mime, "bin")
+    # Distinct prefix from gallery snapshots so future R2 cleanup can
+    # differentiate inline images (referenced by editor HTML) from
+    # gallery rows (referenced by weekly_retro_snapshots).
+    object_key = f"weekly_retros/{retro_id}/thoughts/{_uuid.uuid4().hex}.{ext}"
+    file_like = io.BytesIO(content)
+    storage_ref = r2.upload_blob(file_like, object_key, content_type=mime)
+    if not storage_ref:
+        return {"error": "Upload to R2 failed"}
+
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    view_url = f"{r2_public}/{storage_ref}" if r2_public else storage_ref
+    return {"view_url": view_url}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
