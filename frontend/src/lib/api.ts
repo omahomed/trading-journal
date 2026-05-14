@@ -77,6 +77,10 @@ export interface WeeklyRetro {
   worst_decision: string;
   rule_change: boolean;
   rule_change_text: string;
+  // Phase 3: HTML body of the Weekly Thoughts editor (DOMPurify-sanitized
+  // before send). Backend column is NOT NULL DEFAULT '' so this is never
+  // null on a row read from the API.
+  weekly_thoughts: string;
   ticker_grades: Record<string, WeeklyRetroTickerGrade>;
   created_at: string;
   updated_at: string;

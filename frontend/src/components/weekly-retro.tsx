@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
+import { WeeklyThoughts } from "./weekly-thoughts";
 import { Icons } from "./icons";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
@@ -50,6 +51,9 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [worst_decision, setWorstDecision] = useState("");
   const [rule_change, setRuleChange] = useState(false);
   const [rule_change_text, setRuleChangeText] = useState("");
+  // Phase 3: HTML body of the Weekly Thoughts editor. Snake_case for wire
+  // parity. Stored as HTML string; sanitized in the editor before send.
+  const [weekly_thoughts, setWeeklyThoughts] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
 
   // History — full retro rows keyed by week_start, populated from the API.
@@ -123,10 +127,12 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
       setWorstDecision(existing.worst_decision || "");
       setRuleChange(existing.rule_change || false);
       setRuleChangeText(existing.rule_change_text || "");
+      setWeeklyThoughts(existing.weekly_thoughts || "");
       setTickerGrades(existing.ticker_grades || {});
     } else {
       setWeekGrade(""); setBestDecision(""); setWorstDecision("");
-      setRuleChange(false); setRuleChangeText(""); setTickerGrades({});
+      setRuleChange(false); setRuleChangeText("");
+      setWeeklyThoughts(""); setTickerGrades({});
     }
     // Reset dirty flag — hydration is not a user edit. The next render's
     // debounce useEffect sees dirtyRef.current = false and skips firing.
@@ -192,6 +198,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
       worst_decision,
       rule_change,
       rule_change_text,
+      weekly_thoughts,
       ticker_grades,
     };
     const result = await api.weeklyRetroUpsert(payload);
@@ -205,7 +212,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     setTimeout(() => setSaveMsg(""), 3000);
     return result;
   }, [portfolio, monStr, week_grade, best_decision, worst_decision,
-      rule_change, rule_change_text, ticker_grades]);
+      rule_change, rule_change_text, weekly_thoughts, ticker_grades]);
 
   // Debounced auto-save. dirtyRef gates the effect so the initial hydration
   // pass (and every cross-week switch) doesn't fire a wasteful PUT. Mirrors
@@ -218,7 +225,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     }, 800);
     return () => clearTimeout(t);
   }, [week_grade, best_decision, worst_decision, rule_change, rule_change_text,
-      ticker_grades, handleSave]);
+      weekly_thoughts, ticker_grades, handleSave]);
 
   // History entries sorted newest first
   const historyEntries = useMemo(() => {
@@ -481,6 +488,13 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               </div>
             )}
           </section>
+
+          {/* Weekly Thoughts (Phase 3). HTML rich text editor with the
+              Phase 0 dirtyRef debounced save pattern. */}
+          <WeeklyThoughts
+            value={weekly_thoughts}
+            onChange={(next) => { dirtyRef.current = true; setWeeklyThoughts(next); }}
+          />
 
           {/* Weekly Summary */}
           <div className="rounded-[14px] overflow-hidden mb-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>

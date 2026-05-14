@@ -43,6 +43,22 @@ export const Icons = {
   // palette delete affordance — semantically distinct from Icons.x (which
   // means "detach this assignment" on a TagPill).
   trash: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2} {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
+  // Phase 3: Weekly Thoughts toolbar glyphs. Paths lifted verbatim from
+  // Design/design_handoff_weekly_retro/design/Icons.jsx WIcon.* — sizes
+  // and stroke widths preserved so the toolbar visually matches the
+  // mockup. All ~14px and strokeWidth 2.0-2.2 per the design.
+  bold: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.2} {...p}><path d="M7 4h6a4 4 0 0 1 0 8H7z"/><path d="M7 12h7a4 4 0 0 1 0 8H7z"/></svg>,
+  italic: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.2} {...p}><line x1="19" y1="4" x2="10" y2="4"/><line x1="14" y1="20" x2="5" y2="20"/><line x1="15" y1="4" x2="9" y2="20"/></svg>,
+  underline: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.2} {...p}><path d="M6 4v7a6 6 0 0 0 12 0V4"/><line x1="4" y1="21" x2="20" y2="21"/></svg>,
+  strike: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.2} {...p}><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>,
+  link: (p?: any) => <svg {...iconProps} width={14} height={14} {...p}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>,
+  eraser: (p?: any) => <svg {...iconProps} width={14} height={14} {...p}><path d="M19 21H8a2 2 0 0 1-1.41-.59l-5-5a2 2 0 0 1 0-2.83l11.59-11.58a2 2 0 0 1 2.82 0L22 7l-9.59 9.59"/><line x1="14" y1="21" x2="22" y2="21"/></svg>,
+  highlight: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={1.8} {...p}><path d="M9 11l-6 6v3h3l6-6"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0L9 11l4.6-4.6a2 2 0 0 1 2.8 0L22 12z"/></svg>,
+  textColor: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><path d="M4 20h16"/><path d="M6 16L12 4l6 12"/><path d="M8 12h8"/></svg>,
+  alignLeft: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="18" y2="18"/></svg>,
+  alignCenter: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="5" y1="18" x2="19" y2="18"/></svg>,
+  alignRight: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><line x1="4" y1="6" x2="20" y2="6"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="6" y1="18" x2="20" y2="18"/></svg>,
+  mic: (p?: any) => <svg {...iconProps} width={14} height={14} {...p}><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>,
 };
 
 // Map nav item IDs to icons
