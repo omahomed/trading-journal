@@ -2514,6 +2514,9 @@ def _serialize_weekly_retro(parent_row: dict, ticker_grades: dict) -> dict:
         "worst_decision": parent_row.get("worst_decision") or "",
         "rule_change": bool(parent_row.get("rule_change")),
         "rule_change_text": parent_row.get("rule_change_text") or "",
+        # Phase 3: HTML-formatted reflection prose. NOT NULL DEFAULT '' on
+        # the column means this is always a string, never None.
+        "weekly_thoughts": parent_row.get("weekly_thoughts") or "",
         "ticker_grades": ticker_grades,
         "created_at": (
             parent_row["created_at"].isoformat()
@@ -2598,7 +2601,8 @@ def load_weekly_retro(portfolio_name: str, week_start) -> dict | None:
             cur.execute(
                 "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
                 "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.created_at, r.updated_at "
+                "       r.rule_change_text, r.weekly_thoughts, "
+                "       r.created_at, r.updated_at "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE p.name = %s AND r.week_start = %s AND r.deleted_at IS NULL",
                 (portfolio_name, week_start),
@@ -2621,7 +2625,8 @@ def list_weekly_retros(portfolio_name: str, limit: int = 200) -> list[dict]:
             cur.execute(
                 "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
                 "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.created_at, r.updated_at "
+                "       r.rule_change_text, r.weekly_thoughts, "
+                "       r.created_at, r.updated_at "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE p.name = %s AND r.deleted_at IS NULL "
                 "ORDER BY r.week_start DESC LIMIT %s",
@@ -2643,6 +2648,7 @@ def upsert_weekly_retro(
     worst_decision: str = "",
     rule_change: bool = False,
     rule_change_text: str = "",
+    weekly_thoughts: str = "",
     ticker_grades: dict | None = None,
 ) -> dict:
     """Upsert by (portfolio_id, week_start). If a soft-deleted row exists
@@ -2661,6 +2667,7 @@ def upsert_weekly_retro(
     best_decision = best_decision or ""
     worst_decision = worst_decision or ""
     rule_change_text = rule_change_text or ""
+    weekly_thoughts = weekly_thoughts or ""
     rule_change = bool(rule_change)
 
     with get_db_connection() as conn:
@@ -2687,21 +2694,25 @@ def upsert_weekly_retro(
                     "UPDATE weekly_retros SET "
                     "  week_grade = %s, best_decision = %s, worst_decision = %s, "
                     "  rule_change = %s, rule_change_text = %s, "
+                    "  weekly_thoughts = %s, "
                     "  deleted_at = NULL, updated_at = NOW() "
                     "WHERE id = %s "
                     "RETURNING id",
                     (week_grade_val, best_decision, worst_decision,
-                     rule_change, rule_change_text, existing["id"]),
+                     rule_change, rule_change_text, weekly_thoughts,
+                     existing["id"]),
                 )
                 retro_id = cur.fetchone()["id"]
             else:
                 cur.execute(
                     "INSERT INTO weekly_retros "
                     "  (portfolio_id, week_start, week_grade, best_decision, "
-                    "   worst_decision, rule_change, rule_change_text) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    "   worst_decision, rule_change, rule_change_text, "
+                    "   weekly_thoughts) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                     (portfolio_id, week_start, week_grade_val, best_decision,
-                     worst_decision, rule_change, rule_change_text),
+                     worst_decision, rule_change, rule_change_text,
+                     weekly_thoughts),
                 )
                 retro_id = cur.fetchone()["id"]
 
@@ -2712,7 +2723,8 @@ def upsert_weekly_retro(
             cur.execute(
                 "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
                 "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.created_at, r.updated_at "
+                "       r.rule_change_text, r.weekly_thoughts, "
+                "       r.created_at, r.updated_at "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE r.id = %s",
                 (retro_id,),

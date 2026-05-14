@@ -162,6 +162,7 @@ def test_upsert_inserts_when_no_existing_row(monkeypatch):
             "week_start": date(2026, 5, 4),
             "week_grade": "B+", "best_decision": "good", "worst_decision": "bad",
             "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "<p>fresh notes</p>",
             "created_at": datetime(2026, 5, 5),
             "updated_at": datetime(2026, 5, 5),
         },
@@ -171,15 +172,20 @@ def test_upsert_inserts_when_no_existing_row(monkeypatch):
     result = db_layer.upsert_weekly_retro(
         "CanSlim", date(2026, 5, 4),
         week_grade="B+", best_decision="good", worst_decision="bad",
+        weekly_thoughts="<p>fresh notes</p>",
     )
 
     assert result["id"] == 7
     assert result["week_grade"] == "B+"
+    assert result["weekly_thoughts"] == "<p>fresh notes</p>"
     assert result["ticker_grades"] == {}
     # Verify an INSERT was emitted (not an UPDATE)
     statements = [sql for sql, _ in cur.executed]
     assert any("INSERT INTO weekly_retros" in s for s in statements)
     assert not any("UPDATE weekly_retros" in s for s in statements)
+    # Phase 3: weekly_thoughts must be in the INSERT column list + values.
+    insert_sql = next(s for s, _ in cur.executed if "INSERT INTO weekly_retros" in s)
+    assert "weekly_thoughts" in insert_sql
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +204,7 @@ def test_upsert_updates_when_live_row_exists(monkeypatch):
             "week_start": date(2026, 5, 4),
             "week_grade": "A", "best_decision": "x", "worst_decision": "y",
             "rule_change": True, "rule_change_text": "no FOMO",
+            "weekly_thoughts": "<p>updated</p>",
             "created_at": datetime(2026, 5, 1),
             "updated_at": datetime(2026, 5, 6),
         },
@@ -207,14 +214,19 @@ def test_upsert_updates_when_live_row_exists(monkeypatch):
     result = db_layer.upsert_weekly_retro(
         "CanSlim", date(2026, 5, 4),
         week_grade="A", rule_change=True, rule_change_text="no FOMO",
+        weekly_thoughts="<p>updated</p>",
     )
 
     assert result["id"] == 7
     assert result["week_grade"] == "A"
     assert result["rule_change"] is True
+    assert result["weekly_thoughts"] == "<p>updated</p>"
     statements = [sql for sql, _ in cur.executed]
     assert any("UPDATE weekly_retros" in s for s in statements)
     assert not any("INSERT INTO weekly_retros" in s for s in statements)
+    # Phase 3: weekly_thoughts must be in the UPDATE SET clause.
+    update_sql = next(s for s, _ in cur.executed if "UPDATE weekly_retros" in s)
+    assert "weekly_thoughts = %s" in update_sql
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +248,7 @@ def test_upsert_revives_soft_deleted_row(monkeypatch):
             "week_start": date(2026, 5, 4),
             "week_grade": "B", "best_decision": "", "worst_decision": "",
             "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "<p>revived</p>",
             "created_at": datetime(2026, 4, 1),
             "updated_at": datetime(2026, 5, 13),
         },
@@ -244,15 +257,20 @@ def test_upsert_revives_soft_deleted_row(monkeypatch):
 
     result = db_layer.upsert_weekly_retro(
         "CanSlim", date(2026, 5, 4), week_grade="B",
+        weekly_thoughts="<p>revived</p>",
     )
 
     # Same id — id stability is the whole point of revival.
     assert result["id"] == 99
+    # Phase 3: the revived row reflects the new payload's weekly_thoughts.
+    assert result["weekly_thoughts"] == "<p>revived</p>"
     statements = [sql for sql, _ in cur.executed]
     update_sql = next(s for s, _ in cur.executed if "UPDATE weekly_retros" in s)
     # The UPDATE must clear deleted_at so the partial-unique index sees a
     # live row again. Without this, tags lose their FK on the next prune.
     assert "deleted_at = NULL" in update_sql
+    # Phase 3: the revival UPDATE must also write the new weekly_thoughts.
+    assert "weekly_thoughts = %s" in update_sql
     assert not any("INSERT INTO weekly_retros" in s for s in statements)
 
 
@@ -417,6 +435,7 @@ def weekly_stubs(monkeypatch):
             "week_grade": fields.get("week_grade"), "best_decision": fields.get("best_decision", ""),
             "worst_decision": fields.get("worst_decision", ""), "rule_change": fields.get("rule_change", False),
             "rule_change_text": fields.get("rule_change_text", ""),
+            "weekly_thoughts": fields.get("weekly_thoughts", ""),
             "ticker_grades": fields.get("ticker_grades") or {},
             "created_at": "2026-05-13T00:00:00", "updated_at": "2026-05-13T00:00:00",
         }
@@ -448,6 +467,7 @@ def test_get_returns_row(weekly_stubs):
         "id": 7, "portfolio": "CanSlim", "week_start": "2026-05-04",
         "week_grade": "B+", "best_decision": "x", "worst_decision": "y",
         "rule_change": False, "rule_change_text": "",
+        "weekly_thoughts": "<p>my reflections</p>",
         "ticker_grades": {"AAPL": {"grade": "A (Perfect)", "behavior": "Followed Plan", "notes": ""}},
         "created_at": "2026-05-05T00:00:00", "updated_at": "2026-05-05T00:00:00",
     }
@@ -457,6 +477,7 @@ def test_get_returns_row(weekly_stubs):
     body = r.json()
     assert body["id"] == 7
     assert body["week_grade"] == "B+"
+    assert body["weekly_thoughts"] == "<p>my reflections</p>"
     assert body["ticker_grades"]["AAPL"]["grade"] == "A (Perfect)"
 
 
@@ -489,11 +510,13 @@ def test_list_returns_array(weekly_stubs):
         {"id": 2, "portfolio": "CanSlim", "week_start": "2026-05-11",
          "week_grade": "A", "best_decision": "", "worst_decision": "",
          "rule_change": False, "rule_change_text": "",
+         "weekly_thoughts": "<p>week 2 thoughts</p>",
          "ticker_grades": {},
          "created_at": "2026-05-12T00:00:00", "updated_at": "2026-05-12T00:00:00"},
         {"id": 1, "portfolio": "CanSlim", "week_start": "2026-05-04",
          "week_grade": "B", "best_decision": "", "worst_decision": "",
          "rule_change": False, "rule_change_text": "",
+         "weekly_thoughts": "",
          "ticker_grades": {},
          "created_at": "2026-05-05T00:00:00", "updated_at": "2026-05-05T00:00:00"},
     ]
@@ -504,6 +527,9 @@ def test_list_returns_array(weekly_stubs):
     assert isinstance(body, list)
     assert len(body) == 2
     assert body[0]["week_start"] == "2026-05-11"
+    # Phase 3: weekly_thoughts present on every row in the array.
+    assert body[0]["weekly_thoughts"] == "<p>week 2 thoughts</p>"
+    assert body[1]["weekly_thoughts"] == ""
 
 
 def test_put_happy_path(weekly_stubs):
@@ -518,6 +544,7 @@ def test_put_happy_path(weekly_stubs):
         "worst_decision": "bad",
         "rule_change": True,
         "rule_change_text": "rule",
+        "weekly_thoughts": "<p>this week was great</p>",
         "ticker_grades": {
             "AAPL": {"grade": "A (Perfect)", "behavior": "Followed Plan", "notes": ""},
         },
@@ -532,7 +559,24 @@ def test_put_happy_path(weekly_stubs):
     assert portfolio == "CanSlim"
     assert week_start == date(2026, 5, 4)
     assert fields["week_grade"] == "B+"
+    # Phase 3: weekly_thoughts forwarded to the helper.
+    assert fields["weekly_thoughts"] == "<p>this week was great</p>"
     assert fields["ticker_grades"]["AAPL"]["behavior"] == "Followed Plan"
+
+
+def test_put_omits_weekly_thoughts_defaults_to_empty(weekly_stubs):
+    """A PUT body without weekly_thoughts → helper is called with ''.
+    Mirrors the column's NOT NULL DEFAULT '' semantics from migration 027."""
+    state, client = weekly_stubs
+
+    r = client.put("/api/weekly-retros", json={
+        "portfolio": "CanSlim",
+        "week_start": "2026-05-04",
+        "week_grade": "B+",
+    })
+    assert r.status_code == 200
+    _, _, fields = state["upsert_calls"][0]
+    assert fields["weekly_thoughts"] == ""
 
 
 def test_put_bad_week_start(weekly_stubs):

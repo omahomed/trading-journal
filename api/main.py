@@ -921,6 +921,10 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
             worst_decision=str(body.get("worst_decision") or ""),
             rule_change=bool(body.get("rule_change", False)),
             rule_change_text=str(body.get("rule_change_text") or ""),
+            # Phase 3: HTML body of the Weekly Thoughts editor. Frontend
+            # sanitizes via DOMPurify before sending; the column is plain
+            # TEXT and accepts any string. Defaults to '' when absent.
+            weekly_thoughts=str(body.get("weekly_thoughts") or ""),
             ticker_grades=tg_in or {},
         )
     except ValueError as e:
