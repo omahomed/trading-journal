@@ -426,6 +426,24 @@ export const api = {
       { method: "DELETE" },
     ).then(r => r.json()) as Promise<{ deleted: true; id: number } | { error: string }>,
 
+  // Phase 4.1 — inline image paste into Weekly Thoughts editor. Returns
+  // a public R2 URL the editor swaps into <img src> in place of the
+  // ephemeral blob URL. No DB row created server-side — the editor's
+  // HTML is the source of truth for which inline images exist.
+  uploadWeeklyThoughtsImage: (
+    retroId: number,
+    file: File,
+    portfolio: string = getActivePortfolio(),
+  ) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("portfolio", portfolio);
+    return fetchWithAuth(
+      `${API_BASE}/api/weekly-retros/${retroId}/thoughts-images`,
+      { method: "POST", body: form },
+    ).then(r => r.json()) as Promise<{ view_url: string } | { error: string; detail?: any }>;
+  },
+
   // Tag system (Migration 026 — Phase 1). Polymorphic: assignments use
   // entity_type to discriminate weekly_retro / daily_journal / trades_summary.
   // Phase 1 mounts on weekly_retro only; later phases reuse these endpoints.

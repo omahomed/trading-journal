@@ -72,6 +72,11 @@ export const Icons = {
   table: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><rect x="3" y="4" width="18" height="16" rx="1"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="4" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/></svg>,
   checkSquare: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
   video: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><rect x="2" y="6" width="14" height="12" rx="2"/><polygon points="22 8 16 12 22 16" fill="currentColor" stroke="none"/></svg>,
+  // Phase 4.1: undo + redo toolbar buttons. Curved-arrow pair, Lucide
+  // Undo2 / Redo2 shape. Same 14×14 + strokeWidth 2.0 as the other
+  // Weekly Thoughts toolbar glyphs.
+  undo: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H10"/></svg>,
+  redo: (p?: any) => <svg {...iconProps} width={14} height={14} strokeWidth={2.0} {...p}><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H14"/></svg>,
 };
 
 // Map nav item IDs to icons

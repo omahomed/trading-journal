@@ -36,6 +36,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
+import { api } from "@/lib/api";
 import { Icons } from "./icons";
 import { SectionExpander } from "./section-expander";
 import { ToolbarDropdown, type ToolbarDropdownOption } from "./weekly-thoughts/toolbar-dropdown";
@@ -44,6 +45,13 @@ import { UrlPopover } from "./weekly-thoughts/url-popover";
 interface WeeklyThoughtsProps {
   value: string;
   onChange: (html: string) => void;
+  /** Phase 4.1: required for inline image paste. When null, image-paste
+   *  attempts surface a friendly "save the retro first" inline error
+   *  (matches TagPicker / WeeklySnapshot's disabled-state idiom). When
+   *  undefined, image paste is silently disabled — same UX as null. */
+  retroId?: number | null;
+  /** Phase 4.1: portfolio name forwarded to the upload endpoint. */
+  portfolio?: string;
 }
 
 // Persisted under this key by <SectionExpander>. The constant is held here
@@ -84,6 +92,8 @@ const PASTE_ALLOWED_TAGS = [
   "input",
   // Phase 3.5 video embed — src-gated by hook below
   "iframe",
+  // Phase 4.1 inline images — src-gated by hook below (R2 prefix only)
+  "img",
 ];
 
 // Attributes allowed on the above tags. `style` is INTENTIONALLY NOT
@@ -92,11 +102,13 @@ const PASTE_ALLOWED_TAGS = [
 // the style-attribute XSS surface entirely.
 const PASTE_ALLOWED_ATTR = [
   "href",
-  "class",                                            // .task-list / .wt-* / .indent-N
+  "class",                                            // .task-list / .wt-* / .indent-N / .wt-uploading
   "rowspan", "colspan",                               // tables
   "type", "checked", "disabled",                      // input (type filtered by hook)
-  "src", "width", "height",                           // iframe (src filtered by hook)
+  "src", "width", "height",                           // iframe + img (src filtered by hook)
   "frameborder", "allowfullscreen", "allow",          // iframe
+  // Phase 4.1 img attrs
+  "alt", "loading",
 ];
 
 // Strict YouTube + Vimeo embed-URL whitelist. The query-string portion
@@ -105,13 +117,31 @@ const PASTE_ALLOWED_ATTR = [
 const IFRAME_SRC_PATTERN =
   /^https:\/\/(www\.youtube\.com\/embed\/[\w-]+(\?[\w=&,.-]*)?|player\.vimeo\.com\/video\/\d+(\?[\w=&,.-]*)?)$/;
 
+// Phase 4.1 — img src whitelist for inline images. Only allow URLs from
+// our R2 public bucket under the weekly_retros/ prefix. If
+// NEXT_PUBLIC_R2_PUBLIC_URL is set at build time, use that exact prefix.
+// Otherwise fall back to a permissive HTTPS-pattern that still requires
+// the /weekly_retros/ path + an image extension (defense in depth).
+const _R2_PUBLIC_URL = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL || "")
+  .replace(/\/$/, "");
+function _escapeRegex(s: string): string {
+  return s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+const IMG_SRC_PATTERN = _R2_PUBLIC_URL
+  ? new RegExp(
+      "^" + _escapeRegex(_R2_PUBLIC_URL) +
+      "/weekly_retros/[\\w/.-]+\\.(png|jpe?g|gif|webp)(\\?[\\w=&,.-]*)?$",
+    )
+  : /^https:\/\/[\w.-]+\/weekly_retros\/[\w/.-]+\.(png|jpe?g|gif|webp)(\?[\w=&,.-]*)?$/i;
+
 let _hooksRegistered = false;
 function ensureSanitizerHooks() {
   if (_hooksRegistered) return;
   _hooksRegistered = true;
 
   // Strip iframe src that doesn't match the whitelist; strip input type
-  // values other than "checkbox". These hooks run during sanitize().
+  // values other than "checkbox"; strip img src that doesn't match the
+  // R2-prefix whitelist. These hooks run during sanitize().
   DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
     if (node.nodeName === "IFRAME" && data.attrName === "src") {
       if (!IFRAME_SRC_PATTERN.test(data.attrValue)) data.keepAttr = false;
@@ -119,11 +149,22 @@ function ensureSanitizerHooks() {
     if (node.nodeName === "INPUT" && data.attrName === "type") {
       if (data.attrValue !== "checkbox") data.keepAttr = false;
     }
+    if (node.nodeName === "IMG" && data.attrName === "src") {
+      // Allow blob: URLs during the in-flight upload window. The
+      // editor's emitChange is suppressed while uploads pend, so a
+      // blob URL never reaches the server. Sanitize() also runs on
+      // paste — but blob URLs are document-scoped and won't appear
+      // in pasted HTML from external sources.
+      if (!data.attrValue.startsWith("blob:") && !IMG_SRC_PATTERN.test(data.attrValue)) {
+        data.keepAttr = false;
+      }
+    }
   });
 
   // Remove iframes whose src was stripped (otherwise we'd keep an
   // empty iframe element). Same for inputs whose type was stripped —
-  // anything that's not a checkbox-input is removed entirely.
+  // anything that's not a checkbox-input is removed entirely. Same
+  // for imgs whose src was stripped.
   // NOTE: must use afterSanitizeAttributes (per-element, runs *after*
   // that element's attribute pass), NOT afterSanitizeElements (whole-
   // document, runs once at the end with the root fragment).
@@ -135,6 +176,10 @@ function ensureSanitizerHooks() {
     if (node.nodeName === "INPUT") {
       const t = (node as HTMLInputElement).getAttribute("type");
       if (t !== "checkbox") (node as Element).parentNode?.removeChild(node);
+      return;
+    }
+    if (node.nodeName === "IMG" && !(node as Element).getAttribute("src")) {
+      (node as Element).parentNode?.removeChild(node);
     }
   });
 }
@@ -255,7 +300,12 @@ const BLOCK_LABELS: Record<string, string> = {
   pre: "Code",
 };
 
-export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
+export function WeeklyThoughts({
+  value,
+  onChange,
+  retroId = null,
+  portfolio = "",
+}: WeeklyThoughtsProps) {
   // Register DOMPurify hooks on first component construction. Idempotent.
   ensureSanitizerHooks();
 
@@ -270,6 +320,9 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   const [focusedTable, setFocusedTable] = useState<HTMLTableElement | null>(null);
   const [focusedCell, setFocusedCell] = useState<HTMLTableCellElement | null>(null);
   const [tableToolbarPos, setTableToolbarPos] = useState<{ top: number; left: number } | null>(null);
+  // Phase 4.1: inline error for paste rejections (oversize, bad MIME,
+  // retroId missing). Auto-dismisses after 3s.
+  const [inlineError, setInlineError] = useState<string | null>(null);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
 
@@ -283,6 +336,14 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   // selection. We restore on submit so insertHTML lands in the right
   // place.
   const savedRangeRef = useRef<Range | null>(null);
+
+  // Phase 4.1: in-flight image uploads. Save (onChange) is SUPPRESSED
+  // while this count is > 0 — the editor body contains blob: URLs
+  // which would be meaningless across reload and must never reach
+  // the DB. When the counter returns to 0, any queued emit fires
+  // with the now-real URLs.
+  const pendingUploadsRef = useRef(0);
+  const pendingEmitRef = useRef(false);
 
   // Word count for the collapsed-header caption. Strips HTML tags,
   // splits on whitespace, filters empties.
@@ -324,10 +385,80 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   const emitChange = useCallback(() => {
     const el = editorRef.current;
     if (!el) return;
+    // Phase 4.1: suppress emit while image uploads are in flight. The
+    // editor body contains blob: URLs at this point — useless across
+    // reload. Mark pending so we fire the queued emit when the last
+    // upload completes.
+    if (pendingUploadsRef.current > 0) {
+      pendingEmitRef.current = true;
+      return;
+    }
+    pendingEmitRef.current = false;
     const html = el.innerHTML;
     lastWrittenHtmlRef.current = html;
     onChange(html);
   }, [onChange]);
+
+  // Phase 4.1: inline error toast helper. Auto-dismisses after 3s.
+  const showInlineError = useCallback((msg: string) => {
+    setInlineError(msg);
+    window.setTimeout(() => setInlineError(null), 3000);
+  }, []);
+
+  // Phase 4.1: upload a single image file and swap the optimistic blob
+  // URL <img> for the real R2 URL when the upload returns. The img
+  // element is identified via a data-upload-id matching the blob URL
+  // we generated. On failure the img is removed and an inline error
+  // shown.
+  const uploadAndInsertImage = useCallback(async (file: File) => {
+    if (retroId == null) {
+      showInlineError("Save the retro first to embed images.");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    const uploadId = `wt-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Insert the optimistic <img> at cursor. data-upload-id lets us
+    // find this exact element later to swap src or remove on failure.
+    // class="wt-uploading" picks up the CSS opacity/outline styling.
+    const html =
+      `<img src="${previewUrl}" data-upload-id="${uploadId}" ` +
+      `class="wt-uploading" alt="${file.name.replace(/"/g, "&quot;")}" />`;
+    const el = editorRef.current;
+    if (!el) { URL.revokeObjectURL(previewUrl); return; }
+    el.focus();
+    document.execCommand("insertHTML", false, html);
+    pendingUploadsRef.current += 1;
+
+    try {
+      const res = await api.uploadWeeklyThoughtsImage(retroId, file, portfolio);
+      if (!res || typeof res !== "object" || !("view_url" in res)) {
+        throw new Error("upload_failed");
+      }
+      // Swap the placeholder src for the real R2 URL.
+      const target = el.querySelector<HTMLImageElement>(`img[data-upload-id="${uploadId}"]`);
+      if (target) {
+        target.src = res.view_url;
+        target.removeAttribute("data-upload-id");
+        target.classList.remove("wt-uploading");
+      }
+    } catch {
+      // Remove the placeholder; surface an inline error.
+      const target = el.querySelector(`img[data-upload-id="${uploadId}"]`);
+      target?.remove();
+      showInlineError(`Failed to upload ${file.name}`);
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      pendingUploadsRef.current = Math.max(0, pendingUploadsRef.current - 1);
+      // If a save was queued during the upload window, fire it now.
+      if (pendingUploadsRef.current === 0 && pendingEmitRef.current) {
+        emitChange();
+      } else if (pendingUploadsRef.current === 0) {
+        // No queued emit, but the DOM changed (src swap) — emit so the
+        // parent's value matches the editor.
+        emitChange();
+      }
+    }
+  }, [retroId, portfolio, showInlineError, emitChange]);
 
   // Toolbar command dispatcher. Re-focuses the editor before each
   // command so toolbar clicks don't blur away the selection.
@@ -635,6 +766,47 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
   // ---------------------------------------------------------------------------
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    // Phase 4.1: detect image clipboard items FIRST. Items survive image
+    // pastes from screenshots / file drags; `files` doesn't always
+    // populate for clipboard sources. If any image item is present we
+    // take the upload path and prevent the default HTML/text paste.
+    const items = e.clipboardData?.items;
+    if (items) {
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) imageFiles.push(f);
+        }
+      }
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        if (retroId == null) {
+          showInlineError("Save the retro first to embed images.");
+          return;
+        }
+        // Client-side size + MIME guard (mirrors the server's 5MB +
+        // PNG/JPEG/GIF/WEBP allow-list). Fail-fast before paying the
+        // upload latency.
+        const allowedMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+        const MAX_BYTES = 5 * 1024 * 1024;
+        for (const file of imageFiles) {
+          if (!allowedMimes.has(file.type)) {
+            showInlineError(`${file.name}: only PNG / JPEG / GIF / WEBP allowed`);
+            continue;
+          }
+          if (file.size > MAX_BYTES) {
+            showInlineError(`${file.name}: exceeds 5MB limit`);
+            continue;
+          }
+          void uploadAndInsertImage(file);
+        }
+        return;
+      }
+    }
+
+    // Existing text/HTML paste path (unchanged from Phase 3.5).
     e.preventDefault();
     const html = e.clipboardData.getData("text/html");
     const text = e.clipboardData.getData("text/plain");
@@ -656,7 +828,7 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
     // Catch any inline margin-left that snuck in via pasted content.
     if (editorRef.current) normalizeIndentation(editorRef.current);
     emitChange();
-  }, [emitChange]);
+  }, [emitChange, retroId, showInlineError, uploadAndInsertImage]);
 
   const handleInput = useCallback(() => {
     emitChange();
@@ -696,6 +868,15 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
               flexWrap: "wrap",
             }}
           >
+            {/* Phase 4.1: Undo / Redo. Conventionally at the leading
+                edge of the toolbar. Keyboard shortcuts (Cmd+Z / Cmd+
+                Shift+Z) already work natively via contentEditable;
+                these buttons just expose the affordance visually. */}
+            <ToolbarBtn label="Undo" onClick={() => exec("undo")}><Icons.undo /></ToolbarBtn>
+            <ToolbarBtn label="Redo" onClick={() => exec("redo")}><Icons.redo /></ToolbarBtn>
+
+            <Divider />
+
             {/* Block style (Phase 3.5) */}
             <ToolbarDropdown
               ariaLabel="Block style"
@@ -817,6 +998,24 @@ export function WeeklyThoughts({ value, onChange }: WeeklyThoughtsProps) {
               position: relative so absolutely-positioned children
               (placeholder, table hover toolbar) anchor to it. */}
           <div style={{ padding: 16, position: "relative" }}>
+            {/* Phase 4.1: paste rejection inline toast (oversize / bad
+                MIME / retroId missing). Auto-dismisses after 3s. */}
+            {inlineError && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: 8,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  borderRadius: 6,
+                  background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                  color: "#dc2626",
+                  border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                }}
+              >
+                {inlineError}
+              </div>
+            )}
             {placeholderVisible && (
               <div
                 aria-hidden
