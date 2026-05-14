@@ -175,46 +175,41 @@ describe("WeeklySnapshot — Phase 4", () => {
       makeRow({ id: 1, file_name: "a.png" }),
     ]);
     mockApi.deleteWeeklyRetroSnapshot.mockResolvedValueOnce({ deleted: true, id: 1 });
+    // Phase 4.4: ImageGallery's Delete button uses window.confirm() —
+    // stub it to auto-accept so the test exercises the deletion path.
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
     await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
 
-    const xBtn = screen.getByRole("button", { name: /Delete snapshot a.png/i });
+    const delBtn = screen.getByRole("button", { name: /Delete a.png/i });
+    await act(async () => { fireEvent.click(delBtn); });
 
-    // First click — arms (button label switches to "Confirm delete")
-    await act(async () => { fireEvent.click(xBtn); });
-    expect(mockApi.deleteWeeklyRetroSnapshot).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Confirm delete snapshot a.png/i }))
-      .toBeInTheDocument();
-
-    // Second click — commits
-    const confirmBtn = screen.getByRole("button", { name: /Confirm delete snapshot a.png/i });
-    await act(async () => { fireEvent.click(confirmBtn); });
+    expect(confirmSpy).toHaveBeenCalled();
     await waitFor(() => expect(mockApi.deleteWeeklyRetroSnapshot).toHaveBeenCalledWith(1));
     await waitFor(() => expect(screen.queryByAltText("a.png")).not.toBeInTheDocument());
   });
 
-  test("Hover-out un-arms a pending delete", async () => {
-    // The component also un-arms on hover-out (in addition to the 2s
-    // auto-reset). Testing hover-out is cleaner than fighting fake-timer
-    // semantics; both code paths converge on `setArmedDeleteId(null)`.
+  test("Delete cancelled at confirm() does NOT delete the snapshot", async () => {
     mockApi.listWeeklyRetroSnapshots.mockResolvedValueOnce([
       makeRow({ id: 1, file_name: "a.png" }),
     ]);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
     await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
 
-    const xBtn = screen.getByRole("button", { name: /Delete snapshot a.png/i });
-    await act(async () => { fireEvent.click(xBtn); });
-    expect(screen.getByRole("button", { name: /Confirm delete snapshot a.png/i }))
-      .toBeInTheDocument();
+    const delBtn = screen.getByRole("button", { name: /Delete a.png/i });
+    await act(async () => { fireEvent.click(delBtn); });
 
-    // Hover-out — the thumbnail's onMouseLeave clears the armed state.
-    const thumbWrapper = xBtn.closest("div")!;
-    await act(async () => { fireEvent.mouseLeave(thumbWrapper); });
-    expect(screen.queryByRole("button", { name: /Confirm delete/i })).not.toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mockApi.deleteWeeklyRetroSnapshot).not.toHaveBeenCalled();
+    // Snapshot still in the gallery.
+    expect(screen.getByAltText("a.png")).toBeInTheDocument();
   });
 
   // ─── Lightbox ──────────────────────────────────────────────────────────
+  // Phase 4.4: clickable area moved from a labeled <button> wrapping the
+  // img to a div with onClick (matches the Trade Journal pattern via
+  // <ImageGallery>). Tests now click the img directly via getByAltText.
 
   test("Click thumbnail opens lightbox; Esc closes it", async () => {
     mockApi.listWeeklyRetroSnapshots.mockResolvedValueOnce([
@@ -224,7 +219,7 @@ describe("WeeklySnapshot — Phase 4", () => {
     await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Open snapshot a.png/i }));
+      fireEvent.click(screen.getByAltText("a.png"));
     });
     expect(screen.getByRole("dialog", { name: /Snapshot preview/i })).toBeInTheDocument();
 
@@ -244,7 +239,7 @@ describe("WeeklySnapshot — Phase 4", () => {
     await waitFor(() => expect(screen.getByAltText("a.png")).toBeInTheDocument());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Open snapshot a.png/i }));
+      fireEvent.click(screen.getByAltText("a.png"));
     });
     const dialog = screen.getByRole("dialog", { name: /Snapshot preview/i });
     expect(dialog.querySelector("img")?.getAttribute("src")).toBe("u-a");
