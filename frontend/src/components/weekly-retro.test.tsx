@@ -232,4 +232,75 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
       expect((input as HTMLInputElement).value).toBe("saved before list");
     });
   });
+
+  // ─── Phase 2: Per-Ticker Details expander ──────────────────────────────
+  // Default state collapsed; localStorage-backed per-USER UI preference
+  // (key "mo-weekly-retro-tickets-expanded"). Header always visible with
+  // count + "X/N tickers graded" caption regardless of body state.
+
+  const TICKETS_KEY = "mo-weekly-retro-tickets-expanded";
+
+  test("Per-Ticker expander defaults to collapsed; body not in document", async () => {
+    await mountAndSettle();
+    // Header is always present.
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    // Body wrapper (id="per-ticker-body") absent.
+    expect(document.getElementById("per-ticker-body")).toBeNull();
+  });
+
+  test("Clicking the expander header reveals the body, second click hides it", async () => {
+    await mountAndSettle();
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+
+    await act(async () => { fireEvent.click(header); });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("per-ticker-body")).not.toBeNull();
+
+    await act(async () => { fireEvent.click(header); });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("per-ticker-body")).toBeNull();
+  });
+
+  test("Reads localStorage on mount — expanded persists across page loads", async () => {
+    localStorage.setItem(TICKETS_KEY, "true");
+    await mountAndSettle();
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("per-ticker-body")).not.toBeNull();
+  });
+
+  test("Toggling writes the new state to localStorage", async () => {
+    // Start collapsed (no key).
+    await mountAndSettle();
+    expect(localStorage.getItem(TICKETS_KEY)).toBeNull();
+
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+    await act(async () => { fireEvent.click(header); });
+    expect(localStorage.getItem(TICKETS_KEY)).toBe("true");
+
+    await act(async () => { fireEvent.click(header); });
+    expect(localStorage.getItem(TICKETS_KEY)).toBe("false");
+  });
+
+  test("Header shows ticker count and graded caption even when collapsed (zero-tickets case)", async () => {
+    // tradesRecent default returns no details, so uniqueTickers = 0.
+    await mountAndSettle();
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+    expect(header).toHaveTextContent(/Per-Ticker Details/);
+    expect(header).toHaveTextContent(/\(0\)/);
+    expect(header).toHaveTextContent(/0\/0 tickers graded/);
+    // Body remains absent — collapsed default.
+    expect(document.getElementById("per-ticker-body")).toBeNull();
+  });
+
+  test("Header caption stays in sync independent of expand state", async () => {
+    await mountAndSettle();
+    const header = screen.getByRole("button", { name: /Per-Ticker Details/i });
+    // Collapsed: caption visible.
+    expect(header).toHaveTextContent(/0\/0 tickers graded/);
+    // Expand and re-check: caption still on header (not duplicated by body).
+    await act(async () => { fireEvent.click(header); });
+    expect(header).toHaveTextContent(/0\/0 tickers graded/);
+  });
 });

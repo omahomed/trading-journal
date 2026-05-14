@@ -4,6 +4,11 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
+import { Icons } from "./icons";
+
+// Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
+// (not portfolio- or week-scoped) — one global toggle stored in localStorage.
+const TICKETS_EXPANDED_KEY = "mo-weekly-retro-tickets-expanded";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
 const BEHAVIOR_TAGS = [
@@ -49,6 +54,23 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
 
   // History — full retro rows keyed by week_start, populated from the API.
   const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
+
+  // Phase 2: Per-Ticker Details collapsible. Default collapsed. Open/closed
+  // state persists per-USER (not per-portfolio or per-week) via localStorage
+  // — the lazy-init pattern reads on first render so SSR doesn't crash and a
+  // missing key falls back to false (collapsed).
+  const [ticketsExpanded, setTicketsExpanded] = useState<boolean>(() => {
+    try { return localStorage.getItem(TICKETS_EXPANDED_KEY) === "true"; }
+    catch { return false; }
+  });
+  const toggleTickets = useCallback(() => {
+    setTicketsExpanded(prev => {
+      const next = !prev;
+      try { localStorage.setItem(TICKETS_EXPANDED_KEY, String(next)); }
+      catch { /* incognito quota — UI still works, just not persisted */ }
+      return next;
+    });
+  }, []);
 
   // Dirty flag gates the debounced auto-save effect so the initial mount
   // and every cross-week hydration don't fire a wasteful PUT. Mutated by
@@ -283,20 +305,78 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             ))}
           </div>
 
-          {/* Progress */}
-          {uniqueTickers > 0 && (
-            <div className="mb-5 flex items-center gap-3">
-              <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "var(--bg)" }}>
-                <div className="h-full rounded-full transition-all" style={{ width: `${(gradedTickers / uniqueTickers) * 100}%`, background: navColor }} />
-              </div>
-              <span className="text-[11px] font-medium" style={{ color: "var(--ink-4)" }}>{gradedTickers}/{uniqueTickers} tickers graded</span>
-            </div>
-          )}
+          {/* Per-Ticker Details — collapsible (Phase 2). Header is always
+              visible; body only renders when expanded. The header itself
+              shows the count + grading caption so users can see status
+              without expanding. Per-row expand is orthogonal and unaffected. */}
+          <section className="mb-6">
+            <button
+              type="button"
+              onClick={toggleTickets}
+              aria-expanded={ticketsExpanded}
+              aria-controls="per-ticker-body"
+              className="w-full flex items-center justify-between"
+              style={{
+                padding: "12px 16px",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 600,
+                color: "var(--ink)",
+              }}
+            >
+              <span className="flex items-center" style={{ gap: 8 }}>
+                <span
+                  aria-hidden
+                  style={{
+                    display: "inline-flex",
+                    transform: ticketsExpanded ? "rotate(90deg)" : "none",
+                    transition: "transform 0.15s",
+                    color: "var(--ink-4)",
+                  }}
+                >
+                  <Icons.chevronRight />
+                </span>
+                <span>Per-Ticker Details</span>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>
+                  ({uniqueTickers})
+                </span>
+              </span>
+              <span
+                style={{ fontSize: 11, color: "var(--ink-4)", fontWeight: 400 }}
+              >
+                {gradedTickers}/{uniqueTickers} tickers graded
+              </span>
+            </button>
 
-          {/* Ticker cards */}
-          {grouped.length > 0 ? (
-            <div className="flex flex-col gap-3 mb-6">
-              {grouped.map(([ticker, txns]) => {
+            {ticketsExpanded && (
+              <div id="per-ticker-body" style={{ marginTop: 12 }}>
+                {/* Progress bar — visual companion to the header caption.
+                    Only renders when there are tickers to grade. */}
+                {uniqueTickers > 0 && (
+                  <div className="mb-4 flex items-center gap-3">
+                    <div
+                      className="flex-1 h-2 rounded-full overflow-hidden"
+                      style={{ background: "var(--bg)" }}
+                    >
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${(gradedTickers / uniqueTickers) * 100}%`,
+                          background: navColor,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Ticker cards — original block, untouched apart from the
+                    enclosing wrapper. */}
+                {grouped.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    {grouped.map(([ticker, txns]) => {
                 const isExpanded = expandedTicker === ticker;
                 const g = getGrade(ticker);
                 const txBuys = txns.filter(t => String(t.action).toUpperCase() === "BUY");
@@ -390,9 +470,17 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                 );
               })}
             </div>
-          ) : (
-            <div className="text-center py-12 text-sm mb-6" style={{ color: "var(--ink-4)" }}>No trades found for this week.</div>
-          )}
+                ) : (
+                  <div
+                    className="text-center py-8 text-sm"
+                    style={{ color: "var(--ink-4)" }}
+                  >
+                    No trades found for this week.
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
 
           {/* Weekly Summary */}
           <div className="rounded-[14px] overflow-hidden mb-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
