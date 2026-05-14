@@ -69,42 +69,70 @@ describe("ImageGallery", () => {
     expect(wrapper.className).not.toContain("cursor-pointer");
   });
 
-  // ─── Delete affordance ────────────────────────────────────────────────
+  // ─── Delete affordance — Phase 4.5 inline two-click confirm ─────────
 
-  test("Delete button fires onDelete after confirm() accepts", () => {
+  test("First click on Delete arms the button — text swaps to Confirm?", () => {
     const onDelete = vi.fn();
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<ImageGallery items={IMAGE_ITEMS} onDelete={onDelete} />);
-    const delBtn = screen.getByRole("button", { name: /Delete a.png/i });
+    const delBtn = screen.getByRole("button", { name: /^Delete a.png$/i });
+    expect(delBtn).toHaveTextContent("Delete");
     act(() => { fireEvent.click(delBtn); });
-    expect(confirmSpy).toHaveBeenCalledWith("Delete this image?");
-    expect(onDelete).toHaveBeenCalledWith(1);
+    // onDelete must NOT fire on the first click.
+    expect(onDelete).not.toHaveBeenCalled();
+    // Armed state — aria-label swaps to "Confirm delete a.png".
+    const armedBtn = screen.getByRole("button", { name: /Confirm delete a.png/i });
+    expect(armedBtn).toHaveTextContent(/Confirm/);
   });
 
-  test("Delete button does NOT fire onDelete when confirm() rejects", () => {
+  test("Second click on Confirm? fires onDelete with the item id", () => {
     const onDelete = vi.fn();
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<ImageGallery items={IMAGE_ITEMS} onDelete={onDelete} />);
-    act(() => { fireEvent.click(screen.getByRole("button", { name: /Delete a.png/i })); });
+    const delBtn = screen.getByRole("button", { name: /^Delete a.png$/i });
+    act(() => { fireEvent.click(delBtn); });
+    const confirmBtn = screen.getByRole("button", { name: /Confirm delete a.png/i });
+    act(() => { fireEvent.click(confirmBtn); });
+    expect(onDelete).toHaveBeenCalledWith(1);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  test("Click Delete then wait 2s → button resets to Delete; onDelete NOT fired", () => {
+    vi.useFakeTimers();
+    const onDelete = vi.fn();
+    render(<ImageGallery items={IMAGE_ITEMS} onDelete={onDelete} />);
+    act(() => { fireEvent.click(screen.getByRole("button", { name: /^Delete a.png$/i })); });
+    expect(screen.getByRole("button", { name: /Confirm delete a.png/i })).toBeInTheDocument();
+    // Advance past the 2s timeout.
+    act(() => { vi.advanceTimersByTime(2100); });
+    expect(screen.queryByRole("button", { name: /Confirm delete a.png/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Delete a.png$/i })).toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  test("Click Delete on item B while item A is armed → only B is armed", () => {
+    render(<ImageGallery items={IMAGE_ITEMS} onDelete={() => {}} />);
+    // Arm A
+    act(() => { fireEvent.click(screen.getByRole("button", { name: /^Delete a.png$/i })); });
+    expect(screen.getByRole("button", { name: /Confirm delete a.png/i })).toBeInTheDocument();
+    // Click B — A should un-arm, B should arm
+    act(() => { fireEvent.click(screen.getByRole("button", { name: /^Delete b.png$/i })); });
+    expect(screen.queryByRole("button", { name: /Confirm delete a.png/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Confirm delete b.png/i })).toBeInTheDocument();
+    // A should be back to Delete state
+    expect(screen.getByRole("button", { name: /^Delete a.png$/i })).toBeInTheDocument();
+  });
+
+  test("Component unmounts while armed → no error from pending timer", () => {
+    const { unmount } = render(<ImageGallery items={IMAGE_ITEMS} onDelete={() => {}} />);
+    act(() => { fireEvent.click(screen.getByRole("button", { name: /^Delete a.png$/i })); });
+    // No assertion needed beyond "unmount doesn't throw". Vitest will
+    // fail the test if cleanup leaks an unhandled exception.
+    expect(() => unmount()).not.toThrow();
   });
 
   test("Delete button absent when onDelete is omitted", () => {
     render(<ImageGallery items={IMAGE_ITEMS} />);
     expect(screen.queryByRole("button", { name: /Delete a.png/i })).not.toBeInTheDocument();
-  });
-
-  test("deleteConfirmMessage override propagates to confirm()", () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(
-      <ImageGallery
-        items={IMAGE_ITEMS}
-        onDelete={() => {}}
-        deleteConfirmMessage="Remove this snapshot?"
-      />,
-    );
-    act(() => { fireEvent.click(screen.getByRole("button", { name: /Delete a.png/i })); });
-    expect(confirmSpy).toHaveBeenCalledWith("Remove this snapshot?");
   });
 
   // ─── PDF auto-detection ───────────────────────────────────────────────
