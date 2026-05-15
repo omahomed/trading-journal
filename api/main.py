@@ -934,7 +934,18 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
 
       { portfolio, week_start, week_grade?, best_decision?,
         worst_decision?, rule_change?, rule_change_text?,
-        ticker_grades?: { ticker: { grade, behavior, notes } } }
+        ticker_grades?: { ticker: { grade, behavior, notes } },
+        execution_grade?, process_grade?, pnl_grade?,
+        overall_override?, reviewed_at? }
+
+    Phase 4.6 fields:
+    - execution_grade / process_grade / pnl_grade: 3-axis grading
+    - overall_override: when False (default) AND all 3 axes are non-null,
+      the server recomputes week_grade from the axes and ignores the
+      client-supplied value (defense vs poisoned overall)
+    - reviewed_at: ISO string sets the reviewed lock; null clears it.
+      Changing graded fields while reviewed_at is non-null on both
+      existing + incoming raises a 409.
 
     Returns the persisted row (with id) on success so the frontend can
     attach Phase 1 tags immediately after first save. A soft-deleted row
@@ -949,6 +960,21 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
     week_grade = body.get("week_grade")
     if week_grade == "":
         week_grade = None
+
+    # Phase 4.6: normalize axis grades + override flag + reviewed_at.
+    def _norm_grade(key: str) -> str | None:
+        v = body.get(key)
+        if v == "" or v is None:
+            return None
+        return str(v)
+
+    execution_grade = _norm_grade("execution_grade")
+    process_grade = _norm_grade("process_grade")
+    pnl_grade = _norm_grade("pnl_grade")
+    overall_override = bool(body.get("overall_override", False))
+    reviewed_at = body.get("reviewed_at")
+    if reviewed_at == "":
+        reviewed_at = None
 
     tg_in = body.get("ticker_grades")
     if tg_in is not None and not isinstance(tg_in, dict):
@@ -968,17 +994,32 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
             # TEXT and accepts any string. Defaults to '' when absent.
             weekly_thoughts=str(body.get("weekly_thoughts") or ""),
             ticker_grades=tg_in or {},
+            execution_grade=execution_grade,
+            process_grade=process_grade,
+            pnl_grade=pnl_grade,
+            overall_override=overall_override,
+            reviewed_at=reviewed_at,
         )
+    except db.WeeklyRetroLockedError as e:
+        # Phase 4.6 review lock — surfaced as 409 Conflict so the
+        # frontend can re-render the locked state and surface the
+        # un-review affordance.
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         return {"error": str(e)}
     except psycopg2.errors.CheckViolation as e:
         # Most likely the Monday CHECK or grade vocab CHECK firing — give a
-        # concrete message instead of leaking the trigger text.
+        # concrete message instead of leaking the trigger text. Phase 4.6:
+        # any of the 4 grade columns can trip vocab — preserve the
+        # column-specific "invalid week_grade" message for backward compat,
+        # use "invalid grade" for the new axis columns.
         msg = str(e).lower()
         if "monday" in msg or "isodow" in msg:
             return {"error": "week_start must be a Monday"}
         if "week_grade" in msg:
             return {"error": "invalid week_grade"}
+        if "grade" in msg:
+            return {"error": "invalid grade"}
         return {"error": "constraint violation"}
     except Exception as e:
         return {"error": str(e)}

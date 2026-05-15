@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type NotesRailItem, type NotesRailYtdStats, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { gradeColor } from "@/lib/grade-helpers";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
 import { WeeklySnapshot } from "./weekly-snapshot";
@@ -10,6 +11,7 @@ import { SectionExpander } from "./section-expander";
 import { WeeklyInsightsTile } from "./weekly-insights-tile";
 import { FlightDeck } from "./flight-deck";
 import { NotesRail } from "./notes-rail";
+import { CloseTheWeek, type CloseTheWeekState } from "./close-the-week";
 import { Icons } from "./icons";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
@@ -24,16 +26,12 @@ const BEHAVIOR_TAGS = [
   "Followed Plan", "FOMO Entry", "Caught Knife", "Late Stop",
   "Hesitated", "Boredom Trade", "Sized Too Big", "Revenge Trade", "Panic Sell",
 ];
-const WEEK_GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
 type TickerGradeMap = Record<string, WeeklyRetroTickerGrade>;
 
-function gradeColor(g: string) {
-  if (g.startsWith("A")) return "#08a86b";
-  if (g.startsWith("B")) return "#3b82f6";
-  if (g.startsWith("C")) return "#f59f00";
-  return "#e5484d";
-}
+// gradeColor — single source of truth in @/lib/grade-helpers. Used by
+// ticker-card grade chip below; the Phase 4.6 CloseTheWeek surface
+// imports its own copy.
 
 export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [details, setDetails] = useState<TradeDetail[]>([]);
@@ -57,6 +55,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [worst_decision, setWorstDecision] = useState("");
   const [rule_change, setRuleChange] = useState(false);
   const [rule_change_text, setRuleChangeText] = useState("");
+  // Phase 4.6 — 3-axis grading + persisted review state. State stays in
+  // this parent so the existing debounced auto-save effect keeps firing
+  // on any change without CloseTheWeek owning a side-channel write path.
+  const [execution_grade, setExecutionGrade] = useState<string>("");
+  const [process_grade, setProcessGrade] = useState<string>("");
+  const [pnl_grade, setPnlGrade] = useState<string>("");
+  const [overall_override, setOverallOverride] = useState<boolean>(false);
+  const [reviewed_at, setReviewedAt] = useState<string | null>(null);
   // Phase 3: HTML body of the Weekly Thoughts editor. Snake_case for wire
   // parity. Stored as HTML string; sanitized in the editor before send.
   const [weekly_thoughts, setWeeklyThoughts] = useState("");
@@ -204,10 +210,17 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
       setRuleChangeText(existing.rule_change_text || "");
       setWeeklyThoughts(existing.weekly_thoughts || "");
       setTickerGrades(existing.ticker_grades || {});
+      setExecutionGrade(existing.execution_grade || "");
+      setProcessGrade(existing.process_grade || "");
+      setPnlGrade(existing.pnl_grade || "");
+      setOverallOverride(!!existing.overall_override);
+      setReviewedAt(existing.reviewed_at || null);
     } else {
       setWeekGrade(""); setBestDecision(""); setWorstDecision("");
       setRuleChange(false); setRuleChangeText("");
       setWeeklyThoughts(""); setTickerGrades({});
+      setExecutionGrade(""); setProcessGrade(""); setPnlGrade("");
+      setOverallOverride(false); setReviewedAt(null);
     }
     // Reset dirty flag — hydration is not a user edit. The next render's
     // debounce useEffect sees dirtyRef.current = false and skips firing.
@@ -261,6 +274,15 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
       rule_change_text,
       weekly_thoughts,
       ticker_grades,
+      // Phase 4.6 fields. Server is authoritative on the derived
+      // overall (when overall_override is false AND all 3 axes are
+      // set, it recomputes week_grade); the frontend sends both so
+      // the round-trip echo reflects whatever the server decided.
+      execution_grade: execution_grade || null,
+      process_grade: process_grade || null,
+      pnl_grade: pnl_grade || null,
+      overall_override,
+      reviewed_at,
     };
     const result = await api.weeklyRetroUpsert(payload);
     if ("error" in result) {
@@ -278,7 +300,8 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     return result;
   }, [portfolio, monStr, week_grade, best_decision, worst_decision,
       rule_change, rule_change_text, weekly_thoughts, ticker_grades,
-      refreshRail]);
+      execution_grade, process_grade, pnl_grade, overall_override,
+      reviewed_at, refreshRail]);
 
   // Debounced auto-save. dirtyRef gates the effect so the initial hydration
   // pass (and every cross-week switch) doesn't fire a wasteful PUT. Mirrors
@@ -291,7 +314,54 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     }, 800);
     return () => clearTimeout(t);
   }, [week_grade, best_decision, worst_decision, rule_change, rule_change_text,
-      weekly_thoughts, ticker_grades, handleSave]);
+      weekly_thoughts, ticker_grades,
+      execution_grade, process_grade, pnl_grade, overall_override, reviewed_at,
+      handleSave]);
+
+  // Phase 4.6 — Recent Overall trend. Pull the last 4 prior weeks with a
+  // non-null week_grade from the rail items already in memory; reverse to
+  // oldest→newest for left-to-right reading in the design's strip. Empty
+  // array on the user's first ever week — RecentOverallCard renders
+  // placeholder dashes.
+  const recentOverall = useMemo(() => {
+    return railItems
+      .filter(it => it.week_start < monStr && it.week_grade)
+      .sort((a, b) => b.week_start.localeCompare(a.week_start))
+      .slice(0, 4)
+      .reverse()
+      .map(it => it.week_grade as string);
+  }, [railItems, monStr]);
+
+  // Phase 4.6 — adapter so CloseTheWeek can fire one onChange per field
+  // without re-rendering the parent on every keystroke for unrelated
+  // state. Each entry in the patch dispatches to its own setter +
+  // marks dirty.
+  const handleCtwChange = useCallback((patch: Partial<CloseTheWeekState>) => {
+    dirtyRef.current = true;
+    if (patch.week_grade !== undefined) setWeekGrade(patch.week_grade);
+    if (patch.execution_grade !== undefined) setExecutionGrade(patch.execution_grade);
+    if (patch.process_grade !== undefined) setProcessGrade(patch.process_grade);
+    if (patch.pnl_grade !== undefined) setPnlGrade(patch.pnl_grade);
+    if (patch.overall_override !== undefined) setOverallOverride(patch.overall_override);
+    if (patch.reviewed_at !== undefined) setReviewedAt(patch.reviewed_at);
+    if (patch.best_decision !== undefined) setBestDecision(patch.best_decision);
+    if (patch.worst_decision !== undefined) setWorstDecision(patch.worst_decision);
+    if (patch.rule_change !== undefined) setRuleChange(patch.rule_change);
+    if (patch.rule_change_text !== undefined) setRuleChangeText(patch.rule_change_text);
+  }, []);
+
+  const ctwState: CloseTheWeekState = {
+    week_grade,
+    execution_grade,
+    process_grade,
+    pnl_grade,
+    overall_override,
+    reviewed_at,
+    best_decision,
+    worst_decision,
+    rule_change,
+    rule_change_text,
+  };
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
 
@@ -597,59 +667,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             />
           </SectionExpander>
 
-          {/* Weekly Summary */}
-          <div className="rounded-[14px] overflow-hidden mb-5" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-            <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-              <span className="text-[13px] font-semibold">Weekly Summary</span>
-            </div>
-            <div className="p-5 flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Overall Week Grade</label>
-                  <select value={week_grade} onChange={e => { dirtyRef.current = true; setWeekGrade(e.target.value); }}
-                          className="w-full h-[42px] px-3 rounded-[10px] text-[14px] font-semibold outline-none"
-                          style={{ ...inputStyle, appearance: "none" as any, color: week_grade ? gradeColor(week_grade) : "var(--ink)" }}>
-                    <option value="">Select grade...</option>
-                    {WEEK_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
-                  </select>
-                </div>
-                <div className="flex items-end">
-                  {week_grade && (
-                    <span className="text-[36px] font-semibold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor(week_grade), lineHeight: 1 }}>
-                      {week_grade}
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Best Decision This Week</label>
-                  <input type="text" value={best_decision} onChange={e => { dirtyRef.current = true; setBestDecision(e.target.value); }}
-                         placeholder="One win to repeat..." className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
-                         style={{ ...inputStyle, fontFamily: "inherit" }} />
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Worst Decision This Week</label>
-                  <input type="text" value={worst_decision} onChange={e => { dirtyRef.current = true; setWorstDecision(e.target.value); }}
-                         placeholder="One mistake to fix..." className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
-                         style={{ ...inputStyle, fontFamily: "inherit" }} />
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 mb-2 cursor-pointer text-[13px]">
-                  <input type="checkbox" checked={rule_change} onChange={e => { dirtyRef.current = true; setRuleChange(e.target.checked); }} className="rounded" />
-                  <span className="font-medium">Rule Change Needed?</span>
-                </label>
-                {rule_change && (
-                  <input type="text" value={rule_change_text} onChange={e => { dirtyRef.current = true; setRuleChangeText(e.target.value); }}
-                         placeholder="e.g., New rule: no buying on Day 1 of FTD..."
-                         className="w-full h-[42px] px-3 rounded-[10px] text-[13px] outline-none"
-                         style={{ ...inputStyle, fontFamily: "inherit" }} />
-                )}
-              </div>
-            </div>
-          </div>
+          {/* Phase 4.6 — Close the Week. Replaces the inline Weekly
+              Summary block + the outer "Save Weekly Retro" button.
+              State stays in this parent so the debounced auto-save
+              effect (above) still catches every keystroke. */}
+          <CloseTheWeek state={ctwState}
+                        onChange={handleCtwChange}
+                        onSave={() => handleSave().catch(() => { /* saveMsg shown */ })}
+                        recentOverall={recentOverall} />
 
           {saveMsg && (
             <div className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
@@ -657,12 +682,6 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               {saveMsg}
             </div>
           )}
-
-          <button onClick={() => handleSave().catch(() => { /* saveMsg shown */ })}
-                  className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110"
-                  style={{ background: "#6366f1" }}>
-            Save Weekly Retro
-          </button>
         </>
       </div>
     </div>

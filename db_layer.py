@@ -2510,6 +2510,18 @@ def _serialize_weekly_retro(parent_row: dict, ticker_grades: dict) -> dict:
             else parent_row["week_start"]
         ),
         "week_grade": parent_row.get("week_grade"),
+        # Phase 4.6: 3-axis grading. Axes nullable on legacy rows; the
+        # frontend derives `effectiveOverall` from these when
+        # overall_override is False, else falls back to week_grade.
+        "execution_grade": parent_row.get("execution_grade"),
+        "process_grade": parent_row.get("process_grade"),
+        "pnl_grade": parent_row.get("pnl_grade"),
+        "overall_override": bool(parent_row.get("overall_override")),
+        "reviewed_at": (
+            parent_row["reviewed_at"].isoformat()
+            if parent_row.get("reviewed_at") and hasattr(parent_row["reviewed_at"], "isoformat")
+            else parent_row.get("reviewed_at")
+        ),
         "best_decision": parent_row.get("best_decision") or "",
         "worst_decision": parent_row.get("worst_decision") or "",
         "rule_change": bool(parent_row.get("rule_change")),
@@ -2529,6 +2541,59 @@ def _serialize_weekly_retro(parent_row: dict, ticker_grades: dict) -> dict:
             else parent_row.get("updated_at")
         ),
     }
+
+
+# Phase 4.6: server-side overall-grade derivation. Reuses the same GPA
+# mapping that powers avg_grade_from_letters (NotesRail YTD avg). Returns
+# None when any axis is null — the frontend handles the "partially graded"
+# state by leaving week_grade as-is.
+_AXIS_GRADE_VOCAB = (
+    "A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F",
+)
+
+
+def _derive_overall_grade(
+    execution: str | None,
+    process: str | None,
+    pnl: str | None,
+) -> str | None:
+    """Average the 3 axis grades on the 4.3 GPA scale, then bucket back to
+    the nearest letter via _NUMERIC_BUCKETS. Returns None if any axis is
+    missing or unrecognized.
+
+    Locked Phase 4.6 contract: this is the canonical overall derivation
+    when overall_override == False. Frontend ports the same logic for
+    real-time UI feedback; backend recomputes here to enforce authority
+    (frontend can't poison week_grade by sending a mismatched value).
+    """
+    if not execution or not process or not pnl:
+        return None
+    vals: list[float] = []
+    for g in (execution, process, pnl):
+        key = str(g).strip().upper()
+        if key in _GRADE_TO_NUMERIC:
+            vals.append(_GRADE_TO_NUMERIC[key])
+        else:
+            return None
+    if len(vals) != 3:
+        return None
+    mean = sum(vals) / 3.0
+    for lower, letter in _NUMERIC_BUCKETS:
+        if mean >= lower:
+            # The vocab CHECK only allows A+/A/A-/B+/B/B-/C+/C/C-/D/F. The
+            # bucket table has D+/D/D- extras (pre-existing inconsistency
+            # noted in the audit). Collapse the extras to plain D so the
+            # derived value is always vocab-clean.
+            if letter in ("D+", "D-"):
+                return "D"
+            return letter
+    return "F"
+
+
+class WeeklyRetroLockedError(Exception):
+    """Raised by upsert_weekly_retro when a write attempts to change graded
+    fields on a retro whose reviewed_at is non-null, unless the same payload
+    clears reviewed_at. Bubbled up to the API layer as a 409."""
 
 
 def _fetch_ticker_grades_for_retros(cur, retro_ids: list[int]) -> dict[int, dict]:
@@ -2592,6 +2657,16 @@ def _replace_weekly_retro_ticker_grades(
         )
 
 
+_WEEKLY_RETRO_SELECT_COLS = (
+    "r.id, p.name AS portfolio, r.week_start, r.week_grade, "
+    "r.execution_grade, r.process_grade, r.pnl_grade, "
+    "r.overall_override, r.reviewed_at, "
+    "r.best_decision, r.worst_decision, r.rule_change, "
+    "r.rule_change_text, r.weekly_thoughts, "
+    "r.created_at, r.updated_at"
+)
+
+
 def load_weekly_retro(portfolio_name: str, week_start) -> dict | None:
     """Return the live (non-deleted) retro for the given portfolio + Monday,
     with ticker_grades expanded as a {ticker: {grade, behavior, notes}} dict.
@@ -2599,10 +2674,7 @@ def load_weekly_retro(portfolio_name: str, week_start) -> dict | None:
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
-                "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.weekly_thoughts, "
-                "       r.created_at, r.updated_at "
+                f"SELECT {_WEEKLY_RETRO_SELECT_COLS} "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE p.name = %s AND r.week_start = %s AND r.deleted_at IS NULL",
                 (portfolio_name, week_start),
@@ -2623,10 +2695,7 @@ def list_weekly_retros(portfolio_name: str, limit: int = 200) -> list[dict]:
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
-                "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.weekly_thoughts, "
-                "       r.created_at, r.updated_at "
+                f"SELECT {_WEEKLY_RETRO_SELECT_COLS} "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE p.name = %s AND r.deleted_at IS NULL "
                 "ORDER BY r.week_start DESC LIMIT %s",
@@ -2650,6 +2719,12 @@ def upsert_weekly_retro(
     rule_change_text: str = "",
     weekly_thoughts: str = "",
     ticker_grades: dict | None = None,
+    # Phase 4.6: 3-axis grading + persisted review state.
+    execution_grade: str | None = None,
+    process_grade: str | None = None,
+    pnl_grade: str | None = None,
+    overall_override: bool = False,
+    reviewed_at=None,  # datetime | str | None
 ) -> dict:
     """Upsert by (portfolio_id, week_start). If a soft-deleted row exists
     for the same key, REVIVES it (sets deleted_at = NULL and updates the
@@ -2657,13 +2732,46 @@ def upsert_weekly_retro(
     Children are replaced wholesale via _replace_weekly_retro_ticker_grades.
 
     Returns the persisted row in the same shape as load_weekly_retro().
-    Raises ValueError on unknown portfolio name or invalid week_grade.
-    The DB enforces the Monday CHECK and grade vocab — IntegrityError
+    Raises ValueError on unknown portfolio name or invalid letter grade.
+    Raises WeeklyRetroLockedError when the target row is already reviewed
+    AND the incoming payload would change any graded field without
+    simultaneously clearing reviewed_at.
+    The DB enforces the Monday CHECK and grade vocabs — IntegrityError
     propagates if the caller bypasses validation.
+
+    Phase 4.6 server authority: when overall_override is False AND all 3
+    axes are non-null, week_grade is OVERWRITTEN with _derive_overall_grade
+    before the write. The client-supplied value is only trusted when
+    override is True (or when axes are incomplete).
     """
-    if week_grade is not None and week_grade != "" and week_grade not in _WEEK_GRADE_VOCAB:
-        raise ValueError(f"Invalid week_grade: {week_grade}")
+    # Validate every letter-grade input up front.
+    for name, val in (
+        ("week_grade", week_grade),
+        ("execution_grade", execution_grade),
+        ("process_grade", process_grade),
+        ("pnl_grade", pnl_grade),
+    ):
+        if val is not None and val != "" and val not in _WEEK_GRADE_VOCAB:
+            raise ValueError(f"Invalid {name}: {val}")
+
+    # Empty string → NULL on every grade column.
     week_grade_val = week_grade or None
+    execution_grade_val = execution_grade or None
+    process_grade_val = process_grade or None
+    pnl_grade_val = pnl_grade or None
+    overall_override = bool(overall_override)
+
+    # Server authority on overall: when not overridden AND every axis is
+    # graded, recompute regardless of what the client sent. Prevents the
+    # client from setting axes A/A/A but mismatched week_grade=C.
+    if (not overall_override
+            and execution_grade_val
+            and process_grade_val
+            and pnl_grade_val):
+        week_grade_val = _derive_overall_grade(
+            execution_grade_val, process_grade_val, pnl_grade_val,
+        )
+
     best_decision = best_decision or ""
     worst_decision = worst_decision or ""
     rule_change_text = rule_change_text or ""
@@ -2682,12 +2790,31 @@ def upsert_weekly_retro(
             # index guarantees at most one live row; if a deleted row also
             # exists we revive it instead of inserting a duplicate.
             cur.execute(
-                "SELECT id FROM weekly_retros "
+                "SELECT id, reviewed_at, execution_grade, process_grade, "
+                "       pnl_grade, week_grade, overall_override "
+                "FROM weekly_retros "
                 "WHERE portfolio_id = %s AND week_start = %s "
                 "ORDER BY id DESC LIMIT 1",
                 (portfolio_id, week_start),
             )
             existing = cur.fetchone()
+
+            # Phase 4.6 lock validation: when the persisted row is reviewed,
+            # reject grade changes unless the same payload clears
+            # reviewed_at. Frontend disables the selectors; this is the
+            # defense-in-depth backstop for direct API hits.
+            if existing and existing.get("reviewed_at") and reviewed_at:
+                graded_diff = (
+                    existing.get("execution_grade") != execution_grade_val
+                    or existing.get("process_grade") != process_grade_val
+                    or existing.get("pnl_grade") != pnl_grade_val
+                    or existing.get("week_grade") != week_grade_val
+                    or bool(existing.get("overall_override")) != overall_override
+                )
+                if graded_diff:
+                    raise WeeklyRetroLockedError(
+                        "grade locked; un-review to edit"
+                    )
 
             if existing:
                 cur.execute(
@@ -2695,11 +2822,15 @@ def upsert_weekly_retro(
                     "  week_grade = %s, best_decision = %s, worst_decision = %s, "
                     "  rule_change = %s, rule_change_text = %s, "
                     "  weekly_thoughts = %s, "
+                    "  execution_grade = %s, process_grade = %s, pnl_grade = %s, "
+                    "  overall_override = %s, reviewed_at = %s, "
                     "  deleted_at = NULL, updated_at = NOW() "
                     "WHERE id = %s "
                     "RETURNING id",
                     (week_grade_val, best_decision, worst_decision,
                      rule_change, rule_change_text, weekly_thoughts,
+                     execution_grade_val, process_grade_val, pnl_grade_val,
+                     overall_override, reviewed_at,
                      existing["id"]),
                 )
                 retro_id = cur.fetchone()["id"]
@@ -2708,11 +2839,16 @@ def upsert_weekly_retro(
                     "INSERT INTO weekly_retros "
                     "  (portfolio_id, week_start, week_grade, best_decision, "
                     "   worst_decision, rule_change, rule_change_text, "
-                    "   weekly_thoughts) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    "   weekly_thoughts, "
+                    "   execution_grade, process_grade, pnl_grade, "
+                    "   overall_override, reviewed_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "RETURNING id",
                     (portfolio_id, week_start, week_grade_val, best_decision,
                      worst_decision, rule_change, rule_change_text,
-                     weekly_thoughts),
+                     weekly_thoughts,
+                     execution_grade_val, process_grade_val, pnl_grade_val,
+                     overall_override, reviewed_at),
                 )
                 retro_id = cur.fetchone()["id"]
 
@@ -2721,10 +2857,7 @@ def upsert_weekly_retro(
             # Re-fetch the persisted row + children in the same transaction
             # so the return shape is authoritative (post-trigger, post-default).
             cur.execute(
-                "SELECT r.id, p.name AS portfolio, r.week_start, r.week_grade, "
-                "       r.best_decision, r.worst_decision, r.rule_change, "
-                "       r.rule_change_text, r.weekly_thoughts, "
-                "       r.created_at, r.updated_at "
+                f"SELECT {_WEEKLY_RETRO_SELECT_COLS} "
                 "FROM weekly_retros r JOIN portfolios p ON p.id = r.portfolio_id "
                 "WHERE r.id = %s",
                 (retro_id,),
@@ -5472,6 +5605,10 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
             "weekly_pnl": weekly_pnl,
             "trades_count": trades_count,
             "tags": retro_tags,
+            # Phase 4.6 — tri-state dot needs reviewed_at to distinguish
+            # "drafted but not closed" (amber) from "reviewed" (green).
+            # _serialize_weekly_retro returns an ISO string or None.
+            "reviewed_at": (retro or {}).get("reviewed_at"),
         })
         cursor = cursor + _td(days=7)
 

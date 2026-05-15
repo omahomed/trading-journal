@@ -220,14 +220,38 @@ function RailItem({
           }} />
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* Graded indicator — filled green when has_content, hollow when draft */}
-          <span title={item.has_content ? "Graded" : "Draft — needs grading"}
-                aria-label={item.has_content ? "graded" : "draft"}
-                style={{
-                  width: 8, height: 8, borderRadius: 999, flexShrink: 0,
-                  background: item.has_content ? "#08a86b" : "transparent",
-                  border: `1.5px solid ${item.has_content ? "#08a86b" : "var(--border)"}`,
-                }} />
+          {/* Graded indicator — Phase 4.6 tri-state:
+              - empty (no content) → hollow ring
+              - draft (content but reviewed_at == null) → filled amber
+              - reviewed (reviewed_at != null) → filled green
+              The amber/green pair mirrors the design's "rule change" (amber)
+              and "Mark week as reviewed" (green) accents. */}
+          {(() => {
+            const reviewed = item.reviewed_at != null;
+            const draft = item.has_content && !reviewed;
+            const fill = reviewed ? "#08a86b" : draft ? "#f59f00" : "transparent";
+            const ring = reviewed
+              ? "#08a86b"
+              : draft
+                ? "#f59f00"
+                : "var(--border)";
+            const label = reviewed
+              ? "reviewed"
+              : draft ? "draft" : "empty";
+            const title = reviewed
+              ? "Reviewed"
+              : draft ? "Draft — needs review" : "Empty";
+            return (
+              <span title={title}
+                    aria-label={label}
+                    data-dot-state={label}
+                    style={{
+                      width: 8, height: 8, borderRadius: 999, flexShrink: 0,
+                      background: fill,
+                      border: `1.5px solid ${ring}`,
+                    }} />
+            );
+          })()}
           <span style={{
             fontSize: 12.5, fontWeight: active ? 600 : 500,
             color: "var(--ink)", flex: 1, minWidth: 0,

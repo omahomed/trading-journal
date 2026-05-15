@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { api, getActivePortfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { formatCurrency } from "@/lib/format";
+import { gradeColor } from "@/lib/grade-helpers";
 
 // IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
 // "request error (1001) — statement could not be generated" intermittently,
@@ -35,7 +36,9 @@ function letterGrade(total: number, max: number): string {
   return "F";
 }
 function gradeToScore(g: string) { return g.startsWith("A") ? 5 : g.startsWith("B") ? 4 : g.startsWith("C") ? 3 : g.startsWith("D") ? 2 : 1; }
-function gradeColor(g: string) { return g.startsWith("A") ? "#08a86b" : g.startsWith("B") ? "#3b82f6" : g.startsWith("C") ? "#f59f00" : "#e5484d"; }
+// gradeColor — imported from @/lib/grade-helpers. Inline copy removed in
+// the Phase 4.6 consolidation; verified identical to the previous local
+// implementation before deletion.
 function scoreColor(v: number) { return v >= 4 ? "#08a86b" : v >= 3 ? "#f59f00" : "#e5484d"; }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
