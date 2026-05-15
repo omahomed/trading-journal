@@ -103,11 +103,14 @@ async function mountAndSettle() {
   await screen.findByRole("button", { name: /save weekly retro/i });
 }
 
-// Find the Week Grade <select> via its unique placeholder option text. The
-// per-ticker selects use "Select..." without "grade", so this is safe.
+// Find the canonical Overall <select> in CloseTheWeek. Phase 4.6
+// replaced the standalone "Overall Week Grade" dropdown — week_grade is
+// now set by either (a) grading the 3 axes (derived) or (b) picking a
+// value from the Overall override select (which pins overall_override =
+// true). Tests here exercise path (b) since it produces the same
+// observable: a week_grade change → debounced auto-save.
 async function findWeekGradeSelect(): Promise<HTMLSelectElement> {
-  const placeholder = await screen.findByRole("option", { name: "Select grade..." });
-  return placeholder.closest("select") as HTMLSelectElement;
+  return await screen.findByTestId("overall-select") as HTMLSelectElement;
 }
 
 describe("WeeklyRetro — Phase 0 server persistence swap", () => {
@@ -237,15 +240,21 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
       rule_change_text: p.rule_change_text,
       weekly_thoughts: p.weekly_thoughts,
       ticker_grades: p.ticker_grades,
+      // Phase 4.6 echo fields
+      execution_grade: p.execution_grade ?? null,
+      process_grade: p.process_grade ?? null,
+      pnl_grade: p.pnl_grade ?? null,
+      overall_override: p.overall_override ?? false,
+      reviewed_at: p.reviewed_at ?? null,
       created_at: "2026-05-13T00:00:00Z",
       updated_at: "2026-05-13T00:00:00Z",
     }));
 
     await mountAndSettle();
 
-    // Type while the list fetch is still pending. Labels aren't formally
-    // linked in this component, so query by the unique placeholder text.
-    const input = await screen.findByPlaceholderText(/one win to repeat/i);
+    // Type while the list fetch is still pending. The Phase 4.6 "What
+    // worked?" textarea has aria-label "What worked?" — query via that.
+    const input = await screen.findByLabelText("What worked?");
     await act(async () => {
       fireEvent.change(input, { target: { value: "saved before list" } });
     });

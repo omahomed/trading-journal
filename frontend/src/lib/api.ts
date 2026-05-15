@@ -100,6 +100,10 @@ export interface NotesRailItem {
   weekly_pnl: number | null;
   trades_count: number;
   tags: NotesRailItemTag[];         // attached tags (Phase 1 polymorphic system)
+  // Phase 4.6 — drives the rail's tri-state dot (empty/draft/reviewed).
+  // null on synthetic empty rows and on retros where the user hasn't
+  // checked "Mark week as reviewed".
+  reviewed_at: string | null;
 }
 
 export interface NotesRailYtdStats {
@@ -141,6 +145,17 @@ export interface WeeklyRetro {
   portfolio: string;
   week_start: string;
   week_grade: string | null;
+  // Phase 4.6 — 3-axis grading. Axes are nullable on legacy rows (pre-
+  // Phase 4.6) and on rows where the user hasn't graded every axis yet.
+  // overall_override == true means the user chose a week_grade that
+  // differs from the derived average; backend trusts the client value.
+  // reviewed_at is the persisted "Mark week as reviewed" timestamp;
+  // null means not reviewed yet.
+  execution_grade: string | null;
+  process_grade: string | null;
+  pnl_grade: string | null;
+  overall_override: boolean;
+  reviewed_at: string | null;
   best_decision: string;
   worst_decision: string;
   rule_change: boolean;

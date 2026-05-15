@@ -42,6 +42,7 @@ function item(opts: Partial<NotesRailItem> & {
     weekly_pnl: opts.weekly_pnl ?? null,
     trades_count: opts.trades_count ?? 0,
     tags: opts.tags ?? [],
+    reviewed_at: opts.reviewed_at ?? null,
   };
 }
 
@@ -776,6 +777,50 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(choppyRow.textContent).toMatch(/2$/);
     // Sort order with equal counts → alphabetical: Choppy before FTD.
     expect(opts.map(o => o.dataset.tagName)).toEqual(["Choppy", "FTD"]);
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Phase 4.6 — tri-state graded dot
+  // ────────────────────────────────────────────────────────────────────
+
+  test("dot state: empty when has_content=false (synthetic row)", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      has_content: false, reviewed_at: null,
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const dot = document.querySelector('[data-dot-state="empty"]');
+    expect(dot).toBeTruthy();
+  });
+
+  test("dot state: draft when content present but reviewed_at is null", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      has_content: true, reviewed_at: null,
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const dot = document.querySelector('[data-dot-state="draft"]') as HTMLElement;
+    expect(dot).toBeTruthy();
+    // Amber fill — matches design's "needs review" accent.
+    expect(dot.style.background).toBe("rgb(245, 159, 0)");
+  });
+
+  test("dot state: reviewed when reviewed_at is non-null (green, overrides has_content)", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      has_content: true, reviewed_at: "2026-05-14T10:00:00Z",
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const dot = document.querySelector('[data-dot-state="reviewed"]') as HTMLElement;
+    expect(dot).toBeTruthy();
+    // Green fill #08a86b — matches "moves the dot to green" copy.
+    expect(dot.style.background).toBe("rgb(8, 168, 107)");
   });
 
   test("search input doesn't intercept ArrowDown — focus stays in search bar", () => {

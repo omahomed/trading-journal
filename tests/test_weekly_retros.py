@@ -656,3 +656,338 @@ def test_delete_not_found(weekly_stubs):
     r = client.delete("/api/weekly-retros/999")
     assert r.status_code == 200
     assert r.json() == {"error": "not_found"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.6 — Close the Week (axis grading + reviewed lock)
+# ---------------------------------------------------------------------------
+
+
+def test_derive_overall_grade_averages_three_axes():
+    """A/B/A averages to (4.0 + 3.0 + 4.0)/3 = 3.67 → A- per the
+    _NUMERIC_BUCKETS table. Mirrors the design's VAL_GRADE in
+    sections-bottom.jsx, which the frontend ports verbatim."""
+    assert db_layer._derive_overall_grade("A", "B", "A") == "A-"
+
+
+def test_derive_overall_grade_returns_none_when_any_axis_missing():
+    """Frontend leaves week_grade as-is when not all 3 axes are set;
+    backend mirrors by returning None. _derive_overall_grade is only
+    invoked when callers know all 3 are non-null, but the helper is
+    defensive on its own."""
+    assert db_layer._derive_overall_grade("A", "B", None) is None
+    assert db_layer._derive_overall_grade(None, "B", "A") is None
+    assert db_layer._derive_overall_grade("", "B", "A") is None
+
+
+def test_derive_overall_grade_collapses_d_plus_minus_to_d():
+    """Pre-existing inconsistency in db_layer: _NUMERIC_BUCKETS has
+    D+/D/D- granularity but the column vocab CHECK only allows plain D.
+    The helper collapses to D so the value it returns is always
+    vocab-clean. F/F/F → F (0.0 mean → F bucket). D/D/D → D."""
+    assert db_layer._derive_overall_grade("D", "D", "D") == "D"
+    assert db_layer._derive_overall_grade("F", "F", "F") == "F"
+
+
+def test_upsert_overwrites_week_grade_when_override_false_and_axes_set(monkeypatch):
+    """Server authority: when overall_override is False AND every axis is
+    non-null, server derives week_grade and overwrites the client value.
+    Prevents the client poisoning the canonical overall."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42},                                 # portfolio
+        None,                                       # no existing retro
+        {"id": 7},                                  # INSERT returning
+        {  # final re-fetch
+            "id": 7, "portfolio": "CanSlim",
+            "week_start": date(2026, 5, 4),
+            # The server-derived overall (A/A/A → A) wins over the
+            # client-sent "C" below.
+            "week_grade": "A",
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "overall_override": False, "reviewed_at": None,
+            "best_decision": "", "worst_decision": "",
+            "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "",
+            "created_at": datetime(2026, 5, 5),
+            "updated_at": datetime(2026, 5, 5),
+        },
+    ], fetchalls=[[]])
+    _patch_conn(monkeypatch, cur)
+
+    result = db_layer.upsert_weekly_retro(
+        "CanSlim", date(2026, 5, 4),
+        # Client lies — claims week_grade="C" but axes are all A.
+        week_grade="C",
+        execution_grade="A", process_grade="A", pnl_grade="A",
+        overall_override=False,
+    )
+
+    # The persisted (and returned) week_grade is the derived A, not C.
+    assert result["week_grade"] == "A"
+    # The INSERT must have used the derived value.
+    insert_sql, insert_params = next(
+        (s, p) for s, p in cur.executed if "INSERT INTO weekly_retros" in s
+    )
+    # week_grade is the 3rd positional column (after portfolio_id, week_start).
+    assert insert_params[2] == "A"
+
+
+def test_upsert_trusts_client_week_grade_when_override_true(monkeypatch):
+    """When overall_override is True, server uses the client-supplied
+    week_grade verbatim. The user's intent is to deviate from the
+    average; the server respects it."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42}, None, {"id": 7},
+        {
+            "id": 7, "portfolio": "CanSlim",
+            "week_start": date(2026, 5, 4),
+            "week_grade": "B",
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "overall_override": True, "reviewed_at": None,
+            "best_decision": "", "worst_decision": "",
+            "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "",
+            "created_at": datetime(2026, 5, 5),
+            "updated_at": datetime(2026, 5, 5),
+        },
+    ], fetchalls=[[]])
+    _patch_conn(monkeypatch, cur)
+
+    result = db_layer.upsert_weekly_retro(
+        "CanSlim", date(2026, 5, 4),
+        week_grade="B",
+        execution_grade="A", process_grade="A", pnl_grade="A",
+        overall_override=True,
+    )
+
+    assert result["week_grade"] == "B"
+    insert_sql, insert_params = next(
+        (s, p) for s, p in cur.executed if "INSERT INTO weekly_retros" in s
+    )
+    assert insert_params[2] == "B"  # client value preserved
+
+
+def test_upsert_skips_derivation_when_any_axis_is_null(monkeypatch):
+    """If any axis is null, server can't derive overall — preserves the
+    client-supplied week_grade as-is. This covers the in-progress state
+    (user has graded 2 of 3 axes)."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42}, None, {"id": 7},
+        {
+            "id": 7, "portfolio": "CanSlim",
+            "week_start": date(2026, 5, 4),
+            "week_grade": "C",
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": None,
+            "overall_override": False, "reviewed_at": None,
+            "best_decision": "", "worst_decision": "",
+            "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "",
+            "created_at": datetime(2026, 5, 5),
+            "updated_at": datetime(2026, 5, 5),
+        },
+    ], fetchalls=[[]])
+    _patch_conn(monkeypatch, cur)
+
+    result = db_layer.upsert_weekly_retro(
+        "CanSlim", date(2026, 5, 4),
+        week_grade="C",
+        execution_grade="A", process_grade="A", pnl_grade=None,
+        overall_override=False,
+    )
+
+    # Axes incomplete → server doesn't derive → client value preserved.
+    assert result["week_grade"] == "C"
+
+
+def test_upsert_rejects_axis_grade_with_invalid_vocab(monkeypatch):
+    """Up-front validation: every axis grade is validated against the
+    closed vocab before any DB call. Defense in depth vs the column
+    CHECK constraint."""
+    with pytest.raises(ValueError, match="Invalid execution_grade"):
+        db_layer.upsert_weekly_retro(
+            "CanSlim", date(2026, 5, 4), execution_grade="Z+",
+        )
+    with pytest.raises(ValueError, match="Invalid process_grade"):
+        db_layer.upsert_weekly_retro(
+            "CanSlim", date(2026, 5, 4), process_grade="Z",
+        )
+    with pytest.raises(ValueError, match="Invalid pnl_grade"):
+        db_layer.upsert_weekly_retro(
+            "CanSlim", date(2026, 5, 4), pnl_grade="Z-",
+        )
+
+
+def test_upsert_rejects_axis_change_when_existing_row_is_reviewed(monkeypatch):
+    """Lock validation: when the persisted row has reviewed_at set AND
+    the incoming payload does NOT clear reviewed_at, any change to a
+    graded field raises WeeklyRetroLockedError (→ 409 at the API
+    layer). The frontend's disabled selectors are UX; this is the
+    correctness backstop."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42},                                 # portfolio
+        {  # existing row IS reviewed, with axes A/A/A
+            "id": 7,
+            "reviewed_at": datetime(2026, 5, 13, 12, 0, 0),
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "week_grade": "A", "overall_override": False,
+        },
+    ])
+    _patch_conn(monkeypatch, cur)
+
+    with pytest.raises(db_layer.WeeklyRetroLockedError, match="grade locked"):
+        db_layer.upsert_weekly_retro(
+            "CanSlim", date(2026, 5, 4),
+            week_grade="B",
+            execution_grade="B", process_grade="B", pnl_grade="B",
+            overall_override=False,
+            # Keeps reviewed_at set → lock applies.
+            reviewed_at=datetime(2026, 5, 13, 12, 0, 0).isoformat(),
+        )
+
+
+def test_upsert_allows_axis_change_when_payload_clears_reviewed_at(monkeypatch):
+    """Sibling of the lock test: when the same payload clears
+    reviewed_at (un-review + edit in one call), grade changes are
+    allowed. Lock check skips entirely."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42},                                 # portfolio
+        {  # existing IS reviewed with axes A/A/A
+            "id": 7,
+            "reviewed_at": datetime(2026, 5, 13, 12, 0, 0),
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "week_grade": "A", "overall_override": False,
+        },
+        {"id": 7},                                  # UPDATE returning
+        {  # final re-fetch (now un-reviewed, axes B/B/B)
+            "id": 7, "portfolio": "CanSlim",
+            "week_start": date(2026, 5, 4),
+            "week_grade": "B",
+            "execution_grade": "B", "process_grade": "B", "pnl_grade": "B",
+            "overall_override": False, "reviewed_at": None,
+            "best_decision": "", "worst_decision": "",
+            "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "",
+            "created_at": datetime(2026, 5, 5),
+            "updated_at": datetime(2026, 5, 14),
+        },
+    ], fetchalls=[[]])
+    _patch_conn(monkeypatch, cur)
+
+    # Same payload as the lock test, EXCEPT reviewed_at=None.
+    result = db_layer.upsert_weekly_retro(
+        "CanSlim", date(2026, 5, 4),
+        week_grade="B",
+        execution_grade="B", process_grade="B", pnl_grade="B",
+        overall_override=False,
+        reviewed_at=None,
+    )
+    assert result["execution_grade"] == "B"
+    assert result["reviewed_at"] is None
+
+
+def test_upsert_allows_non_grade_changes_when_reviewed(monkeypatch):
+    """Lock applies to graded fields only. Reflections, rule change,
+    and ticker grades remain editable on a reviewed retro. The lock
+    check finds no graded diff → no error → UPDATE proceeds."""
+    cur = _FakeCursor(fetchones=[
+        {"id": 42},                                 # portfolio
+        {  # existing IS reviewed with axes A/A/A and reflections empty
+            "id": 7,
+            "reviewed_at": datetime(2026, 5, 13, 12, 0, 0),
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "week_grade": "A", "overall_override": False,
+        },
+        {"id": 7},                                  # UPDATE returning
+        {  # final re-fetch
+            "id": 7, "portfolio": "CanSlim",
+            "week_start": date(2026, 5, 4),
+            "week_grade": "A",
+            "execution_grade": "A", "process_grade": "A", "pnl_grade": "A",
+            "overall_override": False,
+            "reviewed_at": datetime(2026, 5, 13, 12, 0, 0),
+            "best_decision": "new reflection", "worst_decision": "",
+            "rule_change": False, "rule_change_text": "",
+            "weekly_thoughts": "",
+            "created_at": datetime(2026, 5, 5),
+            "updated_at": datetime(2026, 5, 14),
+        },
+    ], fetchalls=[[]])
+    _patch_conn(monkeypatch, cur)
+
+    result = db_layer.upsert_weekly_retro(
+        "CanSlim", date(2026, 5, 4),
+        # Unchanged grades.
+        week_grade="A",
+        execution_grade="A", process_grade="A", pnl_grade="A",
+        overall_override=False,
+        reviewed_at=datetime(2026, 5, 13, 12, 0, 0).isoformat(),
+        # Only reflections changed.
+        best_decision="new reflection",
+    )
+
+    assert result["best_decision"] == "new reflection"
+    assert result["reviewed_at"] is not None
+
+
+def test_put_axis_grades_flow_through_to_upsert(weekly_stubs):
+    """API contract: PUT body forwards the 5 new fields to
+    upsert_weekly_retro. Smoke that the body parser doesn't drop them."""
+    state, client = weekly_stubs
+    r = client.put("/api/weekly-retros", json={
+        "portfolio": "CanSlim", "week_start": "2026-05-04",
+        "execution_grade": "A-", "process_grade": "B+", "pnl_grade": "A",
+        "overall_override": True,
+        "week_grade": "A-",
+        "reviewed_at": "2026-05-14T10:00:00+00:00",
+    })
+    assert r.status_code == 200
+    assert len(state["upsert_calls"]) == 1
+    portfolio, ws, fields = state["upsert_calls"][0]
+    assert fields["execution_grade"] == "A-"
+    assert fields["process_grade"] == "B+"
+    assert fields["pnl_grade"] == "A"
+    assert fields["overall_override"] is True
+    assert fields["reviewed_at"] == "2026-05-14T10:00:00+00:00"
+
+
+def test_put_returns_409_when_upsert_raises_locked_error(weekly_stubs):
+    """The WeeklyRetroLockedError raised by db_layer when a reviewed row
+    is mutated propagates as HTTP 409 with the detail message. Mirrors
+    the existing /api/pins/toggle 409 idiom for state conflicts."""
+    state, client = weekly_stubs
+    state["upsert_raises"] = db_layer.WeeklyRetroLockedError(
+        "grade locked; un-review to edit"
+    )
+    r = client.put("/api/weekly-retros", json={
+        "portfolio": "CanSlim", "week_start": "2026-05-04",
+        "execution_grade": "B",
+    })
+    assert r.status_code == 409
+    assert r.json()["detail"] == "grade locked; un-review to edit"
+
+
+def test_legacy_row_serializes_with_null_axes_and_reviewed(monkeypatch):
+    """Pre-Phase-4.6 rows have axis columns NULL, overall_override False
+    (column default), reviewed_at NULL. _serialize_weekly_retro must
+    pass these through cleanly so the frontend's hydration sees a clean
+    'overall set, axes never entered' state."""
+    parent = {
+        "id": 7, "portfolio": "CanSlim",
+        "week_start": date(2026, 5, 4),
+        "week_grade": "B+",
+        "execution_grade": None, "process_grade": None, "pnl_grade": None,
+        "overall_override": False, "reviewed_at": None,
+        "best_decision": "ok", "worst_decision": "",
+        "rule_change": False, "rule_change_text": "",
+        "weekly_thoughts": "",
+        "created_at": datetime(2026, 5, 5),
+        "updated_at": datetime(2026, 5, 5),
+    }
+    out = db_layer._serialize_weekly_retro(parent, {})
+
+    assert out["week_grade"] == "B+"
+    assert out["execution_grade"] is None
+    assert out["process_grade"] is None
+    assert out["pnl_grade"] is None
+    assert out["overall_override"] is False
+    assert out["reviewed_at"] is None
