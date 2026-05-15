@@ -305,14 +305,19 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
         df["ndx_ltd"] = (df["nasdaq"] / ndx_start - 1) * 100
         df["ndx_daily_pct"] = df["nasdaq"].pct_change().fillna(0) * 100
 
-    cols = ["day", "end_nlv", "beg_nlv", "daily_pct_change", "daily_dollar_change",
+    cols = ["id", "day", "end_nlv", "beg_nlv", "daily_pct_change", "daily_dollar_change",
             "daily_return", "pct_invested", "portfolio_ltd",
             "spy_ltd", "ndx_ltd", "spy_daily_pct", "ndx_daily_pct",
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
             "market_window", "market_cycle", "mct_display_day_num",
             "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
-            "highlights", "lowlights", "mistakes", "top_lesson"]
+            "highlights", "lowlights", "mistakes", "top_lesson",
+            # Phase 7 — id surfaces the daily journal row's PK so TagPicker,
+            # NotesRail, and SnapshotGallery on the daily report have an
+            # entity_id to bind to. daily_thoughts is the rich-text body
+            # for the new Daily Thoughts editor (migration 031).
+            "daily_thoughts"]
     available_cols = [c for c in cols if c in df.columns]
     return _df_to_records(df[available_cols])
 
@@ -695,6 +700,11 @@ def journal_edit(entry: dict):
                     "lowlights": str(row.get("lowlights", "") or ""),
                     "mistakes": str(row.get("mistakes", "") or ""),
                     "top_lesson": str(row.get("top_lesson", "") or ""),
+                    # Phase 7 — rich-text body for the Daily Thoughts editor
+                    # (migration 031). Preserved on every edit so a partial
+                    # PUT from another surface (e.g., Daily Routine) doesn't
+                    # wipe the page's prose.
+                    "daily_thoughts": str(row.get("daily_thoughts", "") or ""),
                     "nlv_source": str(row.get("nlv_source", "") or "manual"),
                     "holdings_source": str(row.get("holdings_source", "") or "manual"),
                     "status": db.clean_text_value(row.get("status")),
@@ -751,6 +761,7 @@ def journal_edit(entry: dict):
             "lowlights": _s("lowlights", "lowlights"),
             "mistakes": _s("mistakes", "mistakes"),
             "top_lesson": _s("top_lesson", "top_lesson"),
+            "daily_thoughts": _s("daily_thoughts", "daily_thoughts"),
             "nlv_source": nlv_source_in,
             "holdings_source": holdings_source_in,
             # PRESERVATION: status + above_21ema. Without these keys,
@@ -4718,9 +4729,24 @@ async def upload_eod_snapshot(
     day: str = Form(...),
     snapshot_type: str = Form(...),  # "dashboard" or "campaign"
 ):
-    """Upload an end-of-day snapshot (PNG) to R2 tied to a journal day."""
+    """Upload an end-of-day snapshot (PNG) to R2 tied to a journal day.
+
+    Phase 7: user-uploaded notes are now first-class captures under
+    /api/daily-journals/{id}/captures. Calls with snapshot_type="note"
+    are rejected here so legacy frontends can't silently keep writing
+    to the old surface. Dashboard / campaign uploads remain accepted —
+    those are auto-generated EOD content (cron / IBKR sync paths)."""
     if not _is_r2_available():
         return {"error": "R2 storage not configured"}
+    if str(snapshot_type or "").lower() == "note":
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "endpoint_retired",
+                "message": "User-uploaded notes moved to Daily Captures. "
+                           "Use POST /api/daily-journals/{id}/captures.",
+            },
+        )
     try:
         content = await file.read()
         file_like = io.BytesIO(content)
@@ -4737,18 +4763,28 @@ async def upload_eod_snapshot(
 
         image_id = db.save_trade_image(portfolio, trade_id, ticker, image_type, object_key, file.filename)
         return {"status": "ok", "image_id": image_id, "object_key": object_key}
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": str(e)}
 
 
 @app.get("/api/snapshots/{day}")
 def list_eod_snapshots(day: str, portfolio: str = "CanSlim"):
-    """List EOD snapshots for a specific day."""
+    """List EOD snapshots for a specific day.
+
+    Phase 7: 'eod_note' rows are filtered out — they were migrated to
+    daily_journal_captures by migration 032 and now render in the Daily
+    Captures section instead. The legacy rows still exist in
+    trade_images (no soft-delete column there; see migration 032 for
+    rationale) but the endpoint hides them so they don't double-render."""
     try:
         trade_id = f"EOD-{day}"
         images = db.get_trade_images(portfolio, trade_id)
         R2_PUBLIC = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
         if images:
+            images = [img for img in images
+                      if (img.get("image_type") or "").lower() != "eod_note"]
             for img in images:
                 key = img.get("image_url", "")
                 if key and str(key).startswith("http"):
@@ -4941,6 +4977,146 @@ async def upload_weekly_thoughts_image(
     r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
     view_url = f"{r2_public}/{storage_ref}" if r2_public else storage_ref
     return {"view_url": view_url}
+
+
+# ============================================================
+# DAILY JOURNAL CAPTURES (Migration 031 — Phase 7)
+# ============================================================
+# Image attachments on daily journal entries. URL-grouped under
+# /api/daily-journals/{journal_id}/captures (mirrors the weekly-retros
+# snapshot endpoints above). Reuses the _SNAPSHOT_* MIME/size constants
+# and r2.upload_blob helper from the weekly-retros block.
+
+
+@app.post("/api/daily-journals/{journal_id}/captures")
+@limiter.limit("10/minute")
+async def upload_daily_journal_capture(
+    journal_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+):
+    """Upload an image capture attached to a daily journal entry.
+    Mirrors POST /api/weekly-retros/{retro_id}/snapshots.
+
+    Rejects:
+      - non-image MIME (allow: png/jpeg/gif/webp) → 415
+      - size > 5MB → 413
+      - journal not owned by caller (RLS miss) → 404
+    """
+    if not _is_r2_available():
+        return {"error": "R2 storage not configured"}
+
+    mime = (file.content_type or "").lower()
+    if mime not in _SNAPSHOT_ALLOWED_MIMES:
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "unsupported_media_type",
+                    "allowed": sorted(_SNAPSHOT_ALLOWED_MIMES)},
+        )
+
+    content = await file.read()
+    if len(content) > _SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "limit_bytes": _SNAPSHOT_MAX_BYTES},
+        )
+
+    ext = _SNAPSHOT_MIME_TO_EXT.get(mime, "bin")
+    object_key = f"daily_journal/{journal_id}/{_uuid.uuid4().hex}.{ext}"
+    file_like = io.BytesIO(content)
+    storage_ref = r2.upload_blob(file_like, object_key, content_type=mime)
+    if not storage_ref:
+        return {"error": "Upload to R2 failed"}
+
+    row = db.save_daily_journal_capture(
+        portfolio, journal_id, storage_ref,
+        file_name=file.filename, mime_type=mime,
+        file_size_bytes=len(content),
+    )
+    if row is None:
+        # Journal not owned by caller. R2 bytes orphaned; future sweep
+        # reclaims by stuffed-key scan.
+        raise HTTPException(status_code=404, detail={"error": "journal_not_found"})
+    return row
+
+
+@app.get("/api/daily-journals/{journal_id}/captures")
+def list_daily_journal_captures_endpoint(journal_id: int, portfolio: str = Query("CanSlim")):
+    """List all live captures for the journal entry. 404 if the journal
+    row is missing or not owned by the caller."""
+    rows = db.list_daily_journal_captures(portfolio, journal_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail={"error": "journal_not_found"})
+    return rows
+
+
+@app.delete("/api/daily-journals/captures/{capture_id}")
+@limiter.limit("30/minute")
+def delete_daily_journal_capture(capture_id: int, request: Request):
+    """Soft-delete a capture. RLS scopes the UPDATE to the current
+    tenant — a cross-tenant capture_id misses and returns 404 (NOT 403,
+    to avoid leaking existence)."""
+    ok = db.soft_delete_daily_journal_capture(capture_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail={"error": "capture_not_found"})
+    return {"deleted": True, "id": capture_id}
+
+
+@app.post("/api/daily-journals/{journal_id}/thoughts-images")
+@limiter.limit("20/minute")
+async def upload_daily_thoughts_image(
+    journal_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    portfolio: str = Form("CanSlim"),
+):
+    """Upload an inline image for the Daily Thoughts editor. No DB row —
+    the editor body's HTML is the source of truth for which images exist
+    (parallel to the Phase 4.1 weekly thoughts surface)."""
+    if not _is_r2_available():
+        return {"error": "R2 storage not configured"}
+
+    mime = (file.content_type or "").lower()
+    if mime not in _SNAPSHOT_ALLOWED_MIMES:
+        raise HTTPException(
+            status_code=415,
+            detail={"error": "unsupported_media_type",
+                    "allowed": sorted(_SNAPSHOT_ALLOWED_MIMES)},
+        )
+
+    content = await file.read()
+    if len(content) > _SNAPSHOT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "limit_bytes": _SNAPSHOT_MAX_BYTES},
+        )
+
+    # Ownership check before R2 — same fail-closed pattern as
+    # upload_weekly_thoughts_image.
+    if not db.verify_daily_journal_ownership(portfolio, journal_id):
+        raise HTTPException(status_code=404, detail={"error": "journal_not_found"})
+
+    ext = _SNAPSHOT_MIME_TO_EXT.get(mime, "bin")
+    object_key = f"daily_journal/{journal_id}/thoughts/{_uuid.uuid4().hex}.{ext}"
+    file_like = io.BytesIO(content)
+    storage_ref = r2.upload_blob(file_like, object_key, content_type=mime)
+    if not storage_ref:
+        return {"error": "Upload to R2 failed"}
+
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    view_url = f"{r2_public}/{storage_ref}" if r2_public else storage_ref
+    return {"view_url": view_url}
+
+
+@app.get("/api/daily-journals/list")
+@limiter.limit("60/minute")
+def list_daily_journals_rail_endpoint(request: Request, portfolio: str = Query("CanSlim")):
+    """Wrapped rail envelope for the Daily Report's NotesRail. Mirrors
+    GET /api/weekly-retros/list in shape (items, ytd_stats), but
+    semantics-wise each item is a single daily journal entry rather than
+    a synthetic week."""
+    return db.list_daily_journals_rail(portfolio)
 
 
 if __name__ == "__main__":

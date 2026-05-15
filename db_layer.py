@@ -516,12 +516,28 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 # Aliased as snake_case directly so normalize_journal_columns
                 # leaves it alone (the rename map only handles Pascal-case keys).
                 day_num_select = 'j.mct_display_day_num AS "mct_display_day_num",\n                        ' if has_mct_day_num else ''
+                # Phase 7 daily_thoughts column (migration 031). Detection-gated
+                # so a DB still on pre-031 doesn't 500 the journal_history call.
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'daily_thoughts'"
+                    )
+                    has_daily_thoughts = cur.fetchone() is not None
+                except Exception:
+                    has_daily_thoughts = False
+                daily_thoughts_select = 'j.daily_thoughts AS "daily_thoughts",\n                        ' if has_daily_thoughts else ''
+                # j.id is required by the Phase 7 rail/tag/capture mounts in
+                # daily-report-card.tsx (TagPicker.entity_id, capture parent
+                # FK, NotesRail row id). Snake-case alias passes through
+                # normalize_journal_columns untouched.
                 query = f"""
                     SELECT
+                        j.id AS "id",
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        {cycle_select}{day_num_select}j.above_21ema AS "> 21e",
+                        {cycle_select}{day_num_select}{daily_thoughts_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
@@ -2209,6 +2225,11 @@ def save_journal_entry(journal_entry):
             lowlights = journal_entry.get('lowlights', '')
             mistakes = journal_entry.get('mistakes', '')
             top_lesson = journal_entry.get('top_lesson', '')
+            # Phase 7 — rich-text body for the new Daily Thoughts editor.
+            # Defaulted to '' to match the migration 031 column default;
+            # only the primary INSERT/UPDATE path writes it (fallback paths
+            # target pre-migration-031 schemas which lack the column).
+            daily_thoughts = journal_entry.get('daily_thoughts', '') or ''
             # Provenance for the End NLV value (migration 013). Defaulted to
             # 'manual' so pre-migration callers keep working; constrained to
             # the three known values (anything else collapses to 'manual').
@@ -2249,7 +2270,8 @@ def save_journal_entry(journal_entry):
                             score = %s,
                             highlights = %s, lowlights = %s, mistakes = %s,
                             top_lesson = %s,
-                            nlv_source = %s, holdings_source = %s
+                            nlv_source = %s, holdings_source = %s,
+                            daily_thoughts = %s
                         WHERE id = %s
                         RETURNING id
                     """
@@ -2266,6 +2288,7 @@ def save_journal_entry(journal_entry):
                         highlights, lowlights, mistakes,
                         top_lesson,
                         nlv_source, holdings_source,
+                        daily_thoughts,
                         existing[0]
                     ))
                 except Exception:
@@ -2338,11 +2361,11 @@ def save_journal_entry(journal_entry):
                             market_notes, market_action, portfolio_heat,
                             spy_atr, nasdaq_atr, score,
                             highlights, lowlights, mistakes, top_lesson,
-                            nlv_source, holdings_source
+                            nlv_source, holdings_source, daily_thoughts
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
@@ -2355,7 +2378,7 @@ def save_journal_entry(journal_entry):
                         market_notes, market_action, portfolio_heat,
                         spy_atr, nasdaq_atr, score,
                         highlights, lowlights, mistakes, top_lesson,
-                        nlv_source, holdings_source
+                        nlv_source, holdings_source, daily_thoughts
                     ))
                 except Exception:
                     conn.rollback()
@@ -5662,3 +5685,379 @@ def _format_week_title(monday, friday) -> str:
         f"{_MONTH_NAMES[monday.month - 1]} {monday.day} – "
         f"{_MONTH_NAMES[friday.month - 1]} {friday.day}"
     )
+
+
+# ============================================
+# DAILY JOURNAL CAPTURES (Migration 031, Phase 7)
+# ============================================
+# Image attachments on daily journal entries. Metadata lives in
+# daily_journal_captures; bytes live in Cloudflare R2 via the upload_blob
+# helper in r2_storage.py. Mirrors the weekly_retro_snapshots helpers
+# byte-for-byte except for table + FK names. Soft-delete via deleted_at —
+# the bytes intentionally remain in R2 for v1 (storage is cheap; a future
+# sweep job can reclaim).
+
+
+def _serialize_daily_capture(row: dict, r2_public_url: str) -> dict:
+    """Serialize a daily_journal_captures row for the wire. Composes
+    view_url from R2_PUBLIC_URL + storage_ref. Mirrors _serialize_snapshot
+    above; kept as a parallel function rather than a shared helper so a
+    future field-set divergence between the two surfaces doesn't require
+    a refactor."""
+    storage_ref = row.get("storage_ref") or ""
+    if r2_public_url and storage_ref:
+        view_url = f"{r2_public_url.rstrip('/')}/{storage_ref}"
+    else:
+        view_url = storage_ref
+    return {
+        "id": row["id"],
+        "daily_journal_id": row["daily_journal_id"],
+        "storage_ref": storage_ref,
+        "view_url": view_url,
+        "file_name": row.get("file_name"),
+        "mime_type": row.get("mime_type"),
+        "file_size_bytes": row.get("file_size_bytes"),
+        "width": row.get("width"),
+        "height": row.get("height"),
+        "sort_order": row.get("sort_order") or 0,
+        "caption": row.get("caption") or "",
+        "created_at": (
+            row["created_at"].isoformat()
+            if row.get("created_at") and hasattr(row["created_at"], "isoformat")
+            else row.get("created_at")
+        ),
+    }
+
+
+def _resolve_journal_owned_by_portfolio(cur, journal_id: int, portfolio_name: str) -> bool:
+    """Verify that the daily journal row exists, belongs to the given
+    portfolio, is not soft-deleted, AND is visible to the current
+    app.user_id via RLS. Returns True on hit, False on miss (caller maps
+    to 404 — never 403, to avoid leaking existence).
+
+    Phase 7 defensive: trading_journal's unique constraint on (portfolio,
+    day) is FULL — soft-deleted rows still occupy the slot. The
+    `r.deleted_at IS NULL` predicate here makes sure a tombstoned row
+    can't accept new captures."""
+    cur.execute(
+        "SELECT 1 FROM trading_journal j JOIN portfolios p ON p.id = j.portfolio_id "
+        "WHERE j.id = %s AND p.name = %s AND j.deleted_at IS NULL",
+        (journal_id, portfolio_name),
+    )
+    return cur.fetchone() is not None
+
+
+def save_daily_journal_capture(
+    portfolio_name: str,
+    journal_id: int,
+    storage_ref: str,
+    *,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+    file_size_bytes: int | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict | None:
+    """INSERT a capture row attached to the given daily journal entry.
+    Returns the serialized row (including view_url) on success, or None
+    if the journal row doesn't exist / isn't visible to the current
+    tenant (caller maps to 404)."""
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if not _resolve_journal_owned_by_portfolio(cur, journal_id, portfolio_name):
+                return None
+            cur.execute(
+                "INSERT INTO daily_journal_captures "
+                "  (daily_journal_id, storage_ref, file_name, mime_type, "
+                "   file_size_bytes, width, height) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING id, daily_journal_id, storage_ref, file_name, "
+                "          mime_type, file_size_bytes, width, height, "
+                "          sort_order, caption, created_at",
+                (journal_id, storage_ref, file_name, mime_type,
+                 file_size_bytes, width, height),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+            return _serialize_daily_capture(row, r2_public)
+
+
+def list_daily_journal_captures(portfolio_name: str, journal_id: int) -> list[dict] | None:
+    """Return all live captures for the journal entry, ordered by
+    (sort_order, created_at). Returns None if the journal row is missing
+    / not visible (caller maps to 404). Returns [] for a journal with
+    no captures."""
+    r2_public = (os.environ.get("R2_PUBLIC_URL") or "").rstrip("/")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if not _resolve_journal_owned_by_portfolio(cur, journal_id, portfolio_name):
+                return None
+            cur.execute(
+                "SELECT id, daily_journal_id, storage_ref, file_name, "
+                "       mime_type, file_size_bytes, width, height, "
+                "       sort_order, caption, created_at "
+                "FROM daily_journal_captures "
+                "WHERE daily_journal_id = %s AND deleted_at IS NULL "
+                "ORDER BY sort_order, created_at",
+                (journal_id,),
+            )
+            return [_serialize_daily_capture(dict(r), r2_public) for r in cur.fetchall()]
+
+
+def verify_daily_journal_ownership(portfolio_name: str, journal_id: int) -> bool:
+    """Public wrapper around _resolve_journal_owned_by_portfolio for
+    endpoints that need an ownership check without an INSERT/SELECT.
+    Mirrors verify_retro_ownership."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            return _resolve_journal_owned_by_portfolio(cur, journal_id, portfolio_name)
+
+
+def soft_delete_daily_journal_capture(capture_id: int) -> bool:
+    """Set deleted_at = NOW() on a capture row. RLS scopes the UPDATE
+    to the current tenant — a cross-tenant capture_id misses the WHERE
+    clause and returns False (caller maps to 404, not 403, to avoid
+    leaking existence)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE daily_journal_captures SET deleted_at = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL RETURNING id",
+                (capture_id,),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return hit is not None
+
+
+# ----------------------------------------------------------------------------
+# DAILY NotesRail envelope (Phase 7)
+# ----------------------------------------------------------------------------
+# Builds the rail item list + YTD aggregates for the Daily Report page's
+# left rail. Mirrors list_weekly_retros_rail in shape but:
+#   - One row per existing journal entry (NOT one per calendar day —
+#     ~252×N is too many for a single payload; the rail is a sparse
+#     index of journaled days, not a calendar grid).
+#   - sparkline_value = daily_pct_change (recorded directly on the row).
+#   - grade = letter mapped from `score` via _daily_score_to_letter
+#     (1-5 score scale, same as the Daily Review chips on the page).
+#   - reviewed_at = the day itself when score > 0, else None (mirrors
+#     the Phase 4.6 tri-state dot: empty = no row; draft = row exists
+#     but score == 0; reviewed = score > 0).
+
+
+# Daily score → letter mapping. Matches daily-report-card.tsx:502 (the
+# inline `gradeLabel` ternary chain in <DailyReview/>). Scores are 1-5
+# integers; 0 means "no grade yet" (draft).
+_DAILY_SCORE_TO_LETTER: dict[int, str] = {
+    5: "A+",
+    4: "A",
+    3: "B",
+    2: "C",
+    1: "D",
+}
+
+
+def _daily_score_to_letter(score) -> str | None:
+    """Returns the letter grade for a daily score (1-5), or None for
+    falsy / out-of-range values. Matches the frontend gradeLabel ternary
+    used on the daily-report-card so rail + page agree by construction."""
+    try:
+        n = int(score) if score is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return _DAILY_SCORE_TO_LETTER.get(n)
+
+
+def _daily_journal_tags_batch(journal_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch tag_assignments for many daily_journal entities in one
+    query. Mirrors _weekly_retro_tags_batch."""
+    out: dict[int, list[dict]] = {jid: [] for jid in journal_ids}
+    if not journal_ids:
+        return out
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT a.entity_id, t.name, t.color "
+                "FROM tag_assignments a "
+                "JOIN tags t ON t.id = a.tag_id AND t.deleted_at IS NULL "
+                "WHERE a.entity_type = 'daily_journal' "
+                "  AND a.entity_id = ANY(%s) "
+                "  AND a.deleted_at IS NULL "
+                "ORDER BY a.created_at ASC",
+                (journal_ids,),
+            )
+            for row in cur.fetchall():
+                out.setdefault(row["entity_id"], []).append({
+                    "name": row["name"], "color": row["color"],
+                })
+    return out
+
+
+def _daily_journal_has_content(row: dict) -> bool:
+    """True if the daily journal row has user-supplied content beyond
+    defaults. Drives the rail's draft vs. graded styling. A row that
+    exists because of an auto-save (NLV from IBKR sync) but has no user
+    prose yet still surfaces as draft (id present so it can be pinned,
+    but has_content=False so the dot stays hollow)."""
+    if row.get("score") and int(row["score"]) > 0:
+        return True
+    for key in ("lowlights", "highlights", "mistakes", "top_lesson",
+                "daily_thoughts", "market_notes", "market_action"):
+        if (row.get(key) or "").strip():
+            return True
+    return False
+
+
+def list_daily_journals_rail(portfolio_name: str) -> dict:
+    """Wrapped envelope for the NotesRail on the Daily Report page.
+    Returns:
+
+        {
+          "days": [
+            { id, key (YYYY-MM-DD), date_label, year, month,
+              has_content, pinned, sparkline_value (daily_pct_change),
+              weekly_pnl (daily_dollar_change — name kept for wire
+              compat with NotesRailItem; semantically "period P&L"),
+              trades_count, tags, week_grade (letter from score),
+              reviewed_at },
+            ...
+          ],
+          "ytd_stats": { total_weeks, weeks_graded, avg_grade,
+                         weeks_pinned }
+        }
+
+    Wire-shape notes:
+      - Top-level key is "days" (parallel to weekly's "weeks"); the
+        rail component branches on entityType for the row's date label
+        copy.
+      - "weekly_pnl" / "week_grade" / "weeks_*" field names are kept
+        from the weekly envelope to preserve NotesRailItem compatibility.
+        Semantically the daily envelope uses them for daily P&L and
+        per-day grade — the rail's existing entityType-branched copy
+        handles the rendering distinction.
+      - Only days with an existing journal row are returned (skip empty
+        days — at ~252 trading days/year a multi-year payload would be
+        too large for a single rail load).
+    """
+    df = load_journal(portfolio_name)
+    if df is None or df.empty:
+        return {
+            "days": [],
+            "ytd_stats": {
+                "total_weeks": 0,
+                "weeks_graded": 0,
+                "avg_grade": None,
+                "weeks_pinned": 0,
+            },
+        }
+
+    work = df.copy()
+    # load_journal returns Title-Case; normalize so we can address by
+    # snake_case from here on.
+    from trade_calc import normalize_journal_columns as _norm
+    work = _norm(work)
+    if "day" not in work.columns:
+        return {
+            "days": [],
+            "ytd_stats": {"total_weeks": 0, "weeks_graded": 0,
+                          "avg_grade": None, "weeks_pinned": 0},
+        }
+    work["day"] = pd.to_datetime(work["day"], errors="coerce")
+    work = work.dropna(subset=["day"]).sort_values("day", ascending=False)
+    if work.empty:
+        return {
+            "days": [],
+            "ytd_stats": {"total_weeks": 0, "weeks_graded": 0,
+                          "avg_grade": None, "weeks_pinned": 0},
+        }
+
+    journal_ids = [int(r["id"]) for _, r in work.iterrows()
+                   if r.get("id") is not None and not pd.isna(r["id"])]
+    pinned_ids = list_pinned_entity_ids("daily_journal")
+    tags_by_id = _daily_journal_tags_batch(journal_ids)
+
+    # Per-day transaction counts from trade_details. Mirrors the
+    # weekly helper but bucketed by ISO date instead of Monday-of-week.
+    details = load_details(portfolio_name)
+    trade_counts: dict[str, int] = {}
+    if details is not None and not details.empty:
+        date_col = "Date" if "Date" in details.columns else "date"
+        if date_col in details.columns:
+            tmp = details.copy()
+            tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce")
+            tmp = tmp.dropna(subset=[date_col])
+            for _, row in tmp.iterrows():
+                d = row[date_col].date() if hasattr(row[date_col], "date") else row[date_col]
+                trade_counts[d.isoformat()] = trade_counts.get(d.isoformat(), 0) + 1
+
+    days: list[dict] = []
+    for _, row in work.iterrows():
+        try:
+            jid = int(row["id"]) if row.get("id") is not None else None
+        except (TypeError, ValueError):
+            jid = None
+        day_dt = row["day"]
+        day_iso = day_dt.date().isoformat() if hasattr(day_dt, "date") else str(day_dt)[:10]
+        try:
+            score = int(row.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        letter = _daily_score_to_letter(score)
+        sparkline = row.get("daily_pct_change")
+        if sparkline is not None and not pd.isna(sparkline):
+            sparkline_value = float(sparkline)
+        else:
+            sparkline_value = None
+        pnl = row.get("daily_dollar_change")
+        weekly_pnl = float(pnl) if pnl is not None and not pd.isna(pnl) else None
+
+        days.append({
+            "id": jid,
+            "key": day_iso,
+            "week_start": day_iso,
+            "week_end": day_iso,
+            "year": (day_dt.year if hasattr(day_dt, "year") else int(day_iso[:4])),
+            "month": (day_dt.month if hasattr(day_dt, "month") else int(day_iso[5:7])),
+            "title": _format_daily_title(day_dt),
+            "has_content": _daily_journal_has_content(row.to_dict()),
+            "pinned": bool(jid is not None and jid in pinned_ids),
+            "sparkline_value": sparkline_value,
+            "week_grade": letter,
+            "weekly_pnl": weekly_pnl,
+            "trades_count": trade_counts.get(day_iso, 0),
+            "tags": tags_by_id.get(jid, []) if jid is not None else [],
+            # Phase 4.6 tri-state dot: reviewed = score > 0 (locked
+            # Phase 7 decision — daily entries have no separate
+            # `reviewed_at` column, score becomes the proxy).
+            "reviewed_at": day_iso if score > 0 else None,
+        })
+
+    # YTD aggregate (current calendar year only).
+    from datetime import date as _date
+    current_year = _date.today().year
+    ytd_rows = [d for d in days if d["year"] == current_year]
+    graded_letters = [d["week_grade"] for d in ytd_rows if d["week_grade"]]
+    ytd_pinned_count = sum(1 for d in ytd_rows if d["pinned"])
+
+    return {
+        "days": days,
+        "ytd_stats": {
+            "total_weeks": len(ytd_rows),
+            "weeks_graded": len(graded_letters),
+            "avg_grade": avg_grade_from_letters(graded_letters),
+            "weeks_pinned": ytd_pinned_count,
+        },
+    }
+
+
+def _format_daily_title(day) -> str:
+    """Human label for a daily rail row. Example: "May 15".
+    Server-formats so timezone bugs don't shift the visible date."""
+    try:
+        m = day.month
+        d = day.day
+        return f"{_MONTH_NAMES[m - 1]} {d}"
+    except Exception:
+        return str(day)[:10]
