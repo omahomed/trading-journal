@@ -734,7 +734,7 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     fireEvent.click(screen.getByTestId("rail-filter-trigger"));
     expect(screen.getByTestId("rail-filter-popover")).toBeInTheDocument();
     act(() => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(screen.queryByTestId("rail-filter-popover")).toBeNull();
   });

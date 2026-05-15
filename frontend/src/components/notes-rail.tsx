@@ -7,6 +7,7 @@ import type {
 } from "@/lib/api";
 import { TagPill } from "./tag-pill";
 import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
+import { usePopover } from "@/lib/use-popover";
 
 // Phase 6 — Notion-style left rail for the Weekly Retro page (and later
 // Daily Report in Phase 7). Visual contract from
@@ -727,31 +728,19 @@ function FilterPopover({
   onClose: () => void;
   anchorRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Click-outside + Esc — same idiom as ColorPicker / ToolbarDropdown.
-  // Anchor element is excluded so clicking the trigger button itself
-  // toggles cleanly instead of opening-then-closing on the same click.
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (ref.current && ref.current.contains(target)) return;
-      if (anchorRef.current && anchorRef.current.contains(target)) return;
-      onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose, anchorRef]);
+  // Phase 6.5-followup: outside-click + Escape extracted to usePopover.
+  // FilterPopover is conditionally mounted by FilterBar, so initialOpen
+  // is true. anchorRef is passed in by the parent because the trigger
+  // pill lives in FilterBar's DOM — the hook excludes it from the
+  // outside-click check (external-anchor pattern).
+  const { surfaceRef } = usePopover<HTMLDivElement>({
+    initialOpen: true,
+    onClose,
+    anchorRef,
+  });
 
   return (
-    <div ref={ref}
+    <div ref={surfaceRef}
          role="dialog"
          aria-label="Filter weeks by tag"
          data-testid="rail-filter-popover"

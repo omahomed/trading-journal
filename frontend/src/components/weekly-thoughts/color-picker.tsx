@@ -21,7 +21,8 @@
 // editor selection alive across click); click-outside + Esc
 // dismiss; popover anchored absolutely below the trigger.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
+import { usePopover } from "@/lib/use-popover";
 
 interface ColorPickerProps {
   ariaLabel: string;
@@ -55,10 +56,17 @@ export function ColorPicker({
   onPick,
   editorRef,
 }: ColorPickerProps) {
-  const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Phase 6.5-followup: outside-click + Escape machinery extracted to
+  // usePopover. surfaceRef attaches to the WRAPPER below — that wrapper
+  // contains BOTH the trigger button and the popover surface, so the
+  // single contains() check inside usePopover finds both (the "single-
+  // wrapper" pattern from the audit).
+  const { isOpen: open, setIsOpen: setOpen, surfaceRef: wrapperRef } =
+    usePopover<HTMLDivElement>({ initialOpen: false });
   const savedRangeRef = useRef<Range | null>(null);
 
+  // Editor-selection logic stays here — it's editor concern, not
+  // popover concern. The hook doesn't know or care about Selections.
   const saveSelection = useCallback(() => {
     if (typeof window === "undefined") return;
     const sel = window.getSelection();
@@ -75,39 +83,16 @@ export function ColorPicker({
   }, []);
 
   const toggleOpen = useCallback(() => {
-    setOpen(prev => {
-      if (!prev) saveSelection();
-      return !prev;
-    });
-  }, [saveSelection]);
-
-  // Click-outside-to-close — mirrors the ToolbarDropdown idiom.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (!wrapperRef.current) return;
-      if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // Esc closes.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open]);
+    setOpen(!open);
+    if (!open) saveSelection();
+  }, [open, setOpen, saveSelection]);
 
   const handlePick = useCallback((color: string) => {
     setOpen(false);
     if (editorRef?.current) editorRef.current.focus();
     restoreSelection();
     onPick(color);
-  }, [editorRef, restoreSelection, onPick]);
+  }, [editorRef, restoreSelection, onPick, setOpen]);
 
   // Last palette entry is the reset sentinel — render differently.
   const lastIdx = palette.length - 1;

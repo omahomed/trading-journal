@@ -14,7 +14,8 @@
 // parent's onSelect is called *after* the editor is re-focused and
 // the Range is back in place).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
+import { usePopover } from "@/lib/use-popover";
 import { Icons } from "../icons";
 
 export interface ToolbarDropdownOption {
@@ -42,10 +43,15 @@ export function ToolbarDropdown({
   width = 110,
   editorRef,
 }: ToolbarDropdownProps) {
-  const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Phase 6.5-followup: outside-click + Escape machinery extracted to
+  // usePopover. surfaceRef attaches to the wrapper containing both
+  // trigger button and listbox surface — the single-wrapper pattern
+  // from the audit. No anchorRef needed.
+  const { isOpen: open, setIsOpen: setOpen, surfaceRef: wrapperRef } =
+    usePopover<HTMLDivElement>({ initialOpen: false });
   const savedRangeRef = useRef<Range | null>(null);
 
+  // Editor-selection logic — stays here, not part of the popover idiom.
   const saveSelection = useCallback(() => {
     if (typeof window === "undefined") return;
     const sel = window.getSelection();
@@ -62,32 +68,9 @@ export function ToolbarDropdown({
   }, []);
 
   const toggleOpen = useCallback(() => {
-    setOpen(prev => {
-      if (!prev) saveSelection();
-      return !prev;
-    });
-  }, [saveSelection]);
-
-  // Click-outside-to-close. Matches the TagPicker pattern.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (!wrapperRef.current) return;
-      if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // Esc closes.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open]);
+    setOpen(!open);
+    if (!open) saveSelection();
+  }, [open, setOpen, saveSelection]);
 
   const handlePick = useCallback((value: string) => {
     setOpen(false);
@@ -97,7 +80,7 @@ export function ToolbarDropdown({
     if (editorRef?.current) editorRef.current.focus();
     restoreSelection();
     onSelect(value);
-  }, [editorRef, restoreSelection, onSelect]);
+  }, [editorRef, restoreSelection, onSelect, setOpen]);
 
   return (
     <div ref={wrapperRef} style={{ position: "relative", display: "inline-flex" }}>
