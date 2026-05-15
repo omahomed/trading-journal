@@ -25,6 +25,7 @@ import { TAG_TONES, type TagTone } from "@/lib/tag-palette";
 import { TagPill } from "./tag-pill";
 import { Icons } from "./icons";
 import { log } from "@/lib/log";
+import { usePopover } from "@/lib/use-popover";
 
 const MAX_TAGS_PER_ENTITY = 10;
 
@@ -45,7 +46,6 @@ interface TagPickerProps {
 export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: TagPickerProps) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [assignments, setAssignments] = useState<TagAssignment[]>([]);
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedTone, setSelectedTone] = useState<TagTone>("sky");
   const [error, setError] = useState("");
@@ -59,7 +59,11 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
   const [armedDeleteTagId, setArmedDeleteTagId] = useState<number | null>(null);
   const [hoveredTagId, setHoveredTagId] = useState<number | null>(null);
 
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Dropdown popover. Single-wrapper pattern — the wrapper div below
+  // contains both the "+ Add tag" trigger and the listbox surface, so
+  // surfaceRef does the work of the legacy hand-rolled wrapperRef +
+  // mousedown listener. No anchorRef needed.
+  const { isOpen, setIsOpen, toggle, surfaceRef } = usePopover<HTMLDivElement>();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const showError = useCallback((msg: string) => {
@@ -91,23 +95,14 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
     return () => { cancelled = true; };
   }, [entityType, entityId, portfolio]);
 
-  // Click-outside-to-close. Pattern copied from log-buy.tsx SearchSelect
-  // (mousedown listener + ref containment check).
+  // Autofocus the autocomplete input on open; reset query + tone on
+  // close. Fires regardless of how the close happened (outside-click,
+  // Escape, or explicit setIsOpen(false) after assign/create) — same
+  // behavior the legacy `open` effect provided.
   useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (!wrapperRef.current) return;
-      if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // Autofocus the autocomplete input when the dropdown opens.
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (isOpen) inputRef.current?.focus();
     else { setQuery(""); setSelectedTone("sky"); }
-  }, [open]);
+  }, [isOpen]);
 
   const assignedTagIds = useMemo(
     () => new Set(assignments.map(a => a.tag_id)),
@@ -151,7 +146,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
       created_at: new Date().toISOString(),
     };
     setAssignments(prev => [...prev, optimistic]);
-    setOpen(false);
+    setIsOpen(false);
 
     try {
       const result = await api.createTagAssignment({
@@ -197,7 +192,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
     };
     setTags(prev => [...prev, optimisticTag]);
     setAssignments(prev => [...prev, optimisticAssignment]);
-    setOpen(false);
+    setIsOpen(false);
 
     try {
       const tagResult = await api.createTag({ portfolio, name: cleaned, color: tone });
@@ -276,12 +271,11 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
     }
   }, [assignments, showError, onTagsChanged]);
 
+  // Enter on the autocomplete input — assign exact match, or create+assign
+  // when no match. Escape is handled by usePopover's window keydown
+  // listener (not here), which fires e.preventDefault() and closes the
+  // popover.
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setOpen(false);
-      return;
-    }
     if (e.key === "Enter") {
       e.preventDefault();
       const trimmed = query.trim();
@@ -289,7 +283,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
       if (exactMatch) {
         if (assignedTagIds.has(exactMatch.id)) {
           // Already attached — close without re-assigning.
-          setOpen(false);
+          setIsOpen(false);
         } else {
           void handleAssign(exactMatch);
         }
@@ -297,7 +291,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
         void handleCreateAndAssign(trimmed, selectedTone);
       }
     }
-  }, [query, exactMatch, assignedTagIds, selectedTone, handleAssign, handleCreateAndAssign]);
+  }, [query, exactMatch, assignedTagIds, selectedTone, handleAssign, handleCreateAndAssign, setIsOpen]);
 
   // Disabled-empty state (entity not yet saved). The container is still
   // present so the layout doesn't shift when the entity gets saved.
@@ -332,7 +326,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
   }
 
   return (
-    <div ref={wrapperRef} className="relative" style={{ marginTop: 12 }}>
+    <div ref={surfaceRef} className="relative" style={{ marginTop: 12 }}>
       <div className="flex items-center flex-wrap" style={{ gap: 6 }}>
         {assignments.map(a => (
           <TagPill
@@ -345,7 +339,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
 
         <button
           type="button"
-          onClick={() => { if (!atCap) setOpen(prev => !prev); else showError("Maximum 10 tags per entry"); }}
+          onClick={() => { if (!atCap) toggle(); else showError("Maximum 10 tags per entry"); }}
           aria-label="Add tag"
           title={atCap ? "Maximum 10 tags per entry" : "Add a tag"}
           className="inline-flex items-center"
@@ -368,7 +362,7 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
         </button>
       </div>
 
-      {open && (
+      {isOpen && (
         <div
           role="listbox"
           className="absolute z-20 mt-1.5"
