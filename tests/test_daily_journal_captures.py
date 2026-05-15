@@ -438,3 +438,57 @@ def test_eod_upload_returns_410_for_note_snapshot_type(client):
     body = r.json()
     assert body["detail"]["error"] == "endpoint_retired"
     assert "daily-journals" in body["detail"]["message"]
+
+
+# ===========================================================================
+# Phase 7 regression fix — daily NotesRail tag batching
+# ===========================================================================
+# The user-reported regression on the daily rail's filter bar prompted a
+# pin-down test: prove that list_daily_journals_rail attaches tags per
+# item via _daily_journal_tags_batch. The investigation found the
+# helper is already wired post-Phase-7 (db_layer.py:5873, :5979); these
+# tests pin the contract so any future regression that breaks tag
+# propagation fails loudly here.
+
+
+def test_daily_journal_tags_batch_returns_attached_tags(monkeypatch):
+    """The batch helper returns {journal_id: [{name, color}]} for every
+    tag_assignments row whose entity_type='daily_journal' matches the
+    requested ids. Tags are filtered to live rows (deleted_at IS NULL)."""
+    cur = _FakeCursor(fetchalls=[[
+        {"entity_id": 7, "name": "earnings", "color": "amber"},
+        {"entity_id": 7, "name": "winner", "color": "emerald"},
+        {"entity_id": 9, "name": "loss", "color": "rose"},
+    ]])
+    _patch_conn(monkeypatch, cur)
+    out = db_layer._daily_journal_tags_batch([7, 8, 9])
+    assert out[7] == [
+        {"name": "earnings", "color": "amber"},
+        {"name": "winner", "color": "emerald"},
+    ]
+    assert out[8] == []         # journaled day with no tags
+    assert out[9] == [{"name": "loss", "color": "rose"}]
+    # SQL filters by entity_type + deleted_at + tags.deleted_at.
+    sql, params = cur.executed[0]
+    assert "FROM tag_assignments a" in sql
+    assert "entity_type = 'daily_journal'" in sql
+    assert "deleted_at IS NULL" in sql
+    assert params[0] == [7, 8, 9]
+
+
+def test_daily_journal_tags_batch_returns_empty_dict_for_empty_input(monkeypatch):
+    """No journal ids → no SQL fired, empty dict returned. Defends
+    against the empty-ANY([]) pathological query."""
+    cur = _FakeCursor()
+    _patch_conn(monkeypatch, cur)
+    out = db_layer._daily_journal_tags_batch([])
+    assert out == {}
+    assert cur.executed == []
+
+
+def test_daily_score_to_letter_handles_negative_and_out_of_range_scores():
+    """Defense against unexpected score values — 0 and out-of-range
+    collapse to None (draft row in the rail's tri-state dot)."""
+    assert db_layer._daily_score_to_letter(-1) is None
+    assert db_layer._daily_score_to_letter(0) is None
+    assert db_layer._daily_score_to_letter(99) is None       # out of range
