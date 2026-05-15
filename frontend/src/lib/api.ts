@@ -68,6 +68,28 @@ export interface WeeklyRetroTickerGrade {
   notes: string;
 }
 
+// Phase 5 — performance metrics powering the Weekly Retro top-tile row.
+// Live-computed server-side by /api/analytics/weekly-metrics; matches the
+// shape returned by nlv_service.weekly_metrics.
+export interface WeeklyMetricsWinRate {
+  rate: number;     // wins / (wins + losses + flat). 0 when total == 0.
+  wins: number;
+  losses: number;
+  flat: number;
+  total: number;
+}
+
+export interface WeeklyMetrics {
+  weekly_pnl: number;
+  weekly_return_pct: number;
+  ytd_pct: number;
+  ltd_pct: number;
+  win_rate: WeeklyMetricsWinRate;
+  week_start: string;
+  week_end: string;
+  as_of: string;
+}
+
 export interface WeeklyRetro {
   id: number;
   portfolio: string;
@@ -392,6 +414,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).then(r => r.json()) as Promise<WeeklyRetro | { error: string }>,
+
+  // Phase 5 — performance tiles. Live-computed (no snapshot columns).
+  // weekStart is the Monday of the requested week (YYYY-MM-DD); the
+  // backend echoes Friday in `week_end`.
+  weeklyMetrics: (portfolio: string, weekStart: string) =>
+    fetchJSON<WeeklyMetrics | { error: string }>(
+      `/api/analytics/weekly-metrics?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
+    ),
 
   weeklyRetroDelete: (retroId: number) =>
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {

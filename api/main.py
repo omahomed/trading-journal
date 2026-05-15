@@ -2285,6 +2285,29 @@ def get_dashboard_metrics(portfolio_id: int, request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/analytics/weekly-metrics")
+@limiter.limit("30/minute")
+def get_weekly_metrics(request: Request,
+                       portfolio: str = "CanSlim",
+                       week_start: str = ""):
+    """Phase 5 — performance tiles for the Weekly Retro page.
+
+    Reuses the same TWR / NLV-delta math as Period Review's weekly
+    aggregation (the formulas live in nlv_service, the per-day return
+    series mirrors /api/journal/history). All metrics are computed as
+    of week_end (Friday of the requested week); historical weeks are
+    stable because the underlying journal + trades_summary are immutable.
+
+    Query: portfolio (name), week_start (YYYY-MM-DD, the Monday).
+    """
+    if not week_start:
+        return {"error": "week_start (YYYY-MM-DD) is required"}
+    try:
+        return nlv_service.weekly_metrics(portfolio, week_start)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
 def list_cash_transactions_endpoint(portfolio_id: int, request: Request,

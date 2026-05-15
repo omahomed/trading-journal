@@ -481,3 +481,204 @@ def _compute_ytd_pl_dollar(journal_df: pd.DataFrame, journal_nlv: float) -> floa
 
     cash_flows = float(year_rows.get("cash_change", pd.Series(dtype=float)).sum())
     return round(journal_nlv - baseline - cash_flows, 2)
+
+
+def _twr_chained_pct(daily_returns: pd.Series) -> float:
+    """Chain daily returns: (∏(1 + r) − 1) × 100. Empty → 0.0."""
+    if daily_returns is None or daily_returns.empty:
+        return 0.0
+    curve = (1.0 + daily_returns).cumprod()
+    return float((curve.iloc[-1] - 1.0) * 100.0)
+
+
+def _prepare_journal_for_returns(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort-by-day + per-day TWR return column. Mirrors the same daily-Dietz
+    formula used by /api/journal/history and _compute_twr_from_journal_df:
+
+        adjusted_beg = beg_nlv + cash_change
+        daily_return = (end_nlv − adjusted_beg) / adjusted_beg  if adjusted_beg > 0 else 0
+
+    Returns a *copy* with day coerced to datetime, sorted ascending, with
+    beg_nlv / end_nlv / cash_change / daily_return all present and numeric.
+    Empty input returns an empty DataFrame with the same columns.
+    """
+    cols = ["day", "beg_nlv", "end_nlv", "cash_change", "daily_return"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
+    work = df.copy()
+    work["day"] = pd.to_datetime(work["day"], errors="coerce")
+    work = work.dropna(subset=["day"]).sort_values("day").reset_index(drop=True)
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+
+    for col in ("beg_nlv", "end_nlv", "cash_change"):
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+        else:
+            work[col] = 0.0
+
+    adjusted_beg = work["beg_nlv"] + work["cash_change"]
+    work["daily_return"] = 0.0
+    mask = adjusted_beg > 0
+    work.loc[mask, "daily_return"] = (
+        (work.loc[mask, "end_nlv"] - adjusted_beg[mask]) / adjusted_beg[mask]
+    )
+    return work
+
+
+def _parse_week_start(week_start: str) -> date | None:
+    """Best-effort YYYY-MM-DD parse → date. Returns None on garbage input."""
+    try:
+        return datetime.strptime(str(week_start).strip()[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _compute_win_rate_ytd(summary_df: pd.DataFrame, week_end: date) -> dict[str, Any]:
+    """YTD win-rate from trades_summary.
+
+    Win Rate = wins / (wins + losses + flat). The flat-in-denominator
+    convention matches the existing `computeWinRate` in
+    frontend/src/lib/analytics-stats.ts and Phase 5's locked spec.
+
+    Source: trades_summary.realized_pl (campaign-level — one row per
+    campaign, scale-outs roll up). Status filter: 'CLOSED'. Date filter:
+    Jan 1 of week_end's year ≤ closed_date ≤ week_end.
+
+    Empty result → all zeros with rate=0 (caller renders "—" subtitle).
+    """
+    empty = {"rate": 0.0, "wins": 0, "losses": 0, "flat": 0, "total": 0}
+    if summary_df is None or summary_df.empty:
+        return empty
+
+    status_col = "Status" if "Status" in summary_df.columns else (
+        "status" if "status" in summary_df.columns else None
+    )
+    closed_col = "Closed_Date" if "Closed_Date" in summary_df.columns else (
+        "closed_date" if "closed_date" in summary_df.columns else None
+    )
+    pl_col = "Realized_PL" if "Realized_PL" in summary_df.columns else (
+        "realized_pl" if "realized_pl" in summary_df.columns else None
+    )
+    if not (status_col and closed_col and pl_col):
+        return empty
+
+    work = summary_df.copy()
+    work[status_col] = work[status_col].astype(str).str.upper().str.strip()
+    work = work[work[status_col] == "CLOSED"]
+    if work.empty:
+        return empty
+
+    work[closed_col] = pd.to_datetime(work[closed_col], errors="coerce")
+    work = work.dropna(subset=[closed_col])
+    jan1 = pd.Timestamp(year=week_end.year, month=1, day=1)
+    end_ts = pd.Timestamp(week_end) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    work = work[(work[closed_col] >= jan1) & (work[closed_col] <= end_ts)]
+    if work.empty:
+        return empty
+
+    pl = pd.to_numeric(work[pl_col], errors="coerce").fillna(0.0)
+    wins = int((pl > 0).sum())
+    losses = int((pl < 0).sum())
+    flat = int((pl == 0).sum())
+    total = wins + losses + flat
+    rate = (wins / total) if total > 0 else 0.0
+    return {"rate": round(rate, 4), "wins": wins, "losses": losses, "flat": flat, "total": total}
+
+
+def weekly_metrics(portfolio_name: str, week_start: str) -> dict[str, Any]:
+    """Performance metrics for the Weekly Retro top-tile row.
+
+    Reuses the same daily-Dietz TWR math as Period Review and
+    `_compute_twr_from_journal_df` — no new formula in this function. The
+    weekly aggregation mirrors Period Review's `aggregatePeriods`:
+
+        weekStartNLV = first in-week row's beg_nlv
+        weekEndNLV   = last  in-week row's end_nlv
+        weekCashFlow = Σ in-week cash_change
+        weekly_pnl   = weekEndNLV − (weekStartNLV + weekCashFlow)
+        weekly_return_pct = (∏(1 + daily_return) − 1) × 100  over in-week rows
+
+    LTD / YTD are chained from the same daily_return series, anchored to
+    inception (first journal row) and Jan 1 of week_end's year. All metrics
+    are computed *as of* week_end so historical weeks are stable.
+
+    Week window:
+        Mon (week_start, user-supplied) … Sunday (week_start + 6 days).
+        week_end echoed in the response = Friday (week_start + 4).
+
+    Edge cases:
+      - No journal rows in the requested week → weekly_pnl = 0,
+        weekly_return_pct = 0. LTD/YTD still compute from history.
+      - Week_start unparseable → returns an error dict.
+      - Account inception inside the requested week → LTD == YTD ==
+        weekly_return_pct (cumprod is over the same in-week rows for all
+        three) — naturally falls out of the math, no special-case needed.
+      - No prior-year rows when computing YTD → YTD == LTD (all rows are
+        current-year, so the cumprods agree).
+      - Win Rate with 0 trades YTD → rate=0, total=0.
+    """
+    week_start_date = _parse_week_start(week_start)
+    if week_start_date is None:
+        return {"error": "Invalid week_start (expected YYYY-MM-DD)"}
+
+    week_end_date = week_start_date + pd.Timedelta(days=4).to_pytimedelta()
+    week_window_end = week_start_date + pd.Timedelta(days=6).to_pytimedelta()
+
+    journal_df = db.load_journal(portfolio_name)
+    work = _prepare_journal_for_returns(
+        normalize_journal_columns(journal_df) if journal_df is not None and not journal_df.empty
+        else pd.DataFrame()
+    )
+
+    # As-of cutoff: only rows with day <= end of the week window. Keeps
+    # historical weeks stable even after later journal rows are added.
+    cutoff = pd.Timestamp(week_window_end) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    work = work[work["day"] <= cutoff]
+
+    # Weekly slice: rows within [Monday, Sunday].
+    week_start_ts = pd.Timestamp(week_start_date)
+    in_week_mask = (work["day"] >= week_start_ts) & (work["day"] <= cutoff)
+    week_rows = work[in_week_mask]
+
+    if week_rows.empty:
+        weekly_pnl = 0.0
+        weekly_return_pct = 0.0
+    else:
+        beg_nlv = float(week_rows.iloc[0]["beg_nlv"])
+        end_nlv = float(week_rows.iloc[-1]["end_nlv"])
+        cash_flow = float(week_rows["cash_change"].sum())
+        weekly_pnl = round(end_nlv - (beg_nlv + cash_flow), 2)
+        weekly_return_pct = round(_twr_chained_pct(week_rows["daily_return"]), 4)
+
+    # LTD: all rows up through week_end. YTD: rows in week_end.year through
+    # week_end. Both use the same chained daily_return so they agree by
+    # construction with Period Review's "LTD Return %" column.
+    if work.empty:
+        ltd_pct = 0.0
+        ytd_pct = 0.0
+    else:
+        ltd_pct = round(_twr_chained_pct(work["daily_return"]), 4)
+        jan1 = pd.Timestamp(year=week_end_date.year, month=1, day=1)
+        ytd_rows = work[work["day"] >= jan1]
+        if ytd_rows.empty:
+            # No current-year rows up to week_end → fall back to LTD per
+            # Phase 5 spec ("ytd_pct uses inception as fallback").
+            ytd_pct = ltd_pct
+        else:
+            ytd_pct = round(_twr_chained_pct(ytd_rows["daily_return"]), 4)
+
+    summary_df = db.load_summary(portfolio_name)
+    win_rate = _compute_win_rate_ytd(summary_df, week_end_date)
+
+    return {
+        "weekly_pnl": weekly_pnl,
+        "weekly_return_pct": weekly_return_pct,
+        "ytd_pct": ytd_pct,
+        "ltd_pct": ltd_pct,
+        "win_rate": win_rate,
+        "week_start": week_start_date.isoformat(),
+        "week_end": week_end_date.isoformat(),
+        "as_of": datetime.now().isoformat(),
+    }
