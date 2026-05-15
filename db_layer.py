@@ -5216,19 +5216,23 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
     Returned dict keys are ISO date strings (YYYY-MM-DD) so they're directly
     matchable against the synthetic-Monday grid the API list endpoint builds.
     """
-    # Local import — nlv_service imports db_layer at module top, so importing
-    # nlv_service here would cycle. Lazy import breaks the cycle.
+    # Local imports — nlv_service imports db_layer at module top, so importing
+    # nlv_service here would cycle. Lazy imports break the cycle.
     from nlv_service import _prepare_journal_for_returns
+    from trade_calc import normalize_journal_columns
     from datetime import timedelta as _td
 
     journal = load_journal(portfolio_name)
     if journal is None or journal.empty:
         return {}
 
-    # Normalize columns + compute daily_return once. _prepare_journal_for_returns
-    # tolerates the load_journal() shape directly (it handles missing/typed
-    # columns), so no extra preprocessing needed.
-    work = _prepare_journal_for_returns(journal)
+    # load_journal returns Title-Case columns ("Day", "Beg NLV", "End NLV",
+    # "Cash -/+"). _prepare_journal_for_returns expects lowercase snake_case
+    # ("day", "beg_nlv", "end_nlv", "cash_change"). normalize_journal_columns
+    # is the canonical mapper — it's what nlv_service.weekly_metrics uses too.
+    # Without this, the helper KeyError'd on "day" and the endpoint silently
+    # returned {error: ...}, which the frontend swallowed into the empty state.
+    work = _prepare_journal_for_returns(normalize_journal_columns(journal))
     if work.empty:
         return {}
 
@@ -5263,6 +5267,97 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
 # earliest-journal Monday to the current week, joins in retros + pins +
 # sparkline values, and produces the YTD aggregate.
 # ----------------------------------------------------------------------------
+
+def _weekly_trade_stats_for_portfolio(portfolio_name: str) -> dict[str, dict]:
+    """Per-week aggregates from trades_summary, keyed by ISO Monday of the
+    closed_date's week. Returns:
+        {monday_iso: {pnl: float, trades_count: int,
+                      wins: int, losses: int, flat: int, win_rate: float}}
+
+    Win-rate uses the locked Phase 5 convention: wins / (wins+losses+flat).
+    Source is campaign-level realized_pl (one row per CLOSED campaign).
+    """
+    from datetime import timedelta as _td
+
+    summary = load_summary(portfolio_name)
+    if summary is None or summary.empty:
+        return {}
+
+    # Title-Case columns ("Status", "Closed_Date", "Realized_PL") on the
+    # legacy CSV-era schema. Handle the lowercase variant defensively.
+    status_col = "Status" if "Status" in summary.columns else (
+        "status" if "status" in summary.columns else None)
+    closed_col = "Closed_Date" if "Closed_Date" in summary.columns else (
+        "closed_date" if "closed_date" in summary.columns else None)
+    pl_col = "Realized_PL" if "Realized_PL" in summary.columns else (
+        "realized_pl" if "realized_pl" in summary.columns else None)
+    if not (status_col and closed_col and pl_col):
+        return {}
+
+    work = summary.copy()
+    import pandas as _pd
+    work[status_col] = work[status_col].astype(str).str.upper().str.strip()
+    work = work[work[status_col] == "CLOSED"]
+    if work.empty:
+        return {}
+    work[closed_col] = _pd.to_datetime(work[closed_col], errors="coerce")
+    work = work.dropna(subset=[closed_col])
+    if work.empty:
+        return {}
+    work[pl_col] = _pd.to_numeric(work[pl_col], errors="coerce").fillna(0.0)
+
+    out: dict[str, dict] = {}
+    for _, row in work.iterrows():
+        d = row[closed_col].date() if hasattr(row[closed_col], "date") else row[closed_col]
+        monday = d - _td(days=d.weekday())
+        key = monday.isoformat()
+        pl = float(row[pl_col])
+        bucket = out.setdefault(key, {
+            "pnl": 0.0, "trades_count": 0,
+            "wins": 0, "losses": 0, "flat": 0, "win_rate": 0.0,
+        })
+        bucket["pnl"] += pl
+        bucket["trades_count"] += 1
+        if pl > 0:
+            bucket["wins"] += 1
+        elif pl < 0:
+            bucket["losses"] += 1
+        else:
+            bucket["flat"] += 1
+    for key, b in out.items():
+        total = b["wins"] + b["losses"] + b["flat"]
+        b["win_rate"] = (b["wins"] / total) if total > 0 else 0.0
+        b["pnl"] = round(b["pnl"], 2)
+        b["win_rate"] = round(b["win_rate"], 4)
+    return out
+
+
+def _weekly_retro_tags_batch(retro_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch tag_assignments for many weekly_retro entities in one
+    query. Returns {entity_id: [{name, color}, ...]}. Soft-deleted tags are
+    filtered via the JOIN predicate (same pattern as load_tag_assignments).
+    """
+    out: dict[int, list[dict]] = {rid: [] for rid in retro_ids}
+    if not retro_ids:
+        return out
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT a.entity_id, t.name, t.color "
+                "FROM tag_assignments a "
+                "JOIN tags t ON t.id = a.tag_id AND t.deleted_at IS NULL "
+                "WHERE a.entity_type = 'weekly_retro' "
+                "  AND a.entity_id = ANY(%s) "
+                "  AND a.deleted_at IS NULL "
+                "ORDER BY a.created_at ASC",
+                (retro_ids,),
+            )
+            for row in cur.fetchall():
+                out.setdefault(row["entity_id"], []).append({
+                    "name": row["name"], "color": row["color"],
+                })
+    return out
+
 
 def list_weekly_retros_rail(portfolio_name: str) -> dict:
     """Wrapped envelope for the NotesRail. Returns:
@@ -5310,6 +5405,12 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
     # 3. Pinned ids for this entity type (RLS scopes to the user).
     pinned_ids = list_pinned_entity_ids("weekly_retro")
 
+    # 4. Per-week trade stats from trades_summary.
+    trade_stats = _weekly_trade_stats_for_portfolio(portfolio_name)
+
+    # 5. Tags per retro id, batch-fetched in a single SELECT.
+    tags_by_retro = _weekly_retro_tags_batch([r["id"] for r in saved])
+
     # 4. Build the week grid from inception to the current Monday.
     #    Inception = earliest Monday with either a journal row or a saved
     #    retro. If neither exists, the grid is empty and we still return
@@ -5345,6 +5446,8 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
         key = cursor.isoformat()
         retro = saved_by_week.get(key)
         sparkline = series.get(key, {}).get("weekly_return_pct")
+        stats = trade_stats.get(key) or {}
+        retro_tags = tags_by_retro.get(retro["id"], []) if retro else []
         # has_content: row exists AND user filled in at least one field.
         # Pure "saved by the auto-save but every field blank" stays
         # has_content=False so the rail draft-dot styling is honest.
@@ -5361,6 +5464,11 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
             "pinned": bool(retro and retro["id"] in pinned_ids),
             "sparkline_value": sparkline,
             "week_grade": (retro or {}).get("week_grade"),
+            # Phase 6 design-fidelity additions (per-row subtitle line).
+            "weekly_pnl": stats.get("pnl"),
+            "trades_count": stats.get("trades_count", 0),
+            "win_rate": stats.get("win_rate"),
+            "tags": retro_tags,
         })
         cursor = cursor + _td(days=7)
 

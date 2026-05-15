@@ -334,17 +334,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
         </div>
 
         {/* Phase 6: Review History tab removed; the NotesRail on the left
-            is the canonical way to navigate past retros. */}
+            is the canonical way to navigate past retros. The standalone
+            "Select Week" date input has also been removed — the rail
+            header's calendar icon (Jump to date) is the single date
+            picker. The "Reviewing: X → Y" pill stays as a passive
+            indicator of which week the form is currently on. */}
         <>
-          {/* Week selector */}
           <div className="flex items-center gap-4 mb-5">
-            <div>
-              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Select Week</label>
-              <input type="date" value={weekDate} onChange={e => setWeekDate(e.target.value)}
-                     className="h-[38px] px-3 rounded-[10px] text-[13px] outline-none"
-                     style={{ ...inputStyle, fontFamily: "var(--font-jetbrains), monospace" }} />
-            </div>
-            <div className="mt-5 px-4 py-2 rounded-[10px] text-[12px] font-medium"
+            <div className="px-4 py-2 rounded-[10px] text-[12px] font-medium"
                  style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
               Reviewing: <strong>{monday.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</strong> → <strong>{friday.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</strong>
             </div>

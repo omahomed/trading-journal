@@ -292,6 +292,32 @@ def test_weekly_return_series_buckets_by_iso_monday(monkeypatch):
     assert out["2026-05-11"]["week_end"] == "2026-05-15"
 
 
+def test_weekly_return_series_handles_title_case_journal_columns(monkeypatch):
+    """Regression test for the Phase 6 post-merge regression.
+
+    load_journal() returns Title-Case columns ("Day", "Beg NLV", "End NLV",
+    "Cash -/+") on the legacy CSV-era schema. weekly_return_series_for_portfolio
+    must call normalize_journal_columns() before handing the DataFrame to
+    _prepare_journal_for_returns, which expects lowercase snake_case.
+
+    Pre-fix this raised KeyError: 'day' inside the endpoint; the generic
+    try/except swallowed it into {error: ...}; the frontend swallowed that
+    into "0 weeks · No weekly retros yet". Pin the failure mode so future
+    refactors of load_journal's column shape don't reintroduce it.
+    """
+    import pandas as pd
+    # Title-Case columns matching load_journal's output verbatim.
+    df = pd.DataFrame([
+        {"Day": "2026-05-11", "Beg NLV": 100.0, "End NLV": 110.0, "Cash -/+": 0.0},
+        {"Day": "2026-05-12", "Beg NLV": 110.0, "End NLV": 121.0, "Cash -/+": 0.0},
+    ])
+    monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
+    out = db_layer.weekly_return_series_for_portfolio("CanSlim")
+    # Must produce a real series, not raise and not silently return empty.
+    assert "2026-05-11" in out
+    assert abs(out["2026-05-11"]["weekly_return_pct"] - 21.0) < 0.01
+
+
 def test_weekly_return_series_matches_phase5_weekly_metrics(monkeypatch):
     """Cross-validation with Phase 5's weekly_metrics. Same journal, same
     week → both compute the same weekly_return_pct. Pins the contract
@@ -325,6 +351,11 @@ def test_list_weekly_retros_rail_empty_account_returns_envelope_with_zeros(monke
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: [])
     monkeypatch.setattr(db_layer, "load_journal", lambda _: pd.DataFrame())
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
+    # Phase 6 fidelity update: list_weekly_retros_rail also reads
+    # trades_summary + tag_assignments. Stub both so tests don't hit the
+    # real DB. Individual tests can override these for richer fixtures.
+    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     assert out["weeks"] == []
     assert out["ytd_stats"] == {
@@ -358,6 +389,8 @@ def test_list_weekly_retros_rail_emits_synthetic_rows_for_missing_weeks(monkeypa
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
+    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
 
     out = db_layer.list_weekly_retros_rail("CanSlim")
     keys = {w["key"] for w in out["weeks"]}
@@ -387,11 +420,54 @@ def test_list_weekly_retros_rail_weeks_sorted_newest_first(monkeypatch):
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: [])
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
+    # Phase 6 fidelity update: list_weekly_retros_rail also reads
+    # trades_summary + tag_assignments. Stub both so tests don't hit the
+    # real DB. Individual tests can override these for richer fixtures.
+    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     week_starts = [w["week_start"] for w in out["weeks"]]
     assert week_starts == sorted(week_starts, reverse=True)
     # At least 2 weeks present (the two journal Mondays).
     assert len(week_starts) >= 2
+
+
+def test_list_weekly_retros_rail_includes_trade_stats_and_tags(monkeypatch):
+    """Phase 6 design-fidelity: each row carries weekly_pnl, trades_count,
+    win_rate, and tags so the rail's per-row subtitle line + chips render
+    without per-row API calls."""
+    import pandas as pd
+    df = pd.DataFrame([
+        {"day": "2024-01-08", "beg_nlv": 100.0, "end_nlv": 110.0, "cash_change": 0.0},
+    ])
+    saved = [{"id": 7, "portfolio": "CanSlim", "week_start": "2024-01-08",
+              "week_grade": "A", "best_decision": "x", "worst_decision": "",
+              "rule_change": False, "rule_change_text": "",
+              "weekly_thoughts": "", "ticker_grades": {},
+              "created_at": "2024-01-09T00:00:00",
+              "updated_at": "2024-01-09T00:00:00"}]
+    # Trade stats: 2 closed trades that week, 1 win, 1 loss.
+    summary = pd.DataFrame([
+        {"Status": "CLOSED", "Closed_Date": "2024-01-09", "Realized_PL": 1000.0},
+        {"Status": "CLOSED", "Closed_Date": "2024-01-10", "Realized_PL": -500.0},
+    ])
+    # Tags for retro id=7.
+    tag_rows = [{"entity_id": 7, "name": "FTD", "color": "emerald"}]
+
+    monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
+    monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
+    monkeypatch.setattr(db_layer, "load_summary", lambda _: summary)
+    monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
+    # Stub the batch tag fetch by patching the cursor return.
+    cur = _FakeCursor(fetchalls=[tag_rows])
+    _patch_conn(monkeypatch, cur)
+
+    out = db_layer.list_weekly_retros_rail("CanSlim")
+    row = next(w for w in out["weeks"] if w["key"] == "2024-01-08")
+    assert row["weekly_pnl"] == 500.0
+    assert row["trades_count"] == 2
+    assert abs(row["win_rate"] - 0.5) < 0.001
+    assert row["tags"] == [{"name": "FTD", "color": "emerald"}]
 
 
 def test_list_weekly_retros_rail_marks_pinned_rows(monkeypatch):
@@ -410,6 +486,8 @@ def test_list_weekly_retros_rail_marks_pinned_rows(monkeypatch):
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: {7})
+    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     saved_row = next(w for w in out["weeks"] if w["key"] == "2026-05-11")
     assert saved_row["pinned"] is True

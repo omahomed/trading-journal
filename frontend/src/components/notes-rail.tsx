@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "@/lib/format";
 import type {
-  NotesRailEntityType, NotesRailItem, NotesRailYtdStats,
+  NotesRailEntityType, NotesRailItem, NotesRailItemTag, NotesRailYtdStats,
 } from "@/lib/api";
+import { TagPill } from "./tag-pill";
+import type { TagTone } from "@/lib/tag-palette";
 
 // Phase 6 — Notion-style left rail for the Weekly Retro page (and later
 // Daily Report in Phase 7). Visual contract from
@@ -120,6 +122,19 @@ function CollapseIcon() {
   );
 }
 
+function CalendarIcon() {
+  return (
+    <svg width={14} height={14} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={2}
+         strokeLinecap="round" strokeLinejoin="round">
+      <rect x={3} y={4} width={18} height={18} rx={2} ry={2} />
+      <line x1={16} y1={2} x2={16} y2={6} />
+      <line x1={8} y1={2} x2={8} y2={6} />
+      <line x1={3} y1={10} x2={21} y2={10} />
+    </svg>
+  );
+}
+
 function HamburgerIcon() {
   return (
     <svg width={16} height={16} viewBox="0 0 24 24" fill="none"
@@ -202,7 +217,49 @@ function RailItem({
                   title="Pinned"><StarIcon filled size={11} /></span>
           )}
         </div>
-        {item.sparkline_value != null && (
+        {/* Per-row stats line — design format: "+$16.7k · 14T · 71%W".
+            Hidden entirely when the week has neither pnl nor any trades
+            (the sparkline_value still hints at activity, but this line
+            stays clean rather than rendering all dashes). */}
+        {(item.weekly_pnl != null || item.trades_count > 0) && (
+          <div style={{
+            fontSize: 11, display: "flex", alignItems: "center", gap: 5,
+            paddingLeft: 14,
+            fontFamily: "var(--font-jetbrains), monospace",
+          }}>
+            {item.weekly_pnl != null && (
+              <span style={{ color: accent, fontWeight: 600 }}>
+                {formatCurrency(item.weekly_pnl, { showSign: true, compact: true })}
+              </span>
+            )}
+            {item.trades_count > 0 && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
+                  {item.trades_count}T
+                </span>
+              </>
+            )}
+            {item.win_rate != null && item.trades_count > 0 && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
+                  {Math.round(item.win_rate * 100)}%W
+                </span>
+              </>
+            )}
+            {item.week_grade && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>{item.week_grade}</span>
+              </>
+            )}
+          </div>
+        )}
+        {/* Sparkline-only line for weeks with no closed trades but with
+            NLV data (so the rail still shows return context for ungraded
+            weeks). Phase 5 weekly_return_pct sits in sparkline_value. */}
+        {item.weekly_pnl == null && item.trades_count === 0 && item.sparkline_value != null && (
           <div style={{
             fontSize: 11, display: "flex", alignItems: "center", gap: 5,
             paddingLeft: 14,
@@ -215,6 +272,26 @@ function RailItem({
                 <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
                 <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>{item.week_grade}</span>
               </>
+            )}
+          </div>
+        )}
+        {/* Tag chips — reuse the Phase 1 TagPill (same visual language as
+            the page's tag bar). Caps at first 3 for the rail's narrow
+            column; overflow renders "+N more". */}
+        {item.tags && item.tags.length > 0 && (
+          <div style={{
+            display: "flex", flexWrap: "wrap", gap: 4, paddingLeft: 14,
+            marginTop: 2,
+          }}>
+            {item.tags.slice(0, 3).map((t, i) => (
+              <span key={i} style={{ transform: "scale(0.85)", transformOrigin: "left center" }}>
+                <TagPill label={t.name} tone={t.color as TagTone} />
+              </span>
+            ))}
+            {item.tags.length > 3 && (
+              <span style={{ fontSize: 10, color: "var(--ink-4)" }}>
+                +{item.tags.length - 3}
+              </span>
             )}
           </div>
         )}
@@ -538,6 +615,9 @@ export function NotesRail({
 
   const [query, setQuery] = useState("");
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
+  // Calendar jump-to-date input ref. Trigger picker via showPicker() on
+  // supported browsers; falls back to a synthetic click for older Safari.
+  const dateInputRef = useRef<HTMLInputElement | null>(null);
   // Optimistic pin overrides: maps item.id → desired pinned bool. Cleared
   // when the parent re-renders with updated items.
   const [pinOverrides, setPinOverrides] = useState<Map<number, boolean>>(() => new Map());
@@ -605,6 +685,41 @@ export function NotesRail({
   }, [items]);
 
   const currentYear = currentYearMonth?.year ?? new Date().getFullYear();
+
+  // Year span from earliest to latest item (inclusive). Drives the "·
+  // {N} years" subtitle suffix. 0 → suppress (single-year or empty).
+  const yearsSpanned = useMemo(() => {
+    if (items.length === 0) return 0;
+    const years = items.map(it => it.year);
+    return Math.max(...years) - Math.min(...years) + 1;
+  }, [items]);
+
+  // Jump to the week containing a picked date. Snap to Monday and look
+  // for the item by its key (week_start ISO). If no exact match (out of
+  // range), pick the nearest by absolute distance — the user almost
+  // certainly meant the closest known week.
+  const handleJumpToDate = useCallback((iso: string) => {
+    if (!iso || items.length === 0) return;
+    const picked = new Date(iso + "T12:00:00");
+    if (isNaN(picked.getTime())) return;
+    const day = picked.getDay(); // 0=Sun..6=Sat
+    const offset = day === 0 ? -6 : 1 - day;
+    const monday = new Date(picked);
+    monday.setDate(picked.getDate() + offset);
+    const monStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+    const exact = items.find(it => it.key === monStr);
+    if (exact) { onItemClick(exact); return; }
+    // Nearest fallback — distance in days, lowest wins.
+    let best: NotesRailItem | null = null;
+    let bestDelta = Infinity;
+    const target = monday.getTime();
+    for (const it of items) {
+      const itDate = new Date(it.key + "T12:00:00").getTime();
+      const delta = Math.abs(itDate - target);
+      if (delta < bestDelta) { bestDelta = delta; best = it; }
+    }
+    if (best) onItemClick(best);
+  }, [items, onItemClick]);
 
   // Keyboard nav: ArrowUp / k → previous, ArrowDown / j → next. Skip when
   // focus is in a text input so the search bar isn't hijacked. Operates
@@ -676,7 +791,41 @@ export function NotesRail({
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
             {items.length} {entityType === "weekly_retro" ? "weeks" : "days"}
+            {yearsSpanned > 0 && (
+              <>
+                <span style={{ color: "var(--ink-4)", margin: "0 4px" }}>·</span>
+                <span style={{ color: "var(--ink-3)" }}>
+                  {yearsSpanned} {yearsSpanned === 1 ? "year" : "years"}
+                </span>
+              </>
+            )}
           </div>
+        </div>
+        {/* Calendar jump-to-date — native date input hidden behind an
+            icon button so the rail header doesn't visually scream. On
+            change, finds the week containing the picked date and fires
+            onItemClick with that item. Phase 6.5 may replace this with a
+            custom mini-calendar popover (design has one), but a native
+            picker is cheap and works across desktop+mobile. */}
+        <div style={{ position: "relative" }}>
+          <button onClick={() => dateInputRef.current?.showPicker?.() ?? dateInputRef.current?.click()}
+                  aria-label="Jump to date" title="Jump to date"
+                  data-testid="rail-jump-date-btn"
+                  style={{
+                    width: 28, height: 28, borderRadius: 8,
+                    background: "var(--surface)", border: "1px solid var(--border)",
+                    display: "grid", placeItems: "center", color: "var(--ink-3)",
+                    cursor: "pointer",
+                  }}>
+            <CalendarIcon />
+          </button>
+          <input ref={dateInputRef} type="date"
+                 aria-label="Jump to date input"
+                 data-testid="rail-jump-date-input"
+                 onChange={e => handleJumpToDate(e.target.value)}
+                 style={{
+                   position: "absolute", inset: 0, opacity: 0, pointerEvents: "none",
+                 }} />
         </div>
         {collapsible && (
           <button onClick={() => setCollapsed(true)}
