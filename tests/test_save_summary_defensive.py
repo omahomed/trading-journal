@@ -347,3 +347,56 @@ def test_save_summary_row_preserves_legitimate_string(monkeypatch):
                if "UPDATE trades_summary" in sql]
     sql, params = updates[0]
     assert params[14] == "br1.3 Cup w/o Handle"
+
+
+# ---------------------------------------------------------------------------
+# numpy scalar psycopg2 adapter (regression: schema "np" does not exist)
+# ---------------------------------------------------------------------------
+# Reproduces the user-reported failure: exercise-option passed a DataFrame-
+# sourced Stop_Loss (np.float64) into the parameterized UPDATE inside
+# _save_summary_with_closures_in_txn. psycopg2 has no built-in numpy
+# adapter; under numpy 2.0+, the repr() fallback emitted "np.float64(123.45)"
+# which Postgres parsed as schema "np" → InvalidSchemaName. db_layer
+# registers an adapter at import that converts numpy scalars to native
+# Python via .item() before psycopg2 sees them; these tests pin that down.
+
+
+def test_numpy_float64_adapts_to_native_repr():
+    """np.float64(123.45) must adapt to b'123.45', not b'np.float64(123.45)'."""
+    from psycopg2.extensions import adapt
+    quoted = adapt(np.float64(123.45)).getquoted()
+    assert quoted == b"123.45", f"unexpected adapter output: {quoted!r}"
+
+
+def test_numpy_int64_adapts_to_native_repr():
+    from psycopg2.extensions import adapt
+    quoted = adapt(np.int64(42)).getquoted()
+    assert quoted == b"42", f"unexpected adapter output: {quoted!r}"
+
+
+def test_numpy_bool_adapts_to_native_repr():
+    from psycopg2.extensions import adapt
+    quoted = adapt(np.bool_(True)).getquoted()
+    assert quoted in (b"true", b"True"), f"unexpected adapter output: {quoted!r}"
+
+
+def test_numpy_nan_adapts_to_null():
+    """NaN must become NULL (matches the pd.isna() → None behaviour the
+    per-row _clean helpers already use). Without this, np.float64('nan')
+    would emit literal 'nan' which Postgres rejects on numeric columns."""
+    from psycopg2.extensions import adapt
+    quoted = adapt(np.float64("nan")).getquoted()
+    assert quoted == b"NULL", f"NaN should map to NULL, got: {quoted!r}"
+
+
+def test_dataframe_sourced_numpy_value_adapts_correctly():
+    """End-to-end repro of the exercise-option failure shape: pull a value
+    via DataFrame.iloc[0].get(...) (the exact path opt_row.get('stop_loss')
+    takes) and verify the adapter handles it."""
+    from psycopg2.extensions import adapt
+    df = pd.DataFrame({"stop_loss": [195.50]})
+    val = df.iloc[0].get("stop_loss")
+    assert isinstance(val, np.floating), \
+        f"DataFrame should yield numpy scalar, got {type(val).__name__}"
+    quoted = adapt(val).getquoted()
+    assert quoted == b"195.5", f"unexpected adapter output: {quoted!r}"
