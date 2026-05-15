@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { api, getActivePortfolio, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
+import { api, getActivePortfolio, type NotesRailItem, type NotesRailYtdStats, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
@@ -9,6 +9,7 @@ import { WeeklySnapshot } from "./weekly-snapshot";
 import { SectionExpander } from "./section-expander";
 import { WeeklyInsightsTile } from "./weekly-insights-tile";
 import { FlightDeck } from "./flight-deck";
+import { NotesRail } from "./notes-rail";
 import { Icons } from "./icons";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
@@ -25,7 +26,6 @@ const BEHAVIOR_TAGS = [
 ];
 const WEEK_GRADES = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"];
 
-type Tab = "grade" | "history";
 type TickerGradeMap = Record<string, WeeklyRetroTickerGrade>;
 
 function gradeColor(g: string) {
@@ -38,7 +38,6 @@ function gradeColor(g: string) {
 export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [details, setDetails] = useState<TradeDetail[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<Tab>("grade");
   const [weekDate, setWeekDate] = useState(() => {
     const n = new Date();
     const day = n.getDay(); // 0=Sun
@@ -78,8 +77,18 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
 
-  // History — full retro rows keyed by week_start, populated from the API.
+  // Saved retros, keyed by week_start. Source of truth for the form
+  // hydration effect; the NotesRail uses a separate /list endpoint that
+  // returns sparkline + synthetic-empty-week rows in addition to these.
   const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
+
+  // Phase 6 — NotesRail data. Server-shaped (live computation, no
+  // snapshot columns); refetched after saves so a freshly-graded week's
+  // dot fills in. The rail itself owns the optimistic pin-toggle UI.
+  const [railItems, setRailItems] = useState<NotesRailItem[]>([]);
+  const [railYtdStats, setRailYtdStats] = useState<NotesRailYtdStats>({
+    total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0,
+  });
 
   // Dirty flag gates the debounced auto-save effect so the initial mount
   // and every cross-week hydration don't fire a wasteful PUT. Mutated by
@@ -88,6 +97,22 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
 
   const portfolio = getActivePortfolio();
 
+  // Week range — always snap to Monday (Mon=1...Sun=0 → treat as previous
+  // week's end). Computed eagerly before the effects below; previously
+  // lived further down the body, but Phase 6 deps reference monStr in
+  // useEffect arrays which require TDZ-clean declaration order.
+  const _wd = new Date(weekDate + "T12:00:00");
+  const _dayOfWeek = _wd.getDay(); // 0=Sun, 1=Mon...6=Sat
+  const _monOffset = _dayOfWeek === 0 ? -6 : 1 - _dayOfWeek;
+  const monday = new Date(_wd);
+  monday.setDate(_wd.getDate() + _monOffset);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const monStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+  const sunStr = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
+
   useEffect(() => {
     api.tradesRecent(portfolio, 1000).then(d => {
       setDetails(d.details);
@@ -95,26 +120,28 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     }).catch(() => setLoading(false));
   }, [portfolio]);
 
-  // Server fetch of all retros for this portfolio. Replaces the old
-  // localStorage.getItem("mo-weekly-retros"). On first successful load we
-  // also clear the old localStorage key so stale data doesn't resurface in
-  // a new browser context — Phase 0 cleanup, fresh start.
+  // Phase 6 — fetch the NotesRail envelope (replaces the old bare-array
+  // retros list that fed the deleted Review History tab). The rail rows
+  // carry id+week_grade+pinned for the form-hydration index, plus
+  // sparkline_value + has_content for the rail's own UI.
   //
-  // Functional MERGE (not replace): if a save completed while this list
-  // request was in flight, the server snapshot is stale and would clobber
-  // the just-saved row. Spreading prev LAST means any locally-saved row
-  // wins on a shared key.
+  // The legacy localStorage key cleanup carries over from Phase 0 to
+  // protect against stale "mo-weekly-retros" data resurfacing.
+  const refreshRail = useCallback(async () => {
+    if (!portfolio) return;
+    try {
+      const res = await api.weeklyRetroList(portfolio);
+      if ("error" in res) return;
+      setRailItems(res.weeks);
+      setRailYtdStats(res.ytd_stats);
+    } catch { /* silent — rail simply stays empty */ }
+  }, [portfolio]);
+
   useEffect(() => {
     if (!portfolio) return;
-    api.weeklyRetroList(portfolio).then(rows => {
-      setRetros(prev => {
-        const byWeek: Record<string, WeeklyRetro> = {};
-        for (const r of rows) byWeek[r.week_start] = r;
-        return { ...byWeek, ...prev };
-      });
-      try { localStorage.removeItem("mo-weekly-retros"); } catch { /* incognito */ }
-    }).catch(() => { /* silent — render blank state */ });
-  }, [portfolio]);
+    refreshRail();
+    try { localStorage.removeItem("mo-weekly-retros"); } catch { /* incognito */ }
+  }, [portfolio, refreshRail]);
 
   // Phase 5 — fetch the weekly performance metrics whenever the active
   // portfolio or week changes. Fires in parallel with the retros list
@@ -145,14 +172,28 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolio, weekDate]);
 
-  // Hydrate per-week local state when the user picks a different week.
-  //
-  // Hydration is a week-change event. It must NOT re-run on retros
-  // mutation, or post-save setRetros (and stale list responses arriving
-  // after a save) would overwrite in-flight local edits — see commit
-  // history for the regression. The body still reads retros[monStr]
-  // intentionally; we just don't want retros changes to RETRIGGER the
-  // effect.
+  // Phase 6 — fetch the single retro for the active week on demand.
+  // The Phase 0 bulk-list fetch is gone (its endpoint now returns the
+  // rail envelope without content fields), so each week-navigation
+  // pulls its own full retro. The hydration effect below reads from
+  // the `retros` map populated by this fetch.
+  useEffect(() => {
+    if (!portfolio || retros[monStr]) return;
+    let cancelled = false;
+    api.weeklyRetroGet(portfolio, monStr).then(res => {
+      if (cancelled || !res || "error" in res) return;
+      setRetros(prev => prev[monStr] ? prev : { ...prev, [monStr]: res });
+    }).catch(() => { /* silent — fresh blank state is fine */ });
+    return () => { cancelled = true; };
+  }, [portfolio, monStr, retros]);
+
+  // Hydrate per-week local state when the user picks a different week
+  // OR when the lazy retro fetch (above) populates retros[monStr] for
+  // the first time. The retros[monStr]?.id dep re-fires hydration exactly
+  // once per week — when the id appears. Subsequent setRetros calls
+  // (post-save updates) keep the id stable, so hydration doesn't
+  // re-trigger and clobber in-flight edits — the Phase 0 regression
+  // fence still holds.
   useEffect(() => {
     const existing = retros[monStr];
     if (existing) {
@@ -172,21 +213,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     // debounce useEffect sees dirtyRef.current = false and skips firing.
     dirtyRef.current = false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekDate]);
-
-  // Week range — always snap to Monday (Mon=1...Sun=0→treat as previous week's end)
-  const _wd = new Date(weekDate + "T12:00:00");
-  const _dayOfWeek = _wd.getDay(); // 0=Sun, 1=Mon...6=Sat
-  // Sunday (0) belongs to the PREVIOUS trading week → snap back to that Monday
-  const _monOffset = _dayOfWeek === 0 ? -6 : 1 - _dayOfWeek;
-  const monday = new Date(_wd);
-  monday.setDate(_wd.getDate() + _monOffset);
-  const friday = new Date(monday);
-  friday.setDate(monday.getDate() + 4);
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  const monStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
-  const sunStr = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
+  }, [weekDate, retros[monStr]?.id]);
 
   const weekTxns = useMemo(() => {
     return details.filter(d => {
@@ -244,9 +271,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     setRetros(prev => ({ ...prev, [result.week_start]: result }));
     setSaveMsg("Weekly retro saved!");
     setTimeout(() => setSaveMsg(""), 3000);
+    // Phase 6: refresh the rail so the just-saved week's draft dot fills
+    // in (or grade letter appears). Fire-and-forget; rail simply stays
+    // stale on failure.
+    refreshRail();
     return result;
   }, [portfolio, monStr, week_grade, best_decision, worst_decision,
-      rule_change, rule_change_text, weekly_thoughts, ticker_grades]);
+      rule_change, rule_change_text, weekly_thoughts, ticker_grades,
+      refreshRail]);
 
   // Debounced auto-save. dirtyRef gates the effect so the initial hydration
   // pass (and every cross-week switch) doesn't fire a wasteful PUT. Mirrors
@@ -261,12 +293,6 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   }, [week_grade, best_decision, worst_decision, rule_change, rule_change_text,
       weekly_thoughts, ticker_grades, handleSave]);
 
-  // History entries sorted newest first
-  const historyEntries = useMemo(() => {
-    return Object.entries(retros)
-      .sort((a, b) => b[0].localeCompare(a[0]));
-  }, [retros]);
-
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
 
   const inputStyle: React.CSSProperties = {
@@ -274,48 +300,41 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   };
 
   return (
-    <div style={{ animation: "slide-up 0.18s ease-out" }}>
-      <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          Weekly <em className="italic" style={{ color: navColor }}>Retro</em>
-        </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Grade execution · Identify patterns · Refine rules</div>
-        {/* Tag bar (Phase 1). entityId is null until the retro has been
-            saved at least once — the picker handles the disabled state. */}
-        <TagPicker
-          entityType="weekly_retro"
-          entityId={retros[monStr]?.id ?? null}
-          portfolio={portfolio}
-        />
-      </div>
+    <div className="flex" style={{ animation: "slide-up 0.18s ease-out", minHeight: "100%" }}>
+      {/* Phase 6 — NotesRail (left side). Hidden below lg via the
+          component's own wrapperClass. The rail navigates within the
+          page by mutating weekDate; pin toggles call the polymorphic
+          /api/pins/toggle endpoint and refresh the rail on success. */}
+      <NotesRail
+        entityType="weekly_retro"
+        items={railItems}
+        ytdStats={railYtdStats}
+        currentEntityKey={monStr}
+        onItemClick={(it) => setWeekDate(it.week_start)}
+        onPinToggle={async (entityId, currentlyPinned) => {
+          const res = await api.pinsToggle("weekly_retro", entityId);
+          if ("error" in res) throw new Error(res.error);
+          await refreshRail();
+        }}
+      />
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-5 pb-0.5" style={{ borderBottom: "2px solid var(--border)" }}>
-        {([
-          { key: "grade" as Tab, label: "Grade Week" },
-          { key: "history" as Tab, label: "Review History" },
-        ]).map(t => (
-          <button key={t.key} onClick={() => {
-            // Auto-save when switching away from grade tab. Fire-and-forget
-            // so the tab switch is not blocked on the network round-trip.
-            if (tab === "grade" && t.key === "history" && (week_grade || gradedTickers > 0)) {
-              handleSave().catch(() => { /* saveMsg already shown */ });
-            }
-            setTab(t.key);
-          }}
-                  className="px-4 py-2 text-[12px] font-medium transition-all"
-                  style={{
-                    color: tab === t.key ? navColor : "var(--ink-4)",
-                    borderBottom: tab === t.key ? `2px solid ${navColor}` : "2px solid transparent",
-                    marginBottom: -2,
-                  }}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <div className="flex-1 min-w-0 lg:pl-7">
+        <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
+          <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Weekly <em className="italic" style={{ color: navColor }}>Retro</em>
+          </h1>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Grade execution · Identify patterns · Refine rules</div>
+          {/* Tag bar (Phase 1). entityId is null until the retro has been
+              saved at least once — the picker handles the disabled state. */}
+          <TagPicker
+            entityType="weekly_retro"
+            entityId={retros[monStr]?.id ?? null}
+            portfolio={portfolio}
+          />
+        </div>
 
-      {/* ═══════════ GRADE WEEK TAB ═══════════ */}
-      {tab === "grade" && (
+        {/* Phase 6: Review History tab removed; the NotesRail on the left
+            is the canonical way to navigate past retros. */}
         <>
           {/* Week selector */}
           <div className="flex items-center gap-4 mb-5">
@@ -650,70 +669,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             Save Weekly Retro
           </button>
         </>
-      )}
-
-      {/* ═══════════ REVIEW HISTORY TAB ═══════════ */}
-      {tab === "history" && (
-        <div>
-          {historyEntries.length > 0 ? (
-            <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-              <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["Week Of", "Grade", "Best Decision", "Worst Decision", "Rule Change", "Tickers Graded"].map(h => (
-                      <th key={h} className="text-left text-[10px] uppercase tracking-[0.06em] font-semibold px-4 py-2.5 whitespace-nowrap"
-                          style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyEntries.map(([weekKey, data], i) => {
-                    const tg = data.ticker_grades || {};
-                    const gradedList = Object.entries(tg).filter(([, v]) => v.grade);
-                    return (
-                      <tr key={weekKey} style={{ borderBottom: i < historyEntries.length - 1 ? "1px solid var(--border)" : "none" }}
-                          className="transition-colors"
-                          onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td className="px-4 py-3 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{weekKey}</td>
-                        <td className="px-4 py-3">
-                          {data.week_grade && (
-                            <span className="text-[14px] font-bold" style={{ color: gradeColor(data.week_grade) }}>{data.week_grade}</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3" style={{ color: "var(--ink-3)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {data.best_decision || "—"}
-                        </td>
-                        <td className="px-4 py-3" style={{ color: "#e5484d", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {data.worst_decision || "—"}
-                        </td>
-                        <td className="px-4 py-3 text-[11px]" style={{ color: data.rule_change ? "#e5484d" : "var(--ink-4)" }}>
-                          {data.rule_change ? data.rule_change_text || "Yes" : "—"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1 flex-wrap">
-                            {gradedList.map(([t, v]) => (
-                              <span key={t} className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
-                                    style={{ background: `${gradeColor(v.grade)}15`, color: gradeColor(v.grade) }}>
-                                {t}: {v.grade.split(" ")[0]}
-                              </span>
-                            ))}
-                            {gradedList.length === 0 && <span style={{ color: "var(--ink-4)" }}>—</span>}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="text-center py-16 text-sm" style={{ color: "var(--ink-4)" }}>No weekly retros saved yet. Start by grading this week.</div>
-          )}
-        </div>
-      )}
+      </div>
     </div>
   );
 }

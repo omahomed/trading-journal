@@ -68,6 +68,39 @@ export interface WeeklyRetroTickerGrade {
   notes: string;
 }
 
+// Phase 6 — NotesRail (left-rail navigator). Entity-agnostic shape so
+// the same component mounts on Daily Report in Phase 7. The list endpoint
+// returns one row per week from inception to "now"; synthetic empty
+// rows (id: null, has_content: false) cover Mondays without a retro so
+// the sparkline grid is continuous.
+export type NotesRailEntityType = "weekly_retro" | "daily_journal";
+
+export interface NotesRailItem {
+  id: number | null;            // null on synthetic empty rows
+  key: string;                  // week_start ISO; stable id for activeKey
+  week_start: string;
+  week_end: string;
+  year: number;
+  month: number;                // 1..12
+  title: string;                // "May 11 – May 15"
+  has_content: boolean;         // false → draft-dot styling
+  pinned: boolean;
+  sparkline_value: number | null;   // weekly_return_pct
+  week_grade: string | null;
+}
+
+export interface NotesRailYtdStats {
+  total_weeks: number;
+  weeks_graded: number;
+  avg_grade: string | null;     // letter; null when weeks_graded == 0
+  weeks_pinned: number;
+}
+
+export interface NotesRailListResponse {
+  weeks: NotesRailItem[];
+  ytd_stats: NotesRailYtdStats;
+}
+
 // Phase 5 — performance metrics powering the Weekly Retro top-tile row.
 // Live-computed server-side by /api/analytics/weekly-metrics; matches the
 // shape returned by nlv_service.weekly_metrics.
@@ -401,10 +434,25 @@ export const api = {
       `/api/weekly-retros?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
     ),
 
-  weeklyRetroList: (portfolio: string, limit = 200) =>
-    fetchJSON<WeeklyRetro[]>(
-      `/api/weekly-retros/list?portfolio=${encodeURIComponent(portfolio)}&limit=${limit}`
+  // Phase 6 — wrapped envelope for the NotesRail. Shape changed from a
+  // bare array (used by the now-removed Review History tab) to
+  // {weeks, ytd_stats}. Coordinated cutover; no surviving consumer of
+  // the old shape.
+  weeklyRetroList: (portfolio: string) =>
+    fetchJSON<NotesRailListResponse | { error: string }>(
+      `/api/weekly-retros/list?portfolio=${encodeURIComponent(portfolio)}`
     ),
+
+  // Phase 6 — polymorphic pin toggle. Idempotent server-side; the
+  // response is the NEW pinned state. UI should call this with the
+  // CURRENT state's inverse and trust the response (optimistic update
+  // with rollback on rejection).
+  pinsToggle: (entityType: "weekly_retro" | "daily_journal", entityId: number) =>
+    fetchWithAuth(`${API_BASE}/api/pins/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_type: entityType, entity_id: entityId }),
+    }).then(r => r.json()) as Promise<{ pinned: boolean } | { error: string }>,
 
   weeklyRetroUpsert: (
     payload: Omit<WeeklyRetro, "id" | "created_at" | "updated_at">,

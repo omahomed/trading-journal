@@ -32,11 +32,14 @@ vi.mock("@/lib/api", () => ({
   api: {
     tradesRecent: vi.fn(),
     weeklyRetroList: vi.fn(),
+    weeklyRetroGet: vi.fn(),
     weeklyRetroUpsert: vi.fn(),
     // Phase 5: WeeklyRetro fetches weekly metrics for the top tile row on
     // mount + week change. Default to a benign zero response so these
     // existing tests don't fight the new fetch.
     weeklyMetrics: vi.fn(),
+    // Phase 6: NotesRail's pin toggle endpoint.
+    pinsToggle: vi.fn(),
     // Phase 1: WeeklyRetro mounts <TagPicker> which fetches these on mount
     // once a retro has been saved (entityId != null). Stub to empty arrays
     // so the picker's mount fetch doesn't blow up these unrelated tests.
@@ -51,14 +54,20 @@ import { WeeklyRetro } from "./weekly-retro";
 
 const mTradesRecent = vi.mocked(api.tradesRecent);
 const mWeeklyList   = vi.mocked(api.weeklyRetroList);
+const mWeeklyGet    = vi.mocked(api.weeklyRetroGet);
 const mWeeklyUpsert = vi.mocked(api.weeklyRetroUpsert);
 const mWeeklyMetrics   = vi.mocked(api.weeklyMetrics);
+const mPinsToggle      = vi.mocked(api.pinsToggle);
 const mListTags        = vi.mocked(api.listTags);
 const mListAssignments = vi.mocked(api.listTagAssignments);
 
 function setupDefaults() {
   mTradesRecent.mockResolvedValue({ details: [], lot_closures: [] } as any);
-  mWeeklyList.mockResolvedValue([]);
+  // Phase 6 — list endpoint returns wrapped envelope shape now.
+  mWeeklyList.mockResolvedValue({
+    weeks: [],
+    ytd_stats: { total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0 },
+  } as any);
   mWeeklyUpsert.mockResolvedValue({
     id: 1, portfolio: "CanSlim", week_start: "2026-05-11",
     week_grade: "B+", best_decision: "good", worst_decision: "bad",
@@ -73,6 +82,11 @@ function setupDefaults() {
     week_start: "2026-05-11", week_end: "2026-05-15",
     as_of: "2026-05-14T00:00:00",
   } as any);
+  // Phase 6: weeklyRetroGet returns the not_found shape by default so the
+  // lazy fetch effect resolves without populating retros[monStr] (test
+  // setup mirrors the "blank week" UX). Individual tests override.
+  mWeeklyGet.mockResolvedValue({ error: "not_found" } as any);
+  mPinsToggle.mockResolvedValue({ pinned: true } as any);
   mListTags.mockResolvedValue([]);
   mListAssignments.mockResolvedValue([]);
 }
@@ -119,14 +133,18 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
   });
 
   test("hydration alone does not fire an auto-save (dirty flag guards it)", async () => {
-    mWeeklyList.mockResolvedValue([{
+    // Phase 6: list endpoint returns wrapped envelope; the per-week
+    // fetch (weeklyRetroGet) is what hydrates the form. Whether or not
+    // a retro exists for the current week, hydration on mount must not
+    // flip dirtyRef.
+    mWeeklyGet.mockResolvedValue({
       id: 7, portfolio: "CanSlim", week_start: "2026-05-04",
       week_grade: "A", best_decision: "x", worst_decision: "y",
       rule_change: false, rule_change_text: "",
       weekly_thoughts: "",
       ticker_grades: {},
       created_at: "2026-05-05T00:00:00", updated_at: "2026-05-05T00:00:00",
-    }] as any);
+    } as any);
 
     await mountAndSettle();
     // Wait past the 800ms debounce. dirtyRef=false on mount, so no save.
@@ -200,8 +218,11 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
   // keys), and hydration deps no longer include retros (so post-save
   // setRetros doesn't retrigger the effect at all).
   test("preserves locally-saved row when stale list response arrives after save", async () => {
-    let resolveList: (rows: any[]) => void = () => { /* placeholder */ };
-    const listPromise = new Promise<any[]>(r => { resolveList = r; });
+    // Phase 6: list endpoint returns envelope. The "stale response wipes
+    // saved row" regression still matters — after save, the rail's
+    // post-save refresh shouldn't clobber the in-flight local edits.
+    let resolveList: (res: any) => void = () => { /* placeholder */ };
+    const listPromise = new Promise<any>(r => { resolveList = r; });
     mWeeklyList.mockReturnValueOnce(listPromise as any);
 
     // Echo whatever was saved so the response shape matches the typed input.
@@ -236,10 +257,15 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
     );
     expect(mWeeklyUpsert.mock.calls[0][0].best_decision).toBe("saved before list");
 
-    // NOW the stale list response arrives — empty (snapshot taken
-    // before the save reached the DB). Pre-fix this would clobber the
-    // saved row and trigger hydration's else-branch wipe.
-    await act(async () => { resolveList([]); });
+    // NOW the stale list response arrives — empty envelope (snapshot
+    // taken before the save reached the DB). Pre-fix this would clobber
+    // the saved row and trigger hydration's else-branch wipe.
+    await act(async () => {
+      resolveList({
+        weeks: [],
+        ytd_stats: { total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0 },
+      });
+    });
 
     // Field must still show the typed value — not be wiped.
     await waitFor(() => {
@@ -325,14 +351,15 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
   // payload inclusion on save.
 
   test("Weekly Thoughts hydrates from API response into the editor", async () => {
-    mWeeklyList.mockResolvedValue([{
+    // Phase 6: hydration source is the per-week GET, not the list.
+    mWeeklyGet.mockResolvedValue({
       id: 7, portfolio: "CanSlim", week_start: "2026-05-04",
       week_grade: "A", best_decision: "", worst_decision: "",
       rule_change: false, rule_change_text: "",
       weekly_thoughts: "<p>preloaded reflection</p>",
       ticker_grades: {},
       created_at: "2026-05-05T00:00:00", updated_at: "2026-05-05T00:00:00",
-    }] as any);
+    } as any);
 
     await mountAndSettle();
     // Pick the current Monday (state init defaults to it). The hydration
