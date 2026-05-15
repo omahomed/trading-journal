@@ -118,6 +118,15 @@ export interface NotesRailListResponse {
   ytd_stats: NotesRailYtdStats;
 }
 
+// Phase 7 — daily report rail envelope. Same item shape as the weekly
+// envelope (NotesRailItem), but the top-level key is "days" (the rail
+// component branches on entityType for date-label copy). YTD stats reuse
+// the weekly field names ("weeks_*") to keep NotesRailYtdStats compat.
+export interface DailyJournalListResponse {
+  days: NotesRailItem[];
+  ytd_stats: NotesRailYtdStats;
+}
+
 // Phase 5 — performance metrics powering the Weekly Retro top-tile row.
 // Live-computed server-side by /api/analytics/weekly-metrics; matches the
 // shape returned by nlv_service.weekly_metrics.
@@ -189,6 +198,25 @@ export interface SnapshotRow {
   created_at: string;
 }
 
+// Phase 7 — Daily Journal Captures (Migration 031). Mirrors SnapshotRow
+// byte-for-byte except the FK is named daily_journal_id. The shared
+// <SnapshotGallery> consumes both via an entityType prop and a union row
+// type via DailyJournalCaptureRow | SnapshotRow.
+export interface DailyJournalCaptureRow {
+  id: number;
+  daily_journal_id: number;
+  storage_ref: string;
+  view_url: string;
+  file_name: string | null;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  width: number | null;
+  height: number | null;
+  sort_order: number;
+  caption: string;
+  created_at: string;
+}
+
 // Tags — Phase 1 (Migration 026). Portfolio-scoped, polymorphic
 // (entity_type ∈ {weekly_retro, daily_journal, trades_summary}). Color is a
 // closed-palette key matching TAG_PALETTE in src/lib/tag-palette.ts; see
@@ -213,6 +241,11 @@ export interface TagAssignment {
 }
 
 export interface JournalHistoryPoint {
+  // Phase 7 — journal row PK. Present on every row from the backend after
+  // migration 031; null only on synthetic / pre-migration data the
+  // frontend should not normally see. TagPicker, NotesRail, and the
+  // SnapshotGallery on the daily report page bind to this as entity_id.
+  id: number | null;
   day: string;
   end_nlv: number;
   daily_pct_change: number;
@@ -221,6 +254,11 @@ export interface JournalHistoryPoint {
   ndx_ltd: number;
   pct_invested: number;
   portfolio_heat: number;
+  // Phase 7 — rich-text body of the Daily Thoughts editor (migration 031).
+  // Backend column is NOT NULL DEFAULT '' so the value is never null on
+  // post-migration rows. Marked optional for the migration-window case
+  // where the column might be absent from the SELECT (pre-031 DBs).
+  daily_thoughts?: string;
   [key: string]: any;
 }
 
@@ -546,6 +584,56 @@ export const api = {
     form.append("portfolio", portfolio);
     return fetchWithAuth(
       `${API_BASE}/api/weekly-retros/${retroId}/thoughts-images`,
+      { method: "POST", body: form },
+    ).then(r => r.json()) as Promise<{ view_url: string } | { error: string; detail?: any }>;
+  },
+
+  // Phase 7 — Daily Journal Captures (Migration 031). Mirrors the weekly
+  // retro snapshot endpoints. The shared <SnapshotGallery> branches on
+  // entityType to pick the right method here.
+  dailyJournalList: (portfolio: string) =>
+    fetchJSON<DailyJournalListResponse | { error: string }>(
+      `/api/daily-journals/list?portfolio=${encodeURIComponent(portfolio)}`
+    ),
+
+  uploadDailyJournalCapture: (
+    journalId: number,
+    file: File,
+    portfolio: string = getActivePortfolio(),
+  ) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("portfolio", portfolio);
+    return fetchWithAuth(
+      `${API_BASE}/api/daily-journals/${journalId}/captures`,
+      { method: "POST", body: form },
+    ).then(r => r.json()) as Promise<DailyJournalCaptureRow | { error: string; detail?: any }>;
+  },
+
+  listDailyJournalCaptures: (journalId: number, portfolio: string = getActivePortfolio()) =>
+    fetchJSON<DailyJournalCaptureRow[] | { error: string }>(
+      `/api/daily-journals/${journalId}/captures?portfolio=${encodeURIComponent(portfolio)}`,
+    ),
+
+  deleteDailyJournalCapture: (captureId: number) =>
+    fetchWithAuth(
+      `${API_BASE}/api/daily-journals/captures/${captureId}`,
+      { method: "DELETE" },
+    ).then(r => r.json()) as Promise<{ deleted: true; id: number } | { error: string }>,
+
+  // Phase 7 — inline image paste into Daily Thoughts editor. Same shape
+  // as uploadWeeklyThoughtsImage; the shared <ThoughtsEditor> branches
+  // on entityType to pick which method to invoke.
+  uploadDailyThoughtsImage: (
+    journalId: number,
+    file: File,
+    portfolio: string = getActivePortfolio(),
+  ) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("portfolio", portfolio);
+    return fetchWithAuth(
+      `${API_BASE}/api/daily-journals/${journalId}/thoughts-images`,
       { method: "POST", body: form },
     ).then(r => r.json()) as Promise<{ view_url: string } | { error: string; detail?: any }>;
   },
