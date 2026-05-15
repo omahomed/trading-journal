@@ -11,7 +11,7 @@ import { WeeklySnapshot } from "./weekly-snapshot";
 import { SectionExpander } from "./section-expander";
 import { WeeklyInsightsTile } from "./weekly-insights-tile";
 import { FlightDeck } from "./flight-deck";
-import { NotesRail } from "./notes-rail";
+import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import { CloseTheWeek, type CloseTheWeekState } from "./close-the-week";
 import { Icons } from "./icons";
 
@@ -93,6 +93,9 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   // snapshot columns); refetched after saves so a freshly-graded week's
   // dot fills in. The rail itself owns the optimistic pin-toggle UI.
   const [railItems, setRailItems] = useState<NotesRailItem[]>([]);
+  // Phase 8 — imperative ref so TagBar can fire a rail refetch on
+  // successful tag mutations.
+  const railRef = useRef<NotesRailHandle>(null);
   const [railYtdStats, setRailYtdStats] = useState<NotesRailYtdStats>({
     total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0,
   });
@@ -387,6 +390,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
           page by mutating weekDate; pin toggles call the polymorphic
           /api/pins/toggle endpoint and refresh the rail on success. */}
       <NotesRail
+        ref={railRef}
         entityType="weekly_retro"
         items={railItems}
         ytdStats={railYtdStats}
@@ -397,6 +401,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
           if ("error" in res) throw new Error(res.error);
           await refreshRail();
         }}
+        onRefresh={refreshRail}
       />
 
       <div className="flex-1 min-w-0 lg:pl-7">
@@ -411,6 +416,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             entityType="weekly_retro"
             entityId={retros[monStr]?.id ?? null}
             portfolio={portfolio}
+            onTagsChanged={() => railRef.current?.refresh()}
           />
         </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { formatCurrency } from "@/lib/format";
 import type {
   NotesRailEntityType, NotesRailItem, NotesRailItemTag, NotesRailYtdStats,
@@ -28,7 +28,20 @@ export interface NotesRailProps {
   onItemClick: (item: NotesRailItem) => void;
   onPinToggle: (entityId: number, currentlyPinned: boolean) => void | Promise<void>;
   collapsible?: boolean;
+  /** Phase 8 — parent-supplied refetch function. Invoked by the
+   *  imperative `refresh()` method on the forwarded ref. NotesRail
+   *  itself is a controlled component (parent owns items / ytdStats);
+   *  this prop lets external surfaces (e.g. TagBar tag-change) tell
+   *  the parent "refetch your rail data" without re-plumbing a
+   *  parent-side ref. Optional; omitting it makes `refresh()` a no-op. */
+  onRefresh?: () => void | Promise<void>;
 }
+
+/** Phase 8 — imperative handle surface exposed to refs. Stable shape so
+ *  consumers can type their refs cleanly. */
+export type NotesRailHandle = {
+  refresh: () => void;
+};
 
 function fmtPct(v: number): string {
   const sign = v > 0 ? "+" : "";
@@ -969,10 +982,20 @@ function FilterBar({
 
 // ─── Main export ───────────────────────────────────────────────────────
 
-export function NotesRail({
+export const NotesRail = forwardRef<NotesRailHandle, NotesRailProps>(function NotesRail({
   entityType, items, ytdStats, currentEntityKey,
   onItemClick, onPinToggle, collapsible = true,
-}: NotesRailProps) {
+  onRefresh,
+}, ref) {
+  // Phase 8 — expose `refresh()` to forwarded refs. Delegates to the
+  // parent-owned refetch via the `onRefresh` prop. NotesRail itself
+  // does NOT fetch anything on mount (it's a controlled component),
+  // so calling refresh() from a fresh ref will only fire when onRefresh
+  // is provided — there is no double-fetch surface.
+  useImperativeHandle(ref, () => ({
+    refresh: () => { void onRefresh?.(); },
+  }), [onRefresh]);
+
   const collapseKey = COLLAPSED_KEY_PREFIX + entityType + "-collapsed";
   const folderKey   = COLLAPSED_KEY_PREFIX + entityType + "-collapsed-folders";
 
@@ -1398,4 +1421,4 @@ export function NotesRail({
       </div>
     </aside>
   );
-}
+});

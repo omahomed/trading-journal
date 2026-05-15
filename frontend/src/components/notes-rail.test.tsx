@@ -1,7 +1,8 @@
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { useRef } from "react";
 
-import { NotesRail } from "./notes-rail";
+import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import type { NotesRailItem, NotesRailYtdStats } from "@/lib/api";
 
 // Minimal localStorage shim — jsdom usually has one, but some tests run
@@ -1003,5 +1004,58 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
                      currentEntityKey={null}
                      onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
     expect(screen.queryByTestId("rail-filter-bar")).toBeNull();
+  });
+
+  // ============================================================
+  // Phase 8 — imperative refresh() handle
+  // ============================================================
+  // The rail is a controlled component (parent owns items + ytdStats),
+  // so refresh() doesn't fetch internally — it delegates to the
+  // parent-supplied onRefresh prop. Verifies the imperative handle
+  // wiring + that mount does NOT spuriously call onRefresh.
+
+  test("calling refresh() via ref invokes onRefresh", async () => {
+    const onRefresh = vi.fn();
+    const items = [item({ id: 60, key: "2026-05-14", year: 2026, month: 5 })];
+    // Wrapper component captures the ref so we can call refresh() from
+    // outside the render tree.
+    let railRef: React.RefObject<NotesRailHandle | null> | null = null;
+    function Harness() {
+      railRef = useRef<NotesRailHandle>(null);
+      return (
+        <NotesRail ref={railRef} entityType="daily_journal"
+                   items={items} ytdStats={EMPTY_STATS}
+                   currentEntityKey={null}
+                   onItemClick={vi.fn()} onPinToggle={vi.fn()}
+                   onRefresh={onRefresh} />
+      );
+    }
+    render(<Harness />);
+    // Mount did not invoke onRefresh — refresh() only fires when called.
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => { railRef!.current?.refresh(); });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+
+    // Calling refresh() again triggers another invocation; no debouncing.
+    await act(async () => { railRef!.current?.refresh(); });
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  test("refresh() is a no-op when onRefresh is omitted (no crash)", async () => {
+    let railRef: React.RefObject<NotesRailHandle | null> | null = null;
+    function Harness() {
+      railRef = useRef<NotesRailHandle>(null);
+      return (
+        <NotesRail ref={railRef} entityType="daily_journal"
+                   items={[]} ytdStats={EMPTY_STATS}
+                   currentEntityKey={null}
+                   onItemClick={vi.fn()} onPinToggle={vi.fn()} />
+      );
+    }
+    render(<Harness />);
+    // Should not throw — the conditional inside refresh() handles undefined.
+    await act(async () => { railRef!.current?.refresh(); });
+    // Implicitly: no exception thrown.
   });
 });
