@@ -360,19 +360,21 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               Weekly metrics unavailable: {metricsError}
             </div>
           )}
-          <div data-testid="weekly-insights-row" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-            <WeeklyInsightsTile
-              label="Weekly P&L"
-              value={metrics?.weekly_pnl ?? null}
-              formatType="currency"
-              gradient="linear-gradient(135deg, #10b981, #34d399)"
-              loading={metricsLoading && !metrics}
-            />
+          {/* Consolidated 3-tile layout. Every tile passes a subtitle
+              so the primary numbers vertically align across all three
+              (flex-col justify-between needs the same number of children
+              in each tile). Previously: 5 tiles with only Win Rate
+              carrying a subtitle, causing its primary to shift up while
+              the other four sat lower. */}
+          <div data-testid="weekly-insights-row" className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
             <WeeklyInsightsTile
               label="Weekly Return %"
               value={metrics?.weekly_return_pct ?? null}
               formatType="percent"
-              gradient="linear-gradient(135deg, #0d6efd, #3b82f6)"
+              gradient="linear-gradient(135deg, #10b981, #34d399)"
+              subtitle={metrics?.weekly_pnl != null
+                ? formatCurrency(metrics.weekly_pnl, { showSign: true })
+                : undefined}
               loading={metricsLoading && !metrics}
             />
             <WeeklyInsightsTile
@@ -380,13 +382,9 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               value={metrics?.ytd_pct ?? null}
               formatType="percent"
               gradient="linear-gradient(135deg, #8b5cf6, #a78bfa)"
-              loading={metricsLoading && !metrics}
-            />
-            <WeeklyInsightsTile
-              label="LTD %"
-              value={metrics?.ltd_pct ?? null}
-              formatType="percent"
-              gradient="linear-gradient(135deg, #ec4899, #f472b6)"
+              subtitle={metrics?.ltd_pct != null
+                ? `LTD ${metrics.ltd_pct >= 0 ? "+" : ""}${metrics.ltd_pct.toFixed(2)}%`
+                : undefined}
               loading={metricsLoading && !metrics}
             />
             <WeeklyInsightsTile
@@ -397,7 +395,7 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
               subtitle={metrics
                 ? (metrics.win_rate.total === 0
                   ? "No closes YTD"
-                  : `${metrics.win_rate.wins}W / ${metrics.win_rate.losses}L / ${metrics.win_rate.flat}F of ${metrics.win_rate.total}`)
+                  : `${metrics.win_rate.wins}W · ${metrics.win_rate.losses}L · ${metrics.win_rate.flat}F of ${metrics.win_rate.total}`)
                 : undefined}
               loading={metricsLoading && !metrics}
             />

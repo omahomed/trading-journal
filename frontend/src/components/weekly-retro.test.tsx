@@ -422,7 +422,7 @@ describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
     try { localStorage.clear(); } catch { /* shim */ }
   });
 
-  test("renders the 5-tile gradient row with metrics from the API", async () => {
+  test("renders the 3-tile gradient row with primary + subtitle on each tile", async () => {
     mWeeklyMetrics.mockResolvedValue({
       weekly_pnl: 21430,
       weekly_return_pct: 4.62,
@@ -435,23 +435,53 @@ describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
 
     await mountAndSettle();
 
-    // All 5 labels appear.
-    await screen.findByText("Weekly P&L");
-    expect(screen.getByText("Weekly Return %")).toBeInTheDocument();
+    // 3 tile labels (was 5; Weekly P&L and LTD % are now subtitles
+    // under Weekly Return % and YTD % respectively).
+    await screen.findByText("Weekly Return %");
     expect(screen.getByText("YTD %")).toBeInTheDocument();
-    expect(screen.getByText("LTD %")).toBeInTheDocument();
     expect(screen.getByText("Win Rate")).toBeInTheDocument();
+    expect(screen.queryByText("Weekly P&L")).toBeNull();
+    expect(screen.queryByText("LTD %")).toBeNull();
 
-    // Formatted values from the API. Currency uses showSign, percents use
-    // two decimals + leading sign.
-    await waitFor(() => expect(screen.getByText(/\+\$21,430/)).toBeInTheDocument());
-    expect(screen.getByText("+4.62%")).toBeInTheDocument();
+    // Primary values on each tile.
+    await waitFor(() => expect(screen.getByText("+4.62%")).toBeInTheDocument());
     expect(screen.getByText("+12.30%")).toBeInTheDocument();
-    expect(screen.getByText("+87.40%")).toBeInTheDocument();
-    // Win Rate value = rate * 100 → 78.00%.
     expect(screen.getByText("+78.00%")).toBeInTheDocument();
-    // Subtitle uses the locked "{W}W / {L}L / {F}F of {total}" format.
-    expect(screen.getByText("14W / 4L / 1F of 19")).toBeInTheDocument();
+
+    // Subtitles — each tile carries one, primaries align vertically.
+    // Tile 1 subtitle: Weekly P&L $ with sign + full precision.
+    expect(screen.getByText(/\+\$21,430/)).toBeInTheDocument();
+    // Tile 2 subtitle: "LTD +87.40%".
+    expect(screen.getByText(/LTD \+87\.40%/)).toBeInTheDocument();
+    // Tile 3 subtitle: existing W·L·F·of breakdown (separator updated
+    // from "/" to "·" for visual consistency with the rail stats line).
+    expect(screen.getByText("14W · 4L · 1F of 19")).toBeInTheDocument();
+  });
+
+  test("Weekly Return % tile subtitle renders the Weekly P&L $ with sign", async () => {
+    mWeeklyMetrics.mockResolvedValue({
+      weekly_pnl: -3210, weekly_return_pct: -1.2,
+      ytd_pct: 5.0, ltd_pct: 20.0,
+      win_rate: { rate: 0, wins: 0, losses: 0, flat: 0, total: 0 },
+      week_start: "2026-05-11", week_end: "2026-05-15",
+      as_of: "2026-05-14T00:00:00",
+    } as any);
+    await mountAndSettle();
+    // Negative P&L renders as the subtitle on the Weekly Return % tile.
+    await waitFor(() => expect(screen.getByText(/-\$3,210/)).toBeInTheDocument());
+  });
+
+  test("YTD % tile subtitle renders LTD prefix label", async () => {
+    mWeeklyMetrics.mockResolvedValue({
+      weekly_pnl: 100, weekly_return_pct: 1.0,
+      ytd_pct: 12.3, ltd_pct: -8.45,
+      win_rate: { rate: 0, wins: 0, losses: 0, flat: 0, total: 0 },
+      week_start: "2026-05-11", week_end: "2026-05-15",
+      as_of: "2026-05-14T00:00:00",
+    } as any);
+    await mountAndSettle();
+    // Negative LTD: no "+" sign, includes "LTD" prefix.
+    await waitFor(() => expect(screen.getByText(/LTD -8\.45%/)).toBeInTheDocument());
   });
 
   test("calls api.weeklyMetrics with the active portfolio and current Monday", async () => {
