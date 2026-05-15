@@ -26,9 +26,7 @@ export function PwaRegister() {
           // Don't surface this to the user — registration failure
           // degrades the PWA gracefully (offline support disappears,
           // everything else still works). Log only in dev.
-          if (process.env.NODE_ENV !== "production") {
-            log.warn("pwa", "service worker registration failed", err);
-          }
+          log.warn.devOnly("pwa", "service worker registration failed", err);
         });
     };
 

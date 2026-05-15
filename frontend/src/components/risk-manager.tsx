@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -38,7 +39,10 @@ export function RiskManager({ navColor }: { navColor: string }) {
     api.journalHistory(getActivePortfolio(), 0).then(h => {
       setHistory(h as JournalHistoryPoint[]);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((err) => {
+      log.error("risk-manager", "journalHistory fetch failed", err);
+      setLoading(false);
+    });
   }, []);
 
   const metrics = useMemo(() => {

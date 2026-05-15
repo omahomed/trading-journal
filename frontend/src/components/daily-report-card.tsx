@@ -138,9 +138,18 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory(portfolio, 0).catch(() => []),
-      api.tradesRecent(portfolio, 500).catch(() => ({ details: [], lot_closures: [] })),
-      api.tradesClosed(portfolio, 500).catch(() => []),
+      api.journalHistory(portfolio, 0).catch((err) => {
+        log.error("daily-report-card", "journalHistory fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(portfolio, 500).catch((err) => {
+        log.error("daily-report-card", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.tradesClosed(portfolio, 500).catch((err) => {
+        log.error("daily-report-card", "tradesClosed fetch failed", err);
+        return [];
+      }),
     ]).then(([hist, det, closed]) => {
       const h = (hist as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
       setHistory(h);
@@ -163,7 +172,10 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
     api.listEodSnapshots(selectedDate, portfolio).then(res => {
       if (Array.isArray(res)) setSnapshots(res as any);
       else setSnapshots([]);
-    }).catch(() => setSnapshots([]));
+    }).catch((err) => {
+      log.error("daily-report-card", "listEodSnapshots fetch failed", err);
+      setSnapshots([]);
+    });
     setThoughtsMsg(null);
     setRecapDirty(false);
     dailyThoughtsDirtyRef.current = false;

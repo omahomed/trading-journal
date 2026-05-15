@@ -246,10 +246,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
     try {
       const [openTrades, details, nlv, journal] = await Promise.all([
-        api.tradesOpen(getActivePortfolio()).catch(() => []),
-        api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
-        activeId != null ? api.portfolioNlv(activeId).catch(() => null) : Promise.resolve(null),
-        api.journalLatest(getActivePortfolio()).catch(() => null),
+        api.tradesOpen(getActivePortfolio()).catch((err) => {
+          log.error("active-campaign", "tradesOpen fetch failed", err);
+          return [];
+        }),
+        api.tradesOpenDetails(getActivePortfolio()).catch((err) => {
+          log.error("active-campaign", "tradesOpenDetails fetch failed", err);
+          return { details: [], lot_closures: [] };
+        }),
+        activeId != null ? api.portfolioNlv(activeId).catch((err) => {
+          log.error("active-campaign", "portfolioNlv fetch failed", err);
+          return null;
+        }) : Promise.resolve(null),
+        api.journalLatest(getActivePortfolio()).catch((err) => {
+          log.error("active-campaign", "journalLatest fetch failed", err);
+          return null;
+        }),
       ]);
       const journalNlv = journal ? parseFloat(String((journal as any).end_nlv || 0)) : 0;
       const derivedNlv = nlv && typeof nlv === "object" && !("error" in nlv)

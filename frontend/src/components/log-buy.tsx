@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
 import { StrategyChip } from "./strategy-chip";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -268,13 +269,28 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.journalLatest(getActivePortfolio()).catch((err) => {
+        log.error("log-buy", "journalLatest fetch failed", err);
+        return { end_nlv: 100000 };
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("log-buy", "tradesOpen fetch failed", err);
+        return [];
+      }),
       // V11 MCT state drives sizing mode. Replaces the legacy
       // /api/market/mfactor MA-stack heuristic. We only read `state`.
-      api.rallyPrefix().catch(() => ({ prefix: "" })),
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
-      api.listStrategies({ active: true }).catch(() => [] as Strategy[]),
+      api.rallyPrefix().catch((err) => {
+        log.error("log-buy", "rallyPrefix fetch failed", err);
+        return { prefix: "" };
+      }),
+      api.tradesOpenDetails(getActivePortfolio()).catch((err) => {
+        log.error("log-buy", "tradesOpenDetails fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.listStrategies({ active: true }).catch((err) => {
+        log.error("log-buy", "listStrategies fetch failed", err);
+        return [] as Strategy[];
+      }),
     ]).then(([j, open, rally, det, strats]) => {
       setEquity(parseFloat(String(j.end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
@@ -348,7 +364,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
         if (data && !("error" in data)) {
           setPrice(String(data.price));
         }
-      }).catch(() => {}).finally(() => setFetchingPrice(false));
+      }).catch((err) => {
+        log.debug.devOnly("log-buy", "priceLookup missing (expected)", err);
+      }).finally(() => setFetchingPrice(false));
     }, 600);
     return () => clearTimeout(timeout);
   }, [ticker, actionType]);

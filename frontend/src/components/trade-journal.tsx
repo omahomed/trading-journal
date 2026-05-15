@@ -589,11 +589,20 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
   const loadOpen = useCallback(async () => {
     const [open, openDet, journal] = await Promise.all([
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("trade-journal", "tradesOpen fetch failed", err);
+        return [];
+      }),
       // catch fallback shape mirrors success shape so the destructuring
       // below doesn't crash on a fetch error.
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpenDetails(getActivePortfolio()).catch((err) => {
+        log.error("trade-journal", "tradesOpenDetails fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.journalLatest(getActivePortfolio()).catch((err) => {
+        log.error("trade-journal", "journalLatest fetch failed", err);
+        return { end_nlv: 100000 };
+      }),
     ]);
     const openArr = open as TradePosition[];
     setOpenTrades(openArr);
@@ -615,8 +624,14 @@ export function TradeJournal({ navColor }: { navColor: string }) {
 
   const loadClosed = useCallback(async () => {
     const [closed, recent] = await Promise.all([
-      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 5000).catch(() => ({ details: [], lot_closures: [] })),
+      api.tradesClosed(getActivePortfolio(), 500).catch((err) => {
+        log.error("trade-journal", "tradesClosed fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(getActivePortfolio(), 5000).catch((err) => {
+        log.error("trade-journal", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
     ]);
     const closedArr = closed as TradePosition[];
     // tradesRecent returns details + lot_closures for ALL trades (open +

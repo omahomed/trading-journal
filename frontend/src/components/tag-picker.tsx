@@ -24,6 +24,7 @@ import { api, type Tag, type TagAssignment } from "@/lib/api";
 import { TAG_TONES, type TagTone } from "@/lib/tag-palette";
 import { TagPill } from "./tag-pill";
 import { Icons } from "./icons";
+import { log } from "@/lib/log";
 
 const MAX_TAGS_PER_ENTITY = 10;
 
@@ -67,15 +68,21 @@ export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: Ta
   }, []);
 
   // Initial fetch — tags (per portfolio) + assignments (per entity). Both
-  // independent; Promise.all lets them race. Failure surfaces as inline
-  // error toast, doesn't block render.
+  // independent; Promise.all lets them race. Failures log to console.error
+  // via the log wrapper; no UI surface for tag errors today.
   useEffect(() => {
     if (entityId == null || !portfolio) return;
     let cancelled = false;
     Promise.all([
-      api.listTags(portfolio).catch(() => [] as Tag[]),
+      api.listTags(portfolio).catch((err) => {
+        log.error("tag-picker", "listTags fetch failed", err);
+        return [] as Tag[];
+      }),
       api.listTagAssignments({ entity_type: entityType, entity_id: entityId })
-        .catch(() => [] as TagAssignment[]),
+        .catch((err) => {
+          log.error("tag-picker", "listTagAssignments fetch failed", err);
+          return [] as TagAssignment[];
+        }),
     ]).then(([t, a]) => {
       if (cancelled) return;
       setTags(t);

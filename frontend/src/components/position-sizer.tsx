@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 type SizerTab = "normal" | "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
@@ -227,22 +228,39 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           setEntryPrice(String(data.price));
           setAtrPct(String(data.atr_pct));
         }
-      }).catch(() => {}).finally(() => setFetching(false));
+      }).catch((err) => {
+        log.debug.devOnly("position-sizer", "priceLookup missing (expected)", err);
+      }).finally(() => setFetching(false));
     }, 600);
     return () => clearTimeout(timeout);
   }, [ticker]);
 
   useEffect(() => {
     Promise.all([
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [], lot_closures: [] })),
+      api.journalLatest(getActivePortfolio()).catch((err) => {
+        log.error("position-sizer", "journalLatest fetch failed", err);
+        return { end_nlv: 100000 };
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("position-sizer", "tradesOpen fetch failed", err);
+        return [];
+      }),
+      api.tradesOpenDetails(getActivePortfolio()).catch((err) => {
+        log.error("position-sizer", "tradesOpenDetails fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
       // V11 MCT state drives default sizing mode. Replaces the legacy
       // /api/market/mfactor MA-stack heuristic. rallyPrefix returns
       // {state: POWERTREND|UPTREND|RALLY MODE|CORRECTION, ...}; we
       // discard everything except `state` here.
-      api.rallyPrefix().catch(() => ({ prefix: "" })),
-      api.config("pyramid_rules").catch(() => ({ value: { trigger_pct: 5, alloc_pct: 20 } })),
+      api.rallyPrefix().catch((err) => {
+        log.error("position-sizer", "rallyPrefix fetch failed", err);
+        return { prefix: "" };
+      }),
+      api.config("pyramid_rules").catch((err) => {
+        log.error("position-sizer", "config pyramid_rules fetch failed", err);
+        return { value: { trigger_pct: 5, alloc_pct: 20 } };
+      }),
     ]).then(([j, open, details, rally, pyrCfg]) => {
       setEquity(parseFloat(String((j as any).end_nlv || 100000)));
       setOpenTrades(open as TradePosition[]);
