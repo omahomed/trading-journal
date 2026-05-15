@@ -524,6 +524,260 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(yearHeader.firstElementChild?.textContent).not.toMatch(/\$/);
   });
 
+  // ────────────────────────────────────────────────────────────────────
+  // Phase 6.5 — tag filter bar
+  // ────────────────────────────────────────────────────────────────────
+
+  test("filter bar hidden when no item carries a tag", () => {
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.queryByTestId("rail-filter-bar")).toBeNull();
+  });
+
+  test("filter bar visible once at least one item carries a tag", () => {
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.getByTestId("rail-filter-bar")).toBeInTheDocument();
+    // Resting copy: "All weeks" when no filter active.
+    expect(screen.getByText("All weeks")).toBeInTheDocument();
+  });
+
+  test("clicking the Filter trigger opens the popover; tags shown sorted by count desc, name asc", () => {
+    // Counts: FTD=3, Breakout=2, Choppy=2, Drawdown=1. After count-desc
+    // sort, Breakout precedes Choppy because of the name-asc tiebreaker.
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }, { name: "Breakout", color: "sky" }] }),
+      item({ id: 2, key: "2026-05-04", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }, { name: "Choppy", color: "amber" }] }),
+      item({ id: 3, key: "2026-04-27", year: 2026, month: 4,
+             tags: [{ name: "FTD", color: "emerald" }, { name: "Breakout", color: "sky" }] }),
+      item({ id: 4, key: "2026-04-20", year: 2026, month: 4,
+             tags: [{ name: "Choppy", color: "amber" }, { name: "Drawdown", color: "rose" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    expect(screen.getByTestId("rail-filter-popover")).toBeInTheDocument();
+    const options = screen.getAllByTestId("rail-filter-option");
+    expect(options.map(o => o.dataset.tagName)).toEqual([
+      "FTD", "Breakout", "Choppy", "Drawdown",
+    ]);
+  });
+
+  test("selecting a tag in the popover renders it as an ActiveTagChip", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    const ftdOption = screen.getAllByTestId("rail-filter-option")
+      .find(el => el.dataset.tagName === "FTD")!;
+    fireEvent.click(ftdOption);
+    // Chip is the dark-bg pill in the bar (data-testid rail-filter-chip).
+    const chip = screen.getByTestId("rail-filter-chip");
+    expect(chip.dataset.tagName).toBe("FTD");
+    // ActiveTagChip uses the tone-darkened palette dot color as the bg —
+    // emerald → #08a86b. White text confirms it's not the row-chip light
+    // body. RGB parsing tolerates jsdom's style serialization differences.
+    const bg = chip.style.background;
+    expect(bg.toLowerCase()).toContain("rgb(8, 168, 107)"); // emerald dot
+  });
+
+  test("× on ActiveTagChip removes that filter", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    fireEvent.click(screen.getAllByTestId("rail-filter-option")
+      .find(el => el.dataset.tagName === "FTD")!);
+    expect(screen.getByTestId("rail-filter-chip")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Remove FTD filter"));
+    expect(screen.queryByTestId("rail-filter-chip")).toBeNull();
+    // "All weeks" returns when filters drain.
+    expect(screen.getByText("All weeks")).toBeInTheDocument();
+  });
+
+  test("multi-select: two selected tags use OR semantics — weeks matching either show", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5, title: "May 11 – 15",
+             tags: [{ name: "FTD", color: "emerald" }] }),
+      item({ id: 2, key: "2026-05-04", year: 2026, month: 5, title: "May 4 – 8",
+             tags: [{ name: "Breakout", color: "sky" }] }),
+      item({ id: 3, key: "2026-04-27", year: 2026, month: 4, title: "Apr 27 – May 1",
+             tags: [{ name: "Choppy", color: "amber" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    const opts = screen.getAllByTestId("rail-filter-option");
+    fireEvent.click(opts.find(el => el.dataset.tagName === "FTD")!);
+    fireEvent.click(opts.find(el => el.dataset.tagName === "Breakout")!);
+    // Both FTD-tagged and Breakout-tagged weeks visible; Choppy-only hidden.
+    expect(screen.getByText("May 11 – 15")).toBeInTheDocument();
+    expect(screen.getByText("May 4 – 8")).toBeInTheDocument();
+    expect(screen.queryByText("Apr 27 – May 1")).toBeNull();
+  });
+
+  test("search + filter combine with AND between (search narrows, filter narrows further)", async () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5, title: "May 11 – 15",
+             tags: [{ name: "FTD", color: "emerald" }] }),
+      item({ id: 2, key: "2026-05-04", year: 2026, month: 5, title: "May 4 – 8",
+             tags: [{ name: "Breakout", color: "sky" }] }),
+      item({ id: 3, key: "2026-04-27", year: 2026, month: 4, title: "Apr 27 – May 1",
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Filter on FTD first.
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    fireEvent.click(screen.getAllByTestId("rail-filter-option")
+      .find(el => el.dataset.tagName === "FTD")!);
+    // Now type "Apr" in search — only the April FTD week should pass both.
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    await act(async () => { fireEvent.change(search, { target: { value: "Apr" } }); });
+    expect(screen.getByText("Apr 27 – May 1")).toBeInTheDocument();
+    expect(screen.queryByText("May 11 – 15")).toBeNull();
+    expect(screen.queryByText("May 4 – 8")).toBeNull();
+  });
+
+  test("month folders auto-open when filters are active so matches in collapsed folders surface", () => {
+    // April is past-month (not current) → default-closed without filter.
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5, title: "May 11 – 15",
+             tags: [{ name: "Choppy", color: "amber" }] }),
+      item({ id: 2, key: "2026-04-27", year: 2026, month: 4, title: "Apr 27 – May 1",
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Before filter: April folder closed → "Apr 27 – May 1" not in DOM
+    // (folder body unmounts when closed via display:none isn't used;
+    // body is conditionally rendered).
+    const aprBefore = screen.getAllByTestId("month-folder")
+      .find(f => f.dataset.monthKey === "2026-04")!;
+    expect(aprBefore.dataset.open).toBe("false");
+    // Apply FTD filter.
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    fireEvent.click(screen.getAllByTestId("rail-filter-option")
+      .find(el => el.dataset.tagName === "FTD")!);
+    // April folder forced open; FTD-tagged April week now visible.
+    const aprAfter = screen.getAllByTestId("month-folder")
+      .find(f => f.dataset.monthKey === "2026-04")!;
+    expect(aprAfter.dataset.open).toBe("true");
+    expect(screen.getByText("Apr 27 – May 1")).toBeInTheDocument();
+  });
+
+  test("empty-filter-result state renders copy + Clear filters button; clicking it clears filters", () => {
+    // FTD exists in availableTags, but Drawdown doesn't — so selecting
+    // a tag that matches no week yields zero. Use a contrived setup:
+    // pick FTD then mutate? Easier: tag both items with "Choppy" and
+    // filter on "FTD" via the popover ... but FTD wouldn't appear if no
+    // item carries it. Reverse approach: two weeks, one tagged "FTD",
+    // search "zzz" to force zero, with filter active.
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5, title: "May 11 – 15",
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    fireEvent.click(screen.getAllByTestId("rail-filter-option")
+      .find(el => el.dataset.tagName === "FTD")!);
+    // Filter applied, FTD week matches. Now force the combined filter
+    // to yield zero by adding a no-match search query.
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    fireEvent.change(search, { target: { value: "zzz" } });
+    const empty = screen.getByTestId("rail-no-search-results");
+    expect(empty).toHaveTextContent(/No weeks match the current filters/i);
+    // Clearing filters via the button removes the filter; the search
+    // query is still "zzz" so the row stays hidden, but the empty-state
+    // copy reverts to "No matches."
+    fireEvent.click(screen.getByTestId("rail-filter-clear-empty"));
+    expect(screen.queryByTestId("rail-filter-chip")).toBeNull();
+    expect(screen.getByTestId("rail-no-search-results")).toHaveTextContent(/No matches\./i);
+  });
+
+  test("Esc closes the filter popover", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    expect(screen.getByTestId("rail-filter-popover")).toBeInTheDocument();
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(screen.queryByTestId("rail-filter-popover")).toBeNull();
+  });
+
+  test("click-outside closes the filter popover", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    expect(screen.getByTestId("rail-filter-popover")).toBeInTheDocument();
+    // mousedown on the document body (outside both anchor and popover).
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+    expect(screen.queryByTestId("rail-filter-popover")).toBeNull();
+  });
+
+  test("popover tag count reflects actual usage in items[]", () => {
+    const items = [
+      item({ id: 1, key: "2026-05-11", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }] }),
+      item({ id: 2, key: "2026-05-04", year: 2026, month: 5,
+             tags: [{ name: "FTD", color: "emerald" }, { name: "Choppy", color: "amber" }] }),
+      item({ id: 3, key: "2026-04-27", year: 2026, month: 4,
+             tags: [{ name: "Choppy", color: "amber" }] }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("rail-filter-trigger"));
+    const opts = screen.getAllByTestId("rail-filter-option");
+    const ftdRow = opts.find(o => o.dataset.tagName === "FTD")!;
+    const choppyRow = opts.find(o => o.dataset.tagName === "Choppy")!;
+    // Last child is the count span.
+    expect(ftdRow.textContent).toMatch(/2$/);
+    expect(choppyRow.textContent).toMatch(/2$/);
+    // Sort order with equal counts → alphabetical: Choppy before FTD.
+    expect(opts.map(o => o.dataset.tagName)).toEqual(["Choppy", "FTD"]);
+  });
+
   test("search input doesn't intercept ArrowDown — focus stays in search bar", () => {
     const onItemClick = vi.fn();
     const items = [

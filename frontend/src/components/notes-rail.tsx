@@ -6,7 +6,7 @@ import type {
   NotesRailEntityType, NotesRailItem, NotesRailItemTag, NotesRailYtdStats,
 } from "@/lib/api";
 import { TagPill } from "./tag-pill";
-import type { TagTone } from "@/lib/tag-palette";
+import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
 
 // Phase 6 — Notion-style left rail for the Weekly Retro page (and later
 // Daily Report in Phase 7). Visual contract from
@@ -143,6 +143,27 @@ function HamburgerIcon() {
       <line x1={3} y1={6} x2={21} y2={6} />
       <line x1={3} y1={12} x2={21} y2={12} />
       <line x1={3} y1={18} x2={21} y2={18} />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg width={11} height={11} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={2.4}
+         strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+    </svg>
+  );
+}
+
+function CloseXIcon({ size = 10 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={2.5}
+         strokeLinecap="round" strokeLinejoin="round">
+      <line x1={18} y1={6} x2={6} y2={18} />
+      <line x1={6} y1={6} x2={18} y2={18} />
     </svg>
   );
 }
@@ -621,6 +642,264 @@ function CollapsedRail({ onExpand }: { onExpand: () => void }) {
   );
 }
 
+// ─── Filter bar (Phase 6.5) ────────────────────────────────────────────
+// Derives its tag set from items[].tags (the Phase 1 polymorphic tags
+// returned by /api/weekly-retros/list). Multi-select with OR semantics
+// across tags; combined with the search input via AND. Hidden entirely
+// when no item carries any tag — an empty filter affordance is worse
+// than no affordance.
+
+interface AvailableTag {
+  name: string;
+  color: string;   // TagTone key from the closed palette
+  count: number;   // number of items carrying this tag
+}
+
+function ActiveTagChip({
+  name, color, onRemove,
+}: {
+  name: string;
+  color: string;
+  onRemove: () => void;
+}) {
+  // Tone-darkened bg preserves the row-chip identity while contrasting
+  // with the light-bodied row chips so the selected state reads at a
+  // glance.
+  const tone = TAG_PALETTE[color as TagTone] ?? TAG_PALETTE.sky;
+  return (
+    <span data-testid="rail-filter-chip"
+          data-tag-name={name}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            height: 22, padding: "0 4px 0 8px",
+            borderRadius: 999,
+            background: tone.dot, color: "#fff",
+            fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+          }}>
+      <span>{name}</span>
+      <button type="button"
+              onClick={onRemove}
+              aria-label={`Remove ${name} filter`}
+              style={{
+                width: 16, height: 16, borderRadius: 999,
+                display: "grid", placeItems: "center",
+                background: "transparent",
+                color: "rgba(255,255,255,0.85)",
+                border: "none", cursor: "pointer", padding: 0,
+              }}>
+        <CloseXIcon size={10} />
+      </button>
+    </span>
+  );
+}
+
+function FilterPopover({
+  availableTags, filters, toggle, onClear, onClose, anchorRef,
+}: {
+  availableTags: AvailableTag[];
+  filters: string[];
+  toggle: (name: string) => void;
+  onClear: () => void;
+  onClose: () => void;
+  anchorRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Click-outside + Esc — same idiom as ColorPicker / ToolbarDropdown.
+  // Anchor element is excluded so clicking the trigger button itself
+  // toggles cleanly instead of opening-then-closing on the same click.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (ref.current && ref.current.contains(target)) return;
+      if (anchorRef.current && anchorRef.current.contains(target)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, anchorRef]);
+
+  return (
+    <div ref={ref}
+         role="dialog"
+         aria-label="Filter weeks by tag"
+         data-testid="rail-filter-popover"
+         style={{
+           position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0,
+           zIndex: 40,
+           background: "var(--surface)", border: "1px solid var(--border)",
+           borderRadius: 12, boxShadow: "0 8px 28px rgba(14,20,38,0.14)",
+           padding: 10, display: "flex", flexDirection: "column", gap: 8,
+           maxHeight: 360,
+         }}>
+      <div style={{
+        overflowY: "auto",
+        display: "flex", flexDirection: "column",
+        maxHeight: 280,
+      }}>
+        {availableTags.map(t => {
+          const on = filters.includes(t.name);
+          const tone = TAG_PALETTE[t.color as TagTone] ?? TAG_PALETTE.sky;
+          return (
+            <button key={t.name}
+                    type="button"
+                    data-testid="rail-filter-option"
+                    data-tag-name={t.name}
+                    data-selected={on ? "true" : "false"}
+                    onClick={() => toggle(t.name)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 8px", borderRadius: 6,
+                      fontSize: 12, color: "var(--ink-2)",
+                      textAlign: "left", background: "transparent",
+                      border: "none", cursor: "pointer",
+                    }}>
+              <span aria-hidden style={{
+                width: 14, height: 14, borderRadius: 4,
+                border: `1.5px solid ${on ? "var(--ink)" : "var(--border-2)"}`,
+                background: on ? "var(--ink)" : "transparent",
+                color: "#fff", display: "grid", placeItems: "center",
+                flexShrink: 0,
+              }}>
+                {on && (
+                  <svg width={10} height={10} viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth={3}
+                       strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </span>
+              <span aria-hidden style={{
+                width: 6, height: 6, borderRadius: 999, background: tone.dot,
+                flexShrink: 0,
+              }} />
+              <span style={{ flex: 1 }}>{t.name}</span>
+              <span style={{
+                fontSize: 11, color: "var(--ink-4)",
+                fontFamily: "var(--font-jetbrains), monospace",
+                fontVariantNumeric: "tabular-nums",
+              }}>{t.count}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        paddingTop: 6, borderTop: "1px solid var(--border)",
+      }}>
+        <button type="button"
+                onClick={onClear}
+                disabled={filters.length === 0}
+                data-testid="rail-filter-clear"
+                style={{
+                  fontSize: 11, fontWeight: 500,
+                  color: filters.length === 0 ? "var(--ink-4)" : "var(--ink-3)",
+                  padding: "4px 8px", borderRadius: 6,
+                  background: "transparent", border: "none",
+                  cursor: filters.length === 0 ? "default" : "pointer",
+                }}>Clear all</button>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: "var(--ink-4)" }}>
+          {filters.length} selected
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function FilterBar({
+  availableTags, filters, setFilters,
+}: {
+  availableTags: AvailableTag[];
+  filters: string[];
+  setFilters: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  const toggle = useCallback((name: string) => {
+    setFilters(prev => prev.includes(name)
+      ? prev.filter(x => x !== name)
+      : [...prev, name]);
+  }, [setFilters]);
+
+  // If a previously selected tag disappears from availableTags (e.g., its
+  // last attached retro was deleted server-side) prune it from filters so
+  // the bar doesn't show a chip that filters nothing.
+  useEffect(() => {
+    if (filters.length === 0) return;
+    const names = new Set(availableTags.map(t => t.name));
+    const next = filters.filter(n => names.has(n));
+    if (next.length !== filters.length) setFilters(next);
+  }, [availableTags, filters, setFilters]);
+
+  // Empty-bar gate: hide entirely when no item carries a tag. An empty
+  // affordance with no popover content reads as broken.
+  if (availableTags.length === 0) return null;
+
+  const colorFor = (name: string) =>
+    availableTags.find(t => t.name === name)?.color ?? "sky";
+
+  return (
+    <div data-testid="rail-filter-bar" style={{ position: "relative" }}>
+      <div ref={anchorRef}
+           style={{
+             display: "flex", alignItems: "center", flexWrap: "wrap", gap: 5,
+             padding: "5px 6px 5px 8px",
+             borderRadius: 10,
+             background: "var(--surface)", border: "1px solid var(--border)",
+             minHeight: 34,
+           }}>
+        <button type="button"
+                onClick={() => setOpen(o => !o)}
+                data-testid="rail-filter-trigger"
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  height: 22, padding: "0 8px",
+                  borderRadius: 999, fontSize: 11, fontWeight: 600,
+                  color: "var(--ink-2)", background: "var(--bg)",
+                  border: "1px solid var(--border)", cursor: "pointer",
+                }}>
+          <FilterIcon />
+          Filter
+          {filters.length > 0 && (
+            <span data-testid="rail-filter-count"
+                  style={{
+                    fontSize: 10, padding: "0 5px", borderRadius: 999,
+                    background: "var(--ink)", color: "#fff",
+                    minWidth: 14, textAlign: "center",
+                  }}>{filters.length}</span>
+          )}
+        </button>
+        {filters.length === 0 && (
+          <span style={{ fontSize: 11, color: "var(--ink-4)" }}>All weeks</span>
+        )}
+        {filters.map(name => (
+          <ActiveTagChip key={name} name={name}
+                         color={colorFor(name)}
+                         onRemove={() => toggle(name)} />
+        ))}
+      </div>
+      {open && (
+        <FilterPopover availableTags={availableTags}
+                       filters={filters} toggle={toggle}
+                       onClear={() => setFilters([])}
+                       onClose={() => setOpen(false)}
+                       anchorRef={anchorRef} />
+      )}
+    </div>
+  );
+}
+
 // ─── Main export ───────────────────────────────────────────────────────
 
 export function NotesRail({
@@ -634,6 +913,10 @@ export function NotesRail({
   useEffect(() => { saveLs(collapseKey, collapsed); }, [collapsed, collapseKey]);
 
   const [query, setQuery] = useState("");
+  // Phase 6.5: tag filter selections. Multi-select with OR semantics —
+  // a week matches when it carries ANY selected tag. Combined with the
+  // search query via AND in the `filtered` useMemo below.
+  const [filters, setFilters] = useState<string[]>([]);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
   // Calendar jump-to-date input ref. Trigger picker via showPicker() on
   // supported browsers; falls back to a synthetic click for older Safari.
@@ -675,13 +958,48 @@ export function NotesRail({
     }
   }, [onPinToggle]);
 
-  // Filter by search query — substring on title, case-insensitive. Empty
-  // query passes everything through.
+  // Derive the tag set for the filter bar from items[].tags. Dedupes by
+  // name, counts uses, then orders by count desc / name asc — stable so
+  // pills don't reorder on every render. Phase 1 enforces unique tag
+  // names per portfolio, so name is a safe identity. Falls back to the
+  // last-seen color when the same name appears with different colors
+  // (server constraint should prevent this, but the UI shouldn't crash).
+  const availableTags: AvailableTag[] = useMemo(() => {
+    const byName = new Map<string, AvailableTag>();
+    for (const it of items) {
+      for (const t of it.tags ?? []) {
+        const existing = byName.get(t.name);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          byName.set(t.name, { name: t.name, color: t.color, count: 1 });
+        }
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) =>
+      b.count - a.count || a.name.localeCompare(b.name));
+  }, [items]);
+
+  // Filter by search (title substring) AND tag selection (OR within
+  // selected tags). Search predicate runs first to take advantage of the
+  // typically-larger early reduction; tag predicate runs second on the
+  // already-shrunken set.
   const filtered = useMemo(() => {
-    if (!query.trim()) return itemsWithOverrides;
-    const needle = query.toLowerCase().trim();
-    return itemsWithOverrides.filter(it => it.title.toLowerCase().includes(needle));
-  }, [itemsWithOverrides, query]);
+    let out = itemsWithOverrides;
+    if (query.trim()) {
+      const needle = query.toLowerCase().trim();
+      out = out.filter(it => it.title.toLowerCase().includes(needle));
+    }
+    if (filters.length > 0) {
+      out = out.filter(it => (it.tags ?? []).some(t => filters.includes(t.name)));
+    }
+    return out;
+  }, [itemsWithOverrides, query, filters]);
+
+  // Folders auto-open when either search OR filters narrow the list —
+  // otherwise a tag-match buried in a collapsed month would appear as a
+  // false negative (the empty state would surface instead).
+  const folderForceOpen = !!query.trim() || filters.length > 0;
 
   // Group by year → month for rendering. Current year inlines its months
   // at the top level (matching design); past years wrap in YearFolder.
@@ -880,6 +1198,10 @@ export function NotesRail({
                }} />
       </div>
 
+      {/* Tag filter bar — hidden entirely when no item carries a tag. */}
+      <FilterBar availableTags={availableTags}
+                 filters={filters} setFilters={setFilters} />
+
       {/* List */}
       <div style={{
         display: "flex", flexDirection: "column", gap: 8,
@@ -901,7 +1223,7 @@ export function NotesRail({
                 <MonthFolder key={month} year={currentYear} month={month} items={monthItems}
                              defaultOpen={currentYearMonth?.month === month}
                              isCurrent={currentYearMonth?.month === month}
-                             forceOpen={!!query.trim()}
+                             forceOpen={folderForceOpen}
                              storageKey={folderKey}
                              activeKey={currentEntityKey} focusedKey={focusedKey}
                              onItemClick={onItemClick} onPinToggle={handlePinToggle} />
@@ -919,7 +1241,7 @@ export function NotesRail({
               .map(([month, monthItems]) => ({ month, items: monthItems }));
             return (
               <YearFolder key={year} year={year} months={months}
-                          forceOpen={!!query.trim()}
+                          forceOpen={folderForceOpen}
                           storageKey={folderKey}
                           activeKey={currentEntityKey} focusedKey={focusedKey}
                           onItemClick={onItemClick} onPinToggle={handlePinToggle} />
@@ -937,14 +1259,36 @@ export function NotesRail({
           </div>
         )}
 
-        {/* Search miss state — separate from empty because items > 0 */}
+        {/* Search miss state — separate from empty because items > 0.
+            Copy + a Clear-filters affordance swap in when filters are
+            active so the user has a one-click escape hatch out of an
+            over-narrow filter set. */}
         {items.length > 0 && filtered.length === 0 && (
           <div data-testid="rail-no-search-results"
                style={{
                  padding: "20px 12px", textAlign: "center",
                  fontSize: 12, color: "var(--ink-4)",
+                 display: "flex", flexDirection: "column",
+                 alignItems: "center", gap: 8,
                }}>
-            No matches.
+            <span>
+              {filters.length > 0
+                ? "No weeks match the current filters."
+                : "No matches."}
+            </span>
+            {filters.length > 0 && (
+              <button type="button"
+                      onClick={() => setFilters([])}
+                      data-testid="rail-filter-clear-empty"
+                      style={{
+                        fontSize: 11, fontWeight: 600,
+                        color: "var(--ink-3)",
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6, padding: "4px 10px",
+                        cursor: "pointer",
+                      }}>Clear filters</button>
+            )}
           </div>
         )}
       </div>
