@@ -265,3 +265,21 @@ class TestLoadLotClosures:
             match="Portfolio '_DOES_NOT_EXIST_TEST_PORTFOLIO_' not found",
         ):
             load_lot_closures("_DOES_NOT_EXIST_TEST_PORTFOLIO_")
+
+
+@pytestmark_db
+class TestDeleteTradeCascadesToLotClosures:
+    """Regression: delete_trade must hard-delete lot_closures for the trade.
+    Pre-fix, soft-deleting a trade left orphan lot_closures rows pointing at
+    a soft-deleted parent. The fix folds the DELETE into delete_trade's
+    transaction; this test would have caught the original miss."""
+
+    def test_delete_trade_cascades_to_lot_closures(self, clean_test_trades) -> None:
+        _insert_closure(TEST_TRADE_ID_A, "S1", "B1")
+        _insert_closure(TEST_TRADE_ID_A, "S1", "B2")
+
+        from db_layer import delete_trade, load_lot_closures
+        delete_trade(TEST_PORTFOLIO, TEST_TRADE_ID_A)
+
+        df = load_lot_closures(TEST_PORTFOLIO, trade_id=TEST_TRADE_ID_A)
+        assert df.empty, "lot_closures must be hard-deleted by delete_trade"
