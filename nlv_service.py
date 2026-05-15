@@ -501,12 +501,18 @@ def _prepare_journal_for_returns(df: pd.DataFrame) -> pd.DataFrame:
     Returns a *copy* with day coerced to datetime, sorted ascending, with
     beg_nlv / end_nlv / cash_change / daily_return all present and numeric.
     Empty input returns an empty DataFrame with the same columns.
+
+    Accepts both shapes — Title-Case columns straight from load_journal()
+    or pre-normalized snake_case. normalize_journal_columns is invoked
+    unconditionally; on a snake_case input the rename map matches no keys
+    and the helper is a no-op. Pushed inside so callers can't forget the
+    pre-normalization step (the Phase 6 "0 weeks" regression).
     """
     cols = ["day", "beg_nlv", "end_nlv", "cash_change", "daily_return"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
 
-    work = df.copy()
+    work = normalize_journal_columns(df).copy()
     work["day"] = pd.to_datetime(work["day"], errors="coerce")
     work = work.dropna(subset=["day"]).sort_values("day").reset_index(drop=True)
     if work.empty:
@@ -525,6 +531,27 @@ def _prepare_journal_for_returns(df: pd.DataFrame) -> pd.DataFrame:
         (work.loc[mask, "end_nlv"] - adjusted_beg[mask]) / adjusted_beg[mask]
     )
     return work
+
+
+def _compute_weekly_nlv_delta(week_df: pd.DataFrame) -> float:
+    """End equity − (Start equity + Cash flow) for a single week's journal
+    rows. Single source of truth for weekly P&L; consumed by weekly_metrics
+    (tile) and weekly_return_series_for_portfolio (rail).
+
+    Expects rows already shaped by _prepare_journal_for_returns: sorted
+    ascending by `day`, with `beg_nlv`/`end_nlv`/`cash_change` numeric.
+    Empty input → 0.0 (matches the "no journal rows in the requested week"
+    edge case both consumers already handle).
+
+    Rounded to 2 decimals so callers can write the result directly into
+    a currency field without re-rounding.
+    """
+    if week_df is None or week_df.empty:
+        return 0.0
+    beg_nlv = float(week_df.iloc[0]["beg_nlv"] or 0)
+    end_nlv = float(week_df.iloc[-1]["end_nlv"] or 0)
+    cash_flow = float(week_df["cash_change"].fillna(0).sum())
+    return round(end_nlv - (beg_nlv + cash_flow), 2)
 
 
 def _parse_week_start(week_start: str) -> date | None:
@@ -627,10 +654,10 @@ def weekly_metrics(portfolio_name: str, week_start: str) -> dict[str, Any]:
     week_window_end = week_start_date + pd.Timedelta(days=6).to_pytimedelta()
 
     journal_df = db.load_journal(portfolio_name)
-    work = _prepare_journal_for_returns(
-        normalize_journal_columns(journal_df) if journal_df is not None and not journal_df.empty
-        else pd.DataFrame()
-    )
+    # _prepare_journal_for_returns now normalizes journal columns itself
+    # (Title-Case → snake_case), so callers don't have to remember the
+    # pre-normalize step. Pass the raw load_journal output straight in.
+    work = _prepare_journal_for_returns(journal_df)
 
     # As-of cutoff: only rows with day <= end of the week window. Keeps
     # historical weeks stable even after later journal rows are added.
@@ -646,10 +673,7 @@ def weekly_metrics(portfolio_name: str, week_start: str) -> dict[str, Any]:
         weekly_pnl = 0.0
         weekly_return_pct = 0.0
     else:
-        beg_nlv = float(week_rows.iloc[0]["beg_nlv"])
-        end_nlv = float(week_rows.iloc[-1]["end_nlv"])
-        cash_flow = float(week_rows["cash_change"].sum())
-        weekly_pnl = round(end_nlv - (beg_nlv + cash_flow), 2)
+        weekly_pnl = _compute_weekly_nlv_delta(week_rows)
         weekly_return_pct = round(_twr_chained_pct(week_rows["daily_return"]), 4)
 
     # LTD: all rows up through week_end. YTD: rows in week_end.year through

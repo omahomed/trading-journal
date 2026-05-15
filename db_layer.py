@@ -5357,48 +5357,44 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
     """
     # Local imports — nlv_service imports db_layer at module top, so importing
     # nlv_service here would cycle. Lazy imports break the cycle.
-    from nlv_service import _prepare_journal_for_returns
-    from trade_calc import normalize_journal_columns
+    from nlv_service import _prepare_journal_for_returns, _compute_weekly_nlv_delta
     from datetime import date as _date, timedelta as _td
 
     journal = load_journal(portfolio_name)
     if journal is None or journal.empty:
         return {}
 
-    # load_journal returns Title-Case columns ("Day", "Beg NLV", "End NLV",
-    # "Cash -/+"). _prepare_journal_for_returns expects lowercase snake_case
-    # ("day", "beg_nlv", "end_nlv", "cash_change"). normalize_journal_columns
-    # is the canonical mapper — it's what nlv_service.weekly_metrics uses too.
-    # Without this, the helper KeyError'd on "day" and the endpoint silently
-    # returned {error: ...}, which the frontend swallowed into the empty state.
-    work = _prepare_journal_for_returns(normalize_journal_columns(journal))
+    # _prepare_journal_for_returns now normalizes Title-Case columns itself
+    # (the Phase 6 "0 weeks" regression originated from a missed normalize
+    # call here — pushing normalize inside the helper removed the trap).
+    work = _prepare_journal_for_returns(journal)
     if work.empty:
         return {}
 
     # Bucket per-day rows by Monday-of-week. Preserves day-sorted order
     # inside each bucket (work is sorted ascending by _prepare_journal).
-    buckets: dict[str, list] = {}
-    for _, row in work.iterrows():
+    # _compute_weekly_nlv_delta needs a DataFrame, so collect indices per
+    # bucket and slice rather than building lists of Series.
+    bucket_indices: dict[str, list[int]] = {}
+    for i, row in work.iterrows():
         day = row["day"].date() if hasattr(row["day"], "date") else row["day"]
         monday = day - _td(days=day.weekday())
         key = monday.isoformat()
-        buckets.setdefault(key, []).append(row)
+        bucket_indices.setdefault(key, []).append(i)
 
     out: dict[str, dict] = {}
-    for key, rows in buckets.items():
+    for key, idxs in bucket_indices.items():
         monday = _date.fromisoformat(key)
         friday = monday + _td(days=4)
+        bucket = work.loc[idxs]
         # Chained TWR for the week.
-        product = 1.0
-        for r in rows:
-            product *= 1.0 + float(r["daily_return"])
+        product = float((1.0 + bucket["daily_return"]).prod())
         weekly_return_pct = round((product - 1.0) * 100.0, 4)
-        # NLV-delta for the week — same formula as Phase 5 weekly_metrics
-        # so rail row $ values match the top-tile $ exactly.
-        beg_nlv = float(rows[0]["beg_nlv"])
-        end_nlv = float(rows[-1]["end_nlv"])
-        cash_flow = sum(float(r["cash_change"]) for r in rows)
-        weekly_pnl = round(end_nlv - (beg_nlv + cash_flow), 2)
+        # NLV-delta from the canonical helper — guarantees rail and tile
+        # agree by construction. The test_rail_matches_tile_sources cross-
+        # validation test continues to pin this contract for any future
+        # code path that bypasses the helper.
+        weekly_pnl = _compute_weekly_nlv_delta(bucket)
         out[key] = {
             "week_start": key,
             "week_end": friday.isoformat(),
