@@ -1423,6 +1423,18 @@ def delete_trade(portfolio_name, trade_id):
                   AND deleted_at IS NULL
             """, (portfolio_id, trade_id))
 
+            # Hard-delete lot_closures for this trade. Mirrors the cleanup
+            # the recompute path does when a campaign empties out (see
+            # _safe_delete_lot_closures in api/main.py). Joins this txn so
+            # closures + summary stamp + details stamp commit atomically.
+            # lot_closures uses hard-delete throughout (no deleted_at
+            # column per migration 017) — DELETE is the right paradigm.
+            cur.execute(
+                "DELETE FROM lot_closures "
+                "WHERE portfolio_id = %s AND trade_id = %s",
+                (portfolio_id, trade_id),
+            )
+
             # Hard-delete images and fundamentals — trade_fundamentals.image_id
             # is ON DELETE SET NULL, so clear fundamentals first or they'd be
             # orphaned with NULL image_id instead of removed. Neither table has
