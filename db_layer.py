@@ -5048,3 +5048,373 @@ def _sync_initial_deposit(cur, portfolio_id, starting_capital, effective_date):
             "VALUES (%s, %s, %s, 'deposit', %s)",
             (portfolio_id, effective_date, starting_capital, _INITIAL_DEPOSIT_NOTE),
         )
+
+
+# ============================================================================
+# Phase 6 — pinned_entities (Migration 029) and Weekly Retro list helpers
+# ============================================================================
+# Polymorphic pin store + supporting aggregations for the NotesRail. Pin
+# semantics mirror tag_assignments (Phase 1): soft-delete on unpin, idempotent
+# revival on re-pin via the partial-unique index. The list_weekly_retros_rail
+# helper produces the wrapped {weeks, ytd_stats} envelope the rail consumes,
+# including synthetic empty-week rows for Mondays the user hasn't graded yet.
+
+_PIN_ENTITY_TYPES = ("weekly_retro", "daily_journal")
+
+
+def toggle_pin(entity_type: str, entity_id: int) -> bool:
+    """Idempotent pin toggle for the polymorphic pinned_entities table
+    (Migration 029).
+
+    Contract:
+      - If a LIVE pin exists for (current user, entity_type, entity_id)
+        → soft-delete it. Returns False (now unpinned).
+      - If a SOFT-DELETED pin exists for the same triple → REVIVE it
+        (UPDATE deleted_at = NULL). Returns True (now pinned). Reuses the
+        same row id so pinned_at sort stability is preserved across
+        unpin/re-pin cycles.
+      - Otherwise INSERT a new row. Returns True.
+
+    Tenant isolation is enforced by RLS — the SELECT below only sees the
+    caller's rows. The user_id column has a DEFAULT pulling from
+    current_setting('app.user_id', true), so the INSERT path doesn't have
+    to set it explicitly. Same pattern as create_tag_assignment.
+
+    Raises ValueError on unknown entity_type (defense in depth against the
+    CHECK constraint, which would otherwise produce an IntegrityError that
+    callers find harder to interpret).
+    """
+    if entity_type not in _PIN_ENTITY_TYPES:
+        raise ValueError(f"Unknown entity_type: {entity_type}")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, deleted_at FROM pinned_entities "
+                "WHERE entity_type = %s AND entity_id = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (entity_type, entity_id),
+            )
+            existing = cur.fetchone()
+
+            if existing and existing["deleted_at"] is None:
+                cur.execute(
+                    "UPDATE pinned_entities SET deleted_at = NOW() WHERE id = %s",
+                    (existing["id"],),
+                )
+                conn.commit()
+                return False
+            if existing and existing["deleted_at"] is not None:
+                cur.execute(
+                    "UPDATE pinned_entities SET deleted_at = NULL WHERE id = %s",
+                    (existing["id"],),
+                )
+                conn.commit()
+                return True
+            cur.execute(
+                "INSERT INTO pinned_entities (entity_type, entity_id) VALUES (%s, %s)",
+                (entity_type, entity_id),
+            )
+            conn.commit()
+            return True
+
+
+def list_pinned_entity_ids(entity_type: str) -> set[int]:
+    """Returns the set of currently-pinned (live) entity_ids for the given
+    type, scoped to the caller via RLS. Used by list_weekly_retros_rail to
+    decorate each row with `pinned: bool`."""
+    if entity_type not in _PIN_ENTITY_TYPES:
+        raise ValueError(f"Unknown entity_type: {entity_type}")
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT entity_id FROM pinned_entities "
+                "WHERE entity_type = %s AND deleted_at IS NULL",
+                (entity_type,),
+            )
+            return {row[0] for row in cur.fetchall()}
+
+
+# ----------------------------------------------------------------------------
+# Avg grade — 4.3 GPA scale, bucketed back to letter
+# ----------------------------------------------------------------------------
+# Locked Phase 6 mapping. Frontend + backend SHOULD agree; keeping the
+# canonical implementation here. The bucket thresholds use midpoints between
+# adjacent letters on the numeric scale so a mean exactly at the midpoint
+# rounds to the higher letter.
+
+_GRADE_TO_NUMERIC: dict[str, float] = {
+    "A+": 4.3, "A": 4.0, "A-": 3.7,
+    "B+": 3.3, "B": 3.0, "B-": 2.7,
+    "C+": 2.3, "C": 2.0, "C-": 1.7,
+    "D+": 1.3, "D": 1.0, "D-": 0.7,
+    "F":  0.0,
+}
+
+# Buckets: (lower_bound_inclusive, letter). Sorted descending so the first
+# match on a >= comparison is the right letter. Midpoint between A+ (4.3)
+# and A (4.0) is 4.15, etc.
+_NUMERIC_BUCKETS: list[tuple[float, str]] = [
+    (4.15, "A+"),
+    (3.85, "A"),
+    (3.50, "A-"),
+    (3.15, "B+"),
+    (2.85, "B"),
+    (2.50, "B-"),
+    (2.15, "C+"),
+    (1.85, "C"),
+    (1.50, "C-"),
+    (1.15, "D+"),
+    (0.85, "D"),
+    (0.35, "D-"),
+    (0.00, "F"),
+]
+
+
+def avg_grade_from_letters(grades) -> str | None:
+    """Compute the average letter grade from a list of letter strings.
+
+    Locked Phase 6 formula: map each letter to the 4.3 GPA scale, take the
+    arithmetic mean, then bucket the mean back to the nearest letter for
+    display. Unknown letters and falsy values are ignored. Returns None
+    when no valid letters are present.
+    """
+    if not grades:
+        return None
+    numeric_values: list[float] = []
+    for g in grades:
+        if not g:
+            continue
+        key = str(g).strip().upper()
+        if key in _GRADE_TO_NUMERIC:
+            numeric_values.append(_GRADE_TO_NUMERIC[key])
+    if not numeric_values:
+        return None
+    mean = sum(numeric_values) / len(numeric_values)
+    for lower, letter in _NUMERIC_BUCKETS:
+        if mean >= lower:
+            return letter
+    return "F"
+
+
+# ----------------------------------------------------------------------------
+# Weekly-return series — per-Monday TWR returns over the full journal
+# ----------------------------------------------------------------------------
+# Single-pass batch helper. Loads the journal once, buckets by ISO-Monday,
+# computes chained daily-Dietz returns per bucket (same formula as Phase 5's
+# weekly_metrics / _compute_twr_from_journal_df). The list endpoint embeds
+# the per-week values into each row's `sparkline_value`, so a 52-week rail
+# doesn't have to make 52 separate /api/analytics/weekly-metrics calls.
+
+def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
+    """Returns {week_start_iso: {week_start, week_end, weekly_return_pct}}
+    for every Monday with at least one journal row in the portfolio.
+
+    Reuses Phase 5's `_prepare_journal_for_returns` to produce the per-day
+    return series, then groups by the ISO Monday of each row. Each bucket's
+    chained product (1+r) gives the week TWR.
+
+    Returned dict keys are ISO date strings (YYYY-MM-DD) so they're directly
+    matchable against the synthetic-Monday grid the API list endpoint builds.
+    """
+    # Local import — nlv_service imports db_layer at module top, so importing
+    # nlv_service here would cycle. Lazy import breaks the cycle.
+    from nlv_service import _prepare_journal_for_returns
+    from datetime import timedelta as _td
+
+    journal = load_journal(portfolio_name)
+    if journal is None or journal.empty:
+        return {}
+
+    # Normalize columns + compute daily_return once. _prepare_journal_for_returns
+    # tolerates the load_journal() shape directly (it handles missing/typed
+    # columns), so no extra preprocessing needed.
+    work = _prepare_journal_for_returns(journal)
+    if work.empty:
+        return {}
+
+    out: dict[str, dict] = {}
+    grouped: dict[str, list[float]] = {}
+    for _, row in work.iterrows():
+        day = row["day"].date() if hasattr(row["day"], "date") else row["day"]
+        # Snap to the Monday of day's ISO week. weekday(): Mon=0..Sun=6.
+        monday = day - _td(days=day.weekday())
+        key = monday.isoformat()
+        grouped.setdefault(key, []).append(float(row["daily_return"]))
+        if key not in out:
+            friday = monday + _td(days=4)
+            out[key] = {
+                "week_start": monday.isoformat(),
+                "week_end": friday.isoformat(),
+                "weekly_return_pct": 0.0,
+            }
+
+    for key, returns in grouped.items():
+        product = 1.0
+        for r in returns:
+            product *= 1.0 + r
+        out[key]["weekly_return_pct"] = round((product - 1.0) * 100.0, 4)
+
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Wrapped list endpoint payload — replaces the bare-array list_weekly_retros
+# for the NotesRail consumer. Builds the (id|null) × week grid from the
+# earliest-journal Monday to the current week, joins in retros + pins +
+# sparkline values, and produces the YTD aggregate.
+# ----------------------------------------------------------------------------
+
+def list_weekly_retros_rail(portfolio_name: str) -> dict:
+    """Wrapped envelope for the NotesRail. Returns:
+
+        {
+          "weeks": [
+            { id, key, week_start, week_end, year, month, title,
+              has_content, pinned, sparkline_value, week_grade },
+            ...
+          ],
+          "ytd_stats": {
+            total_weeks, weeks_graded, avg_grade, weeks_pinned,
+          }
+        }
+
+    Mondays without a saved retro emit a synthetic row (id: null,
+    has_content: False, pinned: False, week_grade: None). Their
+    sparkline_value still comes from the journal-derived series, so the
+    month sparkline has continuous data points even on ungraded weeks.
+
+    Date range: earliest Monday with a journal row → most recent past
+    Monday (or current Monday if today is Mon-Sun). No pagination — at
+    ~52 weeks per year, even a 5-year account fits comfortably in one
+    payload.
+
+    ytd_stats:
+      total_weeks  — count of weeks in current year up to the last
+                     returned row's week_start
+      weeks_graded — count of rows in current year with a non-null grade
+      avg_grade    — letter (via _NUMERIC_BUCKETS) over current-year
+                     grades; None when weeks_graded == 0
+      weeks_pinned — count of pinned (live) weekly_retro pins, scoped
+                     to this portfolio's retros
+    """
+    from datetime import date as _date, timedelta as _td
+
+    # 1. Saved retros, keyed by week_start ISO. Reuse the existing helper
+    # to keep the parent + ticker_grades hydration consistent.
+    saved = list_weekly_retros(portfolio_name, limit=1000)
+    saved_by_week: dict[str, dict] = {r["week_start"]: r for r in saved}
+
+    # 2. Sparkline values, keyed by week_start ISO.
+    series = weekly_return_series_for_portfolio(portfolio_name)
+
+    # 3. Pinned ids for this entity type (RLS scopes to the user).
+    pinned_ids = list_pinned_entity_ids("weekly_retro")
+
+    # 4. Build the week grid from inception to the current Monday.
+    #    Inception = earliest Monday with either a journal row or a saved
+    #    retro. If neither exists, the grid is empty and we still return
+    #    the envelope with zeros.
+    earliest_keys: list[str] = []
+    if series:
+        earliest_keys.append(min(series.keys()))
+    if saved_by_week:
+        earliest_keys.append(min(saved_by_week.keys()))
+    if not earliest_keys:
+        return {
+            "weeks": [],
+            "ytd_stats": {
+                "total_weeks": 0,
+                "weeks_graded": 0,
+                "avg_grade": None,
+                "weeks_pinned": 0,
+            },
+        }
+
+    start_iso = min(earliest_keys)
+    start_monday = _date.fromisoformat(start_iso)
+    # Defensive: snap to Monday in case the earliest_key didn't already.
+    start_monday = start_monday - _td(days=start_monday.weekday())
+
+    today = _date.today()
+    current_monday = today - _td(days=today.weekday())
+
+    weeks: list[dict] = []
+    cursor = start_monday
+    while cursor <= current_monday:
+        friday = cursor + _td(days=4)
+        key = cursor.isoformat()
+        retro = saved_by_week.get(key)
+        sparkline = series.get(key, {}).get("weekly_return_pct")
+        # has_content: row exists AND user filled in at least one field.
+        # Pure "saved by the auto-save but every field blank" stays
+        # has_content=False so the rail draft-dot styling is honest.
+        has_content = bool(retro and _retro_has_content(retro))
+        weeks.append({
+            "id": retro["id"] if retro else None,
+            "key": key,
+            "week_start": key,
+            "week_end": friday.isoformat(),
+            "year": cursor.year,
+            "month": cursor.month,
+            "title": _format_week_title(cursor, friday),
+            "has_content": has_content,
+            "pinned": bool(retro and retro["id"] in pinned_ids),
+            "sparkline_value": sparkline,
+            "week_grade": (retro or {}).get("week_grade"),
+        })
+        cursor = cursor + _td(days=7)
+
+    # Sort newest first for the rail's primary read order.
+    weeks.sort(key=lambda w: w["week_start"], reverse=True)
+
+    # YTD aggregate (current calendar year only).
+    current_year = today.year
+    ytd_rows = [w for w in weeks if w["year"] == current_year]
+    graded_letters = [w["week_grade"] for w in ytd_rows if w["week_grade"]]
+    ytd_pinned_count = sum(1 for w in ytd_rows if w["pinned"])
+
+    return {
+        "weeks": weeks,
+        "ytd_stats": {
+            "total_weeks": len(ytd_rows),
+            "weeks_graded": len(graded_letters),
+            "avg_grade": avg_grade_from_letters(graded_letters),
+            "weeks_pinned": ytd_pinned_count,
+        },
+    }
+
+
+def _retro_has_content(retro: dict) -> bool:
+    """True if the retro has any user-supplied content beyond defaults.
+    Drives the rail's draft vs. graded styling. Auto-save can persist a
+    row with all-blank fields when the user simply navigates to a week
+    — those should still surface as draft (id present so it can be
+    pinned, but has_content=False so the dot stays hollow)."""
+    return bool(
+        retro.get("week_grade")
+        or (retro.get("best_decision") or "").strip()
+        or (retro.get("worst_decision") or "").strip()
+        or (retro.get("rule_change_text") or "").strip()
+        or (retro.get("weekly_thoughts") or "").strip()
+        or retro.get("rule_change")
+        or retro.get("ticker_grades")
+    )
+
+
+_MONTH_NAMES = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def _format_week_title(monday, friday) -> str:
+    """Human label for a week row. Examples: "May 11 – May 15",
+    "Apr 27 – May 1". Server-formats so timezone bugs don't shift the
+    visible date in the rail."""
+    same_month = monday.month == friday.month
+    if same_month:
+        return f"{_MONTH_NAMES[monday.month - 1]} {monday.day} – {friday.day}"
+    return (
+        f"{_MONTH_NAMES[monday.month - 1]} {monday.day} – "
+        f"{_MONTH_NAMES[friday.month - 1]} {friday.day}"
+    )

@@ -875,12 +875,54 @@ def weekly_retro_get(
 @app.get("/api/weekly-retros/list")
 def weekly_retro_list(
     portfolio: str = Query("CanSlim"),
-    limit: int = Query(200),
 ):
-    """Return all live retros for the portfolio, newest first. Used by the
-    History tab today and the Phase 6 left rail later."""
+    """Wrapped envelope for the Phase 6 NotesRail.
+
+    Response: { "weeks": [...], "ytd_stats": {...} }. Synthetic empty rows
+    cover Mondays without a saved retro so the rail's sparkline + grade-dot
+    grid is continuous. See db.list_weekly_retros_rail for the field-level
+    contract.
+
+    Phase 6 broke the previous bare-array shape — the only consumer (the
+    Review History tab) was deleted in the same commit, so this is a
+    coordinated cutover with no parallel consumers to support.
+    """
     try:
-        return db.list_weekly_retros(portfolio, limit=limit)
+        return db.list_weekly_retros_rail(portfolio)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/pins/toggle")
+@limiter.limit("60/minute")
+def pins_toggle(request: Request, body: dict = Body(...)):
+    """Idempotent pin toggle for the Phase 6 NotesRail.
+
+    Body: { entity_type: "weekly_retro" | "daily_journal", entity_id: int }
+    Returns: { pinned: bool } — the NEW state after the toggle.
+
+    Idempotency contract: the server tracks pin/unpin via soft-delete on
+    pinned_entities (Migration 029). Sending the same request twice
+    deterministically returns to the pre-call state, no bouncing.
+
+    RLS scopes to the calling user — toggling another user's pin is a
+    no-op (cur.fetchone() returns None and we INSERT a row owned by the
+    caller; their attempt to "unpin" someone else's pin actually creates
+    their own).
+    """
+    entity_type = (body or {}).get("entity_type")
+    entity_id = (body or {}).get("entity_id")
+    if entity_type not in ("weekly_retro", "daily_journal"):
+        return {"error": "invalid_entity_type"}
+    try:
+        entity_id = int(entity_id)
+    except (TypeError, ValueError):
+        return {"error": "entity_id must be an integer"}
+    try:
+        pinned = db.toggle_pin(entity_type, entity_id)
+        return {"pinned": pinned}
+    except ValueError as e:
+        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
 

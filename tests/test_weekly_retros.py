@@ -503,33 +503,32 @@ def test_get_bad_week_start_format(weekly_stubs):
     assert state["load_calls"] == []
 
 
-def test_list_returns_array(weekly_stubs):
-    """List endpoint returns the array of retros, newest first as helper sorts."""
+def test_list_returns_envelope_shape(weekly_stubs, monkeypatch):
+    """Phase 6 — list endpoint now returns {weeks, ytd_stats} (no longer
+    a bare array). The Review History tab that consumed the array shape
+    is gone, so this is a coordinated cutover. Detailed shape tests for
+    the envelope live in test_pinned_entities.py; this is a smoke test
+    that the route still wires through db.list_weekly_retros_rail."""
     state, client = weekly_stubs
-    state["list_result"] = [
-        {"id": 2, "portfolio": "CanSlim", "week_start": "2026-05-11",
-         "week_grade": "A", "best_decision": "", "worst_decision": "",
-         "rule_change": False, "rule_change_text": "",
-         "weekly_thoughts": "<p>week 2 thoughts</p>",
-         "ticker_grades": {},
-         "created_at": "2026-05-12T00:00:00", "updated_at": "2026-05-12T00:00:00"},
-        {"id": 1, "portfolio": "CanSlim", "week_start": "2026-05-04",
-         "week_grade": "B", "best_decision": "", "worst_decision": "",
-         "rule_change": False, "rule_change_text": "",
-         "weekly_thoughts": "",
-         "ticker_grades": {},
-         "created_at": "2026-05-05T00:00:00", "updated_at": "2026-05-05T00:00:00"},
-    ]
-
+    monkeypatch.setattr(
+        db_layer, "list_weekly_retros_rail",
+        lambda _: {
+            "weeks": [
+                {"id": 2, "key": "2026-05-11", "week_start": "2026-05-11",
+                 "week_end": "2026-05-15", "year": 2026, "month": 5,
+                 "title": "May 11 – May 15", "has_content": True,
+                 "pinned": False, "sparkline_value": 4.62, "week_grade": "A"},
+            ],
+            "ytd_stats": {"total_weeks": 1, "weeks_graded": 1,
+                          "avg_grade": "A", "weeks_pinned": 0},
+        },
+    )
     r = client.get("/api/weekly-retros/list?portfolio=CanSlim")
     assert r.status_code == 200
     body = r.json()
-    assert isinstance(body, list)
-    assert len(body) == 2
-    assert body[0]["week_start"] == "2026-05-11"
-    # Phase 3: weekly_thoughts present on every row in the array.
-    assert body[0]["weekly_thoughts"] == "<p>week 2 thoughts</p>"
-    assert body[1]["weekly_thoughts"] == ""
+    assert "weeks" in body and "ytd_stats" in body
+    assert body["weeks"][0]["week_start"] == "2026-05-11"
+    assert body["ytd_stats"]["avg_grade"] == "A"
 
 
 def test_put_happy_path(weekly_stubs):
