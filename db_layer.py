@@ -1,7 +1,10 @@
 # db_layer.py - PostgreSQL abstraction layer for trading journal
 
+import math
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
+from psycopg2.extensions import register_adapter, adapt
+import numpy as np
 import pandas as pd
 import os
 import re
@@ -13,6 +16,33 @@ from datetime import datetime
 from functools import wraps
 import time
 from decimal import Decimal
+
+
+# ============================================
+# psycopg2 numpy scalar adapter
+# ============================================
+# psycopg2 has no built-in adapter for numpy scalars. Without this,
+# values like np.float64 (returned by DataFrame.iloc[0].get(...) for any
+# numeric column) fall through to psycopg2's repr() fallback. Under
+# numpy 2.0+ that repr is "np.float64(123.45)" — Postgres parses that
+# as schema "np", function "float64"(...) and raises InvalidSchemaName.
+#
+# The fix: convert numpy scalars to their native Python equivalent via
+# .item() and delegate to psycopg2's standard adapter chain for that
+# native type. NaN is mapped to NULL (matches the pd.isna() → None
+# behaviour the per-row _clean helpers in this file were already doing).
+def _adapt_numpy_scalar(val):
+    py_val = val.item()
+    if isinstance(py_val, float) and math.isnan(py_val):
+        return adapt(None)
+    return adapt(py_val)
+
+
+for _np_type in (np.float64, np.float32, np.float16,
+                 np.int64, np.int32, np.int16, np.int8,
+                 np.uint64, np.uint32, np.uint16, np.uint8,
+                 np.bool_):
+    register_adapter(_np_type, _adapt_numpy_scalar)
 
 
 # ============================================
