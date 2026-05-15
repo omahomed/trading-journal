@@ -468,15 +468,31 @@ describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
   });
 
   test("refetches metrics when the week date changes", async () => {
+    // Phase 6: the standalone date input was removed from the main
+    // content. Navigation now happens through the NotesRail (item
+    // click) or its calendar jump-to-date popover. Provide a rail item
+    // so the jump-to-date handler can resolve it.
+    mWeeklyList.mockResolvedValue({
+      weeks: [{
+        id: 99, key: "2026-05-04", week_start: "2026-05-04",
+        week_end: "2026-05-08", year: 2026, month: 5,
+        title: "May 4 – 8", has_content: false, pinned: false,
+        sparkline_value: null, week_grade: null,
+        weekly_pnl: null, trades_count: 0, win_rate: null, tags: [],
+      }],
+      ytd_stats: { total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0 },
+    } as any);
     await mountAndSettle();
     const initialCalls = mWeeklyMetrics.mock.calls.length;
 
-    // Change the week selector to a Monday we control. The <label> on the
-    // date picker doesn't carry an htmlFor, so query by input type instead.
+    // NotesRail renders a hidden `<input type="date">` inside the
+    // jump-to-date affordance. Firing change triggers handleJumpToDate
+    // which finds the item by week_start and calls onItemClick →
+    // setWeekDate → metrics refetch.
     const weekInput = document.querySelector('input[type="date"]') as HTMLInputElement;
     expect(weekInput).toBeTruthy();
     await act(async () => {
-      fireEvent.change(weekInput, { target: { value: "2026-05-04" } });
+      fireEvent.change(weekInput, { target: { value: "2026-05-07" } });
     });
 
     await waitFor(() => {

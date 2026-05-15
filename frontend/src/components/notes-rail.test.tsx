@@ -39,6 +39,10 @@ function item(opts: Partial<NotesRailItem> & {
     pinned: opts.pinned ?? false,
     sparkline_value: opts.sparkline_value ?? 1.5,
     week_grade: opts.week_grade ?? "B+",
+    weekly_pnl: opts.weekly_pnl ?? null,
+    trades_count: opts.trades_count ?? 0,
+    win_rate: opts.win_rate ?? null,
+    tags: opts.tags ?? [],
   };
 }
 
@@ -228,8 +232,13 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
                  currentEntityKey={items[0].key}
                  onItemClick={vi.fn()} onPinToggle={vi.fn()} />
     );
-    // SVG is inside the current-month folder header.
-    const rects = container.querySelectorAll("svg rect");
+    // Scope to the sparkline SVG (56x18) — the calendar icon and other
+    // decorative SVGs in the rail header also contain <rect> nodes, so
+    // a naive container-level query would over-count.
+    const sparklineSvg = Array.from(container.querySelectorAll("svg"))
+      .find(s => s.getAttribute("width") === "56" && s.getAttribute("height") === "18");
+    expect(sparklineSvg).toBeTruthy();
+    const rects = sparklineSvg!.querySelectorAll("rect");
     expect(rects.length).toBe(3);
   });
 
@@ -271,6 +280,141 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     });
     expect(onItemClick).toHaveBeenCalled();
     expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-04");
+  });
+
+  test("header subtitle includes years span when items cross multiple years", () => {
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2025-12-29", year: 2025, month: 12 }),
+      item({ id: 12, key: "2024-09-02", year: 2024, month: 9 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // 2026 - 2024 + 1 = 3 years
+    expect(screen.getByText(/3 years/)).toBeInTheDocument();
+    expect(screen.getByText(/3 weeks/)).toBeInTheDocument();
+  });
+
+  test("header subtitle renders '1 year' (singular) when items span one calendar year", () => {
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-01-06", year: 2026, month: 1 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.getByText(/1 year(?!s)/)).toBeInTheDocument();
+  });
+
+  test("calendar jump-to-date button opens picker; selecting a date fires onItemClick with the right week", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+      item({ id: 12, key: "2026-04-27", year: 2026, month: 4 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    // Verify the button exists (clicking native picker doesn't work in jsdom).
+    expect(screen.getByTestId("rail-jump-date-btn")).toBeInTheDocument();
+    // Simulate the date input's change event directly — that's the path
+    // a real user hits after picking from the native popover.
+    const dateInput = screen.getByTestId("rail-jump-date-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2026-05-07" } }); // Thursday of week 2026-05-04
+    });
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+    expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-04");
+  });
+
+  test("calendar jump-to-date picks the nearest week when the exact week isn't loaded", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    const dateInput = screen.getByTestId("rail-jump-date-input") as HTMLInputElement;
+    // 2025-01-01 — far before any loaded week. Nearest is 2026-05-04.
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2025-01-01" } });
+    });
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+    expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-04");
+  });
+
+  test("RailItem renders per-row stats line with weekly_pnl + trades_count + win_rate", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      weekly_pnl: 16700, trades_count: 14, win_rate: 0.71,
+      title: "May 11 – 15",
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Compact $ format → "+$16.7k"
+    expect(screen.getByText(/\+\$16\.7k/)).toBeInTheDocument();
+    expect(screen.getByText("14T")).toBeInTheDocument();
+    expect(screen.getByText("71%W")).toBeInTheDocument();
+  });
+
+  test("RailItem hides stats line when no pnl and no trades, falls back to sparkline line", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      weekly_pnl: null, trades_count: 0, win_rate: null,
+      sparkline_value: 4.62,
+      title: "May 11 – 15",
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Falls back to sparkline percent (no T, no %W). The percent renders
+    // twice: once in the MonthFolder aggregate header, once in the
+    // RailItem fallback line — both legitimate.
+    expect(screen.getAllByText(/\+4\.62%/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText(/^14T$/)).toBeNull();
+    expect(screen.queryByText(/^71%W$/)).toBeNull();
+  });
+
+  test("RailItem renders tag chips when tags are present", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      tags: [
+        { name: "FTD", color: "emerald" },
+        { name: "Breakout", color: "sky" },
+      ],
+      title: "May 11 – 15",
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.getByText("FTD")).toBeInTheDocument();
+    expect(screen.getByText("Breakout")).toBeInTheDocument();
+  });
+
+  test("RailItem caps tag chips at 3 and shows '+N' overflow", () => {
+    const items = [item({
+      id: 10, key: "2026-05-11", year: 2026, month: 5,
+      tags: [
+        { name: "FTD", color: "emerald" },
+        { name: "Breakout", color: "sky" },
+        { name: "Choppy", color: "amber" },
+        { name: "Drawdown", color: "rose" },
+        { name: "FOMC", color: "violet" },
+      ],
+    })];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.getByText("FTD")).toBeInTheDocument();
+    expect(screen.getByText("Breakout")).toBeInTheDocument();
+    expect(screen.getByText("Choppy")).toBeInTheDocument();
+    expect(screen.queryByText("Drawdown")).toBeNull();
+    expect(screen.getByText("+2")).toBeInTheDocument();
   });
 
   test("search input doesn't intercept ArrowDown — focus stays in search bar", () => {

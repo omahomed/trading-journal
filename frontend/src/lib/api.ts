@@ -75,6 +75,12 @@ export interface WeeklyRetroTickerGrade {
 // the sparkline grid is continuous.
 export type NotesRailEntityType = "weekly_retro" | "daily_journal";
 
+export interface NotesRailItemTag {
+  name: string;
+  /** Matches the TAG_PALETTE keys: rose | amber | emerald | sky | violet. */
+  color: string;
+}
+
 export interface NotesRailItem {
   id: number | null;            // null on synthetic empty rows
   key: string;                  // week_start ISO; stable id for activeKey
@@ -87,6 +93,11 @@ export interface NotesRailItem {
   pinned: boolean;
   sparkline_value: number | null;   // weekly_return_pct
   week_grade: string | null;
+  // Phase 6 design-fidelity additions (rail per-row subtitle line + chips).
+  weekly_pnl: number | null;        // $ realized P&L for closed trades in week
+  trades_count: number;             // count of CLOSED campaigns closed in week
+  win_rate: number | null;          // wins/(wins+losses+flat) for those campaigns
+  tags: NotesRailItemTag[];         // attached tags (Phase 1 polymorphic system)
 }
 
 export interface NotesRailYtdStats {
