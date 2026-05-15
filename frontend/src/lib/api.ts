@@ -94,9 +94,11 @@ export interface NotesRailItem {
   sparkline_value: number | null;   // weekly_return_pct
   week_grade: string | null;
   // Phase 6 design-fidelity additions (rail per-row subtitle line + chips).
-  weekly_pnl: number | null;        // $ realized P&L for closed trades in week
-  trades_count: number;             // count of CLOSED campaigns closed in week
-  win_rate: number | null;          // wins/(wins+losses+flat) for those campaigns
+  // weekly_pnl: NLV-delta for the week (matches Weekly P&L tile source).
+  // trades_count: count of trade_details transactions for the week (matches
+  // Flight Deck Total Tickets source).
+  weekly_pnl: number | null;
+  trades_count: number;
   tags: NotesRailItemTag[];         // attached tags (Phase 1 polymorphic system)
 }
 

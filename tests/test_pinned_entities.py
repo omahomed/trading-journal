@@ -354,7 +354,7 @@ def test_list_weekly_retros_rail_empty_account_returns_envelope_with_zeros(monke
     # Phase 6 fidelity update: list_weekly_retros_rail also reads
     # trades_summary + tag_assignments. Stub both so tests don't hit the
     # real DB. Individual tests can override these for richer fixtures.
-    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "load_details", lambda _: pd.DataFrame())
     monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     assert out["weeks"] == []
@@ -389,7 +389,7 @@ def test_list_weekly_retros_rail_emits_synthetic_rows_for_missing_weeks(monkeypa
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
-    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "load_details", lambda _: pd.DataFrame())
     monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
 
     out = db_layer.list_weekly_retros_rail("CanSlim")
@@ -423,7 +423,7 @@ def test_list_weekly_retros_rail_weeks_sorted_newest_first(monkeypatch):
     # Phase 6 fidelity update: list_weekly_retros_rail also reads
     # trades_summary + tag_assignments. Stub both so tests don't hit the
     # real DB. Individual tests can override these for richer fixtures.
-    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "load_details", lambda _: pd.DataFrame())
     monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     week_starts = [w["week_start"] for w in out["weeks"]]
@@ -433,10 +433,17 @@ def test_list_weekly_retros_rail_weeks_sorted_newest_first(monkeypatch):
 
 
 def test_list_weekly_retros_rail_includes_trade_stats_and_tags(monkeypatch):
-    """Phase 6 design-fidelity: each row carries weekly_pnl, trades_count,
-    win_rate, and tags so the rail's per-row subtitle line + chips render
-    without per-row API calls."""
+    """Each row carries weekly_pnl (NLV-delta, matches Weekly P&L tile),
+    trades_count (transaction count, matches Flight Deck Total Tickets
+    tile), and tags so the rail's per-row subtitle line + chips render
+    without per-row API calls.
+
+    Source consistency contract: same numbers as the tiles for the same
+    week. See test_rail_matches_tile_sources for the explicit cross-page
+    pinning."""
     import pandas as pd
+    # Journal week: Mon 2024-01-08 → end_nlv=110, beg_nlv=100, cash=0
+    # → weekly_pnl = 110 - (100 + 0) = +10 (NLV-delta, NOT realized P&L).
     df = pd.DataFrame([
         {"day": "2024-01-08", "beg_nlv": 100.0, "end_nlv": 110.0, "cash_change": 0.0},
     ])
@@ -446,17 +453,20 @@ def test_list_weekly_retros_rail_includes_trade_stats_and_tags(monkeypatch):
               "weekly_thoughts": "", "ticker_grades": {},
               "created_at": "2024-01-09T00:00:00",
               "updated_at": "2024-01-09T00:00:00"}]
-    # Trade stats: 2 closed trades that week, 1 win, 1 loss.
-    summary = pd.DataFrame([
-        {"Status": "CLOSED", "Closed_Date": "2024-01-09", "Realized_PL": 1000.0},
-        {"Status": "CLOSED", "Closed_Date": "2024-01-10", "Realized_PL": -500.0},
+    # Trade details: 3 buy/sell transactions in the week.
+    # trades_count = 3 (matches Flight Deck), NOT 2 (which would be the
+    # closed-campaign count under the pre-fix source).
+    details = pd.DataFrame([
+        {"Date": "2024-01-08", "Action": "BUY"},
+        {"Date": "2024-01-09", "Action": "SELL"},
+        {"Date": "2024-01-09", "Action": "BUY"},
     ])
     # Tags for retro id=7.
     tag_rows = [{"entity_id": 7, "name": "FTD", "color": "emerald"}]
 
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
-    monkeypatch.setattr(db_layer, "load_summary", lambda _: summary)
+    monkeypatch.setattr(db_layer, "load_details", lambda _: details)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
     # Stub the batch tag fetch by patching the cursor return.
     cur = _FakeCursor(fetchalls=[tag_rows])
@@ -464,10 +474,65 @@ def test_list_weekly_retros_rail_includes_trade_stats_and_tags(monkeypatch):
 
     out = db_layer.list_weekly_retros_rail("CanSlim")
     row = next(w for w in out["weeks"] if w["key"] == "2024-01-08")
-    assert row["weekly_pnl"] == 500.0
-    assert row["trades_count"] == 2
-    assert abs(row["win_rate"] - 0.5) < 0.001
+    assert row["weekly_pnl"] == 10.0
+    assert row["trades_count"] == 3
+    # win_rate field intentionally dropped — frontend stats line no
+    # longer renders it.
+    assert "win_rate" not in row
     assert row["tags"] == [{"name": "FTD", "color": "emerald"}]
+
+
+def test_rail_matches_tile_sources(monkeypatch):
+    """Cross-page consistency contract: the rail's weekly_pnl matches the
+    Weekly P&L tile (nlv_service.weekly_metrics) for the same week, and
+    the rail's trades_count matches the Flight Deck Total Tickets count
+    (raw trade_details row count for the week) — both produced by the
+    SAME helpers via the same DataFrames.
+
+    Pre-fix the rail used trades_summary.realized_pl sum + closed-campaign
+    count — different sources, different numbers, different displays.
+    Pinning the equality here so any future regression that swaps the
+    source path back gets caught here, not via user screenshot.
+    """
+    import pandas as pd
+    import nlv_service
+
+    # A week with both journal and details data. NLV-delta = 130 - (100
+    # + 5) = 25. Three details rows → trades_count = 3.
+    journal = pd.DataFrame([
+        {"day": "2024-01-08", "beg_nlv": 100.0, "end_nlv": 110.0, "cash_change": 5.0},
+        {"day": "2024-01-09", "beg_nlv": 110.0, "end_nlv": 120.0, "cash_change": 0.0},
+        {"day": "2024-01-12", "beg_nlv": 120.0, "end_nlv": 130.0, "cash_change": 0.0},
+    ])
+    details = pd.DataFrame([
+        {"Date": "2024-01-08", "Action": "BUY"},
+        {"Date": "2024-01-09", "Action": "SELL"},
+        {"Date": "2024-01-11", "Action": "BUY"},
+    ])
+
+    monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: [])
+    monkeypatch.setattr(db_layer, "load_journal", lambda _: journal)
+    monkeypatch.setattr(db_layer, "load_details", lambda _: details)
+    monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: set())
+    monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
+    # weekly_metrics in nlv_service uses its own load_journal binding —
+    # patch through that too, plus stub load_summary so its Win Rate
+    # calculation doesn't try a DB hit.
+    monkeypatch.setattr(nlv_service.db, "load_journal", lambda _: journal)
+    monkeypatch.setattr(nlv_service.db, "load_summary", lambda _: pd.DataFrame())
+
+    rail = db_layer.list_weekly_retros_rail("CanSlim")
+    rail_row = next(w for w in rail["weeks"] if w["key"] == "2024-01-08")
+
+    tile = nlv_service.weekly_metrics("CanSlim", "2024-01-08")
+
+    # Rail $ == Tile $ (NLV-delta) — both use the same formula now.
+    assert rail_row["weekly_pnl"] == tile["weekly_pnl"]
+    # Rail % == Tile % (chained TWR) — already aligned pre-fix.
+    assert abs(rail_row["sparkline_value"] - tile["weekly_return_pct"]) < 0.0001
+    # Rail trades_count == raw transaction count for the week (3) — same
+    # source as Flight Deck (totalTx = weekTxns.length in weekly-retro.tsx).
+    assert rail_row["trades_count"] == 3
 
 
 def test_list_weekly_retros_rail_marks_pinned_rows(monkeypatch):
@@ -486,7 +551,7 @@ def test_list_weekly_retros_rail_marks_pinned_rows(monkeypatch):
     monkeypatch.setattr(db_layer, "list_weekly_retros", lambda _, **k: saved)
     monkeypatch.setattr(db_layer, "load_journal", lambda _: df)
     monkeypatch.setattr(db_layer, "list_pinned_entity_ids", lambda _: {7})
-    monkeypatch.setattr(db_layer, "load_summary", lambda _: pd.DataFrame())
+    monkeypatch.setattr(db_layer, "load_details", lambda _: pd.DataFrame())
     monkeypatch.setattr(db_layer, "_weekly_retro_tags_batch", lambda _ids: {})
     out = db_layer.list_weekly_retros_rail("CanSlim")
     saved_row = next(w for w in out["weeks"] if w["key"] == "2026-05-11")
