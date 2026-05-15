@@ -5206,12 +5206,18 @@ def avg_grade_from_letters(grades) -> str | None:
 # doesn't have to make 52 separate /api/analytics/weekly-metrics calls.
 
 def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
-    """Returns {week_start_iso: {week_start, week_end, weekly_return_pct}}
-    for every Monday with at least one journal row in the portfolio.
+    """Returns {week_start_iso: {week_start, week_end, weekly_return_pct,
+    weekly_pnl}} for every Monday with at least one journal row in the
+    portfolio.
 
     Reuses Phase 5's `_prepare_journal_for_returns` to produce the per-day
     return series, then groups by the ISO Monday of each row. Each bucket's
-    chained product (1+r) gives the week TWR.
+    chained product (1+r) gives the week TWR. The weekly_pnl is the same
+    NLV-delta formula as Phase 5's weekly_metrics tile —
+        end_nlv − (beg_nlv + Σ cash_change)
+    over the in-week rows. Computing both in the same batch pass guarantees
+    rail values match tile values (cross-page consistency contract is
+    enforced by the test_rail_matches_tile_sources test).
 
     Returned dict keys are ISO date strings (YYYY-MM-DD) so they're directly
     matchable against the synthetic-Monday grid the API list endpoint builds.
@@ -5220,7 +5226,7 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
     # nlv_service here would cycle. Lazy imports break the cycle.
     from nlv_service import _prepare_journal_for_returns
     from trade_calc import normalize_journal_columns
-    from datetime import timedelta as _td
+    from datetime import date as _date, timedelta as _td
 
     journal = load_journal(portfolio_name)
     if journal is None or journal.empty:
@@ -5236,27 +5242,36 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
     if work.empty:
         return {}
 
-    out: dict[str, dict] = {}
-    grouped: dict[str, list[float]] = {}
+    # Bucket per-day rows by Monday-of-week. Preserves day-sorted order
+    # inside each bucket (work is sorted ascending by _prepare_journal).
+    buckets: dict[str, list] = {}
     for _, row in work.iterrows():
         day = row["day"].date() if hasattr(row["day"], "date") else row["day"]
-        # Snap to the Monday of day's ISO week. weekday(): Mon=0..Sun=6.
         monday = day - _td(days=day.weekday())
         key = monday.isoformat()
-        grouped.setdefault(key, []).append(float(row["daily_return"]))
-        if key not in out:
-            friday = monday + _td(days=4)
-            out[key] = {
-                "week_start": monday.isoformat(),
-                "week_end": friday.isoformat(),
-                "weekly_return_pct": 0.0,
-            }
+        buckets.setdefault(key, []).append(row)
 
-    for key, returns in grouped.items():
+    out: dict[str, dict] = {}
+    for key, rows in buckets.items():
+        monday = _date.fromisoformat(key)
+        friday = monday + _td(days=4)
+        # Chained TWR for the week.
         product = 1.0
-        for r in returns:
-            product *= 1.0 + r
-        out[key]["weekly_return_pct"] = round((product - 1.0) * 100.0, 4)
+        for r in rows:
+            product *= 1.0 + float(r["daily_return"])
+        weekly_return_pct = round((product - 1.0) * 100.0, 4)
+        # NLV-delta for the week — same formula as Phase 5 weekly_metrics
+        # so rail row $ values match the top-tile $ exactly.
+        beg_nlv = float(rows[0]["beg_nlv"])
+        end_nlv = float(rows[-1]["end_nlv"])
+        cash_flow = sum(float(r["cash_change"]) for r in rows)
+        weekly_pnl = round(end_nlv - (beg_nlv + cash_flow), 2)
+        out[key] = {
+            "week_start": key,
+            "week_end": friday.isoformat(),
+            "weekly_return_pct": weekly_return_pct,
+            "weekly_pnl": weekly_pnl,
+        }
 
     return out
 
@@ -5268,67 +5283,45 @@ def weekly_return_series_for_portfolio(portfolio_name: str) -> dict[str, dict]:
 # sparkline values, and produces the YTD aggregate.
 # ----------------------------------------------------------------------------
 
-def _weekly_trade_stats_for_portfolio(portfolio_name: str) -> dict[str, dict]:
-    """Per-week aggregates from trades_summary, keyed by ISO Monday of the
-    closed_date's week. Returns:
-        {monday_iso: {pnl: float, trades_count: int,
-                      wins: int, losses: int, flat: int, win_rate: float}}
+def _weekly_transaction_counts_for_portfolio(portfolio_name: str) -> dict[str, int]:
+    """Per-week count of trade_details transactions (buys + sells), keyed
+    by ISO Monday of the transaction date's week.
 
-    Win-rate uses the locked Phase 5 convention: wins / (wins+losses+flat).
-    Source is campaign-level realized_pl (one row per CLOSED campaign).
+    Source matches the Flight Deck "Total Tickets" tile exactly: both
+    count rows from `trade_details` (one row per BUY/SELL transaction)
+    filtered to the week's Mon-Sun range. A campaign with 1 BUY + 2 SELLs
+    contributes 3 to the count, not 1.
+
+    This deliberately differs from "closed campaigns count" (which the
+    pre-fix helper returned). Cross-page consistency with the Flight Deck
+    tile is enforced by test_rail_trades_count_matches_flight_deck.
     """
     from datetime import timedelta as _td
-
-    summary = load_summary(portfolio_name)
-    if summary is None or summary.empty:
-        return {}
-
-    # Title-Case columns ("Status", "Closed_Date", "Realized_PL") on the
-    # legacy CSV-era schema. Handle the lowercase variant defensively.
-    status_col = "Status" if "Status" in summary.columns else (
-        "status" if "status" in summary.columns else None)
-    closed_col = "Closed_Date" if "Closed_Date" in summary.columns else (
-        "closed_date" if "closed_date" in summary.columns else None)
-    pl_col = "Realized_PL" if "Realized_PL" in summary.columns else (
-        "realized_pl" if "realized_pl" in summary.columns else None)
-    if not (status_col and closed_col and pl_col):
-        return {}
-
-    work = summary.copy()
     import pandas as _pd
-    work[status_col] = work[status_col].astype(str).str.upper().str.strip()
-    work = work[work[status_col] == "CLOSED"]
-    if work.empty:
-        return {}
-    work[closed_col] = _pd.to_datetime(work[closed_col], errors="coerce")
-    work = work.dropna(subset=[closed_col])
-    if work.empty:
-        return {}
-    work[pl_col] = _pd.to_numeric(work[pl_col], errors="coerce").fillna(0.0)
 
-    out: dict[str, dict] = {}
+    details = load_details(portfolio_name)
+    if details is None or details.empty:
+        return {}
+
+    # load_details returns Title-Case columns ("Date", "Action", ...).
+    # Action filter is intentionally lenient — anything in the table
+    # counts as a "transaction" for the rail. trades_details is already
+    # the buy/sell ledger; there's no other kind of row.
+    date_col = "Date" if "Date" in details.columns else "date"
+    if date_col not in details.columns:
+        return {}
+
+    work = details.copy()
+    work[date_col] = _pd.to_datetime(work[date_col], errors="coerce")
+    work = work.dropna(subset=[date_col])
+    if work.empty:
+        return {}
+
+    out: dict[str, int] = {}
     for _, row in work.iterrows():
-        d = row[closed_col].date() if hasattr(row[closed_col], "date") else row[closed_col]
+        d = row[date_col].date() if hasattr(row[date_col], "date") else row[date_col]
         monday = d - _td(days=d.weekday())
-        key = monday.isoformat()
-        pl = float(row[pl_col])
-        bucket = out.setdefault(key, {
-            "pnl": 0.0, "trades_count": 0,
-            "wins": 0, "losses": 0, "flat": 0, "win_rate": 0.0,
-        })
-        bucket["pnl"] += pl
-        bucket["trades_count"] += 1
-        if pl > 0:
-            bucket["wins"] += 1
-        elif pl < 0:
-            bucket["losses"] += 1
-        else:
-            bucket["flat"] += 1
-    for key, b in out.items():
-        total = b["wins"] + b["losses"] + b["flat"]
-        b["win_rate"] = (b["wins"] / total) if total > 0 else 0.0
-        b["pnl"] = round(b["pnl"], 2)
-        b["win_rate"] = round(b["win_rate"], 4)
+        out[monday.isoformat()] = out.get(monday.isoformat(), 0) + 1
     return out
 
 
@@ -5405,8 +5398,11 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
     # 3. Pinned ids for this entity type (RLS scopes to the user).
     pinned_ids = list_pinned_entity_ids("weekly_retro")
 
-    # 4. Per-week trade stats from trades_summary.
-    trade_stats = _weekly_trade_stats_for_portfolio(portfolio_name)
+    # 4. Per-week transaction counts from trade_details — matches the
+    #    Flight Deck "Total Tickets" tile source exactly. Replaces the
+    #    pre-fix campaign-count-from-trades_summary path that produced
+    #    different numbers from the tile for the same week.
+    trade_counts = _weekly_transaction_counts_for_portfolio(portfolio_name)
 
     # 5. Tags per retro id, batch-fetched in a single SELECT.
     tags_by_retro = _weekly_retro_tags_batch([r["id"] for r in saved])
@@ -5445,8 +5441,12 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
         friday = cursor + _td(days=4)
         key = cursor.isoformat()
         retro = saved_by_week.get(key)
-        sparkline = series.get(key, {}).get("weekly_return_pct")
-        stats = trade_stats.get(key) or {}
+        series_row = series.get(key, {})
+        sparkline = series_row.get("weekly_return_pct")
+        # NLV-delta P&L for the week. Same source as the Weekly P&L tile
+        # in weekly_metrics → consistent values across rail + tiles.
+        weekly_pnl = series_row.get("weekly_pnl")
+        trades_count = trade_counts.get(key, 0)
         retro_tags = tags_by_retro.get(retro["id"], []) if retro else []
         # has_content: row exists AND user filled in at least one field.
         # Pure "saved by the auto-save but every field blank" stays
@@ -5464,10 +5464,13 @@ def list_weekly_retros_rail(portfolio_name: str) -> dict:
             "pinned": bool(retro and retro["id"] in pinned_ids),
             "sparkline_value": sparkline,
             "week_grade": (retro or {}).get("week_grade"),
-            # Phase 6 design-fidelity additions (per-row subtitle line).
-            "weekly_pnl": stats.get("pnl"),
-            "trades_count": stats.get("trades_count", 0),
-            "win_rate": stats.get("win_rate"),
+            # Phase 6 design-fidelity fields. weekly_pnl matches the
+            # Weekly P&L tile (NLV-delta). trades_count matches the
+            # Flight Deck Total Tickets tile (trade_details rows).
+            # win_rate was dropped in Phase 6 stats-format consolidation —
+            # the rail's per-row line no longer renders it.
+            "weekly_pnl": weekly_pnl,
+            "trades_count": trades_count,
             "tags": retro_tags,
         })
         cursor = cursor + _td(days=7)

@@ -41,7 +41,6 @@ function item(opts: Partial<NotesRailItem> & {
     week_grade: opts.week_grade ?? "B+",
     weekly_pnl: opts.weekly_pnl ?? null,
     trades_count: opts.trades_count ?? 0,
-    win_rate: opts.win_rate ?? null,
     tags: opts.tags ?? [],
   };
 }
@@ -351,7 +350,7 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     const items = [item({
       id: 10, key: "2026-05-11", year: 2026, month: 5,
       sparkline_value: 4.62,
-      weekly_pnl: 16700, trades_count: 14, win_rate: 0.71,
+      weekly_pnl: 16700, trades_count: 14,
       title: "May 11 – 15",
     })];
     render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
