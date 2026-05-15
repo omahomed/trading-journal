@@ -217,20 +217,31 @@ function RailItem({
                   title="Pinned"><StarIcon filled size={11} /></span>
           )}
         </div>
-        {/* Per-row stats line — design format: "+$16.7k · 14T · 71%W".
-            Hidden entirely when the week has neither pnl nor any trades
-            (the sparkline_value still hints at activity, but this line
-            stays clean rather than rendering all dashes). */}
-        {(item.weekly_pnl != null || item.trades_count > 0) && (
+        {/* Unified per-row stats line — same shape at every level of the
+            rail: {return%} · {$P&L} · {N trades}. Each segment is
+            individually optional (current week may have % but no closed
+            trades; back-fill weeks may have % but null pnl). The line
+            renders whenever any of the three has a real value. */}
+        {(item.sparkline_value != null || item.weekly_pnl != null || item.trades_count > 0) && (
           <div style={{
             fontSize: 11, display: "flex", alignItems: "center", gap: 5,
             paddingLeft: 14,
             fontFamily: "var(--font-jetbrains), monospace",
           }}>
-            {item.weekly_pnl != null && (
+            {item.sparkline_value != null && (
               <span style={{ color: accent, fontWeight: 600 }}>
-                {formatCurrency(item.weekly_pnl, { showSign: true, compact: true })}
+                {fmtPct(item.sparkline_value)}
               </span>
+            )}
+            {item.weekly_pnl != null && (
+              <>
+                {item.sparkline_value != null && (
+                  <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                )}
+                <span style={{ color: accent, fontWeight: 600 }}>
+                  {formatCurrency(item.weekly_pnl, { showSign: true, compact: true })}
+                </span>
+              </>
             )}
             {item.trades_count > 0 && (
               <>
@@ -240,33 +251,6 @@ function RailItem({
                 </span>
               </>
             )}
-            {item.win_rate != null && item.trades_count > 0 && (
-              <>
-                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
-                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
-                  {Math.round(item.win_rate * 100)}%W
-                </span>
-              </>
-            )}
-            {item.week_grade && (
-              <>
-                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
-                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>{item.week_grade}</span>
-              </>
-            )}
-          </div>
-        )}
-        {/* Sparkline-only line for weeks with no closed trades but with
-            NLV data (so the rail still shows return context for ungraded
-            weeks). Phase 5 weekly_return_pct sits in sparkline_value. */}
-        {item.weekly_pnl == null && item.trades_count === 0 && item.sparkline_value != null && (
-          <div style={{
-            fontSize: 11, display: "flex", alignItems: "center", gap: 5,
-            paddingLeft: 14,
-            color: accent, fontWeight: 600,
-            fontFamily: "var(--font-jetbrains), monospace",
-          }}>
-            <span>{fmtPct(item.sparkline_value)}</span>
             {item.week_grade && (
               <>
                 <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
@@ -362,7 +346,14 @@ function MonthFolder({
   const totalColor = totalPct == null
     ? "var(--ink-3)"
     : (totalPct >= 0 ? "#08a86b" : "#e5484d");
-  const winCount = realValues.filter(v => v > 0).length;
+  // Aggregate $P&L + trades count across the month's child weeks for the
+  // unified stats line. Both sums skip nulls / zeros naturally.
+  const monthPnl = items.reduce(
+    (acc, it) => acc + (it.weekly_pnl ?? 0), 0,
+  );
+  const hasPnl = items.some(it => it.weekly_pnl != null);
+  const monthTrades = items.reduce((acc, it) => acc + (it.trades_count ?? 0), 0);
+  const pnlColor = monthPnl >= 0 ? "#08a86b" : "#e5484d";
 
   return (
     <div data-testid="month-folder"
@@ -402,17 +393,27 @@ function MonthFolder({
           <div style={{
             display: "flex", alignItems: "center", gap: 5,
             marginTop: 2, fontSize: 10.5,
+            fontFamily: "var(--font-jetbrains), monospace",
           }}>
-            <span style={{
-              color: totalColor, fontWeight: 600,
-              fontFamily: "var(--font-jetbrains), monospace",
-            }}>
+            <span style={{ color: totalColor, fontWeight: 600 }}>
               {totalPct == null ? "—" : fmtPct(totalPct * 100)}
             </span>
-            <span style={{ color: "var(--ink-4)" }}>·</span>
-            <span style={{ color: "var(--ink-3)" }}>{items.length}w</span>
-            <span style={{ color: "var(--ink-4)" }}>·</span>
-            <span style={{ color: "var(--ink-3)" }}>{winCount}W</span>
+            {hasPnl && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: pnlColor, fontWeight: 600 }}>
+                  {formatCurrency(monthPnl, { showSign: true, compact: true })}
+                </span>
+              </>
+            )}
+            {monthTrades > 0 && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
+                  {monthTrades}T
+                </span>
+              </>
+            )}
           </div>
         </div>
         <span style={{ flexShrink: 0, opacity: 0.92 }}>
@@ -477,6 +478,13 @@ function YearFolder({
   const totalColor = totalPct == null
     ? "var(--ink-3)"
     : (totalPct >= 0 ? "#08a86b" : "#e5484d");
+  // Same unified aggregation as MonthFolder, just one level up.
+  const yearPnl = allItems.reduce(
+    (acc, it) => acc + (it.weekly_pnl ?? 0), 0,
+  );
+  const hasYearPnl = allItems.some(it => it.weekly_pnl != null);
+  const yearTrades = allItems.reduce((acc, it) => acc + (it.trades_count ?? 0), 0);
+  const yearPnlColor = yearPnl >= 0 ? "#08a86b" : "#e5484d";
 
   return (
     <div data-testid="year-folder" data-year={yearKey}
@@ -504,15 +512,27 @@ function YearFolder({
           <div style={{
             display: "flex", alignItems: "center", gap: 5,
             marginTop: 2, fontSize: 10.5,
+            fontFamily: "var(--font-jetbrains), monospace",
           }}>
-            <span style={{
-              color: totalColor, fontWeight: 600,
-              fontFamily: "var(--font-jetbrains), monospace",
-            }}>
+            <span style={{ color: totalColor, fontWeight: 600 }}>
               {totalPct == null ? "—" : fmtPct(totalPct * 100)}
             </span>
-            <span style={{ color: "var(--ink-4)" }}>·</span>
-            <span style={{ color: "var(--ink-3)" }}>{allItems.length}w</span>
+            {hasYearPnl && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: yearPnlColor, fontWeight: 600 }}>
+                  {formatCurrency(yearPnl, { showSign: true, compact: true })}
+                </span>
+              </>
+            )}
+            {yearTrades > 0 && (
+              <>
+                <span style={{ color: "var(--ink-4)", fontWeight: 400 }}>·</span>
+                <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
+                  {yearTrades}T
+                </span>
+              </>
+            )}
           </div>
         </div>
         <span style={{

@@ -347,37 +347,53 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-04");
   });
 
-  test("RailItem renders per-row stats line with weekly_pnl + trades_count + win_rate", () => {
+  test("RailItem renders unified stats line: return% · $P&L · trades (no win_rate)", () => {
     const items = [item({
       id: 10, key: "2026-05-11", year: 2026, month: 5,
+      sparkline_value: 4.62,
       weekly_pnl: 16700, trades_count: 14, win_rate: 0.71,
       title: "May 11 – 15",
     })];
     render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
                      currentEntityKey={items[0].key}
                      onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
-    // Compact $ format → "+$16.7k"
-    expect(screen.getByText(/\+\$16\.7k/)).toBeInTheDocument();
-    expect(screen.getByText("14T")).toBeInTheDocument();
-    expect(screen.getByText("71%W")).toBeInTheDocument();
+    // Three segments present. Each renders twice in this single-item
+    // setup — once in the MonthFolder aggregate header and once in the
+    // RailItem row — so use getAllByText.
+    expect(screen.getAllByText(/\+4\.62%/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/\+\$16\.7k/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("14T").length).toBeGreaterThanOrEqual(1);
+    // Win-rate suffix is GONE from the row format.
+    expect(screen.queryByText("71%W")).toBeNull();
   });
 
-  test("RailItem hides stats line when no pnl and no trades, falls back to sparkline line", () => {
-    const items = [item({
-      id: 10, key: "2026-05-11", year: 2026, month: 5,
-      weekly_pnl: null, trades_count: 0, win_rate: null,
-      sparkline_value: 4.62,
-      title: "May 11 – 15",
-    })];
+  test("current week (sparkline_value but null pnl + 0 trades) renders the SAME line shape as past weeks — % visible", () => {
+    // Regression fence for the bug where current week showed only "+11.99%"
+    // while past weeks showed "$P&L · NT". The unified line always leads
+    // with %, then appends pnl/trades segments only when present.
+    const items = [
+      item({
+        id: 10, key: "2026-05-11", year: 2026, month: 5,
+        sparkline_value: 11.99, weekly_pnl: null, trades_count: 0,
+        title: "May 11 – 15",
+      }),
+      item({
+        id: 11, key: "2026-05-04", year: 2026, month: 5,
+        sparkline_value: -5.2, weekly_pnl: -11200, trades_count: 12,
+        title: "May 4 – 8",
+      }),
+    ];
     render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
                      currentEntityKey={items[0].key}
                      onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
-    // Falls back to sparkline percent (no T, no %W). The percent renders
-    // twice: once in the MonthFolder aggregate header, once in the
-    // RailItem fallback line — both legitimate.
-    expect(screen.getAllByText(/\+4\.62%/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText(/^14T$/)).toBeNull();
-    expect(screen.queryByText(/^71%W$/)).toBeNull();
+    // Both weeks render their % — current week's was previously hidden
+    // behind the "pnl != null || trades > 0" gate.
+    expect(screen.getAllByText(/\+11\.99%/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/-5\.20%/).length).toBeGreaterThanOrEqual(1);
+    // Past week's pnl + trades still render alongside its %. They may
+    // also surface in the MonthFolder aggregate header above the row.
+    expect(screen.getAllByText(/-\$11\.2k/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("12T").length).toBeGreaterThanOrEqual(1);
   });
 
   test("RailItem renders tag chips when tags are present", () => {
@@ -415,6 +431,98 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(screen.getByText("Choppy")).toBeInTheDocument();
     expect(screen.queryByText("Drawdown")).toBeNull();
     expect(screen.getByText("+2")).toBeInTheDocument();
+  });
+
+  test("MonthFolder header aggregates $P&L + trades across child weeks (unified format)", () => {
+    const items = [
+      item({
+        id: 10, key: "2026-05-11", year: 2026, month: 5,
+        sparkline_value: 4.62, weekly_pnl: 16700, trades_count: 14,
+      }),
+      item({
+        id: 11, key: "2026-05-04", year: 2026, month: 5,
+        sparkline_value: -2.1, weekly_pnl: -4200, trades_count: 8,
+      }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Header sum: 16700 + (-4200) = 12500 → +$12.5k. Trades: 14 + 8 = 22T.
+    expect(screen.getByText(/\+\$12\.5k/)).toBeInTheDocument();
+    expect(screen.getByText("22T")).toBeInTheDocument();
+    // Old "Nw · NW" format must be gone from the month header.
+    expect(screen.queryByText(/^2w$/)).toBeNull();
+    expect(screen.queryByText(/^1W$/)).toBeNull();
+  });
+
+  test("MonthFolder skips $P&L when all child weeks have null pnl (no aggregate to display)", () => {
+    const items = [
+      item({
+        id: 10, key: "2026-05-11", year: 2026, month: 5,
+        sparkline_value: 4.62, weekly_pnl: null, trades_count: 0,
+      }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    // Only the % shows in the header. No $0 stub, no 0T stub.
+    expect(screen.queryByText(/^\+\$0/)).toBeNull();
+    expect(screen.queryByText(/T$/)).toBeNull();
+  });
+
+  test("YearFolder header aggregates $P&L + trades across all child weeks (unified format) and retains MO label", async () => {
+    // Past-year months wrap in a YearFolder. The component derives the
+    // "current" year from items[0], so the fixture is ordered
+    // newest-first (matching the real backend response shape).
+    const items = [
+      // Current-year row so the YearFolder below wraps the past year.
+      item({
+        id: 22, key: "2026-05-11", year: 2026, month: 5,
+        sparkline_value: 4.62, weekly_pnl: 16700, trades_count: 14,
+      }),
+      item({
+        id: 20, key: "2025-06-02", year: 2025, month: 6,
+        sparkline_value: 3.0, weekly_pnl: 50000, trades_count: 100,
+      }),
+      item({
+        id: 21, key: "2025-05-26", year: 2025, month: 5,
+        sparkline_value: 1.5, weekly_pnl: 44000, trades_count: 134,
+      }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const yearHeader = screen.getByTestId("year-folder");
+    // Aggregate: 50000 + 44000 = 94000 → "+$94.0k" (compact one-decimal).
+    // Trades: 100 + 134 = 234T.
+    expect(yearHeader.textContent).toContain("+$94.0k");
+    expect(yearHeader.textContent).toContain("234T");
+    // "MO" label intact ("2 mo" lowercased in the design).
+    expect(yearHeader.textContent?.toLowerCase()).toMatch(/2\s*mo/);
+    // Old single "Nw" suffix is gone.
+    expect(screen.queryByText(/^2w$/)).toBeNull();
+  });
+
+  test("YearFolder skips $P&L when all child weeks lack pnl, keeps % and MO label", () => {
+    // Newest-first ordering so the 2026 row sets the current year.
+    const items = [
+      item({
+        id: 22, key: "2026-05-11", year: 2026, month: 5,
+        sparkline_value: 4.62, weekly_pnl: 16700, trades_count: 14,
+      }),
+      item({
+        id: 20, key: "2025-06-02", year: 2025, month: 6,
+        sparkline_value: 3.0, weekly_pnl: null, trades_count: 0,
+      }),
+    ];
+    render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const yearHeader = screen.getByTestId("year-folder");
+    expect(yearHeader.textContent?.toLowerCase()).toMatch(/1\s*mo/);
+    // No $ segment in the year header when no pnl exists in this year.
+    // (Open the year folder body is also untouched — only header.)
+    expect(yearHeader.firstElementChild?.textContent).not.toMatch(/\$/);
   });
 
   test("search input doesn't intercept ArrowDown — focus stays in search bar", () => {
