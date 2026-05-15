@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { api, getActivePortfolio, type JournalHistoryPoint, type TradeDetail, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
  *  Supports both two-line form:
@@ -195,7 +196,10 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
       }
       await reloadSnapshots();
     } catch (err) {
-      console.error("Upload failed:", err);
+      // Normalized from inline `console.error("Upload failed:", err)` to
+      // the bracketed [area] convention via @/lib/log (Phase A logger
+      // consolidation).
+      log.error("daily-report-card", "EOD snapshot upload failed", err);
     }
     setUploading(false);
   };

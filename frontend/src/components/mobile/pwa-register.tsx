@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { log } from "@/lib/log";
 
 /**
  * Registers `/sw.js` once on the client. Feature-detects
@@ -26,7 +27,7 @@ export function PwaRegister() {
           // degrades the PWA gracefully (offline support disappears,
           // everything else still works). Log only in dev.
           if (process.env.NODE_ENV !== "production") {
-            console.warn("[pwa] service worker registration failed:", err);
+            log.warn("pwa", "service worker registration failed", err);
           }
         });
     };

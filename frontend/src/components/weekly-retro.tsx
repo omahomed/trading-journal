@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type NotesRailItem, type NotesRailYtdStats, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { gradeColor } from "@/lib/grade-helpers";
+import { log } from "@/lib/log";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
 import { WeeklySnapshot } from "./weekly-snapshot";
@@ -137,10 +138,20 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
     if (!portfolio) return;
     try {
       const res = await api.weeklyRetroList(portfolio);
-      if ("error" in res) return;
+      if ("error" in res) {
+        // The Phase 6 "0 weeks" regression originated here — a silent
+        // return left railItems at its empty-array default and the UI
+        // rendered the empty state with no devtools signal. Surfacing
+        // the error to console.error gives any future regression of
+        // this class an immediate signal in devtools.
+        log.error("weekly-retro", "rail fetch failed", res.error);
+        return;
+      }
       setRailItems(res.weeks);
       setRailYtdStats(res.ytd_stats);
-    } catch { /* silent — rail simply stays empty */ }
+    } catch (err) {
+      log.error("weekly-retro", "rail fetch threw", err);
+    }
   }, [portfolio]);
 
   useEffect(() => {

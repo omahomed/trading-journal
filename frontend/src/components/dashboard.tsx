@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { computeEnrichedPositions } from "@/lib/positions";
 import {
@@ -93,13 +94,15 @@ export function Dashboard({ navColor }: { navColor: string }) {
     try {
       const activeId = activePortfolio?.id;
       const [lat, hist, open, closed, ev, dash, recent] = await Promise.all([
-        api.journalLatest().catch(() => null),
-        api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-        api.tradesOpen().catch(() => []),
-        api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
-        api.events().catch(() => []),
-        activeId != null ? api.dashboardMetrics(activeId).catch(() => null) : Promise.resolve(null),
-        api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
+        api.journalLatest().catch((err) => { log.error("dashboard", "journal latest fetch failed", err); return null; }),
+        api.journalHistory(getActivePortfolio(), 0).catch((err) => { log.error("dashboard", "journal history fetch failed", err); return []; }),
+        api.tradesOpen().catch((err) => { log.error("dashboard", "open trades fetch failed", err); return []; }),
+        api.tradesClosed(getActivePortfolio(), 5000).catch((err) => { log.error("dashboard", "closed trades fetch failed", err); return []; }),
+        api.events().catch((err) => { log.error("dashboard", "events fetch failed", err); return []; }),
+        activeId != null
+          ? api.dashboardMetrics(activeId).catch((err) => { log.error("dashboard", "metrics fetch failed", err); return null; })
+          : Promise.resolve(null),
+        api.tradesRecent(getActivePortfolio(), 2000).catch((err) => { log.error("dashboard", "recent trades fetch failed", err); return { details: [], lot_closures: [] }; }),
       ]);
       // Guard: backend can return {error: "..."} at HTTP 200 when something
       // goes wrong server-side. Don't let that poison the render.

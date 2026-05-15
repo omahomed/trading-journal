@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
@@ -468,8 +469,8 @@ export function PeriodReview({ navColor, initialTab, onTabConsumed }: { navColor
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesClosed(getActivePortfolio(), 5000).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch((err) => { log.error("period-review", "journal history fetch failed", err); return []; }),
+      api.tradesClosed(getActivePortfolio(), 5000).catch((err) => { log.error("period-review", "closed trades fetch failed", err); return []; }),
     ]).then(([jrnl, trades]) => {
       setData(jrnl as any[]);
       setClosedTrades(trades as TradePosition[]);
