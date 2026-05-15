@@ -15,7 +15,7 @@ import {
 } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
-import { NotesRail } from "./notes-rail";
+import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import { TagPicker } from "./tag-picker";
 import { DailyThoughts } from "./daily-thoughts";
 import { SnapshotGallery } from "./snapshot-gallery";
@@ -97,6 +97,10 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
 
   // Phase 7 — NotesRail state. Mirrors the weekly-retro rail wiring.
   const [railItems, setRailItems] = useState<NotesRailItem[]>([]);
+  // Phase 8 — imperative ref so TagBar can fire a rail refetch on
+  // successful tag mutations. The rail's refresh() delegates to the
+  // onRefresh prop wired below.
+  const railRef = useRef<NotesRailHandle>(null);
   const [railYtdStats, setRailYtdStats] = useState<NotesRailYtdStats>({
     total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0,
   });
@@ -331,6 +335,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
           mount. Pin toggles go through the polymorphic /api/pins/toggle
           and refresh the rail on success. */}
       <NotesRail
+        ref={railRef}
         entityType="daily_journal"
         items={railItems}
         ytdStats={railYtdStats}
@@ -341,6 +346,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
           if ("error" in res) throw new Error(res.error);
           await refreshRail();
         }}
+        onRefresh={refreshRail}
       />
 
       <div className="flex-1 min-w-0 lg:pl-7">
@@ -356,6 +362,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
             entityType="daily_journal"
             entityId={dayJournalId}
             portfolio={portfolio}
+            onTagsChanged={() => railRef.current?.refresh()}
           />
         </div>
 

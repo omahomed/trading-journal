@@ -45,6 +45,10 @@ vi.mock("@/lib/api", () => ({
     // so the picker's mount fetch doesn't blow up these unrelated tests.
     listTags: vi.fn(),
     listTagAssignments: vi.fn(),
+    // Phase 8: TagPicker → rail-refetch reactivity. createTagAssignment
+    // is the mutation the integration test fires; success branch wires
+    // back to NotesRail.refresh() via onTagsChanged.
+    createTagAssignment: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -60,6 +64,7 @@ const mWeeklyMetrics   = vi.mocked(api.weeklyMetrics);
 const mPinsToggle      = vi.mocked(api.pinsToggle);
 const mListTags        = vi.mocked(api.listTags);
 const mListAssignments = vi.mocked(api.listTagAssignments);
+const mCreateAssign    = vi.mocked(api.createTagAssignment);
 
 function setupDefaults() {
   mTradesRecent.mockResolvedValue({ details: [], lot_closures: [] } as any);
@@ -89,6 +94,11 @@ function setupDefaults() {
   mPinsToggle.mockResolvedValue({ pinned: true } as any);
   mListTags.mockResolvedValue([]);
   mListAssignments.mockResolvedValue([]);
+  mCreateAssign.mockResolvedValue({
+    id: 1, tag_id: 1, tag_name: "x", tag_color: "rose",
+    entity_type: "weekly_retro", entity_id: 1,
+    created_at: "2026-05-13T00:00:00",
+  } as any);
 }
 
 // Wait for the component's two-step mount: tradesRecent resolves and flips
@@ -597,5 +607,72 @@ describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
       );
     });
     errorSpy.mockRestore();
+  });
+
+  // ============================================================
+  // Phase 8 — TagBar → NotesRail reactivity (integration)
+  // ============================================================
+  // Adding a tag through the TagPicker fires onTagsChanged, which on
+  // WeeklyRetro is wired to railRef.current?.refresh(). The rail's
+  // refresh() delegates to its onRefresh prop, which is the parent's
+  // refreshRail callback → another api.weeklyRetroList() call.
+  // Verifies the end-to-end wire is connected without any indirection.
+
+  test("adding a tag triggers a rail refetch (weeklyRetroList called again)", async () => {
+    // Seed the rail with a saved retro so TagPicker sees a non-null
+    // entityId and is enabled. Use the rail-list response to populate
+    // retros[monStr].id via the hydration path.
+    const savedRetro = {
+      id: 7, portfolio: "CanSlim", week_start: "2026-05-11",
+      week_grade: "B", best_decision: "", worst_decision: "",
+      rule_change: false, rule_change_text: "",
+      weekly_thoughts: "",
+      ticker_grades: {},
+      created_at: "2026-05-12T00:00:00", updated_at: "2026-05-12T00:00:00",
+    };
+    mWeeklyList.mockResolvedValue({
+      weeks: [{
+        id: 7, key: "2026-05-11",
+        week_start: "2026-05-11", week_end: "2026-05-15",
+        year: 2026, month: 5, title: "May 11 – 15",
+        has_content: true, pinned: false,
+        sparkline_value: 1.5, week_grade: "B",
+        weekly_pnl: 0, trades_count: 0, tags: [],
+        reviewed_at: null,
+      }],
+      ytd_stats: { total_weeks: 1, weeks_graded: 1, avg_grade: "B", weeks_pinned: 0 },
+    } as any);
+    mWeeklyGet.mockResolvedValue(savedRetro as any);
+    mListTags.mockResolvedValue([
+      { id: 11, portfolio: "CanSlim", name: "earnings", color: "amber",
+        created_at: "2026-05-01T00:00:00", updated_at: "2026-05-01T00:00:00" },
+    ]);
+    mCreateAssign.mockResolvedValue({
+      id: 200, tag_id: 11, tag_name: "earnings", tag_color: "amber",
+      entity_type: "weekly_retro", entity_id: 7,
+      created_at: "2026-05-13T00:00:00",
+    } as any);
+
+    await mountAndSettle();
+    // Mount fired weeklyRetroList once. Capture the baseline count.
+    const callsAfterMount = mWeeklyList.mock.calls.length;
+    expect(callsAfterMount).toBeGreaterThanOrEqual(1);
+
+    // Open the TagPicker dropdown and click the "earnings" option.
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+    const addBtn = await screen.findByRole("button", { name: /add tag/i });
+    await act(async () => { fireEvent.click(addBtn); });
+    const listbox = await screen.findByRole("listbox");
+    const opt = Array.from(listbox.querySelectorAll("button")).find(
+      b => b.textContent?.includes("earnings"),
+    )!;
+    await act(async () => { fireEvent.click(opt); });
+
+    // Server confirms → onTagsChanged fires → rail.refresh() → onRefresh
+    // (refreshRail) → another weeklyRetroList call.
+    await waitFor(() => expect(mCreateAssign).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(mWeeklyList.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    });
   });
 });

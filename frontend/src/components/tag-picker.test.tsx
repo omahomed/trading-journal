@@ -462,4 +462,93 @@ describe("TagPicker", () => {
     await act(async () => { fireEvent.mouseLeave(rowB); });
     expect(screen.queryByRole("button", { name: /Confirm delete FOMC/i })).not.toBeInTheDocument();
   });
+
+  // ============================================================
+  // Phase 8 — onTagsChanged callback
+  // ============================================================
+  // Fires on successful server confirmation for tag mutations. NOT
+  // fired on optimistic update; NOT fired on error. Parent uses it to
+  // refetch tag-dependent UI (e.g., NotesRail filter bar).
+
+  test("onTagsChanged fires after successful assign", async () => {
+    const onTagsChanged = vi.fn();
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    mCreateAssign.mockResolvedValue(assignment(123, 7, "drawdown", "rose"));
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim"
+                      onTagsChanged={onTagsChanged} />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /add tag/i }));
+    });
+    const listbox = await screen.findByRole("listbox");
+    const opt = Array.from(listbox.querySelectorAll("button")).find(
+      b => b.textContent?.includes("drawdown"),
+    )!;
+    await act(async () => { fireEvent.click(opt); });
+
+    await waitFor(() => expect(mCreateAssign).toHaveBeenCalled());
+    await waitFor(() => expect(onTagsChanged).toHaveBeenCalledTimes(1));
+  });
+
+  test("onTagsChanged fires after successful detach (remove)", async () => {
+    const onTagsChanged = vi.fn();
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    mListAssignments.mockResolvedValue([assignment(99, 7, "drawdown", "rose")]);
+    mDeleteAssign.mockResolvedValue({ status: "ok", id: 99 } as any);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim"
+                      onTagsChanged={onTagsChanged} />);
+    await waitFor(() => expect(mListAssignments).toHaveBeenCalled());
+
+    // Click the × inside the rendered pill.
+    const removeBtn = await screen.findByRole("button", { name: /Remove drawdown/i });
+    await act(async () => { fireEvent.click(removeBtn); });
+
+    await waitFor(() => expect(mDeleteAssign).toHaveBeenCalledWith(99));
+    await waitFor(() => expect(onTagsChanged).toHaveBeenCalledTimes(1));
+  });
+
+  test("onTagsChanged does NOT fire when assign errors", async () => {
+    const onTagsChanged = vi.fn();
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    mCreateAssign.mockResolvedValue({ error: "boom" } as any);
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim"
+                      onTagsChanged={onTagsChanged} />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /add tag/i }));
+    });
+    const listbox = await screen.findByRole("listbox");
+    const opt = Array.from(listbox.querySelectorAll("button")).find(
+      b => b.textContent?.includes("drawdown"),
+    )!;
+    await act(async () => { fireEvent.click(opt); });
+
+    await waitFor(() => expect(mCreateAssign).toHaveBeenCalled());
+    // Wait long enough for any spurious fire to have happened.
+    await new Promise(r => setTimeout(r, 50));
+    expect(onTagsChanged).not.toHaveBeenCalled();
+  });
+
+  test("omitting onTagsChanged is safe — no crash on tag mutation", async () => {
+    mListTags.mockResolvedValue([tag(7, "drawdown", "rose")]);
+    mCreateAssign.mockResolvedValue(assignment(123, 7, "drawdown", "rose"));
+    // No onTagsChanged prop. Component must not throw when it would
+    // otherwise call the callback.
+    render(<TagPicker entityType="weekly_retro" entityId={42} portfolio="CanSlim" />);
+    await waitFor(() => expect(mListTags).toHaveBeenCalled());
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /add tag/i }));
+    });
+    const listbox = await screen.findByRole("listbox");
+    const opt = Array.from(listbox.querySelectorAll("button")).find(
+      b => b.textContent?.includes("drawdown"),
+    )!;
+    await act(async () => { fireEvent.click(opt); });
+
+    // Assignment completed; pill is rendered. No exception thrown.
+    expect(await screen.findByText("drawdown")).toBeInTheDocument();
+  });
 });

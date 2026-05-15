@@ -33,9 +33,15 @@ interface TagPickerProps {
   entityType: EntityType;
   entityId: number | null;
   portfolio: string;
+  /** Phase 8 — fires after the server confirms a tag mutation
+   *  (assign / create+assign / detach / palette delete). NOT fired on
+   *  optimistic update, NOT fired on error paths. Optional — consumers
+   *  that don't care (e.g., the trades_summary mount that has no rail)
+   *  omit it and behavior is unchanged. */
+  onTagsChanged?: () => void;
 }
 
-export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
+export function TagPicker({ entityType, entityId, portfolio, onTagsChanged }: TagPickerProps) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [assignments, setAssignments] = useState<TagAssignment[]>([]);
   const [open, setOpen] = useState(false);
@@ -148,12 +154,13 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
       });
       if ("error" in result) throw new Error(result.error);
       setAssignments(prev => prev.map(a => a.id === tempId ? result : a));
+      onTagsChanged?.();
     } catch (e) {
       setAssignments(prev => prev.filter(a => a.id !== tempId));
       const msg = e instanceof Error ? e.message : "Failed to add tag";
       showError(msg === "tag_limit_reached" ? "Maximum 10 tags per entry" : msg);
     }
-  }, [atCap, assignedTagIds, entityType, entityId, showError]);
+  }, [atCap, assignedTagIds, entityType, entityId, showError, onTagsChanged]);
 
   const handleCreateAndAssign = useCallback(async (name: string, tone: TagTone) => {
     if (atCap) { showError("Maximum 10 tags per entry"); return; }
@@ -205,6 +212,7 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
       setAssignments(prev => prev.map(
         a => a.id === tempAssignmentId ? assignResult : a,
       ));
+      onTagsChanged?.();
     } catch (e) {
       // Roll back both optimistic rows.
       setTags(prev => prev.filter(t => t.id !== tempTagId));
@@ -214,7 +222,7 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
     } finally {
       setCreating(false);
     }
-  }, [atCap, portfolio, entityType, entityId, showError]);
+  }, [atCap, portfolio, entityType, entityId, showError, onTagsChanged]);
 
   const handleDetach = useCallback(async (assignment: TagAssignment) => {
     const removed = assignment;
@@ -222,13 +230,14 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
     try {
       const result = await api.deleteTagAssignment(removed.id);
       if ("error" in result) throw new Error(result.error);
+      onTagsChanged?.();
     } catch (e) {
       // Restore on failure.
       setAssignments(prev => [...prev, removed]);
       const msg = e instanceof Error ? e.message : "Failed to remove tag";
       showError(msg);
     }
-  }, [showError]);
+  }, [showError, onTagsChanged]);
 
   // Permanently delete a tag from the user's palette. Different from
   // detach: this removes the tag itself (soft-deletes server-side via
@@ -249,13 +258,16 @@ export function TagPicker({ entityType, entityId, portfolio }: TagPickerProps) {
     try {
       const result = await api.deleteTag(tag.id);
       if ("error" in result) throw new Error(result.error);
+      // Palette delete removes the tag from EVERY entity it was attached
+      // to. Rail filter bar should reflect the change too.
+      onTagsChanged?.();
     } catch (e) {
       setTags(prev => [...prev, tagSnapshot]);
       setAssignments(prev => [...prev, ...assignmentSnapshot]);
       const msg = e instanceof Error ? e.message : "Failed to delete tag";
       showError(`Couldn't delete tag: ${msg}`);
     }
-  }, [assignments, showError]);
+  }, [assignments, showError, onTagsChanged]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
