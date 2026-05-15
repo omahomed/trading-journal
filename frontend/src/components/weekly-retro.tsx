@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { api, getActivePortfolio, type TradeDetail, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
+import { api, getActivePortfolio, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
 import { WeeklySnapshot } from "./weekly-snapshot";
 import { SectionExpander } from "./section-expander";
+import { WeeklyInsightsTile } from "./weekly-insights-tile";
+import { FlightDeck } from "./flight-deck";
 import { Icons } from "./icons";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
@@ -68,6 +70,14 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
   // hydration effect that resets the other per-week local state.
   const [snapshotCount, setSnapshotCount] = useState(0);
 
+  // Phase 5: server-computed performance metrics for the top tile row.
+  // Refetched on portfolio or week change. `error` short-circuits the
+  // tile values to a single inline message; `null` metrics + !error
+  // means in-flight (renders skeleton tiles).
+  const [metrics, setMetrics] = useState<WeeklyMetrics | null>(null);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+
   // History — full retro rows keyed by week_start, populated from the API.
   const [retros, setRetros] = useState<Record<string, WeeklyRetro>>({});
 
@@ -105,6 +115,35 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
       try { localStorage.removeItem("mo-weekly-retros"); } catch { /* incognito */ }
     }).catch(() => { /* silent — render blank state */ });
   }, [portfolio]);
+
+  // Phase 5 — fetch the weekly performance metrics whenever the active
+  // portfolio or week changes. Fires in parallel with the retros list
+  // fetch; the two responses share no data. The tile skeletons render
+  // while in-flight (metrics === null && metricsLoading), and any
+  // server-side error surfaces inline above the tiles.
+  useEffect(() => {
+    if (!portfolio) return;
+    let cancelled = false;
+    setMetricsLoading(true);
+    setMetricsError(null);
+    api.weeklyMetrics(portfolio, monStr).then(res => {
+      if (cancelled) return;
+      if ("error" in res) {
+        setMetricsError(res.error);
+        setMetrics(null);
+      } else {
+        setMetrics(res);
+      }
+    }).catch(err => {
+      if (cancelled) return;
+      setMetricsError(err?.message || "Failed to load metrics");
+      setMetrics(null);
+    }).finally(() => {
+      if (!cancelled) setMetricsLoading(false);
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolio, weekDate]);
 
   // Hydrate per-week local state when the user picks a different week.
   //
@@ -292,19 +331,60 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
             </div>
           </div>
 
-          {/* Activity Monitor */}
-          <div className="grid grid-cols-4 gap-3 mb-5">
-            {[
-              { k: "Total Tickets", v: totalTx, alert: isOveractive },
-              { k: "Unique Tickers", v: uniqueTickers },
-              { k: "Buys", v: buys.length },
-              { k: "Sells / Trims", v: sells.length },
-            ].map(m => (
-              <div key={m.k} className="p-3 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>{m.k}</div>
-                <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: m.alert ? "#e5484d" : "var(--ink)" }}>{m.v}</div>
-              </div>
-            ))}
+          {/* Phase 5 — Weekly Insights gradient tile row. Replaces the
+              prior 4-tile activity grid (Total Tickets / Unique Tickers /
+              Buys / Sells), which has moved into the Per-Ticker Details
+              expander body as <FlightDeck/>. Metrics come from
+              /api/analytics/weekly-metrics; tiles render skeletons while
+              in-flight and an inline error message on failure. Negative
+              values dim + prefix a ↓ glyph — the gradient stays. */}
+          {metricsError && (
+            <div className="mb-3 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
+                 style={{ background: "color-mix(in oklab, #e5484d 10%, var(--surface))", color: "#dc2626", border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))" }}>
+              Weekly metrics unavailable: {metricsError}
+            </div>
+          )}
+          <div data-testid="weekly-insights-row" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+            <WeeklyInsightsTile
+              label="Weekly P&L"
+              value={metrics?.weekly_pnl ?? null}
+              formatType="currency"
+              gradient="linear-gradient(135deg, #10b981, #34d399)"
+              loading={metricsLoading && !metrics}
+            />
+            <WeeklyInsightsTile
+              label="Weekly Return %"
+              value={metrics?.weekly_return_pct ?? null}
+              formatType="percent"
+              gradient="linear-gradient(135deg, #0d6efd, #3b82f6)"
+              loading={metricsLoading && !metrics}
+            />
+            <WeeklyInsightsTile
+              label="YTD %"
+              value={metrics?.ytd_pct ?? null}
+              formatType="percent"
+              gradient="linear-gradient(135deg, #8b5cf6, #a78bfa)"
+              loading={metricsLoading && !metrics}
+            />
+            <WeeklyInsightsTile
+              label="LTD %"
+              value={metrics?.ltd_pct ?? null}
+              formatType="percent"
+              gradient="linear-gradient(135deg, #ec4899, #f472b6)"
+              loading={metricsLoading && !metrics}
+            />
+            <WeeklyInsightsTile
+              label="Win Rate"
+              value={metrics ? metrics.win_rate.rate * 100 : null}
+              formatType="percent"
+              gradient="linear-gradient(135deg, #f97316, #fb923c)"
+              subtitle={metrics
+                ? (metrics.win_rate.total === 0
+                  ? "No closes YTD"
+                  : `${metrics.win_rate.wins}W / ${metrics.win_rate.losses}L / ${metrics.win_rate.flat}F of ${metrics.win_rate.total}`)
+                : undefined}
+              loading={metricsLoading && !metrics}
+            />
           </div>
 
           {/* Per-Ticker Details — collapsible. Migrated to the shared
@@ -330,6 +410,17 @@ export function WeeklyRetro({ navColor }: { navColor: string }) {
                   the 16px breathing room that the pre-refactor
                   marginTop: 12 + the unbordered section gave. */}
               <div style={{ padding: 16 }}>
+                {/* Phase 5 — Flight Deck. The original 4-tile activity
+                    grid from above the per-ticker section, relocated
+                    here. Neutral-surface styling keeps it visually
+                    distinct from the gradient performance tiles up top. */}
+                <FlightDeck
+                  totalTickets={totalTx}
+                  uniqueTickers={uniqueTickers}
+                  buys={buys.length}
+                  sellsTrims={sells.length}
+                  isOveractive={isOveractive}
+                />
                 {/* Progress bar — visual companion to the header caption.
                     Only renders when there are tickers to grade. */}
                 {uniqueTickers > 0 && (

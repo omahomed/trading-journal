@@ -33,6 +33,10 @@ vi.mock("@/lib/api", () => ({
     tradesRecent: vi.fn(),
     weeklyRetroList: vi.fn(),
     weeklyRetroUpsert: vi.fn(),
+    // Phase 5: WeeklyRetro fetches weekly metrics for the top tile row on
+    // mount + week change. Default to a benign zero response so these
+    // existing tests don't fight the new fetch.
+    weeklyMetrics: vi.fn(),
     // Phase 1: WeeklyRetro mounts <TagPicker> which fetches these on mount
     // once a retro has been saved (entityId != null). Stub to empty arrays
     // so the picker's mount fetch doesn't blow up these unrelated tests.
@@ -48,6 +52,7 @@ import { WeeklyRetro } from "./weekly-retro";
 const mTradesRecent = vi.mocked(api.tradesRecent);
 const mWeeklyList   = vi.mocked(api.weeklyRetroList);
 const mWeeklyUpsert = vi.mocked(api.weeklyRetroUpsert);
+const mWeeklyMetrics   = vi.mocked(api.weeklyMetrics);
 const mListTags        = vi.mocked(api.listTags);
 const mListAssignments = vi.mocked(api.listTagAssignments);
 
@@ -61,6 +66,12 @@ function setupDefaults() {
     weekly_thoughts: "",
     ticker_grades: {},
     created_at: "2026-05-13T00:00:00", updated_at: "2026-05-13T00:00:00",
+  } as any);
+  mWeeklyMetrics.mockResolvedValue({
+    weekly_pnl: 0, weekly_return_pct: 0, ytd_pct: 0, ltd_pct: 0,
+    win_rate: { rate: 0, wins: 0, losses: 0, flat: 0, total: 0 },
+    week_start: "2026-05-11", week_end: "2026-05-15",
+    as_of: "2026-05-14T00:00:00",
   } as any);
   mListTags.mockResolvedValue([]);
   mListAssignments.mockResolvedValue([]);
@@ -374,5 +385,113 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
     const payloads = mWeeklyUpsert.mock.calls.map(c => c[0]);
     const last = payloads[payloads.length - 1];
     expect(last.weekly_thoughts).toBe("<p>before save</p>");
+  });
+});
+
+describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    try { localStorage.clear(); } catch { /* shim */ }
+  });
+
+  test("renders the 5-tile gradient row with metrics from the API", async () => {
+    mWeeklyMetrics.mockResolvedValue({
+      weekly_pnl: 21430,
+      weekly_return_pct: 4.62,
+      ytd_pct: 12.3,
+      ltd_pct: 87.4,
+      win_rate: { rate: 0.78, wins: 14, losses: 4, flat: 1, total: 19 },
+      week_start: "2026-05-11", week_end: "2026-05-15",
+      as_of: "2026-05-14T00:00:00",
+    } as any);
+
+    await mountAndSettle();
+
+    // All 5 labels appear.
+    await screen.findByText("Weekly P&L");
+    expect(screen.getByText("Weekly Return %")).toBeInTheDocument();
+    expect(screen.getByText("YTD %")).toBeInTheDocument();
+    expect(screen.getByText("LTD %")).toBeInTheDocument();
+    expect(screen.getByText("Win Rate")).toBeInTheDocument();
+
+    // Formatted values from the API. Currency uses showSign, percents use
+    // two decimals + leading sign.
+    await waitFor(() => expect(screen.getByText(/\+\$21,430/)).toBeInTheDocument());
+    expect(screen.getByText("+4.62%")).toBeInTheDocument();
+    expect(screen.getByText("+12.30%")).toBeInTheDocument();
+    expect(screen.getByText("+87.40%")).toBeInTheDocument();
+    // Win Rate value = rate * 100 → 78.00%.
+    expect(screen.getByText("+78.00%")).toBeInTheDocument();
+    // Subtitle uses the locked "{W}W / {L}L / {F}F of {total}" format.
+    expect(screen.getByText("14W / 4L / 1F of 19")).toBeInTheDocument();
+  });
+
+  test("calls api.weeklyMetrics with the active portfolio and current Monday", async () => {
+    await mountAndSettle();
+    await waitFor(() => expect(mWeeklyMetrics).toHaveBeenCalled());
+    const [portfolio, weekStart] = mWeeklyMetrics.mock.calls[0]!;
+    expect(portfolio).toBe("CanSlim");
+    // Phase 0 / 4.x convention: the week defaults to "this week's Monday"
+    // (Mon=1...Sun=0). We just assert it's a valid YYYY-MM-DD anchored on
+    // a Monday — the exact date depends on test wall-clock.
+    expect(weekStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const d = new Date(weekStart + "T12:00:00");
+    expect(d.getDay()).toBe(1); // Monday
+  });
+
+  test("refetches metrics when the week date changes", async () => {
+    await mountAndSettle();
+    const initialCalls = mWeeklyMetrics.mock.calls.length;
+
+    // Change the week selector to a Monday we control. The <label> on the
+    // date picker doesn't carry an htmlFor, so query by input type instead.
+    const weekInput = document.querySelector('input[type="date"]') as HTMLInputElement;
+    expect(weekInput).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(weekInput, { target: { value: "2026-05-04" } });
+    });
+
+    await waitFor(() => {
+      expect(mWeeklyMetrics.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
+    const lastCall = mWeeklyMetrics.mock.calls.at(-1)!;
+    expect(lastCall[1]).toBe("2026-05-04");
+  });
+
+  test("shows an inline error message when the metrics endpoint returns an error", async () => {
+    mWeeklyMetrics.mockResolvedValue({ error: "Database is sleeping" } as any);
+    await mountAndSettle();
+    await waitFor(() => {
+      expect(screen.getByText(/Weekly metrics unavailable: Database is sleeping/)).toBeInTheDocument();
+    });
+  });
+
+  test("mounts the Flight Deck inside the Per-Ticker expander body", async () => {
+    mTradesRecent.mockResolvedValue({
+      details: [
+        // Build a Monday-Friday spread of buys/sells; exact dates don't
+        // matter for the FlightDeck mount — just that the component is
+        // present inside the per-ticker section once we open it.
+        { date: new Date().toISOString().slice(0, 10), ticker: "AAPL",
+          action: "BUY", trx_id: "B1", shares: 100, amount: 150, rule: "" },
+        { date: new Date().toISOString().slice(0, 10), ticker: "NVDA",
+          action: "SELL", trx_id: "S1", shares: 50, amount: 500, rule: "" },
+      ],
+      lot_closures: [],
+    } as any);
+    await mountAndSettle();
+
+    // The FlightDeck node renders ONLY inside the expander body. Open it.
+    const expanderToggle = await screen.findByRole("button", { name: /Per-Ticker Details/i });
+    await act(async () => { fireEvent.click(expanderToggle); });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("flight-deck")).toBeInTheDocument();
+    });
+    // Standard 4 labels render.
+    expect(screen.getByText("Total Tickets")).toBeInTheDocument();
+    expect(screen.getByText("Buys")).toBeInTheDocument();
+    expect(screen.getByText("Sells / Trims")).toBeInTheDocument();
   });
 });
