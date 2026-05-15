@@ -86,4 +86,26 @@ describe("WeeklyInsightsTile — Phase 5 gradient KPI tile", () => {
     expect(screen.queryByText(/87\.40%/)).toBeNull();
     expect(screen.getByText("…")).toBeInTheDocument();
   });
+
+  test("subtitle does NOT inherit negative styling — only the primary value gets the ↓ glyph", () => {
+    // Negative primary + a subtitle. The ↓ glyph and the opacity dim
+    // are applied to the primary value only. Subtitle stays at its
+    // normal 0.85 opacity with no glyph prefix.
+    render(
+      <WeeklyInsightsTile
+        label="Weekly Return %"
+        value={-1.2}
+        formatType="percent"
+        gradient="linear-gradient(135deg, #10b981, #34d399)"
+        subtitle="-$3,210"
+      />
+    );
+    const subtitle = screen.getByText("-$3,210");
+    // The subtitle node itself contains only the subtitle text — no
+    // ↓ glyph from the negative-value treatment.
+    expect(subtitle.textContent).not.toContain("↓");
+    // The tile root contains the glyph (it's on the primary value).
+    const tile = screen.getByTestId("weekly-insights-tile");
+    expect(tile.textContent).toContain("↓");
+  });
 });
