@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -133,9 +134,18 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
 
   useEffect(() => {
     Promise.all([
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 500).catch(() => ({ details: [], lot_closures: [] })),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("trade-manager", "tradesOpen fetch failed", err);
+        return [];
+      }),
+      api.tradesClosed(getActivePortfolio(), 500).catch((err) => {
+        log.error("trade-manager", "tradesClosed fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(getActivePortfolio(), 500).catch((err) => {
+        log.error("trade-manager", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
     ]).then(([open, closed, det]) => {
       setOpenTrades(open as TradePosition[]);
       setAllTrades([...open as TradePosition[], ...closed as TradePosition[]]);

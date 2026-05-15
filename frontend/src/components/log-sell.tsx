@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 const SELL_RULES = [
   "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
@@ -130,7 +131,10 @@ export function LogSell({ navColor }: { navColor: string }) {
         if (data.date) setDate(String(data.date));
         if (data.time) setTime(String(data.time));
       } catch { /* ignore */ }
-    }).catch(() => setLoading(false));
+    }).catch((err) => {
+      log.error("log-sell", "tradesOpen fetch failed", err);
+      setLoading(false);
+    });
   }, []);
 
   const selected = openTrades.find(t => t.trade_id === selectedTrade);

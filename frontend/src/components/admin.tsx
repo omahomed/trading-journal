@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, Fragment } from "react";
 import { api, getActivePortfolio, type Strategy, type DriftScanResponse, type DriftScanCheckResult, type Portfolio } from "@/lib/api";
 import { StrategyChip } from "./strategy-chip";
+import { log } from "@/lib/log";
 
 // Hex-color regex mirrored from db_layer._HEX_COLOR_RE so client-side
 // validation rejects bad input before the server has to. Six hex digits
@@ -140,7 +141,10 @@ export function Admin({ navColor }: { navColor: string }) {
   const [strategyError, setStrategyError] = useState<string | null>(null);
 
   const loadStrategies = useCallback(() => {
-    api.listStrategies({ active: false }).then(setStrategies).catch(() => setStrategies([]));
+    api.listStrategies({ active: false }).then(setStrategies).catch((err) => {
+      log.error("admin", "listStrategies fetch failed", err);
+      setStrategies([]);
+    });
   }, []);
 
   const openAddStrategy = () => {
@@ -334,13 +338,34 @@ export function Admin({ navColor }: { navColor: string }) {
   // Load config on mount
   useEffect(() => {
     Promise.all([
-      api.config("reset_date").catch(() => ({ value: null })),
-      api.config("hard_decks").catch(() => ({ value: null })),
-      api.config("max_positions").catch(() => ({ value: null })),
-      api.config("heat_threshold_pct").catch(() => ({ value: null })),
-      api.config("earnings_cushion").catch(() => ({ value: null })),
-      api.config("pyramid_rules").catch(() => ({ value: null })),
-      api.events().catch(() => []),
+      api.config("reset_date").catch((err) => {
+        log.error("admin", "config reset_date fetch failed", err);
+        return { value: null };
+      }),
+      api.config("hard_decks").catch((err) => {
+        log.error("admin", "config hard_decks fetch failed", err);
+        return { value: null };
+      }),
+      api.config("max_positions").catch((err) => {
+        log.error("admin", "config max_positions fetch failed", err);
+        return { value: null };
+      }),
+      api.config("heat_threshold_pct").catch((err) => {
+        log.error("admin", "config heat_threshold_pct fetch failed", err);
+        return { value: null };
+      }),
+      api.config("earnings_cushion").catch((err) => {
+        log.error("admin", "config earnings_cushion fetch failed", err);
+        return { value: null };
+      }),
+      api.config("pyramid_rules").catch((err) => {
+        log.error("admin", "config pyramid_rules fetch failed", err);
+        return { value: null };
+      }),
+      api.events().catch((err) => {
+        log.error("admin", "events fetch failed", err);
+        return [];
+      }),
     ]).then(([rd, hd, mp, ht, ec, pr, ev]) => {
       if (rd.value) setResetDate(String(rd.value));
       if (hd.value) setHardDecks(hd.value);
@@ -373,16 +398,23 @@ export function Admin({ navColor }: { navColor: string }) {
           setSelectedDriftPortfolio(active);
         }
       })
-      .catch(() => setDriftPortfolios([]));
+      .catch((err) => {
+        log.error("admin", "listPortfolios fetch failed", err);
+        setDriftPortfolios([]);
+      });
   }, []);
 
   const loadEvents = useCallback(() => {
-    api.events().then(ev => setEvents(Array.isArray(ev) ? ev : [])).catch(() => {});
+    api.events().then(ev => setEvents(Array.isArray(ev) ? ev : [])).catch((err) => {
+      log.error("admin", "events reload failed", err);
+    });
   }, []);
 
   const loadAudit = useCallback(() => {
     const filterMap: Record<string, string | undefined> = { "All": undefined, "Config": "CONFIG", "Events": "EVENT", "Trades": "BUY" };
-    api.audit(auditLimit, filterMap[auditFilter]).then(d => setAuditData(Array.isArray(d) ? d : [])).catch(() => {});
+    api.audit(auditLimit, filterMap[auditFilter]).then(d => setAuditData(Array.isArray(d) ? d : [])).catch((err) => {
+      log.error("admin", "audit fetch failed", err);
+    });
   }, [auditFilter, auditLimit]);
 
   const saveConfig = async (key: string, value: any, opts?: any) => {

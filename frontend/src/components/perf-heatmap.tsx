@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function heatColor(val: number, zMin: number, zMax: number): string {
@@ -42,10 +43,22 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
+      api.tradesClosed(getActivePortfolio(), 1000).catch((err) => {
+        log.error("perf-heatmap", "tradesClosed fetch failed", err);
+        return [];
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("perf-heatmap", "tradesOpen fetch failed", err);
+        return [];
+      }),
+      api.journalHistory(getActivePortfolio(), 0).catch((err) => {
+        log.error("perf-heatmap", "journalHistory fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(getActivePortfolio(), 2000).catch((err) => {
+        log.error("perf-heatmap", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
     ]).then(([closed, open, jrnl, details]) => {
       setTrades(closed as TradePosition[]);
       setOpenTrades(open as TradePosition[]);

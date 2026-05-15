@@ -107,10 +107,22 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 
   useEffect(() => {
     Promise.all([
-      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 2000).catch(() => ({ details: [], lot_closures: [] })),
+      api.tradesClosed(getActivePortfolio(), 1000).catch((err) => {
+        log.error("analytics", "tradesClosed fetch failed", err);
+        return [];
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("analytics", "tradesOpen fetch failed", err);
+        return [];
+      }),
+      api.journalHistory(getActivePortfolio(), 0).catch((err) => {
+        log.error("analytics", "journalHistory fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(getActivePortfolio(), 2000).catch((err) => {
+        log.error("analytics", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
     ]).then(([closed, open, journal, details]) => {
       setAllTrades(closed as TradePosition[]);
       const openArr = open as TradePosition[];
@@ -119,7 +131,9 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       setJournalHistory(journal as any[]);
       setAllDetails(details.details);
       // Fetch trade lessons
-      api.getTradeLessons(getActivePortfolio()).then(r => { if (r.lessons) setLessons(r.lessons); }).catch(() => {});
+      api.getTradeLessons(getActivePortfolio()).then(r => { if (r.lessons) setLessons(r.lessons); }).catch((err) => {
+        log.error("analytics", "getTradeLessons fetch failed", err);
+      });
       setLoading(false);
     });
   }, []);
@@ -128,7 +142,10 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   // strategies are excluded here because PATCH /api/trades/{id}/strategy
   // rejects them (matches log_buy's contract).
   useEffect(() => {
-    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+    api.listStrategies({ active: true }).then(setStrategies).catch((err) => {
+      log.error("analytics", "listStrategies (active) fetch failed", err);
+      setStrategies([]);
+    });
   }, []);
 
   // All strategies (including inactive) for the Strategy filter
@@ -136,7 +153,10 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   // is obvious from its source-of-truth name, and the endpoint is tiny
   // enough that doubling the request cost is negligible.
   useEffect(() => {
-    api.listStrategies({ active: false }).then(setAllStrategies).catch(() => setAllStrategies([]));
+    api.listStrategies({ active: false }).then(setAllStrategies).catch((err) => {
+      log.error("analytics", "listStrategies (all) fetch failed", err);
+      setAllStrategies([]);
+    });
   }, []);
 
   // Refresh just the campaign rows after a tagging action — cheaper than
@@ -144,8 +164,14 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   // what the campaigns tab reads from.
   const refreshCampaigns = async () => {
     const [closed, open] = await Promise.all([
-      api.tradesClosed(getActivePortfolio(), 1000).catch(() => []),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesClosed(getActivePortfolio(), 1000).catch((err) => {
+        log.error("analytics", "tradesClosed refresh failed", err);
+        return [];
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("analytics", "tradesOpen refresh failed", err);
+        return [];
+      }),
     ]);
     setAllTrades(closed as TradePosition[]);
     setOpenTrades(open as TradePosition[]);

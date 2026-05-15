@@ -5,6 +5,7 @@ import { api, getActivePortfolio } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { formatCurrency } from "@/lib/format";
 import { gradeColor } from "@/lib/grade-helpers";
+import { log } from "@/lib/log";
 
 // IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
 // "request error (1001) — statement could not be generated" intermittently,
@@ -113,8 +114,14 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     const isPastDate = entryDate < todayStr;
     Promise.all([
-      api.journalLatest(getActivePortfolio(), entryDate).catch(() => ({ end_nlv: 0 })),
-      api.batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined).catch(() => ({})),
+      api.journalLatest(getActivePortfolio(), entryDate).catch((err) => {
+        log.debug.devOnly("daily-routine", "journalLatest pre-fill missing (expected)", err);
+        return { end_nlv: 0 };
+      }),
+      api.batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined).catch((err) => {
+        log.debug.devOnly("daily-routine", "batchPrices pre-fill missing (expected)", err);
+        return {};
+      }),
     ]).then(([latestJ, prices]) => {
       setPortPrev(parseFloat(String((latestJ as any).end_nlv || 0)));
       const p = prices as Record<string, number>;
@@ -132,7 +139,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   // Cancellation guard mirrors the IBKR effect's contract.
   useEffect(() => {
     let cancelled = false;
-    api.rallyPrefix(entryDate).catch(() => ({ prefix: "" })).then(rally => {
+    api.rallyPrefix(entryDate).catch((err) => {
+      log.debug.devOnly("daily-routine", "rallyPrefix pre-fill missing (expected)", err);
+      return { prefix: "" };
+    }).then(rally => {
       if (cancelled) return;
       const prefix = (rally as any).prefix || "";
       if (prefix) setMarketNotes(prefix);
@@ -232,7 +242,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     };
 
     api.tradesRecent(getActivePortfolio(), 1000)
-      .catch(() => ({ details: [], lot_closures: [] }))
+      .catch((err) => {
+        log.debug.devOnly("daily-routine", "tradesRecent pre-fill missing (expected)", err);
+        return { details: [], lot_closures: [] };
+      })
       .then(det => {
         setPortAction(buildActions(det.details));
       });

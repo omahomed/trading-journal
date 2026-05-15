@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 // Canonical option-row predicate, matching perf-heatmap.tsx:73-75 and the
 // instrument_type column (Migration 016). Used to keep Portfolio Heat as a
@@ -54,8 +55,14 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
-      api.journalLatest(getActivePortfolio()).catch(() => ({ end_nlv: 100000 })),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("portfolio-heat", "tradesOpen fetch failed", err);
+        return [];
+      }),
+      api.journalLatest(getActivePortfolio()).catch((err) => {
+        log.error("portfolio-heat", "journalLatest fetch failed", err);
+        return { end_nlv: 100000 };
+      }),
     ]).then(([open, journal]) => {
       const openArr = open as TradePosition[];
       // Stocks-only — options carry no yfinance ATR and skew the position

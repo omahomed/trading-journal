@@ -18,12 +18,31 @@
  * empty rail with no devtools signal. Errors must always reach
  * the console so devtools-savvy users (and future error
  * aggregators) can catch regressions of this class.
+ *
+ * Phase B (v2): log.warn.devOnly(...) and log.debug.devOnly(...)
+ * fire only when NODE_ENV !== "production". Used at sites where
+ * the failure is expected-noise in production (e.g., service-
+ * worker registration on http, optional pre-fill fetches) but we
+ * still want visibility during local development.
  */
+
+type LogFn = (area: string, what: string, err: unknown) => void;
+type LogLeveledFn = LogFn & { devOnly: LogFn };
+
+const isDev = (): boolean => process.env.NODE_ENV !== "production";
+
+const _warn: LogFn = (area, what, err) =>
+  console.warn(`[${area}] ${what}:`, err);
+
+const _debug: LogFn = (area, what, err) =>
+  console.debug(`[${area}] ${what}:`, err);
+
+const _devOnly = (fn: LogFn): LogFn =>
+  (area, what, err) => { if (isDev()) fn(area, what, err); };
+
 export const log = {
-  error: (area: string, what: string, err: unknown) =>
-    console.error(`[${area}] ${what}:`, err),
-  warn: (area: string, what: string, err: unknown) =>
-    console.warn(`[${area}] ${what}:`, err),
-  debug: (area: string, what: string, err: unknown) =>
-    console.debug(`[${area}] ${what}:`, err),
+  error: ((area: string, what: string, err: unknown) =>
+    console.error(`[${area}] ${what}:`, err)) as LogFn,
+  warn: Object.assign(_warn, { devOnly: _devOnly(_warn) }) as LogLeveledFn,
+  debug: Object.assign(_debug, { devOnly: _devOnly(_debug) }) as LogLeveledFn,
 };

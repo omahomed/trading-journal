@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -102,8 +103,14 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
 
   const loadContext = async () => {
     const [details, open] = await Promise.all([
-      api.tradesRecent(getActivePortfolio(), 500).catch(() => ({ details: [], lot_closures: [] })),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.tradesRecent(getActivePortfolio(), 500).catch((err) => {
+        log.error("import-trades", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => {
+        log.error("import-trades", "tradesOpen fetch failed", err);
+        return [];
+      }),
     ]);
     setTodayDetails(details.details);
     setOpenTrades(open as TradePosition[]);

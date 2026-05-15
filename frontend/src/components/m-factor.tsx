@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
@@ -28,7 +29,10 @@ export function MFactor({ navColor }: { navColor: string }) {
 
   const loadData = () => {
     setLoading(true);
-    api.rallyPrefix().then(d => { setData(d); setLoading(false); }).catch(() => setLoading(false));
+    api.rallyPrefix().then(d => { setData(d); setLoading(false); }).catch((err) => {
+      log.error("m-factor", "rallyPrefix fetch failed", err);
+      setLoading(false);
+    });
   };
 
   useEffect(() => { loadData(); }, []);
@@ -347,7 +351,10 @@ function SignalLog({ mono }: { mono: string }) {
   useEffect(() => {
     api.marketSignals(30)
       .then((r) => setSignals(r.signals || []))
-      .catch(() => setSignals([]))
+      .catch((err) => {
+        log.error("m-factor", "marketSignals fetch failed", err);
+        setSignals([]);
+      })
       .finally(() => setLoading(false));
   }, []);
 
