@@ -847,4 +847,161 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     });
     expect(onItemClick).not.toHaveBeenCalled();
   });
+
+  // ============================================================
+  // Phase 7 fix — calendar jump-to-date on daily entity
+  // ============================================================
+
+  test("calendar jump-to-date on daily navigates to the picked day (no Monday snap)", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 30, key: "2026-05-14", year: 2026, month: 5, title: "May 14" }),
+      item({ id: 31, key: "2026-05-13", year: 2026, month: 5, title: "May 13" }),
+      item({ id: 32, key: "2026-05-12", year: 2026, month: 5, title: "May 12" }),
+      item({ id: 33, key: "2026-05-11", year: 2026, month: 5, title: "May 11" }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    const dateInput = screen.getByTestId("rail-jump-date-input") as HTMLInputElement;
+    // Pick Wednesday 2026-05-13. On the weekly rail this would snap back
+    // to Monday's 2026-05-11 entry; on daily it should route to the
+    // matching 2026-05-13 entry.
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2026-05-13" } });
+    });
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+    expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-13");
+  });
+
+  test("calendar jump-to-date on daily picks nearest when exact day not loaded", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 30, key: "2026-05-14", year: 2026, month: 5, title: "May 14" }),
+      item({ id: 31, key: "2026-05-12", year: 2026, month: 5, title: "May 12" }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={items[0].key}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    const dateInput = screen.getByTestId("rail-jump-date-input") as HTMLInputElement;
+    // 2026-05-13 is 1 day from both 2026-05-12 and 2026-05-14. Nearest
+    // fallback picks the first one encountered with the lowest distance,
+    // which in our items list is 2026-05-14 (iterated first).
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2026-05-13" } });
+    });
+    expect(onItemClick).toHaveBeenCalledTimes(1);
+    // Either neighbor is acceptable — the user "almost certainly meant
+    // the closest known day" per the helper's contract. Assert it picked
+    // one of the two neighbors, not something else.
+    expect(["2026-05-12", "2026-05-14"]).toContain(onItemClick.mock.calls[0][0].key);
+  });
+
+  // ============================================================
+  // Phase 7 fix — extended search predicate (daily format mismatch)
+  // ============================================================
+
+  test("search on daily matches numeric date forms (5/14, 5-14)", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 40, key: "2026-05-14", year: 2026, month: 5, title: "May 14" }),
+      item({ id: 41, key: "2026-05-13", year: 2026, month: 5, title: "May 13" }),
+      item({ id: 42, key: "2026-04-22", year: 2026, month: 4, title: "Apr 22" }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "5/14" } });
+    });
+    // Only May 14 matches; May 13 and Apr 22 are filtered out.
+    expect(screen.getByText("May 14")).toBeInTheDocument();
+    expect(screen.queryByText("May 13")).toBeNull();
+    expect(screen.queryByText("Apr 22")).toBeNull();
+  });
+
+  test("search on daily matches ISO key (2026-05-14)", async () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 40, key: "2026-05-14", year: 2026, month: 5, title: "May 14" }),
+      item({ id: 41, key: "2026-05-13", year: 2026, month: 5, title: "May 13" }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={onItemClick} onPinToggle={vi.fn()} />);
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "2026-05-14" } });
+    });
+    expect(screen.getByText("May 14")).toBeInTheDocument();
+    expect(screen.queryByText("May 13")).toBeNull();
+  });
+
+  test("search on daily matches the year alone (2026)", async () => {
+    const items = [
+      item({ id: 40, key: "2026-05-14", year: 2026, month: 5, title: "May 14" }),
+      item({ id: 41, key: "2025-12-30", year: 2025, month: 12, title: "Dec 30" }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "2026" } });
+    });
+    expect(screen.getByText("May 14")).toBeInTheDocument();
+    expect(screen.queryByText("Dec 30")).toBeNull();
+  });
+
+  test("search by tag name surfaces every item with that tag (daily)", async () => {
+    const items = [
+      item({ id: 40, key: "2026-05-14", year: 2026, month: 5, title: "May 14",
+            tags: [{ name: "earnings", color: "amber" }] }),
+      item({ id: 41, key: "2026-05-13", year: 2026, month: 5, title: "May 13",
+            tags: [] }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    const search = screen.getByTestId("rail-search") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "earnings" } });
+    });
+    expect(screen.getByText("May 14")).toBeInTheDocument();
+    expect(screen.queryByText("May 13")).toBeNull();
+  });
+
+  // ============================================================
+  // Phase 7 fix — tag filter bar SHOULD appear on daily when items
+  // carry tags. Verifies the rail wiring is entityType-agnostic
+  // (the bug expectation was that this was broken; the regression
+  // ticket flagged it as missing; this test pins the correct
+  // behavior so any future regression that hides the bar on daily
+  // fails loudly).
+  // ============================================================
+
+  test("filter bar appears on daily when at least one item has a tag", () => {
+    const items = [
+      item({ id: 50, key: "2026-05-14", year: 2026, month: 5, title: "May 14",
+            tags: [{ name: "earnings", color: "amber" }] }),
+      item({ id: 51, key: "2026-05-13", year: 2026, month: 5, title: "May 13",
+            tags: [] }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.getByTestId("rail-filter-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("rail-filter-trigger")).toBeInTheDocument();
+  });
+
+  test("filter bar still hides on daily when no item has a tag", () => {
+    const items = [
+      item({ id: 50, key: "2026-05-14", year: 2026, month: 5, tags: [] }),
+    ];
+    render(<NotesRail entityType="daily_journal" items={items} ytdStats={EMPTY_STATS}
+                     currentEntityKey={null}
+                     onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
+    expect(screen.queryByTestId("rail-filter-bar")).toBeNull();
+  });
 });

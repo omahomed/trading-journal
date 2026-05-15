@@ -35,6 +35,60 @@ function fmtPct(v: number): string {
   return `${sign}${v.toFixed(2)}%`;
 }
 
+// Phase 7 fix — calendar jump-to-date snap semantics per entity. Weekly
+// retros key by Monday of the week, so picks anywhere in a week route
+// to that week's Monday entry. Daily journals key by the day itself,
+// so picks pass through untouched. Exported for unit testing.
+export function snapDateForEntity(
+  iso: string,
+  picked: Date,
+  entityType: NotesRailEntityType,
+): string {
+  if (entityType === "daily_journal") {
+    return iso;
+  }
+  // Weekly: snap to Monday of the picked week.
+  const day = picked.getDay(); // 0=Sun..6=Sat
+  const offset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(picked);
+  monday.setDate(picked.getDate() + offset);
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
+}
+
+// Phase 7 fix — composite searchable string per rail item. The search
+// input filters against this lowercased blob; matches succeed on any
+// substring users might naturally type for a date:
+//   - Title ("May 14", "May 11 – 15")
+//   - ISO key ("2026-05-14")
+//   - Year ("2026")
+//   - Numeric date with slash + dash separators ("5/14", "5-14")
+//   - Tag names attached to the item (so "earnings" matches every item
+//     tagged "earnings" even when its title contains no date hit)
+// Memoized via WeakMap so we don't rebuild the string on every keystroke
+// for the same item reference.
+const _searchKeyCache = new WeakMap<NotesRailItem, string>();
+export function itemSearchKey(item: NotesRailItem): string {
+  const cached = _searchKeyCache.get(item);
+  if (cached) return cached;
+  const parts: string[] = [item.title];
+  if (item.key) parts.push(item.key); // e.g. "2026-05-14"
+  // Parse the key for numeric / per-component matches. Falls through
+  // silently on malformed keys so search keeps working on bad data.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(item.key || "");
+  if (m) {
+    const [, yyyy, mm, dd] = m;
+    const mmNum = String(parseInt(mm, 10));
+    const ddNum = String(parseInt(dd, 10));
+    parts.push(yyyy, `${mmNum}/${ddNum}`, `${mmNum}-${ddNum}`);
+  }
+  for (const t of item.tags ?? []) {
+    parts.push(t.name);
+  }
+  const out = parts.join(" ").toLowerCase();
+  _searchKeyCache.set(item, out);
+  return out;
+}
+
 function loadLs(key: string, fallback: any): any {
   try {
     const raw = localStorage.getItem(key);
@@ -993,15 +1047,22 @@ export function NotesRail({
       b.count - a.count || a.name.localeCompare(b.name));
   }, [items]);
 
-  // Filter by search (title substring) AND tag selection (OR within
-  // selected tags). Search predicate runs first to take advantage of the
-  // typically-larger early reduction; tag predicate runs second on the
-  // already-shrunken set.
+  // Filter by search AND tag selection (OR within selected tags). Search
+  // predicate runs first to take advantage of the typically-larger early
+  // reduction; tag predicate runs second on the already-shrunken set.
+  //
+  // Phase 7 fix — search matches a composite searchable string per item
+  // covering multiple natural representations of the date so a user typing
+  // "5/14" or "2026-05-14" finds an item whose title is just "May 14".
+  // Built per-item (see itemSearchKey), AND-ed with item.title to keep
+  // weekly retros' existing title-substring behavior compatible (the
+  // weekly title "May 11 – 15" already contains all the substrings a
+  // user would type for it).
   const filtered = useMemo(() => {
     let out = itemsWithOverrides;
     if (query.trim()) {
       const needle = query.toLowerCase().trim();
-      out = out.filter(it => it.title.toLowerCase().includes(needle));
+      out = out.filter(it => itemSearchKey(it).includes(needle));
     }
     if (filters.length > 0) {
       out = out.filter(it => (it.tags ?? []).some(t => filters.includes(t.name)));
@@ -1045,32 +1106,32 @@ export function NotesRail({
     return Math.max(...years) - Math.min(...years) + 1;
   }, [items]);
 
-  // Jump to the week containing a picked date. Snap to Monday and look
-  // for the item by its key (week_start ISO). If no exact match (out of
-  // range), pick the nearest by absolute distance — the user almost
-  // certainly meant the closest known week.
+  // Jump to the entity covering a picked date. Snap semantics differ by
+  // entityType: weekly retros key by the Monday of the week, so picking
+  // any day in a week routes to that week's Monday-keyed entry; daily
+  // journals key by the day itself, so the picked ISO passes through
+  // untouched. The post-Phase-7 calendar-picker regression came from the
+  // Monday snap firing even on daily, where it shifted Tuesday picks
+  // back to Monday. If no exact item is found, the nearest-by-distance
+  // fallback still applies.
   const handleJumpToDate = useCallback((iso: string) => {
     if (!iso || items.length === 0) return;
     const picked = new Date(iso + "T12:00:00");
     if (isNaN(picked.getTime())) return;
-    const day = picked.getDay(); // 0=Sun..6=Sat
-    const offset = day === 0 ? -6 : 1 - day;
-    const monday = new Date(picked);
-    monday.setDate(picked.getDate() + offset);
-    const monStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}-${String(monday.getDate()).padStart(2, "0")}`;
-    const exact = items.find(it => it.key === monStr);
+    const targetKey = snapDateForEntity(iso, picked, entityType);
+    const exact = items.find(it => it.key === targetKey);
     if (exact) { onItemClick(exact); return; }
     // Nearest fallback — distance in days, lowest wins.
     let best: NotesRailItem | null = null;
     let bestDelta = Infinity;
-    const target = monday.getTime();
+    const target = new Date(targetKey + "T12:00:00").getTime();
     for (const it of items) {
       const itDate = new Date(it.key + "T12:00:00").getTime();
       const delta = Math.abs(itDate - target);
       if (delta < bestDelta) { bestDelta = delta; best = it; }
     }
     if (best) onItemClick(best);
-  }, [items, onItemClick]);
+  }, [items, entityType, onItemClick]);
 
   // Keyboard nav: ArrowUp / k → previous, ArrowDown / j → next. Skip when
   // focus is in a text input so the search bar isn't hijacked. Operates
