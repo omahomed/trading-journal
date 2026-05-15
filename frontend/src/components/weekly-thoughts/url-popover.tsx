@@ -23,6 +23,7 @@
 // flips the open flag, mounting this).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePopover } from "@/lib/use-popover";
 
 interface UrlPopoverProps {
   /** Header text shown above the inputs. */
@@ -61,30 +62,21 @@ export function UrlPopover({
   const [url, setUrl] = useState(initialUrl);
   const [linkText, setLinkText] = useState(initialLinkText);
   const [error, setError] = useState<string | null>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   // Autofocus the URL input on mount.
   useEffect(() => { urlInputRef.current?.focus(); }, []);
 
-  // Click-outside-to-close.
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!wrapperRef.current) return;
-      if (!wrapperRef.current.contains(e.target as Node)) onClose();
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  // Esc closes.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  // Phase 6.5-followup: outside-click + Escape extracted to usePopover.
+  // initialOpen: true because UrlPopover is conditionally mounted by
+  // its parent — the parent owns the open state by mount/unmount; the
+  // hook just needs its listeners live from first render. onClose
+  // passed through so user-dismiss propagates to the parent
+  // (which unmounts).
+  const { surfaceRef: wrapperRef } = usePopover<HTMLDivElement>({
+    initialOpen: true,
+    onClose,
+  });
 
   const handleSubmit = useCallback(() => {
     const trimmedUrl = url.trim();
