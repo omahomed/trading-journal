@@ -281,4 +281,27 @@ describe("WeeklySnapshot — Phase 4", () => {
     await act(async () => { window.dispatchEvent(ev); });
     expect(mockApi.uploadWeeklyRetroSnapshot).not.toHaveBeenCalled();
   });
+
+  // Phase A error-logging sweep — snapshot list fetch failure must
+  // reach console.error via @/lib/log so devtools surfaces the
+  // regression instead of the UI silently rendering an empty gallery.
+  // Selective vi.spyOn keeps the failure-path stderr output out of
+  // the normal test run.
+  test("snapshot list fetch rejection logs to console.error and leaves snapshots empty", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockApi.listWeeklyRetroSnapshots.mockRejectedValueOnce(new Error("boom"));
+
+    render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
+    await waitFor(() =>
+      expect(mockApi.listWeeklyRetroSnapshots).toHaveBeenCalledWith(7, "CanSlim"),
+    );
+
+    await waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[weekly-snapshot] snapshot list fetch failed:",
+        expect.any(Error),
+      );
+    });
+    errorSpy.mockRestore();
+  });
 });

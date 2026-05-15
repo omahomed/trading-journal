@@ -6,6 +6,7 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Lot
 import { matchesAnyTradeQuery } from "@/lib/trade-search";
 import { CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -191,8 +192,9 @@ function lotClosuresToLifoRows(
       // Stale or orphaned closure — shouldn't happen in well-formed data
       // (lot_closures rows are DELETE-then-INSERTed by the recompute path).
       // Logged so we notice if it ever does during the rewire's rollout.
-      console.warn(
-        "[lifo-rewire] closure references unknown buy_trx_id",
+      log.warn(
+        "lifo-rewire",
+        "closure references unknown buy_trx_id",
         { buy_trx_id: closure.buy_trx_id, sell_trx_id: closure.sell_trx_id, trade_id: closure.trade_id },
       );
       continue;

@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type SnapshotRow } from "@/lib/api";
+import { log } from "@/lib/log";
 import { ImageLightbox, type LightboxImage } from "./image-lightbox";
 import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
 
@@ -100,8 +101,15 @@ export function WeeklySnapshot({
     api.listWeeklyRetroSnapshots(retroId, portfolio).then(res => {
       if (cancelled) return;
       if (Array.isArray(res)) setSnapshots(res);
-      else setSnapshots([]);
-    }).catch(() => { if (!cancelled) setSnapshots([]); });
+      else {
+        log.error("weekly-snapshot", "snapshot list returned non-array", res);
+        setSnapshots([]);
+      }
+    }).catch((err) => {
+      if (cancelled) return;
+      log.error("weekly-snapshot", "snapshot list fetch failed", err);
+      setSnapshots([]);
+    });
     return () => { cancelled = true; };
   }, [retroId, portfolio]);
 

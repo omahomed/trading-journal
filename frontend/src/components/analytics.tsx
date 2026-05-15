@@ -6,6 +6,7 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Str
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { LESSON_CATEGORIES, CAT_COLORS } from "@/lib/lesson-categories";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import {
@@ -1234,8 +1235,9 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
         );
         const showSelectedSection = !!selectedTrade && !selectedInLists;
         if (selectedTradeId && !selectedTrade) {
-          // eslint-disable-next-line no-console
-          console.warn(`[Trade Review] trade_id=${selectedTradeId} not found in loaded closed trades.`);
+          log.warn("analytics", "trade not found in loaded closed trades", {
+            trade_id: selectedTradeId,
+          });
         }
 
         // Ref callback wired to the targeted card. Fires once when the

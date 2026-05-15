@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type JournalHistoryPoint, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -32,10 +33,10 @@ export function TradingOverview({ navColor }: { navColor: string }) {
 
   useEffect(() => {
     Promise.all([
-      api.journalHistory(getActivePortfolio(), 0).catch(() => []),
-      api.tradesClosed(getActivePortfolio(), 500).catch(() => []),
-      api.tradesRecent(getActivePortfolio(), 10).catch(() => ({ details: [], lot_closures: [] })),
-      api.tradesOpen(getActivePortfolio()).catch(() => []),
+      api.journalHistory(getActivePortfolio(), 0).catch((err) => { log.error("trading-overview", "journal history fetch failed", err); return []; }),
+      api.tradesClosed(getActivePortfolio(), 500).catch((err) => { log.error("trading-overview", "closed trades fetch failed", err); return []; }),
+      api.tradesRecent(getActivePortfolio(), 10).catch((err) => { log.error("trading-overview", "recent trades fetch failed", err); return { details: [], lot_closures: [] }; }),
+      api.tradesOpen(getActivePortfolio()).catch((err) => { log.error("trading-overview", "open trades fetch failed", err); return []; }),
     ]).then(async ([hist, cl, rec, open]) => {
       setHistory(hist as JournalHistoryPoint[]);
       setClosed(cl as TradePosition[]);
@@ -50,7 +51,9 @@ export function TradingOverview({ navColor }: { navColor: string }) {
           const prices = await api.batchPrices(tickers);
           if (prices && !("error" in prices)) setLivePrices(prices);
         } catch (e) {
-          console.error("[trading-overview] price fetch failed:", e);
+          // Consolidated to log.error — the bracketed format is now
+          // canonical via @/lib/log instead of inline string assembly.
+          log.error("trading-overview", "price fetch failed", e);
           /* fall back */
         }
       }

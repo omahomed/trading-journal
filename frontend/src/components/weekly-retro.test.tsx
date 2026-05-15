@@ -576,4 +576,26 @@ describe("WeeklyRetro — Phase 5 Weekly Insights tiles + Flight Deck", () => {
     expect(screen.getByText("Buys")).toBeInTheDocument();
     expect(screen.getByText("Sells / Trims")).toBeInTheDocument();
   });
+
+  // Phase A error-logging sweep — the rail fetch is the Phase 6
+  // regression-class line. A backend KeyError surfaces as
+  // { error: "..." } at HTTP 200; the rail fetch wrapper previously
+  // swallowed it silently and left railItems empty. The
+  // log.error("weekly-retro", "rail fetch failed", ...) call ensures
+  // any future regression of this class is visible in devtools.
+  test("rail fetch error response logs to console.error and leaves railItems unchanged", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mWeeklyList.mockResolvedValue({ error: "test_failure" } as any);
+
+    render(<WeeklyRetro navColor="#6366f1" />);
+    await waitFor(() => expect(mWeeklyList).toHaveBeenCalled());
+
+    await waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[weekly-retro] rail fetch failed:",
+        "test_failure",
+      );
+    });
+    errorSpy.mockRestore();
+  });
 });

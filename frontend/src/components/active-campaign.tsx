@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle, type Strategy } from "@/lib/api";
+import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
 import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
@@ -265,7 +266,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             prices = result;
           }
         } catch (e) {
-          console.error("[active-campaign] price fetch failed:", e);
+          log.error("active-campaign", "price fetch failed", e);
           /* keep entry prices as fallback */
         }
       }
@@ -285,7 +286,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       lastFetchAtRef.current = now;
       setRefetchError(false);
     } catch (e) {
-      console.error("[active-campaign] refresh failed:", e);
+      log.error("active-campaign", "refresh failed", e);
       setRefetchError(true);
     } finally {
       setLoading(false);
