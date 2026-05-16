@@ -4,16 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
-
-const SELL_RULES = [
-  "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
-  "sr4 Time Stop", "sr5 Climax Top", "sr6 Exhaustion Gap",
-  "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
-  "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
-  "sr13 Earnings Exit", "sr14 Market Correction Exit",
-  "sr15 BE Stop Out (moved at +10%)",
-  "sr16 Profit Taking",
-];
+import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (

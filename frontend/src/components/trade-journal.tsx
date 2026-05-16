@@ -11,11 +11,11 @@ import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
+import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 
-// Rule dropdowns for the closed-trade edit modal. Duplicated from
-// trade-manager.tsx / log-buy.tsx / log-sell.tsx / import-trades.tsx —
-// the codebase pattern is per-component copies rather than a shared
-// module. Stable strings; keep in sync if those copies move.
+// Buy-rule dropdown list for the closed-trade edit modal. Sell rules
+// live in lib/trade-rules.ts (single source of truth); buy rules
+// remain inline pending their own taxonomy cleanup.
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
   "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot", "br1.8 High Tight Flag",
@@ -30,16 +30,6 @@ const BUY_RULES = [
   "br10.1 Hedging with leverage product",
   "br11.1 Shorting",
   "br12.1 Option Play",
-];
-
-const SELL_RULES = [
-  "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
-  "sr4 Time Stop", "sr5 Climax Top", "sr6 Exhaustion Gap",
-  "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
-  "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
-  "sr13 Earnings Exit", "sr14 Market Correction Exit",
-  "sr15 BE Stop Out (moved at +10%)",
-  "sr16 Profit Taking",
 ];
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";

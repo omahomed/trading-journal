@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -19,16 +20,6 @@ const BUY_RULES = [
   "br10.1 Hedging with leverage product",
   "br11.1 Shorting",
   "br12.1 Option Play",
-];
-
-const SELL_RULES = [
-  "sr1 Capital Protection", "sr2 Trailing Stop", "sr3 Portfolio Management",
-  "sr4 Time Stop", "sr5 Climax Top", "sr6 Exhaustion Gap",
-  "sr7 200d Moving Avg Break", "sr8 Living Below 50d", "sr9 Failed Breakout",
-  "sr10 Scale-Out T1 (-3%)", "sr11 Scale-Out T2 (-5%)", "sr12 Scale-Out T3 (-8%)",
-  "sr13 Earnings Exit", "sr14 Market Correction Exit",
-  "sr15 BE Stop Out (moved at +10%)",
-  "sr16 Profit Taking",
 ];
 
 type Tab = "stops" | "edit" | "delete" | "export";
@@ -56,7 +47,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 function SearchSelect({ value, onChange, options, placeholder }: {
-  value: string; onChange: (v: string) => void; options: string[]; placeholder?: string;
+  value: string; onChange: (v: string) => void; options: readonly string[]; placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
