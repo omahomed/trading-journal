@@ -5,6 +5,7 @@ import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
+import { SellRuleGlossary } from "./sell-rule-glossary";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -361,8 +362,10 @@ export function LogSell({ navColor }: { navColor: string }) {
           </div>
         </div>
 
-        {/* Side panel */}
-        <div className="flex flex-col gap-4">
+        {/* Side panel — h-full so it fills the grid cell to match the
+            Sell Order column's height; Open Campaigns then flex-1's
+            to consume the remaining vertical space below Sell Preview. */}
+        <div className="flex flex-col gap-4 h-full">
           <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
             <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
@@ -386,13 +389,17 @@ export function LogSell({ navColor }: { navColor: string }) {
             </div>
           </div>
 
-          {/* Open positions quick reference */}
-          <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          {/* Open positions quick reference — flex-1 lets the card grow
+              into the remaining height of the side panel; the inner
+              scroll uses flex-1 + min-h-0 so it bounds its scroll
+              region to the card's remaining height instead of the
+              old fixed 300px cap. */}
+          <div className="rounded-[14px] overflow-hidden flex flex-col flex-1 min-h-0" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
             <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
               <span className="text-[13px] font-semibold">Open Campaigns</span>
               <span className="text-xs" style={{ color: "var(--ink-4)" }}>{openTrades.length}</span>
             </div>
-            <div className="max-h-[300px] overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               {openTrades.map(t => {
                 const isSelected = selectedTrade === t.trade_id;
                 return (
@@ -419,6 +426,8 @@ export function LogSell({ navColor }: { navColor: string }) {
           </div>
         </div>
       </div>
+
+      <SellRuleGlossary />
     </div>
   );
 }
