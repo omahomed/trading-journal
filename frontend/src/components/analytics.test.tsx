@@ -380,9 +380,9 @@ describe("Analytics — All Campaigns filters", () => {
 
   test("Sell Rule filter narrows visible rows", async () => {
     mClosed.mockResolvedValue([
-      closedTrade({ trade_id: "C1", ticker: "MSFT", sell_rule: "sr1.1 Stop hit" }),
-      closedTrade({ trade_id: "C2", ticker: "AAPL", sell_rule: "sr2.1 Target reached" }),
-      closedTrade({ trade_id: "C3", ticker: "NVDA", sell_rule: "sr1.1 Stop hit" }),
+      closedTrade({ trade_id: "C1", ticker: "MSFT", sell_rule: "sr1 Capital Protection" }),
+      closedTrade({ trade_id: "C2", ticker: "AAPL", sell_rule: "sr2 Selling into Strength" }),
+      closedTrade({ trade_id: "C3", ticker: "NVDA", sell_rule: "sr1 Capital Protection" }),
     ]);
     mOpen.mockResolvedValue([]);
 
@@ -390,7 +390,7 @@ describe("Analytics — All Campaigns filters", () => {
     await screen.findByText("MSFT");
 
     const select = screen.getByTestId("campaigns-sell-rule-filter") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "sr1.1 Stop hit" } });
+    fireEvent.change(select, { target: { value: "sr1 Capital Protection" } });
 
     await waitFor(() => {
       expect(screen.getByText("MSFT")).toBeInTheDocument();
