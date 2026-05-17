@@ -1161,8 +1161,11 @@ export const NotesRail = forwardRef<NotesRailHandle, NotesRailProps>(function No
   // on the visible (filtered) list, in newest-first source order.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase() ?? "";
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase() ?? "";
       if (tag === "input" || tag === "textarea") return;
+      if (target?.isContentEditable
+          || target?.closest?.('[contenteditable="true"]')) return;
       if (filtered.length === 0) return;
       const idx = focusedKey != null
         ? filtered.findIndex(it => it.key === focusedKey)

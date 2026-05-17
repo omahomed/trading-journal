@@ -824,6 +824,57 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(dot.style.background).toBe("rgb(8, 168, 107)");
   });
 
+  test("contentEditable focus guard: does NOT preventDefault keystrokes when focus is in a contentEditable", () => {
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+    ];
+    render(
+      <>
+        <NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                   currentEntityKey={items[0].key}
+                   onItemClick={vi.fn()} onPinToggle={vi.fn()} />
+        <div data-testid="editor" contentEditable suppressContentEditableWarning />
+      </>
+    );
+    const editor = screen.getByTestId("editor");
+    editor.focus();
+    const preventDefaultSpy = vi.fn();
+    const event = new KeyboardEvent("keydown", {
+      key: "j", bubbles: true, cancelable: true,
+    });
+    event.preventDefault = preventDefaultSpy;
+    editor.dispatchEvent(event);
+    expect(preventDefaultSpy).not.toHaveBeenCalled();
+  });
+
+  test("contentEditable focus guard: typing j/k does NOT advance rail focus", () => {
+    const onItemClick = vi.fn();
+    const items = [
+      item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
+      item({ id: 11, key: "2026-05-04", year: 2026, month: 5 }),
+    ];
+    render(
+      <>
+        <NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
+                   currentEntityKey={items[0].key}
+                   onItemClick={onItemClick} onPinToggle={vi.fn()} />
+        <div data-testid="editor" contentEditable suppressContentEditableWarning />
+      </>
+    );
+    const editor = screen.getByTestId("editor");
+    editor.focus();
+    // Type 'j' (would move focus down) then Enter (would activate). Both
+    // must be ignored because focus is in a contentEditable.
+    act(() => {
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+    });
+    act(() => {
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(onItemClick).not.toHaveBeenCalled();
+  });
+
   test("search input doesn't intercept ArrowDown — focus stays in search bar", () => {
     const onItemClick = vi.fn();
     const items = [
