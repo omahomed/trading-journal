@@ -487,6 +487,33 @@ describe("WeeklyThoughts — Phase 3.5 expansion", () => {
     expect(parseVideoUrl("")).toBeNull();
   });
 
+  // ─── parseVideoUrl: YouTube format variants ────────────────────────────
+  // All normalize to https://www.youtube.com/embed/<id>.
+
+  test.each([
+    ["live stream",          "https://www.youtube.com/live/dQw4w9WgXcQ"],
+    ["live with si param",   "https://www.youtube.com/live/dQw4w9WgXcQ?si=abc-def_123"],
+    ["shorts",               "https://www.youtube.com/shorts/dQw4w9WgXcQ"],
+    ["shorts with query",    "https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share"],
+    ["mobile watch",         "https://m.youtube.com/watch?v=dQw4w9WgXcQ"],
+    ["nocookie embed",       "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"],
+    ["nocookie no www",      "https://youtube-nocookie.com/embed/dQw4w9WgXcQ"],
+  ])("parseVideoUrl: %s → embed", (_label, input) => {
+    expect(parseVideoUrl(input)).toEqual({
+      src: "https://www.youtube.com/embed/dQw4w9WgXcQ",
+      provider: "youtube",
+    });
+  });
+
+  test("parseVideoUrl: user-reported YouTube Live URL with si tracking param", () => {
+    expect(parseVideoUrl(
+      "https://www.youtube.com/live/NVGf2FSI41U?si=xxxxxxxxxxxxxxxx"
+    )).toEqual({
+      src: "https://www.youtube.com/embed/NVGf2FSI41U",
+      provider: "youtube",
+    });
+  });
+
   // ─── Font family / size dropdowns ──────────────────────────────────────
 
   test("Font dropdown 'Sans-serif' option → exec('fontName', expected family)", async () => {

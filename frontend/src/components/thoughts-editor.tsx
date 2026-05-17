@@ -249,15 +249,28 @@ export function normalizeIndentation(root: HTMLElement) {
 
 // Parse a YouTube or Vimeo URL into a normalized embed src. Returns
 // null for anything else. Exported for unit testing.
+//
+// Supported YouTube shapes (all normalize to youtube.com/embed/<id>):
+//   - youtu.be/<id>                         (short share)
+//   - {www|m}.youtube.com/watch?v=<id>      (standard, mobile)
+//   - {www|m}.youtube.com/embed/<id>        (already-embedded)
+//   - {www|m}.youtube.com/live/<id>         (live streams)
+//   - {www|m}.youtube.com/shorts/<id>       (shorts)
+//   - youtube-nocookie.com/embed/<id>       (privacy-enhanced)
+// Trailing ?si=… / &t=… query params after the id are ignored — the
+// id capture class [\w-] stops at the ? boundary.
 export function parseVideoUrl(url: string): { src: string; provider: "youtube" | "vimeo" } | null {
   // youtu.be/{id}
   let m = url.match(/^https?:\/\/youtu\.be\/([\w-]+)/);
   if (m) return { src: `https://www.youtube.com/embed/${m[1]}`, provider: "youtube" };
-  // youtube.com/watch?v={id}
-  m = url.match(/^https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?[^#]*?v=([\w-]+)/);
+  // youtube.com/watch?v={id} — also matches m.youtube.com and the
+  // youtube-nocookie.com domain (the latter rarely uses /watch, but
+  // the parser is generous on input).
+  m = url.match(/^https?:\/\/(?:www\.|m\.)?(?:youtube|youtube-nocookie)\.com\/watch\?[^#]*?v=([\w-]+)/);
   if (m) return { src: `https://www.youtube.com/embed/${m[1]}`, provider: "youtube" };
-  // youtube.com/embed/{id} — passthrough
-  m = url.match(/^https?:\/\/(?:www\.)?youtube\.com\/embed\/([\w-]+)/);
+  // youtube.com/{embed,live,shorts}/{id} — same id position across all
+  // three path shapes; consolidated into one regex. Covers nocookie too.
+  m = url.match(/^https?:\/\/(?:www\.|m\.)?(?:youtube|youtube-nocookie)\.com\/(?:embed|live|shorts)\/([\w-]+)/);
   if (m) return { src: `https://www.youtube.com/embed/${m[1]}`, provider: "youtube" };
   // vimeo.com/{numericId}
   m = url.match(/^https?:\/\/(?:www\.)?vimeo\.com\/(\d+)/);
