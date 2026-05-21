@@ -168,6 +168,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const lastFetchAtRef = useRef<number>(0);
   const inFlightRef = useRef(false);
   const lastActiveIdRef = useRef<number | undefined>(undefined);
+  // Migration 036 — per-mount dedupe for the b1_max_return_pct
+  // auto-promote POST. Each trade_id fires at most one promotion per
+  // component lifetime; the backend SQL guard handles cross-tab races.
+  const promotedRef = useRef<Set<string>>(new Set());
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
 
   // Independent sort state for each section. No localStorage persistence —
@@ -229,6 +233,30 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     );
     setPositions(enriched);
   }, []);
+
+  // Auto-promote b1_max_return_pct whenever a position's CURRENT B1 return
+  // exceeds its STORED max. Fire-and-forget: the backend SQL guard makes
+  // the call idempotent (lower / equal values are no-ops), and the
+  // promotedRef Set dedupes within a session so the request fires once
+  // per trade_id per mount. Silent on failure — the next mount will retry.
+  useEffect(() => {
+    const portfolioName = activePortfolio?.name;
+    if (!portfolioName) return;
+    positions.forEach((p) => {
+      if (promotedRef.current.has(p.trade_id)) return;
+      const current = p.b1_return_pct;
+      if (current === null || !Number.isFinite(current)) return;
+      const stored = p.b1_max_return_pct;
+      const needsPromote = stored === null || current > stored;
+      if (!needsPromote) return;
+      promotedRef.current.add(p.trade_id);
+      fetch(`/api/trades/${encodeURIComponent(p.trade_id)}/update-b1-max`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ portfolio: portfolioName, new_max_pct: current }),
+      }).catch(() => { /* silent — backend guard + dedupe ref make retries safe */ });
+    });
+  }, [positions, activePortfolio?.name]);
 
   const loadData = useCallback(async (opts?: { force?: boolean }) => {
     const force = !!opts?.force;

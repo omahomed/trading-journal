@@ -318,6 +318,23 @@ def load_summary(portfolio_name, status=None):
                 's.manual_price_set_at AS "Manual_Price_Set_At",\n                    '
                 if has_manual_price else ''
             )
+            # Migration-tolerance for migration 036. Code deploy may
+            # briefly precede migration apply; absent the column, fall
+            # back to NULL so the SELECT keeps working.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'b1_max_return_pct'"
+                )
+                has_b1_max = cur.fetchone() is not None
+            except Exception:
+                has_b1_max = False
+            b1_max_select = (
+                's.b1_max_return_pct AS "B1_Max_Return_Pct",'
+                if has_b1_max else
+                'NULL::numeric AS "B1_Max_Return_Pct",'
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -345,6 +362,7 @@ def load_summary(portfolio_name, status=None):
                     s.instrument_type AS "Instrument_Type",
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
+                    {b1_max_select}
                     {manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
@@ -740,6 +758,83 @@ def set_manual_price(portfolio_name, trade_id, manual_price):
             updated = cur.fetchone()
             conn.commit()
             return dict(updated) if updated else None
+
+
+def update_b1_max_return_pct(portfolio_name, trade_id, new_max_pct):
+    """Idempotent guard for the persistent Sell Rule tier (migration 036).
+
+    UPDATEs trades_summary.b1_max_return_pct only if the stored value is
+    NULL or strictly less than new_max_pct. Auto-promote on observation;
+    never auto-demote — that semantic lives in the SQL itself so multi-tab
+    races and bad-faith input can't lower the stored peak.
+
+    Returns:
+      {"stored_max_pct": float | None, "was_updated": bool}
+        — stored_max_pct is the value AFTER the (no-)update, so callers
+          can sync their local state without a follow-up read.
+        — was_updated=False on equal-or-lower input (no SQL write).
+      None when the trade_id isn't found in the given portfolio.
+
+    Migration-tolerance: if the b1_max_return_pct column doesn't exist
+    yet (deploy raced migration apply), returns
+    {"stored_max_pct": None, "was_updated": False} so callers degrade
+    gracefully instead of 500ing.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'trades_summary' "
+                "AND column_name = 'b1_max_return_pct'"
+            )
+            if cur.fetchone() is None:
+                return {"stored_max_pct": None, "was_updated": False}
+
+            cur.execute(
+                "SELECT id FROM portfolios WHERE name = %s", (portfolio_name,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            # Conditional UPDATE in a single statement. The WHERE clause
+            # encodes the idempotent guard: write only when the new value
+            # exceeds the stored one (or stored is NULL). RETURNING tells
+            # us whether a write happened.
+            cur.execute(
+                "UPDATE trades_summary "
+                "SET b1_max_return_pct = %s "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL "
+                "  AND (b1_max_return_pct IS NULL OR b1_max_return_pct < %s) "
+                "RETURNING b1_max_return_pct",
+                (new_max_pct, portfolio_id, trade_id, new_max_pct),
+            )
+            updated = cur.fetchone()
+            conn.commit()
+            if updated is not None:
+                return {
+                    "stored_max_pct": float(updated["b1_max_return_pct"]),
+                    "was_updated": True,
+                }
+
+            # No write — either no such trade, or stored already >= new.
+            # Read back the current value to distinguish.
+            cur.execute(
+                "SELECT b1_max_return_pct FROM trades_summary "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL",
+                (portfolio_id, trade_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            stored = row["b1_max_return_pct"]
+            return {
+                "stored_max_pct": float(stored) if stored is not None else None,
+                "was_updated": False,
+            }
 
 
 # ============================================

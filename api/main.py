@@ -1345,6 +1345,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
+        "B1_Max_Return_Pct": "b1_max_return_pct",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
@@ -4518,6 +4519,59 @@ def flag_be_rule(body: dict):
         except Exception:
             pass
         return {"status": "ok", "trade_id": trade_id, "flagged": flagged, "updated": rowcount}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/trades/{trade_id}/update-b1-max")
+def update_b1_max(trade_id: str, body: dict = Body(...)):
+    """Persist the running peak B1 return % for a position (migration 036).
+
+    Drives the Sell Rule column's persistent tier — see SELL_RULES (sr8)
+    in frontend/src/lib/trade-rules.ts. Frontend fires this fire-and-
+    forget whenever it observes a current B1 return % above the stored
+    max; the SQL guard inside db.update_b1_max_return_pct enforces
+    monotonic non-decrease so multi-tab races and bad-faith inputs
+    can't lower the stored peak.
+
+    Body:
+        portfolio:   "CanSlim" | ...  (defaults to CanSlim)
+        new_max_pct: <number>          (finite; NaN / Inf rejected)
+
+    Response:
+        { "stored_max_pct": float | None, "was_updated": bool }
+        - was_updated=true   → SQL wrote a higher value
+        - was_updated=false  → stored already >= new; no-op (safe to retry)
+        - stored_max_pct     → value AFTER the call, for client sync
+    """
+    try:
+        portfolio = (body.get("portfolio") or "CanSlim").strip() or "CanSlim"
+        if not trade_id or not trade_id.strip():
+            raise HTTPException(status_code=404, detail="trade_id is required")
+
+        raw = body.get("new_max_pct")
+        if raw is None:
+            raise HTTPException(status_code=422, detail="new_max_pct is required")
+        try:
+            new_max_pct = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="new_max_pct must be numeric")
+        if not math.isfinite(new_max_pct):
+            raise HTTPException(status_code=422, detail="new_max_pct must be finite")
+
+        result = db.update_b1_max_return_pct(portfolio, trade_id.strip(), new_max_pct)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+
+        if result.get("was_updated"):
+            try:
+                db.load_summary.clear()
+            except Exception:
+                pass
+
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         return {"error": str(e)}
 
