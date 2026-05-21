@@ -2,10 +2,15 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
+import { handleChunkLoadError } from "@/lib/chunk-reload";
 
 // Root-level error boundary. Catches anything that escapes every layout's
 // error.tsx and the root layout itself. Forwards the error to Sentry so we
 // see it even if the user's browser can't render the normal error UI.
+//
+// Backstop chunk-reload handler — error.tsx handles this first for most
+// failures, but if a chunk error escapes that boundary (e.g. failure
+// inside RootLayout itself), we still get one auto-reload attempt here.
 
 export default function GlobalError({
   error,
@@ -14,6 +19,7 @@ export default function GlobalError({
 }) {
   useEffect(() => {
     Sentry.captureException(error);
+    handleChunkLoadError(error);
   }, [error]);
 
   return (
