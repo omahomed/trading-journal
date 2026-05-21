@@ -289,24 +289,43 @@ export function SR8TrimCalculator({ positions, preselectedTradeId }: Props) {
       )}
 
       {/* ─── Result ────────────────────────────────────────────────────── */}
-      {position && result && result.resultingState !== "invalid" && (
-        <div
-          className="rounded-[10px] p-5"
-          style={{
-            background: "color-mix(in oklab, #6366f1 6%, var(--surface))",
-            border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
-          }}
-        >
-          <div className="text-[9px] uppercase tracking-[0.10em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>
-            Recommendation
-          </div>
-          <div className="text-[28px] font-semibold tracking-tight" style={{ ...MONO, color: "var(--ink)" }}>
-            SELL <span data-testid="trim-shares">{result.trimShares.toLocaleString()}</span> SHARES
-          </div>
-          <div className="text-[12px] mt-2 flex flex-wrap gap-x-4 gap-y-1" style={{ color: "var(--ink-3)" }}>
-            <span>
-              Intended: <span style={{ ...MONO }}>{result.intendedTrimShares.toLocaleString()}</span>
-            </span>
+      {position && result && result.resultingState !== "invalid" && (() => {
+        // SR8 Quick / Quicksand are target-based: show the destination
+        // NAV % and target share count so the user can sanity-check
+        // the math against the NAV they entered.
+        const targetPct = rule === "sr8-quick" ? 10 : rule === "sr8-quicksand" ? 5 : null;
+        const targetShares = targetPct != null && navValid
+          ? Math.floor((nav * (targetPct / 100)) / position.current_price)
+          : null;
+        const alreadyAtTarget = targetPct != null && result.trimShares === 0 && position.shares > 0;
+        return (
+          <div
+            className="rounded-[10px] p-5"
+            style={{
+              background: "color-mix(in oklab, #6366f1 6%, var(--surface))",
+              border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
+            }}
+          >
+            <div className="text-[9px] uppercase tracking-[0.10em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>
+              Recommendation
+            </div>
+            <div className="text-[28px] font-semibold tracking-tight" style={{ ...MONO, color: "var(--ink)" }}>
+              SELL <span data-testid="trim-shares">{result.trimShares.toLocaleString()}</span> SHARES
+            </div>
+            {alreadyAtTarget && (
+              <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }} data-testid="already-at-target">
+                Position already at or below {targetPct}% NAV target — nothing to trim.
+              </div>
+            )}
+            {targetPct != null && targetShares != null && !alreadyAtTarget && (
+              <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }} data-testid="trim-target">
+                Target: {targetPct}% NAV ({targetShares.toLocaleString()} shares)
+              </div>
+            )}
+            <div className="text-[12px] mt-2 flex flex-wrap gap-x-4 gap-y-1" style={{ color: "var(--ink-3)" }}>
+              <span>
+                Intended: <span style={{ ...MONO }}>{result.intendedTrimShares.toLocaleString()}</span>
+              </span>
             {result.coreFloorBinds && (
               <span
                 className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
@@ -332,7 +351,8 @@ export function SR8TrimCalculator({ positions, preselectedTradeId }: Props) {
             <StateChip state={result.resultingState} />
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

@@ -118,32 +118,61 @@ describe("computeTrim — SR7 (cushion-tiered, ADDS-bound)", () => {
   });
 });
 
-describe("computeTrim — SR8 Quick / Quicksand (5% NAV slice)", () => {
-  test("slice within total: sells 5% NAV worth", () => {
-    // NAV 600k, 5% = 30k. Px=100 → 300 sh slice.
+describe("computeTrim — SR8 Quick / Quicksand (target-based)", () => {
+  test("Quick reduces position to 10% NAV target", () => {
+    // NAV 600k, 10% = 60k. Px=100 → target 600 sh. Start at 1500 sh.
     const r = computeTrim(baseInput({ rule: "sr8-quick" }));
-    expect(r.intendedTrimShares).toBe(300);
+    expect(r.intendedTrimShares).toBe(900);
+    expect(r.trimShares).toBe(900);
+    expect(r.resultingShares).toBe(600);
+    expect(r.resultingNavPct).toBeCloseTo(10.0);
+  });
+
+  test("Quicksand reduces position to 5% NAV target", () => {
+    // NAV 600k, 5% = 30k. Px=100 → target 300 sh. Start at 1500 sh.
+    const r = computeTrim(baseInput({ rule: "sr8-quicksand" }));
+    expect(r.intendedTrimShares).toBe(1200);
+    expect(r.trimShares).toBe(1200);
+    expect(r.resultingShares).toBe(300);
+    expect(r.resultingNavPct).toBeCloseTo(5.0);
+  });
+
+  test("Quick + Quicksand from same start produce different trims", () => {
+    // COHR-style scenario from the bug report: NAV $600k, 302 sh @ $358.50.
+    // 302 sh × $358.50 = $108,267 ≈ 18.0% NAV.
+    //   Quick target  → floor(0.10 × 600000 / 358.50) = floor(167.4) = 167
+    //   Quicksand     → floor(0.05 × 600000 / 358.50) = floor( 83.7) =  83
+    //   Quick trim    = 302 - 167 = 135
+    //   Quicksand trim= 302 -  83 = 219
+    const cohr = { totalShares: 302, currentPrice: 358.50, nav: 600_000 };
+    const quick = computeTrim(baseInput({ rule: "sr8-quick", ...cohr }));
+    const sand = computeTrim(baseInput({ rule: "sr8-quicksand", ...cohr }));
+    expect(quick.trimShares).toBe(135);
+    expect(sand.trimShares).toBe(219);
+    expect(quick.trimShares).not.toBe(sand.trimShares);
+  });
+
+  test("position already at/below target: trim is 0", () => {
+    // 100 sh @ $358.50 = $35,850 ≈ 6.0% NAV. Below Quick's 10% target.
+    const r = computeTrim(baseInput({
+      rule: "sr8-quick", totalShares: 100, currentPrice: 358.50, nav: 600_000,
+    }));
+    expect(r.trimShares).toBe(0);
+    expect(r.resultingShares).toBe(100);
+    // Still below the 15% NAV core, so state is below-core (not core-only).
+    expect(r.resultingState).toBe("below-core");
+  });
+
+  test("Quicksand sequential after Quick: targets 5% NAV from 10% start", () => {
+    // After Quick the position is at 10% NAV. Quicksand drives to 5%.
+    // 600 sh @ 100 = 60k = 10% NAV. Quicksand target 300 sh → trim 300.
+    const r = computeTrim(baseInput({ rule: "sr8-quicksand", totalShares: 600 }));
     expect(r.trimShares).toBe(300);
-    expect(r.resultingShares).toBe(1200);
+    expect(r.resultingShares).toBe(300);
+    expect(r.resultingNavPct).toBeCloseTo(5.0);
   });
 
-  test("slice > total: capped at total (position smaller than slice)", () => {
-    // 200 sh @ 100 = 20k. Slice = 300. Cap to 200 (full exit).
-    const r = computeTrim(baseInput({ rule: "sr8-quick", totalShares: 200 }));
-    expect(r.intendedTrimShares).toBe(300);
-    expect(r.trimShares).toBe(200);
-    expect(r.resultingShares).toBe(0);
-    expect(r.resultingState).toBe("closed");
-  });
-
-  test("Quicksand on the now-smaller position: same 5% NAV slice", () => {
-    // After Quick: 1200 sh. Quicksand trims another 300 (5% NAV).
-    const r = computeTrim(baseInput({ rule: "sr8-quicksand", totalShares: 1200 }));
-    expect(r.trimShares).toBe(300);
-    expect(r.resultingShares).toBe(900);
-  });
-
-  test("NAV=0: slice undefined → trim=0", () => {
+  test("NAV=0: trim=0 (target undefined)", () => {
     const r = computeTrim(baseInput({ rule: "sr8-quick", nav: 0 }));
     expect(r.trimShares).toBe(0);
   });
@@ -176,17 +205,14 @@ describe("computeTrim — resultingState transitions", () => {
     expect(r.resultingState).toBe("core-only");
   });
 
-  test("resulting < core (intentional SR13 over-trim): 'below-core'", () => {
-    // SR13 forces full exit. resulting = 0 < core → 'closed' takes
-    // priority over 'below-core'. To test below-core: contrive a
-    // scenario where resulting > 0 but < core.
-    // 1000 sh, core 900, SR2 trims 100 → resulting 900 (core-only).
-    // To land below-core we'd need a rule that ignores the cap; the
-    // only one is SR8-grateful-dead and SR13, but both go to 0.
-    // SR8 Quick can do it: 1000 sh, slice 300 → resulting 700 < core 900.
-    const r = computeTrim(baseInput({ rule: "sr8-quick", totalShares: 1000 }));
-    expect(r.trimShares).toBe(300);
-    expect(r.resultingShares).toBe(700);
+  test("resulting < core: 'below-core'", () => {
+    // SR13 forces full exit → resulting=0 → 'closed' takes priority.
+    // To land 'below-core' (resulting > 0 but < core): SR8 Quick on a
+    // position above its 10% target. Base scenario: 1500 sh, core 900,
+    // Quick targets 600 → trim 900, resulting 600 < core 900.
+    const r = computeTrim(baseInput({ rule: "sr8-quick" }));
+    expect(r.trimShares).toBe(900);
+    expect(r.resultingShares).toBe(600);
     expect(r.resultingState).toBe("below-core");
   });
 });
