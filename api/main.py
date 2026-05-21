@@ -1344,6 +1344,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
         "Strategy": "strategy",
+        "B1_Entry_Price": "b1_entry_price",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)

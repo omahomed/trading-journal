@@ -3,6 +3,7 @@
 import type { TradePosition, TradeDetail } from "./api";
 import { runLifoEngine } from "./lifo";
 import { parseOptionTicker } from "./options";
+import { classifySellRuleTier, type SellRuleTier } from "./sell-rule";
 
 export interface EnrichedPosition {
   trade_id: string;
@@ -44,6 +45,11 @@ export interface EnrichedPosition {
   manual_price: number | null;
   grade: number | null;
   strategy: string | null;
+  // B1 (first BUY) return % from its entry to the current price. Drives
+  // sell_rule_tier classification; surfaced here so tooltips/diagnostics
+  // can show the raw % alongside the tier badge if needed.
+  b1_return_pct: number | null;
+  sell_rule_tier: SellRuleTier | null;
 }
 
 export function computeEnrichedPositions(
@@ -136,6 +142,17 @@ export function computeEnrichedPositions(
     const riskStatus: "Free Roll" | "At Risk" = signedRisk >= 0 ? "Free Roll" : "At Risk";
     const expiration = isOption ? (parseOptionTicker(ticker)?.exp ?? null) : null;
 
+    // B1 (first BUY) return % — backend supplies b1_entry_price via a
+    // correlated subquery on trades_details. Null when the campaign has
+    // no BUY rows or the price is missing/zero (data corruption / pre-app
+    // History rows). sell_rule_tier is then null and the column renders "—".
+    const b1EntryRaw = parseFloat(String((trade as any).b1_entry_price ?? ""));
+    const b1EntryPrice = Number.isFinite(b1EntryRaw) && b1EntryRaw > 0 ? b1EntryRaw : null;
+    const b1ReturnPct = b1EntryPrice !== null && currentPrice > 0
+      ? ((currentPrice - b1EntryPrice) / b1EntryPrice) * 100
+      : null;
+    const sellRuleTier = classifySellRuleTier(b1ReturnPct);
+
     return {
       trade_id: trade.trade_id,
       ticker,
@@ -179,6 +196,8 @@ export function computeEnrichedPositions(
       })(),
       grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
       strategy: trade.strategy ?? null,
+      b1_return_pct: b1ReturnPct,
+      sell_rule_tier: sellRuleTier,
     };
   });
 }
