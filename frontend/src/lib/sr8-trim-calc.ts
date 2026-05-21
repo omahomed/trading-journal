@@ -153,17 +153,29 @@ export function computeTrim(input: TrimInput): TrimResult {
     }
     case "sr8-quick":
     case "sr8-quicksand": {
-      // 5% NAV slice of CURRENT NAV (not 5% of original entry, not
-      // 5% of core). Capped at the total position in case the position
-      // is already smaller than the slice (e.g. after Quicksand
-      // following Quick).
+      // TARGET-based, not slice-based. The rule text "Trim 5% NAV
+      // (15% → 10%)" describes the slice magnitude in the canonical
+      // case where the position starts exactly at the 15% NAV core;
+      // the operative semantic is the DESTINATION NAV %, not a fixed
+      // slice. A position currently at 18% NAV trims more than 5% on
+      // Quick (down to 10%); a position already at 10% trims zero.
+      //
+      //   Quick      → reduce to 10% NAV
+      //   Quicksand  → reduce to  5% NAV
+      //
+      // If totalShares <= targetShares, trim is 0 (nothing to do —
+      // position already at or below the destination). No core-floor
+      // cap here: these rules are explicitly reducing the core itself.
       if (!navValid) {
         intendedTrimShares = 0;
         trimShares = 0;
       } else {
-        const slice = Math.floor((nav * 0.05) / currentPrice);
-        intendedTrimShares = slice;
-        trimShares = Math.min(slice, totalShares);
+        const targetPct = rule === "sr8-quick" ? 0.10 : 0.05;
+        const targetValue = nav * targetPct;
+        const targetShares = Math.floor(targetValue / currentPrice);
+        const trim = Math.max(0, totalShares - targetShares);
+        intendedTrimShares = trim;
+        trimShares = trim;
       }
       break;
     }
@@ -216,8 +228,8 @@ export function computeTrim(input: TrimInput): TrimResult {
 export const RULE_OPTIONS: readonly { value: TrimRule; label: string; hint: string }[] = [
   { value: "sr2", label: "SR2 — Selling into Strength", hint: "Trim 25%, capped at ADDS" },
   { value: "sr7", label: "SR7 — 21e Violation", hint: "Cushion-tiered (auto)" },
-  { value: "sr8-quick", label: "SR8 Quick — RS breaks 8w MA", hint: "5% NAV slice" },
-  { value: "sr8-quicksand", label: "SR8 Quicksand — RS drifts further", hint: "5% NAV slice" },
+  { value: "sr8-quick", label: "SR8 Quick — RS breaks 8w MA", hint: "Reduce to 10% NAV" },
+  { value: "sr8-quicksand", label: "SR8 Quicksand — RS drifts further", hint: "Reduce to 5% NAV" },
   { value: "sr8-grateful-dead", label: "SR8 Grateful Dead — RS breaks 21w MA", hint: "Full exit" },
   { value: "sr13", label: "SR13 — Change of Character", hint: "Full exit including core" },
 ] as const;
