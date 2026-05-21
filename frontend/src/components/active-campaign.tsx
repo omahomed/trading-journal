@@ -14,6 +14,7 @@ import { CaptureSnapshotButton } from "./capture-snapshot";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { SellRuleBadge } from "./sell-rule-badge";
+import { SR8TrimCalculator } from "./sr8-trim-calculator";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
 // changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
@@ -182,6 +183,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   const [optSortDir, setOptSortDir] = useState<SortDir>("desc");
 
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; position: EnrichedPosition } | null>(null);
+  // SR8 Trim modal — null = closed. Pre-selects this trade_id in the
+  // calculator. Modal closes on backdrop click, X button, or Esc.
+  const [sr8TrimModalTradeId, setSr8TrimModalTradeId] = useState<string | null>(null);
   // Phase 2 — list of active strategies for the right-click "Set strategy"
   // submenu. Loaded once on mount; refresh after a successful retag is
   // unnecessary because the source of truth (trades_summary.strategy) is
@@ -419,6 +423,15 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
   }, [ctxMenu]);
+
+  // Esc closes the SR8 Trim modal. Backdrop click also closes (handled
+  // inline in the modal JSX).
+  useEffect(() => {
+    if (!sr8TrimModalTradeId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSr8TrimModalTradeId(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sr8TrimModalTradeId]);
 
   const ctxViewJournal = useCallback((p: EnrichedPosition) => {
     localStorage.setItem("journal_prefill", JSON.stringify({ ticker: p.ticker, trade_id: p.trade_id }));
@@ -1252,8 +1265,70 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <span style={{ color: "var(--ink-4)" }}>&#x26A1;</span> Exercise option
             </button>
           )}
+          {ctxMenu.position.sell_rule_tier === "sr8" && (
+            <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                    style={{ color: "var(--ink)" }}
+                    data-testid="ctx-sr8-trim"
+                    onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    onClick={e => { e.stopPropagation(); setSr8TrimModalTradeId(ctxMenu.position.trade_id); setCtxMenu(null); }}>
+              <span style={{ color: "var(--ink-4)" }}>&#x2702;&#xFE0F;</span> Calculate SR8 Trim
+            </button>
+          )}
         </div>
       )}
+
+      {/* SR8 Trim modal. Renders the shared SR8TrimCalculator with the
+          right-clicked position pre-selected. Backdrop click + Esc close.
+          The same calculator powers the Trade Manager SR8 Trim tab —
+          a single component drives both surfaces. */}
+      {sr8TrimModalTradeId && (() => {
+        const sr8 = positions.filter((pp) => pp.sell_rule_tier === "sr8");
+        return (
+          <div
+            role="dialog"
+            aria-label="SR8 Trim Calculator"
+            onClick={() => setSr8TrimModalTradeId(null)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 60,
+              background: "rgba(0,0,0,0.55)",
+              display: "grid",
+              placeItems: "center",
+              padding: "32px",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="rounded-[14px] p-6"
+              style={{
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                width: "min(900px, 100%)",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 50px rgba(0,0,0,0.30)",
+              }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-[18px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+                  SR8 Trim Calculator
+                </h2>
+                <button
+                  onClick={() => setSr8TrimModalTradeId(null)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[16px] transition-colors hover:brightness-95"
+                  style={{ background: "var(--surface-2)", color: "var(--ink-3)" }}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <SR8TrimCalculator positions={sr8} preselectedTradeId={sr8TrimModalTradeId} />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Exercise-option modal. Preview math is computed client-side from
           the option summary's avg_entry (which the backend keeps as the

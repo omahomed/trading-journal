@@ -5,6 +5,8 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
+import { computeEnrichedPositions } from "@/lib/positions";
+import { SR8TrimCalculator } from "./sr8-trim-calculator";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -22,13 +24,14 @@ const BUY_RULES = [
   "br12.1 Option Play",
 ];
 
-type Tab = "stops" | "edit" | "delete" | "export";
+type Tab = "stops" | "edit" | "delete" | "export" | "sr8-trim";
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: "stops", label: "Stop Loss Adjustment", icon: "🛡️" },
   { key: "edit", label: "Edit Transaction", icon: "📝" },
   { key: "delete", label: "Delete Trade", icon: "🗑️" },
   { key: "export", label: "Export", icon: "📥" },
+  { key: "sr8-trim", label: "SR8 Trim", icon: "✂️" },
 ];
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -88,11 +91,17 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || "stops");
 
   useEffect(() => {
-    if (initialTab && ["stops", "edit", "delete", "export"].includes(initialTab)) {
+    if (initialTab && ["stops", "edit", "delete", "export", "sr8-trim"].includes(initialTab)) {
       setTab(initialTab as Tab);
       onTabConsumed?.();
     }
   }, [initialTab, onTabConsumed]);
+
+  // Live prices for the SR8 Trim tab. Fetched once alongside the main
+  // load and reused — the other tabs don't need them, so we keep this
+  // separate. computeEnrichedPositions runs inside the SR8 tab body
+  // (see below) so live prices feed through to current_price.
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
   const [allTrades, setAllTrades] = useState<TradePosition[]>([]);
   const [details, setDetails] = useState<TradeDetail[]>([]);
@@ -142,6 +151,15 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
       setAllTrades([...open as TradePosition[], ...closed as TradePosition[]]);
       setDetails(det.details);
       setLoading(false);
+      // Fan out live-price fetch for the SR8 Trim tab. Independent
+      // from the main load so a flaky prices endpoint doesn't keep
+      // the page in the loading state.
+      const tickers = (open as TradePosition[]).map((t) => t.ticker).filter(Boolean);
+      if (tickers.length > 0) {
+        api.batchPrices(tickers, getActivePortfolio())
+          .then((prices) => setLivePrices(prices || {}))
+          .catch((err) => log.error("trade-manager", "batchPrices fetch failed", err));
+      }
     });
   }, []);
 
@@ -777,6 +795,16 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
           </button>
         </div>
       )}
+
+      {/* ═══════════ SR8 TRIM CALCULATOR ═══════════ */}
+      {tab === "sr8-trim" && (() => {
+        // Enrich on the fly using the same path ACS uses. equity arg is
+        // only consumed for pos_size_pct (not surfaced by the calculator),
+        // so 0 is fine — NAV is user-input via the calculator's own field.
+        const enriched = computeEnrichedPositions(openTrades, details, 0, livePrices);
+        const sr8 = enriched.filter((p) => p.sell_rule_tier === "sr8");
+        return <SR8TrimCalculator positions={sr8} />;
+      })()}
     </div>
   );
 }
