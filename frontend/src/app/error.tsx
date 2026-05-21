@@ -2,10 +2,17 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { useEffect } from "react";
+import { handleChunkLoadError } from "@/lib/chunk-reload";
 
 // Route-level error boundary. Catches anything that throws inside the app's
 // rendered tree (below RootLayout), reports to Sentry, and offers a recover
 // button instead of the default blank screen.
+//
+// Chunk-load errors (deploy invalidated cached chunk hashes) are handled
+// specially: we attempt a single auto-reload — once per session, guarded
+// against loops — before falling through to the boundary UI below. After
+// one failed auto-reload in this session, the user sees the normal UI
+// with "refresh the page" guidance as the fallback.
 
 export default function Error({
   error,
@@ -15,7 +22,11 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
+    // Try auto-reload for chunk errors first. If it fires, the page is
+    // about to navigate — Sentry's transport still has time to flush
+    // the event via beacon API before the reload completes.
     Sentry.captureException(error);
+    handleChunkLoadError(error);
   }, [error]);
 
   return (
