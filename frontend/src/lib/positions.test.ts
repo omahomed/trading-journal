@@ -87,3 +87,87 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.current_price).toBeCloseTo(400);
   });
 });
+
+describe("computeEnrichedPositions — Sell Rule tier (persistent b1_max_return_pct)", () => {
+  // Single-position helper. Each test sets b1_entry_price / b1_max_return_pct
+  // on the trade row and a live price; we assert which tier the classifier
+  // resolves to. The point of the suite: pullbacks must not auto-demote.
+  function singleStock(opts: {
+    b1Entry?: number | null;
+    b1Max?: number | null;
+    livePrice?: number;
+  }) {
+    const trade = {
+      trade_id: "T1",
+      ticker: "AAPL",
+      status: "OPEN",
+      shares: 100,
+      avg_entry: 100,
+      total_cost: 10_000,
+      realized_pl: 0,
+      rule: "",
+      instrument_type: "STOCK",
+      multiplier: 1,
+      open_date: "2026-01-01",
+      b1_entry_price: opts.b1Entry === undefined ? 100 : opts.b1Entry,
+      b1_max_return_pct: opts.b1Max === undefined ? null : opts.b1Max,
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "T1", action: "BUY", date: "2026-01-01", shares: 100, amount: 100 } as any,
+    ];
+    const livePrices: Record<string, number> =
+      opts.livePrice !== undefined ? { AAPL: opts.livePrice } : {};
+    return computeEnrichedPositions([trade], details, 100_000, livePrices)[0];
+  }
+
+  it("COHR pullback case: stored max 70%, current 30% → SR8 (no demote)", () => {
+    const p = singleStock({ b1Entry: 100, b1Max: 70, livePrice: 130 });
+    expect(p.b1_return_pct).toBeCloseTo(30);
+    expect(p.b1_max_return_pct).toBeCloseTo(70);
+    expect(p.sell_rule_tier).toBe("sr8");
+  });
+
+  it("new peak: stored 30%, current 55% → SR8 (effective max = 55)", () => {
+    const p = singleStock({ b1Entry: 100, b1Max: 30, livePrice: 155 });
+    expect(p.sell_rule_tier).toBe("sr8");
+  });
+
+  it("brand-new position post-deploy: stored null, current 5% → SR1", () => {
+    const p = singleStock({ b1Entry: 100, b1Max: null, livePrice: 105 });
+    expect(p.b1_max_return_pct).toBeNull();
+    expect(p.sell_rule_tier).toBe("sr1");
+  });
+
+  it("only stored set (no current price data) → tier from stored", () => {
+    // currentPrice falls back to summaryEntry (100) when livePrice missing;
+    // that produces b1_return_pct=0 against b1_entry=100. The stored max
+    // of 60 wins via Math.max → effective 60 → SR8.
+    const p = singleStock({ b1Entry: 100, b1Max: 60 });
+    expect(p.b1_return_pct).toBeCloseTo(0);
+    expect(p.sell_rule_tier).toBe("sr8");
+  });
+
+  it("both null → tier null (column renders dash)", () => {
+    const p = singleStock({ b1Entry: null, b1Max: null });
+    expect(p.b1_return_pct).toBeNull();
+    expect(p.b1_max_return_pct).toBeNull();
+    expect(p.sell_rule_tier).toBeNull();
+  });
+
+  it("stored = -10 (peaked at loss), current = -20 → SR1, no demote needed", () => {
+    // Both negative; max(-20, -10) = -10 → still SR1. The point is the
+    // classifier doesn't crash on negatives and Math.max is taken correctly.
+    const p = singleStock({ b1Entry: 100, b1Max: -10, livePrice: 80 });
+    expect(p.sell_rule_tier).toBe("sr1");
+  });
+
+  it("boundary: stored exactly at 50% → SR8 (≥ 50 ladder)", () => {
+    const p = singleStock({ b1Entry: 100, b1Max: 50, livePrice: 100 });
+    expect(p.sell_rule_tier).toBe("sr8");
+  });
+
+  it("boundary: stored 49.99%, current 49.99% → SR11 (still below 50)", () => {
+    const p = singleStock({ b1Entry: 100, b1Max: 49.99, livePrice: 149.99 });
+    expect(p.sell_rule_tier).toBe("sr11");
+  });
+});

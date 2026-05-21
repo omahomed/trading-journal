@@ -49,6 +49,11 @@ export interface EnrichedPosition {
   // sell_rule_tier classification; surfaced here so tooltips/diagnostics
   // can show the raw % alongside the tier badge if needed.
   b1_return_pct: number | null;
+  // Persistent peak B1 return ever observed for this campaign (migration
+  // 036). Auto-promoted on observation, never auto-demoted. Sell Rule
+  // tier derives from max(b1_return_pct, b1_max_return_pct) — see
+  // computeEnrichedPositions. NULL pre-backfill; falls back to current.
+  b1_max_return_pct: number | null;
   sell_rule_tier: SellRuleTier | null;
 }
 
@@ -151,7 +156,18 @@ export function computeEnrichedPositions(
     const b1ReturnPct = b1EntryPrice !== null && currentPrice > 0
       ? ((currentPrice - b1EntryPrice) / b1EntryPrice) * 100
       : null;
-    const sellRuleTier = classifySellRuleTier(b1ReturnPct);
+
+    // Persistent peak (migration 036). Sell Rule tier is fundamentally
+    // state: SR8 cores don't auto-demote on a pullback, so classifying
+    // from current B1 return alone mis-tiers leaders that have pulled
+    // back below 50%. Use max(current, stored). Auto-promote fires
+    // fire-and-forget from active-campaign.tsx when current > stored.
+    const b1MaxRaw = parseFloat(String((trade as any).b1_max_return_pct ?? ""));
+    const b1MaxStored = Number.isFinite(b1MaxRaw) ? b1MaxRaw : null;
+    const effectiveMax = b1ReturnPct !== null && b1MaxStored !== null
+      ? Math.max(b1ReturnPct, b1MaxStored)
+      : (b1ReturnPct ?? b1MaxStored);
+    const sellRuleTier = classifySellRuleTier(effectiveMax);
 
     return {
       trade_id: trade.trade_id,
@@ -197,6 +213,7 @@ export function computeEnrichedPositions(
       grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
       strategy: trade.strategy ?? null,
       b1_return_pct: b1ReturnPct,
+      b1_max_return_pct: b1MaxStored,
       sell_rule_tier: sellRuleTier,
     };
   });
