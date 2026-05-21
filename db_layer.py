@@ -357,7 +357,15 @@ def load_summary(portfolio_name, status=None):
                          ORDER BY d.date ASC
                          LIMIT 1),
                         s.rule
-                    ) AS "Buy_Rule"
+                    ) AS "Buy_Rule",
+                    (SELECT d.amount
+                     FROM trades_details d
+                     WHERE d.trade_id = s.trade_id
+                       AND d.portfolio_id = s.portfolio_id
+                       AND d.action = 'BUY'
+                       AND d.deleted_at IS NULL
+                     ORDER BY d.date ASC, d.id ASC
+                     LIMIT 1) AS "B1_Entry_Price"
                 FROM trades_summary s
                 JOIN portfolios p ON s.portfolio_id = p.id
                 WHERE p.name = %s

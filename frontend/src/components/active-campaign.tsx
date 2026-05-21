@@ -9,9 +9,11 @@ import { readCache, writeCache } from "@/lib/session-cache";
 import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { formatCurrency } from "@/lib/format";
+import { SELL_RULE_TIER_ORDER } from "@/lib/sell-rule";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
+import { SellRuleBadge } from "./sell-rule-badge";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
 // changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
@@ -69,6 +71,17 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
     // order matches what the user sees.
     av = a.projected_pct;
     bv = b.projected_pct;
+  } else if (key === "sell_rule_tier") {
+    // Sort by tier order (sr1 < sr11 < sr8). null tiers sort last in both
+    // directions — null handling below treats null as "missing", so flip
+    // the comparison sign for desc but keep null pinned to the bottom.
+    const aRank = a.sell_rule_tier ? SELL_RULE_TIER_ORDER[a.sell_rule_tier] : null;
+    const bRank = b.sell_rule_tier ? SELL_RULE_TIER_ORDER[b.sell_rule_tier] : null;
+    if (aRank === null && bRank === null) return 0;
+    if (aRank === null) return 1;
+    if (bRank === null) return -1;
+    const cmp = aRank - bRank;
+    return dir === "desc" ? -cmp : cmp;
   } else {
     av = (a as any)[key];
     bv = (b as any)[key];
@@ -92,7 +105,7 @@ const COL_WIDTH = "calc(100% / 14)";
 const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "right" }[] = [
   { key: "ticker", label: "Ticker", align: "left" },
   { key: "days_held", label: "Days", align: "right" },
-  { key: "risk_status", label: "Risk Status", align: "center" },
+  { key: "sell_rule_tier", label: "Sell Rule", align: "center" },
   { key: "pyramid_pct", label: "Pyramid", align: "center" },
   { key: "return_pct", label: "Return %", align: "right" },
   { key: "pos_size_pct", label: "Pos Size %", align: "right" },
@@ -111,7 +124,7 @@ const EQUITY_COLS: { key: string; label: string; align: "left" | "center" | "rig
 // without colgroup pixel hacks. Conceptual mapping:
 //   1 Ticker       ↔ Contract
 //   2 Days         ↔ Days
-//   3 Risk Status  ↔ Exp Date
+//   3 Sell Rule    ↔ Exp Date
 //   4 Pyramid      ↔ DTE
 //   5 Return %     ↔ Return %
 //   6 Pos Size %   ↔ Pos Size %
@@ -884,13 +897,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         {p.days_held}
                       </td>
                       <td className="px-2.5 py-2.5 text-center">
-                        <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
-                              style={{
-                                background: p.risk_status === "Free Roll" ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : "color-mix(in oklab, #f59f00 12%, var(--surface))",
-                                color: p.risk_status === "Free Roll" ? "#16a34a" : "#d97706",
-                              }}>
-                          {p.risk_status}
-                        </span>
+                        <SellRuleBadge tier={p.sell_rule_tier} />
                       </td>
                       <td className="px-2.5 py-2.5 text-center"
                           onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
