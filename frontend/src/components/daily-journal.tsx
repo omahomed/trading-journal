@@ -205,7 +205,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
           Daily <em className="italic" style={{ color: navColor }}>Journal</em>
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          {history.length} entries · CanSlim
+          {history.length} entries · {getActivePortfolio()}
         </div>
       </div>
 
