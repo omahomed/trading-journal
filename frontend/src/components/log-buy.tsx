@@ -287,7 +287,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         log.error("log-buy", "tradesOpenDetails fetch failed", err);
         return { details: [], lot_closures: [] };
       }),
-      api.listStrategies({ active: true }).catch((err) => {
+      api.listStrategies({ active: true, portfolio: getActivePortfolio() }).catch((err) => {
         log.error("log-buy", "listStrategies fetch failed", err);
         return [] as Strategy[];
       }),

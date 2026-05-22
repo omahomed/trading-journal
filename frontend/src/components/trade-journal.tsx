@@ -722,7 +722,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // Phase 2 — load active strategies once on mount. Used by both the
   // card pill (color lookup) and the right-click flyout (option list).
   useEffect(() => {
-    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+    api.listStrategies({ active: true, portfolio: getActivePortfolio() }).then(setStrategies).catch(() => setStrategies([]));
   }, []);
 
   // Trade Review lessons — one fetch per portfolio. The trade card's lesson

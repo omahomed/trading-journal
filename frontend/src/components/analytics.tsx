@@ -142,16 +142,21 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   // strategies are excluded here because PATCH /api/trades/{id}/strategy
   // rejects them (matches log_buy's contract).
   useEffect(() => {
-    api.listStrategies({ active: true }).then(setStrategies).catch((err) => {
+    api.listStrategies({ active: true, portfolio: getActivePortfolio() }).then(setStrategies).catch((err) => {
       log.error("analytics", "listStrategies (active) fetch failed", err);
       setStrategies([]);
     });
   }, []);
 
   // All strategies (including inactive) for the Strategy filter
-  // dropdown. Two separate fetches by design: each consumer's purpose
-  // is obvious from its source-of-truth name, and the endpoint is tiny
-  // enough that doubling the request cost is negligible.
+  // dropdown. NOT portfolio-scoped (Migration 038): historical trades
+  // may carry strategy tags no longer "allowed" in the active
+  // portfolio (e.g., the 13 CanSlim-tagged trades in 457B Plan).
+  // Filter UX must surface every strategy ever used in this portfolio's
+  // trades, including ones outside the current allow list.
+  // Two separate fetches by design: each consumer's purpose is obvious
+  // from its source-of-truth name, and the endpoint is tiny enough
+  // that doubling the request cost is negligible.
   useEffect(() => {
     api.listStrategies({ active: false }).then(setAllStrategies).catch((err) => {
       log.error("analytics", "listStrategies (all) fetch failed", err);

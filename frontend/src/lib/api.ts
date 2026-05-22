@@ -351,15 +351,21 @@ export interface CashTransaction {
 
 export type CashAction = "deposit" | "withdraw" | "reconcile";
 
-// Strategy lookup row from the `strategies` table (Migration 019). Each
-// trades_summary row carries a `strategy` text key referencing this table.
-// `color` is a hex string used to distinguish strategies in the UI.
+// Strategy lookup row from the `strategies` table (Migration 019; scoped
+// by Migration 038). Each trades_summary row carries a `strategy` text
+// key referencing this table. `color` is a hex string used to
+// distinguish strategies in the UI.
+//
+// allowed_portfolio_names (Migration 038):
+//   null         → strategy is visible in every portfolio (universal)
+//   string[]     → strategy is visible ONLY in the listed portfolios
 export interface Strategy {
   name: string;
   description: string | null;
   color: string;
   is_active: boolean;
   created_at: string | null;
+  allowed_portfolio_names: string[] | null;
 }
 
 // Drift-scan response (Phase 2 Commit 8). One entry per check, plus a
@@ -957,11 +963,18 @@ export const api = {
   // Health
   health: () => fetchJSON<{ status: string; timestamp: string }>(`/api/health`),
 
-  // Strategies — small global lookup table (Migration 019). Log Buy fetches
-  // the active list to populate its Strategy dropdown; Phase 2 admin UI
-  // fetches with active=false to show disabled strategies for editing.
-  listStrategies: ({ active = true }: { active?: boolean } = {}) =>
-    fetchJSON<Strategy[]>(`/api/strategies?active=${active}`),
+  // Strategies — small global lookup table (Migration 019; per-portfolio
+  // scoping via Migration 038). Log Buy / Active Campaign / Trade Journal
+  // pass `portfolio` to narrow the dropdown to that portfolio's allowed
+  // strategies; admin views omit the param to see every strategy
+  // regardless of scope.
+  listStrategies: (
+    { active = true, portfolio }: { active?: boolean; portfolio?: string } = {},
+  ) => {
+    const qs = new URLSearchParams({ active: String(active) });
+    if (portfolio) qs.set("portfolio", portfolio);
+    return fetchJSON<Strategy[]>(`/api/strategies?${qs.toString()}`);
+  },
 
   // Phase 2 — strategies CRUD. Founder-gated server-side; non-founder
   // calls return { error: "forbidden_not_admin" }.

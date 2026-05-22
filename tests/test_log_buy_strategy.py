@@ -69,7 +69,7 @@ def stubbed(monkeypatch):
     }
 
     monkeypatch.setattr(db_layer, "load_strategies",
-                        lambda active_only=True: [
+                        lambda active_only=True, portfolio_name=None: [
                             s for s in state["strategies"]
                             if not active_only or s["is_active"]
                         ])

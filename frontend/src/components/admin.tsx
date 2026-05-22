@@ -1084,7 +1084,11 @@ export function Admin({ navColor }: { navColor: string }) {
             <select value={backfillPortfolio} onChange={e => setBackfillPortfolio(e.target.value)}
               className="h-[34px] px-2.5 rounded-[8px] text-[12px] w-full"
               style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-              {["CanSlim", "457B Plan", "TQQQ Strategy"].map(p => <option key={p} value={p}>{p}</option>)}
+              {/* Sourced from the same listPortfolios fetch the Drift Scan
+                  uses. Avoids the rename trap the hardcoded list fell into
+                  when "TQQQ Strategy" was repurposed to "Long-Term Growth"
+                  in migration 037. */}
+              {driftPortfolios.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
             </select>
           </InputRow>
           <InputRow label="Start Date (optional)">

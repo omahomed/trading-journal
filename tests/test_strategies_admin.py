@@ -65,13 +65,22 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(main, "FOUNDER_USER_ID", _FOUNDER_ID)
 
     state: dict[str, Any] = {
+        # Post-Migration-038 shape. allowed_portfolio_names = None means
+        # the strategy is universal; an explicit list narrows visibility.
         "strategies": [
             {"name": "CanSlim", "description": None, "color": "#6366f1", "is_active": True,
-             "created_at": datetime(2026, 1, 1)},
+             "created_at": datetime(2026, 1, 1), "allowed_portfolio_names": ["CanSlim"]},
             {"name": "StockTalk", "description": None, "color": "#d97706", "is_active": True,
-             "created_at": datetime(2026, 1, 2)},
+             "created_at": datetime(2026, 1, 2),
+             "allowed_portfolio_names": ["CanSlim", "Long-Term Growth"]},
             {"name": "21eStrategy", "description": None, "color": "#0d9488", "is_active": True,
-             "created_at": datetime(2026, 1, 3)},
+             "created_at": datetime(2026, 1, 3), "allowed_portfolio_names": None},
+            {"name": "LongTerm", "description": None, "color": "#0284c7", "is_active": True,
+             "created_at": datetime(2026, 1, 4),
+             "allowed_portfolio_names": ["457B Plan", "Long-Term Growth"]},
+            {"name": "50sStrategy", "description": None, "color": "#be185d", "is_active": True,
+             "created_at": datetime(2026, 1, 5),
+             "allowed_portfolio_names": ["457B Plan", "Long-Term Growth"]},
         ],
         "retag_result": True,
         "bulk_result": (0, []),
@@ -85,11 +94,18 @@ def stubbed(monkeypatch):
         "audit_logs": [],
     }
 
-    monkeypatch.setattr(db_layer, "load_strategies",
-                        lambda active_only=True: [
-                            s for s in state["strategies"]
-                            if not active_only or s["is_active"]
-                        ])
+    def fake_load_strategies(active_only=True, portfolio_name=None):
+        rows = [s for s in state["strategies"] if not active_only or s["is_active"]]
+        if portfolio_name is None:
+            return rows
+        # Mirror the SQL filter: NULL allowed_portfolio_names = universal;
+        # explicit list narrows.
+        return [
+            s for s in rows
+            if s.get("allowed_portfolio_names") is None
+               or portfolio_name in (s.get("allowed_portfolio_names") or [])
+        ]
+    monkeypatch.setattr(db_layer, "load_strategies", fake_load_strategies)
 
     def fake_update_trade_strategy(portfolio, trade_id, strategy):
         state["retag_calls"].append((portfolio, trade_id, strategy))
@@ -141,6 +157,79 @@ def stubbed(monkeypatch):
     finally:
         if hasattr(main.limiter, "enabled"):
             main.limiter.enabled = original_enabled
+
+
+# ---------------------------------------------------------------------------
+# GET /api/strategies — per-portfolio scoping (Migration 038)
+# ---------------------------------------------------------------------------
+# The visibility matrix locked by the feature spec:
+#
+#   Strategy        | allowed_portfolio_names              | Visible in
+#   CanSlim         | ['CanSlim']                          | CanSlim
+#   StockTalk       | ['CanSlim', 'Long-Term Growth']      | CanSlim, LTG
+#   21eStrategy     | NULL                                 | All 3
+#   LongTerm        | ['457B Plan', 'Long-Term Growth']    | 457B, LTG
+#   50sStrategy     | ['457B Plan', 'Long-Term Growth']    | 457B, LTG
+
+
+def test_list_strategies_no_filter_returns_all(stubbed):
+    """No ?portfolio= param → return every active strategy. Admin path."""
+    _, client = stubbed
+    r = client.get("/api/strategies", headers=_non_founder_headers())
+    assert r.status_code == 200
+    names = {s["name"] for s in r.json()}
+    assert names == {"CanSlim", "StockTalk", "21eStrategy", "LongTerm", "50sStrategy"}
+
+
+def test_list_strategies_canslim_portfolio(stubbed):
+    """CanSlim portfolio sees CanSlim, StockTalk, 21eStrategy (NULL allowed)."""
+    _, client = stubbed
+    r = client.get("/api/strategies?portfolio=CanSlim", headers=_non_founder_headers())
+    assert r.status_code == 200
+    names = {s["name"] for s in r.json()}
+    assert names == {"CanSlim", "StockTalk", "21eStrategy"}
+
+
+def test_list_strategies_457b_portfolio(stubbed):
+    """457B Plan sees LongTerm, 50sStrategy, 21eStrategy (NULL allowed).
+    NOT CanSlim (scoped to CanSlim) or StockTalk (scoped to CanSlim+LTG)."""
+    _, client = stubbed
+    r = client.get("/api/strategies?portfolio=457B%20Plan", headers=_non_founder_headers())
+    assert r.status_code == 200
+    names = {s["name"] for s in r.json()}
+    assert names == {"LongTerm", "50sStrategy", "21eStrategy"}
+
+
+def test_list_strategies_long_term_growth_portfolio(stubbed):
+    """Long-Term Growth sees StockTalk + LongTerm + 50sStrategy + 21eStrategy."""
+    _, client = stubbed
+    r = client.get("/api/strategies?portfolio=Long-Term%20Growth", headers=_non_founder_headers())
+    assert r.status_code == 200
+    names = {s["name"] for s in r.json()}
+    assert names == {"StockTalk", "21eStrategy", "LongTerm", "50sStrategy"}
+
+
+def test_list_strategies_unknown_portfolio_returns_only_universal(stubbed):
+    """Defensive: an unknown portfolio name returns only NULL-allowed
+    (universal) strategies. Don't surface 'no strategies available'
+    just because the user typo'd a portfolio."""
+    _, client = stubbed
+    r = client.get("/api/strategies?portfolio=Nonexistent", headers=_non_founder_headers())
+    assert r.status_code == 200
+    names = {s["name"] for s in r.json()}
+    assert names == {"21eStrategy"}
+
+
+def test_serialize_strategy_exposes_allowed_portfolio_names(stubbed):
+    """Response shape includes allowed_portfolio_names so the frontend can
+    decide which strategies to suppress / surface in edit fallbacks."""
+    _, client = stubbed
+    r = client.get("/api/strategies?portfolio=CanSlim", headers=_non_founder_headers())
+    body = r.json()
+    canslim = next(s for s in body if s["name"] == "CanSlim")
+    twentyone = next(s for s in body if s["name"] == "21eStrategy")
+    assert canslim["allowed_portfolio_names"] == ["CanSlim"]
+    assert twentyone["allowed_portfolio_names"] is None
 
 
 # ---------------------------------------------------------------------------

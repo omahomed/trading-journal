@@ -2077,16 +2077,22 @@ def _ensure_user_owns_portfolio(portfolio_id: int) -> bool:
 
 
 @app.get("/api/strategies")
-def list_strategies_endpoint(active: bool = True):
-    """Return rows from the strategies lookup table (Migration 019).
+def list_strategies_endpoint(active: bool = True, portfolio: str | None = None):
+    """Return rows from the strategies lookup table (Migration 019; scoped
+    by Migration 038).
 
     `active` (default true) filters to is_active=true — what the Log Buy
     dropdown wants. Pass `?active=false` to include disabled strategies
-    (used by Phase 2 admin UI). Strategies are global, not per-user, so
-    this endpoint is safe to call without a portfolio context.
+    (used by Phase 2 admin UI).
+
+    `portfolio` (optional) scopes the result to strategies allowed in that
+    portfolio. Strategies with NULL allowed_portfolio_names are visible
+    everywhere; an explicit list narrows visibility. Omit the param for
+    admin / cross-portfolio views that want every strategy regardless of
+    portfolio scoping.
     """
     try:
-        rows = db.load_strategies(active_only=active)
+        rows = db.load_strategies(active_only=active, portfolio_name=portfolio)
         return [_serialize_strategy(r) for r in rows]
     except Exception as e:
         return {"error": str(e)}
@@ -2095,13 +2101,14 @@ def list_strategies_endpoint(active: bool = True):
 def _serialize_strategy(r: dict) -> dict:
     """Shared serialization for strategy rows. Centralized so GET, POST,
     and PUT all return the same shape (name, description, color,
-    is_active, created_at-as-isoformat)."""
+    is_active, created_at-as-isoformat, allowed_portfolio_names)."""
     return {
         "name": r["name"],
         "description": r.get("description"),
         "color": r["color"],
         "is_active": r["is_active"],
         "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+        "allowed_portfolio_names": r.get("allowed_portfolio_names"),
     }
 
 
