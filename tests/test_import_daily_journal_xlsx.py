@@ -76,16 +76,17 @@ class TestCoerceDate:
 class TestReadXlsx:
     def test_fixture_row_count(self):
         rows = ij.read_xlsx(FIXTURE_XLSX)
-        assert len(rows) == 97
+        # Revised fixture covers 3/31/26 onward (37 trading days).
+        assert len(rows) == 37
 
     def test_fixture_date_range(self):
         rows = ij.read_xlsx(FIXTURE_XLSX)
         days = [r["day"] for r in rows]
-        assert min(days) == date(2026, 1, 2)
+        assert min(days) == date(2026, 3, 31)
         assert max(days) == date(2026, 5, 21)
 
     def test_nan_cash_change_coerced_to_zero(self):
-        """First-week rows have NaN cash_change in the source.
+        """Days with no cash flow have NaN cash_change in the source.
         read_xlsx must coerce these to 0.0, not leave NaN floats
         that would crash arithmetic downstream."""
         rows = ij.read_xlsx(FIXTURE_XLSX)
@@ -258,12 +259,12 @@ class TestDetectNlvContinuityGaps:
         assert ij.detect_nlv_continuity_gaps(rows, tolerance=0.5) == []
 
     def test_fixture_has_known_gap_count(self):
-        """Real xlsx fixture has 90 day-pair gaps > 50¢. Locks the
-        expected shape so a future re-export with cleaner data
-        signals correctly."""
+        """Revised fixture (3/31-onward) has 36 day-pair gaps > 50¢.
+        Locks the expected shape so a future re-export with cleaner
+        data signals correctly."""
         rows = ij.read_xlsx(FIXTURE_XLSX)
         gaps = ij.detect_nlv_continuity_gaps(rows)
-        assert len(gaps) == 90
+        assert len(gaps) == 36
 
 
 class TestFilterByDate:
@@ -357,28 +358,32 @@ class TestWriteRows:
 class TestRealFixtureIntegration:
     def test_row_count(self):
         rows = ij.read_xlsx(FIXTURE_XLSX)
-        assert len(rows) == 97
+        # Revised fixture covers 3/31/26 onward (post migration 040).
+        assert len(rows) == 37
 
     def test_date_range(self):
         rows = ij.read_xlsx(FIXTURE_XLSX)
         days = sorted(r["day"] for r in rows)
-        assert days[0] == date(2026, 1, 2)
+        assert days[0] == date(2026, 3, 31)
         assert days[-1] == date(2026, 5, 21)
 
-    def test_twelve_nonzero_cash_entries_totaling_48420(self):
+    def test_five_nonzero_cash_entries_totaling_16830(self):
+        """Post-reset xlsx has 5 cash injections totalling $16,830
+        (the user's deposits between 4/2 and 5/21)."""
         rows = ij.read_xlsx(FIXTURE_XLSX)
         nz = [r for r in rows if r["cash_change"] != 0]
-        assert len(nz) == 12
-        assert sum(r["cash_change"] for r in nz) == pytest.approx(48420.0)
+        assert len(nz) == 5
+        assert sum(r["cash_change"] for r in nz) == pytest.approx(16830.0)
 
     def test_chained_pipeline_against_real_fixture(self):
-        """Run the full 97-row fixture through the chained-prev_end
-        loop and anchor known days against the user's reported
-        expectations:
-          - First row (2026-01-02): pct = None (no prior baseline)
-          - 1/13: dollar ≈ -$108, pct ≈ -2.23%
-          - 5/20: dollar ≈ +$1144, pct ≈ +3.39%
-          - 5/21 (deposit day): dollar ≈ +$4577, pct ≈ +11.05%
+        """Run the full 37-row revised fixture through the chained-
+        prev_end loop and anchor known days:
+          - First row (2026-03-31): pct = None (no prior baseline);
+            beg_nlv = 14681.62 (preserved from xlsx, matches the
+            migration-040 starting_capital)
+          - 4/2 (first deposit day): dollar ≈ +$399, pct ≈ +2.17%
+          - 5/20 (typical day): dollar ≈ +$1144, pct ≈ +3.39%
+          - 5/21 (deposit + gain day): dollar ≈ +$4577, pct ≈ +11.05%
         """
         rows = sorted(ij.read_xlsx(FIXTURE_XLSX), key=lambda r: r["day"])
         enriched: list[dict] = []
@@ -389,12 +394,13 @@ class TestRealFixtureIntegration:
 
         by_day = {e["day"]: e for e in enriched}
 
-        first = by_day[date(2026, 1, 2)]
+        first = by_day[date(2026, 3, 31)]
         assert first["daily_pct_change"] is None
+        assert first["beg_nlv"] == pytest.approx(14681.62, abs=0.01)
 
-        jan13 = by_day[date(2026, 1, 13)]
-        assert jan13["daily_dollar_change"] == pytest.approx(-108.08, abs=0.05)
-        assert jan13["daily_pct_change"] == pytest.approx(-2.23, abs=0.05)
+        apr2 = by_day[date(2026, 4, 2)]
+        assert apr2["daily_dollar_change"] == pytest.approx(399.11, abs=0.05)
+        assert apr2["daily_pct_change"] == pytest.approx(2.17, abs=0.05)
 
         may20 = by_day[date(2026, 5, 20)]
         assert may20["daily_dollar_change"] == pytest.approx(1143.75, abs=0.5)
