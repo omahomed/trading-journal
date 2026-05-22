@@ -478,6 +478,28 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
+  // Batch journal write — multi-portfolio atomic save for Daily Routine.
+  // Backend returns structured JSON for every status (200/404/409/422/500),
+  // so .then(r => r.json()) works uniformly. Caller branches on status.
+  journalBatchEdit: (body: {
+    day: string;
+    shared: Record<string, any>;
+    portfolios: Array<Record<string, any>>;
+    force_overwrite?: boolean;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/journal/batch-edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{
+      status: "ok" | "exists" | "invalid" | "not_found" | "error";
+      rows_written?: number;
+      portfolios?: string[];
+      conflicting_portfolios?: string[];
+      detail?: string;
+      errors?: Array<{ portfolio: string | null; field: string; message: string }>;
+    }>,
+
   journalRestampMct: (day: string, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/journal/restamp-mct`, {
       method: "POST",
