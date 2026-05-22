@@ -156,14 +156,25 @@ def read_xlsx(path: str | Path, sheet: str = "Sheet2") -> list[dict]:
 def compute_derived(row: dict) -> dict:
     """Augment a parsed row with daily_dollar_change and daily_pct_change.
 
+    Mirrors the canonical app write path in
+    frontend/src/components/daily-routine.tsx:255-276 so a row written
+    by the importer is indistinguishable from a row typed through
+    Daily Routine.
+
     daily_dollar_change = end_nlv - beg_nlv - cash_change
-    daily_pct_change    = daily_dollar_change / beg_nlv
-                          (None when beg_nlv == 0; division undefined.
-                           The DB column is NULL-allowed, so we pass None
-                           and let psycopg2 map to SQL NULL.)
+    daily_pct_change    = (daily_dollar_change / (beg_nlv + cash_change)) * 100
+                          (PERCENTAGE form: 3.39 means 3.39%.
+                           None when adjusted_beg = beg_nlv + cash_change == 0;
+                           division undefined. The DB column is NULL-allowed,
+                           so we pass None and let psycopg2 map to SQL NULL.)
+
+    Divisor uses the post-deposit baseline so a $1,000 deposit + $50
+    gain on a $10k portfolio reports as 50/11000 = 0.455%, not the
+    50/10000 = 0.5% that raw beg_nlv would give.
     """
     dollar = row["end_nlv"] - row["beg_nlv"] - row["cash_change"]
-    pct = (dollar / row["beg_nlv"]) if row["beg_nlv"] != 0 else None
+    adjusted_beg = row["beg_nlv"] + row["cash_change"]
+    pct = (dollar / adjusted_beg) * 100 if adjusted_beg != 0 else None
     return {
         **row,
         "daily_dollar_change": dollar,
