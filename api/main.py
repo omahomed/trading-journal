@@ -409,7 +409,16 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
 
 
 def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
-    """Compute 21-period ATR% = SMA(TR, 21) / SMA(Low, 21) * 100."""
+    """Compute 21-period ATR% = SMA(TR, 21) / SMA(Low, 21) * 100.
+
+    Returns 0.0 on any failure mode (empty/sparse history, yfinance
+    exception, zero-volatility series). Callers (the journal snapshot
+    path in particular) use the return value to weight position
+    contribution to portfolio_heat, so a silent 0 here effectively
+    drops the ticker from the snapshot. Log the exception path so an
+    operator can grep production logs to identify silently-dropped
+    tickers after the fact — behavior unchanged, observability only.
+    """
     import yfinance as yf
     try:
         if as_of_date:
@@ -430,7 +439,9 @@ def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
         if sma_low <= 0:
             return 0.0
         return round((sma_tr / sma_low) * 100, 4)
-    except Exception:
+    except Exception as e:
+        print(f"[_compute_ticker_atr_pct] {ticker} (as_of={as_of_date or 'live'}) "
+              f"silently returned 0.0 due to: {type(e).__name__}: {e}")
         return 0.0
 
 
@@ -1898,6 +1909,141 @@ def price_lookup(request: Request, ticker: str = ""):
         raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /api/prices/lookup-batch — many-tickers-in-one-call variant of the live
+# price + ATR lookup. Designed for Portfolio Heat: one HTTP call covering N
+# tickers instead of N sequential calls. The previous sequential pattern
+# would burn through /api/prices/lookup's 30/minute rate limit on
+# portfolios with >30 stock positions (or any portfolio when the user had
+# also recently used Log Buy / Position Sizer, which share that endpoint).
+# The user's three oldest CanSlim positions were consistently flagged
+# "unavailable" because they were always the last to be requested in the
+# sequential loop and so always the ones that hit 429.
+#
+# Status vocabulary lets the frontend distinguish:
+#   - "ok"     — atr_pct is a number; render normally
+#   - "empty"  — yfinance returned no rows; price/atr_pct null
+#   - "sparse" — yfinance returned <21 bars (e.g., recent IPO); price
+#                surfaced as the last close, but atr_pct=0.0 because
+#                21-period ATR isn't meaningful
+#   - "error"  — exception during fetch; price/atr_pct null. Logged
+#                server-side so a transient yfinance outage can be
+#                diagnosed from operator logs.
+#
+# Reuses the in-process _atr_cache to short-circuit repeated lookups
+# within the 5-minute TTL — the cache is per-ticker keyed and shared
+# with the single-ticker endpoint above. A cached entry counts against
+# neither yfinance nor the rate-limit slot.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_BATCH_MAX_TICKERS = 50
+
+
+@app.get("/api/prices/lookup-batch")
+@limiter.limit("10/minute")
+def price_lookup_batch(request: Request, tickers: str = ""):
+    """Batch live price + ATR for a comma-separated ticker list.
+
+    Returns one result per ticker (deduped, normalized to upper-case).
+    Per-ticker failures don't fail the whole call — each result carries
+    a `status` field. Rate-limit slot usage is 1 per call regardless of
+    ticker count, so this is preferable to fan-out from the client.
+    """
+    if not tickers.strip():
+        raise HTTPException(status_code=400, detail="No tickers provided")
+    import yfinance as yf
+
+    # Normalize + dedupe (preserving first-seen order so callers can rely
+    # on the response shape matching their request shape when no dupes
+    # were sent).
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in tickers.split(","):
+        t = raw.strip().upper()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        normalized.append(t)
+
+    if not normalized:
+        raise HTTPException(status_code=400, detail="No valid tickers in request")
+    if len(normalized) > _BATCH_MAX_TICKERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many tickers ({len(normalized)}); max {_BATCH_MAX_TICKERS} per call",
+        )
+
+    results: list[dict] = []
+    for t in normalized:
+        # Cache short-circuit. Wraps the cached single-ticker result with
+        # status='ok' so the batch shape is uniform.
+        cached = _atr_cache.get(t)
+        if cached is not None and (time.time() - cached[0]) < _ATR_CACHE_TTL_S:
+            cached_payload = cached[1]
+            results.append({
+                "ticker": t,
+                "price": cached_payload.get("price"),
+                "atr_pct": cached_payload.get("atr_pct"),
+                "status": "ok",
+            })
+            continue
+
+        try:
+            df = yf.Ticker(t).history(period="40d")
+        except Exception as e:
+            print(f"[price_lookup_batch] yfinance threw for {t}: "
+                  f"{type(e).__name__}: {e}")
+            results.append({
+                "ticker": t, "price": None, "atr_pct": None, "status": "error",
+            })
+            continue
+
+        if df.empty:
+            results.append({
+                "ticker": t, "price": None, "atr_pct": None, "status": "empty",
+            })
+            continue
+
+        price = float(df["Close"].iloc[-1])
+
+        if len(df) < 21:
+            # Sparse history (recent IPO etc.). Surface last close but flag
+            # so the UI can render an explanatory badge.
+            results.append({
+                "ticker": t, "price": round(price, 2),
+                "atr_pct": 0.0, "status": "sparse",
+            })
+            continue
+
+        # Full ATR computation — identical formula to /api/prices/lookup.
+        tr = pd.concat([
+            df["High"] - df["Low"],
+            (df["High"] - df["Close"].shift(1)).abs(),
+            (df["Low"] - df["Close"].shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        sma_tr = float(tr.tail(21).mean())
+        sma_low = float(df["Low"].tail(21).mean())
+        atr_pct = (sma_tr / sma_low) * 100 if sma_low > 0 else 0.0
+        atr_21 = sma_tr
+
+        payload = {
+            "ticker": t,
+            "price": round(price, 2),
+            "atr": round(atr_21, 2),
+            "atr_pct": round(atr_pct, 2),
+        }
+        _atr_cache[t] = (time.time(), payload)
+        results.append({
+            "ticker": t,
+            "price": payload["price"],
+            "atr_pct": payload["atr_pct"],
+            "status": "ok",
+        })
+
+    return {"results": results}
 
 
 @app.get("/api/charts/ohlcv/{ticker}")
