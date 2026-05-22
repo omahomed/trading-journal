@@ -4852,32 +4852,65 @@ def test_connection():
 _PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at"
 
 
-def load_strategies(active_only: bool = True) -> list[dict]:
-    """Return rows from the `strategies` lookup table (Migration 019).
+def load_strategies(active_only: bool = True, portfolio_name: str | None = None) -> list[dict]:
+    """Return rows from the `strategies` lookup table (Migration 019, scoped
+    by Migration 038).
 
     Sorted by created_at ASC so seeded strategies render in their canonical
-    order (CanSlim → StockTalk → 21eStrategy). active_only filters out
-    soft-disabled strategies — what GET /api/strategies returns by default
-    and what log_buy validates new trades against.
+    order (CanSlim → StockTalk → 21eStrategy → newer rows). active_only
+    filters out soft-disabled strategies — what GET /api/strategies returns
+    by default and what log_buy validates new trades against.
 
-    Tiny, uncached read by design: 3 rows today (~5 ever), so the simplicity
-    of avoiding cache invalidation when the Phase 2 admin UI mutates the
-    table is worth more than the saved sub-millisecond.
+    portfolio_name (Migration 038) scopes the result to strategies allowed
+    in that portfolio. NULL allowed_portfolio_names = universal (visible
+    everywhere). Pass None / omit to skip scoping (admin / cross-portfolio
+    views).
+
+    Tiny, uncached read by design: 5 rows today (~10 ever), so the
+    simplicity of avoiding cache invalidation when the admin UI mutates
+    the table is worth more than the saved sub-millisecond.
+
+    Migration-tolerance: if allowed_portfolio_names doesn't exist yet
+    (code deploy raced ahead of migration 038 apply), the SELECT falls
+    back to NULL so the scoping filter behaves as "all visible" — the
+    same disposition as a NULL allowed value.
     """
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'strategies' "
+                    "AND column_name = 'allowed_portfolio_names'"
+                )
+                has_scoping = cur.fetchone() is not None
+            except Exception:
+                has_scoping = False
+
+            allowed_select = (
+                "allowed_portfolio_names" if has_scoping
+                else "NULL::text[] AS allowed_portfolio_names"
+            )
+
+            where_clauses = []
+            params: list = []
             if active_only:
-                cur.execute(
-                    "SELECT name, description, color, is_active, created_at "
-                    "FROM strategies WHERE is_active "
-                    "ORDER BY created_at ASC"
+                where_clauses.append("is_active")
+            if portfolio_name and has_scoping:
+                where_clauses.append(
+                    "(allowed_portfolio_names IS NULL "
+                    "OR %s = ANY(allowed_portfolio_names))"
                 )
-            else:
-                cur.execute(
-                    "SELECT name, description, color, is_active, created_at "
-                    "FROM strategies "
-                    "ORDER BY created_at ASC"
-                )
+                params.append(portfolio_name)
+
+            where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+            cur.execute(
+                f"SELECT name, description, color, is_active, created_at, {allowed_select} "
+                f"FROM strategies"
+                f"{where_sql} "
+                f"ORDER BY created_at ASC",
+                params,
+            )
             return [dict(r) for r in cur.fetchall()]
 
 

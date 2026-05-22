@@ -358,7 +358,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // here — user can refresh if they just added a strategy. Acceptable for
   // a low-mutation lookup.
   useEffect(() => {
-    api.listStrategies({ active: true }).then(setStrategies).catch(() => setStrategies([]));
+    api.listStrategies({ active: true, portfolio: getActivePortfolio() }).then(setStrategies).catch(() => setStrategies([]));
   }, []);
 
   useEffect(() => {
