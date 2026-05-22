@@ -153,30 +153,54 @@ def read_xlsx(path: str | Path, sheet: str = "Sheet2") -> list[dict]:
     return out
 
 
-def compute_derived(row: dict) -> dict:
-    """Augment a parsed row with daily_dollar_change and daily_pct_change.
+def compute_derived(row: dict, prev_end_nlv: float | None = None) -> dict:
+    """Augment a parsed row per app convention
+    (frontend/src/components/daily-routine.tsx:255-276).
 
-    Mirrors the canonical app write path in
-    frontend/src/components/daily-routine.tsx:255-276 so a row written
-    by the importer is indistinguishable from a row typed through
-    Daily Routine.
+    When prev_end_nlv is provided, the row's beg_nlv is OVERRIDDEN to
+    prev_end_nlv — this matches what the app writes when a user saves
+    a Daily Routine entry, where beg_nlv is filled from the prior
+    journal entry's end_nlv at save time (daily-routine.tsx:275
+    `beg_nlv: portPrev`).
 
-    daily_dollar_change = end_nlv - beg_nlv - cash_change
-    daily_pct_change    = (daily_dollar_change / (beg_nlv + cash_change)) * 100
-                          (PERCENTAGE form: 3.39 means 3.39%.
-                           None when adjusted_beg = beg_nlv + cash_change == 0;
-                           division undefined. The DB column is NULL-allowed,
-                           so we pass None and let psycopg2 map to SQL NULL.)
+    Why override: the user's xlsx populates each row's beg_nlv as a
+    snapshot companion to end_nlv, not as the prior session's close.
+    Honoring the xlsx values would break the app's day-over-day
+    convention and produce 0% daily moves on days that include both a
+    deposit and a real intraday gain (e.g., 5/21: xlsx beg=39507,
+    end=46007, cash=6500 — xlsx-self-contained math says 0%, but the
+    actual day-over-day move was 4577/41430 ≈ 11.05%).
 
-    Divisor uses the post-deposit baseline so a $1,000 deposit + $50
-    gain on a $10k portfolio reports as 50/11000 = 0.455%, not the
-    50/10000 = 0.5% that raw beg_nlv would give.
+    Result:
+      - daily_dollar_change = end - prev_end_nlv - cash_change
+        (i.e. true day-over-day delta net of deposits)
+      - daily_pct_change    = (dollar / (prev_end_nlv + cash_change)) * 100
+        PERCENTAGE form: 3.39 means 3.39%.
+        None when adjusted_beg == 0 (undefined math).
+      - beg_nlv             = prev_end_nlv (overrides xlsx value)
+
+    First-row semantics (prev_end_nlv=None): beg_nlv preserved from
+    xlsx, daily_dollar_change = 0, daily_pct_change = None. No prior
+    baseline exists.
     """
-    dollar = row["end_nlv"] - row["beg_nlv"] - row["cash_change"]
-    adjusted_beg = row["beg_nlv"] + row["cash_change"]
+    if prev_end_nlv is None:
+        return {
+            **row,
+            "daily_dollar_change": 0.0,
+            "daily_pct_change": None,
+        }
+
+    effective_beg = prev_end_nlv
+    cash = row["cash_change"]
+    end = row["end_nlv"]
+
+    dollar = end - effective_beg - cash
+    adjusted_beg = effective_beg + cash
     pct = (dollar / adjusted_beg) * 100 if adjusted_beg != 0 else None
+
     return {
         **row,
+        "beg_nlv": effective_beg,           # override per app convention
         "daily_dollar_change": dollar,
         "daily_pct_change": pct,
     }
@@ -369,16 +393,24 @@ def _print_report(
 
     if gaps:
         print(
-            f"Continuity warnings (informational — {len(gaps)} day-pairs "
-            f"where end_nlv(N) ≠ beg_nlv(N+1)):"
+            f"Source beg_nlv ≠ prev_end_nlv on {len(gaps)} day-pairs "
+            f"(informational):"
         )
-        for d_a, e, d_b, b, delta in gaps[:15]:
+        print(
+            "  Import overrides beg_nlv with prev_end_nlv per app "
+            "convention\n"
+            "  (frontend/src/components/daily-routine.tsx:275). "
+            "The xlsx's\n"
+            "  original beg_nlv values for these rows are NOT stored. "
+            "Sample:"
+        )
+        for d_a, e, d_b, b, delta in gaps[:10]:
             print(
-                f"  - {d_a.isoformat()} end ${e:.2f} vs "
-                f"{d_b.isoformat()} beg ${b:.2f} (delta ${delta:+.2f})"
+                f"  - {d_b.isoformat()}: xlsx beg ${b:.2f} → "
+                f"override to ${e:.2f} (prev day end, delta ${delta:+.2f})"
             )
-        if len(gaps) > 15:
-            print(f"  ... and {len(gaps) - 15} more")
+        if len(gaps) > 10:
+            print(f"  ... and {len(gaps) - 10} more")
         print()
 
     label = "Inserted (commit)" if commit else "Would insert (dry-run)"
@@ -405,17 +437,33 @@ def run_import(args: argparse.Namespace) -> int:
 
     duplicates = detect_duplicates(filtered)
     if duplicates:
-        # Dedupe: keep last occurrence (xlsx's natural order has newest
-        # rows first → last-seen by sorted-by-day-then-original-index
-        # would invert that. Simpler and safer: keep the last row in
-        # source order, which is what the user last typed for that day).
+        # Dedupe: keep last occurrence in source order — that's what the
+        # user last typed for that day. xlsx's natural order is newest-
+        # first, so iterating and overwriting in a dict naturally keeps
+        # the latest dict entry per key.
         seen: dict[date, dict] = {}
         for r in filtered:
             seen[r["day"]] = r
-        filtered = sorted(seen.values(), key=lambda r: r["day"])
+        filtered = list(seen.values())
 
-    enriched = [compute_derived(r) for r in filtered]
-    gaps = detect_nlv_continuity_gaps(enriched)
+    # Sort ascending by day BEFORE chaining — compute_derived needs each
+    # row's previous-day end_nlv as its baseline. The chain must walk
+    # chronologically; xlsx order is reverse-chronological.
+    filtered.sort(key=lambda r: r["day"])
+
+    # Detect continuity gaps against the SOURCE xlsx values (before we
+    # override beg_nlv). Informational only — the override below will
+    # eliminate every gap in stored data; we surface the count so the
+    # user knows the import diverged from their xlsx for those rows.
+    gaps = detect_nlv_continuity_gaps(filtered)
+
+    enriched: list[dict] = []
+    prev_end: float | None = None
+    for r in filtered:
+        enriched.append(compute_derived(r, prev_end_nlv=prev_end))
+        # Use the ORIGINAL xlsx end_nlv, not the (identical) post-derive
+        # value, to keep this loop's data flow obvious.
+        prev_end = r["end_nlv"]
 
     written: dict[str, int] | None = None
     existing_in_db = 0

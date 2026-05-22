@@ -101,74 +101,105 @@ class TestReadXlsx:
 
 
 class TestComputeDerived:
-    def test_basic_no_cash_change(self):
-        """No deposit day: divisor = beg_nlv. Pct in percentage form."""
+    def test_pct_with_prev_end_baseline(self):
+        """Standard no-deposit day: prev_end=100, end=102.5, cash=0.
+        Dollar = 2.5, pct = 2.5/100 * 100 = 2.5%. The row's xlsx
+        beg_nlv is IGNORED and overridden to prev_end."""
         r = ij.compute_derived({
             "day": date(2026, 3, 15),
-            "beg_nlv": 10000.0,
+            "beg_nlv": 999,        # ignored — overridden to prev_end
             "cash_change": 0.0,
-            "end_nlv": 10250.0,
-        })
-        assert r["daily_dollar_change"] == pytest.approx(250.0)
-        # 250 / 10000 * 100 = 2.5%
+            "end_nlv": 102.5,
+        }, prev_end_nlv=100.0)
+        assert r["beg_nlv"] == 100.0
+        assert r["daily_dollar_change"] == pytest.approx(2.5)
         assert r["daily_pct_change"] == pytest.approx(2.5)
 
     def test_pct_uses_adjusted_baseline(self):
-        """$1000 deposit + $50 gain on $10k → dollar=50, pct uses
-        post-deposit baseline (beg + cash) per the canonical app
-        convention in daily-routine.tsx:259."""
+        """$1000 deposit + $50 gain. Divisor = prev_end + cash (post-
+        deposit baseline) per app convention. Note: dollar uses
+        prev_end (NOT xlsx beg)."""
         r = ij.compute_derived({
             "day": date(2026, 3, 15),
-            "beg_nlv": 10000.0,
+            "beg_nlv": 999,        # ignored
             "cash_change": 1000.0,
             "end_nlv": 11050.0,
-        })
+        }, prev_end_nlv=10000.0)
+        assert r["beg_nlv"] == 10000.0
         assert r["daily_dollar_change"] == pytest.approx(50.0)
-        # 50 / (10000 + 1000) * 100 = 50/11000 * 100 ≈ 0.4545%
+        # 50 / (10000 + 1000) * 100 ≈ 0.4545%
         assert r["daily_pct_change"] == pytest.approx(50.0 / 11000.0 * 100)
 
     def test_zero_adjusted_beg_yields_none_pct(self):
-        """Zero adjusted baseline (beg + cash both 0) must return None
-        for daily_pct_change — math is undefined. Covers the empty-
-        account early-January rows in the user's real fixture."""
+        """When prev_end = 0 AND cash = 0, adjusted_beg = 0 → pct is
+        None. Covers the empty-account early-January rows."""
         r = ij.compute_derived({
-            "day": date(2026, 1, 2),
+            "day": date(2026, 1, 5),
             "beg_nlv": 0.0,
             "cash_change": 0.0,
             "end_nlv": 0.0,
-        })
+        }, prev_end_nlv=0.0)
         assert r["daily_dollar_change"] == 0.0
         assert r["daily_pct_change"] is None
 
-    def test_cash_injection_day_with_zero_beg_nlv(self):
-        """First deposit day — beg_nlv=0, cash=4850, end=4850.
-        adjusted_beg = 4850 (not 0), so pct is a real number:
-        dollar = 0, pct = 0 / 4850 * 100 = 0.0 (NOT None).
-        Behavioral change vs the prior decimal-divisor formula."""
+    def test_first_deposit_day_with_zero_prev_end(self):
+        """First deposit day after an empty stretch: prev_end=0,
+        cash=4850, end=4850. adjusted_beg = 4850; dollar = 0;
+        pct = 0.0 (defined math, not None)."""
         r = ij.compute_derived({
             "day": date(2026, 1, 12),
             "beg_nlv": 0.0,
             "cash_change": 4850.0,
             "end_nlv": 4850.0,
-        })
+        }, prev_end_nlv=0.0)
+        assert r["beg_nlv"] == 0.0
         assert r["daily_dollar_change"] == pytest.approx(0.0)
         assert r["daily_pct_change"] == pytest.approx(0.0)
 
     def test_pct_matches_app_convention(self):
-        """Anchor the formula to daily-routine.tsx:259:
+        """Anchor the formula to daily-routine.tsx:255-276:
+            portDailyChg = portNlvN - portPrev - portCashN
             portAdj      = portPrev + portCashN
             portDailyPct = (portDailyChg / portAdj) * 100
 
-        Synthetic: beg=10000, cash=5000, end=15500.
+        Synthetic: prev_end=10000, cash=5000, end=15500.
         Dollar = 500. Pct = 500/15000*100 ≈ 3.333%."""
         r = ij.compute_derived({
             "day": date(2026, 3, 15),
-            "beg_nlv": 10000.0,
+            "beg_nlv": 999,        # ignored
             "cash_change": 5000.0,
             "end_nlv": 15500.0,
-        })
+        }, prev_end_nlv=10000.0)
+        assert r["beg_nlv"] == 10000.0
         assert r["daily_dollar_change"] == pytest.approx(500.0)
         assert r["daily_pct_change"] == pytest.approx(500.0 / 15000.0 * 100)
+
+    def test_first_row_returns_none_pct(self):
+        """First row has no prior baseline (prev_end_nlv=None).
+        Contract: daily_dollar_change = 0, daily_pct_change = None,
+        beg_nlv preserved from xlsx (not overridden)."""
+        r = ij.compute_derived({
+            "day": date(2026, 1, 2),
+            "beg_nlv": 0.0,
+            "cash_change": 0.0,
+            "end_nlv": 0.0,
+        }, prev_end_nlv=None)
+        assert r["beg_nlv"] == 0.0
+        assert r["daily_dollar_change"] == 0.0
+        assert r["daily_pct_change"] is None
+
+    def test_beg_nlv_overridden_on_subsequent_rows(self):
+        """Xlsx beg_nlv (5125.55) is ignored; output uses prev_end
+        (4741.92). This is the user's real 2026-01-13 row case."""
+        r = ij.compute_derived({
+            "day": date(2026, 1, 14),
+            "beg_nlv": 5125.55,
+            "cash_change": 0.0,
+            "end_nlv": 14258.13,
+        }, prev_end_nlv=4741.92)
+        assert r["beg_nlv"] == 4741.92          # overridden
+        # dollar = 14258.13 - 4741.92 - 0 = 9516.21
+        assert r["daily_dollar_change"] == pytest.approx(9516.21)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,20 +371,40 @@ class TestRealFixtureIntegration:
         assert len(nz) == 12
         assert sum(r["cash_change"] for r in nz) == pytest.approx(48420.0)
 
-    def test_zero_adjusted_beg_rows_resolve_to_none_pct(self):
-        """Early-January rows where both beg_nlv = 0 AND cash_change = 0
-        must yield None (adjusted_beg = 0; math undefined).
+    def test_chained_pipeline_against_real_fixture(self):
+        """Run the full 97-row fixture through the chained-prev_end
+        loop and anchor known days against the user's reported
+        expectations:
+          - First row (2026-01-02): pct = None (no prior baseline)
+          - 1/13: dollar ≈ -$108, pct ≈ -2.23%
+          - 5/20: dollar ≈ +$1144, pct ≈ +3.39%
+          - 5/21 (deposit day): dollar ≈ +$4577, pct ≈ +11.05%
+        """
+        rows = sorted(ij.read_xlsx(FIXTURE_XLSX), key=lambda r: r["day"])
+        enriched: list[dict] = []
+        prev_end: float | None = None
+        for r in rows:
+            enriched.append(ij.compute_derived(r, prev_end_nlv=prev_end))
+            prev_end = r["end_nlv"]
 
-        Behavioral nuance after the divisor change:
-            - Jan 2, 5, 6, 7, 8, 9: beg=0, cash=0 → adjusted_beg=0 → pct=None
-            - Jan 12: beg=0, cash=4850 → adjusted_beg=4850 → pct=0.0 (NOT None)
+        by_day = {e["day"]: e for e in enriched}
 
-        So 6 rows yield None and the 7th (the first deposit day) yields 0.0."""
-        rows = ij.read_xlsx(FIXTURE_XLSX)
-        enriched = [ij.compute_derived(r) for r in rows if r["beg_nlv"] == 0]
-        none_pcts = [r for r in enriched if r["daily_pct_change"] is None]
-        zero_pcts = [r for r in enriched if r["daily_pct_change"] == 0.0]
-        assert len(enriched) == 7              # total zero-NLV rows
-        assert len(none_pcts) == 6              # six pre-deposit days
-        assert len(zero_pcts) == 1              # 2026-01-12, the first deposit
-        assert zero_pcts[0]["day"] == date(2026, 1, 12)
+        first = by_day[date(2026, 1, 2)]
+        assert first["daily_pct_change"] is None
+
+        jan13 = by_day[date(2026, 1, 13)]
+        assert jan13["daily_dollar_change"] == pytest.approx(-108.08, abs=0.05)
+        assert jan13["daily_pct_change"] == pytest.approx(-2.23, abs=0.05)
+
+        may20 = by_day[date(2026, 5, 20)]
+        assert may20["daily_dollar_change"] == pytest.approx(1143.75, abs=0.5)
+        assert may20["daily_pct_change"] == pytest.approx(3.39, abs=0.05)
+
+        may21 = by_day[date(2026, 5, 21)]
+        assert may21["daily_dollar_change"] == pytest.approx(4577.26, abs=0.5)
+        assert may21["daily_pct_change"] == pytest.approx(11.05, abs=0.05)
+
+        # beg_nlv override: 5/21's xlsx beg was 39506.79 (a snapshot
+        # that already included intraday gain), now overridden to 5/20's
+        # end_nlv = 34929.53 per app convention.
+        assert may21["beg_nlv"] == pytest.approx(34929.53, abs=0.05)
