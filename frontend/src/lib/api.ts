@@ -728,6 +728,21 @@ export const api = {
   priceLookup: (ticker: string) =>
     fetchJSON<{ ticker: string; price: number; atr: number; atr_pct: number }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),
 
+  // Batch live price + ATR — single rate-limit slot covers many tickers.
+  // Each per-ticker result carries a `status` field so the UI can render
+  // "empty" / "sparse" / "error" cases distinctly from a real "ok" miss.
+  // Used by Portfolio Heat where the prior per-ticker fan-out was burning
+  // through the single-ticker endpoint's 30/min limit.
+  priceLookupBatch: (tickers: string[]) =>
+    fetchJSON<{
+      results: Array<{
+        ticker: string;
+        price: number | null;
+        atr_pct: number | null;
+        status: "ok" | "empty" | "sparse" | "error";
+      }>;
+    }>(`/api/prices/lookup-batch?tickers=${encodeURIComponent(tickers.join(","))}`),
+
   setManualPrice: (body: { portfolio: string; trade_id: string; manual_price: number | null }) =>
     fetchWithAuth(`${API_BASE}/api/trades/manual-price`, {
       method: "POST", headers: { "Content-Type": "application/json" },

@@ -27,6 +27,17 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
   );
 }
 
+// Per-row status drives the rendered badge + whether the row's
+// heat_contribution counts in totals.
+//   "ok"     — clean ATR; contributes to totalHeat / avgVol
+//   "empty"  — yfinance returned no data for this ticker (gray badge)
+//   "sparse" — yfinance returned <21 bars; price is real but ATR isn't
+//              meaningful (gray badge). Most common cause: recent IPO.
+//   "error"  — fetch threw server-side; backend logged the reason
+//              (orange badge). Distinct from rate-limit (entire-batch
+//              failure, surfaced via the batchError banner above).
+type AtrStatus = "ok" | "empty" | "sparse" | "error";
+
 interface HeatRow {
   ticker: string;
   trade_id: string;
@@ -36,12 +47,10 @@ interface HeatRow {
   total_cost: number;
   shares: number;
   rule: string;
-  // "ok"     — atr_pct is a valid yfinance result, contributes to total heat
-  // "failed" — priceLookup raised or rate-limited; row renders "—" and is
-  //            excluded from total heat / avgVol so a transient yfinance
-  //            miss doesn't silently deflate the headline number
-  atr_status: "ok" | "failed";
+  atr_status: AtrStatus;
 }
+
+type BatchFailure = "rate_limited" | "error" | null;
 
 export function PortfolioHeat({ navColor }: { navColor: string }) {
   const [positions, setPositions] = useState<TradePosition[]>([]);
@@ -51,6 +60,10 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   const [fetching, setFetching] = useState(false);
   const [mode, setMode] = useState<"auto" | "manual">("auto");
   const [manualAtr, setManualAtr] = useState<Record<string, string>>({});
+  // Distinguishes "whole-batch failed" from "individual ticker failed."
+  // null means no batch-level failure occurred (some/all per-row statuses
+  // may still be non-ok).
+  const [batchFailure, setBatchFailure] = useState<BatchFailure>(null);
   const HEAT_THRESHOLD = 20; // default from app_config
 
   useEffect(() => {
@@ -83,37 +96,50 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
   const fetchATR = async (trades: TradePosition[], eq: number) => {
     setFetching(true);
-    const results: HeatRow[] = [];
+    setBatchFailure(null);
 
-    for (const t of trades) {
+    const tickers = trades.map(t => t.ticker);
+    let byTicker = new Map<string, { atr_pct: number | null; status: AtrStatus }>();
+    try {
+      const batch = await api.priceLookupBatch(tickers);
+      byTicker = new Map(batch.results.map(r => [r.ticker, {
+        atr_pct: r.atr_pct,
+        status: r.status,
+      }]));
+    } catch (e) {
+      // Whole-batch failure — likely 429 (rate limit) or 503 (yfinance
+      // global outage). Distinguish so the user gets actionable advice.
+      const msg = String(e);
+      const rateLimited = msg.includes("429") || msg.includes("Too Many Requests");
+      setBatchFailure(rateLimited ? "rate_limited" : "error");
+      log.error("portfolio-heat", "priceLookupBatch failed", e);
+      // Continue rendering rows with status="error" so the table still
+      // shows position weights; user can switch to Manual ATR if they want
+      // to see a heat estimate while the batch is offline.
+    }
+
+    const results: HeatRow[] = trades.map(t => {
       const totalCost = parseFloat(String(t.total_cost || 0));
       const weightPct = eq > 0 ? (totalCost / eq) * 100 : 0;
-      let atrPct = 0;
-      let atrStatus: "ok" | "failed" = "failed";
-
-      try {
-        const data = await api.priceLookup(t.ticker);
-        // Backend now raises HTTP 503 on yfinance miss, which fetchJSON
-        // converts to a throw caught below. A 200 response with a real
-        // payload always has a numeric atr_pct.
-        if (data && typeof data.atr_pct === "number") {
-          atrPct = data.atr_pct;
-          atrStatus = "ok";
-        }
-      } catch { /* keep atrStatus = "failed" */ }
-
-      results.push({
+      // Default to status="error" so a batch-level failure (empty map)
+      // still produces a row per position, with "error" badges.
+      const r = byTicker.get(t.ticker) ?? { atr_pct: null, status: "error" as AtrStatus };
+      const atrPct = typeof r.atr_pct === "number" ? r.atr_pct : 0;
+      return {
         ticker: t.ticker,
         trade_id: t.trade_id,
         weight_pct: weightPct,
         atr_pct: atrPct,
-        heat_contribution: atrStatus === "ok" ? weightPct * (atrPct / 100) : 0,
+        // Only "ok" rows contribute to total heat. Sparse rows have a
+        // real price but no meaningful ATR (=0), so weighting them in
+        // would understate exposure; they stay out of the headline.
+        heat_contribution: r.status === "ok" ? weightPct * (atrPct / 100) : 0,
         total_cost: totalCost,
         shares: t.shares || 0,
         rule: t.rule || "",
-        atr_status: atrStatus,
-      });
-    }
+        atr_status: r.status,
+      };
+    });
 
     setHeatData(results.sort((a, b) => b.heat_contribution - a.heat_contribution));
     setFetching(false);
@@ -144,12 +170,19 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
   }
 
-  // Failed rows (yfinance miss / 503) are excluded from totalHeat and the
-  // unweighted avgVol so a partial yfinance outage doesn't silently deflate
-  // the headline. The table still renders those rows with "—" so the user
-  // can see which positions are missing data and refresh if needed.
+  // Only "ok" rows contribute to totalHeat / avgVol. Other statuses
+  // (empty / sparse / error) keep their row in the table with an
+  // explanatory badge so the user can see exactly what's missing and
+  // why — avoids silently deflating the headline when yfinance is
+  // partially down or a recent IPO has too few bars for a 21-period ATR.
   const okRows = heatData.filter(h => h.atr_status === "ok");
-  const failedCount = heatData.length - okRows.length;
+  const emptyCount = heatData.filter(h => h.atr_status === "empty").length;
+  const sparseCount = heatData.filter(h => h.atr_status === "sparse").length;
+  const errorCount = heatData.filter(h => h.atr_status === "error").length;
+  const nonOkParts: string[] = [];
+  if (emptyCount > 0) nonOkParts.push(`${emptyCount} no data`);
+  if (sparseCount > 0) nonOkParts.push(`${sparseCount} insufficient history`);
+  if (errorCount > 0) nonOkParts.push(`${errorCount} failed`);
   const totalHeat = okRows.reduce((a, h) => a + h.heat_contribution, 0);
   const avgVol = okRows.length > 0 ? okRows.reduce((a, h) => a + h.atr_pct, 0) / okRows.length : 0;
   const heatOk = totalHeat < HEAT_THRESHOLD;
@@ -162,13 +195,32 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
           Volatility Check · {positions.length} stock positions
-          {failedCount > 0 && (
-            <span style={{ color: "#d97706" }}>
-              {" "}· {failedCount} unavailable (refresh to retry)
+          {nonOkParts.length > 0 && (
+            <span style={{ color: "#d97706" }} data-testid="non-ok-summary">
+              {" "}· {nonOkParts.join(" · ")}
             </span>
           )}
         </div>
       </div>
+
+      {/* Batch-level failure banner — distinguishes "rate limited" (recoverable
+          in <1 min) from "generic error" (likely server/yfinance outage). */}
+      {batchFailure && (
+        <div
+          className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
+          role="alert"
+          data-testid="batch-failure-banner"
+          style={{
+            background: "color-mix(in oklab, #f59f00 10%, var(--surface))",
+            color: "#b45309",
+            border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))",
+          }}
+        >
+          {batchFailure === "rate_limited"
+            ? "Rate limit hit — refresh in a minute. Showing cached values where available."
+            : "Could not load price data. Try refreshing or switch to Manual ATR mode."}
+        </div>
+      )}
 
       {/* Mode selector */}
       <div className="flex gap-2 mb-6">
@@ -241,7 +293,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
             <KPITile
               label="AVG STOCK VOLATILITY"
               value={`${avgVol.toFixed(2)}%`}
-              sub={failedCount > 0
+              sub={okRows.length < heatData.length
                 ? `${okRows.length} of ${heatData.length} positions`
                 : `${heatData.length} positions`}
               gradient="linear-gradient(135deg, #f97316, #fb923c)"
@@ -286,13 +338,33 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td className="px-3 py-2.5 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
                           {h.ticker}
-                          {h.atr_status === "failed" && (
-                            <span title="Price data unavailable — refresh in a moment"
-                                  style={{ marginLeft: 6, color: "#d97706" }}>⚠</span>
+                          {h.atr_status === "empty" && (
+                            <span title="yfinance returned no data for this symbol"
+                                  data-testid={`status-badge-${h.ticker}`}
+                                  className="ml-2 text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                                  style={{ background: "color-mix(in oklab, var(--ink-4) 15%, transparent)", color: "var(--ink-3)" }}>
+                              NO DATA
+                            </span>
+                          )}
+                          {h.atr_status === "sparse" && (
+                            <span title="Insufficient price history for 21-period ATR (recent IPO?)"
+                                  data-testid={`status-badge-${h.ticker}`}
+                                  className="ml-2 text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                                  style={{ background: "color-mix(in oklab, var(--ink-4) 15%, transparent)", color: "var(--ink-3)" }}>
+                              SHORT HISTORY
+                            </span>
+                          )}
+                          {h.atr_status === "error" && (
+                            <span title="Fetch failed — see server logs"
+                                  data-testid={`status-badge-${h.ticker}`}
+                                  className="ml-2 text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                                  style={{ background: "color-mix(in oklab, #d97706 14%, transparent)", color: "#d97706" }}>
+                              FAILED
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{h.weight_pct.toFixed(1)}%</td>
-                        <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: h.atr_status === "failed" ? "var(--ink-4)" : undefined }}>
+                        <td className="px-3 py-2.5 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: h.atr_status !== "ok" ? "var(--ink-4)" : undefined }}>
                           {h.atr_status === "ok" ? `${h.atr_pct.toFixed(2)}%` : "—"}
                         </td>
                         <td className="px-3 py-2.5 text-right font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace", color: h.atr_status === "ok" ? barColor : "var(--ink-4)" }}>
