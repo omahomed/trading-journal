@@ -102,6 +102,7 @@ class TestReadXlsx:
 
 class TestComputeDerived:
     def test_basic_no_cash_change(self):
+        """No deposit day: divisor = beg_nlv. Pct in percentage form."""
         r = ij.compute_derived({
             "day": date(2026, 3, 15),
             "beg_nlv": 10000.0,
@@ -109,10 +110,13 @@ class TestComputeDerived:
             "end_nlv": 10250.0,
         })
         assert r["daily_dollar_change"] == pytest.approx(250.0)
-        assert r["daily_pct_change"] == pytest.approx(0.025)
+        # 250 / 10000 * 100 = 2.5%
+        assert r["daily_pct_change"] == pytest.approx(2.5)
 
-    def test_with_cash_change_excluded_from_pct(self):
-        """A $1000 deposit + $50 gain on $10k → daily_dollar=50, not 1050."""
+    def test_pct_uses_adjusted_baseline(self):
+        """$1000 deposit + $50 gain on $10k → dollar=50, pct uses
+        post-deposit baseline (beg + cash) per the canonical app
+        convention in daily-routine.tsx:259."""
         r = ij.compute_derived({
             "day": date(2026, 3, 15),
             "beg_nlv": 10000.0,
@@ -120,11 +124,13 @@ class TestComputeDerived:
             "end_nlv": 11050.0,
         })
         assert r["daily_dollar_change"] == pytest.approx(50.0)
-        assert r["daily_pct_change"] == pytest.approx(0.005)
+        # 50 / (10000 + 1000) * 100 = 50/11000 * 100 ≈ 0.4545%
+        assert r["daily_pct_change"] == pytest.approx(50.0 / 11000.0 * 100)
 
-    def test_beg_nlv_zero_yields_none_pct(self):
-        """Zero-NLV days (account just opened, no money yet) must
-        return None for daily_pct_change — math is undefined."""
+    def test_zero_adjusted_beg_yields_none_pct(self):
+        """Zero adjusted baseline (beg + cash both 0) must return None
+        for daily_pct_change — math is undefined. Covers the empty-
+        account early-January rows in the user's real fixture."""
         r = ij.compute_derived({
             "day": date(2026, 1, 2),
             "beg_nlv": 0.0,
@@ -135,8 +141,10 @@ class TestComputeDerived:
         assert r["daily_pct_change"] is None
 
     def test_cash_injection_day_with_zero_beg_nlv(self):
-        """The first deposit day — beg_nlv=0, cash=4850, end=4850.
-        Should NOT crash; daily_pct_change = None."""
+        """First deposit day — beg_nlv=0, cash=4850, end=4850.
+        adjusted_beg = 4850 (not 0), so pct is a real number:
+        dollar = 0, pct = 0 / 4850 * 100 = 0.0 (NOT None).
+        Behavioral change vs the prior decimal-divisor formula."""
         r = ij.compute_derived({
             "day": date(2026, 1, 12),
             "beg_nlv": 0.0,
@@ -144,7 +152,23 @@ class TestComputeDerived:
             "end_nlv": 4850.0,
         })
         assert r["daily_dollar_change"] == pytest.approx(0.0)
-        assert r["daily_pct_change"] is None
+        assert r["daily_pct_change"] == pytest.approx(0.0)
+
+    def test_pct_matches_app_convention(self):
+        """Anchor the formula to daily-routine.tsx:259:
+            portAdj      = portPrev + portCashN
+            portDailyPct = (portDailyChg / portAdj) * 100
+
+        Synthetic: beg=10000, cash=5000, end=15500.
+        Dollar = 500. Pct = 500/15000*100 ≈ 3.333%."""
+        r = ij.compute_derived({
+            "day": date(2026, 3, 15),
+            "beg_nlv": 10000.0,
+            "cash_change": 5000.0,
+            "end_nlv": 15500.0,
+        })
+        assert r["daily_dollar_change"] == pytest.approx(500.0)
+        assert r["daily_pct_change"] == pytest.approx(500.0 / 15000.0 * 100)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,13 +340,20 @@ class TestRealFixtureIntegration:
         assert len(nz) == 12
         assert sum(r["cash_change"] for r in nz) == pytest.approx(48420.0)
 
-    def test_zero_nlv_rows_resolve_to_none_pct(self):
-        """The early-January rows (account empty before first deposit)
-        all have beg_nlv = 0. compute_derived must yield None for
-        daily_pct_change on each."""
+    def test_zero_adjusted_beg_rows_resolve_to_none_pct(self):
+        """Early-January rows where both beg_nlv = 0 AND cash_change = 0
+        must yield None (adjusted_beg = 0; math undefined).
+
+        Behavioral nuance after the divisor change:
+            - Jan 2, 5, 6, 7, 8, 9: beg=0, cash=0 → adjusted_beg=0 → pct=None
+            - Jan 12: beg=0, cash=4850 → adjusted_beg=4850 → pct=0.0 (NOT None)
+
+        So 6 rows yield None and the 7th (the first deposit day) yields 0.0."""
         rows = ij.read_xlsx(FIXTURE_XLSX)
-        zero_nlv = [r for r in rows if r["beg_nlv"] == 0]
-        enriched = [ij.compute_derived(r) for r in zero_nlv]
-        assert all(r["daily_pct_change"] is None for r in enriched)
-        # Expected: 7 such rows (Jan 2, 5, 6, 7, 8, 9, 12).
-        assert len(zero_nlv) == 7
+        enriched = [ij.compute_derived(r) for r in rows if r["beg_nlv"] == 0]
+        none_pcts = [r for r in enriched if r["daily_pct_change"] is None]
+        zero_pcts = [r for r in enriched if r["daily_pct_change"] == 0.0]
+        assert len(enriched) == 7              # total zero-NLV rows
+        assert len(none_pcts) == 6              # six pre-deposit days
+        assert len(zero_pcts) == 1              # 2026-01-12, the first deposit
+        assert zero_pcts[0]["day"] == date(2026, 1, 12)
