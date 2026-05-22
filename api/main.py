@@ -665,12 +665,14 @@ def journal_edit(entry: dict):
 
         # Load existing entry to preserve fields not being edited
         existing = {}
+        existing_row_present = False
         df = db.load_journal(portfolio)
         if not df.empty:
             df = _normalize_journal(df)
             df["day"] = pd.to_datetime(df["day"], errors="coerce").dt.strftime("%Y-%m-%d")
             match = df[df["day"] == str(day).strip()[:10]]
             if not match.empty:
+                existing_row_present = True
                 row = match.iloc[0]
                 existing = {
                     "ending_nlv": float(row.get("end_nlv", 0) or 0),
@@ -780,27 +782,43 @@ def journal_edit(entry: dict):
             ),
         }
 
-        # Auto-compute missing market/risk metrics.
+        # Auto-compute missing market/risk metrics — SNAPSHOT-AT-WRITE contract.
         # market_window is deprecated as of MCT V11 Phase 3a — no longer auto-filled.
-        # Existing values are preserved if the caller sends them; new entries get NULL.
+        #
+        # These four branches (market_cycle/mct_display_day_num, spy_atr,
+        # nasdaq_atr, portfolio_heat) only fire on FRESH INSERTs, never on
+        # edits of pre-existing rows. The as_of in every compute is `day_str`,
+        # which equals "today" by construction when Daily Routine saves the
+        # current day — so the snapshot is correct at write time.
+        #
+        # On edit of an existing row whose stored value happens to be 0 or
+        # NULL, we deliberately PRESERVE that value rather than recomputing
+        # against "today's" data. Recomputing would silently rewrite the
+        # snapshot using inputs (current open positions, current ATR window)
+        # that don't match the row's historical date, producing wrong
+        # numbers. User-initiated gap-fill goes through
+        # /api/journal/backfill-metrics (which is explicit and date-aware);
+        # user-initiated override goes through the Manage Logs edit form
+        # (which always sends an explicit value through the payload).
         day_str = str(day).strip()[:10]
-        # Single engine replay yields both the cycle state and the
-        # display_day_num the badge appends ("POWERTREND D3" etc.). Snapshot
-        # both into the row so the Daily Journal page can render the badge
-        # without re-running the engine on every visit.
-        if not journal_entry["market_cycle"] or journal_entry["mct_display_day_num"] is None:
-            mct_state, mct_day_num = _compute_mct_state_with_day_num(day_str)
-            if not journal_entry["market_cycle"]:
-                journal_entry["market_cycle"] = mct_state
-            if journal_entry["mct_display_day_num"] is None:
-                journal_entry["mct_display_day_num"] = mct_day_num
-        if not journal_entry["spy_atr"]:
-            journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
-        if not journal_entry["nasdaq_atr"]:
-            journal_entry["nasdaq_atr"] = _compute_ticker_atr_pct("^IXIC", day_str)
-        if not journal_entry["portfolio_heat"]:
-            equity = journal_entry["ending_nlv"]
-            journal_entry["portfolio_heat"] = _compute_portfolio_heat(portfolio, day_str, equity)
+        if not existing_row_present:
+            # Single engine replay yields both the cycle state and the
+            # display_day_num the badge appends ("POWERTREND D3" etc.).
+            # Snapshot both into the row so the Daily Journal page can
+            # render the badge without re-running the engine on every visit.
+            if not journal_entry["market_cycle"] or journal_entry["mct_display_day_num"] is None:
+                mct_state, mct_day_num = _compute_mct_state_with_day_num(day_str)
+                if not journal_entry["market_cycle"]:
+                    journal_entry["market_cycle"] = mct_state
+                if journal_entry["mct_display_day_num"] is None:
+                    journal_entry["mct_display_day_num"] = mct_day_num
+            if not journal_entry["spy_atr"]:
+                journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
+            if not journal_entry["nasdaq_atr"]:
+                journal_entry["nasdaq_atr"] = _compute_ticker_atr_pct("^IXIC", day_str)
+            if not journal_entry["portfolio_heat"]:
+                equity = journal_entry["ending_nlv"]
+                journal_entry["portfolio_heat"] = _compute_portfolio_heat(portfolio, day_str, equity)
 
         row_id = db.save_journal_entry(journal_entry)
         return {"status": "ok", "id": row_id}
