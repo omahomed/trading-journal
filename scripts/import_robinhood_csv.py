@@ -550,12 +550,24 @@ def collect_short_option_warnings(rows: list[dict]) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _resolve_portfolio_id(cur, portfolio_name: str) -> int:
-    cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+def _resolve_portfolio(cur, portfolio_name: str) -> tuple[int, str]:
+    """Return (portfolio_id, user_id) for the named portfolio.
+
+    user_id is sourced from portfolios.user_id — the portfolio itself
+    owns its user binding. This script connects via raw psycopg2
+    without a request scope, so `app.user_id` isn't set on the
+    session, which means the DEFAULT on tenant tables' user_id column
+    evaluates to NULL and the NOT NULL constraint fires. Every INSERT
+    in this script passes user_id explicitly.
+    """
+    cur.execute(
+        "SELECT id, user_id FROM portfolios WHERE name = %s",
+        (portfolio_name,),
+    )
     row = cur.fetchone()
     if not row:
         raise ValueError(f"Portfolio '{portfolio_name}' not found")
-    return row[0]
+    return row[0], str(row[1])
 
 
 def _next_trade_id_seq(cur, portfolio_id: int, ym: str) -> int:
@@ -600,13 +612,18 @@ def _build_lifo_summary(campaign: Campaign, trade_id: str) -> dict:
 def write_campaigns(
     cur,
     portfolio_id: int,
+    user_id: str,
     portfolio_name: str,
     campaigns: list[Campaign],
     strategy: str,
 ) -> tuple[int, int]:
     """Insert summary + detail rows for each campaign. Returns
     (summary_count, detail_count). Cash transactions for BUY/SELL are
-    emitted automatically by the trigger pattern in _emit_trade_cash_tx.
+    emitted automatically here too (no DB trigger fires for this
+    script's connection).
+
+    All INSERTs carry user_id explicitly — see _resolve_portfolio for
+    why the column's DEFAULT can't be relied on.
     """
     summary_count = 0
     detail_count = 0
@@ -627,17 +644,17 @@ def write_campaigns(
 
         # Insert summary row.
         summary_cols = [
-            "portfolio_id", "trade_id", "ticker", "status", "open_date",
-            "shares", "avg_entry", "avg_exit", "total_cost", "realized_pl",
-            "unrealized_pl", "return_pct", "rule", "strategy",
-            "instrument_type", "multiplier",
+            "user_id", "portfolio_id", "trade_id", "ticker", "status",
+            "open_date", "shares", "avg_entry", "avg_exit", "total_cost",
+            "realized_pl", "unrealized_pl", "return_pct", "rule",
+            "strategy", "instrument_type", "multiplier",
         ]
         closed_date_col = lifo.get("Closed_Date")
         if closed_date_col:
             summary_cols.append("closed_date")
 
         summary_vals = [
-            portfolio_id, trade_id, camp.ticker,
+            user_id, portfolio_id, trade_id, camp.ticker,
             lifo.get("Status", camp.status),
             camp.open_date,
             lifo.get("Shares", 0),
@@ -680,13 +697,13 @@ def write_campaigns(
             value = tx.value if tx.value > 0 else tx.shares * tx.price * camp.multiplier
 
             detail_cols = [
-                "portfolio_id", "trade_id", "ticker", "action", "date",
-                "shares", "amount", "value", "trx_id",
+                "user_id", "portfolio_id", "trade_id", "ticker", "action",
+                "date", "shares", "amount", "value", "trx_id",
                 "instrument_type", "multiplier",
             ]
             detail_vals = [
-                portfolio_id, trade_id, camp.ticker, tx.action, tx.date,
-                tx.shares, tx.price, value, trx_id,
+                user_id, portfolio_id, trade_id, camp.ticker, tx.action,
+                tx.date, tx.shares, tx.price, value, trx_id,
                 camp.instrument_type, camp.multiplier,
             ]
             placeholders = ", ".join(["%s"] * len(detail_vals))
@@ -704,31 +721,42 @@ def write_campaigns(
                 cash_amount = -value if tx.action == "BUY" else value
                 cur.execute(
                     "INSERT INTO cash_transactions "
-                    "(portfolio_id, date, amount, source, trade_detail_id) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (portfolio_id, tx.date, cash_amount, tx.action.lower(), detail_id),
+                    "(user_id, portfolio_id, date, amount, source, "
+                    " trade_detail_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, portfolio_id, tx.date, cash_amount,
+                     tx.action.lower(), detail_id),
                 )
 
     return summary_count, detail_count
 
 
-def write_cash_rows(cur, portfolio_id: int, cash_rows: list[CashRecord]) -> int:
-    """Insert deposit/income cash transactions."""
+def write_cash_rows(
+    cur, portfolio_id: int, user_id: str, cash_rows: list[CashRecord]
+) -> int:
+    """Insert deposit cash transactions."""
     for c in cash_rows:
         cur.execute(
             "INSERT INTO cash_transactions "
-            "(portfolio_id, date, amount, source, note) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (portfolio_id, c.date, c.amount, c.source, c.note),
+            "(user_id, portfolio_id, date, amount, source, note) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (user_id, portfolio_id, c.date, c.amount, c.source, c.note),
         )
     return len(cash_rows)
 
 
-def reset_cash_ledger(cur, portfolio_id: int) -> int:
-    """Wipe ALL cash_transactions rows for this portfolio. Used once for
-    the real Long-Term Growth import to remove migration 039's reseed."""
-    cur.execute("DELETE FROM cash_transactions WHERE portfolio_id = %s",
-                (portfolio_id,))
+def reset_cash_ledger(cur, portfolio_id: int, user_id: str) -> int:
+    """Wipe ALL cash_transactions rows for this (portfolio, user).
+    Used once for the real Long-Term Growth import to remove migration
+    039's reseed. user_id in the WHERE clause is belt-and-suspenders —
+    portfolio_id alone is sufficient since portfolios are user-scoped,
+    but the explicit binding makes cross-user contamination impossible
+    even if portfolio_id were somehow wrong."""
+    cur.execute(
+        "DELETE FROM cash_transactions "
+        "WHERE portfolio_id = %s AND user_id = %s",
+        (portfolio_id, user_id),
+    )
     return cur.rowcount
 
 
@@ -882,18 +910,19 @@ def run_import(args: argparse.Namespace) -> int:
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            portfolio_id = _resolve_portfolio_id(cur, args.portfolio)
+            portfolio_id, user_id = _resolve_portfolio(cur, args.portfolio)
+            cur.execute("SET LOCAL app.user_id = %s", (user_id,))
             existing_trades = check_existing_trades(cur, portfolio_id, since)
 
             if args.reset_cash_ledger:
-                reset_count = reset_cash_ledger(cur, portfolio_id)
+                reset_count = reset_cash_ledger(cur, portfolio_id, user_id)
 
             s_count, d_count = write_campaigns(
-                cur, portfolio_id, args.portfolio,
+                cur, portfolio_id, user_id, args.portfolio,
                 equity_campaigns + option_campaigns,
                 args.strategy,
             )
-            c_count = write_cash_rows(cur, portfolio_id, cash_rows)
+            c_count = write_cash_rows(cur, portfolio_id, user_id, cash_rows)
             written = {"summary": s_count, "details": d_count, "cash": c_count}
 
             if args.commit:
