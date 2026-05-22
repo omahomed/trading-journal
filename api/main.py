@@ -826,6 +826,314 @@ def journal_edit(entry: dict):
         return {"status": "error", "detail": str(e)}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch journal save — Daily Routine multi-portfolio entrypoint.
+#
+# Atomic write of N journal rows in a single PG transaction. Designed for the
+# multi-portfolio Daily Routine redesign: one save, N rows, all-or-nothing.
+# Coexists with /api/journal/edit (which remains the single-row entry path
+# used by Manage Logs and the Daily Report Card).
+#
+# Shared-vs-per-portfolio field split mirrors the investigation report's
+# verified categorization (6 shared + 9 per-portfolio + 1 per-portfolio
+# ambiguous-but-data-derived = market_action / "actions").
+#
+# Snapshot semantics on auto-compute fields match the recent leak-fix in
+# journal_edit: market_cycle, mct_display_day_num, spy_atr, nasdaq_atr,
+# portfolio_heat fire ONLY for rows that are net-new on this save. For rows
+# being overwritten via force_overwrite=true, those columns are preserved
+# from the existing row (not recomputed against today's data).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_BATCH_EDIT_INSERT_SQL = """
+    INSERT INTO trading_journal (
+        user_id, portfolio_id, day, status, market_window, market_cycle,
+        mct_display_day_num, above_21ema,
+        cash_change, beg_nlv, end_nlv, daily_dollar_change,
+        daily_pct_change, pct_invested, spy, nasdaq,
+        market_notes, market_action, portfolio_heat,
+        spy_atr, nasdaq_atr, score,
+        highlights, lowlights, mistakes, top_lesson,
+        nlv_source, holdings_source, daily_thoughts
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s
+    )
+    RETURNING id
+"""
+
+_BATCH_EDIT_UPDATE_SQL = """
+    UPDATE trading_journal
+       SET status = %s, market_window = %s, market_cycle = %s,
+           mct_display_day_num = %s, above_21ema = %s,
+           cash_change = %s, beg_nlv = %s, end_nlv = %s,
+           daily_dollar_change = %s, daily_pct_change = %s,
+           pct_invested = %s, spy = %s, nasdaq = %s,
+           market_notes = %s, market_action = %s, portfolio_heat = %s,
+           spy_atr = %s, nasdaq_atr = %s, score = %s,
+           highlights = %s, lowlights = %s, mistakes = %s, top_lesson = %s,
+           nlv_source = %s, holdings_source = %s, daily_thoughts = %s
+     WHERE id = %s
+     RETURNING id
+"""
+
+
+def _coerce_nlv_source(v) -> str:
+    """Constrain to {manual, ibkr_auto, ibkr_override}; default 'manual'."""
+    s = str(v or "manual").strip()
+    return s if s in ("manual", "ibkr_auto", "ibkr_override") else "manual"
+
+
+@app.post("/api/journal/batch-edit")
+def journal_batch_edit(body: dict = Body(...)):
+    """Save N journal rows atomically in a single PG transaction.
+
+    Request shape:
+      {
+        "day": "YYYY-MM-DD",
+        "shared": { spy, nasdaq, market_notes, score, highlights, mistakes,
+                    nlv_source?, holdings_source? },
+        "portfolios": [
+          { "portfolio": <name>, "end_nlv": <num>, "total_holdings": <num>,
+            "cash_change": <num>, "actions": <str>,
+            "pct_invested": <num>, "daily_dollar_change": <num>,
+            "daily_pct_change": <num> },
+          ...
+        ],
+        "force_overwrite": false
+      }
+
+    Responses:
+      200 — {status: "ok", rows_written: N, portfolios: [names]}
+      404 — unknown portfolio name
+      409 — conflict with force_overwrite=false (conflicting_portfolios listed)
+      422 — validation errors (errors list with portfolio/field/message)
+      500 — any unhandled exception; transaction is rolled back
+    """
+    # 1. Top-level validation.
+    day = body.get("day")
+    if not day:
+        return JSONResponse(status_code=422, content={
+            "status": "invalid",
+            "errors": [{"portfolio": None, "field": "day", "message": "Required"}],
+        })
+    day_str = str(day).strip()[:10]
+
+    portfolios = body.get("portfolios") or []
+    if not isinstance(portfolios, list) or not portfolios:
+        return JSONResponse(status_code=422, content={
+            "status": "invalid",
+            "errors": [{"portfolio": None, "field": "portfolios",
+                        "message": "Required (must be non-empty array)"}],
+        })
+
+    shared = body.get("shared") or {}
+    force_overwrite = bool(body.get("force_overwrite", False))
+
+    # 2. Per-portfolio field validation.
+    errors: list[dict] = []
+    for pf in portfolios:
+        name = pf.get("portfolio")
+        if not name:
+            errors.append({"portfolio": None, "field": "portfolio",
+                           "message": "Required"})
+            continue
+        if pf.get("end_nlv") is None:
+            errors.append({"portfolio": name, "field": "end_nlv",
+                           "message": "Required"})
+        if pf.get("total_holdings") is None:
+            errors.append({"portfolio": name, "field": "total_holdings",
+                           "message": "Required"})
+    if errors:
+        return JSONResponse(status_code=422,
+                            content={"status": "invalid", "errors": errors})
+
+    # 3. Open the transaction. Everything below this point either commits
+    # together or rolls back together. db.get_db_connection() sets app.user_id
+    # + ROLE app_runtime per the auth context, so RLS is in effect.
+    try:
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # 3a. Resolve every portfolio_id by name. Fail-fast 404 on
+                # any unknown portfolio (RLS already scopes by user).
+                portfolio_meta: dict[str, dict] = {}
+                for pf in portfolios:
+                    name = pf["portfolio"]
+                    cur.execute(
+                        "SELECT id, user_id FROM portfolios WHERE name = %s",
+                        (name,),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        return JSONResponse(status_code=404, content={
+                            "status": "not_found",
+                            "detail": f"Portfolio '{name}' not found",
+                        })
+                    portfolio_meta[name] = {
+                        "id": row[0], "user_id": str(row[1]),
+                    }
+
+                # 3b. Pre-flight conflict check (force_overwrite=false only).
+                # Returns the full list of conflicting portfolios so the UI can
+                # tell the user exactly which need overwrite confirmation.
+                if not force_overwrite:
+                    conflicts = []
+                    for pf in portfolios:
+                        pid = portfolio_meta[pf["portfolio"]]["id"]
+                        cur.execute(
+                            "SELECT 1 FROM trading_journal "
+                            "WHERE portfolio_id = %s AND day = %s "
+                            "  AND deleted_at IS NULL",
+                            (pid, day_str),
+                        )
+                        if cur.fetchone() is not None:
+                            conflicts.append(pf["portfolio"])
+                    if conflicts:
+                        return JSONResponse(status_code=409, content={
+                            "status": "exists",
+                            "detail": ("Rows already exist for some portfolios "
+                                       "on this date. Check Force Overwrite to "
+                                       "replace."),
+                            "conflicting_portfolios": conflicts,
+                        })
+
+                # 3c. Shared field resolution (computed once, reused for every
+                # row's INSERT/UPDATE).
+                shared_spy = float(shared.get("spy") or 0)
+                shared_ndx = float(shared.get("nasdaq") or 0)
+                shared_market_notes = str(shared.get("market_notes") or "")
+                shared_score = int(float(shared.get("score") or 0))
+                shared_highlights = str(shared.get("highlights") or "")
+                shared_mistakes = str(shared.get("mistakes") or "")
+                shared_nlv_source = _coerce_nlv_source(
+                    shared.get("nlv_source", "manual"))
+                shared_holdings_source = _coerce_nlv_source(
+                    shared.get("holdings_source", "manual"))
+
+                # 3d. Per-row save loop. Each row gets:
+                #   - Its own portfolio_id + user_id
+                #   - beg_nlv from THIS portfolio's prior end_nlv
+                #   - Snapshot fields (market_cycle, ATRs, heat) auto-computed
+                #     ONLY when no existing row (snapshot semantics from the
+                #     /api/journal/edit leak fix; applied per-row here).
+                written: list[str] = []
+                for pf in portfolios:
+                    name = pf["portfolio"]
+                    meta = portfolio_meta[name]
+                    pid, uid = meta["id"], meta["user_id"]
+
+                    # Resolve beg_nlv for THIS portfolio = prior day's end_nlv.
+                    cur.execute(
+                        "SELECT end_nlv FROM trading_journal "
+                        "WHERE portfolio_id = %s AND day < %s "
+                        "  AND deleted_at IS NULL "
+                        "ORDER BY day DESC LIMIT 1",
+                        (pid, day_str),
+                    )
+                    prev_row = cur.fetchone()
+                    beg_nlv = float(prev_row[0]) if prev_row else 0.0
+
+                    # Existence check for snapshot gating + UPDATE-vs-INSERT
+                    # branch. Reads the snapshot fields so preserved values
+                    # don't get recomputed against today's data.
+                    cur.execute(
+                        "SELECT id, portfolio_heat, spy_atr, nasdaq_atr, "
+                        "       market_cycle, mct_display_day_num "
+                        "  FROM trading_journal "
+                        " WHERE portfolio_id = %s AND day = %s "
+                        "   AND deleted_at IS NULL",
+                        (pid, day_str),
+                    )
+                    existing_row = cur.fetchone()
+                    existing_row_present = existing_row is not None
+
+                    end_nlv = float(pf["end_nlv"])
+                    total_holdings = float(pf["total_holdings"])
+                    cash_change = float(pf.get("cash_change") or 0)
+                    actions = str(pf.get("actions") or "")
+                    pct_invested = float(pf.get("pct_invested") or 0)
+                    daily_dollar_change = float(
+                        pf.get("daily_dollar_change") or 0)
+                    daily_pct_change = float(pf.get("daily_pct_change") or 0)
+
+                    # Snapshot fields — preserve on overwrite, compute on insert.
+                    if existing_row_present:
+                        portfolio_heat = float(existing_row[1] or 0)
+                        spy_atr = float(existing_row[2] or 0)
+                        nasdaq_atr = float(existing_row[3] or 0)
+                        market_cycle = existing_row[4] or ""
+                        mct_display_day_num = existing_row[5]
+                    else:
+                        market_cycle, mct_display_day_num = (
+                            _compute_mct_state_with_day_num(day_str))
+                        market_cycle = market_cycle or ""
+                        spy_atr = _compute_ticker_atr_pct("SPY", day_str)
+                        nasdaq_atr = _compute_ticker_atr_pct(
+                            "^IXIC", day_str)
+                        portfolio_heat = _compute_portfolio_heat(
+                            name, day_str, end_nlv)
+
+                    # Defaults for fields not surfaced by the batch shape
+                    # but still part of the schema. Match save_journal_entry's
+                    # defaults so the row looks identical to a Daily-Routine-
+                    # saved single-portfolio row.
+                    status_val = "U"
+                    market_window = "Open"
+                    above_21ema = 0
+                    lowlights = ""
+                    top_lesson = ""
+                    daily_thoughts = ""
+
+                    if existing_row_present:
+                        cur.execute(_BATCH_EDIT_UPDATE_SQL, (
+                            status_val, market_window, market_cycle,
+                            mct_display_day_num, above_21ema,
+                            cash_change, beg_nlv, end_nlv,
+                            daily_dollar_change, daily_pct_change,
+                            pct_invested, shared_spy, shared_ndx,
+                            shared_market_notes, actions, portfolio_heat,
+                            spy_atr, nasdaq_atr, shared_score,
+                            shared_highlights, lowlights, shared_mistakes,
+                            top_lesson, shared_nlv_source,
+                            shared_holdings_source, daily_thoughts,
+                            existing_row[0],
+                        ))
+                    else:
+                        cur.execute(_BATCH_EDIT_INSERT_SQL, (
+                            uid, pid, day_str, status_val, market_window,
+                            market_cycle, mct_display_day_num, above_21ema,
+                            cash_change, beg_nlv, end_nlv,
+                            daily_dollar_change, daily_pct_change,
+                            pct_invested, shared_spy, shared_ndx,
+                            shared_market_notes, actions, portfolio_heat,
+                            spy_atr, nasdaq_atr, shared_score,
+                            shared_highlights, lowlights, shared_mistakes,
+                            top_lesson, shared_nlv_source,
+                            shared_holdings_source, daily_thoughts,
+                        ))
+
+                    written.append(name)
+
+                conn.commit()
+                # Invalidate the load_journal memoize cache so subsequent
+                # reads see the freshly-written rows.
+                db.load_journal.clear()
+                return {
+                    "status": "ok",
+                    "rows_written": len(written),
+                    "portfolios": written,
+                }
+    except Exception as e:
+        # Any exception aborts the with-block; psycopg2's context manager
+        # rolls back automatically. Surface a 500 with the detail so the
+        # UI can show the user a useful error.
+        return JSONResponse(status_code=500, content={
+            "status": "error", "detail": str(e),
+        })
+
+
 @app.post("/api/journal/restamp-mct")
 def restamp_mct(payload: dict):
     """Force-recompute MCT state + day_num for a single journal row.
