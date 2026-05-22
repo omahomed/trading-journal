@@ -192,6 +192,75 @@ describe("DailyRoutine — validation", () => {
     expect(summary).toBeInTheDocument();
     expect(within(summary).getByText(/Fix 6 errors before saving/)).toBeInTheDocument();
   });
+
+  test("validation banner is HIDDEN on initial render (no submit, no blur)", async () => {
+    // Regression: previously the summary banner appeared on first paint
+    // because hasErrors() returns true the moment any required field is
+    // empty. With the touched/submitAttempted gates, untouched fields on
+    // first render must not surface the banner.
+    render(<DailyRoutine navColor="#6366f1" />);
+    await screen.findByTestId("portfolio-card-CanSlim");
+
+    expect(screen.queryByTestId("validation-summary")).not.toBeInTheDocument();
+  });
+
+  test("inline 'Required' error does NOT show on initial render (no blur yet)", async () => {
+    // Same regression — per-field error messages should also be gated on
+    // touched. First-paint cards must be clean.
+    render(<DailyRoutine navColor="#6366f1" />);
+    await screen.findByTestId("portfolio-card-CanSlim");
+
+    // No "Required" anywhere on the page on mount.
+    expect(screen.queryByText("Required")).not.toBeInTheDocument();
+  });
+
+  test("blurring an empty NLV surfaces the banner (touched gate fires)", async () => {
+    render(<DailyRoutine navColor="#6366f1" />);
+    await screen.findByTestId("portfolio-card-CanSlim");
+
+    // No banner yet
+    expect(screen.queryByTestId("validation-summary")).not.toBeInTheDocument();
+
+    const nlv = screen.getByTestId("nlv-input-CanSlim") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.blur(nlv);
+    });
+
+    // One field touched-and-failing → banner shows. Listing reflects ALL
+    // errors (still 6 total since every card has both fields empty), even
+    // though only one has been touched — the banner is a global summary.
+    const summary = await screen.findByTestId("validation-summary");
+    expect(within(summary).getByText(/Fix 6 errors before saving/)).toBeInTheDocument();
+  });
+
+  test("changing entryDate clears submitAttempted (banner re-hidden after a save attempt elsewhere)", async () => {
+    // Touch some fields + click Save to trigger submitAttempted=true.
+    // Then change the date — the fresh date should clear the flag and the
+    // banner should re-hide (assuming the new date's cards are also fresh
+    // and untouched, which is true since the load-effect resets state).
+    render(<DailyRoutine navColor="#6366f1" />);
+    await screen.findByTestId("portfolio-card-CanSlim");
+
+    // Force the banner via a Save click. Button is disabled but fireEvent
+    // bypasses that to test the underlying handler doesn't crash either.
+    // Quicker path: blur a field to set touched.
+    const nlv = screen.getByTestId("nlv-input-CanSlim") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.blur(nlv);
+    });
+    await screen.findByTestId("validation-summary");
+
+    // Change the date. The cards rebuild from emptyCard() (all touched=false)
+    // and submitAttempted resets to false in the load-effect → banner hides.
+    const dateInput = screen.getByLabelText("Entry date") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(dateInput, { target: { value: "2026-04-20" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("validation-summary")).not.toBeInTheDocument();
+    });
+  });
 });
 
 

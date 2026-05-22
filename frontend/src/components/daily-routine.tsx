@@ -65,6 +65,12 @@ interface PortfolioCardState {
   nlv_source: IbkrSource;
   holdings_source: IbkrSource;
   errors: { end_nlv?: string; total_holdings?: string };
+  // Per-field touched flags gate inline error rendering. A field is
+  // "touched" once the user has blurred it (or once a save is attempted,
+  // which marks all fields touched at once). Required-but-empty errors
+  // don't render until the user has had a chance to interact with the
+  // field — prevents the "every input shows red on mount" footgun.
+  touched: { end_nlv: boolean; total_holdings: boolean };
 }
 
 function emptyCard(p: { id: number; name: string }): PortfolioCardState {
@@ -79,6 +85,7 @@ function emptyCard(p: { id: number; name: string }): PortfolioCardState {
     nlv_source: "manual",
     holdings_source: "manual",
     errors: {},
+    touched: { end_nlv: false, total_holdings: false },
   };
 }
 
@@ -163,30 +170,36 @@ function PortfolioCard({
         <span className="text-[13px] font-semibold">{card.name}</span>
       </div>
       <div className="p-4 flex flex-col gap-3">
-        <Field label="Closing NLV*" error={card.errors.end_nlv}>
+        <Field label="Closing NLV*" error={card.touched.end_nlv ? card.errors.end_nlv : undefined}>
           <input
             type="number"
             value={card.end_nlv}
             onChange={(e) => onChange({ end_nlv: e.target.value, errors: { ...card.errors, end_nlv: undefined } })}
-            onBlur={() => onChange({ errors: validateCard({ ...card }) })}
+            onBlur={() => onChange({
+              touched: { ...card.touched, end_nlv: true },
+              errors: validateCard({ ...card }),
+            })}
             step="100"
             placeholder="0.00"
             className={inputCls}
-            style={card.errors.end_nlv ? inputErrorStyle : inputStyle}
+            style={card.touched.end_nlv && card.errors.end_nlv ? inputErrorStyle : inputStyle}
             aria-label={`Closing NLV for ${card.name}`}
             data-testid={`nlv-input-${card.name}`}
           />
         </Field>
-        <Field label="Total Holdings*" error={card.errors.total_holdings}>
+        <Field label="Total Holdings*" error={card.touched.total_holdings ? card.errors.total_holdings : undefined}>
           <input
             type="number"
             value={card.total_holdings}
             onChange={(e) => onChange({ total_holdings: e.target.value, errors: { ...card.errors, total_holdings: undefined } })}
-            onBlur={() => onChange({ errors: validateCard({ ...card }) })}
+            onBlur={() => onChange({
+              touched: { ...card.touched, total_holdings: true },
+              errors: validateCard({ ...card }),
+            })}
             step="100"
             placeholder="0.00"
             className={inputCls}
-            style={card.errors.total_holdings ? inputErrorStyle : inputStyle}
+            style={card.touched.total_holdings && card.errors.total_holdings ? inputErrorStyle : inputStyle}
             aria-label={`Total Holdings for ${card.name}`}
             data-testid={`holdings-input-${card.name}`}
           />
@@ -266,6 +279,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
   const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
   const [gradeNotes, setGradeNotes] = useState("");
   const [forceOverwrite, setForceOverwrite] = useState(false);
+  // Tracks whether the user has clicked Save yet. Combined with per-card
+  // `touched` flags to gate the validation-summary banner — first paint
+  // shouldn't surface "fix N errors" before the user has interacted.
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   // Per-card state, derived from the portfolios context. Initialized empty
   // and populated by the per-entryDate effect below.
@@ -293,6 +310,10 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     setLoading(true);
     setSaveOk("");
     setSaveError(null);
+    // A new date is a fresh validation context — clear the submit flag so
+    // the summary banner doesn't carry over from a prior save attempt on
+    // a different day.
+    setSubmitAttempted(false);
 
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -404,11 +425,17 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
     setSaving(true);
     setSaveOk("");
     setSaveError(null);
+    setSubmitAttempted(true);
 
     // Defensive: re-run validation on submit even though the button is
-    // disabled when hasErrors. Mirror errors back onto cards so red borders
-    // light up if somehow the user got here (e.g., keyboard submit).
-    const validated = cards.map((c) => ({ ...c, errors: validateCard(c) }));
+    // disabled when hasErrors. Mark all fields touched so any errors that
+    // were silent (user never blurred the field) light up the red borders
+    // and inline messages. Mirror errors back onto cards.
+    const validated = cards.map((c) => ({
+      ...c,
+      touched: { end_nlv: true, total_holdings: true },
+      errors: validateCard(c),
+    }));
     setCards(validated);
     const stillHasErrors = validated.some((c) => Object.keys(c.errors).length > 0);
     if (stillHasErrors) {
@@ -595,8 +622,18 @@ export function DailyRoutine({ navColor }: { navColor: string }) {
         Force Overwrite Existing Entry
       </label>
 
-      {/* Validation summary — only shown if save was attempted with errors */}
-      {hasErrors && (
+      {/* Validation summary — shown only after the user has interacted.
+          Two gates:
+            (a) submitAttempted: the user has clicked Save at least once
+            (b) any blurred-while-empty field exists
+          Either of these means the user has surfaced their intent to
+          fill out the form; we can confidently nag them about gaps.
+          Without these gates, the banner would appear on initial paint
+          before the user has typed anything — a hostile first impression. */}
+      {hasErrors && (submitAttempted || cards.some((c) =>
+        (c.touched.end_nlv && c.errors.end_nlv) ||
+        (c.touched.total_holdings && c.errors.total_holdings)
+      )) && (
         <div
           className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
           role="alert"
