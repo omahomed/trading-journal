@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, act } from "@testing-library/react";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 // The component captures process.env.NEXT_PUBLIC_BUILD_ID into a module-
@@ -10,21 +10,13 @@ vi.hoisted(() => {
   process.env.NEXT_PUBLIC_BUILD_ID = "test-loaded-build";
 });
 
-// jsdom minimal sessionStorage shim — mirrors active-campaign.test.tsx.
-if (typeof window !== "undefined" && !(window as any).sessionStorage?.getItem) {
-  const _store = new Map<string, string>();
-  Object.defineProperty(window, "sessionStorage", {
-    configurable: true,
-    value: {
-      getItem: (k: string) => _store.get(k) ?? null,
-      setItem: (k: string, v: string) => { _store.set(k, String(v)); },
-      removeItem: (k: string) => { _store.delete(k); },
-      clear: () => { _store.clear(); },
-      key: (i: number) => Array.from(_store.keys())[i] ?? null,
-      get length() { return _store.size; },
-    },
-  });
-}
+// usePathname is the only piece of next/navigation we use. A hoisted ref
+// lets each test swap the value the hook returns, which is the
+// navigation event the new banner reacts to.
+const pathnameRef = vi.hoisted(() => ({ current: "/dashboard" }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => pathnameRef.current,
+}));
 
 import { UpdateBanner } from "./update-banner";
 
@@ -35,8 +27,15 @@ function mockVersionFetch(buildId: string) {
   }) as any;
 }
 
+let reloadMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
-  sessionStorage.clear();
+  pathnameRef.current = "/dashboard";
+  reloadMock = vi.fn();
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { ...window.location, reload: reloadMock },
+  });
   vi.useFakeTimers({ shouldAdvanceTime: true });
 });
 
@@ -46,98 +45,67 @@ afterEach(() => {
 });
 
 describe("UpdateBanner", () => {
-  test("does not render when server build matches loaded build", async () => {
+  test("renders no DOM output", async () => {
     mockVersionFetch("test-loaded-build");
     const { container } = render(<UpdateBanner />);
-    // Let the mount-time check resolve.
     await act(async () => { await Promise.resolve(); });
-    expect(container.textContent).not.toContain("New version available");
+    expect(container.innerHTML).toBe("");
   });
 
-  test("renders when server build differs from loaded build", async () => {
-    mockVersionFetch("server-new-build-1");
-    render(<UpdateBanner />);
-    expect(await screen.findByText("New version available")).toBeDefined();
-  });
-
-  test("dismiss writes the SERVER build ID to sessionStorage (not loaded)", async () => {
-    mockVersionFetch("server-new-build-1");
-    render(<UpdateBanner />);
-    await screen.findByText("New version available");
-    fireEvent.click(screen.getByTitle(/Dismiss/));
-    expect(
-      sessionStorage.getItem("mo-update-banner-dismissed:server-new-build-1"),
-    ).toBeTruthy();
-    // The loaded build's key should NOT be set — dismiss binds to the
-    // server's new build so future polls of THIS build stay quiet.
-    expect(
-      sessionStorage.getItem("mo-update-banner-dismissed:test-loaded-build"),
-    ).toBeNull();
-  });
-
-  test("dismiss persists across remount (banner stays hidden)", async () => {
-    mockVersionFetch("server-new-build-1");
-    const { unmount } = render(<UpdateBanner />);
-    await screen.findByText("New version available");
-    fireEvent.click(screen.getByTitle(/Dismiss/));
-    unmount();
-
-    // Same server build on re-mount — banner must stay hidden because
-    // the sessionStorage key for this build is set.
-    mockVersionFetch("server-new-build-1");
-    const { container } = render(<UpdateBanner />);
+  test("matching server build does not trigger reload on later navigation", async () => {
+    mockVersionFetch("test-loaded-build");
+    const { rerender } = render(<UpdateBanner />);
+    // Let the mount-time check resolve so updateAvailable would have
+    // flipped if it were going to.
     await act(async () => { await Promise.resolve(); });
-    // Allow the async fetch to resolve.
     await act(async () => { await Promise.resolve(); });
-    expect(container.textContent).not.toContain("New version available");
-  });
 
-  test("new server build after dismiss surfaces the banner again", async () => {
-    mockVersionFetch("server-new-build-1");
-    const { unmount } = render(<UpdateBanner />);
-    await screen.findByText("New version available");
-    fireEvent.click(screen.getByTitle(/Dismiss/));
-    unmount();
+    // Navigate. Since no update was detected, no reload.
+    pathnameRef.current = "/trade-journal";
+    rerender(<UpdateBanner />);
+    await act(async () => { await Promise.resolve(); });
 
-    // A DIFFERENT server build ID — dismiss was for build-1, build-2
-    // is new and not yet dismissed.
-    mockVersionFetch("server-new-build-2");
-    render(<UpdateBanner />);
-    expect(await screen.findByText("New version available")).toBeDefined();
-  });
-
-  test("Refresh button confirms before reloading; cancel leaves banner intact", async () => {
-    mockVersionFetch("server-new-build-1");
-    const reloadMock = vi.fn();
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, reload: reloadMock },
-    });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-
-    render(<UpdateBanner />);
-    await screen.findByText("New version available");
-    fireEvent.click(screen.getByText("Refresh"));
-
-    expect(confirmSpy).toHaveBeenCalledOnce();
     expect(reloadMock).not.toHaveBeenCalled();
-    // Banner still present — user cancelled.
-    expect(screen.getByText("New version available")).toBeDefined();
   });
 
-  test("Refresh button confirms and reloads on accept", async () => {
+  test("differing server build flips state but does not reload until navigation", async () => {
     mockVersionFetch("server-new-build-1");
-    const reloadMock = vi.fn();
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: { ...window.location, reload: reloadMock },
-    });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
     render(<UpdateBanner />);
-    await screen.findByText("New version available");
-    fireEvent.click(screen.getByText("Refresh"));
+    // Let the version check resolve and the state update flush.
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // updateAvailable is now true internally, but pathname hasn't
+    // changed → reload must not fire yet.
+    expect(reloadMock).not.toHaveBeenCalled();
+  });
+
+  test("updateAvailable + navigation triggers reload", async () => {
+    mockVersionFetch("server-new-build-1");
+    const { rerender } = render(<UpdateBanner />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(reloadMock).not.toHaveBeenCalled();
+
+    // Simulate navigation.
+    pathnameRef.current = "/trade-journal";
+    rerender(<UpdateBanner />);
+    await act(async () => { await Promise.resolve(); });
 
     expect(reloadMock).toHaveBeenCalledOnce();
+  });
+
+  test("updateAvailable without pathname change does not reload on re-render", async () => {
+    mockVersionFetch("server-new-build-1");
+    const { rerender } = render(<UpdateBanner />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Re-render with the same pathname — no navigation event, no reload.
+    rerender(<UpdateBanner />);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(reloadMock).not.toHaveBeenCalled();
   });
 });
