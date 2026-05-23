@@ -79,15 +79,25 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached;
-        return fetch(req)
-          .then((res) => {
-            // Don't cache opaque or error responses.
-            if (!res || res.status !== 200 || res.type !== "basic") return res;
-            const copy = res.clone();
-            caches.open(RUNTIME_CACHE_NAME).then((cache) => cache.put(req, copy));
-            return res;
-          })
-          .catch(() => caches.match("/dashboard"));
+        const networkFetch = fetch(req).then((res) => {
+          // Don't cache opaque or error responses.
+          if (!res || res.status !== 200 || res.type !== "basic") return res;
+          const copy = res.clone();
+          caches.open(RUNTIME_CACHE_NAME).then((cache) => cache.put(req, copy));
+          return res;
+        });
+        // Offline fallback to the cached /dashboard shell is ONLY safe
+        // for navigation requests. Returning HTML for a failed JS
+        // chunk request (mode === "script") would make the browser
+        // parse HTML as JS and surface a misleading parse error —
+        // and prevent Next.js's chunk-reload handler (in
+        // src/lib/chunk-reload.ts via the error boundaries) from
+        // seeing the real network failure. For non-navigation
+        // requests, let the network error propagate.
+        if (req.mode === "navigate") {
+          return networkFetch.catch(() => caches.match("/dashboard"));
+        }
+        return networkFetch;
       }),
     );
     return;
