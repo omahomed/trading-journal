@@ -32,19 +32,26 @@ const BUILD_ID =
 // /api/version/route.ts reads from this file at runtime, guaranteeing
 // the server returns the SAME value the client bundle was built with —
 // regardless of whether the runtime env has NEXT_PUBLIC_BUILD_ID set.
-// Without this, next.config.ts re-evaluates Date.now() on every server
-// cold-start (every Vercel serverless instance, every Railway restart),
-// producing a divergent server buildId that the dismiss-by-buildId
-// logic in update-banner.tsx can't suppress.
-try {
-  const publicDir = path.join(process.cwd(), "public");
-  if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(publicDir, "build-info.json"),
-    JSON.stringify({ buildId: BUILD_ID, builtAt: new Date().toISOString() }),
-  );
-} catch (e) {
-  console.warn(`[next.config] Failed to write build-info.json: ${e}`);
+//
+// Phase gate: next.config.ts is evaluated at server startup too, not
+// only at `next build`. Without the gate, writeFileSync runs again on
+// every cold start with a fresh `local-${Date.now()}` fallback (when no
+// git SHA env var is set), overwriting the build-time BUILD_ID before
+// /api/version reads it — re-introducing the very divergence this file
+// exists to prevent. NEXT_PHASE === "phase-production-build" is set
+// only during the build step, so writing is restricted to that window.
+const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
+if (isBuildPhase) {
+  try {
+    const publicDir = path.join(process.cwd(), "public");
+    if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(publicDir, "build-info.json"),
+      JSON.stringify({ buildId: BUILD_ID, builtAt: new Date().toISOString() }),
+    );
+  } catch (e) {
+    console.warn(`[next.config] Failed to write build-info.json: ${e}`);
+  }
 }
 
 const nextConfig: NextConfig = {
