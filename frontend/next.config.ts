@@ -1,11 +1,51 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import fs from "fs";
+import path from "path";
 
-// Prefer the Vercel-provided commit SHA when available so the build ID
-// matches what's in git; fall back to a timestamp for local/preview
-// builds. Captured in a const so it's identical across generateBuildId
-// and the inlined NEXT_PUBLIC_BUILD_ID below.
-const BUILD_ID = process.env.VERCEL_GIT_COMMIT_SHA || `build-${Date.now()}`;
+// Build identifier — used by the "new version available" detection in
+// update-banner.tsx. The client bundle bakes this in at build time
+// (LOADED_BUILD_ID); the server returns it at runtime via /api/version.
+// A mismatch surfaces the upgrade prompt to the user.
+//
+// CI env-var cascade (in order of preference):
+//   - VERCEL_GIT_COMMIT_SHA  — set by Vercel
+//   - RAILWAY_GIT_COMMIT_SHA — set by Railway
+//   - RAILWAY_DEPLOYMENT_ID  — Railway fallback if SHA isn't propagated
+//   - GIT_COMMIT_SHA         — generic CI convention
+//   - GITHUB_SHA             — GitHub Actions
+//   - local-<timestamp>      — local-dev only; the file-persistence
+//                              path below makes this safe across the
+//                              build/runtime split that would otherwise
+//                              cause Date.now() to evaluate twice and
+//                              produce the false-positive banner the
+//                              old config exhibited.
+const BUILD_ID =
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  process.env.RAILWAY_GIT_COMMIT_SHA ||
+  process.env.RAILWAY_DEPLOYMENT_ID ||
+  process.env.GIT_COMMIT_SHA ||
+  process.env.GITHUB_SHA ||
+  `local-${Date.now()}`;
+
+// Persist BUILD_ID to a static file that ships with the deploy artifact.
+// /api/version/route.ts reads from this file at runtime, guaranteeing
+// the server returns the SAME value the client bundle was built with —
+// regardless of whether the runtime env has NEXT_PUBLIC_BUILD_ID set.
+// Without this, next.config.ts re-evaluates Date.now() on every server
+// cold-start (every Vercel serverless instance, every Railway restart),
+// producing a divergent server buildId that the dismiss-by-buildId
+// logic in update-banner.tsx can't suppress.
+try {
+  const publicDir = path.join(process.cwd(), "public");
+  if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(publicDir, "build-info.json"),
+    JSON.stringify({ buildId: BUILD_ID, builtAt: new Date().toISOString() }),
+  );
+} catch (e) {
+  console.warn(`[next.config] Failed to write build-info.json: ${e}`);
+}
 
 const nextConfig: NextConfig = {
   devIndicators: false,

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# build-generated: written by next.config.ts at build time and read by
+# /api/version/route.ts at runtime to keep client + server BUILD_ID in
+# sync. Committing it would defeat the purpose (the file's content must
+# reflect THIS build, not a prior one).
+/public/build-info.json
