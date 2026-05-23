@@ -6,7 +6,6 @@
 // only the mobile chrome. Auth still applies via proxy.ts.
 "use client";
 
-import { ChevronLeft, Settings } from "lucide-react";
 import { MobileShell } from "@/components/mobile/mobile-shell";
 
 export default function MobileShellPreview() {
@@ -15,24 +14,12 @@ export default function MobileShellPreview() {
       header={{
         title: "Position",
         italicWord: "Sizer",
-        leftSlot: (
-          <button
-            type="button"
-            aria-label="Back"
-            className="flex h-5 w-5 items-center justify-center text-m-text-muted"
-          >
-            <ChevronLeft size={20} strokeWidth={1.5} aria-hidden="true" />
-          </button>
-        ),
-        rightSlot: (
-          <button
-            type="button"
-            aria-label="Settings"
-            className="flex h-5 w-5 items-center justify-center text-m-text-muted"
-          >
-            <Settings size={20} strokeWidth={1.5} aria-hidden="true" />
-          </button>
-        ),
+        // Phase 2 step 1: explicit empty rightSlot suppresses the default
+        // MobilePortfolioPicker, which would otherwise throw here — this
+        // page lives outside the `(app)` route group and has no
+        // PortfolioProvider above it. This whole preview file is marked
+        // for removal before Phase 2 ships per the header comment.
+        rightSlot: <></>,
       }}
     >
       <div className="space-y-2 pt-2">

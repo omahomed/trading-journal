@@ -7,39 +7,38 @@ export type MobilePageHeaderProps = {
   title: string;
   /** Italic-green word that closes the wordmark, e.g. `"Sizer"`. */
   italicWord: string;
-  /** Optional content for the left action slot (typically a back button). */
-  leftSlot?: ReactNode;
-  /** Optional content for the right action slot (settings, search, more). */
+  /** Optional right-aligned accessory — Phase 2 mounts the portfolio picker here. */
   rightSlot?: ReactNode;
 };
 
 /**
- * Mobile page header. Renders three slots: optional left action, the
- * centered wordmark with italic-green emphasis on `italicWord`, and an
- * optional right action.
+ * Mobile page header. Left-aligned wordmark with italic-green emphasis
+ * on `italicWord`, optional right-aligned accessory slot.
  *
  * The italic word uses the locked anchor design's serif italic stack
  * (`font-m-display-italic` → Iowan Old Style / Palatino / Georgia)
- * tinted with `text-m-accent` (#4ADE80). Both empty slots render an
- * invisible spacer so the title stays centered regardless of which
- * slots are present.
+ * tinted with `text-m-accent` (#4ADE80).
+ *
+ * Phase 1 had a three-slot centered layout with a left back-chevron
+ * stub and per-page right icon stubs. Phase 2 step 1 (portfolio
+ * context plumbing) reframes the header around the global portfolio
+ * picker on the right; back navigation lives in the bottom nav.
  */
 export function MobilePageHeader({
   title,
   italicWord,
-  leftSlot,
   rightSlot,
 }: MobilePageHeaderProps) {
   return (
-    <header className="flex items-center justify-between px-5 pt-3.5 pb-2.5">
-      <div className="flex h-5 w-5 items-center justify-center">{leftSlot}</div>
-      <h1 className="text-base font-medium tracking-tight text-m-text">
-        {title}{" "}
+    <header className="flex items-center justify-between gap-3 px-5 pt-3.5 pb-2.5">
+      <h1 className="min-w-0 truncate text-base font-medium tracking-tight text-m-text">
+        {title}
+        {title ? " " : ""}
         <em className="font-m-display-italic font-normal italic text-m-accent">
           {italicWord}
         </em>
       </h1>
-      <div className="flex h-5 w-5 items-center justify-center">{rightSlot}</div>
+      {rightSlot ? <div className="shrink-0">{rightSlot}</div> : null}
     </header>
   );
 }

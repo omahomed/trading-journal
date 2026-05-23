@@ -2,6 +2,7 @@
 
 import { ChevronDown, Lock } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
+import { usePortfolio } from "@/lib/portfolio-context";
 
 /**
  * Phase 1 stub of the mobile Position Sizer screen. Translates
@@ -10,6 +11,10 @@ import { formatCurrency } from "@/lib/format";
  * a visual stub — TODO comments mark the phase that wires real
  * behavior. Content-only: the surrounding tape pill, page header, and
  * bottom nav are provided by `AdaptiveShell` → `MobileShell`.
+ *
+ * Phase 2 step 1: reads the active portfolio from the shared context
+ * and surfaces its name in the body subtitle. Underlying numeric data
+ * remains mock — Phase 2 later steps wire real backend data.
  */
 
 const MOCK = {
@@ -37,8 +42,14 @@ const MOCK = {
 } as const;
 
 export function MobilePositionSizer() {
+  const { activePortfolio } = usePortfolio();
   return (
     <div className="flex flex-col gap-2.5 pt-2">
+      {activePortfolio && (
+        <div className="text-[11px] text-m-text-dim">
+          Sizing for <span className="text-m-text-muted">{activePortfolio.name}</span>
+        </div>
+      )}
       {/* Mode chip — opens grouped sheet (Entry / Position management / Options) */}
       <button
         type="button"

@@ -2,6 +2,7 @@
 
 import { Search, ListOrdered, TriangleAlert } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
+import { usePortfolio } from "@/lib/portfolio-context";
 
 /**
  * Phase 1 stub of the mobile Trade Journal. Translates
@@ -10,6 +11,10 @@ import { formatCurrency } from "@/lib/format";
  * position-card click targets are visual stubs only — TODO comments
  * mark Phase 4 wiring. Content-only: tape pill, page header, and
  * bottom nav come from `AdaptiveShell` → `MobileShell`.
+ *
+ * Phase 2 step 1: reads the active portfolio from the shared context
+ * and surfaces its name in the Holdings header. Underlying position
+ * data remains mock — Phase 2 later steps wire real backend data.
  */
 
 // ── Mock data ─────────────────────────────────────────────────────
@@ -169,6 +174,7 @@ const fmtPctSignedSmall = (n: number) =>
   (n >= 0 ? "+" : "−") + Math.abs(n).toFixed(1) + "%";
 
 export function MobileTradeJournal() {
+  const { activePortfolio } = usePortfolio();
   return (
     <div className="-mx-5 flex flex-col gap-3 pt-2">
       {/* Search bar — non-functional in Phase 1 */}
@@ -197,7 +203,12 @@ export function MobileTradeJournal() {
 
       {/* Holdings summary */}
       <div className="mx-5">
-        <div className="mb-1 text-[11px] font-medium text-m-text-dim">Holdings</div>
+        <div className="mb-1 flex items-baseline gap-2 text-[11px] font-medium text-m-text-dim">
+          <span>Holdings</span>
+          {activePortfolio && (
+            <span className="text-m-text-muted">· {activePortfolio.name}</span>
+          )}
+        </div>
         <div className="font-m-num text-[32px] font-medium tabular-nums tracking-[-0.02em] text-m-text">
           {formatCurrency(MOCK_HOLDINGS.totalUsd, { decimals: 0 })}
         </div>

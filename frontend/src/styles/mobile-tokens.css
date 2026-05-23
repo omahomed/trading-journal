@@ -119,6 +119,19 @@
   --font-m-display-italic: 'Iowan Old Style', 'Palatino', Georgia, serif;
 }
 
+/* ── Bottom-sheet motion (Phase 2 picker, future sheets) ──
+   Sheet slides up from the bottom edge; backdrop fades in. Durations
+   and easing come from the `--m-duration-*` / `--m-ease-spring` tokens
+   in the `:root` block above. */
+@keyframes m-sheet-enter {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes m-backdrop-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ── Adaptive shell visibility (CSS-only, no JS hydration required) ──
    `.m-only` shows its element only at viewport widths below
    MOBILE_BREAKPOINT_PX (1024px). `.d-only` shows it only at and above.
