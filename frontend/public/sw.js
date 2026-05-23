@@ -12,17 +12,22 @@
 //
 // Versioning: bump SHELL_CACHE_NAME any time you change PRECACHE_URLS
 // or the cache strategy. Old caches are deleted on `activate`.
+//
+// v1 → v2 (one-time invalidation): the v1 PRECACHE seeded "/" and
+// "/dashboard", both of which middleware-redirected through to /login
+// for unauthenticated users. The cached body for "/" was therefore a
+// snapshot of the /login HTML at SW install time, indefinitely served
+// to returning users by the (also-removed) cache-first navigation
+// strategy. The bump forces activate-time eviction of v1 so users
+// returning with stale entries don't keep seeing them.
+const SHELL_CACHE_NAME = "mo-shell-v2";
+const RUNTIME_CACHE_NAME = "mo-runtime-v2";
 
-const SHELL_CACHE_NAME = "mo-shell-v1";
-const RUNTIME_CACHE_NAME = "mo-runtime-v1";
-
-// The minimal set of URLs that have to be available offline for the
-// shell to render. Don't precache page routes whose content depends
-// on auth state — those will fall back to whatever the runtime cache
-// has from prior visits, which is the right behavior.
+// Static PWA assets that the install flow needs offline. Navigation
+// HTML routes are deliberately NOT precached — those are now served
+// network-first by the fetch handler below, so a fresh online client
+// always gets the deploy's current HTML (and current chunk URLs).
 const PRECACHE_URLS = [
-  "/",
-  "/dashboard",
   "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",
@@ -73,31 +78,52 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Same-origin static assets and HTML routes: cache-first, with a
-  // network fallback that updates the runtime cache for next time.
+  // Same-origin requests split by mode:
+  //
+  // - Navigations (HTML routes): network-FIRST. The page HTML always
+  //   comes from the live deploy, so its embedded chunk URLs always
+  //   match what's currently on Vercel — no more chunk-404 broken
+  //   first loads from a stale cached shell. Successful responses are
+  //   written to the runtime cache so offline navigations have
+  //   something to fall back on. Offline chain (in order): cached
+  //   match for the specific URL → cached /dashboard shell (Phase 1
+  //   offline goal) → fail. The /dashboard fallback yields nothing
+  //   until the user has navigated there online once and populated
+  //   the runtime cache.
+  //
+  // - Static assets (_next chunks, fonts, images): cache-FIRST,
+  //   unchanged from prior behavior. Chunks are immutable per build
+  //   so the cache hit is always correct. On miss, fetch and
+  //   populate. On chunk network failure, propagate the error
+  //   (do NOT return HTML — that would parse as JS and bury the
+  //   real failure; see src/lib/chunk-reload.ts for the in-React
+  //   ChunkLoadError handler that the propagated error feeds).
   if (url.origin === self.location.origin) {
+    if (req.mode === "navigate") {
+      event.respondWith(
+        fetch(req)
+          .then((res) => {
+            if (res && res.status === 200 && res.type === "basic") {
+              const copy = res.clone();
+              caches.open(RUNTIME_CACHE_NAME).then((cache) => cache.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() =>
+            caches.match(req).then((cached) => cached || caches.match("/dashboard")),
+          ),
+      );
+      return;
+    }
     event.respondWith(
       caches.match(req).then((cached) => {
         if (cached) return cached;
-        const networkFetch = fetch(req).then((res) => {
-          // Don't cache opaque or error responses.
+        return fetch(req).then((res) => {
           if (!res || res.status !== 200 || res.type !== "basic") return res;
           const copy = res.clone();
           caches.open(RUNTIME_CACHE_NAME).then((cache) => cache.put(req, copy));
           return res;
         });
-        // Offline fallback to the cached /dashboard shell is ONLY safe
-        // for navigation requests. Returning HTML for a failed JS
-        // chunk request (mode === "script") would make the browser
-        // parse HTML as JS and surface a misleading parse error —
-        // and prevent Next.js's chunk-reload handler (in
-        // src/lib/chunk-reload.ts via the error boundaries) from
-        // seeing the real network failure. For non-navigation
-        // requests, let the network error propagate.
-        if (req.mode === "navigate") {
-          return networkFetch.catch(() => caches.match("/dashboard"));
-        }
-        return networkFetch;
       }),
     );
     return;
