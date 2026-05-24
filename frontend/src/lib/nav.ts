@@ -33,7 +33,6 @@ export const NAV: NavGroup[] = [
       { id: "logbuy", label: "Log Buy", href: "/log-buy" },
       { id: "logsell", label: "Log Sell", href: "/log-sell" },
       { id: "sizer", label: "Position Sizer", href: "/position-sizer" },
-      { id: "sizer:normal", label: "Normal Sizer", parentPage: "sizer", tab: "normal" },
       { id: "sizer:volatility", label: "Volatility Sizer", parentPage: "sizer", tab: "volatility" },
       { id: "sizer:scalein", label: "Scale In Sizer", parentPage: "sizer", tab: "scalein" },
       { id: "sizer:pyramid", label: "Pyramid Sizer", parentPage: "sizer", tab: "pyramid" },

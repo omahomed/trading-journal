@@ -5,10 +5,9 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 
-type SizerTab = "normal" | "volatility" | "scalein" | "pyramid" | "trim" | "options";
+type SizerTab = "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
 const TABS: { key: SizerTab; label: string; icon: string }[] = [
-  { key: "normal", label: "Normal Sizer", icon: "📏" },
   { key: "volatility", label: "Volatility Sizer", icon: "⚖️" },
   { key: "scalein", label: "Scale In Sizer", icon: "📐" },
   { key: "pyramid", label: "Pyramid Sizer", icon: "🔺" },
@@ -146,10 +145,10 @@ function lifoAvgCost(inventory: InventoryLot[]): number {
 // --- Main Component ---
 
 export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed, initialHoldingTradeId, onHoldingConsumed }: { navColor: string; onNavigate?: (page: string) => void; initialTab?: string; onTabConsumed?: () => void; initialHoldingTradeId?: string; onHoldingConsumed?: () => void }) {
-  const [tab, setTab] = useState<SizerTab>((initialTab as SizerTab) || "normal");
+  const [tab, setTab] = useState<SizerTab>((initialTab as SizerTab) || "volatility");
 
   useEffect(() => {
-    if (initialTab && ["normal", "volatility", "scalein", "pyramid", "trim", "options"].includes(initialTab)) {
+    if (initialTab && ["volatility", "scalein", "pyramid", "trim", "options"].includes(initialTab)) {
       setTab(initialTab as SizerTab);
       onTabConsumed?.();
     }
@@ -304,17 +303,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     setErrorMsg("");
     setCalculated(false);
 
-    if (tab === "normal") {
-      if (!ticker || entry <= 0 || ma <= 0) {
-        setErrorMsg("Please enter Ticker, Entry Price, and Key MA Level.");
-        return;
-      }
-      const stop = ma * (1 - buf / 100);
-      if (stop >= entry) {
-        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above entry price (${formatCurrency(entry)}).`);
-        return;
-      }
-    } else if (tab === "volatility") {
+    if (tab === "volatility") {
       if (!ticker || entry <= 0 || atr <= 0) {
         setErrorMsg("Please ensure Ticker, Price, and ATR are entered correctly.");
         return;
@@ -360,26 +349,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
     setCalculated(true);
   };
-
-  // ━━━ Normal Sizer Results ━━━
-  const normalResults = useMemo(() => {
-    if (!calculated || tab !== "normal") return null;
-    const stop = ma * (1 - buf / 100);
-    const riskPerShare = entry - stop;
-    if (riskPerShare <= 0) return null;
-
-    const riskShares = Math.ceil(riskBudget / riskPerShare);
-    const targetPct = targetSize;
-    const targetShares = Math.ceil((equity * targetPct / 100) / entry);
-    const finalShares = Math.min(riskShares, targetShares);
-    const finalVal = finalShares * entry;
-    const finalPctNlv = equity > 0 ? (finalVal / equity) * 100 : 0;
-    const limitFactor = finalShares === targetShares && targetShares < riskShares
-      ? `Target Size (${targetPct}%)`
-      : `MA Support (${formatCurrency(ma)})`;
-
-    return { riskShares, targetShares, finalShares, finalVal, finalPctNlv, limitFactor, stop, riskPerShare };
-  }, [calculated, tab, ma, buf, entry, riskBudget, targetSize, equity]);
 
   // ━━━ Volatility Sizer Results ━━━
   // Delegates to the shared `computeVolatilitySizing` lib (see
@@ -607,8 +576,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, costPerContract, equity, riskBudget, optMode, entryPrice, sizingMode]);
 
   const needsHolding = ["scalein", "pyramid", "trim"].includes(tab);
-  const needsMaBuffer = ["normal", "scalein", "volatility"].includes(tab);
-  const needsTarget = tab === "normal" || tab === "trim" || tab === "volatility" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
+  const needsMaBuffer = ["scalein", "volatility"].includes(tab);
+  const needsTarget = tab === "trim" || tab === "volatility" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -640,7 +609,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           {TABS.find(t => t.key === tab)?.icon} {TABS.find(t => t.key === tab)?.label}
         </h2>
         <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
-          {tab === "normal" && "Size positions based on a key support level with buffer. No ATR involved."}
           {tab === "volatility" && "Normalize risk by sizing based on ATR volatility AND technical stop."}
           {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
           {tab === "pyramid" && `Size add-on purchases to winning positions. Max ${pyramidRules.alloc_pct}% of shares per add, gated by last buy's profit.`}
@@ -700,7 +668,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       <div className="flex flex-col gap-5 mb-6">
 
         {/* Ticker (new trade tabs) */}
-        {(tab === "normal" || tab === "volatility") && (
+        {tab === "volatility" && (
           <Field label="Ticker Symbol">
             <div className="relative">
               <input type="text" value={ticker} onChange={e => { setTicker(e.target.value.toUpperCase()); resetCalc(); }}
@@ -805,7 +773,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         )}
 
         {/* Sizing Mode (new trade tabs) */}
-        {(tab === "normal" || tab === "volatility" || tab === "scalein" || tab === "options") && (
+        {(tab === "volatility" || tab === "scalein" || tab === "options") && (
           <>
             <div className="px-4 py-2.5 rounded-[10px] text-[12px] flex items-center justify-between gap-3 flex-wrap"
                  data-testid="sizer-mode-indicator"
@@ -924,45 +892,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       {/* ═══════════ RESULTS ═══════════ */}
       {calculated && !errorMsg && (
         <div style={{ animation: "slide-up 0.15s ease-out" }}>
-
-          {/* ── NORMAL SIZER ── */}
-          {tab === "normal" && normalResults && (
-            <>
-              <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {ticker || "—"}</h3>
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <MetricCard label="Risk Budget" value={formatCurrency(riskBudget, { decimals: 0 })}
-                            sub={`${riskPct}% Risk (${SIZING_MODES[sizingMode].key.charAt(0).toUpperCase() + SIZING_MODES[sizingMode].key.slice(1)} Mode)`}
-                            accent="#6366f1" />
-                <MetricCard label="Stop Distance" value={`${stopDistPct.toFixed(1)}%`}
-                            sub={`${formatCurrency(normalResults.riskPerShare)}/share`}
-                            accent="#f59f00" />
-                <MetricCard label="Target Size" value={`${targetSize}%`}
-                            sub={formatCurrency(equity * targetSize / 100, { decimals: 0 })}
-                            accent="#3b82f6" />
-              </div>
-              <div className="grid grid-cols-3 gap-3 mb-6">
-                <MetricCard label="Risk-Based Limit" value={`${normalResults.riskShares} shs`}
-                            sub={`${formatCurrency(normalResults.riskShares * entry, { decimals: 0 })} (${(normalResults.riskShares * entry / equity * 100).toFixed(1)}% NLV)`} />
-                <MetricCard label="Target Limit" value={`${normalResults.targetShares} shs`}
-                            sub={`${formatCurrency(normalResults.targetShares * entry, { decimals: 0 })} (${targetSize}% NLV)`} />
-                <MetricCard label="Limiting Factor" value={normalResults.limitFactor}
-                            sub="Determines Final Size" />
-              </div>
-
-              <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
-              <Banner type="success">
-                RECOMMENDED SIZE: Buy <strong>{normalResults.finalShares}</strong> shares ({normalResults.finalPctNlv.toFixed(1)}% of NLV).
-              </Banner>
-
-              <div className="mt-4">
-                <button onClick={() => sendToLogBuy({ ticker, shares: normalResults.finalShares, price: entry, stop: normalResults.stop, action: "new" })}
-                        className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
-                        style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                  📝 Send to Log Buy — {ticker || "—"} ({normalResults.finalShares} shs @ {formatCurrency(entry)})
-                </button>
-              </div>
-            </>
-          )}
 
           {/* ── VOLATILITY SIZER ── */}
           {tab === "volatility" && volResults && (
