@@ -6,7 +6,6 @@ import {
   BookOpen,
   Calculator,
   ChartLine,
-  Clock,
   Ellipsis,
   type LucideIcon,
 } from "lucide-react";
@@ -21,15 +20,18 @@ const ITEMS: readonly NavItem[] = [
   { href: "/dashboard", label: "Dashboard", Icon: ChartLine },
   { href: "/position-sizer", label: "Sizer", Icon: Calculator },
   { href: "/trade-journal", label: "Journal", Icon: BookOpen },
-  { href: "/m-factor", label: "Cycle", Icon: Clock },
   { href: "/more", label: "More", Icon: Ellipsis },
 ] as const;
 
 /**
- * Sticky bottom navigation for mobile. Five destinations, lucide icons,
+ * Sticky bottom navigation for mobile. Four destinations, lucide icons,
  * 44×44 minimum touch targets, no hover effects (active state on tap
  * only). Active item is the one whose `href` matches the current
- * pathname or is a strict prefix (so `/m-factor/foo` keeps Cycle lit).
+ * pathname or is a strict prefix.
+ *
+ * Cycle was dropped in Phase 2 Step 2 — the M Factor state now rides on
+ * the global tape pill (visible on every mobile route), so a dedicated
+ * destination duplicated the indicator without adding unique content.
  *
  * Visible only on mobile viewports — wrapped in `.m-only` by the shell
  * is unnecessary because `MobileBottomNav` is only mounted from inside

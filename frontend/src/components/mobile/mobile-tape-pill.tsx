@@ -56,5 +56,24 @@ function formatDetail(d: RallyState): string {
       ? `${Math.abs(d.drawdown_pct).toFixed(1)}% off high`
       : "";
   }
+  // Prefer state-onset date ("Since Apr 14") over day count when the
+  // backend exposes it. Less mental math, and the absolute date stays
+  // meaningful across timezones / late-night sessions where "Day N"
+  // depends on which trading day the user thinks they're in.
+  const since = formatSinceDate(d.power_trend_on_since);
+  if (since) return `Since ${since}`;
   return d.day_num && d.day_num > 0 ? `Day ${d.day_num}` : "";
+}
+
+function formatSinceDate(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  // Parse the YYYY-MM-DD date as UTC midnight, then format in the same
+  // UTC zone — keeps "Apr 14" stable regardless of the viewer's TZ.
+  const dt = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
