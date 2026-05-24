@@ -8,7 +8,7 @@ import { log } from "@/lib/log";
 type SizerTab = "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
 const TABS: { key: SizerTab; label: string; icon: string }[] = [
-  { key: "volatility", label: "Volatility Sizer", icon: "⚖️" },
+  { key: "volatility", label: "New Position Sizer", icon: "⚖️" },
   { key: "scalein", label: "Scale In Sizer", icon: "📐" },
   { key: "pyramid", label: "Pyramid Sizer", icon: "🔺" },
   { key: "trim", label: "Trim (Sell Down)", icon: "✂️" },

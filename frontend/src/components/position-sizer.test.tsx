@@ -193,7 +193,7 @@ async function fillVolTabInputs(opts: {
 }) {
   // Switch to the Volatility tab
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /Volatility Sizer/ }));
+    fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
   });
 
   const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
@@ -256,7 +256,7 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
   test("audit-mode UI is gone: no Sizing Context, no holding picker on vol tab, no Stock Volatility Profile", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Volatility Sizer/ }));
+      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
     });
 
     expect(screen.queryByText(/Sizing Context/)).not.toBeInTheDocument();
