@@ -1,48 +1,226 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Lock } from "lucide-react";
+import { Check } from "lucide-react";
+import { api, getActivePortfolio } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { SIZING_MODES, mctStateToSizingMode } from "@/lib/sizing-mode";
+import { MobileSelectSheet } from "./mobile-select-sheet";
 
 /**
- * Phase 1 stub of the mobile Position Sizer screen. Translates
- * `docs/mobile/anchors/position-sizer-v6.html` to React with hardcoded
- * NVDA mock data. All interactivity (mode chip, picker tiles, CTA) is
- * a visual stub — TODO comments mark the phase that wires real
- * behavior. Content-only: the surrounding tape pill, page header, and
- * bottom nav are provided by `AdaptiveShell` → `MobileShell`.
+ * Phase 2 Step 3 — Mobile Position Sizer (Volatility-tab first cut).
  *
- * Phase 2 step 1: reads the active portfolio from the shared context
- * and surfaces its name in the body subtitle. Underlying numeric data
- * remains mock — Phase 2 later steps wire real backend data.
+ * Replaces Phase 1's MOCK-based mock with real data hooks consuming the
+ * SAME endpoints the desktop sizer uses. Volatility-mode "new trade"
+ * flow only — Normal / Scale-In / Pyramid / Trim / Options remain
+ * desktop-only as Tier 2 follow-ups.
+ *
+ * Mount fetch: journalLatest (equity = end_nlv) + rallyPrefix (MCT state
+ * → auto sizing mode). Per-ticker debounced priceLookup auto-fills
+ * entry + ATR. Computation runs live as inputs change — no Calculate
+ * gate (anchor v6's "audit-result is live" design).
+ *
+ * Sizing math mirrors desktop volResults (volSizerMode === "new"
+ * branch) field-for-field — riskBudget, atrRiskBudget, maxSharesVol,
+ * effectiveStop / maxSharesTech, hard-cap 20%, target cap, limit
+ * reason, riskPerShare with MA-stop-or-ATR fallback.
+ *
+ * Active-portfolio switch triggers window.location.reload() via the
+ * shared usePortfolio() context, so this component doesn't need its
+ * own reactivity wiring — the page remounts.
  */
 
-const MOCK = {
-  ticker: "NVDA",
-  ma: { e8: 182.10, e21: 173.40, s50: 162.50 },
-  entry: 185.50,
-  nlv: 487704,
-  keyMa: 173.40,
-  bufferPct: 1.0,
-  atrPct: 5.0,
-  mode: "Volatility",
-  picker: {
-    mode: { name: "Offense", subValue: "1.00%" },
-    profile: { name: "Tight", subValue: "1.0×" },
-    size: { name: "Full", subValue: "10%" },
-  },
-  audit: {
-    shares: 750,
-    notional: 139125,
-    pctOfNlv: 28.5,
-    totalRisk: 4875,
-    atrStop: 172.69,
-    target2r: 9750,
-  },
-} as const;
+// Locked to match desktop's VOL_PROFILES (position-sizer.tsx:43-47).
+// Reordering would silently shift behavior — DEFAULT_VOL_PROFILE_INDEX
+// keys off array position.
+const VOL_PROFILES = [
+  { key: "tight", label: "Tight", mult: 1.0 },
+  { key: "normal", label: "Normal", mult: 1.25 },
+  { key: "highvol", label: "High-Vol", mult: 1.5 },
+] as const;
+
+// Locked to match desktop's SIZE_OPTIONS (position-sizer.tsx:49-53).
+const SIZE_OPTIONS = [
+  { label: "Starter", pct: 2.5 },
+  { label: "Half", pct: 5 },
+  { label: "Standard", pct: 7.5 },
+  { label: "Full", pct: 10 },
+  { label: "Overweight", pct: 12.5 },
+  { label: "Core", pct: 15 },
+  { label: "Core+", pct: 17.5 },
+  { label: "Max", pct: 20 },
+] as const;
+
+const DEFAULT_VOL_PROFILE_INDEX = 0; // Tight — matches Phase 1 anchor
+const DEFAULT_SIZE_INDEX = 3;        // Full (10%) — matches Phase 1 anchor
+
+const HARD_CAP_PCT = 20;
 
 export function MobilePositionSizer() {
   const { activePortfolio } = usePortfolio();
+
+  // Inputs (user-editable)
+  const [ticker, setTicker] = useState("");
+  const [entryPrice, setEntryPrice] = useState("");
+  const [maLevel, setMaLevel] = useState("");
+  const [buffer, setBuffer] = useState("1.00");
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1); // overwritten on mount
+  const [sizingModeManual, setSizingModeManual] = useState(false);
+  const [volProfileIdx, setVolProfileIdx] = useState<number>(DEFAULT_VOL_PROFILE_INDEX);
+  const [sizeIdx, setSizeIdx] = useState<number>(DEFAULT_SIZE_INDEX);
+
+  // Fetched / lifecycle
+  const [equity, setEquity] = useState<number | null>(null);
+  const [atrPct, setAtrPct] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  // Mount fetch — equity + MCT state for auto sizing mode. Same shape
+  // as desktop's load effect; ignores the parts we don't need (open
+  // trades, tradesOpenDetails, pyramid_rules — all are tab-specific to
+  // Scale-In / Pyramid / Trim).
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.journalLatest(getActivePortfolio()).catch((err) => {
+        log.error("mobile-position-sizer", "journalLatest fetch failed", err);
+        return null;
+      }),
+      api.rallyPrefix().catch((err) => {
+        log.error("mobile-position-sizer", "rallyPrefix fetch failed", err);
+        return null;
+      }),
+    ]).then(([j, rally]) => {
+      if (cancelled) return;
+      const endNlv = j ? parseFloat(String((j as { end_nlv?: number | string }).end_nlv ?? 0)) : 0;
+      setEquity(Number.isFinite(endNlv) && endNlv > 0 ? endNlv : null);
+      const stateStr = (rally as { state?: string } | null)?.state ?? null;
+      // Auto-apply only if the user hasn't manually overridden — on mount
+      // they couldn't have, but defending against a future re-run.
+      setSizingMode((prev) => (sizingModeManual ? prev : mctStateToSizingMode(stateStr)));
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Ticker → priceLookup, debounced 600ms (matches desktop). On
+  // success, auto-fills entryPrice + atrPct. On error, leaves the
+  // inputs editable and surfaces the message near the ATR cell.
+  useEffect(() => {
+    const t = ticker.trim();
+    if (!t) {
+      setPriceError(null);
+      setPriceLoading(false);
+      return;
+    }
+    setPriceLoading(true);
+    const timeout = setTimeout(() => {
+      api
+        .priceLookup(t)
+        .then((data) => {
+          if (data && typeof data.price === "number") {
+            setEntryPrice(String(data.price));
+            if (typeof data.atr_pct === "number") setAtrPct(data.atr_pct);
+            setPriceError(null);
+          }
+        })
+        .catch((err) => {
+          log.debug("mobile-position-sizer", "priceLookup failed", err);
+          setPriceError("Couldn't fetch price");
+        })
+        .finally(() => setPriceLoading(false));
+    }, 600);
+    return () => clearTimeout(timeout);
+  }, [ticker]);
+
+  // Derived inputs
+  const entry = parseFloat(entryPrice) || 0;
+  const ma = parseFloat(maLevel) || 0;
+  const buf = parseFloat(buffer) || 1;
+  const atr = atrPct ?? 0;
+  const eq = equity ?? 0;
+  const riskPct = SIZING_MODES[sizingMode].pct;
+  const targetSize = SIZE_OPTIONS[sizeIdx].pct;
+  const atrMultiplier = VOL_PROFILES[volProfileIdx].mult;
+
+  // Live computation — mirrors desktop volResults (volSizerMode === "new").
+  // Audit returns null when essential inputs are missing so the UI can
+  // render "—" placeholders instead of computing on zero-divided data.
+  const audit = useMemo(() => {
+    if (entry <= 0 || eq <= 0 || atr <= 0) return null;
+
+    const dailyRiskBudget = eq * (riskPct / 100);
+    const atrRiskBudget = dailyRiskBudget * atrMultiplier;
+    const atrDecimal = atr / 100;
+    const maxSharesVol = Math.ceil(atrRiskBudget / (entry * atrDecimal));
+
+    let maxSharesTech = Number.POSITIVE_INFINITY;
+    let effectiveStop = 0;
+    if (ma > 0) {
+      effectiveStop = ma * (1 - buf / 100);
+      if (effectiveStop < entry) {
+        const rps = entry - effectiveStop;
+        maxSharesTech = Math.ceil(dailyRiskBudget / rps);
+      }
+    }
+
+    const maxSharesCap = Math.floor((eq * (HARD_CAP_PCT / 100)) / entry);
+    const maxSharesTarget = Math.ceil((eq * (targetSize / 100)) / entry);
+
+    const finalMaxShares = Math.min(maxSharesVol, maxSharesTech, maxSharesCap, maxSharesTarget);
+    const finalMaxVal = finalMaxShares * entry;
+    const finalPctNlv = eq > 0 ? (finalMaxVal / eq) * 100 : 0;
+
+    let limitReason = "Volatility (ATR)";
+    if (
+      finalMaxShares === maxSharesTarget &&
+      maxSharesTarget < Math.min(maxSharesVol, maxSharesTech, maxSharesCap)
+    ) {
+      limitReason = `Target Size (${targetSize}%)`;
+    } else if (finalMaxShares === maxSharesCap) {
+      limitReason = `Hard Cap (${HARD_CAP_PCT}%)`;
+    } else if (finalMaxShares === maxSharesTech) {
+      limitReason = `MA Support (${formatCurrency(ma)})`;
+    }
+
+    let riskPerShare: number;
+    let stopForDisplay: number;
+    if (effectiveStop > 0 && effectiveStop < entry) {
+      riskPerShare = entry - effectiveStop;
+      stopForDisplay = effectiveStop;
+    } else {
+      riskPerShare = entry * atrDecimal;
+      stopForDisplay = Math.max(0, entry - riskPerShare);
+    }
+    const finalRiskDol = finalMaxShares * riskPerShare;
+    const target2r = finalRiskDol * 2;
+
+    return {
+      shares: finalMaxShares,
+      notional: finalMaxVal,
+      pctOfNlv: finalPctNlv,
+      totalRisk: finalRiskDol,
+      stop: stopForDisplay,
+      target2r,
+      limitReason,
+    };
+  }, [entry, ma, buf, eq, atr, riskPct, atrMultiplier, targetSize]);
+
+  const equityDisplay = equity != null
+    ? formatCurrency(equity, { decimals: 0 })
+    : loading
+      ? "…"
+      : "—";
+
+  const atrDisplay = atrPct != null ? `${atrPct.toFixed(1)}%` : "—";
+
   return (
     <div className="flex flex-col gap-2.5 pt-2">
       {activePortfolio && (
@@ -50,100 +228,309 @@ export function MobilePositionSizer() {
           Sizing for <span className="text-m-text-muted">{activePortfolio.name}</span>
         </div>
       )}
-      {/* Mode chip — opens grouped sheet (Entry / Position management / Options) */}
-      <button
-        type="button"
-        onClick={() => {
-          /* TODO Phase 2: open mode sheet */
-        }}
-        className="flex items-center justify-between rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
-      >
+
+      {/* Mode chip — kept as the anchor v6 design contract dictates.
+          Volatility is the only mode this step supports; other tabs
+          (Normal / Scale-In / Pyramid / Trim / Options) ship as Tier 2
+          follow-ups. No tap target until that lands. */}
+      <div className="flex items-center justify-between rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
         <div className="flex items-center gap-2.5">
           <span className="text-[11px] font-medium text-m-text-dim">Mode</span>
-          <span className="text-sm font-medium text-m-text">{MOCK.mode}</span>
+          <span className="text-sm font-medium text-m-text">Volatility</span>
         </div>
-        <ChevronDown size={14} strokeWidth={1.5} className="text-m-text-dim" aria-hidden="true" />
-      </button>
+        <ChevronDown size={14} strokeWidth={1.5} className="text-m-text-faint" aria-hidden="true" />
+      </div>
 
-      {/* Ticker card — symbol + 8E/21E/50S MA stack */}
+      {/* Ticker card */}
       <div className="rounded-m-lg border-[0.5px] border-m-border bg-m-surface px-[18px] py-[14px]">
-        <div className="font-m-num text-[28px] font-medium tracking-[-0.02em] text-m-text">{MOCK.ticker}</div>
-        <div className="mt-1.5 flex gap-4 font-m-num text-xs tabular-nums text-m-text-dim">
-          <MaCell label="8E" value={MOCK.ma.e8} />
-          <MaCell label="21E" value={MOCK.ma.e21} />
-          <MaCell label="50S" value={MOCK.ma.s50} />
+        <input
+          type="text"
+          value={ticker}
+          onChange={(e) => setTicker(e.target.value.toUpperCase())}
+          placeholder="TICKER"
+          inputMode="text"
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
+          aria-label="Ticker symbol"
+          className="w-full bg-transparent font-m-num text-[28px] font-medium tracking-[-0.02em] text-m-text placeholder:text-m-text-faint focus:outline-none"
+        />
+        <div className="mt-1.5 flex items-center gap-3 text-xs text-m-text-dim">
+          {priceLoading ? (
+            <span className="font-m-num">Fetching price…</span>
+          ) : priceError ? (
+            <span className="font-m-num text-m-warn">{priceError}</span>
+          ) : (
+            <span className="font-m-num">{ticker ? "Live price + ATR" : "Type a ticker"}</span>
+          )}
         </div>
       </div>
 
-      {/* 2x2 input grid — Entry / NLV (locked) / Key MA / Buffer */}
+      {/* 2×2 input grid */}
       <div className="grid grid-cols-2 gap-2">
-        <FieldCell label="Entry" value={formatCurrency(MOCK.entry, { decimals: 0 })} />
-        <FieldCell
+        <NumberFieldCell
+          label="Entry"
+          value={entryPrice}
+          onChange={setEntryPrice}
+          ariaLabel="Entry price"
+          placeholder="0.00"
+        />
+        <ReadOnlyFieldCell
           label="NLV"
           labelIcon={<Lock size={9} strokeWidth={1} className="text-m-text-dim" aria-hidden="true" />}
-          value={formatCurrency(MOCK.nlv, { decimals: 0 })}
+          value={equityDisplay}
         />
-        <FieldCell label="Key MA" value={formatCurrency(MOCK.keyMa, { decimals: 0 })} />
-        <FieldCell label="Buffer" value={`${MOCK.bufferPct.toFixed(2)}%`} />
+        <NumberFieldCell
+          label="Key MA"
+          value={maLevel}
+          onChange={setMaLevel}
+          ariaLabel="Key MA level"
+          placeholder="0.00"
+        />
+        <NumberFieldCell
+          label="Buffer"
+          value={buffer}
+          onChange={setBuffer}
+          ariaLabel="Buffer percent"
+          suffix="%"
+          placeholder="1.00"
+        />
       </div>
 
       {/* ATR row */}
       <div className="flex items-baseline justify-between rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
         <span className="text-[11px] font-medium text-m-text-dim">ATR % (21D)</span>
         <span className="font-m-num text-xl font-medium tabular-nums tracking-[-0.01em] text-m-text">
-          {MOCK.atrPct.toFixed(1)}%
+          {atrDisplay}
         </span>
       </div>
 
-      {/* Three picker tiles — Mode / Profile / Size, each opens its own sheet */}
+      {/* Mode / Profile / Size picker tiles */}
       <div className="grid grid-cols-3 gap-2">
-        <PickerTile label="Mode" valueText={MOCK.picker.mode.name} subValue={MOCK.picker.mode.subValue} accent selected />
-        <PickerTile label="Profile" valueText={MOCK.picker.profile.name} subValue={MOCK.picker.profile.subValue} />
-        <PickerTile label="Size" valueText={MOCK.picker.size.name} subValue={MOCK.picker.size.subValue} />
+        <MobileSelectSheet
+          triggerLabel="Mode"
+          triggerValue={SIZING_MODES[sizingMode].key === "defense"
+            ? "Defense"
+            : SIZING_MODES[sizingMode].key === "normal"
+              ? "Normal"
+              : "Offense"}
+          triggerSubValue={`${SIZING_MODES[sizingMode].pct.toFixed(2)}%`}
+          triggerAccent
+          triggerSelected
+          sheetTitle="Sizing mode"
+        >
+          {(close) => (
+            <div className="flex flex-col">
+              {SIZING_MODES.map((m) => {
+                const isActive = m.index === sizingMode;
+                const displayLabel =
+                  m.key === "defense" ? "Defense" : m.key === "normal" ? "Normal" : "Offense";
+                return (
+                  <button
+                    key={m.key}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => {
+                      setSizingMode(m.index);
+                      setSizingModeManual(true);
+                      close();
+                    }}
+                    className="flex min-h-[52px] items-center justify-between border-b-[0.5px] border-m-border px-5 py-3.5 text-left last:border-b-0"
+                  >
+                    <span className="flex flex-col">
+                      <span className={`text-base ${isActive ? "font-medium" : ""} text-m-text`}>
+                        {displayLabel}
+                      </span>
+                      <span className="font-m-num text-[12px] tabular-nums text-m-text-dim">
+                        {m.pct.toFixed(2)}%
+                      </span>
+                    </span>
+                    {isActive && (
+                      <Check size={20} strokeWidth={2} className="text-m-accent" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </MobileSelectSheet>
+
+        <MobileSelectSheet
+          triggerLabel="Profile"
+          triggerValue={VOL_PROFILES[volProfileIdx].label}
+          triggerSubValue={`${VOL_PROFILES[volProfileIdx].mult.toFixed(2)}×`}
+          sheetTitle="ATR profile"
+        >
+          {(close) => (
+            <div className="flex flex-col">
+              {VOL_PROFILES.map((p, i) => {
+                const isActive = i === volProfileIdx;
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => {
+                      setVolProfileIdx(i);
+                      close();
+                    }}
+                    className="flex min-h-[52px] items-center justify-between border-b-[0.5px] border-m-border px-5 py-3.5 text-left last:border-b-0"
+                  >
+                    <span className="flex flex-col">
+                      <span className={`text-base ${isActive ? "font-medium" : ""} text-m-text`}>
+                        {p.label}
+                      </span>
+                      <span className="font-m-num text-[12px] tabular-nums text-m-text-dim">
+                        {p.mult.toFixed(2)}× ATR
+                      </span>
+                    </span>
+                    {isActive && (
+                      <Check size={20} strokeWidth={2} className="text-m-accent" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </MobileSelectSheet>
+
+        <MobileSelectSheet
+          triggerLabel="Size"
+          triggerValue={SIZE_OPTIONS[sizeIdx].label}
+          triggerSubValue={`${SIZE_OPTIONS[sizeIdx].pct}%`}
+          sheetTitle="Target size"
+        >
+          {(close) => (
+            <div className="flex flex-col">
+              {SIZE_OPTIONS.map((o, i) => {
+                const isActive = i === sizeIdx;
+                return (
+                  <button
+                    key={o.label}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={() => {
+                      setSizeIdx(i);
+                      close();
+                    }}
+                    className="flex min-h-[52px] items-center justify-between border-b-[0.5px] border-m-border px-5 py-3.5 text-left last:border-b-0"
+                  >
+                    <span className="flex flex-col">
+                      <span className={`text-base ${isActive ? "font-medium" : ""} text-m-text`}>
+                        {o.label}
+                      </span>
+                      <span className="font-m-num text-[12px] tabular-nums text-m-text-dim">
+                        {o.pct}% of NLV
+                      </span>
+                    </span>
+                    {isActive && (
+                      <Check size={20} strokeWidth={2} className="text-m-accent" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </MobileSelectSheet>
       </div>
 
-      {/* Audit result — live computed (no Run Audit button) */}
+      {/* Audit result card */}
       <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 pt-4 pb-3.5">
         <div className="flex items-baseline justify-between">
           <span className="text-[11px] font-medium text-m-text-dim">Audit result</span>
-          <span className="text-[11px] font-medium text-m-warn">{MOCK.audit.pctOfNlv.toFixed(1)}% of NLV</span>
+          {audit && (
+            <span
+              className={
+                "text-[11px] font-medium " +
+                (audit.pctOfNlv >= HARD_CAP_PCT ? "text-m-warn" : "text-m-text-muted")
+              }
+            >
+              {audit.pctOfNlv.toFixed(1)}% of NLV
+            </span>
+          )}
         </div>
         <div className="mt-1.5 flex items-baseline gap-2">
-          <span className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text">
-            {MOCK.audit.shares}
+          <span
+            data-testid="audit-shares"
+            className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text"
+          >
+            {audit ? audit.shares.toLocaleString() : "—"}
           </span>
-          <span className="text-[15px] text-m-text-muted">shares · {formatCurrency(MOCK.audit.notional, { decimals: 0 })}</span>
+          <span className="text-[15px] text-m-text-muted">
+            shares
+            {audit ? ` · ${formatCurrency(audit.notional, { decimals: 0 })}` : ""}
+          </span>
         </div>
+        {audit && (
+          <div className="mt-1 text-[11px] text-m-text-dim">
+            Limited by {audit.limitReason}
+          </div>
+        )}
         <div className="mt-3 grid grid-cols-3 gap-2.5 border-t-[0.5px] border-m-border pt-3">
-          <Stat label="Total risk" value={formatCurrency(MOCK.audit.totalRisk, { decimals: 0 })} tone="down" />
-          <Stat label="ATR stop" value={formatCurrency(MOCK.audit.atrStop, { decimals: 0 })} />
-          <Stat label="2R target" value={formatCurrency(MOCK.audit.target2r, { decimals: 0 })} tone="up" />
+          <Stat
+            label="Total risk"
+            value={audit ? formatCurrency(audit.totalRisk, { decimals: 0 }) : "—"}
+            tone="down"
+          />
+          <Stat
+            label="Stop"
+            value={audit ? formatCurrency(audit.stop, { decimals: 0 }) : "—"}
+          />
+          <Stat
+            label="2R target"
+            value={audit ? formatCurrency(audit.target2r, { decimals: 0 }) : "—"}
+            tone="up"
+          />
         </div>
       </div>
-
-      {/* CTA */}
-      <button
-        type="button"
-        onClick={() => {
-          /* TODO Phase 3: hand off to log-buy with prefilled values */
-        }}
-        className="block w-full rounded-m-lg bg-m-accent px-4 py-4 text-center text-[15px] font-medium tracking-[-0.01em] text-m-accent-text-on"
-      >
-        Log buy →
-      </button>
     </div>
   );
 }
 
-function MaCell({ label, value }: { label: string; value: number }) {
+// ── Field primitives ──────────────────────────────────────────────
+
+function NumberFieldCell({
+  label,
+  value,
+  onChange,
+  ariaLabel,
+  suffix,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  ariaLabel: string;
+  suffix?: string;
+  placeholder?: string;
+}) {
   return (
-    <span>
-      {label} <span className="font-medium text-m-text">{value.toFixed(2)}</span>
-    </span>
+    <label className="block rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
+      <span className="mb-0.5 block text-[10px] font-medium text-m-text-dim">{label}</span>
+      <span className="flex items-baseline gap-1">
+        <input
+          type="text"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          aria-label={ariaLabel}
+          placeholder={placeholder}
+          className="min-w-0 flex-1 bg-transparent font-m-num text-lg font-medium tabular-nums text-m-text placeholder:text-m-text-faint focus:outline-none"
+        />
+        {suffix && (
+          <span className="font-m-num text-lg font-medium tabular-nums text-m-text-dim">
+            {suffix}
+          </span>
+        )}
+      </span>
+    </label>
   );
 }
 
-function FieldCell({
+function ReadOnlyFieldCell({
   label,
   labelIcon,
   value,
@@ -163,39 +550,6 @@ function FieldCell({
   );
 }
 
-function PickerTile({
-  label,
-  valueText,
-  subValue,
-  accent = false,
-  selected = false,
-}: {
-  label: string;
-  valueText: string;
-  subValue: string;
-  accent?: boolean;
-  selected?: boolean;
-}) {
-  const borderClass = selected ? "border-m-accent-border-soft" : "border-m-border";
-  const valueToneClass = accent ? "text-m-accent" : "text-m-text";
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        /* TODO Phase 2: open picker sheet for `label` */
-      }}
-      className={`rounded-m-md border-[0.5px] ${borderClass} bg-m-surface px-3 py-[10px] text-left`}
-    >
-      <div className="mb-1 text-[10px] font-medium text-m-text-dim">{label}</div>
-      <div className="flex items-baseline justify-between">
-        <span className={`text-sm font-medium ${valueToneClass}`}>{valueText}</span>
-        <ChevronDown size={10} strokeWidth={1.5} className="text-m-text-dim" aria-hidden="true" />
-      </div>
-      <div className="mt-px font-m-num text-[11px] tabular-nums text-m-text-muted">{subValue}</div>
-    </button>
-  );
-}
-
 function Stat({
   label,
   value,
@@ -210,7 +564,9 @@ function Stat({
   return (
     <div>
       <div className="mb-0.5 text-[10px] text-m-text-dim">{label}</div>
-      <div className={`font-m-num text-[13px] font-medium tabular-nums ${valueClass}`}>{value}</div>
+      <div className={`font-m-num text-[13px] font-medium tabular-nums ${valueClass}`}>
+        {value}
+      </div>
     </div>
   );
 }
