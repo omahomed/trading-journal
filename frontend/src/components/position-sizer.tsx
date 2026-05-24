@@ -24,6 +24,7 @@ import {
   mctStateToSizingMode,
   describeMctSource,
 } from "@/lib/sizing-mode";
+import { computeVolatilitySizing, type SizingScenario, type VolSizerResults } from "@/lib/vol-sizer";
 
 // Local view shape — keeps the component-internal usage of
 // `SIZING_MODES[i].label` untouched. The labels here include the leading
@@ -34,12 +35,6 @@ const SIZING_MODES = SIZING_MODES_BASE.map(m => ({
   label: `${m.icon} ${m.label}`,
   pct: m.pct,
 }));
-
-const VOL_PROFILES = [
-  { key: "tight", label: "Tight (1.0x)", mult: 1.0 },
-  { key: "normal", label: "Normal (1.25x)", mult: 1.25 },
-  { key: "highvol", label: "High-Vol (1.5x)", mult: 1.5 },
-];
 
 const SIZE_OPTIONS = [
   { label: "Starter (2.5%)", pct: 2.5 }, { label: "Half (5%)", pct: 5 },
@@ -192,8 +187,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [maLevel, setMaLevel] = useState("");
   const [buffer, setBuffer] = useState("1.00");
   const [atrPct, setAtrPct] = useState("5.0");
-  const [volProfile, setVolProfile] = useState(0);
   const [ticker, setTicker] = useState("");
+  // selectedHolding is shared by Scale-In / Pyramid / Trim tabs. The
+  // legacy Volatility "Audit Active Position" mode also used it but
+  // that mode is gone — the state stays for the surviving consumers.
   const [selectedHolding, setSelectedHolding] = useState("");
 
   // Active Campaign Summary v2 deep-links into this view via
@@ -211,9 +208,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [costPerContract, setCostPerContract] = useState("1.00");
   const [optMode, setOptMode] = useState<"risk" | "equivalent">("risk");
   const [fetching, setFetching] = useState(false);
-
-  // Volatility sizer mode
-  const [volSizerMode, setVolSizerMode] = useState<"new" | "audit">("new");
 
   // Pyramid config
   const [pyramidRules, setPyramidRules] = useState({ trigger_pct: 5, alloc_pct: 20 });
@@ -321,16 +315,18 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         return;
       }
     } else if (tab === "volatility") {
-      if (volSizerMode === "new") {
-        if (!ticker || entry <= 0 || atr <= 0) {
-          setErrorMsg("Please ensure Ticker, Price, and ATR are entered correctly.");
-          return;
-        }
-      } else {
-        if (!holdingData || entry <= 0 || atr <= 0) {
-          setErrorMsg("Please ensure Ticker, Price, and ATR are entered correctly.");
-          return;
-        }
+      if (!ticker || entry <= 0 || atr <= 0) {
+        setErrorMsg("Please ensure Ticker, Price, and ATR are entered correctly.");
+        return;
+      }
+      if (ma <= 0) {
+        setErrorMsg("Please enter a Key MA Level — the new sizer always grounds risk against a technical stop.");
+        return;
+      }
+      const stop = ma * (1 - buf / 100);
+      if (stop >= entry) {
+        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above entry price (${formatCurrency(entry)}).`);
+        return;
       }
     } else if (tab === "scalein") {
       if (ma <= 0) {
@@ -386,101 +382,28 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, ma, buf, entry, riskBudget, targetSize, equity]);
 
   // ━━━ Volatility Sizer Results ━━━
-  const volResults = useMemo(() => {
+  // Delegates to the shared `computeVolatilitySizing` lib (see
+  // frontend/src/lib/vol-sizer.ts). The `calculated` upstream gate +
+  // handleCalculate's input validation should make the lib's input
+  // assertions unreachable in normal flow; the try/catch is a belt to
+  // keep a malformed input from crashing the whole page.
+  const volResults: VolSizerResults | null = useMemo(() => {
     if (!calculated || tab !== "volatility") return null;
-
-    let tierName: string;
-    let tolPct: number;
-    let atrMultiplier: number;
-    let cushionPct = 0;
-    const avgCost = volSizerMode === "audit" ? holdingAvgCost : entry;
-    const shares = volSizerMode === "audit" ? (holdingData?.shares || 0) : 0;
-
-    if (volSizerMode === "new") {
-      if (sizingMode === 2) { tierName = "Offense Mode"; tolPct = 1.0; }
-      else if (sizingMode === 1) { tierName = "Normal Mode"; tolPct = 0.75; }
-      else { tierName = "Defense Mode"; tolPct = 0.5; }
-      atrMultiplier = VOL_PROFILES[volProfile].mult;
-    } else {
-      cushionPct = avgCost > 0 ? ((entry - avgCost) / avgCost) * 100 : 0;
-      if (cushionPct >= 20) { tierName = "Tier 1 (High Cushion)"; tolPct = 1.0; atrMultiplier = 2.0; }
-      else if (cushionPct >= 5) { tierName = "Tier 2 (Moderate)"; tolPct = 0.65; atrMultiplier = 1.5; }
-      else { tierName = "Tier 3 (Defense)"; tolPct = 0.5; atrMultiplier = 1.0; }
+    try {
+      return computeVolatilitySizing({
+        equity,
+        entry,
+        ma,
+        bufferPct: buf,
+        atrPct: atr,
+        tolPct: SIZING_MODES[sizingMode].pct,
+        targetSizePct: targetSize,
+      });
+    } catch (err) {
+      log.error("position-sizer", "vol-sizer compute failed", err);
+      return null;
     }
-
-    const dailyRiskBudget = equity * (tolPct / 100);
-    const atrRiskBudget = dailyRiskBudget * atrMultiplier;
-    const atrDecimal = atr / 100;
-    const maxSharesVol = Math.ceil(atrRiskBudget / (entry * atrDecimal));
-
-    // Tech Stop Limit
-    let maxSharesTech = 999999;
-    let effectiveStop = 0;
-    let techDistPct = 0;
-    if (volSizerMode === "new" && ma > 0) {
-      effectiveStop = ma * (1 - buf / 100);
-      if (effectiveStop < entry) {
-        const rps = entry - effectiveStop;
-        techDistPct = (rps / entry) * 100;
-        maxSharesTech = Math.ceil(dailyRiskBudget / rps);
-        if (targetSize > 0) {
-          const targetCap = Math.ceil((equity * targetSize / 100) / entry);
-          maxSharesTech = Math.min(maxSharesTech, targetCap);
-        }
-      }
-    }
-
-    // Hard Cap (20%)
-    const maxSharesCap = Math.floor((equity * 0.20) / entry);
-
-    // Target cap
-    let maxSharesTarget = 999999;
-    if (volSizerMode === "new" && targetSize > 0) {
-      maxSharesTarget = Math.ceil((equity * targetSize / 100) / entry);
-    }
-
-    const finalMaxShares = Math.min(maxSharesVol, maxSharesTech, maxSharesCap, maxSharesTarget);
-    const finalMaxVal = finalMaxShares * entry;
-
-    // Limiting factor
-    let limitReason = "Volatility (ATR)";
-    if (finalMaxShares === maxSharesTarget && maxSharesTarget < Math.min(maxSharesVol, maxSharesTech, maxSharesCap)) {
-      limitReason = `Target Size (${targetSize}%)`;
-    } else if (finalMaxShares === maxSharesCap) {
-      limitReason = "Hard Cap (20%)";
-    } else if (finalMaxShares === maxSharesTech) {
-      limitReason = `MA Support (${formatCurrency(ma)})`;
-    }
-
-    // Trade Risk $
-    let riskPerShare: number;
-    let riskLabel: string;
-    if (effectiveStop > 0 && effectiveStop < entry) {
-      riskPerShare = entry - effectiveStop;
-      riskLabel = `Stop ${formatCurrency(effectiveStop)} (${(riskPerShare / entry * 100).toFixed(1)}%)`;
-    } else {
-      riskPerShare = entry * atrDecimal;
-      riskLabel = `1 ATR (${atr.toFixed(1)}%)`;
-    }
-    const finalRiskDol = finalMaxShares * riskPerShare;
-
-    // ATR info
-    const atrRiskAtVol = maxSharesVol * entry * atrDecimal;
-    const atrCostPct = equity > 0 ? (maxSharesVol * entry / equity) * 100 : 0;
-
-    // Tech Stop info
-    const techRiskAtMax = effectiveStop > 0 ? maxSharesTech * (entry - effectiveStop) : 0;
-    const techCostPct = equity > 0 ? (maxSharesTech * entry / equity) * 100 : 0;
-
-    return {
-      tierName, tolPct, atrMultiplier, dailyRiskBudget, atrRiskBudget,
-      maxSharesVol, maxSharesTech, maxSharesCap, maxSharesTarget,
-      finalMaxShares, finalMaxVal, limitReason,
-      effectiveStop, techDistPct, riskPerShare, riskLabel, finalRiskDol,
-      atrRiskAtVol, atrCostPct, techRiskAtMax, techCostPct,
-      cushionPct, shares,
-    };
-  }, [calculated, tab, volSizerMode, entry, atr, ma, buf, sizingMode, volProfile, equity, targetSize, holdingData, holdingAvgCost]);
+  }, [calculated, tab, entry, atr, ma, buf, sizingMode, equity, targetSize]);
 
   // ━━━ Scale-In Results ━━━
   const scaleResults = useMemo(() => {
@@ -684,8 +607,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, costPerContract, equity, riskBudget, optMode, entryPrice, sizingMode]);
 
   const needsHolding = ["scalein", "pyramid", "trim"].includes(tab);
-  const needsMaBuffer = ["normal", "scalein"].includes(tab) || (tab === "volatility" && volSizerMode === "new");
-  const needsTarget = tab === "normal" || tab === "trim" || (tab === "volatility" && volSizerMode === "new") || tab === "scalein" || (tab === "options" && optMode === "equivalent");
+  const needsMaBuffer = ["normal", "scalein", "volatility"].includes(tab);
+  const needsTarget = tab === "normal" || tab === "trim" || tab === "volatility" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -745,30 +668,29 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         </details>
       )}
 
-      {/* Volatility Tier Rules Expander */}
+      {/* Volatility Sizer Rules Expander */}
       {tab === "volatility" && (
         <details className="mb-4 rounded-[10px] overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
           <summary className="px-4 py-2.5 text-[12px] font-semibold cursor-pointer" style={{ color: "var(--ink-3)" }}>
-            View Tier System Rules
+            View Sizer Rules
           </summary>
           <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            <p className="mb-1"><strong>Sizing Mode (New Trades):</strong></p>
+            <p className="mb-1"><strong>Sizing Mode (driven by M Factor state):</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Defense:</strong> 0.50% Risk — equity curve flat/down</li>
-              <li><strong>Normal:</strong> 0.75% Risk — equity curve recovering</li>
-              <li><strong>Offense:</strong> 1.00% Risk — equity curve strong, confirmed uptrend</li>
+              <li><strong>Defense:</strong> 0.50% risk — equity curve flat/down</li>
+              <li><strong>Normal:</strong> 0.75% risk — equity curve recovering</li>
+              <li><strong>Offense:</strong> 1.00% risk — equity curve strong, confirmed uptrend</li>
             </ul>
-            <p className="mb-1"><strong>Stock Volatility Profile (New Trades):</strong></p>
+            <p className="mb-1"><strong>What this sizer shows:</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Tight:</strong> 1.0x ATR — low-volatility, tight setups</li>
-              <li><strong>Normal:</strong> 1.25x ATR — standard growth stocks</li>
-              <li><strong>High-Vol:</strong> 1.5x ATR — high-volatility names</li>
+              <li><strong>Tech Stop:</strong> shares the risk budget can absorb to your MA-based stop</li>
+              <li><strong>1× / 1.5× / 2× ATR cushion:</strong> shares the risk budget can absorb if your stop is one of those ATR distances below entry</li>
+              <li>Every scenario is capped at your target tier ({"<= "}20% of NLV)</li>
             </ul>
-            <p className="mb-1"><strong>Tolerance Tiers (Active Positions):</strong></p>
+            <p className="mb-1"><strong>Recommendation logic:</strong></p>
             <ul className="list-disc ml-4">
-              <li><strong>Tier 1 (High Cushion):</strong> Profit &gt; 20% → 1.00% Risk, 2.0x ATR</li>
-              <li><strong>Tier 2 (Moderate):</strong> Profit 5%-20% → 0.65% Risk, 1.5x ATR</li>
-              <li><strong>Tier 3 (Defense):</strong> Profit &lt; 5% → 0.50% Risk, 1.0x ATR</li>
+              <li>Tech stop ≥ 1 ATR away → size to the tech stop</li>
+              <li>Tech stop {"<"} 1 ATR away → daily noise will chop you out; size to 1.5× ATR instead</li>
             </ul>
           </div>
         </details>
@@ -777,18 +699,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       {/* ═══════════ INPUTS ═══════════ */}
       <div className="flex flex-col gap-5 mb-6">
 
-        {/* Volatility Sizer: Mode Toggle */}
-        {tab === "volatility" && (
-          <Field label="Sizing Context">
-            <div className="flex gap-4 mt-1">
-              <Radio checked={volSizerMode === "new"} onClick={() => { setVolSizerMode("new"); resetCalc(); }} label="🆕 New Trade" />
-              <Radio checked={volSizerMode === "audit"} onClick={() => { setVolSizerMode("audit"); resetCalc(); }} label="🔍 Audit Active Position" />
-            </div>
-          </Field>
-        )}
-
         {/* Ticker (new trade tabs) */}
-        {(tab === "normal" || tab === "options" || (tab === "volatility" && volSizerMode === "new")) && tab !== "options" && (
+        {(tab === "normal" || tab === "volatility") && (
           <Field label="Ticker Symbol">
             <div className="relative">
               <input type="text" value={ticker} onChange={e => { setTicker(e.target.value.toUpperCase()); resetCalc(); }}
@@ -802,8 +714,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </Field>
         )}
 
-        {/* Holding picker (scalein, pyramid, trim, or vol audit mode) */}
-        {(needsHolding || (tab === "volatility" && volSizerMode === "audit")) && (
+        {/* Holding picker (scalein, pyramid, trim) */}
+        {needsHolding && (
           <Field label="Select Position">
             <select value={selectedHolding} onChange={e => {
               setSelectedHolding(e.target.value);
@@ -830,9 +742,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               <div className="mt-2 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", color: "var(--ink-3)" }}>
                 {holdingData.shares} shs @ {formatCurrency(parseFloat(String(holdingData.avg_entry || 0)))}
                 {holdingData.rule ? ` · ${holdingData.rule}` : ""}
-                {tab === "volatility" && volSizerMode === "audit" && holdingAvgCost > 0 && (
-                  <span className="ml-2">(LIFO Avg: {formatCurrency(holdingAvgCost)})</span>
-                )}
               </div>
             )}
           </Field>
@@ -841,7 +750,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         {/* Entry Price + Equity */}
         {tab !== "options" && (
           <div className="grid grid-cols-2 gap-4">
-            <Field label={needsHolding || (tab === "volatility" && volSizerMode === "audit") ? "Current Price ($)" : "Entry Price ($)"}>
+            <Field label={needsHolding ? "Current Price ($)" : "Entry Price ($)"}>
               <input type="number" value={entryPrice} onChange={e => { setEntryPrice(e.target.value); resetCalc(); }}
                      step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
             </Field>
@@ -866,12 +775,26 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </div>
         )}
 
-        {/* Calculated stop info banner */}
-        {needsMaBuffer && calcStop > 0 && entry > 0 && (
-          <Banner type="info">
-            Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
-          </Banner>
-        )}
+        {/* Calculated stop info banner.
+            On the volatility tab we annotate the banner with the tech
+            stop's ATR fraction (read from volResults once available)
+            and show a warning sub-banner when the stop sits inside 1
+            ATR. Both come from the shared vol-sizer lib — the banner
+            reflects the lib's view of the inputs the user can see. */}
+        {needsMaBuffer && calcStop > 0 && entry > 0 && (() => {
+          const volAtr = atr > 0 && entry > 0 && calcStop > 0 ? stopDistPct / atr : null;
+          return (
+            <>
+              <Banner type="info">
+                Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
+                {tab === "volatility" && volAtr !== null && ` · ${volAtr.toFixed(2)}× ATR`}
+              </Banner>
+              {tab === "volatility" && volResults?.warning?.show && (
+                <Banner type="warning">{volResults.warning.text}</Banner>
+              )}
+            </>
+          );
+        })()}
 
         {/* ATR (volatility, pyramid) */}
         {(tab === "volatility" || tab === "pyramid") && (
@@ -881,8 +804,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </Field>
         )}
 
-        {/* Sizing Mode + Vol Profile (new trade tabs) */}
-        {(tab === "normal" || (tab === "volatility" && volSizerMode === "new") || tab === "scalein" || tab === "options") && (
+        {/* Sizing Mode (new trade tabs) */}
+        {(tab === "normal" || tab === "volatility" || tab === "scalein" || tab === "options") && (
           <>
             <div className="px-4 py-2.5 rounded-[10px] text-[12px] flex items-center justify-between gap-3 flex-wrap"
                  data-testid="sizer-mode-indicator"
@@ -926,17 +849,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               </div>
             </Field>
           </>
-        )}
-
-        {/* Vol Profile (volatility new trade only) */}
-        {tab === "volatility" && volSizerMode === "new" && (
-          <Field label="Stock Volatility Profile">
-            <div className="flex gap-4 mt-1">
-              {VOL_PROFILES.map((p, i) => (
-                <Radio key={p.key} checked={volProfile === i} onClick={() => { setVolProfile(i); resetCalc(); }} label={p.label} />
-              ))}
-            </div>
-          </Field>
         )}
 
         {/* Scale-in: max risk derived from sizing mode (shown as read-only) */}
@@ -1006,7 +918,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       <button onClick={handleCalculate}
               className="h-[44px] px-8 rounded-[10px] text-[13px] font-semibold text-white mb-8 transition-all hover:brightness-110"
               style={{ background: "#6366f1" }}>
-        {tab === "trim" ? "Calculate Trim Impact" : tab === "scalein" ? "Calculate Add-On" : tab === "pyramid" ? "Run Pyramid Analysis" : tab === "volatility" ? "Run Sizing Audit" : "Calculate Size"}
+        {tab === "trim" ? "Calculate Trim Impact" : tab === "scalein" ? "Calculate Add-On" : tab === "pyramid" ? "Run Pyramid Analysis" : "Calculate Size"}
       </button>
 
       {/* ═══════════ RESULTS ═══════════ */}
@@ -1054,122 +966,16 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
           {/* ── VOLATILITY SIZER ── */}
           {tab === "volatility" && volResults && (
-            <>
-              <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {volSizerMode === "audit" ? holdingData?.ticker : ticker || "—"}</h3>
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <MetricCard label="Risk Budget" value={formatCurrency(volResults.dailyRiskBudget, { decimals: 0 })}
-                            sub={`${volResults.tolPct}% Risk (${volResults.tierName})`}
-                            accent="#6366f1" />
-                <MetricCard label="Volatility Risk" value={`${atr.toFixed(2)}%`}
-                            sub="ATR (Noise)"
-                            accent="#f59f00" />
-                {volSizerMode === "new" ? (
-                  <div className="p-4 rounded-[12px] relative overflow-hidden" style={{
-                    border: "1px solid var(--border)",
-                    borderLeft: "4px solid #3b82f6",
-                    background: "color-mix(in oklab, #3b82f6 4%, var(--surface))",
-                  }}>
-                    <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>Buy Cost</div>
-                    <div className="flex items-baseline justify-between mt-1.5">
-                      <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>ATR Limit</span>
-                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(volResults.maxSharesVol * entry, { decimals: 0 })}</span>
-                    </div>
-                    <div className="flex items-baseline justify-between mt-1">
-                      <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{volResults.effectiveStop > 0 ? "Tech Stop" : "Hard Cap"}</span>
-                      <span className="text-[17px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency((volResults.effectiveStop > 0 ? volResults.maxSharesTech : volResults.maxSharesCap) * entry, { decimals: 0 })}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <MetricCard label="Profit Cushion" value={`${volResults.cushionPct.toFixed(2)}%`}
-                              sub={volResults.tierName}
-                              accent={volResults.cushionPct >= 20 ? "#08a86b" : volResults.cushionPct >= 5 ? "#f59f00" : "#e5484d"} />
-                )}
-              </div>
-
-              {/* ATR Boost banner */}
-              {volResults.atrMultiplier > 1.0 && (
-                <div className="mb-4">
-                  <Banner type="info">
-                    {volSizerMode === "new"
-                      ? `ATR Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${formatCurrency(volResults.atrRiskBudget, { decimals: 0 })}) — stock volatility profile`
-                      : `Confidence Boost: ATR budget scaled ${volResults.atrMultiplier.toFixed(1)}x (${formatCurrency(volResults.atrRiskBudget, { decimals: 0 })}) — earned by ${volResults.cushionPct.toFixed(1)}% profit cushion`
-                    }
-                  </Banner>
-                </div>
-              )}
-
-              <div className="grid grid-cols-3 gap-3 mb-6">
-                <MetricCard label="ATR Limit" value={`${volResults.maxSharesVol} shs`}
-                            sub={`Risk ${formatCurrency(volResults.atrRiskAtVol, { decimals: 0 })} · ${volResults.atrCostPct.toFixed(1)}% NLV`} />
-                {volSizerMode === "new" && volResults.effectiveStop > 0 ? (
-                  <MetricCard label="Tech Stop Limit" value={`${volResults.maxSharesTech} shs`}
-                              sub={`Risk ${formatCurrency(volResults.techRiskAtMax, { decimals: 0 })} · ${volResults.techCostPct.toFixed(1)}% NLV`}
-                              accent={volResults.maxSharesTech < volResults.maxSharesVol ? "#f59f00" : undefined} />
-                ) : (
-                  <MetricCard label="Hard Cap Limit" value={`${volResults.maxSharesCap} shs`}
-                              sub="20% Max Alloc" />
-                )}
-                <MetricCard label="Trade Risk $" value={formatCurrency(volResults.finalRiskDol, { decimals: 0 })}
-                            sub={volResults.riskLabel} />
-              </div>
-
-              <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
-
-              {volSizerMode === "new" ? (
-                <>
-                  <Banner type="success">
-                    RECOMMENDED SIZE: Buy <strong>{volResults.finalMaxShares}</strong> shares ({(volResults.finalMaxVal / equity * 100).toFixed(1)}% of NLV).
-                  </Banner>
-                  {volResults.limitReason.startsWith("MA") && (
-                    <div className="mt-2">
-                      <Banner type="info">
-                        Note: Sized for technicals. Your stop ({formatCurrency(volResults.effectiveStop)}) is {volResults.techDistPct.toFixed(1)}% away (including buffer).
-                      </Banner>
-                    </div>
-                  )}
-                  <div className="mt-4">
-                    <button onClick={() => sendToLogBuy({ ticker, shares: volResults.finalMaxShares, price: entry, stop: volResults.effectiveStop || entry * 0.92, action: "new" })}
-                            className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
-                            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                      📝 Send to Log Buy — {ticker || "—"} ({volResults.finalMaxShares} shs @ {formatCurrency(entry)})
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* Audit mode: Start/Target/Action */}
-                  <div className="grid grid-cols-3 gap-3 mb-4">
-                    <MetricCard label="Start Position" value={`${Math.floor(volResults.shares)} shs`}
-                                sub={`${(volResults.shares * entry / equity * 100).toFixed(1)}% Weight`} />
-                    <MetricCard label="Target Position" value={`${volResults.finalMaxShares} shs`}
-                                sub={`${(volResults.finalMaxVal / equity * 100).toFixed(1)}% Weight`} />
-                    {(() => {
-                      const diff = volResults.shares - volResults.finalMaxShares;
-                      if (diff > 0) {
-                        return <MetricCard label="Action Required" value={`TRIM ${Math.floor(diff)}`}
-                                           sub={`Sell ${formatCurrency(diff * entry, { decimals: 0 })}`} color="#e5484d" accent="#e5484d" />;
-                      } else if (diff < 0) {
-                        return <MetricCard label="Action Required" value={`CAN ADD ${Math.abs(Math.floor(diff))}`}
-                                           sub={`Buy up to ${formatCurrency(Math.abs(diff) * entry, { decimals: 0 })}`} color="#08a86b" accent="#08a86b" />;
-                      } else {
-                        return <MetricCard label="Action Required" value="AT LIMIT" sub="No room to add" />;
-                      }
-                    })()}
-                  </div>
-                  {(() => {
-                    const diff = volResults.shares - volResults.finalMaxShares;
-                    if (diff > 0) {
-                      return <Banner type="warning">OVERWEIGHT: You are holding {Math.floor(diff)} shares too many for this volatility/technical profile.</Banner>;
-                    } else if (diff < 0) {
-                      const add = Math.abs(Math.floor(diff));
-                      return <Banner type="success">Room to add up to {add} shares ({(add * entry / equity * 100).toFixed(1)}% of NLV) within limits.</Banner>;
-                    } else {
-                      return <Banner type="info">Position is exactly at the {volResults.finalMaxShares} share limit.</Banner>;
-                    }
-                  })()}
-                </>
-              )}
-            </>
+            <VolatilityResults
+              ticker={ticker}
+              entry={entry}
+              equity={equity}
+              targetSize={targetSize}
+              tolPct={SIZING_MODES[sizingMode].pct}
+              modeName={SIZING_MODES_BASE[sizingMode].label}
+              results={volResults}
+              onSendToLogBuy={(args) => sendToLogBuy(args)}
+            />
           )}
 
           {/* ── SCALE IN ── */}
@@ -1479,6 +1285,155 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Volatility Sizer output (extracted: keeps the main render readable
+// and makes per-card pill/binding-constraint logic colocated with the
+// presentation). Consumes the shared `vol-sizer` lib output verbatim;
+// any future shape change should land in the lib, not here.
+function VolatilityResults({
+  ticker, entry, equity, targetSize, tolPct, modeName, results, onSendToLogBuy,
+}: {
+  ticker: string;
+  entry: number;
+  equity: number;
+  targetSize: number;
+  tolPct: number;
+  modeName: string;
+  results: VolSizerResults;
+  onSendToLogBuy: (args: { ticker: string; shares: number; price: number; stop: number; action: string }) => void;
+}) {
+  const rec = results.recommended;
+  const recIsTechStop = results.recommendationReason === "tech_stop_safe";
+  const method = recIsTechStop ? "tech stop" : "1.5× ATR cushion";
+  const constraint = rec.capBinds
+    ? `position-size tier (${targetSize}% NLV)`
+    : `risk budget (${tolPct}%)`;
+
+  return (
+    <div data-testid="vol-results">
+      <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {ticker || "—"}</h3>
+
+      {/* Context grid */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <MetricCard label="Risk Budget" value={formatCurrency(results.riskBudget, { decimals: 0 })}
+                    sub={`${tolPct}% Risk (${modeName} Mode)`}
+                    accent="#6366f1" />
+        <MetricCard label="ATR Noise" value={`${(results.atrPerShare / entry * 100).toFixed(2)}%`}
+                    sub={`${formatCurrency(results.atrPerShare)}/share`}
+                    accent="#f59f00" />
+        <MetricCard label="Position Cap" value={`${results.positionCapShares} shs`}
+                    sub={`${formatCurrency(results.positionCap, { decimals: 0 })} (${targetSize}% NLV)`}
+                    accent="#3b82f6" />
+      </div>
+
+      {/* Tech Stop row */}
+      <div className="mb-3">
+        <ScenarioCard scenario={results.techStop} entry={entry} equity={equity} targetSize={targetSize}
+                      accent="#3b82f6" tone="tech" isRecommended={recIsTechStop} />
+      </div>
+
+      {/* ATR Cushion grid */}
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        {results.atrScenarios.map((s, i) => (
+          <ScenarioCard key={s.label} scenario={s} entry={entry} equity={equity} targetSize={targetSize}
+                        accent="#f59f00" tone="atr"
+                        isRecommended={!recIsTechStop && i === 1} />
+        ))}
+      </div>
+
+      {/* Verdict */}
+      <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
+      <Banner type="success">
+        <div>
+          RECOMMENDED: Buy <strong>{rec.finalShares}</strong> shares · <strong>{rec.positionPct.toFixed(1)}%</strong> of NLV
+        </div>
+        <div className="mt-1 text-[12px] font-normal" style={{ opacity: 0.85 }}>
+          Sized by {method} · bound by {constraint}
+        </div>
+        {results.warning.show && (
+          <div className="mt-2 px-3 py-2 rounded-[8px] text-[12px] font-medium"
+               style={{
+                 background: "color-mix(in oklab, #f59f00 12%, transparent)",
+                 color: "#d97706",
+                 border: "1px solid color-mix(in oklab, #f59f00 30%, transparent)",
+               }}>
+            {results.warning.text}
+          </div>
+        )}
+      </Banner>
+
+      <div className="mt-4">
+        <button onClick={() => onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stop: rec.effectiveStop, action: "new" })}
+                className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
+                style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+          📝 Send to Log Buy — {ticker || "—"} ({rec.finalShares} shs @ {formatCurrency(entry)})
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ScenarioCard({
+  scenario, entry, equity, targetSize, accent, tone, isRecommended,
+}: {
+  scenario: SizingScenario;
+  entry: number;
+  equity: number;
+  targetSize: number;
+  accent: string;
+  tone: "tech" | "atr";
+  isRecommended: boolean;
+}) {
+  const borderWidth = isRecommended ? 6 : 4;
+  return (
+    <div className="p-4 rounded-[12px] relative overflow-hidden"
+         data-testid={`scenario-${scenario.label.replace(/\s+/g, "-").replace("×", "x").toLowerCase()}`}
+         style={{
+           border: "1px solid var(--border)",
+           borderLeft: `${borderWidth}px solid ${accent}`,
+           background: `color-mix(in oklab, ${accent} ${isRecommended ? 7 : 4}%, var(--surface))`,
+         }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+          {scenario.label}
+        </div>
+        {isRecommended && (
+          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                data-testid="recommended-pill"
+                style={{ background: "#08a86b", color: "#fff" }}>
+            Recommended
+          </span>
+        )}
+      </div>
+      <div className="flex items-baseline justify-between">
+        <div>
+          <div className="text-[22px] font-semibold privacy-mask"
+               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+            {scenario.finalShares} <span className="text-[13px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
+          </div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+            Stop {formatCurrency(scenario.effectiveStop)} · {scenario.stopDistancePct.toFixed(2)}% ({tone === "atr" ? `${scenario.atrFraction.toFixed(1)}× ATR` : `${scenario.atrFraction.toFixed(2)}× ATR`})
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-[13px] font-medium privacy-mask"
+               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+            {formatCurrency(scenario.positionCost, { decimals: 0 })}
+          </div>
+          <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
+            {scenario.positionPct.toFixed(1)}% NLV
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex items-baseline justify-between text-[11px]" style={{ color: "var(--ink-4)" }}>
+        <span>Risk if stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(scenario.riskIfStopped, { decimals: 0 })}</strong> ({scenario.riskPct.toFixed(2)}% NLV)</span>
+        {scenario.capBinds && (
+          <span data-testid="cap-binds" style={{ color: "#d97706" }}>capped @ {targetSize}% NLV</span>
+        )}
+      </div>
     </div>
   );
 }

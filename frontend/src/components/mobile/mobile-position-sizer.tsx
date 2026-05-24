@@ -8,41 +8,28 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { SIZING_MODES, mctStateToSizingMode } from "@/lib/sizing-mode";
+import { computeVolatilitySizing, type VolSizerResults, type SizingScenario } from "@/lib/vol-sizer";
 import { MobileSelectSheet } from "./mobile-select-sheet";
 
 /**
- * Phase 2 Step 3 — Mobile Position Sizer (Volatility-tab first cut).
- *
- * Replaces Phase 1's MOCK-based mock with real data hooks consuming the
- * SAME endpoints the desktop sizer uses. Volatility-mode "new trade"
- * flow only — Normal / Scale-In / Pyramid / Trim / Options remain
- * desktop-only as Tier 2 follow-ups.
+ * Mobile Position Sizer — volatility flow on the shared vol-sizer lib.
  *
  * Mount fetch: journalLatest (equity = end_nlv) + rallyPrefix (MCT state
  * → auto sizing mode). Per-ticker debounced priceLookup auto-fills
  * entry + ATR. Computation runs live as inputs change — no Calculate
  * gate (anchor v6's "audit-result is live" design).
  *
- * Sizing math mirrors desktop volResults (volSizerMode === "new"
- * branch) field-for-field — riskBudget, atrRiskBudget, maxSharesVol,
- * effectiveStop / maxSharesTech, hard-cap 20%, target cap, limit
- * reason, riskPerShare with MA-stop-or-ATR fallback.
+ * Math delegates to frontend/src/lib/vol-sizer.ts: tech-stop sizing +
+ * three fixed ATR-cushion scenarios (1× / 1.5× / 2×) + recommendation
+ * + warning. The legacy Stock Volatility Profile picker is gone; the
+ * three multipliers are baked into the lib.
  *
  * Active-portfolio switch triggers window.location.reload() via the
  * shared usePortfolio() context, so this component doesn't need its
  * own reactivity wiring — the page remounts.
  */
 
-// Locked to match desktop's VOL_PROFILES (position-sizer.tsx:43-47).
-// Reordering would silently shift behavior — DEFAULT_VOL_PROFILE_INDEX
-// keys off array position.
-const VOL_PROFILES = [
-  { key: "tight", label: "Tight", mult: 1.0 },
-  { key: "normal", label: "Normal", mult: 1.25 },
-  { key: "highvol", label: "High-Vol", mult: 1.5 },
-] as const;
-
-// Locked to match desktop's SIZE_OPTIONS (position-sizer.tsx:49-53).
+// Locked to match desktop's SIZE_OPTIONS (position-sizer.tsx).
 const SIZE_OPTIONS = [
   { label: "Starter", pct: 2.5 },
   { label: "Half", pct: 5 },
@@ -54,10 +41,7 @@ const SIZE_OPTIONS = [
   { label: "Max", pct: 20 },
 ] as const;
 
-const DEFAULT_VOL_PROFILE_INDEX = 0; // Tight — matches Phase 1 anchor
 const DEFAULT_SIZE_INDEX = 3;        // Full (10%) — matches Phase 1 anchor
-
-const HARD_CAP_PCT = 20;
 
 export function MobilePositionSizer() {
   const { activePortfolio } = usePortfolio();
@@ -69,7 +53,6 @@ export function MobilePositionSizer() {
   const [buffer, setBuffer] = useState("1.00");
   const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1); // overwritten on mount
   const [sizingModeManual, setSizingModeManual] = useState(false);
-  const [volProfileIdx, setVolProfileIdx] = useState<number>(DEFAULT_VOL_PROFILE_INDEX);
   const [sizeIdx, setSizeIdx] = useState<number>(DEFAULT_SIZE_INDEX);
 
   // Fetched / lifecycle
@@ -146,72 +129,43 @@ export function MobilePositionSizer() {
   const buf = parseFloat(buffer) || 1;
   const atr = atrPct ?? 0;
   const eq = equity ?? 0;
-  const riskPct = SIZING_MODES[sizingMode].pct;
+  const tolPct = SIZING_MODES[sizingMode].pct;
   const targetSize = SIZE_OPTIONS[sizeIdx].pct;
-  const atrMultiplier = VOL_PROFILES[volProfileIdx].mult;
 
-  // Live computation — mirrors desktop volResults (volSizerMode === "new").
-  // Audit returns null when essential inputs are missing so the UI can
-  // render "—" placeholders instead of computing on zero-divided data.
-  const audit = useMemo(() => {
-    if (entry <= 0 || eq <= 0 || atr <= 0) return null;
+  // Calculated stop banner derives from raw inputs (not the lib) so it
+  // surfaces even when the lib bails (e.g. ma == 0 before the user has
+  // entered one). The ATR-fraction annotation is only meaningful when
+  // both atr and stop are positive.
+  const calcStop = ma > 0 ? ma * (1 - buf / 100) : 0;
+  const stopDistPct = entry > 0 && calcStop > 0 && calcStop < entry ? ((entry - calcStop) / entry) * 100 : 0;
+  const calcAtrFraction = atr > 0 && stopDistPct > 0 ? stopDistPct / atr : null;
 
-    const dailyRiskBudget = eq * (riskPct / 100);
-    const atrRiskBudget = dailyRiskBudget * atrMultiplier;
-    const atrDecimal = atr / 100;
-    const maxSharesVol = Math.ceil(atrRiskBudget / (entry * atrDecimal));
-
-    let maxSharesTech = Number.POSITIVE_INFINITY;
-    let effectiveStop = 0;
-    if (ma > 0) {
-      effectiveStop = ma * (1 - buf / 100);
-      if (effectiveStop < entry) {
-        const rps = entry - effectiveStop;
-        maxSharesTech = Math.ceil(dailyRiskBudget / rps);
-      }
+  // Live computation — delegates to the shared vol-sizer lib. Returns
+  // null when essential inputs are missing so the UI renders "—"
+  // placeholders instead of computing on zero-divided data. The lib's
+  // input validators are stricter (require ma > 0 and stop < entry);
+  // anything looser is caught here and short-circuits.
+  const audit: VolSizerResults | null = useMemo(() => {
+    if (entry <= 0 || eq <= 0 || atr <= 0 || ma <= 0) return null;
+    if (calcStop >= entry) return null; // degenerate stop — UI will render "—"
+    try {
+      return computeVolatilitySizing({
+        equity: eq,
+        entry,
+        ma,
+        bufferPct: buf,
+        atrPct: atr,
+        tolPct,
+        targetSizePct: targetSize,
+      });
+    } catch (err) {
+      log.error("mobile-position-sizer", "vol-sizer compute failed", err);
+      return null;
     }
+  }, [entry, ma, buf, eq, atr, tolPct, targetSize, calcStop]);
 
-    const maxSharesCap = Math.floor((eq * (HARD_CAP_PCT / 100)) / entry);
-    const maxSharesTarget = Math.ceil((eq * (targetSize / 100)) / entry);
-
-    const finalMaxShares = Math.min(maxSharesVol, maxSharesTech, maxSharesCap, maxSharesTarget);
-    const finalMaxVal = finalMaxShares * entry;
-    const finalPctNlv = eq > 0 ? (finalMaxVal / eq) * 100 : 0;
-
-    let limitReason = "Volatility (ATR)";
-    if (
-      finalMaxShares === maxSharesTarget &&
-      maxSharesTarget < Math.min(maxSharesVol, maxSharesTech, maxSharesCap)
-    ) {
-      limitReason = `Target Size (${targetSize}%)`;
-    } else if (finalMaxShares === maxSharesCap) {
-      limitReason = `Hard Cap (${HARD_CAP_PCT}%)`;
-    } else if (finalMaxShares === maxSharesTech) {
-      limitReason = `MA Support (${formatCurrency(ma)})`;
-    }
-
-    let riskPerShare: number;
-    let stopForDisplay: number;
-    if (effectiveStop > 0 && effectiveStop < entry) {
-      riskPerShare = entry - effectiveStop;
-      stopForDisplay = effectiveStop;
-    } else {
-      riskPerShare = entry * atrDecimal;
-      stopForDisplay = Math.max(0, entry - riskPerShare);
-    }
-    const finalRiskDol = finalMaxShares * riskPerShare;
-    const target2r = finalRiskDol * 2;
-
-    return {
-      shares: finalMaxShares,
-      notional: finalMaxVal,
-      pctOfNlv: finalPctNlv,
-      totalRisk: finalRiskDol,
-      stop: stopForDisplay,
-      target2r,
-      limitReason,
-    };
-  }, [entry, ma, buf, eq, atr, riskPct, atrMultiplier, targetSize]);
+  const rec = audit?.recommended ?? null;
+  const recIsTechStop = audit?.recommendationReason === "tech_stop_safe";
 
   const equityDisplay = equity != null
     ? formatCurrency(equity, { decimals: 0 })
@@ -305,8 +259,10 @@ export function MobilePositionSizer() {
         </span>
       </div>
 
-      {/* Mode / Profile / Size picker tiles */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Mode / Size picker tiles (Profile picker removed — the three
+          ATR cushion scenarios are now shown side-by-side in the result
+          card, eliminating the user-facing multiplier choice). */}
+      <div className="grid grid-cols-2 gap-2">
         <MobileSelectSheet
           triggerLabel="Mode"
           triggerValue={SIZING_MODES[sizingMode].key === "defense"
@@ -344,46 +300,6 @@ export function MobilePositionSizer() {
                       </span>
                       <span className="font-m-num text-[12px] tabular-nums text-m-text-dim">
                         {m.pct.toFixed(2)}%
-                      </span>
-                    </span>
-                    {isActive && (
-                      <Check size={20} strokeWidth={2} className="text-m-accent" aria-hidden="true" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </MobileSelectSheet>
-
-        <MobileSelectSheet
-          triggerLabel="Profile"
-          triggerValue={VOL_PROFILES[volProfileIdx].label}
-          triggerSubValue={`${VOL_PROFILES[volProfileIdx].mult.toFixed(2)}×`}
-          sheetTitle="ATR profile"
-        >
-          {(close) => (
-            <div className="flex flex-col">
-              {VOL_PROFILES.map((p, i) => {
-                const isActive = i === volProfileIdx;
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    role="option"
-                    aria-selected={isActive}
-                    onClick={() => {
-                      setVolProfileIdx(i);
-                      close();
-                    }}
-                    className="flex min-h-[52px] items-center justify-between border-b-[0.5px] border-m-border px-5 py-3.5 text-left last:border-b-0"
-                  >
-                    <span className="flex flex-col">
-                      <span className={`text-base ${isActive ? "font-medium" : ""} text-m-text`}>
-                        {p.label}
-                      </span>
-                      <span className="font-m-num text-[12px] tabular-nums text-m-text-dim">
-                        {p.mult.toFixed(2)}× ATR
                       </span>
                     </span>
                     {isActive && (
@@ -437,54 +353,213 @@ export function MobilePositionSizer() {
         </MobileSelectSheet>
       </div>
 
-      {/* Audit result card */}
-      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 pt-4 pb-3.5">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[11px] font-medium text-m-text-dim">Audit result</span>
-          {audit && (
-            <span
-              className={
-                "text-[11px] font-medium " +
-                (audit.pctOfNlv >= HARD_CAP_PCT ? "text-m-warn" : "text-m-text-muted")
-              }
-            >
-              {audit.pctOfNlv.toFixed(1)}% of NLV
-            </span>
-          )}
+      {/* Calculated Stop banner — surfaces even before the lib has all
+          inputs, so the user sees the tech stop they're configuring. */}
+      {calcStop > 0 && entry > 0 && (
+        <div
+          data-testid="calc-stop-banner"
+          className="rounded-m-md border-[0.5px] px-[14px] py-[10px] text-[12px]"
+          style={{
+            background: "var(--m-accent-tint)",
+            borderColor: "var(--m-accent-border)",
+            color: "var(--m-text)",
+          }}
+        >
+          Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA {formatCurrency(ma)} − {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
+          {calcAtrFraction !== null && ` · ${calcAtrFraction.toFixed(2)}× ATR`}
         </div>
-        <div className="mt-1.5 flex items-baseline gap-2">
-          <span
-            data-testid="audit-shares"
-            className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text"
-          >
-            {audit ? audit.shares.toLocaleString() : "—"}
-          </span>
-          <span className="text-[15px] text-m-text-muted">
-            shares
-            {audit ? ` · ${formatCurrency(audit.notional, { decimals: 0 })}` : ""}
-          </span>
+      )}
+
+      {/* Warning sub-banner: tech stop sits inside 1 ATR (or is invalid). */}
+      {audit?.warning?.show && (
+        <div
+          data-testid="vol-warning"
+          className="rounded-m-md border-[0.5px] px-[14px] py-[10px] text-[12px]"
+          style={{
+            background: "color-mix(in oklab, var(--m-warn) 12%, transparent)",
+            borderColor: "var(--m-warn-border)",
+            color: "var(--m-warn)",
+          }}
+        >
+          {audit.warning.text}
         </div>
-        {audit && (
-          <div className="mt-1 text-[11px] text-m-text-dim">
-            Limited by {audit.limitReason}
+      )}
+
+      {/* Context grid */}
+      <div className="grid grid-cols-3 gap-2">
+        <MiniMetric
+          label="Risk Budget"
+          value={audit ? formatCurrency(audit.riskBudget, { decimals: 0 }) : "—"}
+          sub={`${tolPct.toFixed(2)}%`}
+        />
+        <MiniMetric
+          label="ATR Noise"
+          value={atrPct != null ? `${atrPct.toFixed(2)}%` : "—"}
+          sub={audit ? `${formatCurrency(audit.atrPerShare)}/sh` : undefined}
+        />
+        <MiniMetric
+          label="Position Cap"
+          value={audit ? `${audit.positionCapShares} shs` : "—"}
+          sub={`${targetSize}% NLV`}
+        />
+      </div>
+
+      {/* Tech Stop card */}
+      {audit && (
+        <ScenarioRow
+          scenario={audit.techStop}
+          entry={entry}
+          targetSize={targetSize}
+          isRecommended={!!recIsTechStop}
+        />
+      )}
+
+      {/* ATR Cushion cards (stacked on mobile) */}
+      {audit && (
+        <div className="flex flex-col gap-2">
+          {audit.atrScenarios.map((s, i) => (
+            <ScenarioRow
+              key={s.label}
+              scenario={s}
+              entry={entry}
+              targetSize={targetSize}
+              isRecommended={!recIsTechStop && i === 1}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Verdict card */}
+      {rec && audit && (
+        <div
+          data-testid="verdict-card"
+          className="rounded-m-xl border-[0.5px] px-5 pt-4 pb-4"
+          style={{
+            background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
+            borderColor: "var(--m-accent-border)",
+          }}
+        >
+          <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
+            Recommended
           </div>
-        )}
-        <div className="mt-3 grid grid-cols-3 gap-2.5 border-t-[0.5px] border-m-border pt-3">
-          <Stat
-            label="Total risk"
-            value={audit ? formatCurrency(audit.totalRisk, { decimals: 0 }) : "—"}
-            tone="down"
-          />
-          <Stat
-            label="Stop"
-            value={audit ? formatCurrency(audit.stop, { decimals: 0 }) : "—"}
-          />
-          <Stat
-            label="2R target"
-            value={audit ? formatCurrency(audit.target2r, { decimals: 0 }) : "—"}
-            tone="up"
-          />
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span
+              data-testid="audit-shares"
+              className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text"
+            >
+              {rec.finalShares.toLocaleString()}
+            </span>
+            <span className="text-[15px] text-m-text-muted">
+              shares · {formatCurrency(rec.positionCost, { decimals: 0 })}
+            </span>
+          </div>
+          <div className="mt-1 text-[11px] text-m-text-dim">
+            Sized by {recIsTechStop ? "tech stop" : "1.5× ATR cushion"} · bound by{" "}
+            {rec.capBinds ? `position-size tier (${targetSize}% NLV)` : `risk budget (${tolPct.toFixed(2)}%)`}
+          </div>
         </div>
+      )}
+
+      {/* Placeholder when inputs not ready */}
+      {!audit && (
+        <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 pt-4 pb-3.5">
+          <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
+            Recommended
+          </div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span
+              data-testid="audit-shares"
+              className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text"
+            >
+              —
+            </span>
+            <span className="text-[15px] text-m-text-muted">shares</span>
+          </div>
+          <div className="mt-1 text-[11px] text-m-text-dim">
+            Enter ticker, MA, and ATR to size.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniMetric({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+        {label}
+      </div>
+      <div className="mt-1 font-m-num text-base font-medium tabular-nums text-m-text">
+        {value}
+      </div>
+      {sub && (
+        <div className="text-[10px] text-m-text-dim mt-0.5 font-m-num tabular-nums">{sub}</div>
+      )}
+    </div>
+  );
+}
+
+function ScenarioRow({
+  scenario,
+  entry,
+  targetSize,
+  isRecommended,
+}: {
+  scenario: SizingScenario;
+  entry: number;
+  targetSize: number;
+  isRecommended: boolean;
+}) {
+  const accentVar = scenario.label === "Tech Stop" ? "var(--m-accent)" : "var(--m-warn)";
+  return (
+    <div
+      data-testid={`scenario-${scenario.label.replace(/\s+/g, "-").replace("×", "x").toLowerCase()}`}
+      className="rounded-m-md border-[0.5px] px-[14px] py-[10px]"
+      style={{
+        background: isRecommended
+          ? `color-mix(in oklab, ${accentVar} 10%, var(--m-surface))`
+          : "var(--m-surface)",
+        borderColor: isRecommended ? "var(--m-accent-border)" : "var(--m-border)",
+        borderLeftWidth: isRecommended ? 3 : 1,
+        borderLeftColor: accentVar,
+      }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          {scenario.label}
+        </div>
+        {isRecommended && (
+          <span
+            data-testid="recommended-pill"
+            className="text-[9px] uppercase tracking-[0.08em] font-semibold px-1.5 py-0.5 rounded-[6px]"
+            style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}
+          >
+            Recommended
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex items-baseline justify-between">
+        <span className="font-m-num text-[20px] font-medium tabular-nums text-m-text">
+          {scenario.finalShares.toLocaleString()} <span className="text-[12px] text-m-text-muted">shs</span>
+        </span>
+        <span className="font-m-num text-[12px] tabular-nums text-m-text-muted">
+          {scenario.positionPct.toFixed(1)}% NLV
+        </span>
+      </div>
+      <div className="mt-0.5 flex items-baseline justify-between text-[11px] text-m-text-dim">
+        <span>Stop {formatCurrency(scenario.effectiveStop)} ({scenario.atrFraction.toFixed(2)}× ATR)</span>
+        {scenario.capBinds && (
+          <span data-testid="cap-binds" className="text-m-warn">capped @ {targetSize}%</span>
+        )}
       </div>
     </div>
   );
@@ -546,27 +621,6 @@ function ReadOnlyFieldCell({
         {labelIcon}
       </div>
       <div className="font-m-num text-lg font-medium tabular-nums text-m-text">{value}</div>
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "up" | "down";
-}) {
-  const valueClass =
-    tone === "down" ? "text-m-down" : tone === "up" ? "text-m-accent" : "text-m-text";
-  return (
-    <div>
-      <div className="mb-0.5 text-[10px] text-m-text-dim">{label}</div>
-      <div className={`font-m-num text-[13px] font-medium tabular-nums ${valueClass}`}>
-        {value}
-      </div>
     </div>
   );
 }

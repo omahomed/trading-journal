@@ -208,7 +208,7 @@ describe("MobilePositionSizer — live compute", () => {
     expect(screen.getByTestId("audit-shares")).toHaveTextContent("—");
   });
 
-  test("computes shares when entry + ATR + NLV are present", async () => {
+  test("computes via shared vol-sizer lib when entry + ATR + MA + NLV are present", async () => {
     render(<MobilePositionSizer />);
     await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
 
@@ -222,16 +222,72 @@ describe("MobilePositionSizer — live compute", () => {
     await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
 
-    // Compute expectations (Offense mode, Tight profile, Full 10% target):
-    //   eq=100000, riskPct=1.0 → dailyRiskBudget=1000
-    //   atrMultiplier=1.0 → atrRiskBudget=1000
-    //   maxSharesVol = ceil(1000 / (100 * 0.05)) = ceil(200) = 200
-    //   effectiveStop = 95 * 0.99 = 94.05 → rps = 5.95 → maxSharesTech = ceil(1000/5.95) = 169
-    //   maxSharesCap = floor(100000*0.20/100) = 200
-    //   maxSharesTarget = ceil(100000*0.10/100) = 100
-    //   finalMaxShares = min(200, 169, 200, 100) = 100 (limited by Target)
-    await waitFor(() => expect(screen.getByText("100")).toBeInTheDocument(), { timeout: 2000 });
-    expect(screen.getByText(/Limited by Target Size/)).toBeInTheDocument();
+    // Lib computation (Offense 1.0%, Full 10% target):
+    //   riskBudget = 100000 * 1.0 / 100 = 1000
+    //   positionCapShares = floor(100000 * 10/100 / 100) = 100
+    //   Tech stop: 95 * 0.99 = 94.05; rps = 5.95; candidate = floor(1000/5.95) = 168
+    //     → final = min(168, 100) = 100, capBinds=true
+    //   ATR scenarios at 1× / 1.5× / 2× all candidate >= 100 (5%/7.5%/10% rps)
+    //     → final = 100 for all three, capBinds=true on all
+    //   techStop.atrFraction = 5.95/5 = 1.19 ≥ 1.0 → recommended = tech stop
+    const sharesEl = await screen.findByTestId("audit-shares");
+    await waitFor(() => expect(sharesEl).toHaveTextContent("100"), { timeout: 2000 });
+
+    // Verdict reflects tech-stop recommendation + tier-cap binding
+    const verdict = screen.getByTestId("verdict-card");
+    expect(verdict).toHaveTextContent(/Sized by tech stop/);
+    expect(verdict).toHaveTextContent(/position-size tier/);
+
+    // All four scenarios render with their labels
+    expect(screen.getByTestId("scenario-tech-stop")).toBeInTheDocument();
+    expect(screen.getByTestId("scenario-1x-atr")).toBeInTheDocument();
+    expect(screen.getByTestId("scenario-1.5x-atr")).toBeInTheDocument();
+    expect(screen.getByTestId("scenario-2x-atr")).toBeInTheDocument();
+
+    // Recommended pill: exactly one, on the Tech Stop card.
+    const pills = screen.getAllByTestId("recommended-pill");
+    expect(pills).toHaveLength(1);
+    expect(screen.getByTestId("scenario-tech-stop")).toContainElement(pills[0]);
+  });
+
+  test("flips recommendation to 1.5× ATR when tech stop sits inside 1 ATR (warning visible)", async () => {
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Entry price"), { target: { value: "100" } });
+    // MA = 99, buffer 1% → stop 98.01, distance ~2% — for atr=5% that's 0.4× ATR
+    fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "99" } });
+
+    const ticker = screen.getByLabelText("Ticker symbol");
+    fireEvent.change(ticker, { target: { value: "Y" } });
+    await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
+
+    // Warning banner shows + recommendation flips to 1.5× ATR
+    const warning = await screen.findByTestId("vol-warning");
+    expect(warning).toHaveTextContent(/ATR/);
+
+    const verdict = screen.getByTestId("verdict-card");
+    expect(verdict).toHaveTextContent(/Sized by 1.5× ATR cushion/);
+
+    const pills = screen.getAllByTestId("recommended-pill");
+    expect(pills).toHaveLength(1);
+    expect(screen.getByTestId("scenario-1.5x-atr")).toContainElement(pills[0]);
+  });
+
+  test("calculated-stop banner annotates with ATR fraction", async () => {
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Entry price"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "95" } });
+
+    const ticker = screen.getByLabelText("Ticker symbol");
+    fireEvent.change(ticker, { target: { value: "Z" } });
+    await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
+
+    const banner = await screen.findByTestId("calc-stop-banner");
+    // stopDistPct = (100-94.05)/100*100 = 5.95%; atrFraction = 5.95/5 = 1.19
+    expect(banner).toHaveTextContent(/1\.19× ATR/);
   });
 });
 
@@ -259,25 +315,11 @@ describe("MobilePositionSizer — Mode picker manual override", () => {
   });
 });
 
-describe("MobilePositionSizer — Profile and Size pickers", () => {
+describe("MobilePositionSizer — Size picker", () => {
   beforeEach(() => {
     withPortfolio();
     resetApiMocks();
     setApiMocks({ endNlv: 100_000 });
-  });
-
-  test("Profile picker opens with the 3 ATR profiles and updates on selection", async () => {
-    render(<MobilePositionSizer />);
-    const trigger = await screen.findByRole("button", { name: /Profile: Tight/ });
-    fireEvent.click(trigger);
-
-    const dialog = await screen.findByRole("dialog", { name: /ATR profile/ });
-    expect(within(dialog).getByRole("option", { name: /Tight/ })).toBeInTheDocument();
-    expect(within(dialog).getByRole("option", { name: /Normal/ })).toBeInTheDocument();
-    expect(within(dialog).getByRole("option", { name: /High-Vol/ })).toBeInTheDocument();
-
-    fireEvent.click(within(dialog).getByRole("option", { name: /High-Vol/ }));
-    expect(await screen.findByRole("button", { name: /Profile: High-Vol/ })).toBeInTheDocument();
   });
 
   test("Size picker exposes all 8 desktop SIZE_OPTIONS", async () => {
