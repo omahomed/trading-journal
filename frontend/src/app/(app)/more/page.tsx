@@ -5,6 +5,11 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { useIsMobile } from "@/lib/use-viewport";
+import { useFocusMode } from "@/lib/use-focus-mode";
+import { setFocusModeActive } from "@/lib/format";
+import { MobileToggleSwitch } from "@/components/mobile/mobile-toggle-switch";
+
+const FOCUS_MODE_KEY = "mo-focus-mode";
 
 /**
  * The fifth bottom-nav destination on mobile. Lists the routes that
@@ -15,13 +20,35 @@ import { useIsMobile } from "@/lib/use-viewport";
 export default function MorePage() {
   const router = useRouter();
   const isMobile = useIsMobile();
+  const focusMode = useFocusMode();
 
   useEffect(() => {
     if (!isMobile) router.replace("/dashboard");
   }, [isMobile, router]);
 
+  const toggleFocus = (next: boolean) => {
+    // Same write pattern desktop-shell.tsx uses: flip the module mirror
+    // synchronously *before* persisting, so any in-flight render reads
+    // the new value.
+    setFocusModeActive(next);
+    try {
+      window.localStorage.setItem(FOCUS_MODE_KEY, next ? "on" : "off");
+    } catch {
+      /* ignore quota / private-mode errors */
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3 pt-2">
+      <Section title="Display">
+        <MobileToggleSwitch
+          id="more-focus-mode"
+          checked={focusMode}
+          onChange={toggleFocus}
+          label="Focus Mode"
+          description="Hide dollar amounts across the app."
+        />
+      </Section>
       <Section title="Dashboards">
         <NavRow href="/dashboard" label="Dashboard" />
         <NavRow href="/overview" label="Trading Overview" />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import Link from "next/link";
 import {
   api,
   getActivePortfolio,
@@ -12,6 +13,7 @@ import {
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { computeLast10Stats, type Last10Trade } from "@/lib/analytics-stats";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -487,46 +489,163 @@ function LegendSwatch({
 }
 
 function Last10Strip({ trades }: { trades: TradePosition[] }) {
-  // Backend returns newest-first (closed_date DESC); reverse for OLDEST → NEWEST.
-  const ordered = useMemo(() => [...trades].reverse(), [trades]);
-  const wins = ordered.filter((t) => Number(t.realized_pl ?? 0) > 0).length;
-  const winRate = ordered.length > 0 ? (wins / ordered.length) * 100 : 0;
-  const slots = padToTen(ordered);
+  // Route through the same helper desktop uses so outcome classification
+  // (win / loss / break-even via beDeadzone) stays consistent with the
+  // desktop strip. Input shape: trade_id, ticker, status, open_date, pl.
+  // pl source = realized_pl (mobile passes only closed trades into here).
+  const stats = useMemo(() => {
+    const shaped = trades
+      .filter((t) => t.trade_id)
+      .map((t) => ({
+        trade_id: String(t.trade_id),
+        ticker: String(t.ticker || ""),
+        status: String(t.status || "CLOSED"),
+        open_date: String(t.open_date || ""),
+        pl: Number(t.realized_pl ?? 0),
+        rule: t.rule ? String(t.rule) : undefined,
+      }));
+    return computeLast10Stats(shaped, 0);
+  }, [trades]);
+
+  const slots = useMemo<(Last10Trade | null)[]>(() => {
+    const out: (Last10Trade | null)[] = stats.trades.slice(-10);
+    while (out.length < 10) out.unshift(null);
+    return out;
+  }, [stats.trades]);
+
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on tap outside the strip card. Per-square taps land inside
+  // the wrapper, so they update selectedIdx via the square's own
+  // onClick rather than triggering the outside-dismiss path.
+  useEffect(() => {
+    if (selectedIdx === null) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      if (wrapperRef.current && target && wrapperRef.current.contains(target)) return;
+      setSelectedIdx(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [selectedIdx]);
+
+  const handleSquareTap = (i: number, hasTrade: boolean) => {
+    if (!hasTrade) return;
+    setSelectedIdx((prev) => (prev === i ? null : i));
+  };
+
+  const selectedTrade = selectedIdx != null ? slots[selectedIdx] : null;
 
   return (
-    <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-3">
-      <div className="flex items-baseline justify-between">
+    <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-2 py-3" ref={wrapperRef}>
+      <div className="flex items-baseline justify-between px-1">
         <div className="text-[10px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
           Last 10 Trades
         </div>
-        {ordered.length > 0 && (
+        {stats.count > 0 && (
           <div className="font-m-num text-xs font-medium tabular-nums text-m-accent">
-            {winRate.toFixed(0)}% win rate
+            {stats.winRate.toFixed(0)}% win rate
           </div>
         )}
       </div>
-      <div className="mt-2.5 flex gap-1">
-        {slots.map((slot, i) => (
-          <div
-            key={i}
-            className={
-              "h-7 flex-1 rounded-sm " +
-              (slot === "win"
+      <div className="relative mt-2.5">
+        <div className="flex gap-[3px]">
+          {slots.map((slot, i) => {
+            const outcome = slot?.outcome ?? null;
+            const colorClass =
+              outcome === "win"
                 ? "bg-m-accent opacity-85"
-                : slot === "loss"
+                : outcome === "loss"
                   ? "bg-m-down opacity-85"
-                  : "bg-m-border")
-            }
-            aria-label={
-              slot === "win" ? "Winning trade" : slot === "loss" ? "Losing trade" : "Empty slot"
-            }
-          />
-        ))}
+                  : outcome === "be"
+                    ? "bg-m-text-faint opacity-85"
+                    : "bg-m-border";
+            const isSelected = selectedIdx === i;
+            const ariaLabel = slot
+              ? `${slot.ticker} · ${
+                  outcome === "win" ? "winning trade" : outcome === "loss" ? "losing trade" : "break-even trade"
+                }`
+              : "Empty slot";
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => handleSquareTap(i, slot !== null)}
+                aria-label={ariaLabel}
+                aria-pressed={isSelected}
+                disabled={!slot}
+                className={
+                  "h-9 flex-1 rounded-sm transition-transform " +
+                  colorClass +
+                  (isSelected ? " ring-1 ring-m-text-muted ring-offset-0" : "")
+                }
+              />
+            );
+          })}
+        </div>
+        {selectedTrade && selectedIdx != null && (
+          <Last10Popover trade={selectedTrade} idx={selectedIdx} />
+        )}
       </div>
-      <div className="mt-2 flex justify-between text-[10px] text-m-text-dim">
+      <div className="mt-2 flex justify-between px-1 text-[10px] text-m-text-dim">
         <span>OLDEST</span>
         <span>NEWEST</span>
       </div>
+    </div>
+  );
+}
+
+function Last10Popover({ trade, idx }: { trade: Last10Trade; idx: number }) {
+  // Mirror desktop's positioning rule (dashboard.tsx:743): right-anchor
+  // the popover for squares in the back half so it doesn't clip the
+  // viewport edge.
+  const alignRight = idx >= 5;
+  const daysHeld = (() => {
+    if (!trade.open_date) return null;
+    const open = new Date(trade.open_date);
+    if (Number.isNaN(open.getTime())) return null;
+    return Math.max(0, Math.floor((Date.now() - open.getTime()) / 86_400_000));
+  })();
+  const plClass =
+    trade.outcome === "win"
+      ? "text-m-accent"
+      : trade.outcome === "loss"
+        ? "text-m-down"
+        : "text-m-text-muted";
+  const isOpen = trade.status.toUpperCase() === "OPEN";
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`${trade.ticker} trade detail`}
+      className={
+        "absolute z-20 w-[180px] rounded-m-md border-[0.5px] border-m-border-strong bg-m-surface-2 p-3 shadow-lg " +
+        (alignRight ? "right-1" : "left-1")
+      }
+      style={{ bottom: "calc(100% + 6px)" }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-m-num text-[14px] font-semibold tabular-nums text-m-text">
+          {trade.ticker || "—"}
+        </span>
+        <span className="rounded-m-pill bg-m-bg px-2 py-0.5 text-[10px] font-medium tracking-wide text-m-text-dim">
+          {trade.status.toUpperCase()}
+        </span>
+      </div>
+      <div className={`mt-1.5 font-m-num text-[14px] font-medium tabular-nums ${plClass}`}>
+        {formatCurrency(trade.pl, { showSign: true, signGlyph: "unicode", decimals: 0 })}
+      </div>
+      <div className="mt-1 font-m-num text-[11px] tabular-nums text-m-text-dim">
+        {trade.open_date ? trade.open_date.slice(0, 10) : "—"}
+        {isOpen && daysHeld != null ? ` · ${daysHeld}d held` : ""}
+      </div>
+      <Link
+        href={`/trade-journal?trade_id=${encodeURIComponent(trade.trade_id)}`}
+        className="mt-2.5 block rounded-m-sm bg-m-accent px-3 py-2 text-center text-[12px] font-medium text-m-accent-text-on"
+      >
+        View trade →
+      </Link>
     </div>
   );
 }
@@ -548,16 +667,6 @@ function DashboardSkeleton() {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
-
-type Slot = "win" | "loss" | "empty";
-
-function padToTen(trades: TradePosition[]): Slot[] {
-  const out: Slot[] = trades
-    .slice(-10)
-    .map((t) => (Number(t.realized_pl ?? 0) > 0 ? "win" : "loss"));
-  while (out.length < 10) out.unshift("empty");
-  return out;
-}
 
 interface EcDatum {
   date: string;

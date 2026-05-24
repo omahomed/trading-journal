@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 vi.mock("@/lib/portfolio-context", () => ({
@@ -76,6 +76,19 @@ function baseMetrics(overrides: Partial<DashboardMetrics> = {}): DashboardMetric
   };
 }
 
+// Build a closed-trade record that the Last10 strip will accept. Open
+// dates control ordering (newest = rightmost square); pl drives the
+// outcome classification (computeLast10Stats's default beDeadzone is 50).
+function trade(opts: { id: string; ticker: string; openDate: string; pl: number }) {
+  return {
+    trade_id: opts.id,
+    ticker: opts.ticker,
+    status: "CLOSED",
+    open_date: opts.openDate,
+    realized_pl: opts.pl,
+  };
+}
+
 function setMocks(opts: {
   metrics?: DashboardMetrics | null;
   history?: any[];
@@ -90,21 +103,29 @@ function setMocks(opts: {
   vi.mocked(api.tradesClosed).mockResolvedValue((opts.closed ?? []) as any);
 }
 
+function resetApiMocks() {
+  vi.mocked(api.dashboardMetrics).mockReset();
+  vi.mocked(api.journalHistory).mockReset();
+  vi.mocked(api.journalLatest).mockReset();
+  vi.mocked(api.tradesOpen).mockReset();
+  vi.mocked(api.tradesClosed).mockReset();
+}
+
+function withPortfolio() {
+  vi.mocked(usePortfolio).mockReturnValue({
+    portfolios: [CANSLIM],
+    activePortfolio: CANSLIM,
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+    setActive: vi.fn(),
+  });
+}
+
 describe("MobileDashboard — sections render", () => {
   beforeEach(() => {
-    vi.mocked(usePortfolio).mockReturnValue({
-      portfolios: [CANSLIM],
-      activePortfolio: CANSLIM,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-      setActive: vi.fn(),
-    });
-    vi.mocked(api.dashboardMetrics).mockReset();
-    vi.mocked(api.journalHistory).mockReset();
-    vi.mocked(api.journalLatest).mockReset();
-    vi.mocked(api.tradesOpen).mockReset();
-    vi.mocked(api.tradesClosed).mockReset();
+    withPortfolio();
+    resetApiMocks();
   });
 
   test("renders as-of caption, NLV, all 4 KPI labels, EC, Last 10", async () => {
@@ -135,19 +156,8 @@ describe("MobileDashboard — sections render", () => {
 
 describe("MobileDashboard — conditional styling", () => {
   beforeEach(() => {
-    vi.mocked(usePortfolio).mockReturnValue({
-      portfolios: [CANSLIM],
-      activePortfolio: CANSLIM,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-      setActive: vi.fn(),
-    });
-    vi.mocked(api.dashboardMetrics).mockReset();
-    vi.mocked(api.journalHistory).mockReset();
-    vi.mocked(api.journalLatest).mockReset();
-    vi.mocked(api.tradesOpen).mockReset();
-    vi.mocked(api.tradesClosed).mockReset();
+    withPortfolio();
+    resetApiMocks();
   });
 
   test("EOD Exposure amber when value > 100% (margin territory)", async () => {
@@ -183,61 +193,114 @@ describe("MobileDashboard — conditional styling", () => {
 
 describe("MobileDashboard — Last 10 strip", () => {
   beforeEach(() => {
-    vi.mocked(usePortfolio).mockReturnValue({
-      portfolios: [CANSLIM],
-      activePortfolio: CANSLIM,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-      setActive: vi.fn(),
-    });
-    vi.mocked(api.dashboardMetrics).mockReset();
-    vi.mocked(api.journalHistory).mockReset();
-    vi.mocked(api.journalLatest).mockReset();
-    vi.mocked(api.tradesOpen).mockReset();
-    vi.mocked(api.tradesClosed).mockReset();
+    withPortfolio();
+    resetApiMocks();
   });
 
-  test("renders win/loss colors and win-rate percentage", async () => {
-    // 7 wins, 3 losses → 70% win rate
+  test("renders one square per trade, color-coded by outcome, and a win-rate caption", async () => {
+    // 7 wins, 3 losses → 70% win rate. open_date ascending so ordering is stable.
     const closed = [
-      ...Array.from({ length: 7 }).map((_, i) => ({ realized_pl: 1000 + i })),
-      ...Array.from({ length: 3 }).map((_, i) => ({ realized_pl: -200 - i })),
+      ...Array.from({ length: 7 }).map((_, i) =>
+        trade({ id: `w${i}`, ticker: `WIN${i}`, openDate: `2026-05-0${i + 1}`, pl: 1000 + i }),
+      ),
+      ...Array.from({ length: 3 }).map((_, i) =>
+        trade({ id: `l${i}`, ticker: `LOSS${i}`, openDate: `2026-05-1${i}`, pl: -200 - i }),
+      ),
     ];
-    setMocks({ closed: closed as any });
+    setMocks({ closed });
     render(<MobileDashboard />);
     expect(await screen.findByText("70% win rate")).toBeInTheDocument();
 
-    const winners = document.querySelectorAll("[aria-label='Winning trade']");
-    const losers = document.querySelectorAll("[aria-label='Losing trade']");
+    const winners = screen.getAllByRole("button", { name: /winning trade$/ });
+    const losers = screen.getAllByRole("button", { name: /losing trade$/ });
     expect(winners.length).toBe(7);
     expect(losers.length).toBe(3);
   });
 
-  test("pads with empty slots when fewer than 10 closed trades", async () => {
-    setMocks({ closed: [{ realized_pl: 500 }, { realized_pl: -100 }] as any });
+  test("renders break-even color when |pl| is inside the beDeadzone", async () => {
+    // pl=30 falls inside the default 50-dollar BE deadzone in computeLast10Stats.
+    setMocks({ closed: [trade({ id: "be0", ticker: "FLAT", openDate: "2026-05-01", pl: 30 })] });
+    render(<MobileDashboard />);
+    const beSquare = await screen.findByRole("button", { name: /break-even trade$/ });
+    expect(beSquare.className).toMatch(/bg-m-text-faint/);
+  });
+
+  test("pads with empty (non-tappable) slots when fewer than 10 closed trades", async () => {
+    setMocks({
+      closed: [
+        trade({ id: "w0", ticker: "AAA", openDate: "2026-05-01", pl: 500 }),
+        trade({ id: "l0", ticker: "BBB", openDate: "2026-05-02", pl: -100 }),
+      ],
+    });
     render(<MobileDashboard />);
     await screen.findByText("Last 10 Trades");
-    const empty = document.querySelectorAll("[aria-label='Empty slot']");
+    const empty = screen.getAllByRole("button", { name: "Empty slot" });
     expect(empty.length).toBe(8);
+    expect((empty[0] as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("MobileDashboard — Last 10 popover", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  test("tapping a square opens a popover with ticker, status, P&L, and a View trade link", async () => {
+    setMocks({
+      closed: [
+        trade({ id: "abc123", ticker: "NVDA", openDate: "2026-05-12", pl: 1500 }),
+      ],
+    });
+    render(<MobileDashboard />);
+    const square = await screen.findByRole("button", { name: /NVDA · winning trade$/ });
+    fireEvent.click(square);
+
+    const popover = await screen.findByRole("dialog", { name: /NVDA trade detail/ });
+    expect(popover).toBeInTheDocument();
+    expect(popover.textContent).toMatch(/NVDA/);
+    expect(popover.textContent).toMatch(/CLOSED/);
+    expect(popover.textContent).toMatch(/\+\$1,500/);
+    expect(popover.textContent).toMatch(/2026-05-12/);
+
+    const link = screen.getByRole("link", { name: /View trade/ });
+    expect(link).toHaveAttribute("href", "/trade-journal?trade_id=abc123");
+  });
+
+  test("tapping the same square again closes the popover", async () => {
+    setMocks({
+      closed: [trade({ id: "abc", ticker: "AMD", openDate: "2026-05-10", pl: 800 })],
+    });
+    render(<MobileDashboard />);
+    const square = await screen.findByRole("button", { name: /AMD · winning trade$/ });
+    fireEvent.click(square);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(square);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  test("tapping outside the strip dismisses the popover", async () => {
+    setMocks({
+      closed: [trade({ id: "abc", ticker: "TSLA", openDate: "2026-05-10", pl: 800 })],
+    });
+    render(
+      <div>
+        <MobileDashboard />
+        <button type="button" data-testid="outside">outside</button>
+      </div>,
+    );
+    const square = await screen.findByRole("button", { name: /TSLA · winning trade$/ });
+    fireEvent.click(square);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByTestId("outside"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
 
 describe("MobileDashboard — Equity Curve range toggle", () => {
   beforeEach(() => {
-    vi.mocked(usePortfolio).mockReturnValue({
-      portfolios: [CANSLIM],
-      activePortfolio: CANSLIM,
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-      setActive: vi.fn(),
-    });
-    vi.mocked(api.dashboardMetrics).mockReset();
-    vi.mocked(api.journalHistory).mockReset();
-    vi.mocked(api.journalLatest).mockReset();
-    vi.mocked(api.tradesOpen).mockReset();
-    vi.mocked(api.tradesClosed).mockReset();
+    withPortfolio();
+    resetApiMocks();
   });
 
   test("default range is 6M (active pill)", async () => {

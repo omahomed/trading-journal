@@ -30,8 +30,8 @@ export function MobilePageHeader({
   rightSlot,
 }: MobilePageHeaderProps) {
   return (
-    <header className="flex items-center justify-between gap-3 px-5 pt-3.5 pb-2.5">
-      <h1 className="min-w-0 truncate text-base font-medium tracking-tight text-m-text">
+    <header className="flex items-center justify-between gap-3 px-5 pt-3 pb-2">
+      <h1 className="min-w-0 truncate text-[30px] font-medium leading-tight tracking-[-0.01em] text-m-text">
         {title}
         {title ? " " : ""}
         <em className="font-m-display-italic font-normal italic text-m-accent">
