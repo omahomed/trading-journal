@@ -14,12 +14,11 @@ import path from "path";
 //   - RAILWAY_DEPLOYMENT_ID  — Railway fallback if SHA isn't propagated
 //   - GIT_COMMIT_SHA         — generic CI convention
 //   - GITHUB_SHA             — GitHub Actions
-//   - local-<timestamp>      — local-dev only; the file-persistence
-//                              path below makes this safe across the
-//                              build/runtime split that would otherwise
-//                              cause Date.now() to evaluate twice and
-//                              produce the false-positive banner the
-//                              old config exhibited.
+//   - local-<timestamp>      — local-dev only; the
+//                              `runAfterProductionCompile` hook below
+//                              writes the file exactly once per build,
+//                              so the timestamp doesn't drift at
+//                              runtime cold start.
 const BUILD_ID =
   process.env.VERCEL_GIT_COMMIT_SHA ||
   process.env.RAILWAY_GIT_COMMIT_SHA ||
@@ -28,37 +27,35 @@ const BUILD_ID =
   process.env.GITHUB_SHA ||
   `local-${Date.now()}`;
 
-// Persist BUILD_ID to a static file that ships with the deploy artifact.
-// /api/version/route.ts reads from this file at runtime, guaranteeing
-// the server returns the SAME value the client bundle was built with —
-// regardless of whether the runtime env has NEXT_PUBLIC_BUILD_ID set.
-//
-// Phase gate: next.config.ts is evaluated at server startup too, not
-// only at `next build`. Without the gate, writeFileSync runs again on
-// every cold start with a fresh `local-${Date.now()}` fallback (when no
-// git SHA env var is set), overwriting the build-time BUILD_ID before
-// /api/version reads it — re-introducing the very divergence this file
-// exists to prevent. NEXT_PHASE === "phase-production-build" is set
-// only during the build step, so writing is restricted to that window.
-const isBuildPhase = process.env.NEXT_PHASE === "phase-production-build";
-if (isBuildPhase) {
-  try {
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(publicDir, "build-info.json"),
-      JSON.stringify({ buildId: BUILD_ID, builtAt: new Date().toISOString() }),
-    );
-  } catch (e) {
-    console.warn(`[next.config] Failed to write build-info.json: ${e}`);
-  }
-}
-
 const nextConfig: NextConfig = {
   devIndicators: false,
   generateBuildId: async () => BUILD_ID,
   env: {
     NEXT_PUBLIC_BUILD_ID: BUILD_ID,
+  },
+  compiler: {
+    // Persist BUILD_ID to a static file that ships with the deploy
+    // artifact. `/api/version/route.ts` reads from this file at runtime,
+    // guaranteeing the server returns the SAME value the client bundle
+    // was built with — regardless of whether the runtime env has
+    // NEXT_PUBLIC_BUILD_ID set.
+    //
+    // Next 16's native `runAfterProductionCompile` hook fires exactly
+    // once after production compile finishes and is never invoked at
+    // runtime cold start, so we don't need the brittle
+    // `process.env.NEXT_PHASE === "phase-production-build"` gate the
+    // prior implementation depended on. That env var stopped matching
+    // somewhere in Next 16's lifecycle, the file silently wasn't
+    // written, `/api/version` returned a stale or default BUILD_ID, and
+    // UpdateBanner's auto-reload poll became inert across deploys.
+    runAfterProductionCompile: async ({ projectDir }) => {
+      const publicDir = path.join(projectDir, "public");
+      await fs.promises.mkdir(publicDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(publicDir, "build-info.json"),
+        JSON.stringify({ buildId: BUILD_ID, builtAt: new Date().toISOString() }),
+      );
+    },
   },
   // /market-cycle → /m-factor permanent redirect. The page was renamed
   // from "Market Cycle Tracker" to "M Factor"; Next.js's `permanent: true`
