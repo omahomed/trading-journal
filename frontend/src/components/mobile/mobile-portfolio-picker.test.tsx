@@ -157,3 +157,61 @@ describe("MobilePortfolioPicker", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("MobilePortfolioPicker — scrollable overflow (bugfix mirror)", () => {
+  // Mirrors mobile-select-sheet.test.tsx's structural assertions. The
+  // hand-rolled sheet here had the same shape as MobileSelectSheet's
+  // pre-fix layout (no max-height, no overflow handling); this fix
+  // pulls in the same flex/min-h-0/overflow-y-auto trick verbatim so
+  // long portfolio lists shrink-and-scroll instead of pushing content
+  // above the viewport.
+  //
+  // Safe-area-inset-bottom is set via inline style on the listbox, but
+  // jsdom drops `max()`/`env()` CSS expressions from the style
+  // attribute — there's no way to assert on the rendered value from a
+  // unit test. Verified by reading the component source; visual
+  // verification happens on-device.
+  beforeEach(() => {
+    mockUsePortfolio.mockReset();
+  });
+  afterEach(() => {
+    document.body.style.overflow = "";
+  });
+
+  test("dialog container has max-height + flex column so it can't push content above the viewport", () => {
+    setMockPortfolio({});
+    render(<MobilePortfolioPicker />);
+    fireEvent.click(screen.getByRole("button", { name: /Active portfolio/i }));
+
+    const dialog = screen.getByRole("dialog", { name: "Switch portfolio" });
+    expect(dialog.className).toMatch(/max-h-\[85vh\]/);
+    expect(dialog.className).toMatch(/flex/);
+    expect(dialog.className).toMatch(/flex-col/);
+  });
+
+  test("listbox is independently scrollable when many portfolios overflow", () => {
+    const many = Array.from({ length: 25 }).map((_, i) =>
+      makePortfolio(i + 1, `Portfolio ${i + 1}`),
+    );
+    setMockPortfolio({ portfolios: many, activePortfolio: many[0] });
+    render(<MobilePortfolioPicker />);
+    fireEvent.click(screen.getByRole("button", { name: /Active portfolio/i }));
+
+    const listbox = screen.getByRole("listbox", { name: "Portfolios" });
+    // overflow-y-auto + min-h-0 + flex-1 are the three classes that
+    // make the items area shrink-and-scroll inside the flex column.
+    expect(listbox.className).toMatch(/overflow-y-auto/);
+    expect(listbox.className).toMatch(/min-h-0/);
+    expect(listbox.className).toMatch(/flex-1/);
+  });
+
+  test("header stays fixed at top via shrink-0 so it doesn't scroll with items", () => {
+    setMockPortfolio({});
+    render(<MobilePortfolioPicker />);
+    fireEvent.click(screen.getByRole("button", { name: /Active portfolio/i }));
+
+    const heading = screen.getByRole("heading", { level: 2, name: "Switch portfolio" });
+    const headerRow = heading.parentElement as HTMLElement;
+    expect(headerRow.className).toMatch(/shrink-0/);
+  });
+});
