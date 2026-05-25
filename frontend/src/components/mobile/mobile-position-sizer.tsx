@@ -538,6 +538,72 @@ export function MobilePositionSizer() {
     };
   }, [activeTab, selectedHolding, entry, eq, atr, pyramidRules, holdingInventory, holdingAvgCost]);
 
+  // Trim audit — inline math mirroring desktop trimResults
+  // (position-sizer.tsx:486-531) field-for-field. Sell-side flow:
+  // computes shares-to-sell to hit target weight, then walks the
+  // LIFO inventory to attribute cost basis of the trimmed lots.
+  // Shortfall fallback uses holdingData.avg_entry per L519 (NOT
+  // the holdingAvgCost weighted-avg useMemo used by Pyramid).
+  const trim = useMemo(() => {
+    if (activeTab !== "trim") return null;
+    if (!selectedHolding) return null;
+    if (entry <= 0 || eq <= 0) return null;
+
+    const currShares = Number(selectedHolding.shares ?? 0) || 0;
+    const currVal = currShares * entry;
+    const currWeight = eq > 0 ? (currVal / eq) * 100 : 0;
+    const targetWeight = targetSize;
+
+    if (targetWeight >= currWeight) {
+      return {
+        error: `Target (${targetWeight}%) is higher than Current (${currWeight.toFixed(1)}%). No trim needed.`,
+      };
+    }
+
+    const targetVal = eq * (targetWeight / 100);
+    const valueToSell = currVal - targetVal;
+    const sharesToSell = Math.ceil(valueToSell / entry);
+    const remaining = Math.max(0, currShares - sharesToSell);
+    const actualNewWeight = eq > 0 ? (remaining * entry / eq) * 100 : 0;
+
+    // LIFO P&L — deep-copy lots, pop newest until sharesNeeded reaches 0
+    const inventory = holdingInventory.map((l) => ({ ...l }));
+    let sharesNeeded = sharesToSell;
+    let accumulatedCost = 0;
+
+    while (sharesNeeded > 0 && inventory.length > 0) {
+      const lastLot = inventory[inventory.length - 1];
+      const take = Math.min(sharesNeeded, lastLot.qty);
+      accumulatedCost += take * lastLot.price;
+      lastLot.qty -= take;
+      sharesNeeded -= take;
+      if (lastLot.qty < 0.00001) inventory.pop();
+    }
+    // Shortfall fallback (matches desktop L519): use summary avg_entry,
+    // NOT the weighted-avg holdingAvgCost.
+    if (sharesNeeded > 0) {
+      accumulatedCost += sharesNeeded * (Number(selectedHolding.avg_entry ?? 0) || 0);
+    }
+
+    const costBasisTrimmed = accumulatedCost;
+    const cashGenerated = sharesToSell * entry;
+    const lifoPnl = cashGenerated - costBasisTrimmed;
+    const avgCostSold = sharesToSell > 0 ? costBasisTrimmed / sharesToSell : 0;
+
+    return {
+      ticker: selectedHolding.ticker,
+      sharesToSell,
+      remaining,
+      actualNewWeight,
+      targetWeight,
+      currWeight,
+      cashGenerated,
+      costBasisTrimmed,
+      lifoPnl,
+      avgCostSold,
+    };
+  }, [activeTab, selectedHolding, entry, eq, targetSize, holdingInventory]);
+
   const equityDisplay = equity != null
     ? formatCurrency(equity, { decimals: 0 })
     : loading
@@ -936,18 +1002,64 @@ export function MobilePositionSizer() {
         </div>
       )}
 
-      {/* ── Tab: Coming Soon (trim / options) ── */}
-      {(activeTab === "trim" || activeTab === "options") && (
+      {/* ── Tab: Trim ── */}
+      {activeTab === "trim" && (
+        <div id="sizer-panel-trim" role="tabpanel" className="flex flex-col gap-2.5">
+          <MobileHoldingPicker
+            holdings={holdings}
+            selectedTradeId={selectedTradeId}
+            onSelect={handleHoldingSelect}
+            portfolioName={activePortfolio?.name}
+          />
+
+          {(priceLoading || priceError) && (
+            <div
+              className="text-[11px]"
+              style={{ color: priceError ? "var(--m-warn)" : "var(--m-text-dim)" }}
+            >
+              {priceLoading ? "Fetching price…" : priceError}
+            </div>
+          )}
+
+          {/* Inputs: Current Price + Equity (auto+editable) */}
+          <div className="grid grid-cols-2 gap-2">
+            <NumberFieldCell
+              label="Current Price"
+              value={entryPrice}
+              onChange={setEntryPrice}
+              ariaLabel="Current price"
+              placeholder="0.00"
+            />
+            <NumberFieldCell
+              label="Account Equity"
+              value={equity != null ? String(equity) : ""}
+              onChange={(v) => {
+                const n = parseFloat(v);
+                setEquity(Number.isFinite(n) && n > 0 ? n : null);
+              }}
+              ariaLabel="Account equity"
+              placeholder="0"
+            />
+          </div>
+
+          {/* Target size picker (single tile, takes full width since
+              there's no Mode picker to pair with on Trim) */}
+          <SizePickerTile sizeIdx={sizeIdx} onChange={setSizeIdx} />
+
+          <TrimResultBlock result={trim} />
+        </div>
+      )}
+
+      {/* ── Tab: Coming Soon (options) ── */}
+      {activeTab === "options" && (
         <div
-          id={`sizer-panel-${activeTab}`}
+          id="sizer-panel-options"
           role="tabpanel"
           className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-8 text-center"
         >
           <div className="text-[14px] font-medium text-m-text">Coming soon</div>
           <div className="mt-1.5 text-[12px] text-m-text-dim">
-            {activeTab === "trim"
-              ? "Trim (sell-down) sizer mobile build lands in a follow-up PR."
-              : "Options sizer mobile build lands in a follow-up PR."}
+            Options sizer mobile build lands in a follow-up PR.
           </div>
           <div className="mt-1 text-[11px] text-m-text-faint">Use desktop until then.</div>
         </div>
@@ -1366,6 +1478,155 @@ function PyramidVerdict({ result }: { result: PyramidSuccess }) {
       className="rounded-m-md border-[0.5px] border-m-border bg-m-surface-2 px-[14px] py-3 text-[12px] text-m-text-muted"
     >
       Scale factor resulted in 0 shares. Last buy needs more profit before adding.
+    </div>
+  );
+}
+
+// ── Trim result block ────────────────────────────────────────────
+
+type TrimSuccess = {
+  ticker: string;
+  sharesToSell: number;
+  remaining: number;
+  actualNewWeight: number;
+  targetWeight: number;
+  currWeight: number;
+  cashGenerated: number;
+  costBasisTrimmed: number;
+  lifoPnl: number;
+  avgCostSold: number;
+};
+
+function TrimResultBlock({ result }: { result: { error: string } | TrimSuccess | null }) {
+  if (result == null) {
+    return (
+      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-5 text-center">
+        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          Sell Ticket
+        </div>
+        <div className="mt-2 text-[12px] text-m-text-dim">
+          Select a holding, enter price + equity, and pick a target weight.
+        </div>
+      </div>
+    );
+  }
+
+  if ("error" in result) {
+    return (
+      <div
+        data-testid="trim-no-trim-needed"
+        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+        style={{
+          background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
+          borderColor: "var(--m-warn-border)",
+          color: "var(--m-text)",
+        }}
+      >
+        {result.error}
+      </div>
+    );
+  }
+
+  const r = result;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[13px] font-semibold text-m-text">
+        Sell Ticket: <span className="font-m-num tabular-nums text-m-accent">{r.ticker}</span>
+      </div>
+
+      {/* Sell Ticket — 3 stacked inline cards */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Sell Ticket
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Shares to Sell"
+            value={`−${r.sharesToSell}`}
+            tone="down"
+            inline
+          />
+          <ResultCard
+            label="Remaining"
+            value={`${r.remaining} shs`}
+            inline
+          />
+          <ResultCard
+            label="New Weight"
+            value={`${r.actualNewWeight.toFixed(1)}%`}
+            sub={`target: ${r.targetWeight}%`}
+            tone="up"
+            inline
+          />
+        </div>
+      </div>
+
+      {/* Financial Impact (LIFO) — 3 stacked inline cards */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Financial Impact (LIFO)
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Cash Generated"
+            value={formatCurrency(r.cashGenerated, { decimals: 0 })}
+            tone="up"
+            inline
+          />
+          <ResultCard
+            label="Cost Basis (Sold)"
+            value={formatCurrency(r.costBasisTrimmed, { decimals: 0 })}
+            sub={`avg ${formatCurrency(r.avgCostSold)}/sh`}
+            inline
+          />
+          <ResultCard
+            label="Realized P&L"
+            value={formatCurrency(r.lifoPnl, { showSign: true, signGlyph: "unicode", decimals: 0 })}
+            sub={
+              r.costBasisTrimmed > 0
+                ? `${(r.lifoPnl / r.costBasisTrimmed * 100).toFixed(2)}% return`
+                : undefined
+            }
+            tone={r.lifoPnl >= 0 ? "up" : "down"}
+            inline
+          />
+        </div>
+      </div>
+
+      {/* Verdict — 2 branches mirroring desktop L1082-1091.
+          Success boundary is >= 0 (break-even = profit lock). */}
+      <TrimVerdict result={r} />
+    </div>
+  );
+}
+
+function TrimVerdict({ result }: { result: TrimSuccess }) {
+  if (result.lifoPnl >= 0) {
+    return (
+      <div
+        data-testid="trim-verdict-success"
+        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+        style={{
+          background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
+          borderColor: "var(--m-accent-border)",
+          color: "var(--m-text)",
+        }}
+      >
+        <strong>Profit Lock:</strong> This trim locks in {formatCurrency(result.lifoPnl, { decimals: 0 })} profit.
+      </div>
+    );
+  }
+  return (
+    <div
+      data-testid="trim-verdict-loss"
+      className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+      style={{
+        background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
+        borderColor: "var(--m-warn-border)",
+        color: "var(--m-text)",
+      }}
+    >
+      <strong>Note:</strong> This trim realizes a loss of {formatCurrency(Math.abs(result.lifoPnl), { decimals: 0 })} based on your most recent purchases (LIFO).
     </div>
   );
 }

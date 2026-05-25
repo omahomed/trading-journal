@@ -233,12 +233,9 @@ describe("MobilePositionSizer — tab switcher", () => {
     expect(tab).toHaveAttribute("aria-selected", "true");
   });
 
-  test.each([
-    ["Trim", "trim"],
-    ["Options", "options"],
-  ])("renders Coming-Soon placeholder for %s tab", async (label, _key) => {
+  test("renders Coming-Soon placeholder for Options tab (last remaining)", async () => {
     render(<MobilePositionSizer />);
-    fireEvent.click(screen.getByRole("tab", { name: new RegExp(label) }));
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
     expect(await screen.findByText("Coming soon")).toBeInTheDocument();
   });
 });
@@ -775,5 +772,189 @@ describe("MobilePositionSizer — Pyramid math", () => {
       const card = positionCeiling.closest("div.rounded-m-md") as HTMLElement | null;
       expect(card?.textContent ?? "").toContain(expected);
     });
+  });
+});
+
+// ── Trim tab (PR3) ───────────────────────────────────────────────
+
+describe("MobilePositionSizer — Trim tab gating", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+    setApiMocks();
+  });
+
+  test("Trim tab activates via tap", async () => {
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    expect(await screen.findByRole("tab", { name: /Trim/ })).toHaveAttribute("aria-selected", "true");
+    // Coming-Soon copy must NOT appear on Trim anymore.
+    expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+  });
+
+  test("?tab=trim URL param activates Trim on mount", async () => {
+    mockSearchString = "tab=trim";
+    setApiMocks();
+    render(<MobilePositionSizer />);
+    const tab = await screen.findByRole("tab", { name: /Trim/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("MobilePositionSizer — Trim math", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  test("no-trim-needed: target weight >= current weight → warning banner", async () => {
+    // shares=50 @ entry=50, equity=100k → currWeight 2.5%. Default size=Full
+    // (10%) > 2.5% → trigger the early-bail warning.
+    setApiMocks({
+      endNlv: 100_000,
+      holdings: [holdingFixture({ trade_id: "T1", ticker: "AAA", shares: 50, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T1", ticker: "AAA", shares: 50, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("AAA"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "50" } });
+
+    const banner = await screen.findByTestId("trim-no-trim-needed");
+    expect(banner).toHaveTextContent(/Target \(10%\) is higher than Current \(2\.5%\)/);
+    expect(banner).toHaveTextContent(/No trim needed/);
+  });
+
+  test("profit case: entry above avg cost → success Profit Lock verdict", async () => {
+    // shares=100 @ avg=50, entry=100 → currWeight 10%. Target 5% (Half).
+    // valueToSell = 5000 → sharesToSell = 50.
+    // LIFO walk over single lot {qty:100, price:50}: take 50 → accumulatedCost = 50*50 = 2500.
+    // cashGenerated = 50*100 = 5000; lifoPnl = +2500.
+    setApiMocks({
+      endNlv: 100_000,
+      holdings: [holdingFixture({ trade_id: "T2", ticker: "BBB", shares: 100, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T2", ticker: "BBB", shares: 100, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("BBB"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "100" } });
+
+    // Switch target size from Full (10%) to Half (5%).
+    fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Half"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const verdict = await screen.findByTestId("trim-verdict-success");
+    expect(verdict).toHaveTextContent(/Profit Lock/);
+    expect(verdict).toHaveTextContent(/\$2,500 profit/);
+  });
+
+  test("loss case: entry below avg cost → warning realizes-loss verdict", async () => {
+    // shares=100 @ avg=100, entry=50 → currWeight 5%. Target 2.5% (Starter).
+    // valueToSell = 2500 → sharesToSell = 50.
+    // LIFO walk: take 50 from {qty:100, price:100} → accumulatedCost = 5000.
+    // cashGenerated = 50*50 = 2500; lifoPnl = -2500.
+    setApiMocks({
+      endNlv: 100_000,
+      holdings: [holdingFixture({ trade_id: "T3", ticker: "CCC", shares: 100, avg_entry: 100 })],
+      details: [detailFixture({ trade_id: "T3", ticker: "CCC", shares: 100, amount: 100 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("CCC"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "50" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Starter"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const verdict = await screen.findByTestId("trim-verdict-loss");
+    expect(verdict).toHaveTextContent(/realizes a loss of \$2,500/);
+    expect(verdict).toHaveTextContent(/LIFO/);
+  });
+
+  test("multi-lot LIFO attribution: 3 lots → trim takes from newest first", async () => {
+    // 3 lots ascending date: BUY 30@50, BUY 40@60, BUY 30@70.
+    // Total shares 100; LIFO inventory order [{30,50},{40,60},{30,70}].
+    // Trim 50 shares: take 30 from {30,70} (2100) + 20 from {40,60} (1200) = 3300.
+    // Setup: equity=100k, entry=100, currWeight=10%, target=5% → sharesToSell=50.
+    // cashGenerated=5000, lifoPnl = 5000 - 3300 = +1700.
+    setApiMocks({
+      endNlv: 100_000,
+      holdings: [holdingFixture({ trade_id: "T4", ticker: "DDD", shares: 100, avg_entry: 60 })],
+      details: [
+        detailFixture({ trade_id: "T4", ticker: "DDD", date: "2026-04-01", shares: 30, amount: 50 }),
+        detailFixture({ trade_id: "T4", ticker: "DDD", date: "2026-04-15", shares: 40, amount: 60 }),
+        detailFixture({ trade_id: "T4", ticker: "DDD", date: "2026-05-01", shares: 30, amount: 70 }),
+      ],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("DDD"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Half"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const verdict = await screen.findByTestId("trim-verdict-success");
+    expect(verdict).toHaveTextContent(/\$1,700 profit/);
+
+    // Cost Basis (Sold) card should reflect 3300.
+    const costBasisLabel = screen.getByText("Cost Basis (Sold)");
+    const card = costBasisLabel.closest("div.rounded-m-md") as HTMLElement | null;
+    expect(card?.textContent ?? "").toContain("$3,300");
+  });
+
+  test("shortfall fallback: sharesToSell exceeds inventory → falls back to avg_entry", async () => {
+    // Holding shows 100 shares @ avg=50 but details only contain a BUY of
+    // 60 shares (data inconsistency). LIFO inventory = 60 shares total.
+    // Trim 95 shares (cap target small to force big trim):
+    //   equity 10k, entry 100, currVal 10000, currWeight 100%, target 5% (Half)
+    //   targetVal 500, valueToSell 9500, sharesToSell ceil(9500/100) = 95
+    //   LIFO walk takes 60 from inventory @50 → accumulatedCost 3000
+    //   Shortfall 35 shares fallback at avg_entry 50 → +35*50 = 1750
+    //   Total accumulatedCost = 4750
+    //   cashGenerated = 95*100 = 9500; lifoPnl = +4750
+    setApiMocks({
+      endNlv: 10_000,
+      holdings: [holdingFixture({ trade_id: "T5", ticker: "EEE", shares: 100, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T5", ticker: "EEE", shares: 60, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Trim/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("EEE"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Half"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    const verdict = await screen.findByTestId("trim-verdict-success");
+    expect(verdict).toHaveTextContent(/\$4,750 profit/);
   });
 });
