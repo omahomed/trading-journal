@@ -296,6 +296,226 @@ describe("MobileTradeJournal — detail sheet + lazy image fetch", () => {
   });
 });
 
+describe("MobileTradeJournal — Transactions row format (Step 4 follow-up)", () => {
+  // Helper: scope assertions to the Transactions (LIFO) section so the
+  // Flight Deck tiles (which can echo the same $ values) don't trip
+  // multi-match queries.
+  function getTransactionsSection(dialog: HTMLElement): HTMLElement {
+    const heading = within(dialog).getByText("Transactions (LIFO)");
+    const section = heading.closest("section");
+    if (!section) throw new Error("Transactions section not found");
+    return section as HTMLElement;
+  }
+
+  test("fully-open BUY: no rem annotation, % is live return vs current price", async () => {
+    // B1: 50 sh @ $100, no closures. Current price $110 → live return +10%.
+    setApiMocks({
+      trades: [
+        tradeFixture({
+          trade_id: "T1",
+          ticker: "NVDA",
+          shares: 50,
+          avg_entry: 100,
+        }),
+      ],
+      details: [
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "B1",
+          shares: 50,
+          amount: 100,
+        }),
+      ],
+      prices: { NVDA: 110 },
+    });
+    render(<MobileTradeJournal />);
+    await screen.findByText("NVDA");
+    fireEvent.click(screen.getByText("NVDA"));
+    const dialog = await screen.findByRole("dialog", { name: /NVDA details/ });
+    const txns = getTransactionsSection(dialog);
+
+    // Body line — no rem, no "closed".
+    expect(within(txns).getByText(/50 sh @ \$100\.00/)).toBeInTheDocument();
+    expect(within(txns).queryByText(/rem/)).not.toBeInTheDocument();
+    expect(within(txns).queryByText(/closed/)).not.toBeInTheDocument();
+    // Live return % derived from currentPrice 110 vs buy 100 = +10%.
+    expect(within(txns).getByText(/\(\+10\.0%\)/)).toBeInTheDocument();
+  });
+
+  test("partial-open BUY: 'N rem' annotation visible + live return on the open remainder", async () => {
+    // B1: 50 sh @ $100. SELL of 24 sh @ $95 (realized loss).
+    // Remaining 26 sh; current $200 → live return on open remainder
+    // = (200-100)/100 * 100 = +100%.
+    setApiMocks({
+      trades: [
+        tradeFixture({
+          trade_id: "T1",
+          ticker: "NVDA",
+          shares: 26,
+          avg_entry: 100,
+        }),
+      ],
+      details: [
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "B1",
+          shares: 50,
+          amount: 100,
+        }),
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "S1",
+          action: "SELL",
+          date: "2026-05-10",
+          shares: 24,
+          amount: 95,
+        }),
+      ],
+      closures: [
+        {
+          trade_id: "T1",
+          buy_trx_id: "B1",
+          sell_trx_id: "S1",
+          shares: 24,
+          buy_price: 100,
+          sell_price: 95,
+          multiplier: 1,
+          realized_pl: -120,
+          closed_at: "2026-05-10",
+        },
+      ],
+      prices: { NVDA: 200 },
+    });
+    render(<MobileTradeJournal />);
+    await screen.findByText("NVDA");
+    fireEvent.click(screen.getByText("NVDA"));
+    const dialog = await screen.findByRole("dialog", { name: /NVDA details/ });
+    const txns = getTransactionsSection(dialog);
+
+    // Body line shows total + remaining.
+    expect(within(txns).getByText(/50 sh · 26 rem @ \$100\.00/)).toBeInTheDocument();
+    // Realized $ is still displayed (-$120).
+    expect(within(txns).getByText(/−\$120/)).toBeInTheDocument();
+    // % is now the live return on the open remainder (+100%), not the
+    // realized -5% the prior render showed.
+    expect(within(txns).getByText(/\(\+100\.0%\)/)).toBeInTheDocument();
+  });
+
+  test("fully-closed BUY: 'closed' annotation + realized $ + realized %", async () => {
+    // B1: 50 sh @ $100 fully closed by SELL 50 sh @ $90.
+    // No remaining; lib's returnPct = (90-100)/100 = -10% (realized).
+    setApiMocks({
+      trades: [
+        tradeFixture({
+          trade_id: "T1",
+          ticker: "NVDA",
+          shares: 0,
+          status: "CLOSED",
+          avg_entry: 100,
+        }),
+      ],
+      details: [
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "B1",
+          shares: 50,
+          amount: 100,
+        }),
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "S1",
+          action: "SELL",
+          date: "2026-05-10",
+          shares: 50,
+          amount: 90,
+        }),
+      ],
+      closures: [
+        {
+          trade_id: "T1",
+          buy_trx_id: "B1",
+          sell_trx_id: "S1",
+          shares: 50,
+          buy_price: 100,
+          sell_price: 90,
+          multiplier: 1,
+          realized_pl: -500,
+          closed_at: "2026-05-10",
+        },
+      ],
+      prices: { NVDA: 200 }, // current price irrelevant — fully closed BUY
+    });
+    render(<MobileTradeJournal />);
+    // Closed trade — only renders if cohort includes closed, but our
+    // tradesOpen mock includes this trade (the test focuses on the row
+    // shape, not the cohort gating).
+    await screen.findByText("NVDA");
+    fireEvent.click(screen.getByText("NVDA"));
+    const dialog = await screen.findByRole("dialog", { name: /NVDA details/ });
+    const txns = getTransactionsSection(dialog);
+
+    expect(within(txns).getByText(/50 sh closed @ \$100\.00/)).toBeInTheDocument();
+    expect(within(txns).getByText(/−\$500/)).toBeInTheDocument();
+    // toFixed() uses ASCII hyphen; only formatCurrency emits the U+2212.
+    expect(within(txns).getByText(/\(-10\.0%\)/)).toBeInTheDocument();
+  });
+
+  test("SELL row: no return %, no remaining annotation, value shown as primary $", async () => {
+    setApiMocks({
+      trades: [
+        tradeFixture({
+          trade_id: "T1",
+          ticker: "NVDA",
+          shares: 25,
+          avg_entry: 100,
+        }),
+      ],
+      details: [
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "B1",
+          shares: 50,
+          amount: 100,
+        }),
+        detailFixture({
+          trade_id: "T1",
+          trx_id: "S1",
+          action: "SELL",
+          date: "2026-05-10",
+          shares: 25,
+          amount: 110,
+        }),
+      ],
+      closures: [
+        {
+          trade_id: "T1",
+          buy_trx_id: "B1",
+          sell_trx_id: "S1",
+          shares: 25,
+          buy_price: 100,
+          sell_price: 110,
+          multiplier: 1,
+          realized_pl: 250,
+          closed_at: "2026-05-10",
+        },
+      ],
+      prices: { NVDA: 110 },
+    });
+    render(<MobileTradeJournal />);
+    await screen.findByText("NVDA");
+    fireEvent.click(screen.getByText("NVDA"));
+    const dialog = await screen.findByRole("dialog", { name: /NVDA details/ });
+    const txns = getTransactionsSection(dialog);
+
+    // SELL body line — total shares + price, no rem/closed annotation.
+    expect(within(txns).getByText(/25 sh @ \$110\.00/)).toBeInTheDocument();
+    // SELL primary $ is the absolute value of the sell ($2,750). No %
+    // anywhere on the SELL row — the only "%" in this section comes
+    // from the BUY row's return %.
+    expect(within(txns).getByText("$2,750")).toBeInTheDocument();
+  });
+});
+
 describe("MobileTradeJournal — ?trade_id= deep-link", () => {
   test("opens the detail sheet for the matching trade and clears the prop", async () => {
     const consumed = vi.fn();

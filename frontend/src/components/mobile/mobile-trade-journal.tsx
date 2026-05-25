@@ -832,16 +832,41 @@ function DetailSheet({
     () => closures.filter((c) => c.trade_id === enriched.trade_id),
     [closures, enriched.trade_id],
   );
-  const { rowData } = useMemo(
-    () =>
-      lotClosuresToLifoRows(
-        tradeDetails,
-        tradeClosures,
-        enriched.avg_entry,
-        enriched.multiplier,
-      ),
-    [tradeDetails, tradeClosures, enriched.avg_entry, enriched.multiplier],
-  );
+  const { rowData } = useMemo(() => {
+    const built = lotClosuresToLifoRows(
+      tradeDetails,
+      tradeClosures,
+      enriched.avg_entry,
+      enriched.multiplier,
+    );
+    // Post-processing: lib returns returnPct from the most recent
+    // attributed closure (realized-portion only). For any BUY with
+    // remaining > 0, overwrite returnPct + unrealizedPl using the
+    // current live price vs the lot's own buy price — the lot's live
+    // return. Mirrors desktop trade-journal.tsx:1259-1272 verbatim so
+    // the mobile row's per-row % matches desktop's RETURN % column.
+    const currentPrice = enriched.current_price;
+    if (currentPrice > 0) {
+      for (const row of built.rowData) {
+        if (!row.isSell && row.remaining > 0) {
+          const buyPrice =
+            parseFloat(String(row.tx.amount || 0)) || enriched.avg_entry;
+          row.unrealizedPl =
+            (currentPrice - buyPrice) * row.remaining * enriched.multiplier;
+          if (buyPrice > 0) {
+            row.returnPct = ((currentPrice - buyPrice) / buyPrice) * 100;
+          }
+        }
+      }
+    }
+    return built;
+  }, [
+    tradeDetails,
+    tradeClosures,
+    enriched.avg_entry,
+    enriched.multiplier,
+    enriched.current_price,
+  ]);
 
   const visibleTransactions = transactionsExpanded
     ? rowData
@@ -1141,16 +1166,53 @@ function TransactionRow({ row, multiplier }: { row: LifoRow; multiplier: number 
   const actionClass = isBuy ? "text-m-accent" : "text-m-down";
   const dateStr = String(row.tx.date || "").slice(0, 10);
   const trxId = String((row.tx as unknown as { trx_id?: string }).trx_id || "");
-  const muted = row.isSell || (row.remaining === 0 && !row.isSell);
+  const unit = multiplier > 1 ? "ct" : "sh";
+  const totalShares = Math.abs(row.displayShares);
+  const buyPrice = parseFloat(String(row.tx.amount || 0));
+
+  // BUY lot state: fully open (no closures yet) → no rem annotation;
+  // partially open (0 < remaining < total) → "N rem"; fully closed
+  // (remaining === 0) → "closed". SELLs don't have remaining.
+  const isFullyOpen = isBuy && row.remaining === totalShares;
+  const isPartialOpen = isBuy && row.remaining > 0 && row.remaining < totalShares;
+  const isFullyClosed = isBuy && row.remaining === 0;
+
+  // Muted styling for the inert rows: SELLs (no longer actionable) +
+  // fully-closed BUYs (the lot has fully cycled). Partial-open and
+  // fully-open BUYs stay full-contrast so they catch the eye when
+  // scanning a live position's history.
+  const muted = row.isSell || isFullyClosed;
   const containerClass = muted
     ? "rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2 opacity-70"
     : "rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2";
-  const plClass =
+
+  // Sign-colored return % (BUY only). For fully-open BUYs the value
+  // is the lot's live return vs current price (overwritten by the
+  // DetailSheet's post-processing pass); for partial/closed BUYs
+  // it's a hybrid (live for the open remainder via post-processing,
+  // realized for fully-closed). SELLs render no % per desktop.
+  const returnClass = isBuy
+    ? row.returnPct > 0
+      ? "text-m-accent"
+      : row.returnPct < 0
+        ? "text-m-down"
+        : "text-m-text-dim"
+    : "";
+
+  // Sign-colored realized $ (BUY only with attributed closures).
+  const realizedClass =
     row.realizedPl > 0
       ? "text-m-accent"
       : row.realizedPl < 0
         ? "text-m-down"
         : "text-m-text-dim";
+
+  // SELL: primary $ is the sell value (sell_price × shares × mult).
+  // Negative because cash flows out of the position on a sell. Use
+  // absolute value with no sign to read as "size of the sell", not as
+  // P&L (we have no per-SELL P&L attribution — closures attribute to
+  // BUYs).
+  const sellValue = row.isSell ? Math.abs(row.value) : 0;
 
   return (
     <div className={containerClass}>
@@ -1160,21 +1222,36 @@ function TransactionRow({ row, multiplier }: { row: LifoRow; multiplier: number 
           <span className={`font-semibold ${actionClass}`}>{action}</span>
           <span className="text-m-text-dim">{dateStr}</span>
         </span>
-        {!row.isSell && row.realizedPl !== 0 && (
-          <span className={`font-m-num text-[11px] font-medium tabular-nums ${plClass}`}>
-            {formatCurrency(row.realizedPl, {
-              showSign: true,
-              signGlyph: "unicode",
-              decimals: 0,
-            })}{" "}
-            ({row.returnPct >= 0 ? "+" : ""}
-            {row.returnPct.toFixed(1)}%)
+        {isBuy ? (
+          <span className="flex items-baseline gap-1.5 font-m-num text-[11px] tabular-nums">
+            {row.realizedPl !== 0 && (
+              <span className={`font-medium ${realizedClass}`}>
+                {formatCurrency(row.realizedPl, {
+                  showSign: true,
+                  signGlyph: "unicode",
+                  decimals: 0,
+                })}
+              </span>
+            )}
+            <span className={`font-medium ${returnClass}`}>
+              ({row.returnPct >= 0 ? "+" : ""}
+              {row.returnPct.toFixed(1)}%)
+            </span>
+          </span>
+        ) : (
+          <span className="font-m-num text-[11px] font-medium tabular-nums text-m-text-muted privacy-mask">
+            {formatCurrency(sellValue, { decimals: 0 })}
           </span>
         )}
       </div>
       <div className="mt-0.5 font-m-num text-[11px] tabular-nums text-m-text-muted">
-        {Math.abs(row.displayShares)}
-        {multiplier > 1 ? " ct" : " sh"} @ {formatCurrency(parseFloat(String(row.tx.amount || 0)))}
+        {row.isSell || isFullyOpen
+          ? `${totalShares} ${unit}`
+          : isFullyClosed
+            ? `${totalShares} ${unit} closed`
+            : `${totalShares} ${unit} · ${row.remaining} rem`}
+        {" @ "}
+        {formatCurrency(buyPrice)}
         {row.tx.rule && <> · {row.tx.rule}</>}
       </div>
     </div>
