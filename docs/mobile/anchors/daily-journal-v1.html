@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Daily Journal — Mobile Anchor v1 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .annotation ul { margin: 8px 0 0; padding-left: 20px; }
+  .annotation li { margin: 3px 0; }
+  .container { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .device {
+    max-width: 360px;
+    width: 100%;
+    background: #1c1815;
+    border-radius: 42px;
+    padding: 10px;
+    border: 0.5px solid rgba(255,235,210,0.06);
+  }
+  .screen {
+    background: #100D0B;
+    border-radius: 34px;
+    overflow: hidden;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Daily Journal — v1 (LOCKED)</h1>
+  Reference design for <strong>mobile-daily-journal.tsx</strong> (Phase 2 T2-1). Read-only list view of past journal entries. Replaces the desktop 19-column horizontal-scroll table with per-day cards grouped by sticky month headers.
+  <ul>
+    <li><strong>Tap a card</strong> → /daily-report?date=YYYY-MM-DD (existing desktop detail view; gets its own mobile-fit in T2-4)</li>
+    <li><strong>Filter chips:</strong> Week (default, trailing 7d) / Month (current calendar month) / All</li>
+    <li><strong>5 per-card fields:</strong> Date · MCT badge · Grade pill · End NLV · Daily % + 3-item sub-row (LTD · % inv · NDX)</li>
+    <li>Heat dropped from sub-row per fit constraint; surfaces in T2-4 detail view</li>
+  </ul>
+</div>
+
+<div class="device">
+<div class="screen">
+
+<!-- iOS status bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 6px; font-size: 14px; font-weight: 500;">
+<span>9:41</span>
+<span style="display: flex; gap: 6px; align-items: center;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11h2v3H2zM6 7h2v7H6zM10 4h2v10h-2zM14 1h2v13h-2z" fill="#F5EFE5"/></svg>
+<svg width="20" height="14" viewBox="0 0 20 14" fill="none"><rect x="1" y="3" width="16" height="8" rx="2" stroke="#F5EFE5" stroke-width="1" fill="none"/><rect x="3" y="5" width="12" height="4" rx="1" fill="#F5EFE5"/><rect x="18" y="5" width="1" height="4" rx="0.5" fill="#F5EFE5"/></svg>
+</span>
+</div>
+
+<!-- Tape pill -->
+<div style="margin: 8px 16px 0; padding: 8px 14px; background: rgba(175,169,236,0.10); border: 0.5px solid rgba(175,169,236,0.22); border-radius: 999px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #AFA9EC;"></span>
+<span style="color: #C9C5F0; font-weight: 500;">POWERTREND</span>
+<span style="color: #6B6358;">·</span>
+<span style="color: #B0A89E;">Day 14</span>
+<span style="margin-left: auto; color: #B0A89E; font-size: 11px;">Cap 200%</span>
+</div>
+
+<!-- Wordmark + entry count + portfolio picker -->
+<div style="padding: 14px 20px 4px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
+<div style="flex: 1; min-width: 0;">
+<div style="font-size: 28px; font-weight: 500; letter-spacing: -0.02em;">Daily <span style="font-family: 'Iowan Old Style', 'Palatino', Georgia, serif; font-style: italic; color: #4ADE80; font-weight: 400;">Journal</span></div>
+<div style="font-size: 12px; color: #7A7268; margin-top: 2px;">128 entries · CanSlim</div>
+</div>
+<div style="height: 32px; padding: 0 12px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #B0A89E; flex-shrink: 0;">
+CanSlim
+<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="#7A7268" stroke-width="1.4" stroke-linecap="round"/></svg>
+</div>
+</div>
+
+<!-- Filter chips -->
+<div style="padding: 10px 16px 8px; display: flex; gap: 6px;">
+<span style="padding: 6px 14px; font-size: 12px; color: #052e16; background: #4ADE80; border-radius: 999px; font-weight: 500;">Week</span>
+<span style="padding: 6px 14px; font-size: 12px; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">Month</span>
+<span style="padding: 6px 14px; font-size: 12px; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">All</span>
+</div>
+
+<!-- MAY 2026 sticky header -->
+<div style="padding: 6px 20px; background: #100D0B; font-size: 10px; font-weight: 600; letter-spacing: 0.10em; color: #7A7268;">MAY 2026</div>
+
+<!-- Day cards -->
+<div style="padding: 0 16px; display: flex; flex-direction: column; gap: 8px;">
+
+<!-- Mon May 25: A+, POWERTREND D14, +1.45% -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<div style="display: flex; align-items: baseline; gap: 6px;">
+<span style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums;">Mon May 25</span>
+<span style="padding: 1px 6px; background: #AFA9EC; color: #100D0B; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; border-radius: 4px;">POWERTREND D14</span>
+</div>
+<div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+<span style="padding: 1px 8px; border-radius: 999px; background: rgba(74,222,128,0.10); border: 0.5px solid rgba(74,222,128,0.25); color: #4ADE80; font-size: 10px; font-weight: 600;">A+</span>
+<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<span style="font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums;">$494,776</span>
+<span style="font-size: 15px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+1.45%</span>
+</div>
+<div style="display: flex; gap: 12px; font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">
+<span><span style="color: #4ADE80;">+38.20%</span> LTD</span>
+<span>61.2% inv</span>
+<span><span style="color: #4ADE80;">+0.82%</span> NDX</span>
+</div>
+</div>
+
+<!-- Fri May 22: B, UPTREND D3, -0.34% -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<div style="display: flex; align-items: baseline; gap: 6px;">
+<span style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums;">Fri May 22</span>
+<span style="padding: 1px 6px; background: #4ADE80; color: #052e16; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; border-radius: 4px;">UPTREND D3</span>
+</div>
+<div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+<span style="padding: 1px 8px; border-radius: 999px; background: rgba(251,191,36,0.08); border: 0.5px solid rgba(251,191,36,0.20); color: #FBBF24; font-size: 10px; font-weight: 600;">B</span>
+<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<span style="font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums;">$487,704</span>
+<span style="font-size: 15px; color: #F87171; font-weight: 500; font-variant-numeric: tabular-nums;">−0.34%</span>
+</div>
+<div style="display: flex; gap: 12px; font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">
+<span><span style="color: #4ADE80;">+36.42%</span> LTD</span>
+<span>58.3% inv</span>
+<span><span style="color: #F87171;">−0.21%</span> NDX</span>
+</div>
+</div>
+
+<!-- Thu May 21: C, RALLY MODE D2, -2.18% -->
+<div style="background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<div style="display: flex; align-items: baseline; gap: 6px;">
+<span style="font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums;">Thu May 21</span>
+<span style="padding: 1px 6px; background: #FBBF24; color: #100D0B; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; border-radius: 4px;">RALLY MODE D2</span>
+</div>
+<div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+<span style="padding: 1px 8px; border-radius: 999px; background: rgba(248,113,113,0.14); border: 0.5px solid rgba(248,113,113,0.30); color: #F87171; font-size: 10px; font-weight: 600;">C</span>
+<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+</div>
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;">
+<span style="font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums;">$489,367</span>
+<span style="font-size: 15px; color: #F87171; font-weight: 500; font-variant-numeric: tabular-nums;">−2.18%</span>
+</div>
+<div style="display: flex; gap: 12px; font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">
+<span><span style="color: #4ADE80;">+36.86%</span> LTD</span>
+<span>54.9% inv</span>
+<span><span style="color: #F87171;">−1.84%</span> NDX</span>
+</div>
+</div>
+
+</div>
+
+<!-- End-of-week footer -->
+<div style="padding: 12px 0 0; text-align: center; font-size: 11px; color: #5A5249;">End of week · Tap Month for more history</div>
+
+<!-- Bottom nav -->
+<div style="margin-top: 16px; display: flex; justify-content: space-around; padding: 6px 16px 22px; border-top: 0.5px solid rgba(255,235,210,0.04);">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 13l4-4 4 4 5-6 4 4" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<span>Dashboard</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="4" y="3" width="14" height="16" rx="2" stroke="#5A5249" stroke-width="1.5"/><path d="M7 7h8M7 11h8M7 15h5" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Sizer</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 6h16M3 11h16M3 16h16" stroke="#5A5249" stroke-width="1.5" stroke-linecap="round"/></svg>
+<span>Journal</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: #5A5249;">
+<svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="2" stroke="#5A5249" stroke-width="1.5"/><circle cx="11" cy="11" r="7" stroke="#5A5249" stroke-width="1.5"/></svg>
+<span>More</span>
+</div>
+</div>
+
+</div>
+</div>
+
+</div>
+</body>
+</html>
