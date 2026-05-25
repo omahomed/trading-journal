@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Lock } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type TradeDetail, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
@@ -117,6 +117,75 @@ const SIZE_OPTIONS = [
 
 const DEFAULT_SIZE_INDEX = 3; // Full (10%) — matches Phase 1 anchor
 
+// Pyramid cushion-tier mapping — distinct from MCT-driven SIZING_MODES.
+// Keyed off the position's unrealized gain (cushionPct), not market state.
+// Locked to desktop's inline values in pyramidResults useMemo (L437-484).
+type PyramidTier = { name: string; tolPct: number; atrMult: number };
+const PYRAMID_TIER_3: PyramidTier = { name: "Tier 3 (Defense)", tolPct: 0.5, atrMult: 1.0 };
+const PYRAMID_TIER_2: PyramidTier = { name: "Tier 2 (Moderate)", tolPct: 0.65, atrMult: 1.5 };
+const PYRAMID_TIER_1: PyramidTier = { name: "Tier 1 (High Cushion)", tolPct: 1.0, atrMult: 2.0 };
+
+function pyramidTierForCushion(cushionPct: number): PyramidTier {
+  if (cushionPct >= 20) return PYRAMID_TIER_1;
+  if (cushionPct >= 5) return PYRAMID_TIER_2;
+  return PYRAMID_TIER_3;
+}
+
+const PYRAMID_HARD_CAP_PCT = 20;
+const DEFAULT_PYRAMID_RULES = { trigger_pct: 5, alloc_pct: 20 };
+
+// LIFO inventory walker — verbatim from desktop's buildLIFOInventory
+// (position-sizer.tsx:107-137). Filter to one trade, chronological sort
+// with BUY-before-SELL tiebreak, SELLs pop from end. Result: array of
+// surviving BUY lots in chronological order; inventory[last] is the
+// most recent BUY not fully consumed.
+type InventoryLot = { qty: number; price: number };
+
+function buildLIFOInventory(
+  details: TradeDetail[],
+  tradeId: string,
+  fallbackAvg: number,
+): InventoryLot[] {
+  const trxs = details
+    .filter((d) => d.trade_id === tradeId)
+    .sort((a, b) => {
+      const dateCompare = (a.date || "").localeCompare(b.date || "");
+      if (dateCompare !== 0) return dateCompare;
+      return (
+        (a.action?.toUpperCase() === "BUY" ? 0 : 1) -
+        (b.action?.toUpperCase() === "BUY" ? 0 : 1)
+      );
+    });
+
+  const inventory: InventoryLot[] = [];
+  for (const tx of trxs) {
+    const action = (tx.action || "").toUpperCase();
+    const shares = Math.abs(tx.shares || 0);
+    let price = tx.amount || 0;
+
+    if (action === "BUY") {
+      if (price === 0) price = fallbackAvg;
+      inventory.push({ qty: shares, price });
+    } else if (action === "SELL") {
+      let sellQty = shares;
+      while (sellQty > 0 && inventory.length > 0) {
+        const last = inventory[inventory.length - 1];
+        const take = Math.min(sellQty, last.qty);
+        last.qty -= take;
+        sellQty -= take;
+        if (last.qty < 0.00001) inventory.pop();
+      }
+    }
+  }
+  return inventory;
+}
+
+function lifoAvgCost(inventory: InventoryLot[]): number {
+  const totalShares = inventory.reduce((s, l) => s + l.qty, 0);
+  const totalCost = inventory.reduce((s, l) => s + l.qty * l.price, 0);
+  return totalShares > 0 ? totalCost / totalShares : 0;
+}
+
 export function MobilePositionSizer() {
   const { activePortfolio } = usePortfolio();
   const searchParams = useSearchParams();
@@ -140,17 +209,21 @@ export function MobilePositionSizer() {
   const [equity, setEquity] = useState<number | null>(null);
   const [atrPct, setAtrPct] = useState<number | null>(null);
   const [holdings, setHoldings] = useState<TradePosition[]>([]);
+  const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
+  const [pyramidRules, setPyramidRules] = useState<{ trigger_pct: number; alloc_pct: number }>(
+    DEFAULT_PYRAMID_RULES,
+  );
   const [loading, setLoading] = useState(true);
   const [priceError, setPriceError] = useState<string | null>(null);
   const [priceLoading, setPriceLoading] = useState(false);
 
   const flags = TAB_INPUTS[activeTab];
 
-  // Mount fetch — equity + MCT state + open holdings. tradesOpen drives
-  // the Scale-In / Pyramid / Trim holding pickers; Volatility ignores
-  // it. Pyramid's pyramid_rules config + Scale-In/Trim's
-  // tradesOpenDetails LIFO inventory are deferred to PR2/PR3 (Scale-In
-  // here reads avg_entry directly off the picker selection).
+  // Mount fetch — equity + MCT state + open holdings + LIFO details +
+  // pyramid config. tradesOpen drives the Scale-In / Pyramid / Trim
+  // holding pickers. tradesOpenDetails feeds Pyramid's lastBuy peek +
+  // Trim's LIFO P&L walk (PR3). pyramid_rules is Pyramid-only — single
+  // global config, fetched once on mount; defaults kick in on catch.
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -166,13 +239,27 @@ export function MobilePositionSizer() {
         log.error("mobile-position-sizer", "tradesOpen fetch failed", err);
         return [];
       }),
-    ]).then(([j, rally, open]) => {
+      api.tradesOpenDetails(getActivePortfolio()).catch((err) => {
+        log.error("mobile-position-sizer", "tradesOpenDetails fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.config("pyramid_rules").catch((err) => {
+        log.error("mobile-position-sizer", "config pyramid_rules fetch failed", err);
+        return { key: "pyramid_rules", value: DEFAULT_PYRAMID_RULES };
+      }),
+    ]).then(([j, rally, open, details, pyrCfg]) => {
       if (cancelled) return;
       const endNlv = j ? parseFloat(String((j as { end_nlv?: number | string }).end_nlv ?? 0)) : 0;
       setEquity(Number.isFinite(endNlv) && endNlv > 0 ? endNlv : null);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
       setSizingMode((prev) => (sizingModeManual ? prev : mctStateToSizingMode(stateStr)));
       setHoldings(Array.isArray(open) ? (open as TradePosition[]) : []);
+      const detailsArr = (details as { details?: TradeDetail[] } | null)?.details;
+      setAllDetails(Array.isArray(detailsArr) ? detailsArr : []);
+      const cfgVal = (pyrCfg as { value?: { trigger_pct?: number; alloc_pct?: number } } | null)?.value;
+      if (cfgVal && typeof cfgVal.trigger_pct === "number" && typeof cfgVal.alloc_pct === "number") {
+        setPyramidRules({ trigger_pct: cfgVal.trigger_pct, alloc_pct: cfgVal.alloc_pct });
+      }
       setLoading(false);
     });
     return () => {
@@ -354,6 +441,102 @@ export function MobilePositionSizer() {
       newAddRisk,
     };
   }, [activeTab, holdings, selectedTradeId, eq, entry, ma, buf, sizingMode, targetSize]);
+
+  // ── Pyramid derivations (per-trade LIFO inventory + avg cost) ──
+  // holdingInventory: array of surviving BUY lots for the selected
+  // trade, after applying chronological SELL pops (LIFO).
+  // holdingAvgCost: weighted avg of remaining lots; fallback to
+  // summary's avg_entry when the walk yields zero (matches desktop
+  // L295-299).
+  const selectedHolding = useMemo(
+    () => holdings.find((h) => h.trade_id === selectedTradeId) ?? null,
+    [holdings, selectedTradeId],
+  );
+
+  const holdingInventory = useMemo(() => {
+    if (!selectedHolding) return [];
+    return buildLIFOInventory(
+      allDetails,
+      selectedHolding.trade_id,
+      Number(selectedHolding.avg_entry ?? 0) || 0,
+    );
+  }, [allDetails, selectedHolding]);
+
+  const holdingAvgCost = useMemo(() => {
+    if (!selectedHolding) return 0;
+    const avg = lifoAvgCost(holdingInventory);
+    return avg > 0 ? avg : Number(selectedHolding.avg_entry ?? 0) || 0;
+  }, [selectedHolding, holdingInventory]);
+
+  // Pyramid audit — inline math mirroring desktop pyramidResults
+  // (position-sizer.tsx:437-484) field-for-field. Cushion-driven
+  // tiers (NOT MCT-driven SIZING_MODES) defined inline via
+  // pyramidTierForCushion above.
+  const pyramid = useMemo(() => {
+    if (activeTab !== "pyramid") return null;
+    if (!selectedHolding) return null;
+    if (entry <= 0 || eq <= 0 || atr <= 0) return null;
+    if (holdingInventory.length === 0) return null;
+
+    const shares = Number(selectedHolding.shares ?? 0) || 0;
+    const avgCost = holdingAvgCost;
+    const lastBuy = holdingInventory[holdingInventory.length - 1];
+    const lastBuyPrice = lastBuy.price;
+    const lastBuyProfitPct = lastBuyPrice > 0 ? ((entry - lastBuyPrice) / lastBuyPrice) * 100 : 0;
+    const cushionPct = avgCost > 0 ? ((entry - avgCost) / avgCost) * 100 : 0;
+
+    const baseAddPct = pyramidRules.alloc_pct / 100;
+    const thresholdPct = pyramidRules.trigger_pct;
+
+    let scaleFactor: number;
+    if (lastBuyProfitPct >= thresholdPct) scaleFactor = 1.0;
+    else if (lastBuyProfitPct > 0) scaleFactor = lastBuyProfitPct / thresholdPct;
+    else scaleFactor = 0;
+
+    const pyramidMaxShares = Math.ceil(shares * baseAddPct * scaleFactor);
+
+    const tier = pyramidTierForCushion(cushionPct);
+    const dailyRiskBudget = eq * (tier.tolPct / 100);
+    const atrRiskBudget = dailyRiskBudget * tier.atrMult;
+    const atrDecimal = atr / 100;
+    const maxSharesAtr = Math.floor(atrRiskBudget / (entry * atrDecimal));
+    const maxSharesCap = Math.floor((eq * (PYRAMID_HARD_CAP_PCT / 100)) / entry);
+    const positionCeiling = Math.min(maxSharesAtr, maxSharesCap);
+    const roomToAdd = Math.max(0, positionCeiling - Math.floor(shares));
+
+    const pyramidAllowed = Math.min(pyramidMaxShares, roomToAdd);
+    const pyramidValue = pyramidAllowed * entry;
+    const baseAdd = Math.floor(shares * baseAddPct);
+
+    const newTotalAfter = Math.floor(shares) + pyramidAllowed;
+    const newAvgCostAfter =
+      newTotalAfter > 0
+        ? (Math.floor(shares) * avgCost + pyramidAllowed * entry) / newTotalAfter
+        : 0;
+    const newWeightAfter = eq > 0 ? (newTotalAfter * entry) / eq * 100 : 0;
+    const currentWeight = eq > 0 ? (shares * entry) / eq * 100 : 0;
+
+    return {
+      ticker: selectedHolding.ticker,
+      shares,
+      avgCost,
+      lastBuyPrice,
+      lastBuyProfitPct,
+      cushionPct,
+      scaleFactor,
+      pyramidMaxShares,
+      baseAdd,
+      tier,
+      positionCeiling,
+      roomToAdd,
+      pyramidAllowed,
+      pyramidValue,
+      newTotalAfter,
+      newAvgCostAfter,
+      newWeightAfter,
+      currentWeight,
+    };
+  }, [activeTab, selectedHolding, entry, eq, atr, pyramidRules, holdingInventory, holdingAvgCost]);
 
   const equityDisplay = equity != null
     ? formatCurrency(equity, { decimals: 0 })
@@ -695,8 +878,66 @@ export function MobilePositionSizer() {
         </div>
       )}
 
-      {/* ── Tab: Coming Soon (pyramid / trim / options) ── */}
-      {(activeTab === "pyramid" || activeTab === "trim" || activeTab === "options") && (
+      {/* ── Tab: Pyramid ── */}
+      {activeTab === "pyramid" && (
+        <div id="sizer-panel-pyramid" role="tabpanel" className="flex flex-col gap-2.5">
+          <MobileHoldingPicker
+            holdings={holdings}
+            selectedTradeId={selectedTradeId}
+            onSelect={handleHoldingSelect}
+            portfolioName={activePortfolio?.name}
+          />
+
+          {(priceLoading || priceError) && (
+            <div
+              className="text-[11px]"
+              style={{ color: priceError ? "var(--m-warn)" : "var(--m-text-dim)" }}
+            >
+              {priceLoading ? "Fetching price…" : priceError}
+            </div>
+          )}
+
+          {/* Inputs: Current Price + Equity on row 1, ATR % spans row 2 */}
+          <div className="grid grid-cols-2 gap-2">
+            <NumberFieldCell
+              label="Current Price"
+              value={entryPrice}
+              onChange={setEntryPrice}
+              ariaLabel="Current price"
+              placeholder="0.00"
+            />
+            <NumberFieldCell
+              label="Account Equity"
+              value={equity != null ? String(equity) : ""}
+              onChange={(v) => {
+                const n = parseFloat(v);
+                setEquity(Number.isFinite(n) && n > 0 ? n : null);
+              }}
+              ariaLabel="Account equity"
+              placeholder="0"
+            />
+          </div>
+          <NumberFieldCell
+            label="ATR %"
+            value={atrPct != null ? String(atrPct) : ""}
+            onChange={(v) => {
+              const n = parseFloat(v);
+              setAtrPct(Number.isFinite(n) ? n : null);
+            }}
+            ariaLabel="ATR percent"
+            suffix="%"
+            placeholder="5.0"
+          />
+
+          {/* Pyramid Rules expander (collapsible, default closed) */}
+          <PyramidRulesExpander rules={pyramidRules} />
+
+          <PyramidResultBlock result={pyramid} rules={pyramidRules} />
+        </div>
+      )}
+
+      {/* ── Tab: Coming Soon (trim / options) ── */}
+      {(activeTab === "trim" || activeTab === "options") && (
         <div
           id={`sizer-panel-${activeTab}`}
           role="tabpanel"
@@ -704,11 +945,9 @@ export function MobilePositionSizer() {
         >
           <div className="text-[14px] font-medium text-m-text">Coming soon</div>
           <div className="mt-1.5 text-[12px] text-m-text-dim">
-            {activeTab === "pyramid"
-              ? "Pyramid sizer mobile build lands in a follow-up PR."
-              : activeTab === "trim"
-                ? "Trim (sell-down) sizer mobile build lands in a follow-up PR."
-                : "Options sizer mobile build lands in a follow-up PR."}
+            {activeTab === "trim"
+              ? "Trim (sell-down) sizer mobile build lands in a follow-up PR."
+              : "Options sizer mobile build lands in a follow-up PR."}
           </div>
           <div className="mt-1 text-[11px] text-m-text-faint">Use desktop until then.</div>
         </div>
@@ -860,6 +1099,276 @@ function ScaleInResultBlock({
   );
 }
 
+
+// ── Pyramid rules expander ────────────────────────────────────────
+
+type PyramidRulesShape = { trigger_pct: number; alloc_pct: number };
+
+function PyramidRulesExpander({ rules }: { rules: PyramidRulesShape }) {
+  return (
+    <details className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-4 py-2.5">
+      <summary
+        className="cursor-pointer text-[12px] font-semibold text-m-text-muted"
+        data-testid="pyramid-rules-summary"
+      >
+        View Pyramid Rules
+      </summary>
+      <div className="mt-2 pb-1 text-[12px] leading-relaxed text-m-text-dim">
+        <p className="mb-1">
+          <strong className="text-m-text">How it works:</strong>
+        </p>
+        <ol className="ml-4 flex list-decimal flex-col gap-0.5">
+          <li>
+            Each add is capped at <strong className="text-m-text">{rules.alloc_pct}%</strong> of your current shares
+          </li>
+          <li>
+            Your last buy must be up <strong className="text-m-text">at least {rules.trigger_pct}%</strong> for a full-size add
+          </li>
+          <li>
+            If last buy is up less than {rules.trigger_pct}%, the add scales proportionally:{" "}
+            <code className="rounded-[4px] bg-m-surface-2 px-1 py-px font-m-num text-[11px] tabular-nums text-m-text-muted">
+              (profit% / {rules.trigger_pct}%) × {rules.alloc_pct}%
+            </code>
+          </li>
+          <li>
+            If last buy is <strong className="text-m-text">flat or down</strong>, no add is allowed
+          </li>
+          <li>
+            The add is also capped by your ATR limit and {rules.alloc_pct}% hard cap
+          </li>
+        </ol>
+      </div>
+    </details>
+  );
+}
+
+// ── Pyramid result block ──────────────────────────────────────────
+
+type PyramidSuccess = {
+  ticker: string;
+  shares: number;
+  avgCost: number;
+  lastBuyPrice: number;
+  lastBuyProfitPct: number;
+  cushionPct: number;
+  scaleFactor: number;
+  pyramidMaxShares: number;
+  baseAdd: number;
+  tier: { name: string; tolPct: number; atrMult: number };
+  positionCeiling: number;
+  roomToAdd: number;
+  pyramidAllowed: number;
+  pyramidValue: number;
+  newTotalAfter: number;
+  newAvgCostAfter: number;
+  newWeightAfter: number;
+  currentWeight: number;
+};
+
+function PyramidResultBlock({
+  result,
+  rules,
+}: {
+  result: PyramidSuccess | null;
+  rules: PyramidRulesShape;
+}) {
+  if (result == null) {
+    return (
+      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-5 text-center">
+        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          Pyramid Analysis
+        </div>
+        <div className="mt-2 text-[12px] text-m-text-dim">
+          Select a holding and enter price, equity, and ATR to compute the pyramid.
+        </div>
+      </div>
+    );
+  }
+
+  const r = result;
+  const lastBuyToneIsUp = r.lastBuyProfitPct >= 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[13px] font-semibold text-m-text">
+        Pyramid Analysis: <span className="font-m-num tabular-nums text-m-accent">{r.ticker}</span>
+      </div>
+
+      {/* Last Buy Info — 3 stacked inline cards */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Last Buy Info
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Last Buy Price"
+            value={formatCurrency(r.lastBuyPrice)}
+            inline
+          />
+          <ResultCard
+            label="Last Buy P&L"
+            value={`${r.lastBuyProfitPct >= 0 ? "+" : ""}${r.lastBuyProfitPct.toFixed(2)}%`}
+            sub={`${formatCurrency(r.lastBuyPrice * (r.lastBuyProfitPct / 100))}/share`}
+            tone={lastBuyToneIsUp ? "up" : "down"}
+            inline
+          />
+          <ResultCard
+            label="Total Cushion"
+            value={`${r.cushionPct >= 0 ? "+" : ""}${r.cushionPct.toFixed(2)}%`}
+            sub={`avg cost ${formatCurrency(r.avgCost)}`}
+            tone="warn"
+            inline
+          />
+        </div>
+      </div>
+
+      {/* Pyramid Calculation — 3 stacked inline cards */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Pyramid Calculation
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label={`Base Add (${rules.alloc_pct}%)`}
+            value={`${r.baseAdd} shs`}
+            sub={`${rules.alloc_pct}% of ${Math.floor(r.shares)} shares`}
+            inline
+          />
+          <ResultCard
+            label="Scale Factor"
+            value={`${(r.scaleFactor * 100).toFixed(0)}%`}
+            sub={`last buy up ${r.lastBuyProfitPct.toFixed(1)}% (need ${rules.trigger_pct}%)`}
+            inline
+          />
+          <ResultCard
+            label="Pyramid Max"
+            value={`${r.pyramidMaxShares} shs`}
+            sub="after scaling"
+            inline
+          />
+        </div>
+      </div>
+
+      {/* Ceiling Check — 3 stacked inline cards */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Ceiling Check
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Position Ceiling"
+            value={`${r.positionCeiling} shs`}
+            sub={`${r.tier.name} · ${r.tier.atrMult.toFixed(1)}× ATR`}
+            inline
+          />
+          <ResultCard
+            label="Current Position"
+            value={`${Math.floor(r.shares)} shs`}
+            sub={`${r.currentWeight.toFixed(1)}% weight`}
+            inline
+          />
+          <ResultCard
+            label="Room to Add"
+            value={`${r.roomToAdd} shs`}
+            sub="before hitting ceiling"
+            inline
+          />
+        </div>
+      </div>
+
+      {/* Verdict — 4 branches mirroring desktop L1015-1047 */}
+      <PyramidVerdict result={r} />
+    </div>
+  );
+}
+
+function PyramidVerdict({ result }: { result: PyramidSuccess }) {
+  const r = result;
+
+  if (r.scaleFactor === 0) {
+    const direction = r.lastBuyProfitPct < 0 ? "down" : "flat";
+    return (
+      <div
+        data-testid="pyramid-verdict-error"
+        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+        style={{
+          background: "color-mix(in oklab, var(--m-down) 12%, transparent)",
+          borderColor: "var(--m-down)",
+          color: "var(--m-down)",
+        }}
+      >
+        <strong>NO ADD</strong> — Last buy is {direction} ({r.lastBuyProfitPct.toFixed(2)}%). Wait for it to work.
+      </div>
+    );
+  }
+
+  if (r.pyramidAllowed === 0 && r.pyramidMaxShares > 0) {
+    return (
+      <div
+        data-testid="pyramid-verdict-warning"
+        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+        style={{
+          background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
+          borderColor: "var(--m-warn-border)",
+          color: "var(--m-text)",
+        }}
+      >
+        <strong>NO ROOM</strong> — Pyramid says {r.pyramidMaxShares} shares, but position is at ATR/cap ceiling ({r.positionCeiling} shs).
+      </div>
+    );
+  }
+
+  if (r.pyramidAllowed > 0) {
+    const limitedBy = r.pyramidAllowed === r.pyramidMaxShares ? "Pyramid pace" : "ATR/Cap ceiling";
+    return (
+      <div className="flex flex-col gap-3">
+        <div
+          data-testid="pyramid-verdict-success"
+          className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+          style={{
+            background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
+            borderColor: "var(--m-accent-border)",
+            color: "var(--m-text)",
+          }}
+        >
+          <strong>ADD {r.pyramidAllowed} shares</strong> ({formatCurrency(r.pyramidValue, { decimals: 0 })}) — limited by: {limitedBy}.
+        </div>
+
+        {/* 3 follow-up cards on success */}
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Add Shares"
+            value={`${r.pyramidAllowed} shs`}
+            sub={formatCurrency(r.pyramidValue, { decimals: 0 })}
+            tone="up"
+            inline
+          />
+          <ResultCard
+            label="New Total"
+            value={`${r.newTotalAfter} shs`}
+            sub={`${r.newWeightAfter.toFixed(1)}% weight`}
+            inline
+          />
+          <ResultCard
+            label="New Avg Cost"
+            value={formatCurrency(r.newAvgCostAfter)}
+            sub={`from ${formatCurrency(r.avgCost)}`}
+            inline
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid="pyramid-verdict-info"
+      className="rounded-m-md border-[0.5px] border-m-border bg-m-surface-2 px-[14px] py-3 text-[12px] text-m-text-muted"
+    >
+      Scale factor resulted in 0 shares. Last buy needs more profit before adding.
+    </div>
+  );
+}
 
 // ── Picker tiles ──────────────────────────────────────────────────
 

@@ -17,6 +17,8 @@ vi.mock("@/lib/api", () => ({
     rallyPrefix: vi.fn(),
     priceLookup: vi.fn(),
     tradesOpen: vi.fn(),
+    tradesOpenDetails: vi.fn(),
+    config: vi.fn(),
   },
   getActivePortfolio: vi.fn(() => "CanSlim"),
 }));
@@ -28,7 +30,7 @@ vi.mock("@/lib/log", () => ({
 import { api } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { MobilePositionSizer } from "./mobile-position-sizer";
-import type { Portfolio, TradePosition } from "@/lib/api";
+import type { Portfolio, TradeDetail, TradePosition } from "@/lib/api";
 
 const CANSLIM: Portfolio = {
   id: 1,
@@ -72,6 +74,26 @@ function holdingFixture(opts: {
   } as TradePosition;
 }
 
+function detailFixture(opts: {
+  trade_id: string;
+  ticker?: string;
+  date?: string;
+  action?: "BUY" | "SELL";
+  shares: number;
+  amount: number;
+}): TradeDetail {
+  return {
+    trade_id: opts.trade_id,
+    ticker: opts.ticker ?? "AAA",
+    action: opts.action ?? "BUY",
+    date: opts.date ?? "2026-05-01",
+    shares: opts.shares,
+    amount: opts.amount,
+    value: opts.shares * opts.amount,
+    rule: "",
+  } as TradeDetail;
+}
+
 function setApiMocks(opts: {
   endNlv?: number | null;
   state?: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION" | null;
@@ -79,6 +101,9 @@ function setApiMocks(opts: {
   atrPct?: number;
   priceRejects?: boolean;
   holdings?: TradePosition[];
+  details?: TradeDetail[];
+  pyramidRules?: { trigger_pct: number; alloc_pct: number };
+  pyramidRulesRejects?: boolean;
 } = {}) {
   vi.mocked(api.journalLatest).mockResolvedValue(
     opts.endNlv === null
@@ -99,6 +124,18 @@ function setApiMocks(opts: {
     });
   }
   vi.mocked(api.tradesOpen).mockResolvedValue((opts.holdings ?? []) as any);
+  vi.mocked(api.tradesOpenDetails).mockResolvedValue({
+    details: opts.details ?? [],
+    lot_closures: [],
+  } as any);
+  if (opts.pyramidRulesRejects) {
+    vi.mocked(api.config).mockRejectedValue(new Error("config not found"));
+  } else {
+    vi.mocked(api.config).mockResolvedValue({
+      key: "pyramid_rules",
+      value: opts.pyramidRules ?? { trigger_pct: 5, alloc_pct: 20 },
+    } as any);
+  }
 }
 
 function resetApiMocks() {
@@ -106,6 +143,8 @@ function resetApiMocks() {
   vi.mocked(api.rallyPrefix).mockReset();
   vi.mocked(api.priceLookup).mockReset();
   vi.mocked(api.tradesOpen).mockReset();
+  vi.mocked(api.tradesOpenDetails).mockReset();
+  vi.mocked(api.config).mockReset();
   mockSearchString = "";
 }
 
@@ -195,7 +234,6 @@ describe("MobilePositionSizer — tab switcher", () => {
   });
 
   test.each([
-    ["Pyramid", "pyramid"],
     ["Trim", "trim"],
     ["Options", "options"],
   ])("renders Coming-Soon placeholder for %s tab", async (label, _key) => {
@@ -232,10 +270,7 @@ describe("MobilePositionSizer — mount fetch", () => {
   });
 
   test("falls back to Normal mode when rallyPrefix returns null", async () => {
-    vi.mocked(api.journalLatest).mockResolvedValue({ end_nlv: 100_000 } as any);
-    vi.mocked(api.rallyPrefix).mockResolvedValue(null as any);
-    vi.mocked(api.priceLookup).mockResolvedValue({} as any);
-    vi.mocked(api.tradesOpen).mockResolvedValue([] as any);
+    setApiMocks({ endNlv: 100_000, state: null });
     render(<MobilePositionSizer />);
     const modeTrigger = await screen.findByRole("button", { name: /Mode: Normal/ });
     expect(modeTrigger).toBeInTheDocument();
@@ -569,5 +604,176 @@ describe("MobilePositionSizer — Scale-In math", () => {
 
     expect(await screen.findByTestId("scale-error-banner")).toBeInTheDocument();
     expect(screen.getByTestId("scale-error-banner")).toHaveTextContent(/NO ADD/);
+  });
+});
+
+// ── Pyramid tab (PR2) ─────────────────────────────────────────────
+
+describe("MobilePositionSizer — Pyramid mount fetch", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  test("fetches tradesOpenDetails + pyramid_rules config on mount", async () => {
+    setApiMocks();
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalledWith("CanSlim"));
+    expect(api.config).toHaveBeenCalledWith("pyramid_rules");
+  });
+
+  test("uses fallback {trigger 5, alloc 20} when config fetch rejects", async () => {
+    setApiMocks({ pyramidRulesRejects: true });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.config).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByTestId("pyramid-rules-summary"));
+    // Default copy mentions "20%" and "5%"
+    const summaryContent = await screen.findByText(/Each add is capped at/i);
+    expect(summaryContent.textContent).toMatch(/20%/);
+  });
+});
+
+describe("MobilePositionSizer — Pyramid Rules expander", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+    setApiMocks({ pyramidRules: { trigger_pct: 7, alloc_pct: 25 } });
+  });
+
+  test("renders the expander with config-driven copy after mount", async () => {
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.config).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+
+    const summary = await screen.findByTestId("pyramid-rules-summary");
+    expect(summary).toHaveTextContent(/View Pyramid Rules/);
+
+    // Expand and confirm config values flow through
+    fireEvent.click(summary);
+    const firstRule = await screen.findByText(/Each add is capped at/i);
+    expect(firstRule.textContent).toMatch(/25%/);
+    const secondRule = screen.getByText(/Your last buy must be up/i);
+    expect(secondRule.textContent).toMatch(/7%/);
+  });
+});
+
+describe("MobilePositionSizer — Pyramid math", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  test("success verdict: 100 shs @ avg 50, entry 60 → ADD 20 shares (Pyramid pace)", async () => {
+    // Cushion = (60-50)/50*100 = 20% → Tier 1 (tolPct 1.0, atrMult 2.0)
+    // baseAddPct = 0.20, threshold = 5; lastBuyProfitPct = 20% ≥ 5 → scaleFactor 1.0
+    // pyramidMaxShares = ceil(100 * 0.20 * 1.0) = 20
+    // maxSharesCap = floor(100000*0.20/60) = 333; positionCeiling = min(666, 333) = 333
+    // roomToAdd = 333 - 100 = 233; pyramidAllowed = min(20, 233) = 20 → success "Pyramid pace"
+    setApiMocks({
+      endNlv: 100_000,
+      atrPct: 5,
+      holdings: [holdingFixture({ trade_id: "T1", ticker: "AAA", shares: 100, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T1", ticker: "AAA", shares: 100, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("AAA"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // priceLookup auto-filled entry to 100 (default mock). Override + ATR.
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+
+    const verdict = await screen.findByTestId("pyramid-verdict-success");
+    expect(verdict).toHaveTextContent(/ADD 20 shares/);
+    expect(verdict).toHaveTextContent(/Pyramid pace/);
+  });
+
+  test("error verdict: lastBuy at 65 vs entry 60 → scaleFactor 0 → NO ADD (down)", async () => {
+    setApiMocks({
+      endNlv: 100_000,
+      atrPct: 5,
+      holdings: [holdingFixture({ trade_id: "T2", ticker: "BBB", shares: 100, avg_entry: 65 })],
+      details: [detailFixture({ trade_id: "T2", ticker: "BBB", shares: 100, amount: 65 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("BBB"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+
+    const verdict = await screen.findByTestId("pyramid-verdict-error");
+    expect(verdict).toHaveTextContent(/NO ADD/);
+    expect(verdict).toHaveTextContent(/down/);
+  });
+
+  test("warning verdict: position already at hard-cap ceiling → NO ROOM", async () => {
+    // Position 400 shares; equity 100k, entry 60 → maxSharesCap = 333
+    // positionCeiling ≤ 333 < 400 → roomToAdd = 0
+    // baseAddPct 0.20 × 400 × scaleFactor 1.0 → pyramidMaxShares = 80
+    // pyramidAllowed = min(80, 0) = 0 → warning path
+    setApiMocks({
+      endNlv: 100_000,
+      atrPct: 5,
+      holdings: [holdingFixture({ trade_id: "T3", ticker: "CCC", shares: 400, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T3", ticker: "CCC", shares: 400, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("CCC"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+
+    const verdict = await screen.findByTestId("pyramid-verdict-warning");
+    expect(verdict).toHaveTextContent(/NO ROOM/);
+    expect(verdict).toHaveTextContent(/Pyramid says 80 shares/);
+  });
+
+  test.each([
+    { entry: 60, expected: "Tier 1 (High Cushion)" }, // cushion = 20% → Tier 1
+    { entry: 59.99, expected: "Tier 2 (Moderate)" },  // cushion = 19.98% → Tier 2
+    { entry: 52.5, expected: "Tier 2 (Moderate)" },   // cushion = 5% → Tier 2
+    { entry: 52.4, expected: "Tier 3 (Defense)" },    // cushion = 4.8% → Tier 3
+  ])("tier boundary: entry $entry → $expected", async ({ entry, expected }) => {
+    setApiMocks({
+      endNlv: 100_000,
+      atrPct: 5,
+      holdings: [holdingFixture({ trade_id: "T4", ticker: "DDD", shares: 100, avg_entry: 50 })],
+      details: [detailFixture({ trade_id: "T4", ticker: "DDD", shares: 100, amount: 50 })],
+    });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("DDD"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: String(entry) } });
+    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+
+    // Position Ceiling card sub-text includes the tier name. Walk to the
+    // card root (rounded-m-md class) so we capture both the label row and
+    // the sub line below it.
+    await waitFor(() => {
+      const positionCeiling = screen.getByText("Position Ceiling");
+      const card = positionCeiling.closest("div.rounded-m-md") as HTMLElement | null;
+      expect(card?.textContent ?? "").toContain(expected);
+    });
   });
 });
