@@ -16,6 +16,10 @@ type Props = {
   triggerSelected?: boolean;
   /** Title shown at the top of the bottom sheet. */
   sheetTitle: string;
+  /** Tailwind max-height class for the sheet body. Default `"max-h-[85vh]"`
+   *  fits the option-list use case; consumers with content-dense bodies
+   *  (e.g. Trade Journal detail sheet) can opt up to `"max-h-[95vh]"`. */
+  maxHeightClass?: string;
   /** Render-prop for the sheet body — typically a list of options.
    *  Receives a `close` callback so option handlers can dismiss the
    *  sheet after committing a selection. */
@@ -40,6 +44,7 @@ export function MobileSelectSheet({
   triggerAccent = false,
   triggerSelected = false,
   sheetTitle,
+  maxHeightClass = "max-h-[85vh]",
   children,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -100,7 +105,7 @@ export function MobileSelectSheet({
             role="dialog"
             aria-modal="true"
             aria-label={sheetTitle}
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col border-t-[0.5px] border-m-border bg-m-bg"
+            className={`fixed inset-x-0 bottom-0 z-50 flex ${maxHeightClass} flex-col border-t-[0.5px] border-m-border bg-m-bg`}
             style={{
               borderTopLeftRadius: "var(--m-radius-xl)",
               borderTopRightRadius: "var(--m-radius-xl)",
