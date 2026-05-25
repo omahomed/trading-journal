@@ -233,10 +233,13 @@ describe("MobilePositionSizer — tab switcher", () => {
     expect(tab).toHaveAttribute("aria-selected", "true");
   });
 
-  test("renders Coming-Soon placeholder for Options tab (last remaining)", async () => {
+  test("Coming-Soon placeholder is gone from every tab (PR4 closes the arc)", async () => {
     render(<MobilePositionSizer />);
-    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
-    expect(await screen.findByText("Coming soon")).toBeInTheDocument();
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+    for (const tabName of [/Sizer/, /Scale In/, /Pyramid/, /Trim/, /Options/]) {
+      fireEvent.click(screen.getByRole("tab", { name: tabName }));
+      expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+    }
   });
 });
 
@@ -956,5 +959,212 @@ describe("MobilePositionSizer — Trim math", () => {
 
     const verdict = await screen.findByTestId("trim-verdict-success");
     expect(verdict).toHaveTextContent(/\$4,750 profit/);
+  });
+});
+
+// ── Options tab (PR4 — closes the arc) ───────────────────────────
+
+describe("MobilePositionSizer — Options tab gating", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+    setApiMocks();
+  });
+
+  test("Options tab activates via tap (no Coming-soon placeholder)", async () => {
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    expect(await screen.findByRole("tab", { name: /Options/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
+    // Method picker is always present on the Options panel.
+    expect(screen.getByRole("button", { name: /Method: Risk/ })).toBeInTheDocument();
+  });
+
+  test("?tab=options URL param activates Options on mount", async () => {
+    mockSearchString = "tab=options";
+    setApiMocks();
+    render(<MobilePositionSizer />);
+    const tab = await screen.findByRole("tab", { name: /Options/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("Method defaults to Risk; Ticker / Stock Price / Size picker are hidden", async () => {
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    expect(await screen.findByRole("button", { name: /Method: Risk/ })).toBeInTheDocument();
+    // Mode picker IS visible (Risk mode drives the recommendation).
+    expect(screen.getByRole("button", { name: /Mode:/ })).toBeInTheDocument();
+    // Equivalent-only inputs are hidden.
+    expect(screen.queryByLabelText("Stock price")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Ticker symbol")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Size: / })).not.toBeInTheDocument();
+  });
+
+  test("Switching method to Equivalent reveals Ticker + Stock Price + Size picker", async () => {
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Method: Risk/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Equivalent"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.getByLabelText("Stock price")).toBeInTheDocument();
+    expect(screen.getByLabelText("Ticker symbol")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Size:/ })).toBeInTheDocument();
+    // Mode picker hidden in Equivalent mode (recommendation is targetSize-driven).
+    expect(screen.queryByRole("button", { name: /Mode:/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("MobilePositionSizer — Options Risk-mode math", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  test("3 tier rows compute deterministically: equity=100k, cpc=$1 → 10 / 20 / 30 contracts", async () => {
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" });
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+
+    // Default cpc is "1.00" → $100/contract. Equity defaults to 100k.
+    // Conservative 1% = $1,000 budget → 10 contracts
+    // Normal       2% = $2,000 budget → 20 contracts
+    // Aggressive   3% = $3,000 budget → 30 contracts
+    const tier1 = await screen.findByTestId("options-risk-tier-1");
+    expect(tier1).toHaveTextContent(/Conservative \(1%\)/);
+    expect(tier1).toHaveTextContent(/10 contracts/);
+    expect(tier1).toHaveTextContent(/Budget \$1,000/);
+
+    const tier2 = screen.getByTestId("options-risk-tier-2");
+    expect(tier2).toHaveTextContent(/Normal \(2%\)/);
+    expect(tier2).toHaveTextContent(/20 contracts/);
+
+    const tier3 = screen.getByTestId("options-risk-tier-3");
+    expect(tier3).toHaveTextContent(/Aggressive \(3%\)/);
+    expect(tier3).toHaveTextContent(/30 contracts/);
+
+    // Hard-cap footer note must render.
+    expect(screen.getByText(/Hard cap: 5% of NLV \(\$5,000\)/)).toBeInTheDocument();
+  });
+
+  test("Recommended card reflects sizingMode: Offense (1.0%) → 10 contracts, Defense (0.5%) → 5 contracts", async () => {
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" }); // → Offense (1.0%)
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+
+    const readRecCard = () => {
+      const label = screen.getByText("Recommended");
+      return (label.closest("div.rounded-m-md") as HTMLElement | null)?.textContent ?? "";
+    };
+
+    // Offense (1.0%) → $1,000 budget → 10 contracts
+    await waitFor(() => expect(readRecCard()).toMatch(/10 contracts/));
+    expect(readRecCard()).toMatch(/Risk Budget/);
+
+    // Switch to Defense via Mode picker → 0.5% → $500 budget → 5 contracts
+    fireEvent.click(screen.getByRole("button", { name: /Mode: Offense/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Defense"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await waitFor(() => expect(readRecCard()).toMatch(/5 contracts/));
+  });
+
+  test("Single contract exceeds budget → warning banner with desktop wording", async () => {
+    // equity=100k, Defense 0.5% → $500 budget. cpc=$6 → $600/contract. 600 > 500.
+    // floor(500/600) = 0 contracts. Warning fires.
+    setApiMocks({ endNlv: 100_000, state: "CORRECTION" }); // → Defense
+    render(<MobilePositionSizer />);
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("Cost per contract"), { target: { value: "6.00" } });
+
+    const banner = await screen.findByTestId("options-risk-warning");
+    expect(banner).toHaveTextContent(/A single contract \(\$600\)/);
+    expect(banner).toHaveTextContent(/exceeds your risk budget \(\$500\)/);
+    expect(banner).toHaveTextContent(/Consider a cheaper strike or spread/);
+  });
+});
+
+describe("MobilePositionSizer — Options Equivalent-mode math", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+  });
+
+  async function switchToEquivalent() {
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Method: Risk/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Equivalent"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  test("8 tiers compute deterministically: equity=100k, entry=$100 → Full (10%) = 100 shs / 1 contract", async () => {
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+    await switchToEquivalent();
+
+    fireEvent.change(screen.getByLabelText("Stock price"), { target: { value: "100" } });
+
+    // Wait for at least one tier card to render before iterating.
+    await screen.findByTestId("options-equiv-tier-10");
+
+    // All 8 SIZE_OPTIONS (2.5 / 5 / 7.5 / 10 / 12.5 / 15 / 17.5 / 20) render.
+    expect(screen.getAllByTestId(/options-equiv-tier-/)).toHaveLength(8);
+
+    // Full (10%) at entry=$100 → positionValue $10k → sharesEquiv 100 → 1 contract.
+    const full = screen.getByTestId("options-equiv-tier-10");
+    expect(full).toHaveTextContent(/Full/);
+    expect(full).toHaveTextContent(/100 shs equiv/);
+    expect(full).toHaveTextContent(/1 contract/);
+
+    // Max (20%) at entry=$100 → positionValue $20k → sharesEquiv 200 → 2 contracts.
+    const max = screen.getByTestId("options-equiv-tier-20");
+    expect(max).toHaveTextContent(/200 shs equiv/);
+    expect(max).toHaveTextContent(/2 contracts/);
+  });
+
+  test("Success banner reflects active targetSize with deterministic numeric assertion", async () => {
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+    await switchToEquivalent();
+
+    fireEvent.change(screen.getByLabelText("Stock price"), { target: { value: "100" } });
+
+    // Default size = Full (10%) → 1 contract, 100 share equivalent, totalCost $100, 0.1% NLV.
+    const banner = await screen.findByTestId("options-equiv-banner");
+    expect(banner).toHaveTextContent(/At 10% target/);
+    expect(banner).toHaveTextContent(/Buy 1 contract /); // singular
+    expect(banner).toHaveTextContent(/\(100 share equivalent\)/);
+    expect(banner).toHaveTextContent(/for \$100/);
+    expect(banner).toHaveTextContent(/0\.1% of NLV/);
+
+    // Switch to Max (20%) → 2 contracts, 200 share equivalent.
+    fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Max"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(banner).toHaveTextContent(/At 20% target/);
+    expect(banner).toHaveTextContent(/Buy 2 contracts/);
+    expect(banner).toHaveTextContent(/200 share equivalent/);
+  });
+
+  test("Ticker input uppercase-coerces typed input", async () => {
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+    await switchToEquivalent();
+
+    const tickerInput = screen.getByLabelText("Ticker symbol") as HTMLInputElement;
+    fireEvent.change(tickerInput, { target: { value: "msft" } });
+    expect(tickerInput.value).toBe("MSFT");
   });
 });

@@ -16,11 +16,11 @@ import { MobileHoldingPicker } from "./mobile-holding-picker";
  * Mobile Position Sizer — tab-switching shell + per-tab implementations.
  *
  * Tabs (mirrors desktop order):
- *   - volatility  → New Position Sizer (vol-sizer lib, Step 3)
- *   - scalein     → Scale In Sizer (inline math, this PR)
- *   - pyramid     → Coming soon (PR2)
- *   - trim        → Coming soon (PR3)
- *   - options     → Coming soon (PR4)
+ *   - volatility  → New Position Sizer (vol-sizer lib)
+ *   - scalein     → Scale In Sizer (inline math)
+ *   - pyramid     → Pyramid Sizer (inline math)
+ *   - trim        → Trim Sizer (inline math + LIFO walk)
+ *   - options     → Options Sizer (inline math, this PR — closes arc)
  *
  * State persists across tab switches (matches desktop pattern: a user
  * iterating on one trade across multiple lenses shouldn't lose their
@@ -71,6 +71,48 @@ type TabInputs = {
   needsSizingMode?: boolean;
   needsTargetSize?: boolean;
 };
+
+// ── Options result shapes (consumed by OptionsResultBlock) ────────
+type OptionsRiskRow = {
+  label: string;
+  pct: number;
+  budget: number;
+  contracts: number;
+  totalCost: number;
+  pctNlv: number;
+};
+
+type OptionsRiskResult = {
+  mode: "risk";
+  cpc: number;
+  hardCapBudget: number;
+  rows: OptionsRiskRow[];
+  recContracts: number;
+  recTotal: number;
+  recPct: number;
+  recLimiting: string;
+  recBudget: number;
+};
+
+type OptionsEquivTier = {
+  label: string;
+  pct: number;
+  positionValue: number;
+  sharesEquiv: number;
+  contracts: number;
+  totalCost: number;
+  pctNlv: number;
+};
+
+type OptionsEquivResult = {
+  mode: "equivalent";
+  cpc: number;
+  hardCapBudget: number;
+  positionTiers: OptionsEquivTier[];
+  price: number;
+};
+
+type OptionsResult = OptionsRiskResult | OptionsEquivResult;
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string; icon: string }> = [
   { key: "volatility", label: "Sizer", icon: "⚖️" },
@@ -204,6 +246,13 @@ export function MobilePositionSizer() {
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [sizeIdx, setSizeIdx] = useState<number>(DEFAULT_SIZE_INDEX);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+
+  // Options-only state. optMode toggles between "risk" (recommend N
+  // contracts from sizing mode + tier table) and "equivalent" (translate
+  // stock-position size into contract count). costPerContract is the
+  // per-share option premium ($1.00 default → $100/contract).
+  const [optMode, setOptMode] = useState<"risk" | "equivalent">("risk");
+  const [costPerContract, setCostPerContract] = useState("1.00");
 
   // Fetched / lifecycle
   const [equity, setEquity] = useState<number | null>(null);
@@ -603,6 +652,70 @@ export function MobilePositionSizer() {
       avgCostSold,
     };
   }, [activeTab, selectedHolding, entry, eq, targetSize, holdingInventory]);
+
+  // Options audit — inline math mirroring desktop optResults
+  // (position-sizer.tsx:534-576) field-for-field. Two render branches:
+  //   risk      → 3 tier rows + standalone recommendation card driven by
+  //               sizingMode (MCT-derived)
+  //   equivalent → 8 position-size tier rows (filtered to <=20% via
+  //               SIZE_OPTIONS) + success banner indexed by targetSize
+  // Hard cap is a literal 5% of NLV per options trade.
+  const options = useMemo((): OptionsResult | null => {
+    if (activeTab !== "options") return null;
+    const cpc = (parseFloat(costPerContract) || 0) * 100;
+    if (cpc <= 0 || eq <= 0) return null;
+    const hardCapBudget = eq * 0.05;
+
+    if (optMode === "risk") {
+      const tiers = [
+        { label: "Conservative (1%)", pct: 1.0 },
+        { label: "Normal (2%)", pct: 2.0 },
+        { label: "Aggressive (3%)", pct: 3.0 },
+      ];
+      const rows = tiers.map((t) => {
+        const budget = eq * (t.pct / 100);
+        const contracts = Math.min(
+          Math.floor(budget / cpc),
+          Math.floor(hardCapBudget / cpc),
+        );
+        const totalCost = contracts * cpc;
+        const pctNlv = eq > 0 ? (totalCost / eq) * 100 : 0;
+        return { ...t, budget, contracts, totalCost, pctNlv };
+      });
+      const recBudget = eq * (SIZING_MODES[sizingMode].pct / 100);
+      const recContracts = Math.min(
+        Math.floor(recBudget / cpc),
+        Math.floor(hardCapBudget / cpc),
+      );
+      const recTotal = recContracts * cpc;
+      const recPct = eq > 0 ? (recTotal / eq) * 100 : 0;
+      const recLimiting =
+        recContracts === Math.floor(recBudget / cpc) ? "Risk Budget" : "Hard Cap (5%)";
+      return {
+        mode: "risk",
+        cpc,
+        hardCapBudget,
+        rows,
+        recContracts,
+        recTotal,
+        recPct,
+        recLimiting,
+        recBudget,
+      };
+    }
+
+    // optMode === "equivalent"
+    if (entry <= 0) return null;
+    const positionTiers = SIZE_OPTIONS.filter((s) => s.pct <= 20).map((s) => {
+      const positionValue = eq * (s.pct / 100);
+      const sharesEquiv = Math.floor(positionValue / entry);
+      const contracts = Math.ceil(sharesEquiv / 100);
+      const totalCost = contracts * cpc;
+      const pctNlv = eq > 0 ? (totalCost / eq) * 100 : 0;
+      return { label: s.label, pct: s.pct, positionValue, sharesEquiv, contracts, totalCost, pctNlv };
+    });
+    return { mode: "equivalent", cpc, hardCapBudget, positionTiers, price: entry };
+  }, [activeTab, costPerContract, eq, sizingMode, optMode, entry]);
 
   const equityDisplay = equity != null
     ? formatCurrency(equity, { decimals: 0 })
@@ -1050,18 +1163,86 @@ export function MobilePositionSizer() {
         </div>
       )}
 
-      {/* ── Tab: Coming Soon (options) ── */}
+      {/* ── Tab: Options ── */}
       {activeTab === "options" && (
-        <div
-          id="sizer-panel-options"
-          role="tabpanel"
-          className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-8 text-center"
-        >
-          <div className="text-[14px] font-medium text-m-text">Coming soon</div>
-          <div className="mt-1.5 text-[12px] text-m-text-dim">
-            Options sizer mobile build lands in a follow-up PR.
+        <div id="sizer-panel-options" role="tabpanel" className="flex flex-col gap-2.5">
+          {/* Method picker (Risk / Equivalent). Picker-tile + bottom
+              sheet pattern reused from Mode/Size pickers — no segmented
+              control precedent in the mobile codebase. */}
+          <OptionsMethodPickerTile optMode={optMode} onChange={setOptMode} />
+
+          {/* Cost per Contract + Account Equity (always visible) */}
+          <div className="grid grid-cols-2 gap-2">
+            <NumberFieldCell
+              label="Cost / Contract ($)"
+              value={costPerContract}
+              onChange={setCostPerContract}
+              ariaLabel="Cost per contract"
+              placeholder="1.00"
+            />
+            <NumberFieldCell
+              label="Account Equity"
+              value={equity != null ? String(equity) : ""}
+              onChange={(v) => {
+                const n = parseFloat(v);
+                setEquity(Number.isFinite(n) && n > 0 ? n : null);
+              }}
+              ariaLabel="Account equity"
+              placeholder="0"
+            />
           </div>
-          <div className="mt-1 text-[11px] text-m-text-faint">Use desktop until then.</div>
+
+          {/* Risk mode → Mode picker drives the highlighted recommendation */}
+          {optMode === "risk" && (
+            <ModePickerTile
+              sizingMode={sizingMode}
+              onChange={(i) => {
+                setSizingMode(i);
+                setSizingModeManual(true);
+              }}
+            />
+          )}
+
+          {/* Equivalent mode → Ticker + Stock Price + Size picker */}
+          {optMode === "equivalent" && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
+                  <span className="mb-0.5 block text-[10px] font-medium text-m-text-dim">
+                    Ticker
+                  </span>
+                  <input
+                    type="text"
+                    value={ticker}
+                    onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                    placeholder="XYZ"
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-label="Ticker symbol"
+                    className="w-full bg-transparent font-m-num text-lg font-medium tabular-nums text-m-text placeholder:text-m-text-faint focus:outline-none"
+                  />
+                </label>
+                <NumberFieldCell
+                  label="Stock Price"
+                  value={entryPrice}
+                  onChange={setEntryPrice}
+                  ariaLabel="Stock price"
+                  placeholder="0.00"
+                />
+              </div>
+              <SizePickerTile sizeIdx={sizeIdx} onChange={setSizeIdx} />
+            </>
+          )}
+
+          <OptionsResultBlock
+            result={options}
+            sizingMode={sizingMode}
+            costPerContract={costPerContract}
+            equity={eq}
+            ticker={ticker}
+            targetSize={targetSize}
+          />
         </div>
       )}
     </div>
@@ -1935,6 +2116,262 @@ function ReadOnlyFieldCell({
         {labelIcon}
       </div>
       <div className="font-m-num text-lg font-medium tabular-nums text-m-text">{value}</div>
+    </div>
+  );
+}
+
+// ── Options picker tile (Method: Risk / Equivalent) ───────────────
+
+const OPTIONS_METHODS = [
+  { key: "risk", label: "Risk", description: "Premium = max risk" },
+  { key: "equivalent", label: "Equivalent", description: "Match stock exposure" },
+] as const;
+
+function OptionsMethodPickerTile({
+  optMode,
+  onChange,
+}: {
+  optMode: "risk" | "equivalent";
+  onChange: (m: "risk" | "equivalent") => void;
+}) {
+  const current = OPTIONS_METHODS.find((m) => m.key === optMode) ?? OPTIONS_METHODS[0];
+  return (
+    <MobileSelectSheet
+      triggerLabel="Method"
+      triggerValue={current.label}
+      triggerSubValue={current.description}
+      triggerSelected
+      sheetTitle="Sizing method"
+    >
+      {(close) => (
+        <div className="flex flex-col">
+          {OPTIONS_METHODS.map((opt) => {
+            const isActive = opt.key === optMode;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                role="option"
+                aria-selected={isActive}
+                onClick={() => {
+                  onChange(opt.key);
+                  close();
+                }}
+                className="flex min-h-[52px] items-center justify-between border-b-[0.5px] border-m-border px-5 py-3.5 text-left last:border-b-0"
+              >
+                <span className="flex flex-col">
+                  <span className={`text-base ${isActive ? "font-medium" : ""} text-m-text`}>
+                    {opt.label}
+                  </span>
+                  <span className="text-[12px] text-m-text-dim">{opt.description}</span>
+                </span>
+                {isActive && (
+                  <Check size={20} strokeWidth={2} className="text-m-accent" aria-hidden="true" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </MobileSelectSheet>
+  );
+}
+
+// ── Options result block ──────────────────────────────────────────
+
+function OptionsResultBlock({
+  result,
+  sizingMode,
+  costPerContract,
+  equity,
+  ticker,
+  targetSize,
+}: {
+  result: OptionsResult | null;
+  sizingMode: 0 | 1 | 2;
+  costPerContract: string;
+  equity: number;
+  ticker: string;
+  targetSize: number;
+}) {
+  if (result == null) {
+    return (
+      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-5 text-center">
+        <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          Options Sizer
+        </div>
+        <div className="mt-2 text-[12px] text-m-text-dim">
+          Enter cost per contract + equity to size your options trade.
+        </div>
+      </div>
+    );
+  }
+
+  if (result.mode === "risk") {
+    const r = result;
+    const modeLabel = SIZING_MODES[sizingMode].label.split(" ")[0];
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="text-[13px] font-semibold text-m-text">Risk-Based Options Sizing</div>
+
+        {/* Summary — 3 stacked inline cards */}
+        <div className="grid grid-cols-1 gap-2">
+          <ResultCard
+            label="Selected Risk Budget"
+            value={formatCurrency(r.recBudget, { decimals: 0 })}
+            sub={`${SIZING_MODES[sizingMode].pct}% of equity (${modeLabel})`}
+            inline
+          />
+          <ResultCard
+            label="Cost / Contract"
+            value={formatCurrency(r.cpc, { decimals: 0 })}
+            sub={`$${costPerContract} × 100 shares`}
+            inline
+          />
+          <ResultCard
+            label="Recommended"
+            value={`${r.recContracts} contract${r.recContracts !== 1 ? "s" : ""}`}
+            sub={`${formatCurrency(r.recTotal, { decimals: 0 })} (${r.recPct.toFixed(1)}% NLV) · ${r.recLimiting}`}
+            tone="up"
+            inline
+          />
+        </div>
+
+        {/* Warning when single contract exceeds budget */}
+        {r.recContracts === 0 && (
+          <div
+            data-testid="options-risk-warning"
+            className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+            style={{
+              background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
+              borderColor: "var(--m-warn-border)",
+              color: "var(--m-text)",
+            }}
+          >
+            A single contract ({formatCurrency(r.cpc, { decimals: 0 })}) exceeds your risk budget ({formatCurrency(r.recBudget, { decimals: 0 })}). Consider a cheaper strike or spread.
+          </div>
+        )}
+
+        {/* All Risk Tiers — card stack (no row highlight to mirror desktop) */}
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+            All Risk Tiers
+          </div>
+          <div className="grid grid-cols-1 gap-2">
+            {r.rows.map((row) => (
+              <div
+                key={row.label}
+                data-testid={`options-risk-tier-${row.pct}`}
+                className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
+              >
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[12px] font-medium text-m-text">{row.label}</span>
+                  <span className="font-m-num text-base font-medium tabular-nums text-m-text">
+                    {row.contracts} {row.contracts === 1 ? "contract" : "contracts"}
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-3 gap-2 font-m-num text-[11px] tabular-nums text-m-text-dim">
+                  <span>Budget {formatCurrency(row.budget, { decimals: 0 })}</span>
+                  <span>Cost {formatCurrency(row.totalCost, { decimals: 0 })}</span>
+                  <span className="text-right">{row.pctNlv.toFixed(2)}% NLV</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="text-[11px] text-m-text-faint">
+          Hard cap: 5% of NLV ({formatCurrency(r.hardCapBudget, { decimals: 0 })}) — no tier can exceed this.
+        </div>
+      </div>
+    );
+  }
+
+  // Equivalent mode
+  const r = result;
+  const selected = r.positionTiers.find((t) => t.pct === targetSize);
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[13px] font-semibold text-m-text">
+        Position Equivalent: <span className="font-m-num tabular-nums text-m-accent">{ticker || "—"}</span>
+      </div>
+      <div className="text-[12px] text-m-text-dim">
+        How many option contracts replicate stock exposure at each position size tier.
+      </div>
+
+      {/* Summary — 3 stacked inline cards */}
+      <div className="grid grid-cols-1 gap-2">
+        <ResultCard label="Stock Price" value={formatCurrency(r.price)} sub={ticker || "—"} inline />
+        <ResultCard
+          label="Cost / Contract"
+          value={formatCurrency(r.cpc, { decimals: 0 })}
+          sub={`$${costPerContract} × 100 shares`}
+          inline
+        />
+        <ResultCard
+          label="Account Equity"
+          value={formatCurrency(equity, { decimals: 0 })}
+          inline
+        />
+      </div>
+
+      {/* Position Tiers — card stack with active-targetSize highlight */}
+      <div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
+          Position Tiers
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          {r.positionTiers.map((t) => {
+            const isActive = t.pct === targetSize;
+            return (
+              <div
+                key={t.label}
+                data-testid={`options-equiv-tier-${t.pct}`}
+                aria-current={isActive ? "true" : undefined}
+                className="rounded-m-md border-[0.5px] px-[14px] py-[10px]"
+                style={{
+                  background: isActive
+                    ? "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))"
+                    : "var(--m-surface)",
+                  borderColor: isActive ? "var(--m-accent-border)" : "var(--m-border)",
+                  borderLeftWidth: isActive ? 3 : 1,
+                  borderLeftColor: isActive ? "var(--m-accent)" : "var(--m-border)",
+                }}
+              >
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[12px] font-medium text-m-text">
+                    {t.label} <span className="text-m-text-dim">({t.pct}%)</span>
+                    {isActive && <span className="ml-1 text-m-accent">←</span>}
+                  </span>
+                  <span className="font-m-num text-base font-medium tabular-nums text-m-text">
+                    {t.contracts} {t.contracts === 1 ? "contract" : "contracts"}
+                  </span>
+                </div>
+                <div className="mt-1 grid grid-cols-3 gap-2 font-m-num text-[11px] tabular-nums text-m-text-dim">
+                  <span>Stock {formatCurrency(t.positionValue, { decimals: 0 })}</span>
+                  <span>{t.sharesEquiv} shs equiv</span>
+                  <span className="text-right">{t.pctNlv.toFixed(2)}% NLV</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Success banner mirroring desktop verbiage */}
+      {selected && (
+        <div
+          data-testid="options-equiv-banner"
+          className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+          style={{
+            background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
+            borderColor: "var(--m-accent-border)",
+            color: "var(--m-text)",
+          }}
+        >
+          At <strong>{targetSize}%</strong> target: Buy <strong>{selected.contracts} contract{selected.contracts !== 1 ? "s" : ""}</strong> ({selected.sharesEquiv} share equivalent) for {formatCurrency(selected.totalCost, { decimals: 0 })} ({selected.pctNlv.toFixed(1)}% of NLV).
+        </div>
+      )}
     </div>
   );
 }
