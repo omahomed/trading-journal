@@ -100,14 +100,14 @@ export function MobileSelectSheet({
             role="dialog"
             aria-modal="true"
             aria-label={sheetTitle}
-            className="fixed inset-x-0 bottom-0 z-50 border-t-[0.5px] border-m-border bg-m-bg pb-6"
+            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col border-t-[0.5px] border-m-border bg-m-bg"
             style={{
               borderTopLeftRadius: "var(--m-radius-xl)",
               borderTopRightRadius: "var(--m-radius-xl)",
               animation: "m-sheet-enter var(--m-duration-sheet) var(--m-ease-spring)",
             }}
           >
-            <div className="flex items-center justify-between border-b-[0.5px] border-m-border px-5 pt-4 pb-3">
+            <div className="flex shrink-0 items-center justify-between border-b-[0.5px] border-m-border px-5 pt-4 pb-3">
               <h2 className="text-base font-medium text-m-text">{sheetTitle}</h2>
               <button
                 type="button"
@@ -118,7 +118,20 @@ export function MobileSelectSheet({
                 <X size={20} strokeWidth={1.5} aria-hidden="true" />
               </button>
             </div>
-            <div role="listbox" aria-label={sheetTitle}>
+            {/* Items scroll independently. min-h-0 lets flex-1 actually
+                shrink the listbox below its content height (otherwise
+                long lists would force the parent to grow past max-h).
+                Bottom padding respects iOS safe-area so the last item
+                clears the home indicator. */}
+            <div
+              role="listbox"
+              aria-label={sheetTitle}
+              className="min-h-0 flex-1 overflow-y-auto"
+              style={{
+                paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))",
+                WebkitOverflowScrolling: "touch",
+              }}
+            >
               {children(() => setOpen(false))}
             </div>
           </div>
