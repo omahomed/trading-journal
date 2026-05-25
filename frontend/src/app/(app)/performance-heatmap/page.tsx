@@ -1,10 +1,7 @@
-"use client";
+import { connection } from "next/server";
+import PerformanceHeatmapClient from "./performance-heatmap-client";
 
-import { usePathname } from "next/navigation";
-import { PerfHeatmap } from "@/components/perf-heatmap";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  return <PerfHeatmap navColor={navColor} />;
+export default async function PerformanceHeatmapPage() {
+  await connection();
+  return <PerformanceHeatmapClient />;
 }

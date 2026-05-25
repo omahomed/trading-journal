@@ -1,10 +1,7 @@
-"use client";
+import { connection } from "next/server";
+import AdminClient from "./admin-client";
 
-import { usePathname } from "next/navigation";
-import { Admin } from "@/components/admin";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  return <Admin navColor={navColor} />;
+export default async function AdminPage() {
+  await connection();
+  return <AdminClient />;
 }

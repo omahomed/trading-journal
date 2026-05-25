@@ -1,10 +1,7 @@
-"use client";
+import { connection } from "next/server";
+import LogSellClient from "./log-sell-client";
 
-import { usePathname } from "next/navigation";
-import { LogSell } from "@/components/log-sell";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  return <LogSell navColor={navColor} />;
+export default async function LogSellPage() {
+  await connection();
+  return <LogSellClient />;
 }

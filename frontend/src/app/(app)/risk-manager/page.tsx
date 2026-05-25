@@ -1,10 +1,7 @@
-"use client";
+import { connection } from "next/server";
+import RiskManagerClient from "./risk-manager-client";
 
-import { usePathname } from "next/navigation";
-import { RiskManager } from "@/components/risk-manager";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  return <RiskManager navColor={navColor} />;
+export default async function RiskManagerPage() {
+  await connection();
+  return <RiskManagerClient />;
 }

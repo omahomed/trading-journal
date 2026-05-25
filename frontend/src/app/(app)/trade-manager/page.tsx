@@ -1,23 +1,12 @@
-"use client";
+import { connection } from "next/server";
+import TradeManagerClient from "./trade-manager-client";
 
-import { useState, useEffect } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
-import { TradeManager } from "@/components/trade-manager";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const navColor = getGroupForHref(pathname)?.color || "#6366f1";
-  const [initialTab, setInitialTab] = useState<string | undefined>(searchParams.get("tab") || undefined);
-
-  useEffect(() => { setInitialTab(searchParams.get("tab") || undefined); }, [searchParams]);
-
-  return (
-    <TradeManager
-      navColor={navColor}
-      initialTab={initialTab}
-      onTabConsumed={() => setInitialTab(undefined)}
-    />
-  );
+export default async function TradeManagerPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  await connection();
+  const sp = await searchParams;
+  return <TradeManagerClient initialTabProp={sp.tab} />;
 }

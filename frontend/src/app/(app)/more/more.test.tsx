@@ -11,7 +11,7 @@ vi.mock("@/lib/use-viewport", () => ({
 }));
 
 import { setFocusModeActive, getFocusModeSnapshot } from "@/lib/format";
-import MorePage from "./page";
+import MoreClient from "./more-client";
 
 const FOCUS_KEY = "mo-focus-mode";
 
@@ -43,7 +43,7 @@ function stubLocalStorage(): Record<string, string> {
   return data;
 }
 
-describe("MorePage — Focus Mode toggle", () => {
+describe("MoreClient — Focus Mode toggle", () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
@@ -57,7 +57,7 @@ describe("MorePage — Focus Mode toggle", () => {
   });
 
   test("renders a toggle row labeled 'Focus Mode' with the description copy", () => {
-    render(<MorePage />);
+    render(<MoreClient />);
     expect(screen.getByText("Focus Mode")).toBeInTheDocument();
     expect(screen.getByText(/Hide dollar amounts/)).toBeInTheDocument();
     expect(screen.getByRole("checkbox")).toBeInTheDocument();
@@ -65,12 +65,12 @@ describe("MorePage — Focus Mode toggle", () => {
 
   test("reflects the current Focus Mode state on mount", () => {
     setFocusModeActive(true);
-    render(<MorePage />);
+    render(<MoreClient />);
     expect(screen.getByRole("checkbox")).toBeChecked();
   });
 
   test("toggling persists to localStorage and flips the module mirror", () => {
-    render(<MorePage />);
+    render(<MoreClient />);
     const toggle = screen.getByRole("checkbox") as HTMLInputElement;
     expect(toggle).not.toBeChecked();
 

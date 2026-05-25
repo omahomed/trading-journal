@@ -1,12 +1,12 @@
-"use client";
+import { connection } from "next/server";
+import DailyReportClient from "./daily-report-client";
 
-import { usePathname, useSearchParams } from "next/navigation";
-import { DailyReportCard } from "@/components/daily-report-card";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  const searchParams = useSearchParams();
-  const initialDate = searchParams?.get("date") || undefined;
-  return <DailyReportCard navColor={navColor} initialDate={initialDate} />;
+export default async function DailyReportPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
+  await connection();
+  const sp = await searchParams;
+  return <DailyReportClient initialDate={sp.date} />;
 }

@@ -1,27 +1,12 @@
-"use client";
+import { connection } from "next/server";
+import AnalyticsClient from "./analytics-client";
 
-import { useState, useEffect } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
-import { Analytics } from "@/components/analytics";
-import { getGroupForHref } from "@/lib/nav";
-
-export default function Route() {
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const navColor = getGroupForHref(pathname)?.color || "#6366f1";
-  const [initialTab, setInitialTab] = useState<string | undefined>(searchParams.get("tab") || undefined);
-  const [initialTradeId, setInitialTradeId] = useState<string | undefined>(searchParams.get("trade_id") || undefined);
-
-  useEffect(() => { setInitialTab(searchParams.get("tab") || undefined); }, [searchParams]);
-  useEffect(() => { setInitialTradeId(searchParams.get("trade_id") || undefined); }, [searchParams]);
-
-  return (
-    <Analytics
-      navColor={navColor}
-      initialTab={initialTab}
-      initialTradeId={initialTradeId}
-      onTabConsumed={() => setInitialTab(undefined)}
-      onTradeIdConsumed={() => setInitialTradeId(undefined)}
-    />
-  );
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; trade_id?: string }>;
+}) {
+  await connection();
+  const sp = await searchParams;
+  return <AnalyticsClient initialTabProp={sp.tab} initialTradeIdProp={sp.trade_id} />;
 }
