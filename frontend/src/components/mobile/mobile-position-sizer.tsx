@@ -11,6 +11,7 @@ import { SIZING_MODES, mctStateToSizingMode } from "@/lib/sizing-mode";
 import { computeVolatilitySizing, type VolSizerResults, type SizingScenario } from "@/lib/vol-sizer";
 import { MobileSelectSheet } from "./mobile-select-sheet";
 import { MobileHoldingPicker } from "./mobile-holding-picker";
+import { NumberFieldCell, ReadOnlyFieldCell } from "./mobile-form-fields";
 
 /**
  * Mobile Position Sizer — tab-switching shell + per-tab implementations.
@@ -2073,65 +2074,9 @@ function ScenarioRow({
   );
 }
 
-// ── Field primitives ──────────────────────────────────────────────
-
-function NumberFieldCell({
-  label,
-  value,
-  onChange,
-  ariaLabel,
-  suffix,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  ariaLabel: string;
-  suffix?: string;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
-      <span className="mb-0.5 block text-[10px] font-medium text-m-text-dim">{label}</span>
-      <span className="flex items-baseline gap-1">
-        <input
-          type="text"
-          inputMode="decimal"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label={ariaLabel}
-          placeholder={placeholder}
-          className="min-w-0 flex-1 bg-transparent font-m-num text-lg font-medium tabular-nums text-m-text placeholder:text-m-text-faint focus:outline-none"
-        />
-        {suffix && (
-          <span className="font-m-num text-lg font-medium tabular-nums text-m-text-dim">
-            {suffix}
-          </span>
-        )}
-      </span>
-    </label>
-  );
-}
-
-function ReadOnlyFieldCell({
-  label,
-  labelIcon,
-  value,
-}: {
-  label: string;
-  labelIcon?: React.ReactNode;
-  value: string;
-}) {
-  return (
-    <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
-      <div className="mb-0.5 flex items-center gap-1 text-[10px] font-medium text-m-text-dim">
-        {label}
-        {labelIcon}
-      </div>
-      <div className="font-m-num text-lg font-medium tabular-nums text-m-text">{value}</div>
-    </div>
-  );
-}
+// Field primitives (NumberFieldCell, ReadOnlyFieldCell) extracted to
+// mobile-form-fields.tsx in Phase 2 Step 5 so the daily routine can
+// share the same cell shapes. Imported at the top of this file.
 
 // ── Options picker tile (Method: Risk / Equivalent) ───────────────
 

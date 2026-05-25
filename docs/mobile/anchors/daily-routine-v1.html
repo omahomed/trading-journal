@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Daily Routine — Mobile Anchor v1 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .annotation ul { margin: 8px 0 0; padding-left: 20px; }
+  .annotation li { margin: 3px 0; }
+  .container { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .device {
+    max-width: 360px;
+    width: 100%;
+    background: #1c1815;
+    border-radius: 42px;
+    padding: 10px;
+    border: 0.5px solid rgba(255,235,210,0.06);
+  }
+  .screen {
+    background: #100D0B;
+    border-radius: 34px;
+    overflow: hidden;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Daily Routine — v1 (LOCKED)</h1>
+  Reference design for <strong>mobile-daily-routine.tsx</strong> (Phase 2 Step 5). Mobile-fitted port of desktop daily-routine.tsx with three UX wins layered in:
+  <ul>
+    <li><strong>Pre-load existing</strong> — when an entry exists for the chosen date, form pre-fills + green-bordered banner + Force Overwrite auto-on. Eliminates desktop's conflict-then-refill loop.</li>
+    <li><strong>localStorage autosave</strong> — 500ms debounced; key <code>mo-daily-routine-draft-{YYYY-MM-DD}</code>. Restored on mount, cleared on save success, preserved on save failure.</li>
+    <li><strong>MobileScoreSelector chips</strong> — replaces touch-hostile range sliders with 1-5 tap-target chip rows, tier-tinted (1-2 red, 3 amber, 4-5 green).</li>
+  </ul>
+</div>
+
+<div class="device">
+<div class="screen">
+
+<!-- iOS status bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 6px; font-size: 14px; font-weight: 500;">
+<span>9:41</span>
+<span style="display: flex; gap: 6px; align-items: center;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11h2v3H2zM6 7h2v7H6zM10 4h2v10h-2zM14 1h2v13h-2z" fill="#F5EFE5"/></svg>
+<svg width="20" height="14" viewBox="0 0 20 14" fill="none"><rect x="1" y="3" width="16" height="8" rx="2" stroke="#F5EFE5" stroke-width="1" fill="none"/><rect x="3" y="5" width="12" height="4" rx="1" fill="#F5EFE5"/><rect x="18" y="5" width="1" height="4" rx="0.5" fill="#F5EFE5"/></svg>
+</span>
+</div>
+
+<!-- Tape pill -->
+<div style="margin: 8px 16px 0; padding: 8px 14px; background: rgba(175,169,236,0.10); border: 0.5px solid rgba(175,169,236,0.22); border-radius: 999px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+<span style="width: 6px; height: 6px; border-radius: 50%; background: #AFA9EC;"></span>
+<span style="color: #C9C5F0; font-weight: 500;">POWERTREND</span>
+<span style="color: #6B6358;">·</span>
+<span style="color: #B0A89E;">Day 5</span>
+<span style="margin-left: auto; color: #B0A89E; font-size: 11px;">Cap 200%</span>
+</div>
+
+<!-- Wordmark -->
+<div style="padding: 14px 20px 4px;">
+<div style="font-size: 28px; font-weight: 500; letter-spacing: -0.02em;">Daily <span style="font-family: 'Iowan Old Style', 'Palatino', Georgia, serif; font-style: italic; color: #4ADE80; font-weight: 400;">Routine</span></div>
+<div style="font-size: 12px; color: #7A7268; margin-top: 2px;">Mon, May 25 · CanSlim · 457B Plan · LTG</div>
+</div>
+
+<!-- Pre-load banner -->
+<div style="margin: 10px 16px 0; padding: 12px 14px; background: rgba(74,222,128,0.10); border: 0.5px solid rgba(74,222,128,0.30); border-left: 3px solid #4ADE80; border-radius: 10px; display: flex; gap: 10px; align-items: flex-start;">
+<svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="margin-top: 2px; flex-shrink: 0;"><path d="M11 2l1 1L4 11H3v-1L11 2z" stroke="#4ADE80" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<div style="flex: 1; min-width: 0; font-size: 12px;">
+<div style="font-weight: 500;">Editing existing entry</div>
+<div style="margin-top: 2px; color: #7A7268;">CanSlim already saved for this date. Force overwrite auto-enabled below.</div>
+</div>
+</div>
+
+<!-- MARKET section -->
+<div style="padding: 10px 16px 0;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase; color: #7A7268; padding: 0 4px;">Market</div>
+
+<div style="margin-top: 8px; padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Date</div>
+<div style="font-size: 16px; font-variant-numeric: tabular-nums;">2026-05-25</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">SPY Close</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">540.12</div>
+</div>
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Nasdaq Close</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">18420.55</div>
+</div>
+</div>
+
+<div style="margin-top: 8px; padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Market Notes</div>
+<div style="font-size: 14px; color: #B0A89E;">Day 14 UPTREND: Gap up, breadth solid</div>
+</div>
+</div>
+
+<!-- PORTFOLIOS section -->
+<div style="padding: 14px 16px 0;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase; color: #7A7268; padding: 0 4px;">Portfolios</div>
+
+<!-- CanSlim card -->
+<div style="margin-top: 8px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px;">
+<div style="display: flex; justify-content: space-between; align-items: baseline; padding: 10px 16px; border-bottom: 0.5px solid rgba(255,235,210,0.06);">
+<span style="font-size: 13px; font-weight: 600;">CanSlim</span>
+<span style="font-size: 12px; color: #4ADE80; font-weight: 500; font-variant-numeric: tabular-nums;">+1.45%</span>
+</div>
+
+<!-- Derived tile row -->
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 10px 16px; border-bottom: 0.5px solid rgba(255,235,210,0.06);">
+<div style="padding: 4px 8px; background: rgba(255,235,210,0.04); border-radius: 6px;">
+<div style="font-size: 9px; font-weight: 500; color: #7A7268; letter-spacing: 0.06em; text-transform: uppercase;">Prev NLV</div>
+<div style="font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 1px;">$487,704</div>
+</div>
+<div style="padding: 4px 8px; background: rgba(255,235,210,0.04); border-radius: 6px;">
+<div style="font-size: 9px; font-weight: 500; color: #7A7268; letter-spacing: 0.06em; text-transform: uppercase;">Daily $</div>
+<div style="font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 1px; color: #4ADE80;">+$7,072</div>
+</div>
+<div style="padding: 4px 8px; background: rgba(255,235,210,0.04); border-radius: 6px;">
+<div style="font-size: 9px; font-weight: 500; color: #7A7268; letter-spacing: 0.06em; text-transform: uppercase;">Daily %</div>
+<div style="font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 1px; color: #4ADE80;">+1.45%</div>
+</div>
+<div style="padding: 4px 8px; background: rgba(255,235,210,0.04); border-radius: 6px;">
+<div style="font-size: 9px; font-weight: 500; color: #7A7268; letter-spacing: 0.06em; text-transform: uppercase;">% Invested</div>
+<div style="font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 1px;">61.2%</div>
+</div>
+</div>
+
+<!-- Inputs -->
+<div style="padding: 16px; display: flex; flex-direction: column; gap: 8px;">
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Closing NLV *</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">494,776</div>
+</div>
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Total Holdings *</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;">302,830</div>
+</div>
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Cash +/−</div>
+<div style="font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; color: #7A7268;">0</div>
+</div>
+<div style="padding: 10px 14px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Actions</div>
+<div style="font-size: 14px; color: #B0A89E;">BUY: NVDA, AAPL | SELL: MSFT</div>
+</div>
+</div>
+</div>
+
+<!-- 457B Plan stub -->
+<div style="margin-top: 8px; padding: 10px 16px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; color: #7A7268; font-size: 12px;">
+457B Plan card (same shape, condensed for the mockup)
+</div>
+<div style="margin-top: 8px; padding: 10px 16px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px; color: #7A7268; font-size: 12px;">
+LTG card (same shape, condensed for the mockup)
+</div>
+</div>
+
+<!-- REPORT CARD section -->
+<div style="margin: 14px 16px 0; padding: 12px 16px 16px; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px;">
+<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 12px;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase; color: #7A7268;">Report Card</div>
+<div style="font-size: 44px; font-family: 'Iowan Old Style', Georgia, serif; font-weight: 500; line-height: 1; color: #4ADE80;">A</div>
+<div style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums; margin-top: 2px;">19 / 20</div>
+</div>
+
+<!-- Chip rows -->
+<div style="display: flex; flex-direction: column; gap: 12px;">
+<!-- Followed plan -->
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<span style="font-size: 12px; font-weight: 500;">Followed plan</span>
+<div style="display: flex; gap: 4px;">
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">1</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">2</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">3</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">4</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; background: #4ADE80; color: #052e16; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">5</div>
+</div>
+</div>
+<!-- Respected stops -->
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<span style="font-size: 12px; font-weight: 500;">Respected stops</span>
+<div style="display: flex; gap: 4px;">
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">1</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">2</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">3</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; background: #4ADE80; color: #052e16; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">4</div>
+<div style="width: 36px; height: 36px; border-radius: 999px; border: 0.5px solid rgba(255,235,210,0.10); background: #100D0B; color: #B0A89E; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;">5</div>
+</div>
+</div>
+</div>
+
+<div style="margin-top: 14px; padding: 10px 14px; background: #100D0B; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px;">
+<div style="font-size: 10px; font-weight: 500; color: #7A7268; margin-bottom: 2px;">Grade Notes</div>
+<div style="font-size: 14px; color: #B0A89E;">Optional…</div>
+</div>
+</div>
+
+<!-- Force overwrite toggle row -->
+<div style="margin: 14px 16px 0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 12px;">
+<div style="flex: 1; min-width: 0;">
+<div style="font-size: 14px;">Force overwrite existing entry</div>
+<div style="font-size: 12px; color: #7A7268; margin-top: 2px;">Auto-enabled because an entry already exists for this date.</div>
+</div>
+<div style="position: relative; width: 44px; height: 26px;">
+<div style="position: absolute; top: 0; left: 0; width: 44px; height: 26px; background: #4ADE80; border-radius: 999px;"></div>
+<div style="position: absolute; top: 2px; left: 20px; width: 22px; height: 22px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,0.2);"></div>
+</div>
+</div>
+
+<!-- Sticky Save bar -->
+<div style="margin: 16px 16px 22px; padding: 12px 0 0; border-top: 0.5px solid rgba(255,235,210,0.04);">
+<button style="width: 100%; height: 48px; background: #4ADE80; color: #052e16; font-size: 15px; font-weight: 600; border-radius: 12px; border: none; display: flex; align-items: center; justify-content: center; gap: 6px;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 6-6" stroke="#052e16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+Save daily routine
+</button>
+<div style="margin-top: 6px; text-align: center; font-size: 11px; color: #7A7268;">Autosaved 3s ago</div>
+</div>
+
+</div>
+</div>
+
+</div>
+</body>
+</html>
