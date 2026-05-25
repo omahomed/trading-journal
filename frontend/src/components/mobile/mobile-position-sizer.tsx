@@ -317,11 +317,18 @@ export function MobilePositionSizer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Volatility ticker → priceLookup, debounced 600ms. Scale-In picks
-  // its price up via the holding-picker onSelect handler below
-  // (matches desktop's L692-701 inline lookup on holding pick).
+  // Ticker → priceLookup, debounced 600ms. Fires for Volatility and
+  // Options Equivalent (both have a free-form ticker input). Scale-In /
+  // Pyramid / Trim pick price up via the holding-picker onSelect handler
+  // below (matches desktop's L692-701 inline lookup on holding pick).
+  // Desktop's equivalent effect gates only on [ticker] with no tab check,
+  // so Equivalent ticker auto-fills there incidentally — mobile needed
+  // the explicit gate widen.
   useEffect(() => {
-    if (activeTab !== "volatility") return;
+    const tickerInputTab =
+      activeTab === "volatility" ||
+      (activeTab === "options" && optMode === "equivalent");
+    if (!tickerInputTab) return;
     const t = ticker.trim();
     if (!t) {
       setPriceError(null);
@@ -346,7 +353,7 @@ export function MobilePositionSizer() {
         .finally(() => setPriceLoading(false));
     }, 600);
     return () => clearTimeout(timeout);
-  }, [ticker, activeTab]);
+  }, [ticker, activeTab, optMode]);
 
   // Holding selection → priceLookup auto-fill (mirrors desktop L692-701).
   const handleHoldingSelect = (h: TradePosition) => {
@@ -667,10 +674,16 @@ export function MobilePositionSizer() {
     const hardCapBudget = eq * 0.05;
 
     if (optMode === "risk") {
+      // Tier extension (3 → 5) mirrors desktop position-sizer.tsx:546.
+      // Max (5%) equals the literal hard cap — at default sizing modes
+      // the row renders the same numbers as the hard-cap footer note,
+      // intentional for tier-row transparency.
       const tiers = [
         { label: "Conservative (1%)", pct: 1.0 },
         { label: "Normal (2%)", pct: 2.0 },
         { label: "Aggressive (3%)", pct: 3.0 },
+        { label: "Heavy (4%)", pct: 4.0 },
+        { label: "Max (5%)", pct: 5.0 },
       ];
       const rows = tiers.map((t) => {
         const budget = eq * (t.pct / 100);

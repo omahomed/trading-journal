@@ -1025,7 +1025,7 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
     resetApiMocks();
   });
 
-  test("3 tier rows compute deterministically: equity=100k, cpc=$1 → 10 / 20 / 30 contracts", async () => {
+  test("5 tier rows compute deterministically: equity=100k, cpc=$1 → 10 / 20 / 30 / 40 / 50 contracts", async () => {
     setApiMocks({ endNlv: 100_000, state: "POWERTREND" });
     render(<MobilePositionSizer />);
     fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
@@ -1035,6 +1035,8 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
     // Conservative 1% = $1,000 budget → 10 contracts
     // Normal       2% = $2,000 budget → 20 contracts
     // Aggressive   3% = $3,000 budget → 30 contracts
+    // Heavy        4% = $4,000 budget → 40 contracts
+    // Max          5% = $5,000 budget → 50 contracts (equals hard cap)
     const tier1 = await screen.findByTestId("options-risk-tier-1");
     expect(tier1).toHaveTextContent(/Conservative \(1%\)/);
     expect(tier1).toHaveTextContent(/10 contracts/);
@@ -1047,6 +1049,16 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
     const tier3 = screen.getByTestId("options-risk-tier-3");
     expect(tier3).toHaveTextContent(/Aggressive \(3%\)/);
     expect(tier3).toHaveTextContent(/30 contracts/);
+
+    const tier4 = screen.getByTestId("options-risk-tier-4");
+    expect(tier4).toHaveTextContent(/Heavy \(4%\)/);
+    expect(tier4).toHaveTextContent(/40 contracts/);
+    expect(tier4).toHaveTextContent(/Budget \$4,000/);
+
+    const tier5 = screen.getByTestId("options-risk-tier-5");
+    expect(tier5).toHaveTextContent(/Max \(5%\)/);
+    expect(tier5).toHaveTextContent(/50 contracts/);
+    expect(tier5).toHaveTextContent(/Budget \$5,000/);
 
     // Hard-cap footer note must render.
     expect(screen.getByText(/Hard cap: 5% of NLV \(\$5,000\)/)).toBeInTheDocument();
@@ -1166,5 +1178,70 @@ describe("MobilePositionSizer — Options Equivalent-mode math", () => {
     const tickerInput = screen.getByLabelText("Ticker symbol") as HTMLInputElement;
     fireEvent.change(tickerInput, { target: { value: "msft" } });
     expect(tickerInput.value).toBe("MSFT");
+  });
+});
+
+describe("MobilePositionSizer — Options Equivalent priceLookup wiring", () => {
+  beforeEach(() => {
+    withPortfolio();
+    resetApiMocks();
+    setApiMocks({ endNlv: 100_000, price: 185.5, atrPct: 5 });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function gotoEquivalent() {
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Method: Risk/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Equivalent"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  test("fires priceLookup 600ms after Equivalent ticker changes and auto-fills Stock Price", async () => {
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+    await gotoEquivalent();
+
+    const tickerInput = screen.getByLabelText("Ticker symbol") as HTMLInputElement;
+    fireEvent.change(tickerInput, { target: { value: "nvda" } });
+    expect(tickerInput.value).toBe("NVDA");
+
+    expect(api.priceLookup).not.toHaveBeenCalledWith("NVDA");
+
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalledWith("NVDA"));
+
+    const stockPriceInput = await screen.findByLabelText("Stock price") as HTMLInputElement;
+    expect(stockPriceInput.value).toBe("185.5");
+  });
+
+  test("does NOT fire priceLookup in Risk mode even when a ticker is set from Equivalent", async () => {
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
+
+    // Set a ticker in Equivalent first (the only Options mode with a ticker
+    // input). Then drain debounce + swap to Risk and confirm a SECOND
+    // ticker mutation does NOT re-fire the lookup.
+    await gotoEquivalent();
+    fireEvent.change(screen.getByLabelText("Ticker symbol"), { target: { value: "AAA" } });
+    await act(async () => { vi.advanceTimersByTime(700); });
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalledWith("AAA"));
+
+    vi.mocked(api.priceLookup).mockClear();
+
+    // Switch back to Risk mode. Mode picker reappears; ticker input hidden.
+    fireEvent.click(screen.getByRole("button", { name: /Method: Equivalent/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Risk"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // optMode flip itself should NOT re-fire priceLookup (no ticker change).
+    await act(async () => { vi.advanceTimersByTime(700); });
+    expect(api.priceLookup).not.toHaveBeenCalled();
   });
 });

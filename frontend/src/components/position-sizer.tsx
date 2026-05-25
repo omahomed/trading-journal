@@ -538,11 +538,16 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     const hardCapBudget = equity * 0.05;
 
     if (optMode === "risk") {
-      // Risk-based: show contracts at 1%, 2%, 3% risk tiers
+      // Risk-based: show contracts at 1%/2%/3%/4%/5% risk tiers.
+      // Max (5%) tier matches the literal hard cap — at default sizing
+      // modes it renders the same numbers as the footer's hard-cap note,
+      // intentional for tier-row transparency.
       const tiers = [
         { label: "Conservative (1%)", pct: 1.0 },
         { label: "Normal (2%)", pct: 2.0 },
         { label: "Aggressive (3%)", pct: 3.0 },
+        { label: "Heavy (4%)", pct: 4.0 },
+        { label: "Max (5%)", pct: 5.0 },
       ];
       const rows = tiers.map(t => {
         const budget = equity * (t.pct / 100);
@@ -922,7 +927,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                       ✓ Position is risk-free — stop {formatCurrency(scaleResults.stop)} sits above your {formatCurrency(scaleResults.avgEntry)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
                     </div>
                   )}
-                  <h3 className="text-[15px] font-semibold mb-4">PYRAMID TICKET</h3>
+                  <h3 className="text-[15px] font-semibold mb-4">SCALE TICKET</h3>
                   <div className="grid grid-cols-4 gap-3 mb-4">
                     <MetricCard label="ADD SHARES" value={`+${scaleResults.recommendedAdd}`}
                                 accent="#08a86b" color="#08a86b" />
