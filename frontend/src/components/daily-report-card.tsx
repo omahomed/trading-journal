@@ -760,7 +760,7 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
                 portfolio={portfolio}
                 disabledMessage="Save the journal entry first to add captures."
                 activeMessage="Paste a screenshot or drag an image here"
-                microcopy="Anything worth a second look — charts, alerts, news clips. PNG, JPEG, GIF, WEBP. Max 5MB."
+                microcopy="Anything worth a second look — charts, alerts, news clips. PNG, JPEG, GIF, WEBP. Max 15MB."
                 dropZoneAriaLabel="Upload capture"
                 lightboxAriaLabel="Capture preview"
               />

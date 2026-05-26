@@ -284,8 +284,8 @@ def test_upload_rejects_disallowed_mime(client, monkeypatch):
 
 def test_upload_rejects_oversize(client, monkeypatch):
     tc, api_main = client
-    # 5MB + 1 byte
-    big = b"x" * (5 * 1024 * 1024 + 1)
+    # 15MB + 1 byte
+    big = b"x" * (15 * 1024 * 1024 + 1)
     r = tc.post(
         "/api/weekly-retros/5/snapshots",
         files={"file": ("big.png", big, "image/png")},
@@ -295,7 +295,7 @@ def test_upload_rejects_oversize(client, monkeypatch):
     assert r.status_code == 413
     body = r.json()
     assert body["detail"]["error"] == "file_too_large"
-    assert body["detail"]["limit_bytes"] == 5 * 1024 * 1024
+    assert body["detail"]["limit_bytes"] == 15 * 1024 * 1024
 
 
 def test_upload_returns_404_when_retro_not_owned(client, monkeypatch):

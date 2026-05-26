@@ -927,13 +927,13 @@ describe("WeeklyThoughts — Phase 4.1 polish + image paste", () => {
 
   // ─── Image paste — size rejection ────────────────────────────────────
 
-  test("Image paste >5MB shows inline error, no upload call", async () => {
+  test("Image paste >15MB shows inline error, no upload call", async () => {
     render(<WeeklyThoughts value="" onChange={() => {}} retroId={7} portfolio="CanSlim" />);
     const editor = screen.getByRole("textbox", { name: /weekly thoughts/i });
-    const big = makeImageFile("big.png", 5 * 1024 * 1024 + 1, "image/png");
+    const big = makeImageFile("big.png", 15 * 1024 * 1024 + 1, "image/png");
     await act(async () => { dispatchPasteWithImage(editor, big); });
     expect(mockApi.uploadWeeklyThoughtsImage).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/5MB/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/15MB/i);
   });
 
   // ─── Image paste — MIME rejection ────────────────────────────────────

@@ -85,7 +85,7 @@ describe("MobileImageUpload — state rendering", () => {
     render(<Harness onUpload={vi.fn()} onDelete={vi.fn()} />);
     const cta = screen.getByTestId("image-upload-empty-cta");
     expect(cta).toHaveTextContent(/Add images/);
-    expect(cta).toHaveTextContent(/5 MB max/);
+    expect(cta).toHaveTextContent(/15 MB max/);
     expect(cta).toHaveTextContent(/PNG|JPG/);
   });
 
@@ -128,14 +128,16 @@ describe("MobileImageUpload — state rendering", () => {
   });
 
   test("custom maxFileBytes reflected in format hint", () => {
+    // Pick a value distinct from the 15 MB default so the assertion
+    // actually exercises the override path.
     render(
       <Harness
         onUpload={vi.fn()}
         onDelete={vi.fn()}
-        maxFileBytes={15 * 1024 * 1024}
+        maxFileBytes={25 * 1024 * 1024}
       />,
     );
-    expect(screen.getByTestId("image-upload-empty-cta")).toHaveTextContent(/15 MB max/);
+    expect(screen.getByTestId("image-upload-empty-cta")).toHaveTextContent(/25 MB max/);
   });
 });
 

@@ -5364,8 +5364,11 @@ def r2_status():
 
 import uuid as _uuid
 
-# Audit §5: 5MB upload cap, image MIME whitelist.
-_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024
+# Audit §5: 15MB upload cap, image MIME whitelist. Bumped from 5MB
+# (Phase 2 housekeeping) ahead of T2-4 mobile detail consumers — iPhone
+# HEIC→JPEG conversions can exceed 5MB at high quality, and the larger
+# headroom de-risks the mobile upload flow without inviting absurd sizes.
+_SNAPSHOT_MAX_BYTES = 15 * 1024 * 1024
 _SNAPSHOT_ALLOWED_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 _SNAPSHOT_MIME_TO_EXT = {
     "image/png": "png",
@@ -5387,7 +5390,7 @@ async def upload_weekly_retro_snapshot(
 
     Rejects:
       - non-image MIME (allow: png/jpeg/gif/webp) → 415
-      - size > 5MB → 413
+      - size > 15MB → 413
       - retro not owned by caller (RLS miss) → 404
     Bytes upload to R2 via r2.upload_blob; metadata row INSERTed into
     weekly_retro_snapshots. Returns row dict with precomputed view_url.
@@ -5535,7 +5538,7 @@ async def upload_daily_journal_capture(
 
     Rejects:
       - non-image MIME (allow: png/jpeg/gif/webp) → 415
-      - size > 5MB → 413
+      - size > 15MB → 413
       - journal not owned by caller (RLS miss) → 404
     """
     if not _is_r2_available():

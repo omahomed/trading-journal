@@ -301,7 +301,7 @@ def test_upload_rejects_disallowed_mime(client):
 
 def test_upload_rejects_oversize(client):
     tc, _ = client
-    big = b"x" * (5 * 1024 * 1024 + 1)
+    big = b"x" * (15 * 1024 * 1024 + 1)
     r = tc.post(
         "/api/daily-journals/5/captures",
         files={"file": ("big.png", big, "image/png")},

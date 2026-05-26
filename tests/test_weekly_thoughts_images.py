@@ -4,7 +4,7 @@ POST /api/weekly-retros/{retro_id}/thoughts-images
 
 Surface tested:
   - 415 on disallowed MIME (text/plain)
-  - 413 on body > 5MB
+  - 413 on body > 15MB
   - 404 when retro is not visible to the caller (ownership miss)
   - 200 happy path returns {"view_url": "..."} with the R2 prefix
   - Object key pattern includes the "thoughts/" segment so future
@@ -56,7 +56,7 @@ def test_upload_rejects_disallowed_mime(client):
 
 def test_upload_rejects_oversize(client):
     tc, _ = client
-    big = b"x" * (5 * 1024 * 1024 + 1)  # 5MB + 1 byte
+    big = b"x" * (15 * 1024 * 1024 + 1)  # 15MB + 1 byte
     r = tc.post(
         "/api/weekly-retros/5/thoughts-images",
         files={"file": ("big.png", big, "image/png")},
@@ -65,7 +65,7 @@ def test_upload_rejects_oversize(client):
     )
     assert r.status_code == 413
     assert r.json()["detail"]["error"] == "file_too_large"
-    assert r.json()["detail"]["limit_bytes"] == 5 * 1024 * 1024
+    assert r.json()["detail"]["limit_bytes"] == 15 * 1024 * 1024
 
 
 def test_upload_returns_404_when_retro_not_owned(client, monkeypatch):

@@ -72,8 +72,8 @@ export interface MobileImageUploadProps<TRow extends ImageUploadRow> {
   /** Override the disabled-state title. */
   disabledMessage?: string;
   /** Max bytes per file. Files larger than this are rejected
-   *  client-side before `onUpload` fires. Default 5 MB matches the
-   *  desktop SnapshotGallery cap. */
+   *  client-side before `onUpload` fires. Default 15 MB matches the
+   *  desktop SnapshotGallery + backend _SNAPSHOT_MAX_BYTES cap. */
   maxFileBytes?: number;
   /** Accepted MIME types. HEIC and other unsupported formats are
    *  rejected with a specific banner message. Defaults to PNG /
@@ -86,7 +86,7 @@ export interface MobileImageUploadProps<TRow extends ImageUploadRow> {
   onThumbnailTap?: (row: TRow, index: number) => void;
 }
 
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 15 * 1024 * 1024;
 const DEFAULT_ACCEPTED: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",

@@ -75,7 +75,7 @@ export interface SnapshotGalleryProps {
   lightboxAriaLabel?: string;
 }
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ALLOWED_MIMES = new Set([
   "image/png",
   "image/jpeg",
@@ -96,7 +96,7 @@ function describeRejection(f: File): string {
   if (!ALLOWED_MIMES.has(f.type))
     return `${f.name}: only PNG / JPEG / GIF / WEBP allowed`;
   if (f.size > MAX_FILE_BYTES)
-    return `${f.name}: exceeds 5MB limit`;
+    return `${f.name}: exceeds 15MB limit`;
   return `${f.name}: rejected`;
 }
 
@@ -107,7 +107,7 @@ export function SnapshotGallery({
   onCountChange,
   disabledMessage,
   activeMessage = "Paste a screenshot or drag an image here",
-  microcopy = "Charts and snapshots from your week. PNG, JPEG, GIF, WEBP. Max 5MB.",
+  microcopy = "Charts and snapshots from your week. PNG, JPEG, GIF, WEBP. Max 15MB.",
   dropZoneAriaLabel = "Upload snapshot",
   lightboxAriaLabel = "Snapshot preview",
 }: SnapshotGalleryProps) {

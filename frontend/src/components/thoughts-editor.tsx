@@ -993,18 +993,18 @@ export function ThoughtsEditor({
           showInlineError(noEntityErrorMessage);
           return;
         }
-        // Client-side size + MIME guard (mirrors the server's 5MB +
+        // Client-side size + MIME guard (mirrors the server's 15MB +
         // PNG/JPEG/GIF/WEBP allow-list). Fail-fast before paying the
         // upload latency.
         const allowedMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-        const MAX_BYTES = 5 * 1024 * 1024;
+        const MAX_BYTES = 15 * 1024 * 1024;
         for (const file of imageFiles) {
           if (!allowedMimes.has(file.type)) {
             showInlineError(`${file.name}: only PNG / JPEG / GIF / WEBP allowed`);
             continue;
           }
           if (file.size > MAX_BYTES) {
-            showInlineError(`${file.name}: exceeds 5MB limit`);
+            showInlineError(`${file.name}: exceeds 15MB limit`);
             continue;
           }
           void uploadAndInsertImage(file);

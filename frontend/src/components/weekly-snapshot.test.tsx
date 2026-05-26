@@ -114,11 +114,11 @@ describe("WeeklySnapshot — Phase 4", () => {
 
   // ─── Upload (client-side validation) ───────────────────────────────────
 
-  test("Rejects file >5MB client-side; no upload call", async () => {
+  test("Rejects file >15MB client-side; no upload call", async () => {
     render(<WeeklySnapshot retroId={7} portfolio="CanSlim" />);
     await waitFor(() => expect(mockApi.listWeeklyRetroSnapshots).toHaveBeenCalled());
 
-    const big = makeFile("big.png", 5 * 1024 * 1024 + 1, "image/png");
+    const big = makeFile("big.png", 15 * 1024 * 1024 + 1, "image/png");
     // Inject via the hidden file input — testing-library uses
     // change events on input[type=file].
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -127,7 +127,7 @@ describe("WeeklySnapshot — Phase 4", () => {
       fireEvent.change(input);
     });
     expect(mockApi.uploadWeeklyRetroSnapshot).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/5MB/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/15MB/i);
   });
 
   test("Rejects non-image file client-side; no upload call", async () => {
