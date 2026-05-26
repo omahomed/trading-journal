@@ -34,10 +34,14 @@ type TickerGradeMap = Record<string, WeeklyRetroTickerGrade>;
 // ticker-card grade chip below; the Phase 4.6 CloseTheWeek surface
 // imports its own copy.
 
-export function WeeklyRetro({ navColor }: { navColor: string }) {
+export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initialWeek?: string }) {
   const [details, setDetails] = useState<TradeDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [weekDate, setWeekDate] = useState(() => {
+    // Honor ?week=YYYY-MM-DD when present — mirrors the daily-report ?date=
+    // pattern so the mobile list view's tap-to-detail navigation lands on
+    // the tapped week instead of the current Monday.
+    if (initialWeek && /^\d{4}-\d{2}-\d{2}$/.test(initialWeek)) return initialWeek;
     const n = new Date();
     const day = n.getDay(); // 0=Sun
     const offset = day === 0 ? -6 : 1 - day;

@@ -2,9 +2,15 @@
 
 import { usePathname } from "next/navigation";
 import { WeeklyRetro } from "@/components/weekly-retro";
+import { MobileWeeklyRetro } from "@/components/mobile/mobile-weekly-retro";
+import { useIsMobile } from "@/lib/use-viewport";
 import { getGroupForHref } from "@/lib/nav";
 
-export default function WeeklyRetroClient() {
+type Props = { initialWeek?: string };
+
+export default function WeeklyRetroClient({ initialWeek }: Props) {
+  const isMobile = useIsMobile();
   const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  return <WeeklyRetro navColor={navColor} />;
+  if (isMobile) return <MobileWeeklyRetro />;
+  return <WeeklyRetro navColor={navColor} initialWeek={initialWeek} />;
 }
