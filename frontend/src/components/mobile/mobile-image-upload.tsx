@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   AlertCircle,
@@ -84,6 +85,16 @@ export interface MobileImageUploadProps<TRow extends ImageUploadRow> {
   /** Fires when the user taps an uploaded thumbnail. Consumer wires
    *  a lightbox (or other view affordance) here. */
   onThumbnailTap?: (row: TRow, index: number) => void;
+  /** Predicate marking a row as non-deletable. The X button + delete-
+   *  confirm flow are suppressed for matching rows. Used by mixed
+   *  galleries that interleave user-uploaded items (deletable) with
+   *  system-generated items like EOD snapshots (read-only). */
+  nonDeletable?: (row: TRow) => boolean;
+  /** Optional per-row badge overlay rendered in the top-left corner
+   *  of the thumbnail. Used by mixed galleries to mark provenance
+   *  (e.g., "EOD" for system-generated EOD snapshots). Return null
+   *  for rows that should render without a badge. */
+  renderBadge?: (row: TRow) => ReactNode;
 }
 
 const DEFAULT_MAX_BYTES = 15 * 1024 * 1024;
@@ -115,6 +126,8 @@ export function MobileImageUpload<TRow extends ImageUploadRow>({
   acceptedMimes,
   emptyStateLabel = "Add images",
   onThumbnailTap,
+  nonDeletable,
+  renderBadge,
 }: MobileImageUploadProps<TRow>) {
   const allowedMimes = acceptedMimes ?? (DEFAULT_ACCEPTED as Set<string>);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -308,6 +321,8 @@ export function MobileImageUpload<TRow extends ImageUploadRow>({
           onPick={triggerPicker}
           onThumbnailTap={onThumbnailTap}
           onStartDelete={startDelete}
+          nonDeletable={nonDeletable}
+          renderBadge={renderBadge}
         />
       )}
 
@@ -372,6 +387,8 @@ function PopulatedState<TRow extends ImageUploadRow>({
   onPick,
   onThumbnailTap,
   onStartDelete,
+  nonDeletable,
+  renderBadge,
 }: {
   rows: TRow[];
   pendingUploads: PendingUpload[];
@@ -379,6 +396,8 @@ function PopulatedState<TRow extends ImageUploadRow>({
   onPick: () => void;
   onThumbnailTap?: (row: TRow, index: number) => void;
   onStartDelete: (row: TRow) => void;
+  nonDeletable?: (row: TRow) => boolean;
+  renderBadge?: (row: TRow) => ReactNode;
 }) {
   const isConfirming = confirmingDelete != null;
   return (
@@ -397,6 +416,8 @@ function PopulatedState<TRow extends ImageUploadRow>({
             dimmed={isConfirming && confirmingDelete !== row.id}
             onTap={onThumbnailTap}
             onRemove={onStartDelete}
+            deletable={!nonDeletable || !nonDeletable(row)}
+            badge={renderBadge ? renderBadge(row) : null}
           />
         ))}
         {pendingUploads.map((p) => (
@@ -421,6 +442,8 @@ function Thumbnail<TRow extends ImageUploadRow>({
   dimmed,
   onTap,
   onRemove,
+  deletable = true,
+  badge,
 }: {
   row: TRow;
   index: number;
@@ -428,6 +451,8 @@ function Thumbnail<TRow extends ImageUploadRow>({
   dimmed: boolean;
   onTap?: (row: TRow, index: number) => void;
   onRemove: (row: TRow) => void;
+  deletable?: boolean;
+  badge?: ReactNode;
 }) {
   const containerStyle: CSSProperties = {
     width: 84,
@@ -457,8 +482,19 @@ function Thumbnail<TRow extends ImageUploadRow>({
         />
       </button>
 
-      {/* Always-visible X — fires startDelete. */}
-      {!confirming && (
+      {/* Optional per-row badge overlay (e.g., "EOD" for system rows). */}
+      {badge ? (
+        <div
+          data-testid={`image-upload-badge-${row.id}`}
+          className="absolute left-1 top-1"
+        >
+          {badge}
+        </div>
+      ) : null}
+
+      {/* Always-visible X — fires startDelete. Suppressed when
+          deletable=false (e.g., system-generated rows in a mixed gallery). */}
+      {!confirming && deletable && (
         <button
           type="button"
           onClick={(e) => {
