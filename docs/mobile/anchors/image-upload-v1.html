@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Image Upload — Mobile Anchor v1 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .annotation ul { margin: 8px 0 0; padding-left: 20px; }
+  .annotation li { margin: 3px 0; }
+  .container { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .frame {
+    max-width: 360px;
+    width: 100%;
+    background: #100D0B;
+    border-radius: 18px;
+    padding: 16px;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .state-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: #7A7268;
+    margin: 0 0 8px 4px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Image Upload — v1 (LOCKED)</h1>
+  Reference design for <strong>mobile-image-upload.tsx</strong> (Phase 2 T2-3). Entity-agnostic primitive consumed by T2-4 (Daily Report detail edit) and T2-5 (Weekly Retro detail edit). 7 states stacked below.
+  <ul>
+    <li><strong>Function-as-prop:</strong> consumer wraps <code>api.upload*</code> via <code>onUpload</code> + <code>onDelete</code> callbacks. Primitive doesn't know about backend endpoints.</li>
+    <li><strong>Click-only:</strong> no drag-drop, no paste — those don't translate to mobile.</li>
+    <li><strong>ImageLightbox not embedded:</strong> consumer wires fullscreen via <code>onThumbnailTap</code>.</li>
+  </ul>
+</div>
+
+<!-- STATE 1: Empty -->
+<div class="state-label">1 · EMPTY</div>
+<div class="frame">
+<button style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 120px; padding: 16px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.22); border-radius: 14px; color: #F5EFE5;">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="#B0A89E" stroke-width="1.5"/><circle cx="9" cy="9" r="1.5" fill="#B0A89E"/><path d="M3 14l5-5 4 4" stroke="#B0A89E" stroke-width="1.5"/><path d="M19 12v8M15 16h8" stroke="#B0A89E" stroke-width="1.5" stroke-linecap="round"/></svg>
+<div style="font-size: 13px; font-weight: 500;">Add images</div>
+<div style="font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">PNG / JPG / GIF / WEBP · 5 MB max</div>
+</button>
+</div>
+
+<!-- STATE 2: Populated -->
+<div class="state-label">2 · POPULATED</div>
+<div class="frame">
+<div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;">
+<!-- thumb 1 with X -->
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a3f5f, #4a7ba8); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);">
+<button style="position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; background: rgba(0,0,0,0.65); border-radius: 999px; display: flex; align-items: center; justify-content: center; border: none;">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
+</div>
+<!-- thumb 2 with X -->
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #5f4a2a, #a87b4a); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);">
+<button style="position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; background: rgba(0,0,0,0.65); border-radius: 999px; display: flex; align-items: center; justify-content: center; border: none;">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
+</div>
+<!-- thumb 3 with X -->
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a5f4a, #4aa87b); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);">
+<button style="position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; background: rgba(0,0,0,0.65); border-radius: 999px; display: flex; align-items: center; justify-content: center; border: none;">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
+</div>
+<!-- add more -->
+<button style="flex-shrink: 0; width: 84px; height: 84px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.22); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #B0A89E;">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+</div>
+</div>
+
+<!-- STATE 3: Uploading -->
+<div class="state-label">3 · UPLOADING</div>
+<div class="frame">
+<div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;">
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a3f5f, #4a7ba8); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);"></div>
+<!-- pending spinner cell -->
+<div style="flex-shrink: 0; width: 84px; height: 84px; background: #2A211A; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+<div style="width: 24px; height: 24px; border: 2px solid #4ADE80; border-top-color: transparent; border-radius: 50%; animation: spin 800ms linear infinite;"></div>
+</div>
+<button style="flex-shrink: 0; width: 84px; height: 84px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.22); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #B0A89E;">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+</div>
+<div style="margin-top: 6px; font-size: 11px; color: #7A7268; font-variant-numeric: tabular-nums;">Uploading IMG_4521.jpg…</div>
+</div>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+<!-- STATE 4: Just uploaded (success ring) -->
+<div class="state-label">4 · UPLOADED (RING DECAY)</div>
+<div class="frame">
+<div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;">
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a3f5f, #4a7ba8); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);"></div>
+<!-- just-uploaded with green ring -->
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #5f4a2a, #a87b4a); border-radius: 10px; border: 2px solid #4ADE80; box-shadow: 0 0 0 2px rgba(74,222,128,0.20);">
+<button style="position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; background: rgba(0,0,0,0.65); border-radius: 999px; display: flex; align-items: center; justify-content: center; border: none;">
+<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
+</div>
+<button style="flex-shrink: 0; width: 84px; height: 84px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.22); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #B0A89E;">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+</div>
+<div style="margin-top: 6px; display: flex; align-items: center; gap: 4px; font-size: 11px; color: #4ADE80; font-variant-numeric: tabular-nums;">
+<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-6" stroke="#4ADE80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+Added IMG_4521.jpg
+</div>
+</div>
+
+<!-- STATE 5: Delete confirm -->
+<div class="state-label">5 · DELETE CONFIRM</div>
+<div class="frame">
+<div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;">
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a3f5f, #4a7ba8); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06); opacity: 0.4;"></div>
+<!-- target with trash overlay -->
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #5f4a2a, #a87b4a); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06);">
+<div style="position: absolute; inset: 0; background: rgba(0,0,0,0.45); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V4h6v3M6 7l1 12h10l1-12" stroke="#F87171" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</div>
+</div>
+<div style="position: relative; flex-shrink: 0; width: 84px; height: 84px; background: linear-gradient(135deg, #2a5f4a, #4aa87b); border-radius: 10px; border: 0.5px solid rgba(255,235,210,0.06); opacity: 0.4;"></div>
+</div>
+<div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; background: rgba(248,113,113,0.10); border: 0.5px solid #F87171; border-radius: 10px;">
+<span style="font-size: 12px;">Delete <strong>IMG_4521.jpg</strong>?</span>
+<div style="display: flex; gap: 6px; flex-shrink: 0;">
+<button style="padding: 4px 12px; font-size: 12px; font-weight: 500; color: #B0A89E; background: #1A1612; border: 0.5px solid rgba(255,235,210,0.06); border-radius: 999px;">Cancel</button>
+<button style="padding: 4px 12px; font-size: 12px; font-weight: 500; color: #fff; background: #F87171; border: none; border-radius: 999px;">Delete</button>
+</div>
+</div>
+</div>
+
+<!-- STATE 6: Error banner -->
+<div class="state-label">6 · ERROR</div>
+<div class="frame">
+<button style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 120px; padding: 16px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.22); border-radius: 14px; color: #F5EFE5;">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="#B0A89E" stroke-width="1.5"/><circle cx="9" cy="9" r="1.5" fill="#B0A89E"/><path d="M3 14l5-5 4 4" stroke="#B0A89E" stroke-width="1.5"/><path d="M19 12v8M15 16h8" stroke="#B0A89E" stroke-width="1.5" stroke-linecap="round"/></svg>
+<div style="font-size: 13px; font-weight: 500;">Add images</div>
+<div style="font-size: 11px; color: #7A7268;">PNG / JPG / GIF / WEBP · 5 MB max</div>
+</button>
+<div style="margin-top: 8px; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; background: rgba(248,113,113,0.10); border-left: 3px solid #F87171; border-radius: 10px;">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="margin-top: 2px; flex-shrink: 0;"><circle cx="12" cy="12" r="9" stroke="#F87171" stroke-width="1.6"/><path d="M12 8v5M12 16v.5" stroke="#F87171" stroke-width="1.6" stroke-linecap="round"/></svg>
+<div style="flex: 1; min-width: 0; font-size: 12px;">
+<div style="font-weight: 500;">photo.heic — type not supported</div>
+<div style="margin-top: 2px; color: #7A7268;">Use PNG / JPG / GIF / WEBP under 5 MB.</div>
+</div>
+</div>
+</div>
+
+<!-- STATE 7: Disabled -->
+<div class="state-label">7 · DISABLED</div>
+<div class="frame">
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 120px; padding: 16px; background: #1A1612; border: 0.5px dashed rgba(255,235,210,0.06); border-radius: 14px; color: #B0A89E; opacity: 0.6;">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="#5A5249" stroke-width="1.5"/><path d="M2 2l20 20" stroke="#5A5249" stroke-width="1.6" stroke-linecap="round"/></svg>
+<div style="font-size: 13px; font-weight: 500; text-align: center;">Save entry first to add images</div>
+<div style="font-size: 11px; color: #5A5249;">Image attachments unlock after first save</div>
+</div>
+</div>
+
+</div>
+</body>
+</html>
