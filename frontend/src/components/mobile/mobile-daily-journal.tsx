@@ -273,21 +273,12 @@ function Header({
   entryCount: number;
   portfolioName: string;
 }) {
+  // Wordmark dropped — the shell's MobilePageHeader owns the page
+  // title. This is the per-page metadata strip only.
   return (
-    <div className="flex flex-col gap-0.5 pt-1">
-      <h1 className="text-[28px] font-medium tracking-[-0.02em] text-m-text">
-        Daily{" "}
-        <em
-          className="not-italic font-normal text-m-accent"
-          style={{ fontFamily: "var(--font-fraunces), Georgia, serif", fontStyle: "italic" }}
-        >
-          Journal
-        </em>
-      </h1>
-      <div className="text-[12px] text-m-text-dim">
-        {entryCount} {entryCount === 1 ? "entry" : "entries"}
-        {portfolioName && <> · {portfolioName}</>}
-      </div>
+    <div className="pt-1 text-[12px] text-m-text-dim">
+      {entryCount} {entryCount === 1 ? "entry" : "entries"}
+      {portfolioName && <> · {portfolioName}</>}
     </div>
   );
 }

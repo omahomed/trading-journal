@@ -736,21 +736,12 @@ function Header({
   friendlyDate: string;
   portfolioNamesCsv: string;
 }) {
+  // Wordmark dropped — the shell's MobilePageHeader owns the page
+  // title. This is the per-page metadata strip only.
   return (
-    <div className="flex flex-col gap-0.5 pt-1">
-      <h1 className="text-[28px] font-medium tracking-[-0.02em] text-m-text">
-        Daily{" "}
-        <em
-          className="not-italic font-normal text-m-accent"
-          style={{ fontFamily: "var(--font-fraunces), Georgia, serif", fontStyle: "italic" }}
-        >
-          Routine
-        </em>
-      </h1>
-      <div className="text-[12px] text-m-text-dim">
-        {friendlyDate}
-        {portfolioNamesCsv && <> · {portfolioNamesCsv}</>}
-      </div>
+    <div className="pt-1 text-[12px] text-m-text-dim">
+      {friendlyDate}
+      {portfolioNamesCsv && <> · {portfolioNamesCsv}</>}
     </div>
   );
 }
