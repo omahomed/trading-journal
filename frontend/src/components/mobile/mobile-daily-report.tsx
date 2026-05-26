@@ -7,8 +7,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Eye,
-  EyeOff,
   Plus,
 } from "lucide-react";
 import {
@@ -153,11 +151,19 @@ export function MobileDailyReport({ initialDate }: Props) {
   const router = useRouter();
   const { activePortfolio } = usePortfolio();
   const portfolio = activePortfolio?.name ?? getActivePortfolio();
-  const date = useMemo(() => {
-    if (initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate)) return initialDate;
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
-  }, [initialDate]);
+
+  // `initialDate` must be a YYYY-MM-DD string. Missing / malformed
+  // values redirect to /daily-journal so users land on the list and
+  // pick a real date — the dead-end "No journal entry" state is only
+  // a defensive fallback for race conditions.
+  const dateValid = !!initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate);
+  const date = initialDate && dateValid ? initialDate : "";
+
+  useEffect(() => {
+    if (!dateValid) {
+      router.replace("/daily-journal");
+    }
+  }, [dateValid, router]);
 
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
   const [captures, setCaptures] = useState<DailyJournalCaptureRow[]>([]);
@@ -242,12 +248,32 @@ export function MobileDailyReport({ initialDate }: Props) {
     };
   }, [journalRow?.id, portfolio]);
 
+  // Once the fetch resolves, if no row matches the requested date,
+  // redirect to /daily-journal. The dead-end DisabledState is kept as
+  // a defensive fallback (rendered while this effect fires) but is no
+  // longer the normal landing for missing-row paths.
+  useEffect(() => {
+    if (loading) return;
+    if (!dateValid) return; // invalid-date redirect already fired above
+    if (!journalRow) {
+      router.replace("/daily-journal");
+    }
+  }, [loading, dateValid, journalRow, router]);
+
+  // All back-nav handlers route unconditionally to /daily-journal.
+  // router.back() was unreliable when users opened the page directly
+  // (deep link / bookmark) — it landed wherever the in-app history had
+  // pointed last (often /more) rather than the journal list. The
+  // disabled-state pill label promises "Back to journal list"; honor
+  // it. The header chevron does the same for consistency.
+  const goToJournalList = () => router.push("/daily-journal");
+
   if (loading) {
-    return <LoadingSkeleton date={date} portfolio={portfolio} onBack={() => router.back()} />;
+    return <LoadingSkeleton date={date} portfolio={portfolio} onBack={goToJournalList} />;
   }
 
   if (!journalRow) {
-    return <DisabledState date={date} portfolio={portfolio} onBack={() => router.back()} />;
+    return <DisabledState date={date} portfolio={portfolio} onBack={goToJournalList} />;
   }
 
   return (
@@ -265,13 +291,7 @@ export function MobileDailyReport({ initialDate }: Props) {
       availableTags={availableTags}
       tradesDetails={tradesDetails}
       tradesClosed={tradesClosed}
-      onBack={() => {
-        if (typeof window !== "undefined" && window.history.length > 1) {
-          router.back();
-        } else {
-          router.push("/daily-journal");
-        }
-      }}
+      onBack={goToJournalList}
     />
   );
 }
@@ -471,12 +491,15 @@ function LoadedReport({
     }
   }, [recapDirty, isSaving, portfolio, date, recap, draftKey, journalRow]);
 
-  // ── Focus mode hydration + toggle ────────────────────────────────
-  const [focusOn, setFocusOn] = useState(false);
+  // ── Focus mode hydration ─────────────────────────────────────────
+  // App-global focus mode lives elsewhere; this component only honors
+  // it (reads localStorage + seeds the lib/format singleton + applies
+  // the `.privacy` body class once on mount). The previous per-page
+  // toggle UI was removed in T2-4 follow-up — the global driver is
+  // the single source of truth.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(FOCUS_MODE_LS_KEY) === "on";
-      setFocusOn(saved);
       setFocusModeActive(saved);
       if (saved) {
         document.body.classList.add("privacy");
@@ -484,21 +507,6 @@ function LoadedReport({
     } catch {
       // SSR / private mode — focus mode stays off
     }
-  }, []);
-
-  const toggleFocus = useCallback(() => {
-    setFocusOn((prev) => {
-      const next = !prev;
-      setFocusModeActive(next);
-      try {
-        window.localStorage.setItem(FOCUS_MODE_LS_KEY, next ? "on" : "off");
-        if (next) document.body.classList.add("privacy");
-        else document.body.classList.remove("privacy");
-      } catch {
-        // best-effort
-      }
-      return next;
-    });
   }, []);
 
   // ── Captures + EOD merged gallery ────────────────────────────────
@@ -615,8 +623,6 @@ function LoadedReport({
         portfolio={portfolio}
         marketCycle={String(journalRow.market_cycle ?? "")}
         dayNum={Number(journalRow.mct_display_day_num ?? 0) || null}
-        focusOn={focusOn}
-        onToggleFocus={toggleFocus}
         onBack={onBack}
       />
 
@@ -701,16 +707,12 @@ function ReportHeader({
   portfolio,
   marketCycle,
   dayNum,
-  focusOn,
-  onToggleFocus,
   onBack,
 }: {
   date: string;
   portfolio: string;
   marketCycle: string;
   dayNum: number | null;
-  focusOn: boolean;
-  onToggleFocus: () => void;
   onBack: () => void;
 }) {
   const meta = [portfolio, dayNum ? `D${dayNum}` : null, marketCycle || null]
@@ -735,24 +737,11 @@ function ReportHeader({
         >
           {fmtDateHeader(date)}
         </h1>
-        <button
-          type="button"
-          onClick={onToggleFocus}
-          aria-label={focusOn ? "Disable focus mode" : "Enable focus mode"}
-          aria-pressed={focusOn}
-          data-testid="focus-mode-toggle"
-          className={`flex h-9 w-9 items-center justify-center rounded-m-pill border-[0.5px] ${
-            focusOn
-              ? "border-m-accent-border bg-m-accent-tint text-m-accent"
-              : "border-m-border bg-m-surface text-m-text-dim"
-          } active:opacity-80`}
-        >
-          {focusOn ? (
-            <EyeOff size={16} strokeWidth={1.6} aria-hidden="true" />
-          ) : (
-            <Eye size={16} strokeWidth={1.6} aria-hidden="true" />
-          )}
-        </button>
+        {/* rightSlot intentionally empty — the focus-mode toggle was
+            removed in T2-4 follow-up. The app's global focus mode
+            driver is the single source of truth; this header only
+            honors the masking state via the hydration effect. */}
+        <span className="h-9 w-9" aria-hidden="true" />
       </div>
       {meta && (
         <div className="text-center text-[11px] text-m-text-dim">{meta}</div>

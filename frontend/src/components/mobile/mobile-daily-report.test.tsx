@@ -7,8 +7,9 @@ vi.mock("@/lib/portfolio-context", () => ({
 
 const pushMock = vi.fn();
 const backMock = vi.fn();
+const replaceMock = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock, back: backMock }),
+  useRouter: () => ({ push: pushMock, back: backMock, replace: replaceMock }),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -194,46 +195,58 @@ describe("MobileDailyReport — mount fetch", () => {
 // ── Disabled state ─────────────────────────────────────────────────
 
 describe("MobileDailyReport — no journal entry", () => {
-  test("renders no-entry banner when journalHistory has no matching row", async () => {
+  test("redirects to /daily-journal after fetch resolves with no matching row", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-04-01", id: 1 }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    const banner = await screen.findByTestId("no-entry-state");
-    expect(banner).toHaveTextContent(/No journal entry for/);
-    // All other sections suppressed.
-    expect(screen.queryByTestId("drawdown-tile")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("recap-section")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("captures-section")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith("/daily-journal"),
+    );
   });
 
-  test("back button on no-entry state calls router.back when history present", async () => {
+  test("disabled-state pill button routes to /daily-journal unconditionally", async () => {
+    // Defensive-fallback path: while the redirect effect fires, the
+    // no-entry banner still renders briefly. Clicking its pill must
+    // honor the label promise even if the redirect somehow stalled.
     vi.mocked(api.journalHistory).mockResolvedValue([]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
     const back = await screen.findByTestId("no-entry-back-button");
     fireEvent.click(back);
-    expect(backMock).toHaveBeenCalled();
+    expect(pushMock).toHaveBeenCalledWith("/daily-journal");
+    expect(backMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("MobileDailyReport — invalid date redirect", () => {
+  test("undefined initialDate fires router.replace('/daily-journal')", async () => {
+    render(<MobileDailyReport />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith("/daily-journal"),
+    );
+  });
+
+  test("malformed initialDate fires router.replace('/daily-journal')", async () => {
+    render(<MobileDailyReport initialDate="not-a-date" />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith("/daily-journal"),
+    );
   });
 });
 
 // ── Header + back nav ──────────────────────────────────────────────
 
 describe("MobileDailyReport — header back nav", () => {
-  test("back chevron fires router navigation (back or /daily-journal push)", async () => {
+  test("back chevron routes to /daily-journal unconditionally", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1 }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    // Wait for the LOADED state's report-back-button (post-fetch render).
-    // Both the loading skeleton and loaded report use the same testid;
-    // findByTestId resolves the first one to appear. Wait an extra tick
-    // so the loaded-state click handler closure (with conditional
-    // history.length branching) is mounted.
     await screen.findByTestId("drawdown-tile");
     const back = screen.getByTestId("report-back-button");
     fireEvent.click(back);
-    const totalCalls = backMock.mock.calls.length + pushMock.mock.calls.length;
-    expect(totalCalls).toBeGreaterThan(0);
+    expect(pushMock).toHaveBeenCalledWith("/daily-journal");
+    expect(backMock).not.toHaveBeenCalled();
   });
 });
 
@@ -304,34 +317,29 @@ describe("MobileDailyReport — daily $ delta in metrics tile", () => {
 
 // ── Focus mode ─────────────────────────────────────────────────────
 
-describe("MobileDailyReport — focus mode", () => {
+describe("MobileDailyReport — focus mode hydration", () => {
+  // The per-page focus-mode toggle UI was removed in T2-4 follow-up.
+  // The app's global driver lives elsewhere; this page only honors
+  // masking via the lib/format singleton + .privacy-mask class.
+
   test("hydrates from localStorage on mount and calls setFocusModeActive", async () => {
     window.localStorage.setItem("mo-focus-mode", "on");
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1 }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    await screen.findByTestId("focus-mode-toggle");
+    await screen.findByTestId("drawdown-tile");
     expect(setFocusModeActiveMock).toHaveBeenCalledWith(true);
     expect(document.body.classList.contains("privacy")).toBe(true);
   });
 
-  test("toggle button flips state, writes localStorage, calls setFocusModeActive", async () => {
+  test("no toggle button is rendered in the header", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1 }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    const toggle = await screen.findByTestId("focus-mode-toggle");
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    expect(window.localStorage.getItem("mo-focus-mode")).toBe("on");
-    expect(setFocusModeActiveMock).toHaveBeenCalledWith(true);
-    expect(document.body.classList.contains("privacy")).toBe(true);
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(window.localStorage.getItem("mo-focus-mode")).toBe("off");
-    expect(document.body.classList.contains("privacy")).toBe(false);
+    await screen.findByTestId("drawdown-tile");
+    expect(screen.queryByTestId("focus-mode-toggle")).not.toBeInTheDocument();
   });
 
   test("$ elements carry privacy-mask className", async () => {
@@ -340,7 +348,6 @@ describe("MobileDailyReport — focus mode", () => {
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
     await screen.findByTestId("drawdown-tile");
-    // At least one privacy-mask element exists (NLV value).
     expect(document.querySelectorAll(".privacy-mask").length).toBeGreaterThan(0);
   });
 });
