@@ -344,6 +344,7 @@ function DayCard({
   const ltdPct = Number((entry as Record<string, unknown>).portfolio_ltd ?? 0) || 0;
   const pctInv = Number(entry.pct_invested ?? 0) || 0;
   const ndxPct = Number((entry as Record<string, unknown>).ndx_daily_pct ?? 0) || 0;
+  const spyPct = Number((entry as Record<string, unknown>).spy_daily_pct ?? 0) || 0;
   const score = Number((entry as Record<string, unknown>).score ?? 0) || 0;
   const grade = gradeLabel(score);
   const tier = gradeTier(score);
@@ -384,8 +385,9 @@ function DayCard({
         </span>
       </div>
 
-      {/* Sub-row: LTD · % invested · NDX (3 items only — Heat dropped
-          per fit constraint; will surface in T2-4 detail view) */}
+      {/* Sub-row: LTD · % invested · NDX · SPY (4 items — fits on
+          380px+ viewports per user on-device verification of T2-1.
+          Heat remains deferred to T2-4 detail view per scope plan.) */}
       <div
         data-testid={`day-card-sub-${day}`}
         className="flex items-baseline gap-3 font-m-num text-[11px] tabular-nums text-m-text-dim"
@@ -404,6 +406,13 @@ function DayCard({
             {ndxPct.toFixed(2)}%
           </span>{" "}
           NDX
+        </span>
+        <span data-testid={`sub-spy-${day}`}>
+          <span className={pctClass(spyPct)}>
+            {spyPct >= 0 ? "+" : ""}
+            {spyPct.toFixed(2)}%
+          </span>{" "}
+          SPY
         </span>
       </div>
     </button>

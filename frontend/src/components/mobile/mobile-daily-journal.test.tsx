@@ -68,6 +68,7 @@ function entryFixture(opts: {
   portfolio_ltd?: number;
   pct_invested?: number;
   ndx_daily_pct?: number;
+  spy_daily_pct?: number;
   score?: number;
   market_cycle?: string;
   mct_display_day_num?: number | null;
@@ -83,6 +84,7 @@ function entryFixture(opts: {
     pct_invested: opts.pct_invested ?? 50,
     portfolio_heat: 0,
     ndx_daily_pct: opts.ndx_daily_pct ?? 0,
+    spy_daily_pct: opts.spy_daily_pct ?? 0,
     score: opts.score ?? 5,
     market_cycle: opts.market_cycle ?? "",
     mct_display_day_num: opts.mct_display_day_num ?? null,
@@ -250,8 +252,8 @@ describe("MobileDailyJournal — MCT badge", () => {
   });
 });
 
-describe("MobileDailyJournal — sub-row layout (3 items, no Heat)", () => {
-  test("renders LTD · % inv · NDX, no Heat", async () => {
+describe("MobileDailyJournal — sub-row layout (4 items, no Heat)", () => {
+  test("renders LTD · % inv · NDX · SPY, no Heat", async () => {
     const day = todayStr();
     vi.mocked(api.journalHistory).mockResolvedValue([
       entryFixture({
@@ -259,6 +261,7 @@ describe("MobileDailyJournal — sub-row layout (3 items, no Heat)", () => {
         portfolio_ltd: 12.34,
         pct_invested: 56.7,
         ndx_daily_pct: -1.23,
+        spy_daily_pct: 0.42,
       }),
     ]);
     render(<MobileDailyJournal />);
@@ -266,16 +269,18 @@ describe("MobileDailyJournal — sub-row layout (3 items, no Heat)", () => {
     expect(within(sub).getByTestId(`sub-ltd-${day}`)).toHaveTextContent(/\+12\.34% LTD/);
     expect(within(sub).getByTestId(`sub-inv-${day}`)).toHaveTextContent("56.7% inv");
     expect(within(sub).getByTestId(`sub-ndx-${day}`)).toHaveTextContent(/-1\.23% NDX/);
+    expect(within(sub).getByTestId(`sub-spy-${day}`)).toHaveTextContent(/\+0\.42% SPY/);
     expect(sub.textContent).not.toMatch(/heat/i);
   });
 
-  test("LTD% colored by sign (positive green, negative red), % inv neutral", async () => {
+  test("LTD/NDX/SPY colored by sign (positive green, negative red), % inv neutral", async () => {
     const day = todayStr();
     vi.mocked(api.journalHistory).mockResolvedValue([
       entryFixture({
         day,
         portfolio_ltd: -5.0,
         ndx_daily_pct: 2.5,
+        spy_daily_pct: -0.8,
       }),
     ]);
     render(<MobileDailyJournal />);
@@ -284,6 +289,8 @@ describe("MobileDailyJournal — sub-row layout (3 items, no Heat)", () => {
     expect(ltdSpan?.className).toMatch(/text-m-down/);
     const ndxSpan = screen.getByTestId(`sub-ndx-${day}`).querySelector("span");
     expect(ndxSpan?.className).toMatch(/text-m-accent/);
+    const spySpan = screen.getByTestId(`sub-spy-${day}`).querySelector("span");
+    expect(spySpan?.className).toMatch(/text-m-down/);
   });
 });
 
