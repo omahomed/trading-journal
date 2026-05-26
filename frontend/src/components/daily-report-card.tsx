@@ -107,6 +107,16 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // T2-4b — market_notes inline edit state. Desktop previously had a
+  // read-only Market Notes display; this adds a pencil → textarea +
+  // Save / Cancel affordance so users can edit from Daily Report
+  // without bouncing to Daily Routine. Save uses the same
+  // /api/journal/edit endpoint as the other field saves.
+  const [marketNotesEdit, setMarketNotesEdit] = useState(false);
+  const [marketNotesValue, setMarketNotesValue] = useState("");
+  const [marketNotesSaving, setMarketNotesSaving] = useState(false);
+  const [marketNotesMsg, setMarketNotesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   // Auto-resize the textarea to fit its content (recap markdown editor).
   useEffect(() => {
     const ta = textareaRef.current;
@@ -243,6 +253,48 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
     }, 800);
     return () => window.clearTimeout(handle);
   }, [dailyThoughts, selectedDate, portfolio]);
+
+  const openMarketNotesEdit = () => {
+    const current = String((day as any)?.market_notes ?? "");
+    setMarketNotesValue(current);
+    setMarketNotesEdit(true);
+    setMarketNotesMsg(null);
+  };
+
+  const cancelMarketNotesEdit = () => {
+    setMarketNotesEdit(false);
+    setMarketNotesMsg(null);
+  };
+
+  const saveMarketNotes = async () => {
+    if (!selectedDate) return;
+    setMarketNotesSaving(true);
+    setMarketNotesMsg(null);
+    try {
+      const res = await api.journalEdit({
+        portfolio,
+        day: selectedDate,
+        market_notes: marketNotesValue,
+      });
+      if (res.status === "ok") {
+        setHistory((prev) =>
+          prev.map((h) =>
+            String(h.day).slice(0, 10) === selectedDate
+              ? ({ ...h, market_notes: marketNotesValue } as any)
+              : h,
+          ),
+        );
+        setMarketNotesMsg({ ok: true, text: "Saved" });
+        setMarketNotesEdit(false);
+      } else {
+        setMarketNotesMsg({ ok: false, text: res.detail || "Save failed" });
+      }
+    } catch (err: any) {
+      setMarketNotesMsg({ ok: false, text: err.message || "Save failed" });
+    }
+    setMarketNotesSaving(false);
+    setTimeout(() => setMarketNotesMsg(null), 3000);
+  };
 
   const saveRecap = async () => {
     if (!selectedDate) return;
@@ -505,16 +557,96 @@ export function DailyReportCard({ navColor, initialDate }: { navColor: string; i
               </div>
 
               <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Market Notes</div>
+                <div
+                  className="flex items-center justify-between px-4 py-3 text-[13px] font-semibold"
+                  style={{ borderBottom: "1px solid var(--border)" }}
+                >
+                  <span>Market Notes</span>
+                  {!marketNotesEdit && (
+                    <button
+                      type="button"
+                      onClick={openMarketNotesEdit}
+                      aria-label="Edit market notes"
+                      data-testid="market-notes-edit-button"
+                      className="text-[11px] font-medium rounded-[6px] px-2 py-1"
+                      style={{
+                        background: "transparent",
+                        color: "var(--ink-3)",
+                        border: "1px solid var(--border)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
                 <div className="p-4">
-                  {(day as any).market_notes ? (
+                  {marketNotesEdit ? (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        value={marketNotesValue}
+                        onChange={(e) => setMarketNotesValue(e.target.value)}
+                        placeholder="One-line market summary — QQQ at 21EMA, strong open, etc."
+                        data-testid="market-notes-textarea"
+                        className="w-full px-3 py-2 rounded-[8px] text-[12px] outline-none resize-none"
+                        rows={3}
+                        style={{
+                          background: "var(--bg)",
+                          border: "1px solid var(--border)",
+                          color: "var(--ink)",
+                          fontFamily: "inherit",
+                          lineHeight: 1.5,
+                        }}
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={saveMarketNotes}
+                          disabled={marketNotesSaving}
+                          data-testid="market-notes-save-button"
+                          className="rounded-[6px] px-3 py-1.5 text-[11px] font-medium"
+                          style={{
+                            background: "#08a86b",
+                            color: "#fff",
+                            border: "none",
+                            cursor: marketNotesSaving ? "default" : "pointer",
+                            opacity: marketNotesSaving ? 0.6 : 1,
+                          }}
+                        >
+                          {marketNotesSaving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelMarketNotesEdit}
+                          disabled={marketNotesSaving}
+                          className="rounded-[6px] px-3 py-1.5 text-[11px]"
+                          style={{
+                            background: "transparent",
+                            color: "var(--ink-3)",
+                            border: "1px solid var(--border)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        {marketNotesMsg && (
+                          <span
+                            className="text-[11px] ml-1"
+                            style={{ color: marketNotesMsg.ok ? "#08a86b" : "#e5484d" }}
+                          >
+                            {marketNotesMsg.text}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (day as any).market_notes ? (
                     <div className="px-3 py-2.5 rounded-[8px] text-[12px]" style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
                       {(day as any).market_notes}
                     </div>
                   ) : (
                     <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No market notes logged.</div>
                   )}
-                  {(day as any).market_action && (
+                  {!marketNotesEdit && (day as any).market_action && (
                     <div className="mt-2 text-[12px]"><strong>Actions:</strong> {(day as any).market_action}</div>
                   )}
                 </div>

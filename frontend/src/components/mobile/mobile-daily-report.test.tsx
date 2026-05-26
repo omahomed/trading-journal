@@ -352,78 +352,58 @@ describe("MobileDailyReport — focus mode hydration", () => {
   });
 });
 
-// ── Daily Recap edit + localStorage draft ─────────────────────────
+// ── Daily Recap preview + edit pill (T2-4b) ───────────────────────
 
-describe("MobileDailyReport — Daily Recap edit", () => {
-  test("textarea seeded with journalRow.lowlights", async () => {
+describe("MobileDailyReport — Daily Recap preview", () => {
+  test("renders markdown preview when lowlights present", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
-      journalFixture({ day: "2026-05-25", id: 1, lowlights: "Existing notes" } as never),
-    ]);
-    render(<MobileDailyReport initialDate="2026-05-25" />);
-    const textarea = (await screen.findByTestId("recap-textarea")) as HTMLTextAreaElement;
-    expect(textarea.value).toBe("Existing notes");
-  });
-
-  test("draft from localStorage overrides server value on mount", async () => {
-    window.localStorage.setItem(
-      "mo-daily-report-recap-draft-2026-05-25-CanSlim",
-      "Stale draft",
-    );
-    vi.mocked(api.journalHistory).mockResolvedValue([
-      journalFixture({ day: "2026-05-25", id: 1, lowlights: "Server value" } as never),
-    ]);
-    render(<MobileDailyReport initialDate="2026-05-25" />);
-    const textarea = (await screen.findByTestId("recap-textarea")) as HTMLTextAreaElement;
-    await waitFor(() => expect(textarea.value).toBe("Stale draft"));
-  });
-
-  test("Save button disabled when unchanged, enabled when dirty", async () => {
-    vi.mocked(api.journalHistory).mockResolvedValue([
-      journalFixture({ day: "2026-05-25", id: 1, lowlights: "x" } as never),
-    ]);
-    render(<MobileDailyReport initialDate="2026-05-25" />);
-    const save = (await screen.findByTestId("recap-save-button")) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    const textarea = screen.getByTestId("recap-textarea");
-    fireEvent.change(textarea, { target: { value: "x changed" } });
-    expect(save.disabled).toBe(false);
-  });
-
-  test("Save calls journalEdit with portfolio + day + lowlights; clears draft", async () => {
-    vi.mocked(api.journalHistory).mockResolvedValue([
-      journalFixture({ day: "2026-05-25", id: 1, lowlights: "x" } as never),
-    ]);
-    vi.mocked(api.journalEdit).mockResolvedValue({ status: "ok", id: 1 });
-    render(<MobileDailyReport initialDate="2026-05-25" />);
-    const textarea = await screen.findByTestId("recap-textarea");
-    fireEvent.change(textarea, { target: { value: "Updated recap" } });
-    // Drive the autosave debounce so the draft lands in localStorage.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 600));
-    });
-    expect(window.localStorage.getItem("mo-daily-report-recap-draft-2026-05-25-CanSlim")).toBe(
-      "Updated recap",
-    );
-    fireEvent.click(screen.getByTestId("recap-save-button"));
-    await waitFor(() =>
-      expect(api.journalEdit).toHaveBeenCalledWith({
-        portfolio: "CanSlim",
+      journalFixture({
         day: "2026-05-25",
-        lowlights: "Updated recap",
-      }),
-    );
-    await waitFor(() =>
-      expect(
-        window.localStorage.getItem("mo-daily-report-recap-draft-2026-05-25-CanSlim"),
-      ).toBeNull(),
-    );
+        id: 1,
+        lowlights: "**Bold** recap with [link](https://x.example)",
+      } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const preview = await screen.findByTestId("recap-preview");
+    expect(preview.querySelector("strong")?.textContent).toBe("Bold");
+  });
+
+  test("renders HTML output (from MobileRichTextEditor) via rehypeRaw", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        lowlights: "<h2>Heading</h2><p>HTML <strong>recap</strong></p>",
+      } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const preview = await screen.findByTestId("recap-preview");
+    expect(preview.querySelector("h2")?.textContent).toBe("Heading");
+    expect(preview.querySelector("strong")?.textContent).toBe("recap");
+  });
+
+  test("empty state when lowlights empty", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, lowlights: "" } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("recap-empty");
+    expect(screen.queryByTestId("recap-preview")).not.toBeInTheDocument();
+  });
+
+  test("Edit pill renders alongside the section label", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1 } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("recap-edit-pill");
   });
 });
 
-// ── Daily Thoughts read-only ───────────────────────────────────────
+// ── Daily Thoughts preview + edit pill (T2-4b) ────────────────────
 
-describe("MobileDailyReport — Daily Thoughts read-only", () => {
-  test("renders HTML when present", async () => {
+describe("MobileDailyReport — Daily Thoughts preview", () => {
+  test("renders HTML preview when daily_thoughts present", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({
         day: "2026-05-25",
@@ -432,32 +412,102 @@ describe("MobileDailyReport — Daily Thoughts read-only", () => {
       }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    const block = await screen.findByTestId("thoughts-html");
-    expect(block.innerHTML).toContain("<strong>world</strong>");
+    const preview = await screen.findByTestId("thoughts-preview");
+    expect(preview.querySelector("strong")?.textContent).toBe("world");
   });
 
-  test("empty state when no thoughts", async () => {
+  test("renders class-based text color (.text-color-emerald)", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        daily_thoughts:
+          '<p>Mixed <span class="text-color-emerald">colored</span> text</p>',
+      }),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const preview = await screen.findByTestId("thoughts-preview");
+    expect(preview.querySelector("span.text-color-emerald")).not.toBeNull();
+  });
+
+  test("empty state when no daily_thoughts", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "" }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
     await screen.findByTestId("thoughts-empty");
-    expect(screen.queryByTestId("thoughts-html")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("thoughts-preview")).not.toBeInTheDocument();
   });
 
-  test("no edit affordance (no textarea, no contentEditable)", async () => {
+  test("no 'Edit in T2-4b →' indigo placeholder", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "<p>x</p>" }),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const section = await screen.findByTestId("thoughts-section");
+    expect(within(section).queryByText(/T2-4b/)).not.toBeInTheDocument();
+  });
+
+  test("Edit pill opens the sheet", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "<p>x</p>" }),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const pill = await screen.findByTestId("thoughts-edit-pill");
+    fireEvent.click(pill);
+    await screen.findByTestId("mobile-edit-sheet");
+    expect(screen.getByTestId("mobile-edit-sheet-title")).toHaveTextContent(
+      "Daily Thoughts",
+    );
+  });
+});
+
+// ── Edit-sheet save flow (Recap) ──────────────────────────────────
+
+describe("MobileDailyReport — Recap edit sheet save flow", () => {
+  test("opens sheet on Edit pill tap, seeded with lowlights value", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({
         day: "2026-05-25",
         id: 1,
-        daily_thoughts: "<p>read only</p>",
-      }),
+        lowlights: "Seeded value",
+      } as never),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
-    const section = await screen.findByTestId("thoughts-section");
-    // Recap section has the only textarea on the page.
-    expect(within(section).queryByRole("textbox")).not.toBeInTheDocument();
-    expect(section.querySelectorAll("[contenteditable]").length).toBe(0);
+    const pill = await screen.findByTestId("recap-edit-pill");
+    fireEvent.click(pill);
+    await screen.findByTestId("mobile-edit-sheet");
+    expect(screen.getByTestId("mobile-edit-sheet-title")).toHaveTextContent(
+      "Daily Recap",
+    );
+    // Editor body content is set imperatively (innerHTML); assert presence.
+    expect(screen.getByTestId("mobile-rich-text-editor-body")).toBeInTheDocument();
+  });
+
+  test("Save fires journalEdit with { portfolio, day, lowlights } when dirty", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, lowlights: "x" } as never),
+    ]);
+    vi.mocked(api.journalEdit).mockResolvedValue({ status: "ok", id: 1 });
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("recap-edit-pill"));
+    await screen.findByTestId("mobile-edit-sheet");
+    // Simulate editor onChange firing with new HTML — the editor body
+    // emits onChange via input event in the real component; here we
+    // simulate by typing into the contentEditable.
+    const body = screen.getByTestId("mobile-rich-text-editor-body");
+    body.innerHTML = "<p>Updated recap</p>";
+    fireEvent.input(body);
+    const save = screen.getByTestId("mobile-edit-sheet-save") as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.journalEdit).toHaveBeenCalledWith({
+        portfolio: "CanSlim",
+        day: "2026-05-25",
+        lowlights: expect.stringContaining("Updated recap"),
+      }),
+    );
   });
 });
 
@@ -773,5 +823,87 @@ describe("MobileDailyReport — grade tile", () => {
     render(<MobileDailyReport initialDate="2026-05-25" />);
     const grade = await screen.findByTestId("metric-grade-value");
     expect(grade).toHaveTextContent(label);
+  });
+});
+
+// ── DAILY P&L label (T2-4b rename) ────────────────────────────────
+
+describe("MobileDailyReport — DAILY P&L label", () => {
+  test("metrics tile uses 'DAILY P&L' label (T2-4 was 'DAILY')", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1 } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("drawdown-tile");
+    expect(screen.getByText("DAILY P&L")).toBeInTheDocument();
+    expect(screen.queryByText(/^DAILY$/)).not.toBeInTheDocument();
+  });
+});
+
+// ── Market Notes header + edit (T2-4b new consumer) ───────────────
+
+describe("MobileDailyReport — Market Notes header line", () => {
+  test("renders market_notes text in header subtitle area when present", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        market_notes: "QQQ at 21EMA, strong open",
+      } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const text = await screen.findByTestId("header-market-notes-text");
+    expect(text).toHaveTextContent("QQQ at 21EMA, strong open");
+  });
+
+  test("renders 'Add market notes' prompt when market_notes empty", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, market_notes: "" } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const header = await screen.findByTestId("header-market-notes");
+    expect(header).toHaveTextContent(/Add market notes/);
+    expect(screen.queryByTestId("header-market-notes-text")).not.toBeInTheDocument();
+  });
+
+  test("pencil button opens Market Notes edit sheet with textarea (no rich editor)", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        market_notes: "Seeded",
+      } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const pencil = await screen.findByTestId("header-market-notes-edit");
+    fireEvent.click(pencil);
+    await screen.findByTestId("mobile-edit-sheet");
+    expect(screen.getByTestId("mobile-edit-sheet-title")).toHaveTextContent(
+      "Market Notes",
+    );
+    const textarea = screen.getByTestId("market-notes-textarea") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("Seeded");
+    // Confirm NO rich-text editor in this sheet.
+    expect(screen.queryByTestId("mobile-rich-text-editor")).not.toBeInTheDocument();
+  });
+
+  test("Save fires journalEdit with { portfolio, day, market_notes }", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, market_notes: "old" } as never),
+    ]);
+    vi.mocked(api.journalEdit).mockResolvedValue({ status: "ok", id: 1 });
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("header-market-notes-edit"));
+    const textarea = await screen.findByTestId("market-notes-textarea");
+    fireEvent.change(textarea, { target: { value: "new notes" } });
+    const save = screen.getByTestId("mobile-edit-sheet-save");
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.journalEdit).toHaveBeenCalledWith({
+        portfolio: "CanSlim",
+        day: "2026-05-25",
+        market_notes: "new notes",
+      }),
+    );
   });
 });

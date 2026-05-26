@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mobile Edit Sheet — v1 (LOCKED)</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f0e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 28px 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  }
+  .annotation {
+    max-width: 360px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .annotation h1 { font-size: 16px; margin: 0 0 8px; }
+  .annotation strong { color: #000; }
+  .annotation ul { margin: 8px 0 0; padding-left: 20px; }
+  .annotation li { margin: 3px 0; }
+  .container { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .device {
+    max-width: 360px;
+    width: 100%;
+    background: #1c1815;
+    border-radius: 42px;
+    padding: 10px;
+    border: 0.5px solid rgba(255,235,210,0.06);
+  }
+  .screen {
+    background: #100D0B;
+    border-radius: 34px;
+    overflow: hidden;
+    color: #F5EFE5;
+    font-feature-settings: 'tnum' 1;
+    -webkit-font-smoothing: antialiased;
+    position: relative;
+    min-height: 760px;
+  }
+  .keyboard {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 230px;
+    background: #2A2620;
+    border-top: 0.5px solid rgba(255,235,210,0.12);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: rgba(245,239,229,0.35);
+    letter-spacing: 0.06em;
+  }
+  .toolbar-btn {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: #F5EFE5;
+  }
+  .toolbar-divider { width: 1px; height: 20px; background: rgba(255,235,210,0.10); margin: 0 4px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="annotation">
+  <h1>Mobile Edit Sheet — v1 (LOCKED)</h1>
+  Reference design for <strong>mobile-edit-sheet.tsx + mobile-rich-text-editor.tsx</strong> (Phase 2 T2-4b consolidated). One editor pattern serves three Daily Report consumers: Daily Recap, Daily Thoughts, Market Notes.
+  <ul>
+    <li><strong>MobileEditSheet:</strong> generic fullscreen-style sheet with drag handle, X / title / Save header, dirty-dismiss confirm (iOS Mail action-sheet style)</li>
+    <li><strong>MobileRichTextEditor:</strong> contentEditable + 15-surface toolbar (Bold / Italic / Underline | Heading | Bullet / Numbered / Indent / Outdent | Color / Link | Quote / Code | Clear | Undo / Redo), horizontal-scroll single-row, sticky-above-keyboard via visualViewport observer</li>
+    <li><strong>Color picker:</strong> tap palette icon → 5 swatches (TAG_PALETTE: rose / amber / emerald / sky / violet) + dashed default-reset. Class-based <code>.text-color-X</code> (mirrors <code>.indent-N</code>; no DOMPurify config change)</li>
+    <li><strong>DOMPurify:</strong> identical paste sanitizer to desktop ThoughtsEditor; image paste stripped (Captures section handles attachment)</li>
+    <li><strong>Consumers:</strong> Daily Recap → lowlights (HTML). Daily Thoughts → daily_thoughts (HTML). Market Notes → market_notes (plain textarea, no rich editor — one-liner)</li>
+    <li><strong>Save:</strong> <code>POST /api/journal/edit</code> with the matching field name. localStorage draft per field cleared on success or clean dismiss; preserved across dirty-confirm flow.</li>
+    <li><strong>Daily Report integration:</strong> Recap + Thoughts get markdown-rendered previews (ReactMarkdown + rehypeRaw) with Edit pill; Market Notes one-liner sits in header subtitle area with pencil affordance; metrics tile relabeled DAILY → DAILY P&L; desktop daily-report-card.tsx gets a parallel Market Notes edit affordance.</li>
+  </ul>
+</div>
+
+<div class="device">
+<div class="screen">
+
+<!-- iOS status bar -->
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 6px; font-size: 14px; font-weight: 500;">
+<span>9:41</span>
+<span style="display: flex; gap: 6px; align-items: center;">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 11h2v3H2zM6 7h2v7H6zM10 4h2v10h-2zM14 1h2v13h-2z" fill="#F5EFE5"/></svg>
+<svg width="20" height="14" viewBox="0 0 20 14" fill="none"><rect x="1" y="3" width="16" height="8" rx="2" stroke="#F5EFE5" stroke-width="1" fill="none"/><rect x="3" y="5" width="12" height="4" rx="1" fill="#F5EFE5"/><rect x="18" y="5" width="1" height="4" rx="0.5" fill="#F5EFE5"/></svg>
+</span>
+</div>
+
+<!-- Sheet (visually full-screen-ish, slides up from bottom) -->
+<div style="position: absolute; inset: 30px 0 0; background: #100D0B; border-top: 0.5px solid rgba(255,235,210,0.06); border-radius: 22px 22px 0 0; display: flex; flex-direction: column;">
+
+<!-- Drag handle -->
+<div style="display: flex; justify-content: center; padding: 8px 0 4px;">
+<span style="height: 4px; width: 32px; border-radius: 999px; background: rgba(255,235,210,0.22);"></span>
+</div>
+
+<!-- Header: X · title · Save -->
+<div style="display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 8px; padding: 4px 12px 12px; border-bottom: 0.5px solid rgba(255,235,210,0.06);">
+<button style="display: flex; height: 36px; width: 36px; align-items: center; justify-content: center; border-radius: 999px; background: none; border: none; color: #7A7268;">
+<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 5l10 10M15 5l-10 10" stroke="#7A7268" stroke-width="1.6" stroke-linecap="round"/></svg>
+</button>
+<h2 style="margin: 0; text-align: center; font-size: 15px; font-weight: 500;">Daily Recap</h2>
+<button style="padding: 6px 16px; border-radius: 999px; background: #4ADE80; color: #052e16; font-size: 13px; font-weight: 500; border: none;">Save</button>
+</div>
+
+<!-- Editor body (contentEditable) -->
+<div style="flex: 1; overflow-y: auto; padding: 12px 16px 56px; font-size: 15px; line-height: 1.6; color: #F5EFE5;">
+<p style="margin: 0 0 12px;">NVDA breakout entry was textbook — waited for the pivot, sized correctly, set the stop tight.</p>
+<h2 style="margin: 0 0 8px; font-size: 18px; font-weight: 600;">Wins</h2>
+<ul style="margin: 0 0 12px; padding-left: 24px;">
+<li>Got out of <span class="text-color-emerald" style="color: #08a86b;">PLTR</span> at the right level</li>
+<li>Held conviction on <strong>CRWD</strong> despite the mid-day shake</li>
+</ul>
+<h2 style="margin: 0 0 8px; font-size: 18px; font-weight: 600;">Watch tomorrow</h2>
+<p style="margin: 0;">Watch CRWD for follow-through, otherwise <span class="text-color-rose" style="color: #f43f5e;">stand down</span>.</p>
+</div>
+
+<!-- Toolbar (sticky-above-keyboard via visualViewport) -->
+<div style="position: absolute; left: 0; right: 0; bottom: 230px; background: #1A1612; border-top: 0.5px solid rgba(255,235,210,0.06); display: flex; align-items: center; gap: 2px; padding: 5px 8px; overflow-x: auto; white-space: nowrap;">
+<span class="toolbar-btn" style="font-weight: bold; font-size: 14px;">B</span>
+<span class="toolbar-btn" style="font-style: italic; font-size: 14px;">I</span>
+<span class="toolbar-btn" style="text-decoration: underline; font-size: 14px;">U</span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3v10M2 8h6M10 3v10" stroke="#F5EFE5" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="3" cy="4" r="1" fill="#F5EFE5"/><circle cx="3" cy="8" r="1" fill="#F5EFE5"/><circle cx="3" cy="12" r="1" fill="#F5EFE5"/><path d="M6 4h8M6 8h8M6 12h8" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h2M2 8h2M2 12h2M6 4h8M6 8h8M6 12h8" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 5h10M3 8h7M3 11h10M13 6.5l-2 1.5 2 1.5" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 5h10M3 8h7M3 11h10M11 6.5l2 1.5-2 1.5" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn" style="background: rgba(245,239,229,0.06);"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="8" r="5" stroke="#F5EFE5" stroke-width="1.4"/><circle cx="6" cy="5" r="1" fill="#f43f5e"/><circle cx="3" cy="9" r="1" fill="#f59f00"/><circle cx="9" cy="9" r="1" fill="#08a86b"/></svg></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M7 9.5a2.5 2.5 0 003.5 0l2-2a2.5 2.5 0 00-3.5-3.5l-1 1M9 6.5a2.5 2.5 0 00-3.5 0l-2 2a2.5 2.5 0 003.5 3.5l1-1" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h3v4H3zM10 4h3v4h-3zM3 8c0 2 1 3 3 3M10 8c0 2 1 3 3 3" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+<span class="toolbar-btn" style="font-family: monospace; font-size: 13px;">&lt;/&gt;</span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h10M2 8h6M2 12h8M11 6l3 2-3 2" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+<span class="toolbar-divider"></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 7a4 4 0 117 3M3 7v-3M3 7h3" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+<span class="toolbar-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13 7a4 4 0 10-7 3M13 7v-3M13 7h-3" stroke="#F5EFE5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+</div>
+
+<!-- iOS virtual keyboard (visual placeholder) -->
+<div class="keyboard">
+<span>iOS keyboard visible · toolbar tracks via visualViewport</span>
+</div>
+
+</div>
+
+</div>
+</div>
+
+<!-- Annotation: confirm prompt mock -->
+<div class="annotation">
+  <h1>Dirty-dismiss confirm prompt</h1>
+  When the user taps X / Escape / backdrop with unsaved changes, a bottom-anchored action sheet stacks above the editor sheet:
+  <ul>
+    <li><strong>"You have unsaved changes"</strong> (small muted header)</li>
+    <li><strong>Discard Changes</strong> — red, fires onClose</li>
+    <li><strong>Keep Editing</strong> — gray, dismisses the confirm only (editor sheet stays open)</li>
+    <li>Backdrop tap during confirm = Keep Editing</li>
+    <li>Escape during confirm dismisses the confirm only</li>
+    <li>The localStorage draft is preserved across the confirm flow per Step 5 convention; only an explicit Discard / clean close clears it</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>

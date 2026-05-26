@@ -416,3 +416,16 @@ body {
 .weekly-thoughts-editor .indent-4 { margin-left: 160px; }
 .weekly-thoughts-editor .indent-5 { margin-left: 200px; }
 .weekly-thoughts-editor .indent-6 { margin-left: 240px; }
+
+/* T2-4b text-color classes — produced by the mobile rich-text editor's
+   color picker wrapping selection in <span class="text-color-X">.
+   Same class-based approach as .indent-N so colored text survives the
+   style-attribute-disallowed DOMPurify pass. Values are the saturated
+   TAG_PALETTE dot colors (more legible on dark mobile surface than
+   the muted .text values used in tag chips). Applies globally so
+   color renders on desktop too when content is viewed there. */
+.text-color-rose    { color: #f43f5e; }
+.text-color-amber   { color: #f59f00; }
+.text-color-emerald { color: #08a86b; }
+.text-color-sky     { color: #0d6efd; }
+.text-color-violet  { color: #8b5cf6; }

@@ -7,8 +7,12 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Pencil,
   Plus,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 import {
   api,
   getActivePortfolio,
@@ -25,6 +29,8 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { ImageLightbox, type LightboxImage } from "@/components/image-lightbox";
 import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
 import { MobileImageUpload, type ImageUploadRow } from "./mobile-image-upload";
+import { MobileEditSheet } from "./mobile-edit-sheet";
+import { MobileRichTextEditor } from "./mobile-rich-text-editor";
 
 /**
  * Mobile Daily Report — Phase 2 T2-4 (core).
@@ -67,10 +73,133 @@ type MergedRow = ImageUploadRow & {
   _sortKey: string; // ISO timestamp for chronological sort
 };
 
-const DRAFT_KEY_PREFIX = "mo-daily-report-recap-draft-";
+const DRAFT_KEY_RECAP_PREFIX = "mo-daily-report-recap-draft-";
+const DRAFT_KEY_THOUGHTS_PREFIX = "mo-daily-report-thoughts-draft-";
+const DRAFT_KEY_MARKET_NOTES_PREFIX = "mo-daily-report-market-notes-draft-";
 const AUTOSAVE_DEBOUNCE_MS = 500;
-const SAVED_INDICATOR_VISIBLE_MS = 3000;
 const FOCUS_MODE_LS_KEY = "mo-focus-mode";
+
+// ── useFieldEditor hook ─────────────────────────────────────────────
+//
+// Manages one editable journal field (Recap / Thoughts / Market Notes).
+// Wraps the localStorage draft + debounced autosave + journalEdit save
+// + sheet open/close + dirty tracking into a single object the consumer
+// can wire to MobileEditSheet.
+
+type FieldEditor = {
+  /** Current value (HTML for Recap/Thoughts, plain text for Market
+   *  Notes). Updated via setValue from the editor's onChange. */
+  value: string;
+  setValue: (v: string) => void;
+  /** Sheet visibility. */
+  open: boolean;
+  /** Opens the sheet, hydrating value from localStorage draft (if any)
+   *  or the latest server value. */
+  openSheet: () => void;
+  /** Closes the sheet (clean dismiss path — MobileEditSheet handles
+   *  the dirty-confirm flow before calling this). */
+  closeSheet: () => void;
+  /** True when value !== serverValue (last saved). */
+  dirty: boolean;
+  /** Saves to /api/journal/edit and closes the sheet on success.
+   *  Clears the localStorage draft. */
+  save: () => Promise<void>;
+  /** True while save is in flight. */
+  isSaving: boolean;
+};
+
+function useFieldEditor({
+  portfolio,
+  date,
+  field,
+  serverValue,
+  draftKey,
+  onSaveSuccess,
+}: {
+  portfolio: string;
+  date: string;
+  field: "lowlights" | "daily_thoughts" | "market_notes";
+  serverValue: string;
+  draftKey: string;
+  onSaveSuccess: (newValue: string) => void;
+}): FieldEditor {
+  const [value, setValue] = useState(serverValue);
+  const [open, setOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const debounceRef = useRef<number | null>(null);
+
+  // Debounced localStorage autosave on value change. Runs only while
+  // the sheet is open — closed sheets don't accept new edits and
+  // shouldn't write drafts.
+  useEffect(() => {
+    if (!open) return;
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(draftKey, value);
+      } catch {
+        // best-effort
+      }
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    };
+  }, [value, draftKey, open]);
+
+  const openSheet = useCallback(() => {
+    // Hydrate value from draft (if present + different) or server.
+    let seed = serverValue;
+    try {
+      const draft = window.localStorage.getItem(draftKey);
+      if (draft != null && draft !== serverValue) seed = draft;
+    } catch {
+      // SSR / private mode
+    }
+    setValue(seed);
+    setOpen(true);
+  }, [serverValue, draftKey]);
+
+  const closeSheet = useCallback(() => {
+    // Clean dismiss → clear draft so the next open seeds from server.
+    // Dirty-discard goes through MobileEditSheet's confirm flow, which
+    // also lands here.
+    try {
+      window.localStorage.removeItem(draftKey);
+    } catch {
+      // best-effort
+    }
+    setOpen(false);
+  }, [draftKey]);
+
+  const save = useCallback(async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const payload: Record<string, unknown> = { portfolio, day: date };
+      payload[field] = value;
+      const res = await api.journalEdit(payload);
+      if (res && typeof res === "object" && "status" in res && res.status !== "ok") {
+        log.error("mobile-daily-report", `journalEdit non-ok for ${field}`, res);
+        return;
+      }
+      onSaveSuccess(value);
+      try {
+        window.localStorage.removeItem(draftKey);
+      } catch {
+        // best-effort
+      }
+      setOpen(false);
+    } catch (err) {
+      log.error("mobile-daily-report", `journalEdit threw for ${field}`, err);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, portfolio, date, field, value, draftKey, onSaveSuccess]);
+
+  const dirty = value !== serverValue;
+
+  return { value, setValue, open, openSheet, closeSheet, dirty, save, isSaving };
+}
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -410,86 +539,47 @@ function LoadedReport({
     [tradesClosed, date],
   );
 
-  // ── Daily Recap (lowlights) edit ─────────────────────────────────
-  const initialRecap = String((journalRow as Record<string, unknown>).lowlights ?? "");
-  const [recap, setRecap] = useState(initialRecap);
-  const [recapSavedAt, setRecapSavedAt] = useState<number | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [savedFlashVisible, setSavedFlashVisible] = useState(false);
-  const draftKey = `${DRAFT_KEY_PREFIX}${date}-${portfolio}`;
-  const autosaveTimerRef = useRef<number | null>(null);
+  // ── Editor state: Recap / Thoughts / Market Notes ────────────────
+  //
+  // All three follow the same shape via useFieldEditor — initial value
+  // from journalRow, hydration from localStorage draft, debounced
+  // autosave, Save handler that POSTs /api/journal/edit with the
+  // appropriate field name. T2-4b replaces the old inline textarea
+  // pattern with a sheet-hosted editor (rich-text for Recap +
+  // Thoughts; plain textarea for Market Notes since it's plain text).
 
-  // Hydrate from localStorage draft if present (overrides server value
-  // when user has unsaved changes). Runs once on mount.
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    hydratedRef.current = true;
-    try {
-      const draft = window.localStorage.getItem(draftKey);
-      if (draft != null && draft !== initialRecap) {
-        setRecap(draft);
-      }
-    } catch {
-      // localStorage may be unavailable (SSR / private mode); fall back
-      // to server value.
-    }
-  }, [draftKey, initialRecap]);
+  const recap = useFieldEditor({
+    portfolio,
+    date,
+    field: "lowlights",
+    serverValue: String((journalRow as Record<string, unknown>).lowlights ?? ""),
+    draftKey: `${DRAFT_KEY_RECAP_PREFIX}${date}-${portfolio}`,
+    onSaveSuccess: (next) => {
+      (journalRow as Record<string, unknown>).lowlights = next;
+    },
+  });
 
-  // Debounced localStorage autosave.
-  useEffect(() => {
-    if (!hydratedRef.current) return;
-    if (autosaveTimerRef.current) {
-      window.clearTimeout(autosaveTimerRef.current);
-    }
-    autosaveTimerRef.current = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(draftKey, recap);
-      } catch {
-        // best-effort
-      }
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => {
-      if (autosaveTimerRef.current) {
-        window.clearTimeout(autosaveTimerRef.current);
-      }
-    };
-  }, [recap, draftKey]);
+  const thoughts = useFieldEditor({
+    portfolio,
+    date,
+    field: "daily_thoughts",
+    serverValue: String(journalRow.daily_thoughts ?? ""),
+    draftKey: `${DRAFT_KEY_THOUGHTS_PREFIX}${date}-${portfolio}`,
+    onSaveSuccess: (next) => {
+      (journalRow as Record<string, unknown>).daily_thoughts = next;
+    },
+  });
 
-  // Fade the "Saved Ns ago" indicator after the visible window. State
-  // persists; only visibility flips.
-  useEffect(() => {
-    if (!recapSavedAt) return;
-    setSavedFlashVisible(true);
-    const id = window.setTimeout(() => setSavedFlashVisible(false), SAVED_INDICATOR_VISIBLE_MS);
-    return () => window.clearTimeout(id);
-  }, [recapSavedAt]);
-
-  const recapDirty = recap !== initialRecap;
-
-  const handleRecapSave = useCallback(async () => {
-    if (!recapDirty || isSaving) return;
-    setIsSaving(true);
-    try {
-      const res = await api.journalEdit({ portfolio, day: date, lowlights: recap });
-      if (res && typeof res === "object" && "status" in res && res.status !== "ok") {
-        log.error("mobile-daily-report", "journalEdit non-ok", res);
-        return;
-      }
-      try {
-        window.localStorage.removeItem(draftKey);
-      } catch {
-        // best-effort
-      }
-      // Mutate the in-memory journalRow.lowlights so dirty check resets.
-      (journalRow as Record<string, unknown>).lowlights = recap;
-      setRecapSavedAt(Date.now());
-    } catch (err) {
-      log.error("mobile-daily-report", "journalEdit threw", err);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [recapDirty, isSaving, portfolio, date, recap, draftKey, journalRow]);
+  const marketNotes = useFieldEditor({
+    portfolio,
+    date,
+    field: "market_notes",
+    serverValue: String((journalRow as Record<string, unknown>).market_notes ?? ""),
+    draftKey: `${DRAFT_KEY_MARKET_NOTES_PREFIX}${date}-${portfolio}`,
+    onSaveSuccess: (next) => {
+      (journalRow as Record<string, unknown>).market_notes = next;
+    },
+  });
 
   // ── Focus mode hydration ─────────────────────────────────────────
   // App-global focus mode lives elsewhere; this component only honors
@@ -623,6 +713,8 @@ function LoadedReport({
         portfolio={portfolio}
         marketCycle={String(journalRow.market_cycle ?? "")}
         dayNum={Number(journalRow.mct_display_day_num ?? 0) || null}
+        marketNotes={marketNotes.value}
+        onEditMarketNotes={marketNotes.openSheet}
         onBack={onBack}
       />
 
@@ -660,16 +752,14 @@ function LoadedReport({
       />
 
       <DailyRecapSection
-        value={recap}
-        onChange={setRecap}
-        dirty={recapDirty}
-        isSaving={isSaving}
-        savedAt={recapSavedAt}
-        flashVisible={savedFlashVisible}
-        onSave={handleRecapSave}
+        html={recap.value}
+        onEdit={recap.openSheet}
       />
 
-      <DailyThoughtsSection html={String(journalRow.daily_thoughts ?? "")} />
+      <DailyThoughtsSection
+        html={thoughts.value}
+        onEdit={thoughts.openSheet}
+      />
 
       <CapturesGallerySection
         merged={mergedRows}
@@ -696,6 +786,69 @@ function LoadedReport({
         onNavigate={(idx) => setLightboxIdx(idx)}
         ariaLabel="Daily Report image"
       />
+
+      {/* Three edit sheets — one per field. Each is mounted via a
+          MobileEditSheet that's lazy-rendered (returns null when
+          closed), so unmounting unmounts the editor inside too. */}
+      <MobileEditSheet
+        open={recap.open}
+        onClose={recap.closeSheet}
+        title="Daily Recap"
+        isDirty={recap.dirty}
+        rightAction={{
+          label: recap.isSaving ? "Saving…" : "Save",
+          onClick: recap.save,
+          disabled: !recap.dirty || recap.isSaving,
+        }}
+      >
+        <MobileRichTextEditor
+          initialValue={recap.value}
+          onChange={recap.setValue}
+          placeholder="What happened today? Lowlights, mistakes, observations…"
+        />
+      </MobileEditSheet>
+
+      <MobileEditSheet
+        open={thoughts.open}
+        onClose={thoughts.closeSheet}
+        title="Daily Thoughts"
+        isDirty={thoughts.dirty}
+        rightAction={{
+          label: thoughts.isSaving ? "Saving…" : "Save",
+          onClick: thoughts.save,
+          disabled: !thoughts.dirty || thoughts.isSaving,
+        }}
+      >
+        <MobileRichTextEditor
+          initialValue={thoughts.value}
+          onChange={thoughts.setValue}
+          placeholder="What did you observe today? Trades, market behavior, decisions…"
+        />
+      </MobileEditSheet>
+
+      <MobileEditSheet
+        open={marketNotes.open}
+        onClose={marketNotes.closeSheet}
+        title="Market Notes"
+        isDirty={marketNotes.dirty}
+        rightAction={{
+          label: marketNotes.isSaving ? "Saving…" : "Save",
+          onClick: marketNotes.save,
+          disabled: !marketNotes.dirty || marketNotes.isSaving,
+        }}
+      >
+        <div className="flex h-full flex-col px-4 py-3">
+          <textarea
+            data-testid="market-notes-textarea"
+            value={marketNotes.value}
+            onChange={(e) => marketNotes.setValue(e.target.value)}
+            aria-label="Market notes"
+            placeholder="One-line market summary — QQQ at 21EMA, strong open, etc."
+            rows={3}
+            className="w-full resize-none bg-transparent text-[15px] leading-relaxed text-m-text placeholder:text-m-text-faint focus:outline-none"
+          />
+        </div>
+      </MobileEditSheet>
     </div>
   );
 }
@@ -707,17 +860,22 @@ function ReportHeader({
   portfolio,
   marketCycle,
   dayNum,
+  marketNotes,
+  onEditMarketNotes,
   onBack,
 }: {
   date: string;
   portfolio: string;
   marketCycle: string;
   dayNum: number | null;
+  marketNotes: string;
+  onEditMarketNotes: () => void;
   onBack: () => void;
 }) {
   const meta = [portfolio, dayNum ? `D${dayNum}` : null, marketCycle || null]
     .filter(Boolean)
     .join(" · ");
+  const hasMarketNotes = marketNotes.trim().length > 0;
 
   return (
     <div className="flex flex-col gap-1 px-5 pt-2">
@@ -737,15 +895,43 @@ function ReportHeader({
         >
           {fmtDateHeader(date)}
         </h1>
-        {/* rightSlot intentionally empty — the focus-mode toggle was
-            removed in T2-4 follow-up. The app's global focus mode
-            driver is the single source of truth; this header only
-            honors the masking state via the hydration effect. */}
+        {/* rightSlot intentionally empty — focus-mode toggle removed in
+            T2-4 follow-up; T2-4b keeps it empty. */}
         <span className="h-9 w-9" aria-hidden="true" />
       </div>
       {meta && (
         <div className="text-center text-[11px] text-m-text-dim">{meta}</div>
       )}
+      {/* Market Notes one-liner — third line below the meta strip. When
+          present: italic muted text + pencil edit affordance. When
+          empty: small pencil + "Add market notes" prompt so users have
+          an entry point without having to open Daily Routine. */}
+      <div
+        data-testid="header-market-notes"
+        className="flex items-center justify-center gap-1.5 px-3 pt-0.5"
+      >
+        {hasMarketNotes ? (
+          <span
+            data-testid="header-market-notes-text"
+            className="min-w-0 truncate text-[12px] italic text-m-text-muted"
+          >
+            {marketNotes}
+          </span>
+        ) : (
+          <span className="text-[11px] italic text-m-text-faint">
+            Add market notes
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onEditMarketNotes}
+          aria-label={hasMarketNotes ? "Edit market notes" : "Add market notes"}
+          data-testid="header-market-notes-edit"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-m-pill text-m-text-dim active:opacity-80"
+        >
+          <Pencil size={11} strokeWidth={1.6} aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -771,7 +957,7 @@ function MetricsRow({
         </span>
       </MetricTile>
 
-      <MetricTile label="DAILY">
+      <MetricTile label="DAILY P&L">
         <span
           className={`font-m-num text-[17px] font-medium tabular-nums ${pctClass(dailyPct)}`}
         >
@@ -1093,89 +1279,107 @@ function PositionsClosedSection({
 }
 
 function DailyRecapSection({
-  value,
-  onChange,
-  dirty,
-  isSaving,
-  savedAt,
-  flashVisible,
-  onSave,
+  html,
+  onEdit,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  dirty: boolean;
-  isSaving: boolean;
-  savedAt: number | null;
-  flashVisible: boolean;
-  onSave: () => void;
+  html: string;
+  onEdit: () => void;
 }) {
-  const buttonLabel = isSaving ? "Saving…" : "Save";
   return (
-    <section data-testid="recap-section" className="mx-5">
-      <div className="mb-1.5 text-[11px] font-semibold tracking-[0.06em] text-m-text-dim">
-        DAILY RECAP
-      </div>
-      <label className="block rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2.5">
-        <textarea
-          data-testid="recap-textarea"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label="Daily recap"
-          placeholder="What happened today? (lowlights, mistakes, observations)"
-          rows={4}
-          className="block w-full resize-none bg-transparent text-sm text-m-text placeholder:text-m-text-faint focus:outline-none"
-        />
-      </label>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span
-          data-testid="recap-saved-indicator"
-          className={`text-[11px] text-m-text-faint transition-opacity ${
-            flashVisible && savedAt ? "opacity-100" : "opacity-0"
-          }`}
-          aria-live="polite"
-        >
-          {savedAt ? `Saved ${Math.max(1, Math.round((Date.now() - savedAt) / 1000))}s ago ✓` : ""}
-        </span>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={!dirty || isSaving}
-          data-testid="recap-save-button"
-          className="rounded-m-pill bg-m-accent px-4 py-1.5 text-[12px] font-medium text-m-accent-text-on disabled:opacity-40"
-        >
-          {buttonLabel}
-        </button>
-      </div>
-    </section>
+    <EditableTextSection
+      testId="recap-section"
+      label="DAILY RECAP"
+      html={html}
+      emptyPlaceholder="Tap Edit to write your daily recap"
+      previewTestId="recap-preview"
+      emptyTestId="recap-empty"
+      editTestId="recap-edit-pill"
+      editAriaLabel="Edit daily recap"
+      onEdit={onEdit}
+    />
   );
 }
 
-function DailyThoughtsSection({ html }: { html: string }) {
+function DailyThoughtsSection({
+  html,
+  onEdit,
+}: {
+  html: string;
+  onEdit: () => void;
+}) {
+  return (
+    <EditableTextSection
+      testId="thoughts-section"
+      label="DAILY THOUGHTS"
+      html={html}
+      emptyPlaceholder="Tap Edit to write your daily thoughts"
+      previewTestId="thoughts-preview"
+      emptyTestId="thoughts-empty"
+      editTestId="thoughts-edit-pill"
+      editAriaLabel="Edit daily thoughts"
+      onEdit={onEdit}
+    />
+  );
+}
+
+/** Shared preview + Edit-pill block backing both Recap and Thoughts.
+ *  Content renders via ReactMarkdown + remarkGfm + rehypeRaw — the
+ *  same chain the desktop daily-report-card.tsx uses, so HTML output
+ *  from MobileRichTextEditor round-trips cleanly. */
+function EditableTextSection({
+  testId,
+  label,
+  html,
+  emptyPlaceholder,
+  previewTestId,
+  emptyTestId,
+  editTestId,
+  editAriaLabel,
+  onEdit,
+}: {
+  testId: string;
+  label: string;
+  html: string;
+  emptyPlaceholder: string;
+  previewTestId: string;
+  emptyTestId: string;
+  editTestId: string;
+  editAriaLabel: string;
+  onEdit: () => void;
+}) {
   const hasContent = html && html.trim().length > 0;
   return (
-    <section data-testid="thoughts-section" className="mx-5">
+    <section data-testid={testId} className="mx-5">
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
         <span className="text-[11px] font-semibold tracking-[0.06em] text-m-text-dim">
-          DAILY THOUGHTS
+          {label}
         </span>
-        <span className="text-[10px] italic text-m-purple">Edit in T2-4b →</span>
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={editAriaLabel}
+          data-testid={editTestId}
+          className="inline-flex items-center gap-1 rounded-m-pill border-[0.5px] border-m-border px-2 py-0.5 text-[11px] text-m-text-dim active:opacity-80"
+        >
+          <Pencil size={11} strokeWidth={1.6} aria-hidden="true" />
+          Edit
+        </button>
       </div>
       {hasContent ? (
-        // Backend sanitizes via DOMPurify on the save side (ThoughtsEditor
-        // pipeline); we render the stored HTML as-is here. T2-4b will add
-        // an edit affordance with its own sanitizer if/when the editor
-        // approach is chosen.
         <div
-          data-testid="thoughts-html"
+          data-testid={previewTestId}
           className="prose-mobile rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-[13px] leading-snug text-m-text"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+            {html}
+          </ReactMarkdown>
+        </div>
       ) : (
         <div
-          data-testid="thoughts-empty"
-          className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-3 text-[12px] italic text-m-text-faint"
+          data-testid={emptyTestId}
+          className="rounded-m-md border border-dashed border-m-border-strong bg-m-surface px-3 py-3 text-[12px] italic text-m-text-faint"
         >
-          No thoughts written yet · Edit on desktop
+          {emptyPlaceholder}
         </div>
       )}
     </section>
