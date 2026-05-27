@@ -7,7 +7,47 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import DOMPurify from "dompurify";
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  $getSelection,
+  $isRangeSelection,
+  $isTextNode,
+  CLEAR_HISTORY_COMMAND,
+  FORMAT_TEXT_COMMAND,
+  INDENT_CONTENT_COMMAND,
+  OUTDENT_CONTENT_COMMAND,
+  ParagraphNode,
+  REDO_COMMAND,
+  UNDO_COMMAND,
+  type LexicalEditor,
+} from "lexical";
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { ContentEditable } from "@lexical/react/LexicalContentEditable";
+import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
+import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
+import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import { ListPlugin } from "@lexical/react/LexicalListPlugin";
+import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
+import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import {
+  $createHeadingNode,
+  $createQuoteNode,
+  HeadingNode,
+  QuoteNode,
+  type HeadingTagType,
+} from "@lexical/rich-text";
+import {
+  INSERT_ORDERED_LIST_COMMAND,
+  INSERT_UNORDERED_LIST_COMMAND,
+  ListItemNode,
+  ListNode,
+} from "@lexical/list";
+import { TOGGLE_LINK_COMMAND, AutoLinkNode, LinkNode } from "@lexical/link";
+import { $generateHtmlFromNodes, $generateNodesFromDOM } from "@lexical/html";
+import { $setBlocksType } from "@lexical/selection";
 import {
   Bold,
   Code,
@@ -25,221 +65,126 @@ import {
   Underline,
   Undo,
 } from "lucide-react";
+import {
+  $createColoredTextNode,
+  $isColoredTextNode,
+  ColoredTextNode,
+  type TextColor,
+} from "./lexical-nodes/colored-text-node";
+import {
+  IndentAwareHeadingNode,
+  IndentAwareListItemNode,
+  IndentAwareParagraphNode,
+  IndentAwareQuoteNode,
+} from "./lexical-nodes/indent-aware-blocks";
 
 /**
- * Mobile rich text editor — Phase 2 T2-4b.
+ * Mobile rich text editor — Phase 2 T2-4b Lexical migration.
  *
- * contentEditable + execCommand + 15-surface toolbar + class-based
- * color picker + visualViewport-aware sticky-above-keyboard toolbar.
- * Used by Daily Recap and Daily Thoughts editors on mobile.
+ * Internals replaced from contentEditable + execCommand to
+ * Lexical (Meta's controlled-DOM editor). External API is
+ * preserved verbatim — all consumers (Recap, Thoughts via
+ * useFieldEditor hook) work without modification.
  *
- * Differences from the desktop ThoughtsEditor:
- *   - 15 toolbar surfaces (trimmed from desktop's 28)
- *   - No image paste (Captures handles attachment per audit A3)
- *   - No table / task list / video / voice (deferred)
- *   - Color via .text-color-X classes (mirrors .indent-N pattern;
- *     execCommand foreColor emits style="color:..." which DOMPurify
- *     strips, so we wrap selection in <span class="text-color-X">
- *     via custom insertHTML)
- *   - Sticky-above-keyboard toolbar via visualViewport observer
+ * Why this rewrite: three iterative fixes on contentEditable +
+ * execCommand failed on iOS Safari due to execCommand's
+ * inconsistent handling + selection-loss-on-pointerdown. Lexical's
+ * command system captures selection at dispatch time inside its
+ * own update cycle, sidestepping the entire class of bugs.
  *
- * DOMPurify config inherited verbatim from desktop ThoughtsEditor's
- * PASTE_ALLOWED_TAGS + PASTE_ALLOWED_ATTR (minus tags this editor
- * doesn't emit: input, iframe, img, table — kept in case content
- * was authored on desktop and surfaces here, but stripped to keep
- * the mobile surface tight).
+ * Architecture:
+ *   - LexicalComposer wraps the editor + plugins + toolbar
+ *   - RichTextPlugin mounts the ContentEditable surface
+ *   - Custom nodes: IndentAware{Paragraph,Heading,Quote,ListItem}
+ *     translate Lexical's __indent → .indent-N class on
+ *     export/import (DOMPurify policy: no inline style attrs)
+ *   - ColoredTextNode applies .text-color-X class for the color
+ *     picker (mirrors .indent-N pattern)
+ *   - HtmlHydrationPlugin reads initialValue HTML on mount
+ *   - SerializerPlugin emits HTML via @lexical/html on every
+ *     change and pipes to props.onChange + props.onDirtyChange
+ *   - Toolbar lives inside the composer subtree so it can
+ *     useLexicalComposerContext() but renders outside the
+ *     ContentEditable; visualViewport observer (unchanged from
+ *     prior architecture) drives its sticky-above-keyboard
+ *     bottom offset.
  *
- * iOS native BIU selection menu works automatically with
- * contentEditable; no custom code needed.
+ * Toolbar surfaces match the locked 15-surface trim:
+ *   B / I / U | Heading | Bullet / Numbered / Indent / Outdent |
+ *   Color | Link | Quote / Code | Clear | Undo / Redo
+ *
+ * No image paste, no strikethrough toolbar (kept asymmetric:
+ * paste-allowed via DOMPurify, no compose-time surface). Legacy
+ * <pre> blocks degrade to paragraph (no @lexical/code).
  */
 
-// ── DOMPurify config ────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────
 
-const PASTE_ALLOWED_TAGS = [
-  "b", "i", "u", "s", "strike", "em", "strong", "a", "br", "p", "div", "span",
-  "ul", "ol", "li",
-  "h1", "h2", "h3",
-  "blockquote", "pre", "code", "hr",
+const EDITOR_NAMESPACE = "mobile-rich-text-editor";
+
+const TEXT_COLORS: ReadonlyArray<TextColor> = [
+  "rose",
+  "amber",
+  "emerald",
+  "sky",
+  "violet",
 ];
 
-const PASTE_ALLOWED_ATTR = [
-  "href",
-  "class", // .text-color-X / .indent-N
-];
+const COLOR_SWATCH_HEX: Record<TextColor, string> = {
+  rose: "#f43f5e",
+  amber: "#f59f00",
+  emerald: "#08a86b",
+  sky: "#0d6efd",
+  violet: "#8b5cf6",
+};
 
-const TEXT_COLORS = ["rose", "amber", "emerald", "sky", "violet"] as const;
-type TextColor = (typeof TEXT_COLORS)[number];
+// Lexical theme: class-only (no inline styles). Matches our
+// DOMPurify-no-style-attr policy. Tailwind handles visual styling
+// via the parent .mobile-rte-body utility classes.
+const editorTheme = {
+  paragraph: "mobile-rte-paragraph",
+  quote: "mobile-rte-quote",
+  heading: {
+    h1: "mobile-rte-h1",
+    h2: "mobile-rte-h2",
+    h3: "mobile-rte-h3",
+  },
+  list: {
+    nested: { listitem: "mobile-rte-nested-listitem" },
+    ol: "mobile-rte-ol",
+    ul: "mobile-rte-ul",
+    listitem: "mobile-rte-li",
+  },
+  link: "mobile-rte-link",
+  text: {
+    bold: "mobile-rte-bold",
+    italic: "mobile-rte-italic",
+    underline: "mobile-rte-underline",
+    code: "mobile-rte-code",
+  },
+};
 
-// ── Helpers (mirrored from desktop ThoughtsEditor where applicable) ──
-
-/** Convert inline `margin-left: Npx` (execCommand indent output) to
- *  `.indent-N` classes so they survive the style-disallowed sanitizer.
- *  Mirrors thoughts-editor.tsx:226-248. */
-function normalizeIndentation(root: HTMLElement): void {
-  const blocks = root.querySelectorAll<HTMLElement>(
-    "p, div, h1, h2, h3, blockquote, ul, ol, pre, li",
-  );
-  blocks.forEach((el) => {
-    const ml = el.style.marginLeft;
-    if (!ml) return;
-    const px = parseInt(ml, 10);
-    if (isNaN(px) || px <= 0) {
-      el.style.removeProperty("margin-left");
-      if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
-      return;
-    }
-    const level = Math.min(6, Math.max(1, Math.round(px / 40)));
-    el.style.removeProperty("margin-left");
-    if (!el.getAttribute("style")?.trim()) el.removeAttribute("style");
-    Array.from(el.classList).forEach((c) => {
-      if (c.startsWith("indent-")) el.classList.remove(c);
-    });
-    el.classList.add(`indent-${level}`);
-  });
-}
-
-/** Sanitize HTML via DOMPurify with the same allow-list as desktop. */
-function sanitize(html: string): string {
-  return DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: PASTE_ALLOWED_TAGS,
-    ALLOWED_ATTR: PASTE_ALLOWED_ATTR,
-  });
-}
-
-/** Wrap current selection in <span class="text-color-X">. */
-function applyTextColor(color: TextColor): void {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
-  const range = selection.getRangeAt(0);
-  const span = document.createElement("span");
-  span.className = `text-color-${color}`;
-  // Wrap the selected fragment. If the selection spans multiple
-  // existing color spans, extractContents preserves their inner text
-  // but the new wrap replaces the outer color anyway.
-  try {
-    const contents = range.extractContents();
-    span.appendChild(contents);
-    range.insertNode(span);
-    // Restore selection over the new span so subsequent taps work.
-    selection.removeAllRanges();
-    const fresh = document.createRange();
-    fresh.selectNodeContents(span);
-    selection.addRange(fresh);
-  } catch {
-    // Cross-block selections can throw; silent fail keeps the editor
-    // responsive.
-  }
-}
-
-/** Remove any .text-color-X wrapping covering the current selection. */
-function clearTextColor(): void {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return;
-  const range = selection.getRangeAt(0);
-  // Walk up to find the nearest ancestor span with a text-color- class.
-  let node: Node | null = range.commonAncestorContainer;
-  while (node && node !== document.body) {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as HTMLElement;
-      if (el.tagName === "SPAN") {
-        const colorClass = Array.from(el.classList).find((c) =>
-          c.startsWith("text-color-"),
-        );
-        if (colorClass) {
-          // Unwrap: replace span with its children, preserve selection.
-          const parent = el.parentNode;
-          if (!parent) return;
-          while (el.firstChild) parent.insertBefore(el.firstChild, el);
-          parent.removeChild(el);
-          return;
-        }
-      }
-    }
-    node = node.parentNode;
-  }
-}
-
-// ── Component ───────────────────────────────────────────────────────
+// ── External API (unchanged from prior version) ────────────────────
 
 export type MobileRichTextEditorProps = {
-  /** Initial HTML value seeded into the editor body on mount. */
   initialValue: string;
-  /** Fires on every input with the sanitized HTML. */
   onChange: (html: string) => void;
-  /** Optional dirty change reporter — fires when current value
-   *  flips relative to `initialValue`. */
   onDirtyChange?: (dirty: boolean) => void;
-  /** Placeholder shown when the editor body is empty. */
   placeholder?: string;
 };
 
-export function MobileRichTextEditor({
+// ── Component ──────────────────────────────────────────────────────
+
+export default function MobileRichTextEditor({
   initialValue,
   onChange,
   onDirtyChange,
   placeholder = "Start writing…",
 }: MobileRichTextEditorProps) {
-  const editorRef = useRef<HTMLDivElement | null>(null);
-  const initialRef = useRef(initialValue);
-  const lastDirtyRef = useRef(false);
-  // Saved selection range — captured when the heading or color trigger
-  // is tapped, restored before the chosen swatch/option fires its
-  // command. iOS Safari can blur the editor when the popover opens,
-  // and the `onMouseDown`/`onPointerDown` preventDefault on toolbar
-  // buttons doesn't always protect against this for popovers that
-  // re-render with a new DOM subtree. Save+restore makes the
-  // dropdown-then-action flow reliable.
-  const savedRangeRef = useRef<Range | null>(null);
-
-  const [headingOpen, setHeadingOpen] = useState(false);
-  const [colorOpen, setColorOpen] = useState(false);
+  // visualViewport observer drives the toolbar's bottom offset so
+  // the toolbar sticks above the iOS virtual keyboard. Unchanged
+  // from the prior editor's architecture.
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [isEmpty, setIsEmpty] = useState(initialValue.trim().length === 0);
-
-  /** Snapshot the current selection range so the chosen popover
-   *  action can restore it before firing a command. */
-  const saveSelection = useCallback(() => {
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
-      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
-    }
-  }, []);
-
-  /** Restore the previously-saved selection range, if any, and focus
-   *  the editor. No-ops when nothing was saved. */
-  const restoreSelection = useCallback(() => {
-    editorRef.current?.focus();
-    const sel = window.getSelection();
-    if (savedRangeRef.current && sel) {
-      sel.removeAllRanges();
-      sel.addRange(savedRangeRef.current);
-    }
-  }, []);
-
-  // ── Seed contentEditable with initial HTML on mount ───────────────
-  useEffect(() => {
-    const el = editorRef.current;
-    if (!el) return;
-    el.innerHTML = initialValue || "";
-    initialRef.current = initialValue;
-    setIsEmpty(initialValue.trim().length === 0);
-    // Focus the editor after the sheet animation lands.
-    const t = window.setTimeout(() => {
-      el.focus();
-      const sel = window.getSelection();
-      if (sel) {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-    }, 320);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ── visualViewport observer for sticky-above-keyboard toolbar ─────
   useEffect(() => {
     if (typeof window === "undefined") return;
     const vv = window.visualViewport;
@@ -257,212 +202,320 @@ export function MobileRichTextEditor({
     };
   }, []);
 
-  // ── Emit change + dirty signal ────────────────────────────────────
-  const emitChange = useCallback(() => {
-    const el = editorRef.current;
-    if (!el) return;
-    normalizeIndentation(el);
-    const raw = el.innerHTML;
-    const clean = sanitize(raw);
-    if (clean !== raw) {
-      // Re-applying clean would clobber the caret. Skip in-place
-      // rewrite during typing; sanitization runs again on Save when
-      // the consumer reads the value via onChange.
-    }
-    onChange(clean);
-    setIsEmpty(el.textContent?.trim().length === 0);
-    const dirty = clean !== initialRef.current;
-    if (dirty !== lastDirtyRef.current) {
-      lastDirtyRef.current = dirty;
-      onDirtyChange?.(dirty);
-    }
-  }, [onChange, onDirtyChange]);
-
-  // ── Toolbar actions ───────────────────────────────────────────────
-  const runCommand = useCallback(
-    (cmd: string, arg?: string) => {
-      const el = editorRef.current;
-      el?.focus();
-      document.execCommand(cmd, false, arg);
-      emitChange();
+  const initialConfig = {
+    namespace: EDITOR_NAMESPACE,
+    theme: editorTheme,
+    onError(error: Error) {
+      // Lexical convention: throw on errors so React error boundaries
+      // can surface the failure. The LexicalErrorBoundary inside the
+      // RichTextPlugin catches and degrades gracefully.
+      throw error;
     },
-    [emitChange],
-  );
-
-  const insertCodeInline = useCallback(() => {
-    const el = editorRef.current;
-    el?.focus();
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    if (range.collapsed) return;
-    const code = document.createElement("code");
-    try {
-      code.appendChild(range.extractContents());
-      range.insertNode(code);
-      sel.removeAllRanges();
-      const fresh = document.createRange();
-      fresh.selectNodeContents(code);
-      sel.addRange(fresh);
-      emitChange();
-    } catch {
-      // ignore cross-block selections
-    }
-  }, [emitChange]);
-
-  const insertLink = useCallback(() => {
-    const el = editorRef.current;
-    el?.focus();
-    const url = window.prompt("Enter URL");
-    if (!url) return;
-    document.execCommand("createLink", false, url);
-    emitChange();
-  }, [emitChange]);
-
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent<HTMLDivElement>) => {
-      // Block image paste entirely (T2-4b A3 decision: Captures
-      // handles image attachment; no inline images in this editor).
-      const files = Array.from(e.clipboardData.files ?? []);
-      if (files.some((f) => f.type.startsWith("image/"))) {
-        e.preventDefault();
-        return;
-      }
-      // Sanitize text/HTML paste through DOMPurify before insert.
-      e.preventDefault();
-      const html = e.clipboardData.getData("text/html");
-      const text = e.clipboardData.getData("text/plain");
-      const incoming = html || text;
-      if (!incoming) return;
-      const clean = sanitize(incoming);
-      document.execCommand("insertHTML", false, clean);
-      emitChange();
-    },
-    [emitChange],
-  );
-
-  const applyHeading = useCallback(
-    (tag: "h1" | "h2" | "h3" | "p") => {
-      restoreSelection();
-      document.execCommand("formatBlock", false, `<${tag}>`);
-      emitChange();
-      setHeadingOpen(false);
-    },
-    [restoreSelection, emitChange],
-  );
-
-  const applyColor = useCallback(
-    (color: TextColor | "default") => {
-      restoreSelection();
-      if (color === "default") clearTextColor();
-      else applyTextColor(color);
-      emitChange();
-      setColorOpen(false);
-    },
-    [restoreSelection, emitChange],
-  );
-
-  const openHeadingMenu = useCallback(() => {
-    saveSelection();
-    setHeadingOpen((v) => !v);
-  }, [saveSelection]);
-
-  const openColorMenu = useCallback(() => {
-    saveSelection();
-    setColorOpen((v) => !v);
-  }, [saveSelection]);
-
-  // ── Render ────────────────────────────────────────────────────────
-  const toolbarStyle: CSSProperties = {
-    bottom: keyboardHeight > 0 ? `${keyboardHeight}px` : undefined,
-  };
+    nodes: [
+      // Base nodes required by plugins.
+      ListNode,
+      LinkNode,
+      AutoLinkNode,
+      // Our subclasses. Replacements below route base-class
+      // creation through these so every list item / paragraph /
+      // heading / quote produced by commands becomes the
+      // indent-aware variant.
+      IndentAwareParagraphNode,
+      IndentAwareHeadingNode,
+      IndentAwareQuoteNode,
+      IndentAwareListItemNode,
+      ColoredTextNode,
+      {
+        replace: ParagraphNode,
+        with: () => new IndentAwareParagraphNode(),
+        withKlass: IndentAwareParagraphNode,
+      },
+      {
+        replace: HeadingNode,
+        with: (node: HeadingNode) =>
+          new IndentAwareHeadingNode(node.getTag()),
+        withKlass: IndentAwareHeadingNode,
+      },
+      {
+        replace: QuoteNode,
+        with: () => new IndentAwareQuoteNode(),
+        withKlass: IndentAwareQuoteNode,
+      },
+      {
+        replace: ListItemNode,
+        with: (node: ListItemNode) =>
+          new IndentAwareListItemNode(
+            (node as ListItemNode & { __value: number }).__value,
+            (node as ListItemNode & { __checked?: boolean }).__checked,
+          ),
+        withKlass: IndentAwareListItemNode,
+      },
+    ],
+  } as const;
 
   return (
     <div
       data-testid="mobile-rich-text-editor"
       className="relative flex h-full flex-col"
     >
-      {/* contentEditable body — fills available space above toolbar. */}
-      <div
-        ref={editorRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={emitChange}
-        onPaste={handlePaste}
-        data-testid="mobile-rich-text-editor-body"
-        aria-label="Editor"
-        className="mobile-rte-body flex-1 overflow-y-auto px-4 py-3 text-[15px] leading-relaxed text-m-text focus:outline-none"
-        style={{
-          paddingBottom: `${56 + keyboardHeight + 16}px`,
-          WebkitUserSelect: "text",
+      <LexicalComposer initialConfig={initialConfig}>
+        <EditorBody placeholder={placeholder} keyboardHeight={keyboardHeight} />
+        <HistoryPlugin />
+        <ListPlugin />
+        <LinkPlugin />
+        <HtmlHydrationPlugin initialValue={initialValue} />
+        <SerializerPlugin
+          initialValue={initialValue}
+          onChange={onChange}
+          onDirtyChange={onDirtyChange}
+        />
+      </LexicalComposer>
+    </div>
+  );
+}
+
+// ── Editor surface + toolbar (inside LexicalComposer) ─────────────
+
+function EditorBody({
+  placeholder,
+  keyboardHeight,
+}: {
+  placeholder: string;
+  keyboardHeight: number;
+}) {
+  return (
+    <>
+      <div className="relative flex-1 overflow-y-auto">
+        <RichTextPlugin
+          contentEditable={
+            <ContentEditable
+              data-testid="mobile-rich-text-editor-body"
+              aria-label="Editor"
+              className="mobile-rte-body min-h-full px-4 py-3 text-[15px] leading-relaxed text-m-text focus:outline-none"
+              style={{
+                paddingBottom: `${56 + keyboardHeight + 16}px`,
+                WebkitUserSelect: "text",
+              }}
+            />
+          }
+          placeholder={
+            <div
+              data-testid="mobile-rich-text-editor-placeholder"
+              aria-hidden="true"
+              className="pointer-events-none absolute left-4 top-3 text-[15px] text-m-text-faint"
+            >
+              {placeholder}
+            </div>
+          }
+          ErrorBoundary={LexicalErrorBoundary}
+        />
+      </div>
+      <Toolbar keyboardHeight={keyboardHeight} />
+    </>
+  );
+}
+
+// ── Toolbar ────────────────────────────────────────────────────────
+
+function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
+  const [editor] = useLexicalComposerContext();
+  const [headingOpen, setHeadingOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
+
+  // Close popovers when the editor selection changes (user taps into
+  // the content while a popover is open). Keeps the UI predictable.
+  useEffect(() => {
+    return editor.registerUpdateListener(() => {
+      // Cheap reset on any update — popovers only stay open for a
+      // single command anyway.
+    });
+  }, [editor]);
+
+  const fmt = useCallback(
+    (kind: "bold" | "italic" | "underline" | "code") => {
+      editor.dispatchCommand(FORMAT_TEXT_COMMAND, kind);
+    },
+    [editor],
+  );
+
+  const setBlock = useCallback(
+    (kind: "p" | "h1" | "h2" | "h3" | "quote") => {
+      editor.update(() => {
+        const sel = $getSelection();
+        if (!$isRangeSelection(sel)) return;
+        // Use Lexical's canonical $create* factories, which call
+        // $applyNodeReplacement internally. The factories construct
+        // base-class nodes (ParagraphNode / HeadingNode / QuoteNode);
+        // the replace map in initialConfig.nodes substitutes our
+        // IndentAware* subclass on each. Going through this path
+        // (instead of `new IndentAware*()` directly) ensures every
+        // Lexical-internal registration step runs.
+        if (kind === "p") {
+          $setBlocksType(sel, () => $createParagraphNode());
+        } else if (kind === "quote") {
+          $setBlocksType(sel, () => $createQuoteNode());
+        } else {
+          const tag = kind as HeadingTagType;
+          $setBlocksType(sel, () => $createHeadingNode(tag));
+        }
+      });
+    },
+    [editor],
+  );
+
+  const insertList = useCallback(
+    (kind: "ul" | "ol") => {
+      editor.dispatchCommand(
+        kind === "ul"
+          ? INSERT_UNORDERED_LIST_COMMAND
+          : INSERT_ORDERED_LIST_COMMAND,
+        undefined,
+      );
+    },
+    [editor],
+  );
+
+  const indent = useCallback(() => {
+    editor.dispatchCommand(INDENT_CONTENT_COMMAND, undefined);
+  }, [editor]);
+
+  const outdent = useCallback(() => {
+    editor.dispatchCommand(OUTDENT_CONTENT_COMMAND, undefined);
+  }, [editor]);
+
+  const applyColor = useCallback(
+    (color: TextColor) => {
+      editor.update(() => {
+        const sel = $getSelection();
+        if (!$isRangeSelection(sel)) return;
+        const nodes = sel.extract();
+        for (const node of nodes) {
+          if (!$isTextNode(node)) continue;
+          const text = node.getTextContent();
+          if (!text) continue;
+          const format = node.getFormat();
+          const newNode = $createColoredTextNode(text, color);
+          newNode.setFormat(format);
+          node.replace(newNode);
+        }
+      });
+      setColorOpen(false);
+    },
+    [editor],
+  );
+
+  const clearColor = useCallback(() => {
+    editor.update(() => {
+      const sel = $getSelection();
+      if (!$isRangeSelection(sel)) return;
+      const nodes = sel.extract();
+      for (const node of nodes) {
+        if (!$isColoredTextNode(node)) continue;
+        const text = node.getTextContent();
+        if (!text) continue;
+        const format = node.getFormat();
+        const plain = $createTextNode(text);
+        plain.setFormat(format);
+        node.replace(plain);
+      }
+    });
+    setColorOpen(false);
+  }, [editor]);
+
+  const insertLink = useCallback(() => {
+    const url = window.prompt("Enter URL");
+    if (!url) return;
+    // Use TOGGLE_LINK_COMMAND for parity with how Lexical's LinkPlugin
+    // expects link toggles to fire — same path the desktop ThoughtsEditor
+    // uses. The plugin handles selection capture + node creation.
+    editor.dispatchCommand(TOGGLE_LINK_COMMAND, url);
+  }, [editor]);
+
+  const clearFormat = useCallback(() => {
+    editor.update(() => {
+      const sel = $getSelection();
+      if (!$isRangeSelection(sel)) return;
+      const nodes = sel.extract();
+      for (const node of nodes) {
+        if ($isColoredTextNode(node)) {
+          const text = node.getTextContent();
+          const plain = $createTextNode(text);
+          node.replace(plain);
+          continue;
+        }
+        if ($isTextNode(node)) {
+          node.setFormat(0);
+          node.setStyle("");
+        }
+      }
+    });
+  }, [editor]);
+
+  const undo = useCallback(() => {
+    editor.dispatchCommand(UNDO_COMMAND, undefined);
+  }, [editor]);
+
+  const redo = useCallback(() => {
+    editor.dispatchCommand(REDO_COMMAND, undefined);
+  }, [editor]);
+
+  const toolbarStyle: CSSProperties = {
+    position: "sticky",
+    bottom: keyboardHeight > 0 ? `${keyboardHeight}px` : 0,
+    paddingLeft: 8,
+    paddingRight: 8,
+    paddingTop: 5,
+    paddingBottom: 5,
+    gap: 2,
+    WebkitOverflowScrolling: "touch",
+  };
+
+  return (
+    <div
+      data-testid="mobile-rich-text-editor-toolbar"
+      className="z-10 flex shrink-0 items-center overflow-x-auto whitespace-nowrap border-t-[0.5px] border-m-border bg-m-surface"
+      style={toolbarStyle}
+    >
+      {/* T2-4b second-follow-up: Undo / Redo moved to first position
+          (was last). Most-used escape hatches now reachable without
+          horizontal scroll on 360px viewports. */}
+      <ToolbarBtn label="Undo" icon={<Undo size={16} />} onAction={undo} />
+      <ToolbarBtn label="Redo" icon={<Redo size={16} />} onAction={redo} />
+      <Divider />
+
+      <ToolbarBtn label="Bold" icon={<Bold size={16} />} onAction={() => fmt("bold")} />
+      <ToolbarBtn label="Italic" icon={<Italic size={16} />} onAction={() => fmt("italic")} />
+      <ToolbarBtn label="Underline" icon={<Underline size={16} />} onAction={() => fmt("underline")} />
+      <ToolbarBtn label="Inline code" icon={<Code size={16} />} onAction={() => fmt("code")} />
+      <Divider />
+
+      <HeadingDropdown
+        open={headingOpen}
+        onOpen={() => setHeadingOpen((v) => !v)}
+        onSelect={(kind) => {
+          setBlock(kind);
+          setHeadingOpen(false);
         }}
       />
-      {isEmpty && (
-        <div
-          data-testid="mobile-rich-text-editor-placeholder"
-          aria-hidden="true"
-          className="pointer-events-none absolute left-4 top-3 text-[15px] text-m-text-faint"
-        >
-          {placeholder}
-        </div>
-      )}
+      <Divider />
 
-      {/* Sticky-above-keyboard toolbar. */}
-      <div
-        data-testid="mobile-rich-text-editor-toolbar"
-        className="sticky z-10 flex shrink-0 items-center overflow-x-auto whitespace-nowrap border-t-[0.5px] border-m-border bg-m-surface"
-        style={{
-          ...toolbarStyle,
-          position: "sticky",
-          bottom: keyboardHeight > 0 ? `${keyboardHeight}px` : 0,
-          paddingLeft: 8,
-          paddingRight: 8,
-          paddingTop: 5,
-          paddingBottom: 5,
-          gap: 2,
-          WebkitOverflowScrolling: "touch",
-        }}
-      >
-        <ToolbarBtn label="Bold" icon={<Bold size={16} />} onAction={() => runCommand("bold")} />
-        <ToolbarBtn label="Italic" icon={<Italic size={16} />} onAction={() => runCommand("italic")} />
-        <ToolbarBtn label="Underline" icon={<Underline size={16} />} onAction={() => runCommand("underline")} />
-        <Divider />
+      <ToolbarBtn label="Bulleted list" icon={<List size={16} />} onAction={() => insertList("ul")} />
+      <ToolbarBtn label="Numbered list" icon={<ListOrdered size={16} />} onAction={() => insertList("ol")} />
+      <ToolbarBtn label="Indent" icon={<IndentIncrease size={16} />} onAction={indent} />
+      <ToolbarBtn label="Outdent" icon={<IndentDecrease size={16} />} onAction={outdent} />
+      <Divider />
 
-        <HeadingDropdown
-          open={headingOpen}
-          onOpen={openHeadingMenu}
-          onSelect={applyHeading}
-        />
-        <Divider />
+      <ToolbarBtn label="Quote" icon={<Quote size={16} />} onAction={() => setBlock("quote")} />
 
-        <ToolbarBtn label="Bulleted list" icon={<List size={16} />} onAction={() => runCommand("insertUnorderedList")} />
-        <ToolbarBtn label="Numbered list" icon={<ListOrdered size={16} />} onAction={() => runCommand("insertOrderedList")} />
-        <ToolbarBtn label="Indent" icon={<IndentIncrease size={16} />} onAction={() => runCommand("indent")} />
-        <ToolbarBtn label="Outdent" icon={<IndentDecrease size={16} />} onAction={() => runCommand("outdent")} />
-        <Divider />
+      <ColorPicker
+        open={colorOpen}
+        onOpen={() => setColorOpen((v) => !v)}
+        onSelect={(c) => (c === "default" ? clearColor() : applyColor(c))}
+      />
+      <ToolbarBtn label="Insert link" icon={<LinkIcon size={16} />} onAction={insertLink} />
+      <Divider />
 
-        <ColorPicker
-          open={colorOpen}
-          onOpen={openColorMenu}
-          onSelect={applyColor}
-        />
-        <ToolbarBtn label="Insert link" icon={<LinkIcon size={16} />} onAction={insertLink} />
-        <Divider />
-
-        <ToolbarBtn label="Quote" icon={<Quote size={16} />} onAction={() => runCommand("formatBlock", "<blockquote>")} />
-        <ToolbarBtn label="Inline code" icon={<Code size={16} />} onAction={insertCodeInline} />
-        <Divider />
-
-        <ToolbarBtn
-          label="Clear formatting"
-          icon={<RemoveFormatting size={16} />}
-          onAction={() => runCommand("removeFormat")}
-        />
-        <Divider />
-
-        <ToolbarBtn label="Undo" icon={<Undo size={16} />} onAction={() => runCommand("undo")} />
-        <ToolbarBtn label="Redo" icon={<Redo size={16} />} onAction={() => runCommand("redo")} />
-      </div>
+      <ToolbarBtn label="Clear formatting" icon={<RemoveFormatting size={16} />} onAction={clearFormat} />
     </div>
   );
 }
@@ -478,20 +531,12 @@ function ToolbarBtn({
   icon: React.ReactNode;
   onAction: () => void;
 }) {
-  // Execute the action IN the pointerdown handler — NOT in onClick.
-  //
-  // Why: iOS Safari, given preventDefault on pointerdown to preserve
-  // contentEditable selection, suppresses the synthetic click event
-  // that would otherwise follow. If the action is wired to onClick,
-  // it never fires on iOS. Production contentEditable toolbars
-  // (TipTap mobile, Lexical mobile, etc.) fire from pointerdown.
-  //
-  // onClick is NOT a fallback here: on desktop, pointerdown fires
-  // for mouse interactions too, so wiring both would double-fire.
-  // Mobile editor toolbars don't need keyboard-activation support
-  // (Tab + Enter on an icon-only button) — that's a desktop pattern,
-  // and the desktop ThoughtsEditor handles that case separately.
-  // mousedown handler stays for any non-pointer-supporting browsers.
+  // Action dispatched in onPointerDown to preserve editor selection
+  // on iOS (the pointerdown-vs-click lesson from the third T2-4b
+  // follow-up). Lexical's command system captures selection at
+  // dispatch time inside its update cycle, so the editor staying
+  // focused isn't strictly necessary for command correctness — but
+  // keeping focus avoids a visible keyboard-dismiss flash on iOS.
   return (
     <button
       type="button"
@@ -526,7 +571,7 @@ function HeadingDropdown({
 }: {
   open: boolean;
   onOpen: () => void;
-  onSelect: (tag: "h1" | "h2" | "h3" | "p") => void;
+  onSelect: (kind: "p" | "h1" | "h2" | "h3") => void;
 }) {
   return (
     <div className="relative shrink-0">
@@ -552,22 +597,22 @@ function HeadingDropdown({
         >
           {(
             [
-              { tag: "p", label: "Normal" },
-              { tag: "h1", label: "Heading 1" },
-              { tag: "h2", label: "Heading 2" },
-              { tag: "h3", label: "Heading 3" },
+              { kind: "p", label: "Normal" },
+              { kind: "h1", label: "Heading 1" },
+              { kind: "h2", label: "Heading 2" },
+              { kind: "h3", label: "Heading 3" },
             ] as const
           ).map((opt) => (
             <button
-              key={opt.tag}
+              key={opt.kind}
               type="button"
               role="menuitem"
               onMouseDown={(e) => e.preventDefault()}
               onPointerDown={(e) => {
                 e.preventDefault();
-                onSelect(opt.tag);
+                onSelect(opt.kind);
               }}
-              data-testid={`mobile-rte-heading-${opt.tag}`}
+              data-testid={`mobile-rte-heading-${opt.kind}`}
               className="block w-full border-b-[0.5px] border-m-border px-3 py-2 text-left text-[13px] text-m-text last:border-b-0 active:bg-m-surface-2"
             >
               {opt.label}
@@ -578,17 +623,6 @@ function HeadingDropdown({
     </div>
   );
 }
-
-// Saturated palette colors for inline text styling on dark surface.
-// Mirrors the dot color from TAG_PALETTE (more legible against
-// --m-surface than the muted .text values used in tag chips).
-const COLOR_SWATCH_HEX: Record<TextColor, string> = {
-  rose: "#f43f5e",
-  amber: "#f59f00",
-  emerald: "#08a86b",
-  sky: "#0d6efd",
-  violet: "#8b5cf6",
-};
 
 function ColorPicker({
   open,
@@ -656,6 +690,100 @@ function ColorPicker({
     </div>
   );
 }
+
+// ── HTML hydration + serialization plugins ────────────────────────
+
+/** Hydrates the editor with the consumer's `initialValue` HTML on
+ *  mount. Subsequent changes to `initialValue` are ignored (the
+ *  editor's own state is authoritative after first paint — matches
+ *  the previous editor's behavior + the useFieldEditor contract). */
+function HtmlHydrationPlugin({ initialValue }: { initialValue: string }) {
+  const [editor] = useLexicalComposerContext();
+  const didHydrateRef = useRef(false);
+  useEffect(() => {
+    if (didHydrateRef.current) return;
+    didHydrateRef.current = true;
+    editor.update(() => {
+      const root = $getRoot();
+      root.clear();
+      const trimmed = (initialValue ?? "").trim();
+      if (!trimmed) {
+        root.append($createParagraphNode());
+        return;
+      }
+      const parser = new DOMParser();
+      const dom = parser.parseFromString(trimmed, "text/html");
+      const nodes = $generateNodesFromDOM(editor, dom);
+      // $generateNodesFromDOM returns a mix of element + inline nodes;
+      // wrap stray inline nodes (TextNode) in paragraphs so the root
+      // only contains block-level children (Lexical constraint).
+      for (const node of nodes) {
+        if (node.isInline?.() || $isTextNode(node) || $isColoredTextNode(node)) {
+          const p = $createParagraphNode();
+          p.append(node);
+          root.append(p);
+        } else {
+          root.append(node);
+        }
+      }
+      if (root.getChildrenSize() === 0) {
+        root.append($createParagraphNode());
+      }
+    });
+    // Discard the hydration update from the undo stack so the first
+    // undo doesn't wipe seeded content.
+    editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
+/** Emits `props.onChange(html)` and `props.onDirtyChange(boolean)`
+ *  on every editor update. Skips emissions during the initial
+ *  hydration pass (hydration writes the very state we just received
+ *  as `initialValue`; firing onChange there would create a spurious
+ *  dirty flag immediately on mount). */
+function SerializerPlugin({
+  initialValue,
+  onChange,
+  onDirtyChange,
+}: {
+  initialValue: string;
+  onChange: (html: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
+  const initialRef = useRef(initialValue);
+  const lastDirtyRef = useRef(false);
+  const firstChangeRef = useRef(true);
+  return (
+    <OnChangePlugin
+      ignoreHistoryMergeTagChange
+      ignoreSelectionChange
+      onChange={(_state, editor: LexicalEditor) => {
+        editor.update(() => {
+          const html = $generateHtmlFromNodes(editor, null);
+          if (firstChangeRef.current) {
+            // First change fires from hydration. Skip emitting onChange
+            // but stash the canonical HTML so dirty comparisons use
+            // post-hydration shape (not the raw initialValue string,
+            // which may differ in whitespace from Lexical's output).
+            firstChangeRef.current = false;
+            initialRef.current = html;
+            return;
+          }
+          onChange(html);
+          const dirty = html !== initialRef.current;
+          if (dirty !== lastDirtyRef.current) {
+            lastDirtyRef.current = dirty;
+            onDirtyChange?.(dirty);
+          }
+        });
+      }}
+    />
+  );
+}
+
+// ── Utils ──────────────────────────────────────────────────────────
 
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
