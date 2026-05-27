@@ -1,5 +1,36 @@
 import { describe, test, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  $applyNodeReplacement,
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  createEditor,
+  ParagraphNode,
+} from "lexical";
+import {
+  $createHeadingNode,
+  $createQuoteNode,
+  HeadingNode,
+  QuoteNode,
+} from "@lexical/rich-text";
+import {
+  $createListItemNode,
+  ListItemNode,
+  ListNode,
+} from "@lexical/list";
+import { AutoLinkNode, LinkNode } from "@lexical/link";
+import { $generateHtmlFromNodes } from "@lexical/html";
+import {
+  IndentAwareHeadingNode,
+  IndentAwareListItemNode,
+  IndentAwareParagraphNode,
+  IndentAwareQuoteNode,
+} from "./lexical-nodes/indent-aware-blocks";
+import {
+  $createColoredTextNode,
+  ColoredTextNode,
+} from "./lexical-nodes/colored-text-node";
 import MobileRichTextEditor from "./mobile-rich-text-editor";
 
 /**
@@ -216,6 +247,173 @@ describe("MobileRichTextEditor — external API", () => {
     const evt = new Event("pointerdown", { bubbles: true, cancelable: true });
     btn.dispatchEvent(evt);
     expect(evt.defaultPrevented).toBe(true);
+  });
+});
+
+// ── Node replacement registration tests ──────────────────────────
+//
+// These tests verify the LexicalComposer.initialConfig.nodes replace
+// map wires the IndentAware* subclasses correctly. The on-device
+// regression that motivated the second follow-up (block commands
+// failing on iOS while inline ones worked) would have surfaced as a
+// failure here: `new HeadingNode("h1")` going through
+// `$applyNodeReplacement` should return an IndentAwareHeadingNode,
+// not a plain HeadingNode.
+//
+// We construct a standalone Lexical editor with the same node config
+// the component uses, then exercise the replacement path via
+// $createHeadingNode etc. (which internally call
+// $applyNodeReplacement).
+
+function createTestEditor() {
+  return createEditor({
+    namespace: "test-editor",
+    onError: (err) => {
+      throw err;
+    },
+    nodes: [
+      ListNode,
+      LinkNode,
+      AutoLinkNode,
+      IndentAwareParagraphNode,
+      IndentAwareHeadingNode,
+      IndentAwareQuoteNode,
+      IndentAwareListItemNode,
+      ColoredTextNode,
+      {
+        replace: ParagraphNode,
+        with: () => new IndentAwareParagraphNode(),
+        withKlass: IndentAwareParagraphNode,
+      },
+      {
+        replace: HeadingNode,
+        with: (node: HeadingNode) =>
+          new IndentAwareHeadingNode(node.getTag()),
+        withKlass: IndentAwareHeadingNode,
+      },
+      {
+        replace: QuoteNode,
+        with: () => new IndentAwareQuoteNode(),
+        withKlass: IndentAwareQuoteNode,
+      },
+      {
+        replace: ListItemNode,
+        with: (node: ListItemNode) =>
+          new IndentAwareListItemNode(
+            (node as ListItemNode & { __value: number }).__value,
+            (node as ListItemNode & { __checked?: boolean }).__checked,
+          ),
+        withKlass: IndentAwareListItemNode,
+      },
+    ],
+  });
+}
+
+/** Run a callback inside editor.update synchronously and return the
+ *  result. Lexical's update is synchronous by default (the discrete
+ *  option isn't needed when not in a batch). */
+function runInEditor<T>(editor: ReturnType<typeof createEditor>, fn: () => T): T {
+  let result!: T;
+  editor.update(
+    () => {
+      result = fn();
+    },
+    { discrete: true },
+  );
+  return result;
+}
+
+describe("MobileRichTextEditor — node replacement wiring", () => {
+  test("$applyNodeReplacement substitutes IndentAwareParagraphNode for ParagraphNode", () => {
+    const editor = createTestEditor();
+    const result = runInEditor(editor, () =>
+      $applyNodeReplacement(new ParagraphNode()),
+    );
+    expect(result).toBeInstanceOf(IndentAwareParagraphNode);
+  });
+
+  test("$createHeadingNode produces IndentAwareHeadingNode via replacement", () => {
+    const editor = createTestEditor();
+    const { node, tag } = runInEditor(editor, () => {
+      const n = $createHeadingNode("h2");
+      return { node: n, tag: n.getTag() };
+    });
+    expect(node).toBeInstanceOf(IndentAwareHeadingNode);
+    expect(tag).toBe("h2");
+  });
+
+  test("$createQuoteNode produces IndentAwareQuoteNode via replacement", () => {
+    const editor = createTestEditor();
+    const result = runInEditor(editor, () => $createQuoteNode());
+    expect(result).toBeInstanceOf(IndentAwareQuoteNode);
+  });
+
+  test("$createListItemNode produces IndentAwareListItemNode via replacement", () => {
+    const editor = createTestEditor();
+    const result = runInEditor(editor, () => $createListItemNode());
+    expect(result).toBeInstanceOf(IndentAwareListItemNode);
+  });
+
+  test("IndentAwareHeadingNode supports __indent via setIndent/getIndent", () => {
+    const editor = createTestEditor();
+    const indent = runInEditor(editor, () => {
+      const node = $createHeadingNode("h1");
+      node.setIndent(2);
+      return node.getIndent();
+    });
+    expect(indent).toBe(2);
+  });
+
+  test("IndentAware*.exportDOM emits class='indent-N' (not padding style)", () => {
+    const editor = createTestEditor();
+    const html = runInEditor(editor, () => {
+      const root = $getRoot();
+      root.clear();
+      const p = $createHeadingNode("h2");
+      p.setIndent(3);
+      p.append($createTextNode("indented heading"));
+      root.append(p);
+      return $generateHtmlFromNodes(editor, null);
+    });
+    expect(html).toContain('class="indent-3"');
+    expect(html).not.toContain("padding-inline-start");
+    expect(html).not.toMatch(/style="[^"]*padding/);
+  });
+
+  test("ColoredTextNode round-trips through HTML export", () => {
+    const editor = createTestEditor();
+    const html = runInEditor(editor, () => {
+      const root = $getRoot();
+      root.clear();
+      const p = $createParagraphNode();
+      p.append($createColoredTextNode("hello", "emerald"));
+      root.append(p);
+      return $generateHtmlFromNodes(editor, null);
+    });
+    expect(html).toContain('class="text-color-emerald"');
+    expect(html).toContain("hello");
+  });
+
+  test("IndentAwareHeadingNode.exportJSON includes the subclass type", () => {
+    const editor = createTestEditor();
+    const exported = runInEditor(editor, () => {
+      const node = $createHeadingNode("h1");
+      return node.exportJSON();
+    });
+    expect((exported as Record<string, unknown>).type).toBe(
+      "indent-aware-heading",
+    );
+  });
+
+  test("IndentAwareParagraphNode.exportJSON includes the subclass type", () => {
+    const editor = createTestEditor();
+    const exported = runInEditor(editor, () => {
+      const node = $createParagraphNode();
+      return node.exportJSON();
+    });
+    expect((exported as Record<string, unknown>).type).toBe(
+      "indent-aware-paragraph",
+    );
   });
 });
 

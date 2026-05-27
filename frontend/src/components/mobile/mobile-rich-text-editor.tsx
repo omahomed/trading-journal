@@ -20,7 +20,6 @@ import {
   OUTDENT_CONTENT_COMMAND,
   ParagraphNode,
   REDO_COMMAND,
-  TextNode,
   UNDO_COMMAND,
   type LexicalEditor,
 } from "lexical";
@@ -34,6 +33,8 @@ import { LinkPlugin } from "@lexical/react/LexicalLinkPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
+  $createHeadingNode,
+  $createQuoteNode,
   HeadingNode,
   QuoteNode,
   type HeadingTagType,
@@ -44,7 +45,7 @@ import {
   ListItemNode,
   ListNode,
 } from "@lexical/list";
-import { $toggleLink, AutoLinkNode, LinkNode } from "@lexical/link";
+import { TOGGLE_LINK_COMMAND, AutoLinkNode, LinkNode } from "@lexical/link";
 import { $generateHtmlFromNodes, $generateNodesFromDOM } from "@lexical/html";
 import { $setBlocksType } from "@lexical/selection";
 import {
@@ -342,13 +343,20 @@ function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
       editor.update(() => {
         const sel = $getSelection();
         if (!$isRangeSelection(sel)) return;
+        // Use Lexical's canonical $create* factories, which call
+        // $applyNodeReplacement internally. The factories construct
+        // base-class nodes (ParagraphNode / HeadingNode / QuoteNode);
+        // the replace map in initialConfig.nodes substitutes our
+        // IndentAware* subclass on each. Going through this path
+        // (instead of `new IndentAware*()` directly) ensures every
+        // Lexical-internal registration step runs.
         if (kind === "p") {
-          $setBlocksType(sel, () => new IndentAwareParagraphNode());
+          $setBlocksType(sel, () => $createParagraphNode());
         } else if (kind === "quote") {
-          $setBlocksType(sel, () => new IndentAwareQuoteNode());
+          $setBlocksType(sel, () => $createQuoteNode());
         } else {
           const tag = kind as HeadingTagType;
-          $setBlocksType(sel, () => new IndentAwareHeadingNode(tag));
+          $setBlocksType(sel, () => $createHeadingNode(tag));
         }
       });
     },
@@ -417,9 +425,10 @@ function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
   const insertLink = useCallback(() => {
     const url = window.prompt("Enter URL");
     if (!url) return;
-    editor.update(() => {
-      $toggleLink(url);
-    });
+    // Use TOGGLE_LINK_COMMAND for parity with how Lexical's LinkPlugin
+    // expects link toggles to fire — same path the desktop ThoughtsEditor
+    // uses. The plugin handles selection capture + node creation.
+    editor.dispatchCommand(TOGGLE_LINK_COMMAND, url);
   }, [editor]);
 
   const clearFormat = useCallback(() => {
@@ -467,9 +476,17 @@ function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
       className="z-10 flex shrink-0 items-center overflow-x-auto whitespace-nowrap border-t-[0.5px] border-m-border bg-m-surface"
       style={toolbarStyle}
     >
+      {/* T2-4b second-follow-up: Undo / Redo moved to first position
+          (was last). Most-used escape hatches now reachable without
+          horizontal scroll on 360px viewports. */}
+      <ToolbarBtn label="Undo" icon={<Undo size={16} />} onAction={undo} />
+      <ToolbarBtn label="Redo" icon={<Redo size={16} />} onAction={redo} />
+      <Divider />
+
       <ToolbarBtn label="Bold" icon={<Bold size={16} />} onAction={() => fmt("bold")} />
       <ToolbarBtn label="Italic" icon={<Italic size={16} />} onAction={() => fmt("italic")} />
       <ToolbarBtn label="Underline" icon={<Underline size={16} />} onAction={() => fmt("underline")} />
+      <ToolbarBtn label="Inline code" icon={<Code size={16} />} onAction={() => fmt("code")} />
       <Divider />
 
       <HeadingDropdown
@@ -488,6 +505,8 @@ function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
       <ToolbarBtn label="Outdent" icon={<IndentDecrease size={16} />} onAction={outdent} />
       <Divider />
 
+      <ToolbarBtn label="Quote" icon={<Quote size={16} />} onAction={() => setBlock("quote")} />
+
       <ColorPicker
         open={colorOpen}
         onOpen={() => setColorOpen((v) => !v)}
@@ -496,15 +515,7 @@ function Toolbar({ keyboardHeight }: { keyboardHeight: number }) {
       <ToolbarBtn label="Insert link" icon={<LinkIcon size={16} />} onAction={insertLink} />
       <Divider />
 
-      <ToolbarBtn label="Quote" icon={<Quote size={16} />} onAction={() => setBlock("quote")} />
-      <ToolbarBtn label="Inline code" icon={<Code size={16} />} onAction={() => fmt("code")} />
-      <Divider />
-
       <ToolbarBtn label="Clear formatting" icon={<RemoveFormatting size={16} />} onAction={clearFormat} />
-      <Divider />
-
-      <ToolbarBtn label="Undo" icon={<Undo size={16} />} onAction={undo} />
-      <ToolbarBtn label="Redo" icon={<Redo size={16} />} onAction={redo} />
     </div>
   );
 }

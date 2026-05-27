@@ -20,15 +20,24 @@
  */
 
 import {
+  $applyNodeReplacement,
   ParagraphNode,
   type DOMConversion,
   type DOMConversionMap,
   type DOMExportOutput,
   type LexicalEditor,
   type LexicalNode,
+  type LexicalUpdateJSON,
+  type SerializedElementNode,
+  type SerializedParagraphNode,
 } from "lexical";
-import { HeadingNode, QuoteNode } from "@lexical/rich-text";
-import { ListItemNode } from "@lexical/list";
+import {
+  HeadingNode,
+  QuoteNode,
+  type HeadingTagType,
+  type SerializedHeadingNode,
+} from "@lexical/rich-text";
+import { ListItemNode, type SerializedListItemNode } from "@lexical/list";
 
 const INDENT_CLASS_RE = /^indent-([1-5])$/;
 const MAX_INDENT = 5;
@@ -108,6 +117,21 @@ export class IndentAwareParagraphNode extends ParagraphNode {
     return wrapImportDOMForIndent(ParagraphNode.importDOM?.() ?? null);
   }
 
+  static importJSON(
+    json: SerializedParagraphNode,
+  ): IndentAwareParagraphNode {
+    return $applyNodeReplacement(
+      new IndentAwareParagraphNode(),
+    ).updateFromJSON(json);
+  }
+
+  exportJSON(): SerializedParagraphNode {
+    return {
+      ...super.exportJSON(),
+      type: IndentAwareParagraphNode.getType(),
+    };
+  }
+
   exportDOM(editor: LexicalEditor): DOMExportOutput {
     return applyIndentClassToExport(super.exportDOM(editor), this.__indent);
   }
@@ -128,6 +152,25 @@ export class IndentAwareHeadingNode extends HeadingNode {
     return wrapImportDOMForIndent(HeadingNode.importDOM?.() ?? null);
   }
 
+  static importJSON(json: SerializedHeadingNode): IndentAwareHeadingNode {
+    return $applyNodeReplacement(
+      new IndentAwareHeadingNode(json.tag as HeadingTagType),
+    ).updateFromJSON(json);
+  }
+
+  updateFromJSON(
+    serializedNode: LexicalUpdateJSON<SerializedHeadingNode>,
+  ): this {
+    return super.updateFromJSON(serializedNode);
+  }
+
+  exportJSON(): SerializedHeadingNode {
+    return {
+      ...super.exportJSON(),
+      type: IndentAwareHeadingNode.getType(),
+    };
+  }
+
   exportDOM(editor: LexicalEditor): DOMExportOutput {
     return applyIndentClassToExport(super.exportDOM(editor), this.__indent);
   }
@@ -146,6 +189,19 @@ export class IndentAwareQuoteNode extends QuoteNode {
 
   static importDOM(): DOMConversionMap | null {
     return wrapImportDOMForIndent(QuoteNode.importDOM?.() ?? null);
+  }
+
+  static importJSON(json: SerializedElementNode): IndentAwareQuoteNode {
+    return $applyNodeReplacement(
+      new IndentAwareQuoteNode(),
+    ).updateFromJSON(json);
+  }
+
+  exportJSON(): SerializedElementNode {
+    return {
+      ...super.exportJSON(),
+      type: IndentAwareQuoteNode.getType(),
+    };
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {
@@ -174,6 +230,19 @@ export class IndentAwareListItemNode extends ListItemNode {
     const fn = (ListItemNode as unknown as { importDOM?: MaybeImportDOM })
       .importDOM;
     return wrapImportDOMForIndent(typeof fn === "function" ? fn() : null);
+  }
+
+  static importJSON(json: SerializedListItemNode): IndentAwareListItemNode {
+    return $applyNodeReplacement(
+      new IndentAwareListItemNode(json.value, json.checked),
+    ).updateFromJSON(json);
+  }
+
+  exportJSON(): SerializedListItemNode {
+    return {
+      ...super.exportJSON(),
+      type: IndentAwareListItemNode.getType(),
+    };
   }
 
   exportDOM(editor: LexicalEditor): DOMExportOutput {
