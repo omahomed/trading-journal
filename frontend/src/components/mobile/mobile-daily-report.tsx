@@ -1347,13 +1347,37 @@ function EditableTextSection({
   editAriaLabel: string;
   onEdit: () => void;
 }) {
+  // Default-collapsed (matches Performance Comparison / Positions
+  // Opened pattern). User taps the header to expand. T2-4b
+  // follow-up — long Recap/Thoughts content was pushing everything
+  // below off-screen.
+  const [expanded, setExpanded] = useState(false);
   const hasContent = html && html.trim().length > 0;
+  const toggleTestId = `${testId}-toggle`;
+
   return (
     <section data-testid={testId} className="mx-5">
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-semibold tracking-[0.06em] text-m-text-dim">
-          {label}
-        </span>
+      {/* Header row: two sibling buttons so the Edit pill stays a
+          separate tap target. Nested <button>s would be invalid HTML;
+          a div wrapper with onClick would lose semantic affordance. */}
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          data-testid={toggleTestId}
+          className="flex flex-1 items-center gap-1.5 py-1 text-left"
+        >
+          <span className="text-[11px] font-semibold tracking-[0.06em] text-m-text-dim">
+            {label}
+          </span>
+          <ChevronDown
+            size={12}
+            strokeWidth={1.6}
+            aria-hidden="true"
+            className={`text-m-text-dim transition-transform ${expanded ? "" : "-rotate-90"}`}
+          />
+        </button>
         <button
           type="button"
           onClick={onEdit}
@@ -1365,22 +1389,24 @@ function EditableTextSection({
           Edit
         </button>
       </div>
-      {hasContent ? (
-        <div
-          data-testid={previewTestId}
-          className="prose-mobile rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-[13px] leading-snug text-m-text"
-        >
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-            {html}
-          </ReactMarkdown>
-        </div>
-      ) : (
-        <div
-          data-testid={emptyTestId}
-          className="rounded-m-md border border-dashed border-m-border-strong bg-m-surface px-3 py-3 text-[12px] italic text-m-text-faint"
-        >
-          {emptyPlaceholder}
-        </div>
+      {expanded && (
+        hasContent ? (
+          <div
+            data-testid={previewTestId}
+            className="prose-mobile rounded-m-md border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-[13px] leading-snug text-m-text"
+          >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+              {html}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <div
+            data-testid={emptyTestId}
+            className="rounded-m-md border border-dashed border-m-border-strong bg-m-surface px-3 py-3 text-[12px] italic text-m-text-faint"
+          >
+            {emptyPlaceholder}
+          </div>
+        )
       )}
     </section>
   );

@@ -182,11 +182,39 @@ export function MobileRichTextEditor({
   const editorRef = useRef<HTMLDivElement | null>(null);
   const initialRef = useRef(initialValue);
   const lastDirtyRef = useRef(false);
+  // Saved selection range — captured when the heading or color trigger
+  // is tapped, restored before the chosen swatch/option fires its
+  // command. iOS Safari can blur the editor when the popover opens,
+  // and the `onMouseDown`/`onPointerDown` preventDefault on toolbar
+  // buttons doesn't always protect against this for popovers that
+  // re-render with a new DOM subtree. Save+restore makes the
+  // dropdown-then-action flow reliable.
+  const savedRangeRef = useRef<Range | null>(null);
 
   const [headingOpen, setHeadingOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isEmpty, setIsEmpty] = useState(initialValue.trim().length === 0);
+
+  /** Snapshot the current selection range so the chosen popover
+   *  action can restore it before firing a command. */
+  const saveSelection = useCallback(() => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+  }, []);
+
+  /** Restore the previously-saved selection range, if any, and focus
+   *  the editor. No-ops when nothing was saved. */
+  const restoreSelection = useCallback(() => {
+    editorRef.current?.focus();
+    const sel = window.getSelection();
+    if (savedRangeRef.current && sel) {
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
+  }, []);
 
   // ── Seed contentEditable with initial HTML on mount ───────────────
   useEffect(() => {
@@ -315,23 +343,34 @@ export function MobileRichTextEditor({
 
   const applyHeading = useCallback(
     (tag: "h1" | "h2" | "h3" | "p") => {
-      runCommand("formatBlock", `<${tag}>`);
+      restoreSelection();
+      document.execCommand("formatBlock", false, `<${tag}>`);
+      emitChange();
       setHeadingOpen(false);
     },
-    [runCommand],
+    [restoreSelection, emitChange],
   );
 
   const applyColor = useCallback(
     (color: TextColor | "default") => {
-      const el = editorRef.current;
-      el?.focus();
+      restoreSelection();
       if (color === "default") clearTextColor();
       else applyTextColor(color);
       emitChange();
       setColorOpen(false);
     },
-    [emitChange],
+    [restoreSelection, emitChange],
   );
+
+  const openHeadingMenu = useCallback(() => {
+    saveSelection();
+    setHeadingOpen((v) => !v);
+  }, [saveSelection]);
+
+  const openColorMenu = useCallback(() => {
+    saveSelection();
+    setColorOpen((v) => !v);
+  }, [saveSelection]);
 
   // ── Render ────────────────────────────────────────────────────────
   const toolbarStyle: CSSProperties = {
@@ -391,7 +430,7 @@ export function MobileRichTextEditor({
 
         <HeadingDropdown
           open={headingOpen}
-          onOpen={() => setHeadingOpen((v) => !v)}
+          onOpen={openHeadingMenu}
           onSelect={applyHeading}
         />
         <Divider />
@@ -404,7 +443,7 @@ export function MobileRichTextEditor({
 
         <ColorPicker
           open={colorOpen}
-          onOpen={() => setColorOpen((v) => !v)}
+          onOpen={openColorMenu}
           onSelect={applyColor}
         />
         <ToolbarBtn label="Insert link" icon={<LinkIcon size={16} />} onAction={insertLink} />
@@ -442,10 +481,13 @@ function ToolbarBtn({
   return (
     <button
       type="button"
-      // onMouseDown.preventDefault is the canonical trick to avoid
-      // blurring the editor + losing selection when the toolbar is
-      // tapped (matches desktop ThoughtsEditor pattern).
+      // preventDefault on mousedown + pointerdown is the canonical
+      // trick to keep contentEditable focused + selection alive when a
+      // toolbar button is tapped. iOS Safari fires pointerdown BEFORE
+      // mousedown, so mousedown-alone leaks selection on touch. Both
+      // events must be handled.
       onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.preventDefault()}
       onClick={onAction}
       aria-label={label}
       data-testid={`mobile-rte-toolbar-${slug(label)}`}
@@ -480,6 +522,7 @@ function HeadingDropdown({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
+        onPointerDown={(e) => e.preventDefault()}
         onClick={onOpen}
         aria-label="Headings"
         aria-expanded={open}
@@ -507,6 +550,7 @@ function HeadingDropdown({
               type="button"
               role="menuitem"
               onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.preventDefault()}
               onClick={() => onSelect(opt.tag)}
               data-testid={`mobile-rte-heading-${opt.tag}`}
               className="block w-full border-b-[0.5px] border-m-border px-3 py-2 text-left text-[13px] text-m-text last:border-b-0 active:bg-m-surface-2"
@@ -545,6 +589,7 @@ function ColorPicker({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
+        onPointerDown={(e) => e.preventDefault()}
         onClick={onOpen}
         aria-label="Text color"
         aria-expanded={open}
@@ -565,6 +610,7 @@ function ColorPicker({
               type="button"
               role="menuitem"
               onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.preventDefault()}
               onClick={() => onSelect(c)}
               aria-label={`${c} text`}
               data-testid={`mobile-rte-color-${c}`}
@@ -576,6 +622,7 @@ function ColorPicker({
             type="button"
             role="menuitem"
             onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => e.preventDefault()}
             onClick={() => onSelect("default")}
             aria-label="Default (reset color)"
             data-testid="mobile-rte-color-default"

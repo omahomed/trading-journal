@@ -355,7 +355,7 @@ describe("MobileDailyReport — focus mode hydration", () => {
 // ── Daily Recap preview + edit pill (T2-4b) ───────────────────────
 
 describe("MobileDailyReport — Daily Recap preview", () => {
-  test("renders markdown preview when lowlights present", async () => {
+  test("renders markdown preview when expanded and lowlights present", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({
         day: "2026-05-25",
@@ -364,6 +364,8 @@ describe("MobileDailyReport — Daily Recap preview", () => {
       } as never),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    // Section is collapsed by default — expand it first.
+    fireEvent.click(await screen.findByTestId("recap-section-toggle"));
     const preview = await screen.findByTestId("recap-preview");
     expect(preview.querySelector("strong")?.textContent).toBe("Bold");
   });
@@ -377,33 +379,64 @@ describe("MobileDailyReport — Daily Recap preview", () => {
       } as never),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("recap-section-toggle"));
     const preview = await screen.findByTestId("recap-preview");
     expect(preview.querySelector("h2")?.textContent).toBe("Heading");
     expect(preview.querySelector("strong")?.textContent).toBe("recap");
   });
 
-  test("empty state when lowlights empty", async () => {
+  test("empty state when expanded and lowlights empty", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1, lowlights: "" } as never),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("recap-section-toggle"));
     await screen.findByTestId("recap-empty");
     expect(screen.queryByTestId("recap-preview")).not.toBeInTheDocument();
   });
 
-  test("Edit pill renders alongside the section label", async () => {
+  test("section is collapsed by default — preview hidden until toggle", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        lowlights: "**Bold** recap",
+      } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("recap-section-toggle");
+    expect(screen.queryByTestId("recap-preview")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("recap-empty")).not.toBeInTheDocument();
+  });
+
+  test("Edit pill is reachable from collapsed state without expanding", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1 } as never),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
     await screen.findByTestId("recap-edit-pill");
+    fireEvent.click(screen.getByTestId("recap-edit-pill"));
+    // Sheet opens; section remains collapsed.
+    await screen.findByTestId("mobile-edit-sheet");
+    expect(screen.queryByTestId("recap-preview")).not.toBeInTheDocument();
+  });
+
+  test("toggle button rotates chevron via aria-expanded", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, lowlights: "x" } as never),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    const toggle = await screen.findByTestId("recap-section-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 });
 
 // ── Daily Thoughts preview + edit pill (T2-4b) ────────────────────
 
 describe("MobileDailyReport — Daily Thoughts preview", () => {
-  test("renders HTML preview when daily_thoughts present", async () => {
+  test("renders HTML preview when expanded", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({
         day: "2026-05-25",
@@ -412,6 +445,7 @@ describe("MobileDailyReport — Daily Thoughts preview", () => {
       }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("thoughts-section-toggle"));
     const preview = await screen.findByTestId("thoughts-preview");
     expect(preview.querySelector("strong")?.textContent).toBe("world");
   });
@@ -426,16 +460,27 @@ describe("MobileDailyReport — Daily Thoughts preview", () => {
       }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("thoughts-section-toggle"));
     const preview = await screen.findByTestId("thoughts-preview");
     expect(preview.querySelector("span.text-color-emerald")).not.toBeNull();
   });
 
-  test("empty state when no daily_thoughts", async () => {
+  test("empty state when expanded and no daily_thoughts", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "" }),
     ]);
     render(<MobileDailyReport initialDate="2026-05-25" />);
+    fireEvent.click(await screen.findByTestId("thoughts-section-toggle"));
     await screen.findByTestId("thoughts-empty");
+    expect(screen.queryByTestId("thoughts-preview")).not.toBeInTheDocument();
+  });
+
+  test("section is collapsed by default", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "<p>x</p>" }),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("thoughts-section-toggle");
     expect(screen.queryByTestId("thoughts-preview")).not.toBeInTheDocument();
   });
 
@@ -448,7 +493,7 @@ describe("MobileDailyReport — Daily Thoughts preview", () => {
     expect(within(section).queryByText(/T2-4b/)).not.toBeInTheDocument();
   });
 
-  test("Edit pill opens the sheet", async () => {
+  test("Edit pill opens the sheet from collapsed state", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       journalFixture({ day: "2026-05-25", id: 1, daily_thoughts: "<p>x</p>" }),
     ]);
@@ -459,6 +504,8 @@ describe("MobileDailyReport — Daily Thoughts preview", () => {
     expect(screen.getByTestId("mobile-edit-sheet-title")).toHaveTextContent(
       "Daily Thoughts",
     );
+    // Preview stays collapsed even after opening the sheet.
+    expect(screen.queryByTestId("thoughts-preview")).not.toBeInTheDocument();
   });
 });
 
