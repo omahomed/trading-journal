@@ -29,8 +29,18 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { ImageLightbox, type LightboxImage } from "@/components/image-lightbox";
 import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
 import { MobileImageUpload, type ImageUploadRow } from "./mobile-image-upload";
+import dynamic from "next/dynamic";
 import { MobileEditSheet } from "./mobile-edit-sheet";
-import { MobileRichTextEditor } from "./mobile-rich-text-editor";
+
+// Lazy-load the rich text editor — the Lexical bundle adds ~100-120 KB
+// gzipped and is only needed on first edit-sheet open (Recap + Thoughts).
+// Subsequent opens in the same session are instant (chunk is cached).
+// Market Notes uses a plain textarea, not this editor, so opening that
+// sheet doesn't trigger the chunk download.
+const MobileRichTextEditor = dynamic(
+  () => import("./mobile-rich-text-editor"),
+  { ssr: false, loading: () => null },
+);
 
 /**
  * Mobile Daily Report — Phase 2 T2-4 (core).

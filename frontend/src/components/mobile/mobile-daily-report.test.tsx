@@ -38,6 +38,38 @@ vi.mock("@/lib/log", () => ({
   },
 }));
 
+// Stub the Lexical-backed rich text editor so the daily-report tests
+// stay focused on consumer wiring (Edit pill → sheet → Save → API)
+// without dragging Lexical's full editor lifecycle through jsdom.
+// The stub renders test-only buttons that fire onChange + onDirtyChange
+// the same way the real editor would on user edits.
+vi.mock("./mobile-rich-text-editor", () => ({
+  __esModule: true,
+  default: ({
+    initialValue,
+    onChange,
+    onDirtyChange,
+  }: {
+    initialValue: string;
+    onChange: (html: string) => void;
+    onDirtyChange?: (dirty: boolean) => void;
+  }) => (
+    <div data-testid="mobile-rich-text-editor-body">
+      <span data-testid="rte-stub-initial">{initialValue}</span>
+      <button
+        type="button"
+        data-testid="rte-stub-fire-change"
+        onClick={() => {
+          onChange("<p>Updated recap</p>");
+          onDirtyChange?.(true);
+        }}
+      >
+        fire change
+      </button>
+    </div>
+  ),
+}));
+
 const setFocusModeActiveMock = vi.fn();
 vi.mock("@/lib/format", async () => {
   const actual = await vi.importActual<typeof import("@/lib/format")>("@/lib/format");
@@ -539,14 +571,13 @@ describe("MobileDailyReport — Recap edit sheet save flow", () => {
     render(<MobileDailyReport initialDate="2026-05-25" />);
     fireEvent.click(await screen.findByTestId("recap-edit-pill"));
     await screen.findByTestId("mobile-edit-sheet");
-    // Simulate editor onChange firing with new HTML — the editor body
-    // emits onChange via input event in the real component; here we
-    // simulate by typing into the contentEditable.
-    const body = screen.getByTestId("mobile-rich-text-editor-body");
-    body.innerHTML = "<p>Updated recap</p>";
-    fireEvent.input(body);
+    // Use the editor stub's test-only button to fire onChange with new
+    // HTML — Lexical's controlled DOM means we can't manipulate the
+    // editor body directly in jsdom; the consumer wiring is what we're
+    // testing here, not the editor itself.
+    fireEvent.click(await screen.findByTestId("rte-stub-fire-change"));
     const save = screen.getByTestId("mobile-edit-sheet-save") as HTMLButtonElement;
-    expect(save.disabled).toBe(false);
+    await waitFor(() => expect(save.disabled).toBe(false));
     fireEvent.click(save);
     await waitFor(() =>
       expect(api.journalEdit).toHaveBeenCalledWith({
