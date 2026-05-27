@@ -106,13 +106,13 @@ describe("MobileRichTextEditor — toolbar execCommand wiring", () => {
   ])("toolbar fires execCommand('%s')", (cmd, label) => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    fireEvent.click(screen.getByTestId(`mobile-rte-toolbar-${slug}`));
+    fireEvent.pointerDown(screen.getByTestId(`mobile-rte-toolbar-${slug}`));
     expect(execSpy).toHaveBeenCalledWith(cmd, false, undefined);
   });
 
   test("Quote button fires formatBlock(<blockquote>)", () => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-quote"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-quote"));
     expect(execSpy).toHaveBeenCalledWith("formatBlock", false, "<blockquote>");
   });
 });
@@ -123,7 +123,7 @@ describe("MobileRichTextEditor — heading dropdown", () => {
   test("opens menu on tap", () => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
     expect(screen.queryByTestId("mobile-rte-heading-menu")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-headings"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-headings"));
     expect(screen.getByTestId("mobile-rte-heading-menu")).toBeInTheDocument();
   });
 
@@ -134,8 +134,8 @@ describe("MobileRichTextEditor — heading dropdown", () => {
     ["mobile-rte-heading-p", "<p>"],
   ])("selecting %s fires formatBlock(%s)", (testid, tag) => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-headings"));
-    fireEvent.click(screen.getByTestId(testid));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-headings"));
+    fireEvent.pointerDown(screen.getByTestId(testid));
     expect(execSpy).toHaveBeenCalledWith("formatBlock", false, tag);
     // Menu closes after selection.
     expect(screen.queryByTestId("mobile-rte-heading-menu")).not.toBeInTheDocument();
@@ -148,13 +148,13 @@ describe("MobileRichTextEditor — color picker", () => {
   test("opens palette on tap", () => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
     expect(screen.queryByTestId("mobile-rte-color-menu")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
     expect(screen.getByTestId("mobile-rte-color-menu")).toBeInTheDocument();
   });
 
   test("renders 5 color swatches + default-reset", () => {
     render(<MobileRichTextEditor initialValue="" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
     expect(screen.getByTestId("mobile-rte-color-rose")).toBeInTheDocument();
     expect(screen.getByTestId("mobile-rte-color-amber")).toBeInTheDocument();
     expect(screen.getByTestId("mobile-rte-color-emerald")).toBeInTheDocument();
@@ -172,9 +172,9 @@ describe("MobileRichTextEditor — color picker", () => {
     // covered by on-device manual testing.
     const onChange = vi.fn();
     render(<MobileRichTextEditor initialValue="<p>hello</p>" onChange={onChange} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
     expect(screen.getByTestId("mobile-rte-color-menu")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("mobile-rte-color-emerald"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-color-emerald"));
     expect(screen.queryByTestId("mobile-rte-color-menu")).not.toBeInTheDocument();
     expect(onChange).toHaveBeenCalled();
   });
@@ -187,8 +187,8 @@ describe("MobileRichTextEditor — color picker", () => {
         onChange={onChange}
       />,
     );
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
-    fireEvent.click(screen.getByTestId("mobile-rte-color-default"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-color-default"));
     expect(screen.queryByTestId("mobile-rte-color-menu")).not.toBeInTheDocument();
     expect(onChange).toHaveBeenCalled();
   });
@@ -308,7 +308,7 @@ describe("MobileRichTextEditor — link insertion", () => {
   test("prompts for URL and fires createLink", () => {
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("https://example.com");
     render(<MobileRichTextEditor initialValue="<p>x</p>" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-insert-link"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-insert-link"));
     expect(promptSpy).toHaveBeenCalled();
     expect(execSpy).toHaveBeenCalledWith("createLink", false, "https://example.com");
   });
@@ -316,7 +316,7 @@ describe("MobileRichTextEditor — link insertion", () => {
   test("cancelling the URL prompt skips createLink", () => {
     vi.spyOn(window, "prompt").mockReturnValue(null);
     render(<MobileRichTextEditor initialValue="<p>x</p>" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-insert-link"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-insert-link"));
     expect(execSpy).not.toHaveBeenCalledWith("createLink", expect.anything(), expect.anything());
   });
 });
@@ -363,7 +363,7 @@ describe("MobileRichTextEditor — pointerdown preventDefault", () => {
 
   test("heading menu option calls preventDefault on pointerdown", () => {
     render(<MobileRichTextEditor initialValue="<p>x</p>" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-headings"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-headings"));
     const opt = screen.getByTestId("mobile-rte-heading-h1");
     const evt = new Event("pointerdown", { bubbles: true, cancelable: true });
     opt.dispatchEvent(evt);
@@ -372,7 +372,7 @@ describe("MobileRichTextEditor — pointerdown preventDefault", () => {
 
   test("color swatch calls preventDefault on pointerdown", () => {
     render(<MobileRichTextEditor initialValue="<p>x</p>" onChange={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
     const swatch = screen.getByTestId("mobile-rte-color-emerald");
     const evt = new Event("pointerdown", { bubbles: true, cancelable: true });
     swatch.dispatchEvent(evt);
@@ -401,16 +401,16 @@ describe("MobileRichTextEditor — selection preservation across popovers", () =
     sel.addRange(range);
 
     // Open menu (saves range), then select H1.
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-headings"));
-    fireEvent.click(screen.getByTestId("mobile-rte-heading-h1"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-headings"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-heading-h1"));
     expect(execSpy).toHaveBeenCalledWith("formatBlock", false, "<h1>");
   });
 
   test("color picker trigger snapshots selection; swatch restores + fires onChange", () => {
     const onChange = vi.fn();
     render(<MobileRichTextEditor initialValue="<p>seed</p>" onChange={onChange} />);
-    fireEvent.click(screen.getByTestId("mobile-rte-toolbar-color"));
-    fireEvent.click(screen.getByTestId("mobile-rte-color-rose"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-toolbar-color"));
+    fireEvent.pointerDown(screen.getByTestId("mobile-rte-color-rose"));
     expect(onChange).toHaveBeenCalled();
     expect(screen.queryByTestId("mobile-rte-color-menu")).not.toBeInTheDocument();
   });

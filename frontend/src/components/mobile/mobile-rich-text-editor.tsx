@@ -478,17 +478,28 @@ function ToolbarBtn({
   icon: React.ReactNode;
   onAction: () => void;
 }) {
+  // Execute the action IN the pointerdown handler — NOT in onClick.
+  //
+  // Why: iOS Safari, given preventDefault on pointerdown to preserve
+  // contentEditable selection, suppresses the synthetic click event
+  // that would otherwise follow. If the action is wired to onClick,
+  // it never fires on iOS. Production contentEditable toolbars
+  // (TipTap mobile, Lexical mobile, etc.) fire from pointerdown.
+  //
+  // onClick is NOT a fallback here: on desktop, pointerdown fires
+  // for mouse interactions too, so wiring both would double-fire.
+  // Mobile editor toolbars don't need keyboard-activation support
+  // (Tab + Enter on an icon-only button) — that's a desktop pattern,
+  // and the desktop ThoughtsEditor handles that case separately.
+  // mousedown handler stays for any non-pointer-supporting browsers.
   return (
     <button
       type="button"
-      // preventDefault on mousedown + pointerdown is the canonical
-      // trick to keep contentEditable focused + selection alive when a
-      // toolbar button is tapped. iOS Safari fires pointerdown BEFORE
-      // mousedown, so mousedown-alone leaks selection on touch. Both
-      // events must be handled.
       onMouseDown={(e) => e.preventDefault()}
-      onPointerDown={(e) => e.preventDefault()}
-      onClick={onAction}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        onAction();
+      }}
       aria-label={label}
       data-testid={`mobile-rte-toolbar-${slug(label)}`}
       className="flex h-9 w-9 shrink-0 items-center justify-center rounded-m-sm text-m-text active:bg-m-surface-2"
@@ -522,8 +533,10 @@ function HeadingDropdown({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onPointerDown={(e) => e.preventDefault()}
-        onClick={onOpen}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          onOpen();
+        }}
         aria-label="Headings"
         aria-expanded={open}
         data-testid="mobile-rte-toolbar-headings"
@@ -550,8 +563,10 @@ function HeadingDropdown({
               type="button"
               role="menuitem"
               onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => onSelect(opt.tag)}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                onSelect(opt.tag);
+              }}
               data-testid={`mobile-rte-heading-${opt.tag}`}
               className="block w-full border-b-[0.5px] border-m-border px-3 py-2 text-left text-[13px] text-m-text last:border-b-0 active:bg-m-surface-2"
             >
@@ -589,8 +604,10 @@ function ColorPicker({
       <button
         type="button"
         onMouseDown={(e) => e.preventDefault()}
-        onPointerDown={(e) => e.preventDefault()}
-        onClick={onOpen}
+        onPointerDown={(e) => {
+          e.preventDefault();
+          onOpen();
+        }}
         aria-label="Text color"
         aria-expanded={open}
         data-testid="mobile-rte-toolbar-color"
@@ -610,8 +627,10 @@ function ColorPicker({
               type="button"
               role="menuitem"
               onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => onSelect(c)}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                onSelect(c);
+              }}
               aria-label={`${c} text`}
               data-testid={`mobile-rte-color-${c}`}
               className="h-7 w-7 rounded-full border-[0.5px] border-m-border"
@@ -622,8 +641,10 @@ function ColorPicker({
             type="button"
             role="menuitem"
             onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => onSelect("default")}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              onSelect("default");
+            }}
             aria-label="Default (reset color)"
             data-testid="mobile-rte-color-default"
             className="flex h-7 w-7 items-center justify-center rounded-full border border-dashed border-m-border-strong text-m-text-dim"
