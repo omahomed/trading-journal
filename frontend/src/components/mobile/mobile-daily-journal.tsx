@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight } from "lucide-react";
+import { CalendarRange, ChevronRight, PenLine } from "lucide-react";
 import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -223,6 +223,8 @@ export function MobileDailyJournal() {
         portfolioName={activePortfolio?.name ?? ""}
       />
 
+      <DailyNavRow router={router} />
+
       <FilterChips active={filter} onChange={setFilter} />
 
       {filtered.length === 0 ? (
@@ -279,6 +281,54 @@ function Header({
     <div className="pt-1 text-[12px] text-m-text-dim">
       {entryCount} {entryCount === 1 ? "entry" : "entries"}
       {portfolioName && <> · {portfolioName}</>}
+    </div>
+  );
+}
+
+// Two-button quick-link row sitting between the entries-count subtitle
+// and the Week/Month/All filter pills. T2-6 — gives the Daily tab a
+// shared landing surface for Weekly Retro + Daily Routine without
+// needing a dedicated /daily route. Cards mirror the day-card surface
+// treatment (rounded, bordered, surface background) so they read as
+// navigation, not filter state.
+function DailyNavRow({
+  router,
+}: {
+  router: ReturnType<typeof useRouter>;
+}) {
+  return (
+    <div
+      data-testid="daily-nav-row"
+      className="grid grid-cols-2 gap-3"
+    >
+      <button
+        type="button"
+        data-testid="daily-nav-weekly-retro"
+        onClick={() => router.push("/weekly-retro")}
+        className="flex min-h-[44px] items-center gap-2 rounded-m-lg border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-left text-[13px] font-medium text-m-text active:opacity-80"
+      >
+        <CalendarRange
+          size={16}
+          strokeWidth={1.5}
+          className="shrink-0 text-m-text-dim"
+          aria-hidden="true"
+        />
+        <span>Weekly Retro</span>
+      </button>
+      <button
+        type="button"
+        data-testid="daily-nav-daily-routine"
+        onClick={() => router.push("/daily-routine")}
+        className="flex min-h-[44px] items-center gap-2 rounded-m-lg border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-left text-[13px] font-medium text-m-text active:opacity-80"
+      >
+        <PenLine
+          size={16}
+          strokeWidth={1.5}
+          className="shrink-0 text-m-text-dim"
+          aria-hidden="true"
+        />
+        <span>Daily Routine</span>
+      </button>
     </div>
   );
 }

@@ -65,12 +65,11 @@ export default function MoreClient() {
         <NavRow href="/risk-manager" label="Risk Manager" />
         <NavRow href="/earnings" label="Earnings Planner" />
       </Section>
-      <Section title="Daily">
-        <NavRow href="/daily-routine" label="Daily Routine" />
-        <NavRow href="/daily-journal" label="Daily Journal" />
-        <NavRow href="/daily-report" label="Daily Report" />
-        <NavRow href="/weekly-retro" label="Weekly Retro" />
-      </Section>
+      {/* "Daily" section removed in T2-6 — all four destinations
+          (Daily Routine, Daily Journal, Daily Report, Weekly Retro)
+          now have faster paths via the new Daily bottom-nav tab and
+          its quick-link card row on /daily-journal. Desktop More
+          retains the "Daily Workflow" group through nav.ts. */}
       <Section title="Market Intel">
         <NavRow href="/rally-context" label="Rally Context" />
       </Section>

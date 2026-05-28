@@ -337,3 +337,74 @@ describe("MobileDailyJournal — end-of-list footer", () => {
     );
   });
 });
+
+describe("MobileDailyJournal — T2-6 Daily nav row", () => {
+  test("renders Weekly Retro + Daily Routine quick-link buttons", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({ day: todayStr() }),
+    ]);
+    render(<MobileDailyJournal />);
+    const row = await screen.findByTestId("daily-nav-row");
+    const weekly = within(row).getByTestId("daily-nav-weekly-retro");
+    const routine = within(row).getByTestId("daily-nav-daily-routine");
+    expect(weekly).toHaveTextContent("Weekly Retro");
+    expect(routine).toHaveTextContent("Daily Routine");
+  });
+
+  test("Weekly Retro button routes to /weekly-retro", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({ day: todayStr() }),
+    ]);
+    render(<MobileDailyJournal />);
+    fireEvent.click(await screen.findByTestId("daily-nav-weekly-retro"));
+    expect(pushMock).toHaveBeenCalledWith("/weekly-retro");
+  });
+
+  test("Daily Routine button routes to /daily-routine", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({ day: todayStr() }),
+    ]);
+    render(<MobileDailyJournal />);
+    fireEvent.click(await screen.findByTestId("daily-nav-daily-routine"));
+    expect(pushMock).toHaveBeenCalledWith("/daily-routine");
+  });
+
+  test("nav row renders between entries-count subtitle and Week/Month/All filter pills", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({ day: todayStr() }),
+    ]);
+    const { container } = render(<MobileDailyJournal />);
+    await screen.findByTestId("daily-nav-row");
+
+    // Walk children of the page root and verify DOM order.
+    const root = container.firstChild as HTMLElement;
+    const children = Array.from(root.children);
+    const headerIdx = children.findIndex(
+      (el) => el.textContent?.includes("entries") || el.textContent?.includes("entry"),
+    );
+    const navRowIdx = children.findIndex(
+      (el) => (el as HTMLElement).getAttribute("data-testid") === "daily-nav-row",
+    );
+    const filterIdx = children.findIndex(
+      (el) => (el as HTMLElement).getAttribute("role") === "radiogroup",
+    );
+    expect(headerIdx).toBeGreaterThanOrEqual(0);
+    expect(navRowIdx).toBeGreaterThan(headerIdx);
+    expect(filterIdx).toBeGreaterThan(navRowIdx);
+  });
+
+  test("Week/Month/All filter pills still function (regression)", async () => {
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({ day: todayStr() }),
+      entryFixture({ day: daysAgo(30) }),
+    ]);
+    render(<MobileDailyJournal />);
+    await screen.findByTestId(`day-card-${todayStr()}`);
+    // 30-day-old entry hidden by default Week filter
+    expect(
+      screen.queryByTestId(`day-card-${daysAgo(30)}`),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "All" }));
+    await screen.findByTestId(`day-card-${daysAgo(30)}`);
+  });
+});
