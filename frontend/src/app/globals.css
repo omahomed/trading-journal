@@ -430,15 +430,14 @@ body {
 .text-color-sky     { color: #0d6efd; }
 .text-color-violet  { color: #8b5cf6; }
 
-/* T2-4b — mirror the .indent-N rules above to the mobile rich text
-   editor body. The Lexical-backed editor (mobile-rich-text-editor.tsx)
-   renders its content inside `.mobile-rte-body` and emits class-based
-   indent markup via the IndentAware* node subclasses. Without these
-   rules, indent visuals only showed up in desktop's
-   `.weekly-thoughts-editor` container, never inside the mobile editor.
-   Same scale as the desktop block for consistent round-trip rendering. */
-.mobile-rte-body .indent-1 { margin-left: 40px; }
-.mobile-rte-body .indent-2 { margin-left: 80px; }
-.mobile-rte-body .indent-3 { margin-left: 120px; }
-.mobile-rte-body .indent-4 { margin-left: 160px; }
-.mobile-rte-body .indent-5 { margin-left: 200px; }
+/* T2-4b — mirror the .indent-N rules above to the mobile textarea
+   editor's live preview pane. The preview renders ReactMarkdown +
+   rehypeRaw output inside `.mobile-textarea-preview`, and indent
+   classes from AI-pasted (or hand-typed) content land here. Same
+   scale as the desktop `.weekly-thoughts-editor` block so content
+   round-trips identically. */
+.mobile-textarea-preview .indent-1 { margin-left: 40px; }
+.mobile-textarea-preview .indent-2 { margin-left: 80px; }
+.mobile-textarea-preview .indent-3 { margin-left: 120px; }
+.mobile-textarea-preview .indent-4 { margin-left: 160px; }
+.mobile-textarea-preview .indent-5 { margin-left: 200px; }

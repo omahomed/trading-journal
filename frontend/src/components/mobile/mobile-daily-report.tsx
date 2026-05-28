@@ -29,18 +29,8 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { ImageLightbox, type LightboxImage } from "@/components/image-lightbox";
 import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
 import { MobileImageUpload, type ImageUploadRow } from "./mobile-image-upload";
-import dynamic from "next/dynamic";
 import { MobileEditSheet } from "./mobile-edit-sheet";
-
-// Lazy-load the rich text editor — the Lexical bundle adds ~100-120 KB
-// gzipped and is only needed on first edit-sheet open (Recap + Thoughts).
-// Subsequent opens in the same session are instant (chunk is cached).
-// Market Notes uses a plain textarea, not this editor, so opening that
-// sheet doesn't trigger the chunk download.
-const MobileRichTextEditor = dynamic(
-  () => import("./mobile-rich-text-editor"),
-  { ssr: false, loading: () => null },
-);
+import { MobileTextareaEditor } from "./mobile-textarea-editor";
 
 /**
  * Mobile Daily Report — Phase 2 T2-4 (core).
@@ -811,7 +801,7 @@ function LoadedReport({
           disabled: !recap.dirty || recap.isSaving,
         }}
       >
-        <MobileRichTextEditor
+        <MobileTextareaEditor
           initialValue={recap.value}
           onChange={recap.setValue}
           placeholder="What happened today? Lowlights, mistakes, observations…"
@@ -829,7 +819,7 @@ function LoadedReport({
           disabled: !thoughts.dirty || thoughts.isSaving,
         }}
       >
-        <MobileRichTextEditor
+        <MobileTextareaEditor
           initialValue={thoughts.value}
           onChange={thoughts.setValue}
           placeholder="What did you observe today? Trades, market behavior, decisions…"
@@ -1334,8 +1324,8 @@ function DailyThoughtsSection({
 
 /** Shared preview + Edit-pill block backing both Recap and Thoughts.
  *  Content renders via ReactMarkdown + remarkGfm + rehypeRaw — the
- *  same chain the desktop daily-report-card.tsx uses, so HTML output
- *  from MobileRichTextEditor round-trips cleanly. */
+ *  same chain the desktop daily-report-card.tsx uses (and the mobile
+ *  textarea editor's preview pane), so HTML round-trips cleanly. */
 function EditableTextSection({
   testId,
   label,
