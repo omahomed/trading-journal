@@ -38,14 +38,14 @@ vi.mock("@/lib/log", () => ({
   },
 }));
 
-// Stub the Lexical-backed rich text editor so the daily-report tests
-// stay focused on consumer wiring (Edit pill → sheet → Save → API)
-// without dragging Lexical's full editor lifecycle through jsdom.
-// The stub renders test-only buttons that fire onChange + onDirtyChange
-// the same way the real editor would on user edits.
-vi.mock("./mobile-rich-text-editor", () => ({
+// Stub the textarea editor so the daily-report tests stay focused on
+// consumer wiring (Edit pill → sheet → Save → API) without dragging
+// ReactMarkdown + DOMPurify through every test. The stub renders a
+// test-only button that fires onChange + onDirtyChange the same way
+// the real editor would on user edits.
+vi.mock("./mobile-textarea-editor", () => ({
   __esModule: true,
-  default: ({
+  MobileTextareaEditor: ({
     initialValue,
     onChange,
     onDirtyChange,
