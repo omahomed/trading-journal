@@ -877,17 +877,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     )}
                   </Field>
                 </div>
-                {/* ATR mode supplementary copy: confirmation line + caption when
-                    available, or unavailability notice when atrPct = 0. */}
+                {/* ATR mode confirmation line — the resolved stop preview.
+                    Unavailability notice when atrPct = 0 (sparse history or
+                    fetch failure). The "Default mode for buys with no stop…"
+                    explanatory caption from the original mockup was removed
+                    post-deployment review — users selecting ATR mode know
+                    what ATR mode is. */}
                 {stopMode === "atr" && (
                   atrPct > 0 ? (
-                    <div className="flex flex-col gap-0.5 mt-0.5">
-                      <div className="text-[12px] font-medium" style={{ color: "#3b82f6", fontFamily: "var(--font-jetbrains), monospace" }}>
-                        → Stop {formatCurrency(stopPrice)} · {(atrMultiplier * atrPct).toFixed(1)}% below entry
-                      </div>
-                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
-                        Default mode for buys with no stop — replaces the old 5% percentage default
-                      </div>
+                    <div className="text-[12px] font-medium mt-0.5" style={{ color: "#3b82f6", fontFamily: "var(--font-jetbrains), monospace" }}>
+                      → Stop {formatCurrency(stopPrice)} · {(atrMultiplier * atrPct).toFixed(1)}% below entry
                     </div>
                   ) : (
                     <div className="text-[12px] mt-0.5" style={{ color: "var(--ink-4)" }}>
@@ -1207,6 +1206,34 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     {formatCurrency(equity, { decimals: 0 })}
                   </div>
                 </Field>
+
+                {/* ATR informational row. Renders only when the user has
+                    entered a ticker (priceLookup has fired). Subtle styling
+                    mirrors the sizing-mode indicator copy above — this is
+                    metadata for the trader, not a primary metric. atrPct=0
+                    is the backend's "insufficient history" sentinel; we
+                    surface that here so the unavailability matches the
+                    pills-disabled state on the left form. */}
+                {ticker.trim().length > 0 && (
+                  <div className="px-3 py-2 rounded-[8px] text-[12px]"
+                       data-testid="logbuy-atr-info"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                    <span style={{ color: "var(--ink-4)" }}>ATR (21d):</span>{" "}
+                    {atrPct > 0 ? (
+                      <>
+                        <span className="font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                          {atrPct.toFixed(2)}%
+                        </span>
+                        <span style={{ color: "var(--ink-4)" }}> · </span>
+                        <span className="font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                          {formatCurrency(priceNum * atrPct / 100)}/sh
+                        </span>
+                      </>
+                    ) : (
+                      <span style={{ color: "var(--ink-4)" }}>unavailable for this ticker</span>
+                    )}
+                  </div>
+                )}
 
                 {/* Risk Budget + Stop Dist */}
                 <div className="grid grid-cols-2 gap-2.5">

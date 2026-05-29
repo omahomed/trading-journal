@@ -768,3 +768,139 @@ describe("LogBuy — ATR stop-loss mode", () => {
     expect(screen.getByText("Stop Loss %")).toBeInTheDocument();
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────
+// ATR UI polish (post-deployment review):
+//   - Live Sizer panel now carries an informational ATR row between
+//     Account Equity and Risk $; subtle metadata styling.
+//   - Multiplier pills under ATR mode render all three (1× / 1.5× / 2×)
+//     regardless of which is selected, with the selected pill clearly
+//     distinguished by inverted color/border (background = ink-1,
+//     color = surface). Inactive pills are outlined (background = bg,
+//     border = border). The 1.5× pill is the default selection.
+// ─────────────────────────────────────────────────────────────────────
+
+
+describe("LogBuy — ATR Live Sizer info row + pill rendering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+    vi.mocked(api.logBuy).mockResolvedValue({ trx_id: "B1" } as any);
+  });
+
+  function mockPriceLookup(price: number, atrPct: number) {
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "AAPL", price, atr: atrPct * price / 100, atr_pct: atrPct,
+    } as any);
+  }
+
+  test("ATR info row hidden when no ticker entered", async () => {
+    mockPriceLookup(180, 2.0);
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    // No ticker → no priceLookup → no ATR row.
+    expect(screen.queryByTestId("logbuy-atr-info")).not.toBeInTheDocument();
+  });
+
+  test("ATR info row renders ATR % + $/sh when atrPct > 0", async () => {
+    mockPriceLookup(180, 2.87);
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+
+    const row = await screen.findByTestId("logbuy-atr-info", {}, { timeout: 3000 });
+    expect(row.textContent).toMatch(/ATR \(21d\):/);
+    // 180 × 2.87 / 100 = 5.166 → formatted as $5.17
+    expect(row.textContent).toMatch(/2\.87%/);
+    expect(row.textContent).toMatch(/\$5\.17/);
+    expect(row.textContent).toMatch(/\/sh/);
+  });
+
+  test("ATR info row renders 'unavailable' when atrPct = 0 (sparse-history sentinel)", async () => {
+    mockPriceLookup(180, 0);
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+
+    const row = await screen.findByTestId("logbuy-atr-info", {}, { timeout: 3000 });
+    expect(row.textContent).toMatch(/ATR \(21d\):/);
+    expect(row.textContent).toMatch(/unavailable for this ticker/);
+    // No percent or $/sh values when unavailable.
+    expect(row.textContent).not.toMatch(/%/);
+    expect(row.textContent).not.toMatch(/\/sh/);
+  });
+
+  test("ATR pills: all three render with the selected pill visually distinguished", async () => {
+    mockPriceLookup(180, 2.0);
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+
+    // Activate ATR mode so the pills render.
+    await act(async () => {
+      fireEvent.click(screen.getByText(/ATR \(×\)/));
+    });
+
+    const pills = await screen.findByTestId("logbuy-atr-pills");
+    const buttons = pills.querySelectorAll("button");
+
+    // All three pills present in the DOM. Earlier production screenshot
+    // raised concern that the 1.5× pill was missing visually; this
+    // assertion locks in that all three are rendered, with 1.5× as the
+    // middle button.
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0].textContent).toContain("1×");
+    expect(buttons[1].textContent).toContain("1.5×");
+    expect(buttons[2].textContent).toContain("2×");
+
+    // Visual distinction: selected pill (index 1 = 1.5× default) gets
+    // background = var(--ink-1) (filled) and color = var(--surface)
+    // (inverted text). Inactive pills get background = var(--bg) with
+    // border-only treatment. aria-pressed exposes the selection state
+    // for screen readers and tests.
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[2].getAttribute("aria-pressed")).toBe("false");
+
+    const selectedStyle = (buttons[1] as HTMLButtonElement).style;
+    const inactiveStyle = (buttons[0] as HTMLButtonElement).style;
+    // Selected uses ink-1 background; inactive uses bg. These resolve
+    // through CSS vars at render time — we just assert the inline-style
+    // strings differ, proving the two states render with different
+    // declarations and the selected pill can't visually collapse into
+    // the inactive pills.
+    expect(selectedStyle.background).not.toBe(inactiveStyle.background);
+    expect(selectedStyle.color).not.toBe(inactiveStyle.color);
+  });
+
+  test("ATR caption ('Default mode for buys with no stop …') is removed", async () => {
+    // Regression guard for the post-deployment polish — the caption
+    // line was useful in the mockup but adds noise in the live form.
+    mockPriceLookup(180, 2.0);
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/ATR \(×\)/));
+    });
+
+    // Confirmation line still present.
+    await waitFor(() => {
+      expect(screen.getByText(/→ Stop \$/)).toBeInTheDocument();
+    });
+    // Removed caption.
+    expect(screen.queryByText(/Default mode for buys with no stop/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/replaces the old 5% percentage default/)).not.toBeInTheDocument();
+  });
+});
