@@ -6,6 +6,8 @@ import pandas as pd
 import os
 from datetime import datetime
 
+from db_layer import TRX_ID_PATTERN
+
 # Portfolio paths
 PORTFOLIOS = {
     'CanSlim': '/Users/momacbookair/Library/Mobile Documents/com~apple~CloudDocs/my_code/portfolios/CanSlim',
@@ -142,11 +144,29 @@ def import_details(conn, portfolio_name, csv_path):
         cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
         portfolio_id = cur.fetchone()[0]
 
-    # Prepare data
+    # Prepare data. csv_row_idx is the human-readable line number a user
+    # sees when opening the CSV: header is row 1, the first data row is
+    # row 2. Used in the trx_id validation error message so the operator
+    # can scroll directly to the offending row.
     rows = []
-    for _, row in df.iterrows():
+    for csv_row_idx, (_, row) in enumerate(df.iterrows(), start=2):
         # Clean Trade_ID
         trade_id = str(row.get('Trade_ID', '')).replace('.0', '')
+
+        trx_id_raw = clean_text(row.get('Trx_ID', ''))
+        # Empty trx_id is allowed for legacy data that pre-dates the field;
+        # but if present, it MUST match the canonical pattern. Free-form
+        # text like "Market selloff..." in this column is the corruption
+        # pattern production already has ~10 rows of — reject at the import
+        # boundary to prevent more.
+        if trx_id_raw and not TRX_ID_PATTERN.match(trx_id_raw):
+            raise ValueError(
+                f"Invalid trx_id at CSV row {csv_row_idx} "
+                f"(Trade_ID={trade_id}, Ticker={row.get('Ticker', '')}): "
+                f"{trx_id_raw!r} does not match the canonical pattern "
+                f"{TRX_ID_PATTERN.pattern}. Expected forms: B1, A1, S1, SA1, "
+                f"SB1, B0-Pre, or {{base}}-Auto / {{base}}-N variants."
+            )
 
         rows.append((
             portfolio_id,
@@ -161,7 +181,7 @@ def import_details(conn, portfolio_name, csv_path):
             clean_text(row.get('Notes', '')),
             clean_numeric(row.get('Realized_PL', 0)),
             clean_numeric(row.get('Stop_Loss')),
-            clean_text(row.get('Trx_ID', '')),
+            trx_id_raw,
             clean_text(row.get('Exec_Grade', '')),
             clean_text(row.get('Behavior_Tag', '')),
             clean_text(row.get('Retro_Notes', ''))

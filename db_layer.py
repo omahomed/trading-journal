@@ -1883,6 +1883,39 @@ def load_lot_closures(portfolio_name, trade_id=None, trade_ids=None):
     return df
 
 
+# Canonical trx_id format. DRY anchor for strict-mode validators on the
+# import (migrate_csv_to_postgres.py) and API surface (api/main.py log_buy
+# / log_sell / edit_transaction). Generators like generate_unique_trx_id
+# below build their own per-prefix regex; consumers that just need to
+# decide "is this string a legitimate trx_id?" import this constant.
+#
+# Allowed forms (surveyed against 1453 active production rows):
+#   B1, B2, ...           initial BUYs                                (542 rows)
+#   A1, A2, ...           add-on BUYs                                 (294 rows)
+#   S1, S2, ...           SELLs                                       (307 rows)
+#   SA1, SA2, ...         legacy SELL-of-add                          (134 rows)
+#   SB1, SB2, ...         legacy SELL-of-base                         (134 rows)
+#   {base}-Auto           IBKR auto-import marker — dead convention,  ( 13 rows)
+#                         preserved for backward-compat; no current
+#                         code path generates it.
+#   {base}-N              dedupe-script survivor (N >= 2), see        ( 24 rows)
+#                         scripts/dedupe_trx_ids.py:163-168
+#   B0-Pre                pre-existing-position marker                (  1 row)
+#
+# Alternation ordering inside the regex is longest-first deliberately —
+# `S` is a prefix of `SA` and `SB`, so listing `SB|SA` before `S` avoids
+# regex backtracking that would otherwise misclassify `SA1` as `S` + `A1`.
+# Same reason `B0-Pre` is its own top-level alternative: the literal hyphen
+# would otherwise need to be excluded from the `{base}-Auto|-\d+` branch.
+#
+# Numeric suffix is `[1-9]\d*` — generator counts from 1, and a production
+# survey confirmed no standalone B0/A0/S0/SA0/SB0 rows exist. B0 is
+# reserved exclusively for the `B0-Pre` literal.
+TRX_ID_PATTERN = re.compile(
+    r'^(?:B0-Pre|(?:SB|SA|B|A|S)[1-9]\d*(?:-Auto|-\d+)?)$'
+)
+
+
 def generate_unique_trx_id(portfolio_name: str, trade_id: str, prefix: str) -> str:
     """Return the lowest-numbered unused trx_id matching ^{prefix}\\d+$ in
     (portfolio_id, trade_id), e.g. 'B2' or 'S5'. Skips gaps already filled.

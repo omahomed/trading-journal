@@ -3755,6 +3755,15 @@ def log_buy(request: Request, body: dict):
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
         time_str = body.get("time", datetime.now().strftime("%H:%M"))
         client_trx_id = body.get("trx_id", "")
+        if client_trx_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "trx_id is server-assigned and cannot be supplied in the "
+                    "buy request body. Omit the field; the server will return "
+                    "the assigned trx_id in the response."
+                ),
+            )
         # Strategy (Migration 019). Defaults to CanSlim — matches the DB
         # column DEFAULT and the user's primary strategy. For new buys we
         # validate the value against the active strategies; for scale-ins
@@ -3921,6 +3930,11 @@ def log_buy(request: Request, body: dict):
             pass
 
         return {"status": "ok", "detail_id": detail_id, "summary_id": summary_id, "trx_id": trx_id}
+    except HTTPException:
+        # Let FastAPI render the actual HTTP status (e.g. the 422 strict-mode
+        # reject above). The catch-all below would otherwise wrap it into a
+        # 200 with {"error": str(e)} and drop the status code.
+        raise
     except Exception as e:
         return {"error": str(e)}
 
@@ -3995,6 +4009,15 @@ def log_sell(request: Request, body: dict):
         date_str = body.get("date") or datetime.now().strftime("%Y-%m-%d")
         time_str = body.get("time") or datetime.now().strftime("%H:%M")
         client_trx_id = body.get("trx_id", "")
+        if client_trx_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "trx_id is server-assigned and cannot be supplied in the "
+                    "sell request body. Omit the field; the server will return "
+                    "the assigned trx_id in the response."
+                ),
+            )
         grade_raw = body.get("grade", None)
 
         if not trade_id or shares <= 0 or price <= 0:
@@ -4137,6 +4160,11 @@ def log_sell(request: Request, body: dict):
             "remaining_shares": round(remaining_shares, 4),
             "is_closed": is_closed,
         }
+    except HTTPException:
+        # Let FastAPI render the actual HTTP status (e.g. the 422 strict-mode
+        # reject above). The catch-all below would otherwise wrap it into a
+        # 200 with {"error": str(e)} and drop the status code.
+        raise
     except Exception as e:
         return {"error": str(e)}
 
@@ -4559,25 +4587,20 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         if multiplier == 1.0 and is_option_ticker(effective_ticker):
             multiplier = 100.0
 
-        # Validate trx_id (if changing): must not collide with another row in
-        # the same trade. The frontend's edit form makes the field readOnly so
-        # the client shouldn't be sending changed values, but treat it as a
-        # belt-and-suspenders check — reject early with a friendly error
-        # rather than relying on the migration-018 UNIQUE constraint to fail
-        # the UPDATE midway.
+        # Strictness: trx_id is server-assigned and immutable after creation.
+        # The frontend's edit form makes the field readOnly and echoes the
+        # existing value back to the server, so a matching client value is
+        # tolerated. Any divergence is a strict 422 — preventing the
+        # pre-df6141a renumbering pattern from re-introducing scrambles.
         client_trx_id = str(body.get("trx_id", "") or "").strip()
-        if client_trx_id and client_trx_id != existing_trx_id and not df_d.empty \
-                and "trx_id" in df_d.columns and "detail_id" in df_d.columns:
-            try:
-                collision = df_d[
-                    (df_d["trade_id"] == effective_trade_id)
-                    & (df_d["trx_id"] == client_trx_id)
-                    & (df_d["detail_id"] != int(detail_id))
-                ]
-                if not collision.empty:
-                    return {"error": f"trx_id '{client_trx_id}' already used by another row in this trade"}
-            except (TypeError, ValueError):
-                pass  # malformed detail_id — fall through; later DB layer catches it
+        if client_trx_id and client_trx_id != existing_trx_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"trx_id is server-assigned and immutable. Existing value "
+                    f"'{existing_trx_id}' cannot be changed to '{client_trx_id}'."
+                ),
+            )
 
         shares = float(body.get("shares") or 0)
         amount = float(body.get("amount") or 0)
@@ -4614,7 +4637,10 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
             "Rule": body.get("rule", ""),
             "Notes": body.get("notes", ""),
             "Stop_Loss": body.get("stop_loss", 0),
-            "Trx_ID": body.get("trx_id", ""),
+            # trx_id is immutable post-creation — strict-mode check above
+            # already rejects mismatched client values; explicitly pin to
+            # existing_trx_id so an inadvertent code-path change can't drift.
+            "Trx_ID": existing_trx_id,
         }
 
         db.update_detail_row(portfolio, detail_id, row_dict)
@@ -4654,6 +4680,11 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
             pass
 
         return {"status": "ok", "detail_id": detail_id}
+    except HTTPException:
+        # Let FastAPI render the actual HTTP status (e.g. the 422 strict-mode
+        # reject above). The catch-all below would otherwise wrap it into a
+        # 200 with {"error": str(e)} and drop the status code.
+        raise
     except Exception as e:
         return {"error": str(e)}
 
