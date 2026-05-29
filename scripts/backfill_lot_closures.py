@@ -61,7 +61,7 @@ os.environ.setdefault("DATABASE_URL", get_database_url())
 import pandas as pd  # noqa: E402
 
 import db_layer as db  # noqa: E402
-from trade_calc import compute_lifo_summary, is_option_ticker  # noqa: E402
+from trade_calc import compute_matching_summary, is_option_ticker  # noqa: E402
 
 # All pre-auth rows are tagged with the founder UUID; db_layer's RLS filters
 # by app.user_id, so any script writing through the layer needs to set this
@@ -82,7 +82,7 @@ EXACT_THRESHOLD = 0.005
 
 
 # Columns load_details returns (TitleCase) → the snake_case shape
-# compute_lifo_summary expects. Mirror of the relevant slice of
+# compute_matching_summary expects. Mirror of the relevant slice of
 # api.main._normalize_trades, inlined here so we don't have to import
 # api.main (which would load the whole FastAPI app for a one-off script).
 _LIFO_COLUMN_RENAME = {
@@ -100,12 +100,12 @@ _LIFO_COLUMN_RENAME = {
 
 def _normalize_for_lifo(df: pd.DataFrame) -> pd.DataFrame:
     """Rename load_details TitleCase columns to the snake_case shape
-    compute_lifo_summary expects."""
+    compute_matching_summary expects."""
     return df.rename(columns={k: v for k, v in _LIFO_COLUMN_RENAME.items() if k in df.columns})
 
 
 def resolve_multiplier(txns: pd.DataFrame, ticker: str) -> float:
-    """Mirror of the multiplier resolution in api.main._recompute_summary_lifo.
+    """Mirror of the multiplier resolution in api.main._recompute_summary_matching.
 
     Prefers the per-row multiplier column (Migration 016), falls back to
     ticker-pattern autodetect for any pre-016 row that still has the default
@@ -132,7 +132,7 @@ def reconcile_trade(trade_id: str, ticker: str, persisted_pl: float,
     """
     txns = df_d_portfolio[df_d_portfolio["trade_id"] == trade_id]
     multiplier = resolve_multiplier(txns, ticker)
-    result = compute_lifo_summary(
+    result = compute_matching_summary(
         txns, trade_id, ticker, multiplier=multiplier, with_closures=True,
     )
     summary, closures = result

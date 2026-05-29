@@ -17,7 +17,7 @@ Design highlights:
   - DB writer uses raw psycopg2 + db_layer.get_db_connection() so the
     script doesn't drag in api.main (FastAPI / Sentry init).
   - Summary fields (status / shares / avg_entry / realized_pl) computed
-    via trade_calc.compute_lifo_summary — same LIFO walk the app uses.
+    via trade_calc.compute_matching_summary — same LIFO walk the app uses.
 
 Cash source mapping (within existing CHECK constraint
 {deposit,withdraw,buy,sell,reconcile}):
@@ -74,7 +74,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from db_layer import get_db_connection  # noqa: E402
-from trade_calc import compute_lifo_summary  # noqa: E402
+from trade_calc import compute_matching_summary  # noqa: E402
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -592,7 +592,7 @@ def _build_lifo_summary(campaign: Campaign, trade_id: str) -> dict:
     """Run the canonical LIFO walk on a campaign's transactions to get
     status / shares / avg_entry / avg_exit / realized_pl / etc.
 
-    trade_calc.compute_lifo_summary expects a DataFrame with columns:
+    trade_calc.compute_matching_summary expects a DataFrame with columns:
     date, action, shares, amount. Multiplier scales dollar totals.
     """
     rows = [
@@ -601,7 +601,7 @@ def _build_lifo_summary(campaign: Campaign, trade_id: str) -> dict:
         for tx in campaign.txns
     ]
     df = pd.DataFrame(rows)
-    summary = compute_lifo_summary(
+    summary = compute_matching_summary(
         df, trade_id, campaign.ticker,
         fallback_open_date=campaign.open_date.isoformat(),
         multiplier=campaign.multiplier,

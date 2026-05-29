@@ -1,13 +1,13 @@
 """Regression tests for recompute paths preserving non-LIFO summary fields.
 
-The bug: api/main.py _recompute_summary_lifo passed only LIFO-derived fields
+The bug: api/main.py _recompute_summary_matching passed only LIFO-derived fields
 (Status, Shares, Avg_Entry, etc.) to db.save_summary_with_closures. The DB
 layer's UPDATE binds every column including those not in the input dict, so
 rule/buy_notes/sell_rule/sell_notes got NULL and risk_budget got 0 (column
 DEFAULT). Triggered on every sell/edit/delete/rebuild — wiped ~46 campaigns
 of user-entered metadata in production.
 
-The fix: _recompute_summary_lifo now loads the existing summary row and
+The fix: _recompute_summary_matching now loads the existing summary row and
 merges Rule, Buy_Notes, Sell_Rule, Sell_Notes, Risk_Budget, Stop_Loss into
 the LIFO output before save. log_sell's inline summary_row likewise reads
 Stop_Loss + Risk_Budget off the existing row (matching how it already
@@ -176,10 +176,10 @@ def stubbed(monkeypatch):
                         lambda *a, **kw: None)
     monkeypatch.setattr(db_layer, "log_audit", lambda *a, **kw: None)
 
-    # validate_post_edit_lifo runs in edit/delete endpoints. With our minimal
+    # validate_post_edit_matching runs in edit/delete endpoints. With our minimal
     # detail dataset the validator is fine, but stub it anyway to keep the
     # test focused on the preservation contract rather than LIFO validation.
-    monkeypatch.setattr(main, "validate_post_edit_lifo",
+    monkeypatch.setattr(main, "validate_post_edit_matching",
                         lambda *a, **kw: None)
 
     if hasattr(main.limiter, "enabled"):
@@ -201,12 +201,12 @@ def stubbed(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_recompute_summary_lifo_preserves_all_six_fields(stubbed):
+def test_recompute_summary_matching_preserves_all_six_fields(stubbed):
     """The single chokepoint covering edit/delete/rebuild for all 6 fields."""
     state, _client = stubbed
     import api.main as main
 
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
+    main._recompute_summary_matching("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1, \
         "Expected exactly one save_summary_with_closures call"
@@ -232,13 +232,13 @@ def test_recompute_preserves_notes(stubbed):
     c0435ee fixed for the 6 user-prose fields.
 
     Existing summary row has notes='General notes on this campaign'.
-    After _recompute_summary_lifo runs, the captured save_summary_with_closures
+    After _recompute_summary_matching runs, the captured save_summary_with_closures
     payload must carry that Notes value.
     """
     state, _client = stubbed
     import api.main as main
 
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
+    main._recompute_summary_matching("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1
     saved = state["saved_with_closures"][0]["summary_row"]
@@ -246,13 +246,13 @@ def test_recompute_preserves_notes(stubbed):
         f"Notes not preserved: got {saved.get('Notes')!r}"
 
 
-def test_recompute_summary_lifo_no_existing_summary_does_not_crash(stubbed):
+def test_recompute_summary_matching_no_existing_summary_does_not_crash(stubbed):
     """First-time recompute (no existing summary row) must not crash."""
     state, _client = stubbed
     import api.main as main
 
     state["summary_df"] = pd.DataFrame()  # no existing summary
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
+    main._recompute_summary_matching("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1
 
@@ -270,7 +270,7 @@ def test_recompute_with_wiped_existing_summary_does_not_crash(stubbed):
         wiped[field] = None
     state["summary_df"] = pd.DataFrame([wiped])
 
-    main._recompute_summary_lifo("CanSlim", "202605-001", "AAPL")
+    main._recompute_summary_matching("CanSlim", "202605-001", "AAPL")
 
     assert len(state["saved_with_closures"]) == 1
     saved = state["saved_with_closures"][0]["summary_row"]
@@ -305,7 +305,7 @@ def _assert_six_fields_preserved(saved_row: dict[str, Any]) -> None:
 
 
 def test_log_sell_partial_close_preserves_all_six_fields(stubbed):
-    """log_sell → _recompute_summary_lifo (sole writer post-B-2). The
+    """log_sell → _recompute_summary_matching (sole writer post-B-2). The
     recompute must preserve all 6 fields end-to-end for a partial close.
 
     Pre-B-2: log_sell wrote inline via save_summary_row, then a recompute
@@ -347,7 +347,7 @@ def test_log_sell_partial_close_preserves_all_six_fields(stubbed):
 
 
 def test_edit_transaction_preserves_all_six_fields(stubbed):
-    """edit_transaction → _recompute_summary_lifo. All 6 fields preserved."""
+    """edit_transaction → _recompute_summary_matching. All 6 fields preserved."""
     state, client = stubbed
 
     r = client.put("/api/trades/edit-transaction", json={
@@ -369,13 +369,13 @@ def test_edit_transaction_preserves_all_six_fields(stubbed):
     assert "error" not in body, body
 
     assert state["saved_with_closures"], \
-        "Expected _recompute_summary_lifo to call save_summary_with_closures"
+        "Expected _recompute_summary_matching to call save_summary_with_closures"
     saved = state["saved_with_closures"][-1]["summary_row"]
     _assert_six_fields_preserved(saved)
 
 
 def test_delete_transaction_preserves_all_six_fields(stubbed):
-    """delete_transaction → _recompute_summary_lifo. All 6 fields preserved.
+    """delete_transaction → _recompute_summary_matching. All 6 fields preserved.
 
     Note: with only one detail row in the dataset, deletion would normally
     empty the campaign and trigger db.delete_trade instead of save. To
@@ -399,6 +399,6 @@ def test_delete_transaction_preserves_all_six_fields(stubbed):
     assert "error" not in body, body
 
     assert state["saved_with_closures"], \
-        "Expected _recompute_summary_lifo to call save_summary_with_closures"
+        "Expected _recompute_summary_matching to call save_summary_with_closures"
     saved = state["saved_with_closures"][-1]["summary_row"]
     _assert_six_fields_preserved(saved)
