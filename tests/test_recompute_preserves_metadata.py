@@ -305,8 +305,16 @@ def _assert_six_fields_preserved(saved_row: dict[str, Any]) -> None:
 
 
 def test_log_sell_partial_close_preserves_all_six_fields(stubbed):
-    """log_sell hits the inline save_summary_row path AND _recompute_summary_lifo.
-    Both must preserve all 6 fields end-to-end for a partial close."""
+    """log_sell → _recompute_summary_lifo (sole writer post-B-2). The
+    recompute must preserve all 6 fields end-to-end for a partial close.
+
+    Pre-B-2: log_sell wrote inline via save_summary_row, then a recompute
+    pass produced lot_closures. B-2 deleted the inline path so the
+    recompute is now the only path to save_summary_with_closures. The
+    body-supplied Sell_Rule + Sell_Notes flow via the overrides
+    parameter; Stop_Loss / Risk_Budget / Rule / Buy_Notes are preserved
+    by the recompute's preserve-existing-fields loop.
+    """
     state, client = stubbed
 
     # Partial close: sell 50 of 100 shares.
@@ -324,23 +332,18 @@ def test_log_sell_partial_close_preserves_all_six_fields(stubbed):
     body = r.json()
     assert "error" not in body, body
 
-    # The inline save_summary_row at line 3052 must preserve Stop_Loss and
-    # Risk_Budget (without the companion fix, they'd be NULL/0 here).
-    assert state["saved_summaries"], "Expected an inline save_summary_row call"
-    inline_saved = state["saved_summaries"][-1]["row"]
-    assert inline_saved.get("Stop_Loss") == 195.0
-    assert inline_saved.get("Risk_Budget") == 500.0
-    # Sell_Rule and Sell_Notes are written from the body (the user just sold)
-    assert inline_saved.get("Sell_Rule") == "sr1.1 Profit target"
-    assert inline_saved.get("Sell_Notes") == "Half off the table"
-    # Rule and Buy_Notes preserved from existing row
-    assert inline_saved.get("Rule") == "br1.3 Cup w/o Handle"
-    assert inline_saved.get("Buy_Notes") == "Initial entry on breakout"
-
-    # The recompute (line 3068) must also preserve the 6 fields. After the
-    # inline save, the existing summary_df now reflects the post-inline
-    # state — Sell_Rule + Sell_Notes from body, others preserved.
+    # The recompute is the sole summary writer post-B-2. All 6 fields must
+    # land in the saved row.
     assert state["saved_with_closures"], "Expected a recompute save call"
+    saved = state["saved_with_closures"][-1]["summary_row"]
+    assert saved.get("Stop_Loss") == 195.0
+    assert saved.get("Risk_Budget") == 500.0
+    # Sell_Rule and Sell_Notes are written from the body via the overrides param.
+    assert saved.get("Sell_Rule") == "sr1.1 Profit target"
+    assert saved.get("Sell_Notes") == "Half off the table"
+    # Rule and Buy_Notes preserved from existing row by the recompute loop.
+    assert saved.get("Rule") == "br1.3 Cup w/o Handle"
+    assert saved.get("Buy_Notes") == "Initial entry on breakout"
 
 
 def test_edit_transaction_preserves_all_six_fields(stubbed):

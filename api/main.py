@@ -7,6 +7,7 @@ can fetch real data via REST endpoints.
 import sys
 import os
 import time
+from typing import Any
 
 # Add parent directory to path so we can import existing modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,6 +44,7 @@ import db_layer as db
 import nlv_service
 from trade_calc import (
     compute_lifo_summary,
+    compute_open_inventory,
     compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
@@ -4096,124 +4098,53 @@ def log_sell(request: Request, body: dict):
             portfolio, trade_id, "S", detail_row, given_trx_id=client_trx_id,
         )
 
-        # LIFO recalculation: reload all details and recompute summary
-        df_d = db.load_details(portfolio)
-        df_d = _normalize_trades(df_d)
-        txns = df_d[df_d["trade_id"] == trade_id].copy()
-        txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
-        txns = txns.dropna(subset=["date"]).sort_values("date")
-
-        # Phase 2 B-1: per-SELL matching. Each SELL reads its own
-        # match_method stamp; BUYs contribute to inventory in chronological
-        # arrival order tracked by arrival_seq so the LIFO branch can sort
-        # explicitly after any HCFO mutation rather than relying on the
-        # inventory[-1] adjacency invariant.
-        inventory = []
-        arrival_seq = 0
-        total_realized = 0.0
-        for _, tx in txns.iterrows():
-            action = str(tx.get("action", "")).upper()
-            tx_shares = float(tx.get("shares", 0))
-            tx_price = float(tx.get("amount", 0))
-            tx_date = tx.get("date")
-            if action == "BUY":
-                inventory.append({
-                    "price": tx_price, "shares": tx_shares,
-                    "date": tx_date, "arrival_seq": arrival_seq,
-                })
-                arrival_seq += 1
-            elif action == "SELL":
-                # NaN-safe per-SELL switch (see trade_calc.compute_trade_risk
-                # for rationale).
-                raw_method = tx.get("match_method")
-                sell_method = (
-                    "LIFO" if pd.isna(raw_method) or not raw_method
-                    else str(raw_method).upper()
-                )
-                if sell_method == "HCFO":
-                    inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
-                else:  # LIFO
-                    inventory.sort(key=lambda lot: -lot["arrival_seq"])
-                to_sell = tx_shares
-                while to_sell > 0 and inventory:
-                    lot = inventory[0]
-                    take = min(to_sell, lot["shares"])
-                    total_realized += (tx_price - lot["price"]) * take
-                    lot["shares"] -= take
-                    to_sell -= take
-                    if lot["shares"] < 0.0001:
-                        inventory.pop(0)
-
-        remaining_shares = sum(lot["shares"] for lot in inventory)
-        remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
-        avg_entry = remaining_cost / remaining_shares if remaining_shares > 0 else float(row.get("avg_entry", 0))
-
-        # Compute avg_exit from all sells
-        sells = txns[txns["action"].str.upper() == "SELL"]
-        total_sell_val = float((sells["shares"].astype(float) * sells["amount"].astype(float)).sum())
-        total_sell_shs = float(sells["shares"].astype(float).sum())
-        avg_exit = total_sell_val / total_sell_shs if total_sell_shs > 0 else 0.0
-
-        is_closed = remaining_shares < 0.01
-        buys = txns[txns["action"].str.upper() == "BUY"]
-        total_cost = float((buys["shares"].astype(float) * buys["amount"].astype(float)).sum())
-        total_buy_shs = float(buys["shares"].astype(float).sum())
-        # Return % is multiplier-invariant (ratio cancels). Apply multiplier
-        # only to absolute dollars (Total_Cost, Realized_PL).
-        return_pct = (total_realized / total_cost * 100) if is_closed and total_cost > 0 else 0.0
-        cost_to_report = remaining_cost if not is_closed else total_cost
-
-        summary_row = {
-            "Trade_ID": trade_id, "Ticker": str(ticker),
-            "Status": "CLOSED" if is_closed else "OPEN",
-            "Open_Date": str(row.get("open_date", ""))[:10],
-            "Closed_Date": date_str if is_closed else None,
-            "Shares": float(remaining_shares if not is_closed else total_buy_shs),
-            "Avg_Entry": float(round(avg_entry, 4)),
-            "Avg_Exit": float(round(avg_exit, 4)) if avg_exit > 0 else 0.0,
-            "Total_Cost": float(round(cost_to_report * multiplier, 2)),
-            "Realized_PL": float(round(total_realized * multiplier, 2)),
-            "Return_Pct": float(round(return_pct, 4)),
-            "Sell_Rule": rule,
-            "Sell_Notes": notes,
-            "Rule": db.clean_text_value(row.get("rule")),
-            "Buy_Notes": db.clean_text_value(row.get("buy_notes")),
-            "Stop_Loss": row.get("stop_loss"),
-            "Risk_Budget": row.get("risk_budget"),
-            "Instrument_Type": instrument_type, "Multiplier": multiplier,
-        }
+        # Phase 2 B-2: sole summary writer is _recompute_summary_lifo.
+        # Sell_Rule + Sell_Notes (and Grade) come from the request body and
+        # override the preserve-existing-fields loop inside the recompute,
+        # which would otherwise carry over the prior SELL's metadata.
+        overrides: dict[str, Any] = {"Sell_Rule": rule, "Sell_Notes": notes}
         if grade_raw is not None and str(grade_raw).strip() != "":
             try:
                 g = int(grade_raw)
                 if 1 <= g <= 5:
-                    summary_row["Grade"] = g
+                    overrides["Grade"] = g
             except (ValueError, TypeError):
                 pass
-        summary_id = db.save_summary_row(portfolio, summary_row)
 
-        # Audit trail
         try:
+            summary = _recompute_summary_lifo(
+                portfolio, trade_id, ticker, overrides=overrides,
+            )
+        except Exception as e:
+            print(f"[lot_closures] post-SELL recompute failed for {trade_id}: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"SELL row saved (detail_id={detail_id}, trx_id={trx_id}) "
+                    f"but summary recompute failed: {type(e).__name__}: {e}. "
+                    f"Trigger a manual recompute via Trade Manager → Edit any "
+                    f"transaction → Save."
+                ),
+            )
+
+        # Audit trail. Pulls realized_pl from the recompute summary so the
+        # message reflects the SELL row's incremental contribution (CLOSED
+        # trades show full lifetime realized_pl; OPEN trades show the
+        # cumulative figure — same value the prior inline path emitted).
+        try:
+            realized_for_audit = float(summary["Realized_PL"]) if summary else 0.0
             db.log_audit(portfolio, "SELL", trade_id, ticker,
-                         f"{trx_id}: {shares} shs @ ${price:.2f} | P&L: ${total_realized:.2f}", username="web")
+                         f"{trx_id}: {shares} shs @ ${price:.2f} | P&L: ${realized_for_audit:.2f}", username="web")
         except Exception:
             pass
 
-        # Re-run LIFO via the shared recompute path so lot_closures gets
-        # populated for fresh SELLs too. The inline LIFO above already wrote
-        # the correct summary; this second pass produces the same summary
-        # numbers (idempotent) and adds the per-pair closure rows the inline
-        # path doesn't touch. TODO step 5: kill the inline LIFO duplication
-        # and have this endpoint use _recompute_summary_lifo exclusively.
-        try:
-            _recompute_summary_lifo(portfolio, trade_id, ticker)
-        except Exception as e:
-            print(f"[lot_closures] post-SELL recompute failed for {trade_id}: {e}")
-
         return {
-            "status": "ok", "detail_id": detail_id, "summary_id": summary_id,
-            "trx_id": trx_id, "realized_pl": round(total_realized * multiplier, 2),
-            "remaining_shares": round(remaining_shares, 4),
-            "is_closed": is_closed,
+            "status": "ok",
+            "detail_id": detail_id,
+            "trx_id": trx_id,
+            "realized_pl": float(summary["Realized_PL"]) if summary else 0.0,
+            "remaining_shares": float(summary["Shares"]) if (summary and summary["Status"] == "OPEN") else 0.0,
+            "is_closed": bool(summary and summary["Status"] == "CLOSED"),
         }
     except HTTPException:
         # Let FastAPI render the actual HTTP status (e.g. the 422 strict-mode
@@ -4362,43 +4293,12 @@ def exercise_option(request: Request, body: dict = Body(...)):
             opt_txns["date"] = pd.to_datetime(opt_txns["date"], errors="coerce")
             opt_txns = opt_txns.dropna(subset=["date"]).sort_values("date")
 
-            # Phase 2 B-1: per-SELL matching with arrival_seq + date on each
-            # BUY lot so the LIFO branch can sort explicitly post-HCFO-mutation.
-            inventory = []
-            arrival_seq = 0
-            for _, tx in opt_txns.iterrows():
-                action = str(tx.get("action", "")).upper()
-                tx_shares = float(tx.get("shares", 0) or 0)
-                tx_price = float(tx.get("amount", 0) or 0)
-                tx_date = tx.get("date")
-                if action == "BUY":
-                    inventory.append({
-                        "price": tx_price, "shares": tx_shares,
-                        "date": tx_date, "arrival_seq": arrival_seq,
-                    })
-                    arrival_seq += 1
-                elif action == "SELL":
-                    # NaN-safe per-SELL switch (see trade_calc.compute_trade_risk
-                    # for rationale).
-                    raw_method = tx.get("match_method")
-                    sell_method = (
-                        "LIFO" if pd.isna(raw_method) or not raw_method
-                        else str(raw_method).upper()
-                    )
-                    if sell_method == "HCFO":
-                        inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
-                    else:  # LIFO
-                        inventory.sort(key=lambda lot: -lot["arrival_seq"])
-                    to_sell = tx_shares
-                    while to_sell > 0 and inventory:
-                        lot = inventory[0]
-                        take = min(to_sell, lot["shares"])
-                        lot["shares"] -= take
-                        to_sell -= take
-                        if lot["shares"] < 0.0001:
-                            inventory.pop(0)
-            contracts_held = sum(lot["shares"] for lot in inventory)
-            held_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
+            # Phase 2 B-2: shared inventory walker. The per-SELL LIFO/HCFO
+            # switch lives inside compute_open_inventory → _walk_inventory;
+            # the call site only consumes the post-walk aggregates.
+            opt_inventory = compute_open_inventory(opt_txns)
+            contracts_held = sum(lot["shares"] for lot in opt_inventory)
+            held_cost = sum(lot["shares"] * lot["price"] for lot in opt_inventory)
             if contracts_held <= 0:
                 return {"error": "No contracts currently held"}
             weighted_avg_premium = held_cost / contracts_held
@@ -4846,16 +4746,37 @@ def delete_transaction_endpoint(request: Request,
         return {"error": str(e)}
 
 
-def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback_open_date: str = "") -> None:
+def _recompute_summary_lifo(
+    portfolio: str,
+    trade_id: str,
+    ticker: str,
+    fallback_open_date: str = "",
+    overrides: dict[str, Any] | None = None,
+) -> dict | None:
     """Recompute a trade campaign's summary from its remaining detail rows
-    using LIFO and replace its lot_closures rows. If no details remain,
-    deletes the summary and any orphan closures. Shared helper used by
-    delete-by-date cleanup."""
+    using the canonical per-SELL matching walker and replace its
+    lot_closures rows. If no details remain, deletes the summary and any
+    orphan closures and returns None.
+
+    Phase 2 B-2: log_sell is now the sole writer through this helper
+    for fresh SELLs (the inline summary save was removed). edit / delete
+    paths continue to use this helper as before.
+
+    `overrides`: optional dict whose entries are written into the
+    summary_row AFTER the preserve-existing-fields loop, so body-supplied
+    Sell_Rule / Sell_Notes / Grade win over the previous SELL's
+    persisted values. Other callers omit overrides → no change in
+    behavior.
+
+    Returns the summary_row that was written, or None when the trade was
+    deleted (no detail rows remain). Existing callers ignore the return
+    value; log_sell uses it to build its response payload.
+    """
     df_d = db.load_details(portfolio)
     if df_d.empty:
         db.delete_trade(portfolio, trade_id)
         _safe_delete_lot_closures(portfolio, trade_id)
-        return
+        return None
     df_d = _normalize_trades(df_d)
     txns = df_d[df_d["trade_id"] == trade_id]
     # Resolve multiplier from the campaign's detail rows (Migration 016). Falls
@@ -4883,7 +4804,7 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
     if summary_row is None:
         db.delete_trade(portfolio, trade_id)
         _safe_delete_lot_closures(portfolio, trade_id)
-        return
+        return None
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
     # Preserve user-entered fields that LIFO doesn't compute. compute_lifo_summary
@@ -4910,6 +4831,12 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
                         summary_row[pascal] = val
     except Exception as e:
         print(f"[recompute] preserve-existing-fields failed for {trade_id}: {e}")
+    # Phase 2 B-2: overrides run AFTER preservation so log_sell's body-
+    # supplied Sell_Rule / Sell_Notes / Grade win over the prior SELL's
+    # persisted values. Other callers omit overrides → no-op branch.
+    if overrides:
+        for k, v in overrides.items():
+            summary_row[k] = v
     # Try the combined write first so summary + closures land together.
     # Falls back to summary-only if lot_closures isn't there yet (deploy ran
     # before migration 017) or if the closures phase fails — summary is the
@@ -4921,6 +4848,7 @@ def _recompute_summary_lifo(portfolio: str, trade_id: str, ticker: str, fallback
         print(f"[lot_closures] save_summary_with_closures failed for {trade_id}: {e}. "
               f"Falling back to summary-only write.")
         db.save_summary_row(portfolio, summary_row)
+    return summary_row
 
 
 def _safe_delete_lot_closures(portfolio: str, trade_id: str) -> None:

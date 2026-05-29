@@ -303,7 +303,15 @@ def test_log_buy_scale_in_with_nan_body_falls_back_to_clean_existing(buy_sell_st
 
 def test_log_sell_with_nan_existing_row_writes_null_not_nan(buy_sell_stubs):
     """S4 producer guard. Existing row has rule=NaN, buy_notes=NaN.
-    Pre-fix: str(row.get("rule", "") or "") = "nan". Post-fix: None."""
+    Pre-fix: str(row.get("rule", "") or "") = "nan". Post-fix: None.
+
+    Phase 2 B-2: the inline save_summary_row path was deleted; the
+    recompute is now the sole writer. The NaN-strip behavior survives
+    via _recompute_summary_lifo's pd.notna(val) guard in its
+    preserve-existing-fields loop — NaN cells fail the guard and are
+    NOT written into summary_row, so save_summary_with_closures sees
+    no Rule/Buy_Notes keys and the DB column lands NULL (its DEFAULT).
+    """
     state, client = buy_sell_stubs
     state["summary_df"] = pd.DataFrame([_summary_row_with_nan()])
     state["details_df"] = pd.DataFrame([{
@@ -332,17 +340,19 @@ def test_log_sell_with_nan_existing_row_writes_null_not_nan(buy_sell_stubs):
     body = r.json()
     assert "error" not in body, body
 
-    # Inline save_summary_row at line 3054 is the protected site.
-    assert state["saved_summaries"], "Expected a save_summary_row call"
-    inline_saved = state["saved_summaries"][-1]["row"]
+    # Recompute is the sole summary writer post-B-2.
+    assert state["saved_with_closures"], "Expected a recompute save call"
+    saved = state["saved_with_closures"][-1]["summary_row"]
 
-    assert inline_saved.get("Rule") is None, \
-        f"Rule should be None (was NaN-on-existing), got {inline_saved.get('Rule')!r}"
-    assert inline_saved.get("Buy_Notes") is None, \
-        f"Buy_Notes should be None, got {inline_saved.get('Buy_Notes')!r}"
-    # Belt + suspenders against any future bypass
-    assert inline_saved.get("Rule") != "nan"
-    assert inline_saved.get("Buy_Notes") != "nan"
+    # NaN guard in _recompute_summary_lifo prevents NaN cells from being
+    # copied into summary_row; absent keys → DB column = NULL/DEFAULT.
+    assert saved.get("Rule") is None, \
+        f"Rule should be None (was NaN-on-existing), got {saved.get('Rule')!r}"
+    assert saved.get("Buy_Notes") is None, \
+        f"Buy_Notes should be None, got {saved.get('Buy_Notes')!r}"
+    # Belt + suspenders against any future bypass.
+    assert saved.get("Rule") != "nan"
+    assert saved.get("Buy_Notes") != "nan"
 
 
 def test_set_trade_grade_with_nan_existing_row_writes_null_not_nan(buy_sell_stubs):

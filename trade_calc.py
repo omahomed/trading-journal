@@ -75,6 +75,148 @@ def calc_risk_budget(
     return round(shares * (entry - stop_loss) * multiplier, 2)
 
 
+def _walk_inventory(
+    txns: pd.DataFrame,
+    *,
+    emit_closures: bool = False,
+    multiplier: float = 1.0,
+) -> tuple[pd.DataFrame, list[dict[str, Any]], list[dict[str, Any]], float]:
+    """Walk a campaign's BUY/SELL transactions, returning the post-walk
+    inventory + (optionally) closure pairs + total realized PL.
+
+    This is the canonical matching walker — sole source of truth for the
+    per-SELL LIFO/HCFO switch. Wrappers above (compute_open_inventory,
+    compute_lifo_summary) layer their domain-specific assembly on top of
+    this output. compute_trade_risk uses compute_open_inventory
+    transitively; that's the third and final consumer.
+
+    Per-SELL behavior:
+      * Each SELL reads its own match_method stamp from trades_details
+        (NULL/missing → LIFO by historical convention, migration 041).
+      * HCFO sorts inventory by (-price, date_asc) — highest-cost first,
+        oldest tiebreak — then consumes from index 0.
+      * LIFO sorts inventory by -arrival_seq (newest BUY first) then
+        consumes from index 0. The arrival_seq field protects LIFO
+        ordering after any prior HCFO mutation reordered the list, so
+        inventory[-1] adjacency assumptions never apply post-HCFO.
+
+    Lot dict shape (every lot, always):
+      {
+        "price": float,           # entry price
+        "shares": float,           # remaining shares
+        "stop": float,             # 0.0 when not on tx
+        "date": Timestamp,         # entry date (HCFO tiebreak)
+        "arrival_seq": int,        # 0-based arrival order (LIFO sort key)
+        "trx_id": str,             # entry's trx_id, "" if absent
+      }
+
+    Closure dict shape (only when emit_closures=True):
+      sell_trx_id, buy_trx_id, shares, buy_price, sell_price, multiplier,
+      realized_pl (multiplier-scaled), closed_at.
+
+    Returns (prepped_txns, inventory, closures, total_realized).
+    prepped_txns is the txns DataFrame after sort/dropna so wrappers
+    needing post-walk aggregates (avg_exit etc.) don't re-prep. When
+    inputs are empty or every row drops on date-parse, all four return
+    values are their empty/zero equivalents and prepped_txns.empty is
+    True.
+
+    `multiplier` only affects closure emission (realized_pl scaling);
+    callers that don't emit closures pass the default 1.0.
+    """
+    empty_txns = txns.iloc[0:0].copy() if not txns.empty else txns
+    if txns.empty:
+        return (empty_txns, [], [], 0.0)
+
+    txns = txns.copy()
+    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
+    txns = txns.dropna(subset=["date"]).sort_values("date")
+    if txns.empty:
+        return (txns, [], [], 0.0)
+
+    inventory: list[dict[str, Any]] = []
+    closures: list[dict[str, Any]] = []
+    total_realized = 0.0
+    arrival_seq = 0
+    for _, tx in txns.iterrows():
+        action = str(tx.get("action", "")).upper()
+        tx_shares = float(tx.get("shares", 0) or 0)
+        tx_price = float(tx.get("amount", 0) or 0)
+        # NaN-safe scalar reads — pandas fills missing fields with NaN
+        # in mixed fixtures (and load_details NULL → NaN too). bool(NaN)
+        # is True, so `or` doesn't catch it; explicit pd.isna check.
+        raw_stop = tx.get("stop_loss")
+        tx_stop = 0.0 if pd.isna(raw_stop) or not raw_stop else float(raw_stop)
+        tx_date = tx.get("date")
+        raw_trx_id = tx.get("trx_id")
+        tx_trx_id = "" if pd.isna(raw_trx_id) or not raw_trx_id else str(raw_trx_id)
+        if action == "BUY":
+            inventory.append({
+                "price": tx_price,
+                "shares": tx_shares,
+                "stop": tx_stop,
+                "date": tx_date,
+                "arrival_seq": arrival_seq,
+                "trx_id": tx_trx_id,
+            })
+            arrival_seq += 1
+        elif action == "SELL":
+            # NaN-safe: pandas fills missing match_method with NaN in mixed
+            # fixtures, and bool(NaN) is True, so `or` doesn't catch it.
+            raw_method = tx.get("match_method")
+            sell_method = (
+                "LIFO" if pd.isna(raw_method) or not raw_method
+                else str(raw_method).upper()
+            )
+            if sell_method == "HCFO":
+                inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
+            else:  # LIFO
+                inventory.sort(key=lambda lot: -lot["arrival_seq"])
+            to_sell = tx_shares
+            while to_sell > 0 and inventory:
+                lot = inventory[0]
+                take = min(to_sell, lot["shares"])
+                pair_pl = (tx_price - lot["price"]) * take
+                total_realized += pair_pl
+                if emit_closures:
+                    closures.append({
+                        "sell_trx_id": tx_trx_id,
+                        "buy_trx_id": str(lot.get("trx_id", "") or ""),
+                        "shares": float(take),
+                        "buy_price": float(lot["price"]),
+                        "sell_price": float(tx_price),
+                        "multiplier": float(multiplier),
+                        "realized_pl": float(pair_pl * multiplier),
+                        "closed_at": tx_date,
+                    })
+                lot["shares"] -= take
+                to_sell -= take
+                if lot["shares"] < 0.0001:
+                    inventory.pop(0)
+
+    return (txns, inventory, closures, total_realized)
+
+
+def compute_open_inventory(txns: pd.DataFrame) -> list[dict[str, Any]]:
+    """Return the post-walk open inventory for a campaign.
+
+    Each entry is a canonical lot dict — see _walk_inventory for the
+    full shape. Closures are not emitted (the caller doesn't need them);
+    callers wanting closures should use compute_lifo_summary with
+    with_closures=True.
+
+    Used by:
+      * compute_trade_risk — reads lot.price/shares/stop to compute
+        residual exposure
+      * api/main.exercise_option — reads lot.price/shares to derive
+        contracts_held + weighted_avg_premium for the SELL+BUY pair
+
+    Empty input → empty list.
+    """
+    _, inventory, _, _ = _walk_inventory(txns, emit_closures=False)
+    return inventory
+
+
 def compute_trade_risk(
     txns: pd.DataFrame, multiplier: float = 1.0
 ) -> float:
@@ -95,10 +237,11 @@ def compute_trade_risk(
         regardless of whether a stop was set. Decorative "50%" stops from
         the prior practice are ignored here.
 
-    Walks the same LIFO inventory algorithm as compute_lifo_summary, then
-    applies the per-instrument rule above to whatever remains. Returns 0
-    when no inventory remains (fully closed campaign) or when the txns
-    DataFrame is empty.
+    Phase 2 B-2: walks via the canonical compute_open_inventory helper,
+    which itself wraps _walk_inventory — same per-SELL LIFO/HCFO switch
+    as compute_lifo_summary. Risk is computed against the final lot
+    residue, which under HCFO holds the lowest-cost lots (opposite of
+    LIFO's residual).
 
     Independent of any prior stored value — every call reads only the
     current detail rows and produces the answer fresh. This is the property
@@ -113,53 +256,7 @@ def compute_trade_risk(
     """
     if txns.empty:
         return 0.0
-
-    txns = txns.copy()
-    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
-    txns = txns.dropna(subset=["date"]).sort_values("date")
-    if txns.empty:
-        return 0.0
-
-    # Phase 2 B-1: per-SELL matching. Trade Risk $ depends on what
-    # remains in inventory after each sell, so the HCFO branch shifts
-    # the residue toward lower-cost lots. arrival_seq + date on each
-    # lot let the LIFO branch sort explicitly post-HCFO mutation
-    # instead of relying on the inventory[-1] adjacency invariant.
-    inventory: list[dict[str, Any]] = []
-    arrival_seq = 0
-    for _, tx in txns.iterrows():
-        action = str(tx.get("action", "")).upper()
-        tx_shares = float(tx.get("shares", 0) or 0)
-        tx_price = float(tx.get("amount", 0) or 0)
-        tx_stop = float(tx.get("stop_loss", 0) or 0)
-        tx_date = tx.get("date")
-        if action == "BUY":
-            inventory.append({
-                "price": tx_price, "shares": tx_shares, "stop": tx_stop,
-                "date": tx_date, "arrival_seq": arrival_seq,
-            })
-            arrival_seq += 1
-        elif action == "SELL":
-            # NaN-safe: pandas fills missing match_method with NaN in mixed
-            # fixtures, and bool(NaN) is True, so `or` doesn't catch it.
-            raw_method = tx.get("match_method")
-            sell_method = (
-                "LIFO" if pd.isna(raw_method) or not raw_method
-                else str(raw_method).upper()
-            )
-            if sell_method == "HCFO":
-                inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
-            else:  # LIFO
-                inventory.sort(key=lambda lot: -lot["arrival_seq"])
-            to_sell = tx_shares
-            while to_sell > 0 and inventory:
-                lot = inventory[0]
-                take = min(to_sell, lot["shares"])
-                lot["shares"] -= take
-                to_sell -= take
-                if lot["shares"] < 0.0001:
-                    inventory.pop(0)
-
+    inventory = compute_open_inventory(txns)
     total_risk = 0.0
     for lot in inventory:
         if lot["shares"] <= 0:
@@ -204,68 +301,16 @@ def compute_lifo_summary(
     realized_pl, closed_at. Summary may still be None for empty/all-null-date
     inputs; closures is `[]` in that case. The flag is opt-in so existing
     callers (and tests) keep the simpler return shape unchanged.
+
+    Phase 2 B-2: the walk delegates to _walk_inventory (canonical
+    matching walker). The body here only assembles the summary dict
+    from the walker's outputs.
     """
+    txns, inventory, closures, total_realized = _walk_inventory(
+        txns, emit_closures=True, multiplier=multiplier,
+    )
     if txns.empty:
         return (None, []) if with_closures else None
-
-    txns = txns.copy()
-    txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
-    txns = txns.dropna(subset=["date"]).sort_values("date")
-    if txns.empty:
-        return (None, []) if with_closures else None
-
-    # Phase 2 B-1: per-SELL matching. Each SELL reads its own match_method
-    # stamp. NULL → LIFO by historical convention (migration 041 backfilled
-    # every existing SELL to 'LIFO'). arrival_seq + date on each lot let
-    # the LIFO branch sort explicitly post-HCFO mutation, so the inventory
-    # need not stay in arrival order across the walk.
-    inventory: list[dict[str, Any]] = []
-    closures: list[dict[str, Any]] = []
-    total_realized = 0.0
-    arrival_seq = 0
-    for _, tx in txns.iterrows():
-        action = str(tx.get("action", "")).upper()
-        tx_shares = float(tx.get("shares", 0) or 0)
-        tx_price = float(tx.get("amount", 0) or 0)
-        tx_trx_id = str(tx.get("trx_id", "") or "")
-        if action == "BUY":
-            inventory.append({
-                "price": tx_price, "shares": tx_shares, "trx_id": tx_trx_id,
-                "date": tx.get("date"), "arrival_seq": arrival_seq,
-            })
-            arrival_seq += 1
-        elif action == "SELL":
-            # NaN-safe per-SELL switch (see compute_trade_risk for rationale).
-            raw_method = tx.get("match_method")
-            sell_method = (
-                "LIFO" if pd.isna(raw_method) or not raw_method
-                else str(raw_method).upper()
-            )
-            if sell_method == "HCFO":
-                inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
-            else:  # LIFO
-                inventory.sort(key=lambda lot: -lot["arrival_seq"])
-            to_sell = tx_shares
-            sell_date = tx.get("date")
-            while to_sell > 0 and inventory:
-                lot = inventory[0]
-                take = min(to_sell, lot["shares"])
-                pair_pl = (tx_price - lot["price"]) * take
-                total_realized += pair_pl
-                closures.append({
-                    "sell_trx_id": tx_trx_id,
-                    "buy_trx_id": str(lot.get("trx_id", "") or ""),
-                    "shares": float(take),
-                    "buy_price": float(lot["price"]),
-                    "sell_price": float(tx_price),
-                    "multiplier": float(multiplier),
-                    "realized_pl": float(pair_pl * multiplier),
-                    "closed_at": sell_date,
-                })
-                lot["shares"] -= take
-                to_sell -= take
-                if lot["shares"] < 0.0001:
-                    inventory.pop(0)
 
     remaining_shares = sum(lot["shares"] for lot in inventory)
     remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)

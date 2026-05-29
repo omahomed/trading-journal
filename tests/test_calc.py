@@ -11,6 +11,7 @@ import pytest
 from trade_calc import (
     calc_risk_budget,
     compute_lifo_summary,
+    compute_open_inventory,
     compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
@@ -844,3 +845,117 @@ class TestComputeTradeRiskHcfoBranch:
         ])
         assert compute_trade_risk(df_hcfo, multiplier=1.0) == 500.0
         assert compute_trade_risk(df_lifo, multiplier=1.0) == 1000.0
+
+
+class TestComputeOpenInventory:
+    """The canonical post-walk inventory helper (Phase 2 B-2).
+
+    compute_open_inventory wraps _walk_inventory(emit_closures=False)
+    and is the sole interface for callers that need the residual lot
+    list — exercise_option and compute_trade_risk. Closure-emitting
+    callers (compute_lifo_summary) use the same private walker but
+    with emit_closures=True.
+    """
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_pure_lifo_trade(self) -> None:
+        """LIFO SELL consumes the newest lot first; residual is the older lot."""
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 55.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0,
+             "match_method": "LIFO"},
+        ])
+        inv = compute_open_inventory(df)
+        assert len(inv) == 1
+        assert inv[0]["price"] == 50.0
+        assert inv[0]["shares"] == 100.0
+
+    def test_pure_hcfo_trade(self) -> None:
+        """HCFO SELL consumes the highest-cost lot first; residual is the lower-cost lot."""
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
+             "match_method": "HCFO"},
+        ])
+        inv = compute_open_inventory(df)
+        assert len(inv) == 1
+        assert inv[0]["price"] == 50.0
+        assert inv[0]["shares"] == 100.0
+
+    def test_mixed_methods(self) -> None:
+        """LIFO then HCFO in the same trade. Validates the per-SELL switch
+        on the shared walker — same fixture shape as
+        TestComputeLifoSummaryMixedMethods.test_mixed_lifo_then_hcfo,
+        but only the inventory is asserted (not the summary)."""
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
+             "match_method": "LIFO"},
+            {"date": "2026-01-22", "action": "SELL", "shares": 100, "amount": 80.0,
+             "match_method": "HCFO"},
+        ])
+        inv = compute_open_inventory(df)
+        assert len(inv) == 1
+        assert inv[0]["price"] == 40.0
+        assert inv[0]["shares"] == 100.0
+
+    def test_empty_trade(self) -> None:
+        """Empty input → empty list, not None and not an exception."""
+        df = pd.DataFrame(columns=["date", "action", "shares", "amount"])
+        assert compute_open_inventory(df) == []
+
+    def test_lot_dict_shape(self) -> None:
+        """Every lot dict carries the canonical full field set so all
+        downstream consumers (exercise_option, compute_trade_risk) see
+        a uniform shape regardless of whether the source tx had every
+        column populated. trx_id defaults to '' when absent, stop to 0.0."""
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0,
+             "stop_loss": 45.0, "trx_id": "B1"},
+            {"date": "2026-01-15", "action": "BUY", "shares": 50,  "amount": 55.0,
+             # stop_loss + trx_id intentionally omitted to test defaults
+            },
+        ])
+        inv = compute_open_inventory(df)
+        assert len(inv) == 2
+        canonical_keys = {"price", "shares", "stop", "date", "arrival_seq", "trx_id"}
+        for lot in inv:
+            assert set(lot.keys()) >= canonical_keys, (
+                f"missing canonical lot keys: "
+                f"{canonical_keys - set(lot.keys())}"
+            )
+        # Lot 1: full fields populated.
+        assert inv[0]["trx_id"] == "B1"
+        assert inv[0]["stop"] == 45.0
+        assert inv[0]["arrival_seq"] == 0
+        # Lot 2: defaults applied.
+        assert inv[1]["trx_id"] == ""
+        assert inv[1]["stop"] == 0.0
+        assert inv[1]["arrival_seq"] == 1
+
+    def test_dropna_and_sort(self) -> None:
+        """Bogus dates are dropped (not crashed on); rows are walked in
+        date-sorted order regardless of input order. Mirrors the
+        existing compute_trade_risk dropna test."""
+        df = self._txns([
+            {"date": "bogus",      "action": "BUY",  "shares": 999, "amount": 999.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 55.0},
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+        ])
+        inv = compute_open_inventory(df)
+        # Bogus row dropped → 2 BUYs walked. Order is date-sorted so
+        # arrival_seq reflects chronological order, not input order.
+        assert len(inv) == 2
+        seqs = sorted(lot["arrival_seq"] for lot in inv)
+        assert seqs == [0, 1]
+        # Date-asc means the $50 lot is arrival_seq=0.
+        by_seq = {lot["arrival_seq"]: lot for lot in inv}
+        assert by_seq[0]["price"] == 50.0
+        assert by_seq[1]["price"] == 55.0
