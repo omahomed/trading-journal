@@ -161,7 +161,22 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [calculated, setCalculated] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const sendToLogBuy = (data: { ticker: string; shares: number; price: number; stop?: number; trade_id?: string; action?: string }) => {
+  // stopMode + atrMultiplier let ATR scenarios round-trip from the Sizer
+  // through Log Buy without resolving to a dollar price here (Log Buy
+  // fetches its own atrPct from /api/prices/lookup and recomputes the
+  // effective stop). Tech-stop scenarios continue to emit a resolved
+  // `stop` value and tag stopMode='price' so the receiver flips Log Buy
+  // out of its default pct mode (pre-existing bug ride-along).
+  const sendToLogBuy = (data: {
+    ticker: string;
+    shares: number;
+    price: number;
+    stop?: number;
+    stopMode?: "price" | "atr";
+    atrMultiplier?: 1 | 1.5 | 2;
+    trade_id?: string;
+    action?: string;
+  }) => {
     localStorage.setItem("ps_prefill", JSON.stringify(data));
     if (onNavigate) onNavigate("logbuy");
   };
@@ -966,7 +981,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                   )}
 
                   <div className="mt-4">
-                    <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: scaleResults.recommendedAdd, price: entry, stop: scaleResults.stop, trade_id: holdingData?.trade_id, action: "scale_in" })}
+                    <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: scaleResults.recommendedAdd, price: entry, stop: scaleResults.stop, stopMode: "price", trade_id: holdingData?.trade_id, action: "scale_in" })}
                             className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                             style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
                       📝 Send to Log Buy — {holdingData?.ticker} (+{scaleResults.recommendedAdd} shs @ {formatCurrency(entry)})
@@ -1237,11 +1252,29 @@ function VolatilityResults({
   tolPct: number;
   modeName: string;
   results: VolSizerResults;
-  onSendToLogBuy: (args: { ticker: string; shares: number; price: number; stop: number; action: string }) => void;
+  onSendToLogBuy: (args: {
+    ticker: string;
+    shares: number;
+    price: number;
+    stop?: number;
+    stopMode?: "price" | "atr";
+    atrMultiplier?: 1 | 1.5 | 2;
+    action: string;
+  }) => void;
 }) {
   const rec = results.recommended;
   const recIsTechStop = results.recommendationReason === "tech_stop_safe";
   const method = recIsTechStop ? "tech stop" : "1.5× ATR cushion";
+  // Map the recommended scenario's label back to the multiplier the
+  // ATR pills in Log Buy expect. Returns null for the tech-stop case,
+  // which routes through the price-mode branch instead.
+  const atrMultFromLabel = (label: typeof rec.label): 1 | 1.5 | 2 | null => {
+    if (label === "1x ATR") return 1;
+    if (label === "1.5x ATR") return 1.5;
+    if (label === "2x ATR") return 2;
+    return null;
+  };
+  const recAtrMult = atrMultFromLabel(rec.label);
   const constraint = rec.capBinds
     ? `position-size tier (${targetSize}% NLV)`
     : `risk budget (${tolPct}%)`;
@@ -1300,7 +1333,17 @@ function VolatilityResults({
       </Banner>
 
       <div className="mt-4">
-        <button onClick={() => onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stop: rec.effectiveStop, action: "new" })}
+        <button onClick={() => {
+                  // ATR scenario → emit multiplier; Log Buy fetches atrPct
+                  // itself and recomputes the stop. Tech stop → emit
+                  // resolved dollar price; stopMode='price' flips the
+                  // receiver out of its default pct mode.
+                  if (recAtrMult !== null) {
+                    onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stopMode: "atr", atrMultiplier: recAtrMult, action: "new" });
+                  } else {
+                    onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stop: rec.effectiveStop, stopMode: "price", action: "new" });
+                  }
+                }}
                 className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
           📝 Send to Log Buy — {ticker || "—"} ({rec.finalShares} shs @ {formatCurrency(entry)})

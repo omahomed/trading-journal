@@ -363,7 +363,11 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
     expect(screen.getByText(/Sized by tech stop/)).toBeInTheDocument();
   });
 
-  test("Send to Log Buy uses recommended.finalShares and recommended.effectiveStop (no 0.92 fallback)", async () => {
+  test("Send to Log Buy emits ATR payload (stopMode + multiplier) when ATR scenario is recommended", async () => {
+    // ATR scenarios no longer pre-resolve a dollar stop. The Sizer emits
+    // {stopMode:"atr", atrMultiplier:1.5} and Log Buy fetches its own
+    // atrPct from /api/prices/lookup to recompute the effective stop —
+    // eliminates two-fetch drift between Sizer time and Log Buy time.
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
@@ -388,8 +392,49 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
     expect(stored.ticker).toBe("GOOGL");
     expect(stored.shares).toBe(183);
     expect(stored.price).toBe(382.97);
-    // recommended = 1.5x ATR → effectiveStop = 382.97 * (1 - 1.5*0.0287) ≈ 366.48
-    expect(stored.stop).toBeCloseTo(366.483, 2);
+    expect(stored.action).toBe("new");
+    // Recommended = 1.5× ATR scenario. ATR-mode handoff:
+    expect(stored.stopMode).toBe("atr");
+    expect(stored.atrMultiplier).toBe(1.5);
+    // No resolved dollar stop on ATR scenarios — Log Buy recomputes
+    // from its own atrPct lookup. (Pre-B-3 the field was 366.48.)
+    expect(stored.stop).toBeUndefined();
+  });
+
+  test("Send to Log Buy emits price payload (stopMode='price' + resolved stop) when tech stop is recommended", async () => {
+    // Companion to the ATR-payload test above. Tech-stop scenarios
+    // continue to emit a resolved dollar `stop`, tagged stopMode='price'
+    // so the receiver flips Log Buy out of its default pct mode.
+    // setupDefaults() (and a fresh mRally MOMENTUM mock at the top of
+    // this suite) puts us in a fixture where 100/100/3.0/2.0 gives
+    // tech_stop_safe (stop=97, stopDist=3, atrFraction=1.5).
+    render(<PositionSizer navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("sizer-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
+
+    await fillVolTabInputs({
+      ticker: "AAPL",
+      entry: "100",
+      ma: "100",
+      buffer: "3.0",
+      atr: "2.0",
+      equity: "100000",
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
+    });
+
+    const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy/ });
+    await act(async () => { fireEvent.click(sendBtn); });
+
+    const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
+    expect(stored.ticker).toBe("AAPL");
+    expect(stored.price).toBe(100);
+    expect(stored.stopMode).toBe("price");
+    // Tech-stop math: entry - (entry × stopDistPct/100) = 100 × 0.97 = 97.
+    expect(stored.stop).toBeCloseTo(97, 2);
+    // No multiplier on tech-stop payload.
+    expect(stored.atrMultiplier).toBeUndefined();
     expect(stored.action).toBe("new");
   });
 });
