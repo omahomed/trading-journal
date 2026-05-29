@@ -486,7 +486,8 @@ def load_details(portfolio_name, trade_id=None):
                     d.behavior_tag AS "Behavior_Tag",
                     d.retro_notes AS "Retro_Notes",
                     d.instrument_type AS "Instrument_Type",
-                    d.multiplier AS "Multiplier"
+                    d.multiplier AS "Multiplier",
+                    d.match_method AS "Match_Method"
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
                 WHERE p.name = %s
@@ -1206,6 +1207,13 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
             row_dict.get('Instrument_Type') or 'STOCK',
             row_dict.get('Multiplier') if row_dict.get('Multiplier') is not None else 1,
         ]
+    # Migration 041 / Phase 2 B-1: per-SELL match_method stamp. Caller
+    # (log_sell, exercise_option) sets this for SELL rows. BUY callers
+    # and legacy/test callers omit the key → column lands NULL, which
+    # the CHECK constraint (LIFO/HCFO/NULL) explicitly allows.
+    if 'Match_Method' in row_dict:
+        insert_cols += ["match_method"]
+        insert_vals += [row_dict.get('Match_Method')]
     placeholders = ", ".join(["%s"] * len(insert_vals))
     insert_query = (
         f"INSERT INTO trades_details ({', '.join(insert_cols)}) "

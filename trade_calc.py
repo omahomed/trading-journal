@@ -120,23 +120,45 @@ def compute_trade_risk(
     if txns.empty:
         return 0.0
 
-    inventory: list[dict[str, float]] = []
+    # Phase 2 B-1: per-SELL matching. Trade Risk $ depends on what
+    # remains in inventory after each sell, so the HCFO branch shifts
+    # the residue toward lower-cost lots. arrival_seq + date on each
+    # lot let the LIFO branch sort explicitly post-HCFO mutation
+    # instead of relying on the inventory[-1] adjacency invariant.
+    inventory: list[dict[str, Any]] = []
+    arrival_seq = 0
     for _, tx in txns.iterrows():
         action = str(tx.get("action", "")).upper()
         tx_shares = float(tx.get("shares", 0) or 0)
         tx_price = float(tx.get("amount", 0) or 0)
         tx_stop = float(tx.get("stop_loss", 0) or 0)
+        tx_date = tx.get("date")
         if action == "BUY":
-            inventory.append({"price": tx_price, "shares": tx_shares, "stop": tx_stop})
+            inventory.append({
+                "price": tx_price, "shares": tx_shares, "stop": tx_stop,
+                "date": tx_date, "arrival_seq": arrival_seq,
+            })
+            arrival_seq += 1
         elif action == "SELL":
+            # NaN-safe: pandas fills missing match_method with NaN in mixed
+            # fixtures, and bool(NaN) is True, so `or` doesn't catch it.
+            raw_method = tx.get("match_method")
+            sell_method = (
+                "LIFO" if pd.isna(raw_method) or not raw_method
+                else str(raw_method).upper()
+            )
+            if sell_method == "HCFO":
+                inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
+            else:  # LIFO
+                inventory.sort(key=lambda lot: -lot["arrival_seq"])
             to_sell = tx_shares
             while to_sell > 0 and inventory:
-                last = inventory[-1]
-                take = min(to_sell, last["shares"])
-                last["shares"] -= take
+                lot = inventory[0]
+                take = min(to_sell, lot["shares"])
+                lot["shares"] -= take
                 to_sell -= take
-                if last["shares"] < 0.0001:
-                    inventory.pop()
+                if lot["shares"] < 0.0001:
+                    inventory.pop(0)
 
     total_risk = 0.0
     for lot in inventory:
@@ -192,38 +214,58 @@ def compute_lifo_summary(
     if txns.empty:
         return (None, []) if with_closures else None
 
+    # Phase 2 B-1: per-SELL matching. Each SELL reads its own match_method
+    # stamp. NULL → LIFO by historical convention (migration 041 backfilled
+    # every existing SELL to 'LIFO'). arrival_seq + date on each lot let
+    # the LIFO branch sort explicitly post-HCFO mutation, so the inventory
+    # need not stay in arrival order across the walk.
     inventory: list[dict[str, Any]] = []
     closures: list[dict[str, Any]] = []
     total_realized = 0.0
+    arrival_seq = 0
     for _, tx in txns.iterrows():
         action = str(tx.get("action", "")).upper()
         tx_shares = float(tx.get("shares", 0) or 0)
         tx_price = float(tx.get("amount", 0) or 0)
         tx_trx_id = str(tx.get("trx_id", "") or "")
         if action == "BUY":
-            inventory.append({"price": tx_price, "shares": tx_shares, "trx_id": tx_trx_id})
+            inventory.append({
+                "price": tx_price, "shares": tx_shares, "trx_id": tx_trx_id,
+                "date": tx.get("date"), "arrival_seq": arrival_seq,
+            })
+            arrival_seq += 1
         elif action == "SELL":
+            # NaN-safe per-SELL switch (see compute_trade_risk for rationale).
+            raw_method = tx.get("match_method")
+            sell_method = (
+                "LIFO" if pd.isna(raw_method) or not raw_method
+                else str(raw_method).upper()
+            )
+            if sell_method == "HCFO":
+                inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
+            else:  # LIFO
+                inventory.sort(key=lambda lot: -lot["arrival_seq"])
             to_sell = tx_shares
             sell_date = tx.get("date")
             while to_sell > 0 and inventory:
-                last = inventory[-1]
-                take = min(to_sell, last["shares"])
-                pair_pl = (tx_price - last["price"]) * take
+                lot = inventory[0]
+                take = min(to_sell, lot["shares"])
+                pair_pl = (tx_price - lot["price"]) * take
                 total_realized += pair_pl
                 closures.append({
                     "sell_trx_id": tx_trx_id,
-                    "buy_trx_id": str(last.get("trx_id", "") or ""),
+                    "buy_trx_id": str(lot.get("trx_id", "") or ""),
                     "shares": float(take),
-                    "buy_price": float(last["price"]),
+                    "buy_price": float(lot["price"]),
                     "sell_price": float(tx_price),
                     "multiplier": float(multiplier),
                     "realized_pl": float(pair_pl * multiplier),
                     "closed_at": sell_date,
                 })
-                last["shares"] -= take
+                lot["shares"] -= take
                 to_sell -= take
-                if last["shares"] < 0.0001:
-                    inventory.pop()
+                if lot["shares"] < 0.0001:
+                    inventory.pop(0)
 
     remaining_shares = sum(lot["shares"] for lot in inventory)
     remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
