@@ -43,3 +43,7 @@ portfolios/*/Trade_Log_*.csv
 portfolios/*/Trading_Journal_*.csv
 portfolios/*/Audit_Trail.csv
 .env
+
+# Phase 1b relabel runner — per-run snapshot CSVs of affected_rows go here.
+# Auditable on the operator's local machine but not version-controlled.
+snapshots/
