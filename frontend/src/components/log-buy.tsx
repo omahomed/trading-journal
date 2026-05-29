@@ -252,9 +252,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
-  const [stopMode, setStopMode] = useState<"price" | "pct">("pct");
+  const [stopMode, setStopMode] = useState<"price" | "pct" | "atr">("pct");
   const [stopValue, setStopValue] = useState("");
   const [slPct, setSlPct] = useState("5.0");
+  // ATR stop loss mode: multiplier × atrPct% below entry. atrPct is captured
+  // from /api/prices/lookup at the same time we fetch price; backend returns
+  // 0.0 for tickers with <21 bars (the "ATR unavailable" sentinel). The pills
+  // disable in that case and the user falls back to Price or Percentage.
+  const [atrPct, setAtrPct] = useState(0);
+  const [atrMultiplier, setAtrMultiplier] = useState<1 | 1.5 | 2>(1.5);
   // For options the stop-loss field is hidden by default — premium-based
   // stops don't follow the < 8% stock convention, and 50% is a placeholder
   // not a meaningful default. The user can reveal it via "Show stop loss".
@@ -313,7 +319,23 @@ export function LogBuy({ navColor }: { navColor: string }) {
     }
   }, [actionType]);
 
-  // Prefill from Position Sizer (via localStorage)
+  // pendingAtrDefault: set true when an importer prefill arrives with no
+  // stop fields. The actual ATR-vs-pct fallback decision waits for the
+  // priceLookup effect to resolve atrPct (a separate effect below picks
+  // the mode once we know whether ATR is available).
+  // atrResolved: gates the fallback effect on a COMPLETED price lookup.
+  // fetchingPrice alone is insufficient — it starts false (before the
+  // 600ms debounce) and goes true only when the fetch starts, so the
+  // fallback effect would otherwise fire on mount with atrPct=0 and
+  // prematurely lock in the pct/5.0 default before the fetch even ran.
+  const [pendingAtrDefault, setPendingAtrDefault] = useState(false);
+  const [atrResolved, setAtrResolved] = useState(false);
+
+  // Prefill from Position Sizer (via localStorage). Payload may carry an
+  // explicit stopMode (Sizer's ATR scenarios) or just a resolved `stop`
+  // dollar price (Sizer's tech-stop scenario + importer). Importer prefill
+  // without any stop hint sets pendingAtrDefault so a separate effect can
+  // pick ATR vs. percentage once atrPct lands.
   useEffect(() => {
     try {
       const raw = localStorage.getItem("ps_prefill");
@@ -323,9 +345,29 @@ export function LogBuy({ navColor }: { navColor: string }) {
       if (data.ticker) setTicker(data.ticker);
       if (data.shares) setShares(String(data.shares));
       if (data.price) setPrice(String(data.price));
-      if (data.stop) setStopValue(String(data.stop.toFixed(2)));
       if (data.date) setDate(String(data.date));
       if (data.time) setTime(String(data.time));
+      // Mode + value reception. Symmetric branches:
+      //   stopMode='atr' → ATR mode with explicit multiplier
+      //   stopMode='price' → Price mode with explicit resolved stop
+      //   data.stop alone (legacy / tech-stop scenario) → Price mode +
+      //     resolved stop. Pre-B-3 the receiver only set stopValue and
+      //     left stopMode in its "pct" default, so the user had to flip
+      //     manually. Fixed here as the ride-along.
+      //   no stop hints at all → mark pendingAtrDefault for the
+      //     atrPct-watcher effect below.
+      if (data.stopMode === "atr" && (data.atrMultiplier === 1 || data.atrMultiplier === 1.5 || data.atrMultiplier === 2)) {
+        setStopMode("atr");
+        setAtrMultiplier(data.atrMultiplier);
+      } else if (data.stopMode === "price" && typeof data.stop === "number") {
+        setStopMode("price");
+        setStopValue(String(data.stop.toFixed(2)));
+      } else if (typeof data.stop === "number") {
+        setStopMode("price");
+        setStopValue(String(data.stop.toFixed(2)));
+      } else {
+        setPendingAtrDefault(true);
+      }
       if (data.action === "scale_in" && data.trade_id) {
         setActionType("scalein");
         setSelectedCampaign(data.trade_id);
@@ -335,14 +377,39 @@ export function LogBuy({ navColor }: { navColor: string }) {
     } catch { /* ignore */ }
   }, []);
 
+  // Pick the default stop mode once atrPct resolves. Only fires when an
+  // importer prefill arrived without explicit stop signals (the
+  // pendingAtrDefault flag). Gated on atrResolved so we wait for the
+  // first priceLookup to complete — without this, the effect would fire
+  // on mount with atrPct=0 (initial state) and prematurely lock in the
+  // pct/5.0 default. If ATR is available (atrPct > 0), default to ATR
+  // mode at 1.5×. If sparse-history / option / fetch failure leaves
+  // atrPct at 0 after the lookup, fall through to existing pct/5.0
+  // default (no regression).
+  useEffect(() => {
+    if (!pendingAtrDefault || !atrResolved) return;
+    if (atrPct > 0) {
+      setStopMode("atr");
+      setAtrMultiplier(1.5);
+    }
+    // else: leave stopMode at "pct" with slPct="5.0" — current behavior.
+    setPendingAtrDefault(false);
+  }, [pendingAtrDefault, atrResolved, atrPct]);
+
   // When the ticker resolves to an equity option, bump the default stop %
   // from the stock convention (5%) to the user's option playbook (50% of
   // premium). Only fires while the field still holds the stock default
   // "5.0", so a manual override survives a ticker re-edit.
+  // ATR ride-along: ATR mode is meaningless for options (the underlying-
+  // share atrPct doesn't size the premium stop), so when switching to an
+  // option ticker, reset stopMode from "atr" back to "pct". The ATR
+  // radio itself is hidden on option tickers (see render); this resets
+  // any prior selection that would otherwise survive the ticker switch.
   useEffect(() => {
     const isOptionTicker = /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(ticker.trim());
     if (isOptionTicker && slPct === "5.0") setSlPct("50");
     if (!isOptionTicker && slPct === "50") setSlPct("5.0");
+    if (isOptionTicker && stopMode === "atr") setStopMode("pct");
   }, [ticker]);
 
   // Stop-loss visibility tracks ticker shape: hide for options, show for
@@ -355,7 +422,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
     setShowStopLoss(!isOptionTicker);
   }, [ticker]);
 
-  // Auto-fetch price when ticker changes (debounced)
+  // Auto-fetch price + ATR when ticker changes (debounced). Same
+  // /api/prices/lookup call the Position Sizer uses. atr_pct === 0 is
+  // the backend's "insufficient history" sentinel — ATR pills disable
+  // in that case.
   useEffect(() => {
     if (!ticker || ticker.length < 1 || actionType !== "new") return;
     const timeout = setTimeout(() => {
@@ -363,10 +433,16 @@ export function LogBuy({ navColor }: { navColor: string }) {
       api.priceLookup(ticker).then(data => {
         if (data && !("error" in data)) {
           setPrice(String(data.price));
+          setAtrPct(data.atr_pct);
         }
       }).catch((err) => {
         log.debug.devOnly("log-buy", "priceLookup missing (expected)", err);
-      }).finally(() => setFetchingPrice(false));
+        // Fetch failed (503 from yfinance) — clear ATR so pills disable.
+        setAtrPct(0);
+      }).finally(() => {
+        setFetchingPrice(false);
+        setAtrResolved(true);
+      });
     }, 600);
     return () => clearTimeout(timeout);
   }, [ticker, actionType]);
@@ -387,6 +463,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
   let stopPrice = 0;
   if (stopMode === "price") {
     stopPrice = parseFloat(stopValue) || 0;
+  } else if (stopMode === "atr") {
+    // ATR mode: stop = price × (1 − multiplier × atrPct/100). Inline
+    // duplication with the submit-body branch is intentional (the spec
+    // explicitly rules out extracting a shared helper from vol-sizer).
+    stopPrice = priceNum > 0 && atrPct > 0 ? priceNum * (1 - (atrMultiplier * atrPct) / 100) : 0;
   } else {
     // Default stop = 50% of premium for options (per the user's playbook),
     // 5% for stocks. The user can still override slPct manually.
@@ -574,7 +655,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
         shares: parseFloat(shares),
         price: parseFloat(price),
         stop_loss: showStopLoss
-          ? (stopMode === "price" ? parseFloat(stopValue) : parseFloat(price) * (1 - parseFloat(slPct) / 100))
+          ? (stopMode === "price"
+              ? parseFloat(stopValue)
+              : stopMode === "atr"
+                ? parseFloat(price) * (1 - (atrMultiplier * atrPct) / 100)
+                : parseFloat(price) * (1 - parseFloat(slPct) / 100))
           : null,
         rule,
         strategy,
@@ -746,22 +831,70 @@ export function LogBuy({ navColor }: { navColor: string }) {
             {/* Stop Loss — hidden by default for options; revealed via the
                 small link below. Stock trades always render the full block. */}
             {showStopLoss ? (
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Stop Loss Mode">
-                  <div className="flex gap-4 mt-1">
-                    <Radio checked={stopMode === "price"} onClick={() => setStopMode("price")} label="Price Level ($)" />
-                    <Radio checked={stopMode === "pct"} onClick={() => setStopMode("pct")} label="Percentage (%)" />
-                  </div>
-                </Field>
-                <Field label={stopMode === "price" ? "Stop Price ($)" : "Stop Loss %"}>
-                  {stopMode === "price" ? (
-                    <input type="number" value={stopValue} onChange={e => setStopValue(e.target.value)}
-                           step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
+              <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Stop Loss Mode">
+                    <div className="flex gap-4 mt-1 flex-wrap">
+                      <Radio checked={stopMode === "price"} onClick={() => setStopMode("price")} label="Price Level ($)" />
+                      <Radio checked={stopMode === "pct"} onClick={() => setStopMode("pct")} label="Percentage (%)" />
+                      {/* ATR radio hidden on option tickers — options don't
+                          have meaningful underlying-share ATR for sizing. */}
+                      {!isOption && (
+                        <Radio checked={stopMode === "atr"} onClick={() => setStopMode("atr")} label="ATR (×)" />
+                      )}
+                    </div>
+                  </Field>
+                  <Field label={stopMode === "price" ? "Stop Price ($)" : stopMode === "atr" ? "ATR Multiplier" : "Stop Loss %"}>
+                    {stopMode === "price" ? (
+                      <input type="number" value={stopValue} onChange={e => setStopValue(e.target.value)}
+                             step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
+                    ) : stopMode === "atr" ? (
+                      <div className="flex gap-2 mt-1" data-testid="logbuy-atr-pills">
+                        {([1, 1.5, 2] as const).map(m => {
+                          const selected = atrMultiplier === m;
+                          const disabled = atrPct === 0;
+                          return (
+                            <button key={m} type="button"
+                                    onClick={() => { if (!disabled) setAtrMultiplier(m); }}
+                                    disabled={disabled}
+                                    aria-pressed={selected}
+                                    aria-label={`${m}× ATR`}
+                                    className="px-3 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                    style={{
+                                      background: selected ? "var(--ink-1)" : "var(--bg)",
+                                      color: selected ? "var(--surface)" : "var(--ink-2)",
+                                      border: `1px solid ${selected ? "var(--ink-1)" : "var(--border)"}`,
+                                      cursor: disabled ? "not-allowed" : "pointer",
+                                    }}>
+                              {m}×
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <input type="number" value={slPct} onChange={e => setSlPct(e.target.value)}
+                             step="0.5" placeholder="5.0" className={inputCls} style={inputStyle} />
+                    )}
+                  </Field>
+                </div>
+                {/* ATR mode supplementary copy: confirmation line + caption when
+                    available, or unavailability notice when atrPct = 0. */}
+                {stopMode === "atr" && (
+                  atrPct > 0 ? (
+                    <div className="flex flex-col gap-0.5 mt-0.5">
+                      <div className="text-[12px] font-medium" style={{ color: "#3b82f6", fontFamily: "var(--font-jetbrains), monospace" }}>
+                        → Stop {formatCurrency(stopPrice)} · {(atrMultiplier * atrPct).toFixed(1)}% below entry
+                      </div>
+                      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                        Default mode for buys with no stop — replaces the old 5% percentage default
+                      </div>
+                    </div>
                   ) : (
-                    <input type="number" value={slPct} onChange={e => setSlPct(e.target.value)}
-                           step="0.5" placeholder="5.0" className={inputCls} style={inputStyle} />
-                  )}
-                </Field>
+                    <div className="text-[12px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+                      ATR unavailable for this ticker (insufficient history). Use Price or Percentage mode.
+                    </div>
+                  )
+                )}
               </div>
             ) : (
               <button type="button" onClick={() => setShowStopLoss(true)}
