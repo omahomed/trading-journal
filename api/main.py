@@ -1680,6 +1680,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Value": "value", "Notes": "notes", "Stop_Loss": "stop_loss",
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
+        "Match_Method": "match_method",
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
         "B1_Max_Return_Pct": "b1_max_return_pct",
@@ -3738,6 +3739,33 @@ def _save_detail_with_unique_trx_id(
     )
 
 
+# Phase 2 B-1: per-SELL matching-method stamping. log_sell and the
+# exercise_option option-leg SELL read the live MATCH_METHOD env var
+# at request time and write the resolved value into trades_details.
+# Per-call resolution (not module-load) keeps tests cleanly isolated
+# via monkeypatch.setenv.
+_VALID_MATCH_METHODS = ("LIFO", "HCFO")
+
+
+def _resolve_match_method() -> str:
+    """Read MATCH_METHOD env. Default 'LIFO'. Invalid → ValueError.
+
+    Empty string and unset both resolve to 'LIFO'. Case-insensitive on
+    the env value. Whitespace stripped. Any other value raises so a
+    typo in deployment config surfaces loudly instead of silently
+    landing as NULL.
+    """
+    val = os.environ.get("MATCH_METHOD", "LIFO").strip().upper()
+    if not val:
+        return "LIFO"
+    if val not in _VALID_MATCH_METHODS:
+        raise ValueError(
+            f"MATCH_METHOD={val!r} is invalid. Must be one of "
+            f"{_VALID_MATCH_METHODS} (or unset for LIFO default)."
+        )
+    return val
+
+
 @app.post("/api/trades/buy")
 @limiter.limit("10/minute")
 def log_buy(request: Request, body: dict):
@@ -4018,6 +4046,10 @@ def log_sell(request: Request, body: dict):
                     "the assigned trx_id in the response."
                 ),
             )
+        # Phase 2 B-1: stamp the SELL with the current MATCH_METHOD.
+        # Resolved once per request so a mid-walk env flip can't desync
+        # the row's stamp from the inline LIFO/HCFO walk below.
+        match_method = _resolve_match_method()
         grade_raw = body.get("grade", None)
 
         if not trade_id or shares <= 0 or price <= 0:
@@ -4058,6 +4090,7 @@ def log_sell(request: Request, body: dict):
             "Value": value, "Rule": rule, "Notes": notes,
             "Realized_PL": 0, "Trx_ID": "",
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
+            "Match_Method": match_method,
         }
         detail_id, trx_id = _save_detail_with_unique_trx_id(
             portfolio, trade_id, "S", detail_row, given_trx_id=client_trx_id,
@@ -4070,24 +4103,46 @@ def log_sell(request: Request, body: dict):
         txns["date"] = pd.to_datetime(txns["date"], errors="coerce")
         txns = txns.dropna(subset=["date"]).sort_values("date")
 
+        # Phase 2 B-1: per-SELL matching. Each SELL reads its own
+        # match_method stamp; BUYs contribute to inventory in chronological
+        # arrival order tracked by arrival_seq so the LIFO branch can sort
+        # explicitly after any HCFO mutation rather than relying on the
+        # inventory[-1] adjacency invariant.
         inventory = []
+        arrival_seq = 0
         total_realized = 0.0
         for _, tx in txns.iterrows():
             action = str(tx.get("action", "")).upper()
             tx_shares = float(tx.get("shares", 0))
             tx_price = float(tx.get("amount", 0))
+            tx_date = tx.get("date")
             if action == "BUY":
-                inventory.append({"price": tx_price, "shares": tx_shares})
+                inventory.append({
+                    "price": tx_price, "shares": tx_shares,
+                    "date": tx_date, "arrival_seq": arrival_seq,
+                })
+                arrival_seq += 1
             elif action == "SELL":
+                # NaN-safe per-SELL switch (see trade_calc.compute_trade_risk
+                # for rationale).
+                raw_method = tx.get("match_method")
+                sell_method = (
+                    "LIFO" if pd.isna(raw_method) or not raw_method
+                    else str(raw_method).upper()
+                )
+                if sell_method == "HCFO":
+                    inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
+                else:  # LIFO
+                    inventory.sort(key=lambda lot: -lot["arrival_seq"])
                 to_sell = tx_shares
                 while to_sell > 0 and inventory:
-                    last = inventory[-1]
-                    take = min(to_sell, last["shares"])
-                    total_realized += (tx_price - last["price"]) * take
-                    last["shares"] -= take
+                    lot = inventory[0]
+                    take = min(to_sell, lot["shares"])
+                    total_realized += (tx_price - lot["price"]) * take
+                    lot["shares"] -= take
                     to_sell -= take
-                    if last["shares"] < 0.0001:
-                        inventory.pop()
+                    if lot["shares"] < 0.0001:
+                        inventory.pop(0)
 
         remaining_shares = sum(lot["shares"] for lot in inventory)
         remaining_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
@@ -4307,22 +4362,41 @@ def exercise_option(request: Request, body: dict = Body(...)):
             opt_txns["date"] = pd.to_datetime(opt_txns["date"], errors="coerce")
             opt_txns = opt_txns.dropna(subset=["date"]).sort_values("date")
 
+            # Phase 2 B-1: per-SELL matching with arrival_seq + date on each
+            # BUY lot so the LIFO branch can sort explicitly post-HCFO-mutation.
             inventory = []
+            arrival_seq = 0
             for _, tx in opt_txns.iterrows():
                 action = str(tx.get("action", "")).upper()
                 tx_shares = float(tx.get("shares", 0) or 0)
                 tx_price = float(tx.get("amount", 0) or 0)
+                tx_date = tx.get("date")
                 if action == "BUY":
-                    inventory.append({"price": tx_price, "shares": tx_shares})
+                    inventory.append({
+                        "price": tx_price, "shares": tx_shares,
+                        "date": tx_date, "arrival_seq": arrival_seq,
+                    })
+                    arrival_seq += 1
                 elif action == "SELL":
+                    # NaN-safe per-SELL switch (see trade_calc.compute_trade_risk
+                    # for rationale).
+                    raw_method = tx.get("match_method")
+                    sell_method = (
+                        "LIFO" if pd.isna(raw_method) or not raw_method
+                        else str(raw_method).upper()
+                    )
+                    if sell_method == "HCFO":
+                        inventory.sort(key=lambda lot: (-lot["price"], lot["date"]))
+                    else:  # LIFO
+                        inventory.sort(key=lambda lot: -lot["arrival_seq"])
                     to_sell = tx_shares
                     while to_sell > 0 and inventory:
-                        last = inventory[-1]
-                        take = min(to_sell, last["shares"])
-                        last["shares"] -= take
+                        lot = inventory[0]
+                        take = min(to_sell, lot["shares"])
+                        lot["shares"] -= take
                         to_sell -= take
-                        if last["shares"] < 0.0001:
-                            inventory.pop()
+                        if lot["shares"] < 0.0001:
+                            inventory.pop(0)
             contracts_held = sum(lot["shares"] for lot in inventory)
             held_cost = sum(lot["shares"] * lot["price"] for lot in inventory)
             if contracts_held <= 0:
@@ -4336,6 +4410,10 @@ def exercise_option(request: Request, body: dict = Body(...)):
             opt_total_premium_dollars = held_cost * opt_multiplier  # for audit detail
 
             # --- 1. Option SELL detail ---
+            # Phase 2 B-1: stamp the option-leg SELL with the current method.
+            # Stock-leg BUY (below) intentionally NOT stamped — BUY rows stay
+            # NULL by convention; per-SELL stamping is the rule, not per-row.
+            opt_match_method = _resolve_match_method()
             opt_sell_value = contracts_held * weighted_avg_premium * opt_multiplier
             opt_sell_trx_id = db._generate_unique_trx_id_in_txn(
                 cur, portfolio_id, option_trade_id, "S",
@@ -4352,6 +4430,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
                 "Trx_ID": opt_sell_trx_id,
                 "Instrument_Type": "OPTION",
                 "Multiplier": opt_multiplier,
+                "Match_Method": opt_match_method,
             }
             opt_detail_id = db._save_detail_row_in_txn(cur, portfolio_id, opt_detail_row)
 

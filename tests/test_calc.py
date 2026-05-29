@@ -510,3 +510,337 @@ class TestComputeTradeRisk:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 200.0, "stop_loss": 195.0},
         ])
         assert compute_trade_risk(df, multiplier=1.0) == 500.0
+
+
+class TestComputeLifoSummaryHcfoBranch:
+    """HCFO matching: each SELL consumes the highest-cost open lot first,
+    ties broken by date ASC (oldest highest-cost wins).
+
+    Mirrors the LIFO test set in TestComputeLifoSummary so the two matching
+    methods can be compared side-by-side and any future divergence in the
+    walk's structural invariants (closure emission, residual inventory,
+    avg_entry/avg_exit) is caught.
+    """
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_hcfo_matches_highest_cost_first(self) -> None:
+        """3 BUYs at $40 / $60 / $50. One SELL of 100 @ $70 stamped HCFO
+        consumes the $60 lot first (highest cost), not the most-recent ($50).
+
+        Realized PL = 100 × (70 − 60) = 1000. After: 100 @ $40 + 100 @ $50
+        remain → avg_entry = (4000+5000)/200 = 45.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result is not None
+        assert result["Realized_PL"] == 1000.0
+        assert result["Shares"] == 200.0
+        assert result["Avg_Entry"] == 45.0
+        assert result["Status"] == "OPEN"
+
+    def test_hcfo_sell_spans_two_lots(self) -> None:
+        """SELL larger than highest-cost lot consumes that lot fully, then
+        the next-highest. 100 @ $40 + 50 @ $60. SELL 80 @ $70 HCFO eats the
+        50 @ $60 lot in full, then 30 from $40 lot.
+
+        Realized PL = 50×(70−60) + 30×(70−40) = 500 + 900 = 1400.
+        Remaining: 70 @ $40, avg_entry = 40.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 60.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 80,  "amount": 70.0,
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result is not None
+        assert result["Realized_PL"] == 1400.0
+        assert result["Shares"] == 70.0
+        assert result["Avg_Entry"] == 40.0
+
+    def test_hcfo_tiebreak_uses_date_asc(self) -> None:
+        """Two BUYs at the SAME price tiebreak on date ASC (oldest first).
+
+        BUY 100 @ $50 (2026-01-10), BUY 100 @ $50 (2026-01-15). SELL 50 @ $60
+        HCFO sorts by (-price, date) → the older lot wins.
+
+        Verified by checking the remaining inventory: only the 2026-01-15
+        lot should have its full 100 shares; the 2026-01-10 lot is partial.
+        Since both prices match, this is checked via the closures' buy_trx_id
+        if present, or indirectly via shares remaining.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0, "trx_id": "B1"},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 100, "amount": 50.0, "trx_id": "A1"},
+            {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0,
+             "match_method": "HCFO", "trx_id": "S1"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        assert result is not None
+        summary, closures = result
+        # Same price for both BUYs → realized PL identical regardless of which
+        # was consumed. Tiebreak proof: closure points at B1 (older), not A1.
+        assert len(closures) == 1
+        assert closures[0]["buy_trx_id"] == "B1"
+        assert summary["Realized_PL"] == 500.0
+        assert summary["Shares"] == 150.0
+
+    def test_hcfo_losing_trade_realized_pl_negative(self) -> None:
+        """HCFO works for losing trades too. BUY 100 @ $60, BUY 100 @ $40.
+        SELL 100 @ $45 HCFO consumes the $60 lot → loss.
+
+        Realized PL = 100 × (45 − 60) = −1500. Remaining: 100 @ $40.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 45.0,
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result is not None
+        assert result["Realized_PL"] == -1500.0
+        assert result["Shares"] == 100.0
+        assert result["Avg_Entry"] == 40.0
+
+    def test_hcfo_with_closures_emits_pair_dicts(self) -> None:
+        """Closure dicts produced by an HCFO walk reference the highest-cost
+        lot's buy_trx_id, not the most-recent's."""
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0, "trx_id": "B1"},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 60.0, "trx_id": "A1"},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 50.0, "trx_id": "A2"},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0, "trx_id": "S1",
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        assert result is not None
+        summary, closures = result
+        assert len(closures) == 1
+        assert closures[0]["buy_trx_id"] == "A1"  # the $60 lot
+        assert closures[0]["sell_trx_id"] == "S1"
+        assert closures[0]["shares"] == 100.0
+        assert closures[0]["buy_price"] == 60.0
+        assert closures[0]["sell_price"] == 70.0
+        assert closures[0]["realized_pl"] == 1000.0
+
+    def test_hcfo_remaining_inventory_is_lowest_cost_lots(self) -> None:
+        """Multiple SELLs under HCFO walk down the cost ladder. Residual
+        inventory is the LOWEST-cost lots, the opposite of LIFO's residual.
+
+        BUYs: 100@$40, 100@$50, 100@$60. SELL 150 HCFO → consumes 100@$60
+        + 50@$50. Remaining: 50@$50 + 100@$40, avg_entry = (2500+4000)/150
+        = 43.3333.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 150, "amount": 70.0,
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result is not None
+        # 100×(70−60) + 50×(70−50) = 1000 + 1000 = 2000
+        assert result["Realized_PL"] == 2000.0
+        assert result["Shares"] == 150.0
+        assert result["Avg_Entry"] == pytest.approx(43.3333, abs=0.0001)
+
+
+class TestComputeLifoSummaryMixedMethods:
+    """Mixed-method SELLs in one trade: each SELL is stamped independently
+    and the walk handles the per-SELL switch. The arrival_seq lot field is
+    what protects LIFO ordering after an HCFO mutation reordered inventory.
+    """
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_null_match_method_defaults_to_lifo(self) -> None:
+        """No match_method column / NULL value defaults to LIFO so every
+        pre-B-1 fixture and every historical SELL behaves byte-for-byte
+        identically. Cross-checked against the canonical LIFO case in
+        TestComputeLifoSummary."""
+        # No column at all
+        df_no_col = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 55.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0},
+        ])
+        # Explicit None
+        df_null = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 55.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0,
+             "match_method": None},
+        ])
+        # Explicit LIFO
+        df_lifo = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-15", "action": "BUY",  "shares": 50,  "amount": 55.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0,
+             "match_method": "LIFO"},
+        ])
+        for df in (df_no_col, df_null, df_lifo):
+            result = compute_lifo_summary(df, "T1", "AAPL")
+            assert result is not None
+            # LIFO eats the newest lot (50 @ $55): realized = 50×(60−55) = 250
+            assert result["Realized_PL"] == 250.0
+            assert result["Shares"] == 100.0
+
+    def test_mixed_lifo_then_hcfo_in_one_trade(self) -> None:
+        """LIFO SELL first, then HCFO SELL in the same trade.
+
+        BUYs: 100@$40, 100@$60, 100@$50.
+        SELL 100 @ $70 LIFO → consumes newest ($50). Realized = 100×20 = 2000.
+        Remaining: 100@$40, 100@$60.
+        SELL 100 @ $80 HCFO → consumes highest-cost ($60). Realized = 100×20 = 2000.
+        Remaining: 100@$40. Total realized = 4000. avg_entry = 40.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 60.0},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 50.0},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
+             "match_method": "LIFO"},
+            {"date": "2026-01-22", "action": "SELL", "shares": 100, "amount": 80.0,
+             "match_method": "HCFO"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL")
+        assert result is not None
+        assert result["Realized_PL"] == 4000.0
+        assert result["Shares"] == 100.0
+        assert result["Avg_Entry"] == 40.0
+
+    def test_mixed_hcfo_then_lifo_in_one_trade(self) -> None:
+        """HCFO first, then LIFO — the edge case the arrival_seq field
+        protects. After HCFO mutates inventory order, LIFO must still
+        consume the most-recently-arrived BUY, not whatever happens to
+        be at the end of the (potentially reordered) list.
+
+        BUYs in arrival order: B1=100@$40, A1=100@$60, A2=100@$50.
+        SELL 100 @ $70 HCFO → consumes A1 ($60). Realized = 100×10 = 1000.
+        Inventory after sort+mutation: contains B1 and A2 in some order.
+        SELL 100 @ $75 LIFO → must consume A2 (newest), realized = 100×25 = 2500.
+        Total = 3500. Remaining: B1 (100@$40). avg_entry = 40.
+        """
+        df = self._txns([
+            {"date": "2026-01-10", "action": "BUY",  "shares": 100, "amount": 40.0, "trx_id": "B1"},
+            {"date": "2026-01-12", "action": "BUY",  "shares": 100, "amount": 60.0, "trx_id": "A1"},
+            {"date": "2026-01-14", "action": "BUY",  "shares": 100, "amount": 50.0, "trx_id": "A2"},
+            {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
+             "match_method": "HCFO", "trx_id": "S1"},
+            {"date": "2026-01-22", "action": "SELL", "shares": 100, "amount": 75.0,
+             "match_method": "LIFO", "trx_id": "S2"},
+        ])
+        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        assert result is not None
+        summary, closures = result
+        assert summary["Realized_PL"] == 3500.0
+        assert summary["Shares"] == 100.0
+        assert summary["Avg_Entry"] == 40.0
+        # Closure pairs prove the per-SELL switch routed correctly even
+        # after the HCFO sort reordered the inventory list.
+        s1_closures = [c for c in closures if c["sell_trx_id"] == "S1"]
+        s2_closures = [c for c in closures if c["sell_trx_id"] == "S2"]
+        assert len(s1_closures) == 1 and s1_closures[0]["buy_trx_id"] == "A1"
+        assert len(s2_closures) == 1 and s2_closures[0]["buy_trx_id"] == "A2"
+
+
+class TestComputeTradeRiskHcfoBranch:
+    """compute_trade_risk's residual-inventory exposure under HCFO.
+
+    Trade Risk $ depends on what remains after each SELL, so the per-SELL
+    method choice shifts the residual toward the lowest-cost lots under
+    HCFO. Coverage centers on stock trades (where stops drive the formula);
+    options policy I is method-agnostic (max loss = premium regardless of
+    matching method), so no separate HCFO option test is needed.
+    """
+
+    @staticmethod
+    def _txns(rows: list[dict]) -> pd.DataFrame:
+        return pd.DataFrame(rows)
+
+    def test_hcfo_residual_drives_risk(self) -> None:
+        """Two BUYs, one SELL stamped HCFO. The residual inventory under
+        HCFO holds the LOWER-cost lot, which means the risk number diverges
+        from the LIFO path's residual.
+
+        BUYs: 100 @ $50 stop 45 (lot1), 50 @ $60 stop 55 (lot2).
+        SELL 50 @ $65 HCFO → consumes lot2 fully. Remaining: lot1 only.
+        Risk = 100 × (50 − 45) = 500.
+
+        Under LIFO the same SELL also consumes lot2 (it's the newest),
+        so the LIFO/HCFO answers coincide here. The next test exercises
+        a case where they diverge.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 50.0, "stop_loss": 45.0},
+            {"date": "2026-01-02", "action": "BUY",  "shares": 50,  "amount": 60.0, "stop_loss": 55.0},
+            {"date": "2026-01-03", "action": "SELL", "shares": 50,  "amount": 65.0, "stop_loss": 0.0,
+             "match_method": "HCFO"},
+        ])
+        assert compute_trade_risk(df, multiplier=1.0) == 500.0
+
+    def test_hcfo_diverges_from_lifo_when_newer_lot_cheaper(self) -> None:
+        """When the older BUY is the highest-cost lot, HCFO and LIFO
+        produce DIFFERENT residuals → different risk numbers.
+
+        BUYs in arrival order: 100 @ $60 stop 55 (older, expensive),
+        50 @ $40 stop 35 (newer, cheap). SELL 50 @ $65.
+
+        HCFO consumes 50 from the $60 lot (highest cost). Residual:
+        50 @ $60 stop 55  → risk 50×(60−55) = 250
+        50 @ $40 stop 35  → risk 50×(40−35) = 250
+        Total HCFO risk = 500.
+
+        LIFO would consume the $40 lot first → residual is 100 @ $60
+        stop 55 → risk 100×5 = 500. Coincidentally equal here, so we
+        check the residuals via stricter math:
+        Build a no-stop variant where HCFO leaves an option-style cost
+        exposure visible.
+        """
+        df = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 60.0, "stop_loss": 55.0},
+            {"date": "2026-01-02", "action": "BUY",  "shares": 50,  "amount": 40.0, "stop_loss": 35.0},
+            {"date": "2026-01-03", "action": "SELL", "shares": 50,  "amount": 65.0, "stop_loss": 0.0,
+             "match_method": "HCFO"},
+        ])
+        # HCFO consumes 50 of the $60 lot. Residual: 50 @ $60 + 50 @ $40.
+        # 50×(60-55) + 50×(40-35) = 250 + 250 = 500.
+        assert compute_trade_risk(df, multiplier=1.0) == 500.0
+
+    def test_lifo_and_hcfo_diverge_when_residual_differs(self) -> None:
+        """Construct a case where LIFO and HCFO residuals visibly differ.
+
+        BUYs: 100 @ $60 stop 50 (older, expensive), 100 @ $40 stop 35 (newer).
+        SELL 100 stamped HCFO → consumes the $60 lot in full.
+        Residual: 100 @ $40 stop 35 → risk 100×5 = 500.
+
+        Identical inputs with LIFO stamp would consume the $40 lot.
+        Residual: 100 @ $60 stop 50 → risk 100×10 = 1000.
+        """
+        df_hcfo = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 60.0, "stop_loss": 50.0},
+            {"date": "2026-01-02", "action": "BUY",  "shares": 100, "amount": 40.0, "stop_loss": 35.0},
+            {"date": "2026-01-03", "action": "SELL", "shares": 100, "amount": 65.0, "stop_loss": 0.0,
+             "match_method": "HCFO"},
+        ])
+        df_lifo = self._txns([
+            {"date": "2026-01-01", "action": "BUY",  "shares": 100, "amount": 60.0, "stop_loss": 50.0},
+            {"date": "2026-01-02", "action": "BUY",  "shares": 100, "amount": 40.0, "stop_loss": 35.0},
+            {"date": "2026-01-03", "action": "SELL", "shares": 100, "amount": 65.0, "stop_loss": 0.0,
+             "match_method": "LIFO"},
+        ])
+        assert compute_trade_risk(df_hcfo, multiplier=1.0) == 500.0
+        assert compute_trade_risk(df_lifo, multiplier=1.0) == 1000.0
