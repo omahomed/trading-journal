@@ -18,7 +18,7 @@ This script:
      occurrence as-is.
   3. Renames subsequent siblings with a numeric suffix: -2, -3, -4, ...
      skipping any suffix already in use elsewhere in the trade.
-  4. Re-runs _recompute_summary_lifo per affected trade so lot_closures
+  4. Re-runs _recompute_summary_matching per affected trade so lot_closures
      get rewritten with the new (now-unique) sell_trx_id / buy_trx_id.
 
 Per-trade flow is two-phase: an atomic_transaction commits all renames
@@ -264,7 +264,7 @@ def dedupe(portfolio_name: str, apply_writes: bool) -> int:
     recompute_fn = None
     if apply_writes:
         sys.path.insert(0, str(REPO_ROOT / "api"))
-        from main import _recompute_summary_lifo as recompute_fn  # noqa: E402
+        from main import _recompute_summary_matching as recompute_fn  # noqa: E402
 
     rename_planned_total = 0
     rename_succeeded_total = 0

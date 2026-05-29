@@ -43,13 +43,13 @@ from slowapi.util import get_remote_address
 import db_layer as db
 import nlv_service
 from trade_calc import (
-    compute_lifo_summary,
+    compute_matching_summary,
     compute_open_inventory,
     compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns as _normalize_journal,
-    validate_post_edit_lifo,
+    validate_post_edit_matching,
 )
 from tickers import parse_option_ticker
 
@@ -4098,7 +4098,7 @@ def log_sell(request: Request, body: dict):
             portfolio, trade_id, "S", detail_row, given_trx_id=client_trx_id,
         )
 
-        # Phase 2 B-2: sole summary writer is _recompute_summary_lifo.
+        # Phase 2 B-2: sole summary writer is _recompute_summary_matching.
         # Sell_Rule + Sell_Notes (and Grade) come from the request body and
         # override the preserve-existing-fields loop inside the recompute,
         # which would otherwise carry over the prior SELL's metadata.
@@ -4112,7 +4112,7 @@ def log_sell(request: Request, body: dict):
                 pass
 
         try:
-            summary = _recompute_summary_lifo(
+            summary = _recompute_summary_matching(
                 portfolio, trade_id, ticker, overrides=overrides,
             )
         except Exception as e:
@@ -4336,7 +4336,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
 
             # --- 2. Recompute option summary + closures ---
             # Re-walk all option details (including the SELL we just inserted)
-            # via compute_lifo_summary. The pure function returns the LIFO
+            # via compute_matching_summary. The pure function returns the LIFO
             # fields; we layer on the preserved/derived columns.
             opt_txns_after = pd.concat([
                 opt_txns,
@@ -4350,7 +4350,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
                     "trx_id": opt_sell_trx_id,
                 }]),
             ], ignore_index=True)
-            opt_lifo_result = compute_lifo_summary(
+            opt_lifo_result = compute_matching_summary(
                 opt_txns_after, option_trade_id, opt_ticker,
                 multiplier=opt_multiplier, with_closures=True,
             )
@@ -4451,7 +4451,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
                     "trx_id": stock_buy_trx_id,
                 }]),
             ], ignore_index=True)
-            stock_lifo_result = compute_lifo_summary(
+            stock_lifo_result = compute_matching_summary(
                 stock_txns_after, stock_trade_id, underlying,
                 multiplier=1.0, with_closures=True,
             )
@@ -4594,7 +4594,7 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         if effective_trade_id and not df_d.empty:
             txns_for_trade = df_d[df_d["trade_id"] == effective_trade_id] \
                 if "trade_id" in df_d.columns else df_d.iloc[0:0]
-            err = validate_post_edit_lifo(
+            err = validate_post_edit_matching(
                 txns_for_trade, int(detail_id),
                 proposed_action, shares, amount, proposed_date,
             )
@@ -4648,7 +4648,7 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # closed the trade — the card still shows the pre-edit P&L).
         try:
             if effective_trade_id:
-                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
+                _recompute_summary_matching(portfolio, effective_trade_id, effective_ticker)
         except Exception:
             pass
 
@@ -4678,7 +4678,7 @@ def delete_transaction_endpoint(request: Request,
     """Soft-delete a single transaction detail row, then recompute its
     campaign's LIFO summary so avg_entry / realized_pl / status reflect
     the removal. If the deletion empties the campaign, the summary is
-    cleaned up by _recompute_summary_lifo."""
+    cleaned up by _recompute_summary_matching."""
     try:
         if not detail_id:
             return {"error": "detail_id is required"}
@@ -4714,7 +4714,7 @@ def delete_transaction_endpoint(request: Request,
         if effective_trade_id and not df_d.empty:
             txns_for_trade = df_d[df_d["trade_id"] == effective_trade_id] \
                 if "trade_id" in df_d.columns else df_d.iloc[0:0]
-            err = validate_post_edit_lifo(
+            err = validate_post_edit_matching(
                 txns_for_trade, int(detail_id),
                 "DELETE", 0.0, 0.0, "",
             )
@@ -4728,7 +4728,7 @@ def delete_transaction_endpoint(request: Request,
 
         if effective_trade_id:
             try:
-                _recompute_summary_lifo(portfolio, effective_trade_id, effective_ticker)
+                _recompute_summary_matching(portfolio, effective_trade_id, effective_ticker)
             except Exception:
                 # Summary recompute failure shouldn't roll back the delete —
                 # the row is gone; the worst case is a stale summary that
@@ -4746,7 +4746,7 @@ def delete_transaction_endpoint(request: Request,
         return {"error": str(e)}
 
 
-def _recompute_summary_lifo(
+def _recompute_summary_matching(
     portfolio: str,
     trade_id: str,
     ticker: str,
@@ -4796,7 +4796,7 @@ def _recompute_summary_lifo(
         if multiplier == 1.0 and is_option_ticker(ticker):
             multiplier = 100.0
             instrument_type = 'OPTION'
-    result = compute_lifo_summary(
+    result = compute_matching_summary(
         txns, trade_id, ticker, fallback_open_date,
         multiplier=multiplier, with_closures=True,
     )
@@ -4807,7 +4807,7 @@ def _recompute_summary_lifo(
         return None
     summary_row["Instrument_Type"] = instrument_type
     summary_row["Multiplier"] = multiplier
-    # Preserve user-entered fields that LIFO doesn't compute. compute_lifo_summary
+    # Preserve user-entered fields that LIFO doesn't compute. compute_matching_summary
     # only returns LIFO-derived fields (status, shares, avg_entry, etc.), so passing
     # its output directly to save_summary_with_closures would bind NULL/DEFAULT to
     # rule, buy_notes, sell_rule, sell_notes, risk_budget, stop_loss — wiping user
@@ -4899,7 +4899,7 @@ def delete_transactions_by_date(date: str = Query(...), portfolio: str = Query("
 
         for tid, ticker in ticker_by_tid.items():
             try:
-                _recompute_summary_lifo(portfolio, tid, ticker)
+                _recompute_summary_matching(portfolio, tid, ticker)
             except Exception:
                 pass
 

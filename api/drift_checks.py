@@ -455,7 +455,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
         remediation=(
             "Recompute LIFO for the affected trade — the recompute now "
             "writes trx_ids correctly. Old empty rows will be replaced by "
-            "the delete-then-insert path in _recompute_summary_lifo."
+            "the delete-then-insert path in _recompute_summary_matching."
         ),
     ),
     DriftCheck(
@@ -501,7 +501,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
               AND ABS(s.realized_pl - COALESCE(lc.sum_pl, 0)) > 0.01
         """,
         remediation=(
-            "Recompute LIFO for the campaign — _recompute_summary_lifo "
+            "Recompute LIFO for the campaign — _recompute_summary_matching "
             "rewrites lot_closures and recomputes summary.realized_pl in a "
             "single transaction, so they should match after."
         ),
@@ -526,7 +526,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
         # OPEN trades it carries the LIFO post-sell remaining inventory
         # (what this check compares against). For CLOSED trades it
         # carries the lifetime sum of BUY shares (campaign face-card
-        # metric — see compute_lifo_summary in trade_calc.py:177 and
+        # metric — see compute_matching_summary in trade_calc.py:177 and
         # the matching write in api/main.py:3142). Comparing those to
         # `SUM(open_remaining)=0` for closed trades over-flags every
         # closed campaign that ever bought shares — pure false positive.

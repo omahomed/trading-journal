@@ -27,7 +27,7 @@ Architecture mirrors scripts/dedupe_trx_ids.py:
   - Per-trade Phase A (notes-lift) + Phase B (rename) in ONE atomic
     transaction so rename rollback also rolls back the notes-lift.
   - Phase C runs OUTSIDE the atomic transaction: clear the @ttl_cache'd
-    load_details / load_summary, call _recompute_summary_lifo to rewrite
+    load_details / load_summary, call _recompute_summary_matching to rewrite
     lot_closures with the new trx_ids, emit a RELABEL_TRADE audit row.
     A recompute failure does not roll back the rename — the rename is
     the high-stakes write, lot_closures self-heal on the next edit.
@@ -709,7 +709,7 @@ def relabel(
     print("─" * 80)
 
     sys.path.insert(0, str(REPO_ROOT / "api"))
-    from main import _recompute_summary_lifo as recompute_fn  # noqa: E402
+    from main import _recompute_summary_matching as recompute_fn  # noqa: E402
 
     rename_failures: list[tuple[str, str]] = []
     recompute_failures: list[tuple[str, str]] = []

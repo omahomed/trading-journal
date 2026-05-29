@@ -1,7 +1,7 @@
 """Tests for Phase 2 B-2's log_sell consolidation.
 
 Pre-B-2: log_sell wrote summary inline via save_summary_row, then ran
-a second pass through _recompute_summary_lifo for lot_closures. B-2
+a second pass through _recompute_summary_matching for lot_closures. B-2
 deleted the inline path; the recompute is now the sole summary writer.
 
 Coverage:
@@ -9,7 +9,7 @@ Coverage:
      trx_id context (replaces the prior silent-print swallow).
   2. Response payload (realized_pl, remaining_shares, is_closed) is
      derived from the recompute summary, not the deleted inline walk.
-  3. The overrides dict passed to _recompute_summary_lifo drives
+  3. The overrides dict passed to _recompute_summary_matching drives
      Sell_Rule + Sell_Notes (and Grade) over the preserve-existing
      loop — the body's values win.
   4. Structural invariant: save_summary_row is NEVER called by
@@ -87,7 +87,7 @@ def stubbed(monkeypatch):
     state knobs:
       summary_df          — what load_summary returns
       details_df          — what load_details returns (start: one BUY)
-      recompute_should_raise — if not None, _recompute_summary_lifo raises
+      recompute_should_raise — if not None, _recompute_summary_matching raises
                                 this exception instead of running
 
     state observations:
@@ -99,7 +99,7 @@ def stubbed(monkeypatch):
       saved_details       — every detail row passed to save_detail_row
                             (the SELL we just logged is here)
       recompute_overrides — last `overrides` dict passed to
-                            _recompute_summary_lifo (so the test can
+                            _recompute_summary_matching (so the test can
                             inspect what body→recompute plumbing did)
     """
     monkeypatch.setenv("AUTH_SECRET", _TEST_SECRET)
@@ -181,9 +181,9 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(db_layer, "delete_lot_closures_for_trade",
                         lambda *a, **kw: None)
 
-    # Wrap _recompute_summary_lifo so we can both capture its `overrides`
+    # Wrap _recompute_summary_matching so we can both capture its `overrides`
     # input and optionally force it to raise (for the 500-path test).
-    real_recompute = main._recompute_summary_lifo
+    real_recompute = main._recompute_summary_matching
     def wrapped_recompute(portfolio, trade_id, ticker,
                          fallback_open_date="", overrides=None):
         state["recompute_overrides"] = dict(overrides) if overrides else None
@@ -193,7 +193,7 @@ def stubbed(monkeypatch):
             portfolio, trade_id, ticker, fallback_open_date,
             overrides=overrides,
         )
-    monkeypatch.setattr(main, "_recompute_summary_lifo", wrapped_recompute)
+    monkeypatch.setattr(main, "_recompute_summary_matching", wrapped_recompute)
 
     if hasattr(main.limiter, "enabled"):
         original_enabled = main.limiter.enabled

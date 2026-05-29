@@ -10,13 +10,13 @@ import pytest
 
 from trade_calc import (
     calc_risk_budget,
-    compute_lifo_summary,
+    compute_matching_summary,
     compute_open_inventory,
     compute_trade_risk,
     is_option_ticker,
     multiplier_for_ticker,
     normalize_journal_columns,
-    validate_post_edit_lifo,
+    validate_post_edit_matching,
 )
 
 
@@ -87,19 +87,19 @@ class TestComputeLifoSummary:
 
     def test_empty_df_returns_none(self) -> None:
         df = pd.DataFrame(columns=["date", "action", "shares", "amount"])
-        assert compute_lifo_summary(df, "T1", "AAPL") is None
+        assert compute_matching_summary(df, "T1", "AAPL") is None
 
     def test_all_null_dates_returns_none(self) -> None:
         df = self._txns([
             {"date": None, "action": "BUY", "shares": 100, "amount": 50.0},
         ])
-        assert compute_lifo_summary(df, "T1", "AAPL") is None
+        assert compute_matching_summary(df, "T1", "AAPL") is None
 
     def test_single_buy_opens_position(self) -> None:
         df = self._txns([
             {"date": "2026-01-15", "action": "BUY", "shares": 100, "amount": 50.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         assert result["Status"] == "OPEN"
         assert result["Shares"] == 100.0
@@ -115,7 +115,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-15", "action": "BUY", "shares": 100, "amount": 50.0},
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 60.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result["Status"] == "CLOSED"
         assert result["Realized_PL"] == 1000.0
         assert result["Closed_Date"] == "2026-01-20"
@@ -130,7 +130,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-15", "action": "BUY", "shares": 50, "amount": 55.0},
             {"date": "2026-01-20", "action": "SELL", "shares": 50, "amount": 60.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         # Sell takes the 50-share lot @ 55 → realized = 50 * (60 - 55) = 250
         assert result["Realized_PL"] == 250.0
         # Remaining: 100 @ 50 (the older lot)
@@ -145,7 +145,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-15", "action": "BUY", "shares": 50, "amount": 55.0},
             {"date": "2026-01-20", "action": "SELL", "shares": 80, "amount": 60.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         # 50 * (60 - 55) = 250 + 30 * (60 - 50) = 300 → 550
         assert result["Realized_PL"] == 550.0
         # Remaining: 70 shares from the oldest lot, still @ 50
@@ -157,7 +157,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0},
             {"date": "2026-01-15", "action": "BUY", "shares": 100, "amount": 60.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result["Shares"] == 200.0
         assert result["Avg_Entry"] == 55.0
         assert result["Status"] == "OPEN"
@@ -167,7 +167,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0},
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 45.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result["Status"] == "CLOSED"
         assert result["Realized_PL"] == -500.0
         assert result["Return_Pct"] == pytest.approx(-10.0)
@@ -179,7 +179,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0},
             {"date": "2026-01-15", "action": "BUY", "shares": 50, "amount": 55.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         # After sorting: buy 100@50, buy 50@55, sell 50@60
         # LIFO: sell takes the 50@55 → realized = 250
         assert result["Realized_PL"] == 250.0
@@ -192,7 +192,7 @@ class TestComputeLifoSummary:
             {"date": "2026-01-15", "action": "SELL", "shares": 40, "amount": 55.0},
             {"date": "2026-01-20", "action": "BUY", "shares": 30, "amount": 52.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         # Realized from the partial sell: 40 * (55 - 50) = 200
         assert result["Realized_PL"] == 200.0
         # Remaining: 60 @ 50 + 30 @ 52 = 90 shares, total cost 3000 + 1560 = 4560, avg 50.6667
@@ -231,7 +231,7 @@ class TestOptionsMultiplier:
             {"date": "2026-04-27", "action": "BUY", "shares": 6, "amount": 12.08},
             {"date": "2026-04-29", "action": "SELL", "shares": 6, "amount": 7.78},
         ])
-        result = compute_lifo_summary(df, "T1", "RKLB 260618 $80C", multiplier=100)
+        result = compute_matching_summary(df, "T1", "RKLB 260618 $80C", multiplier=100)
         assert result["Status"] == "CLOSED"
         assert result["Realized_PL"] == pytest.approx(-2580.0)
         assert result["Total_Cost"] == pytest.approx(7248.0)
@@ -243,7 +243,7 @@ class TestOptionsMultiplier:
         df = pd.DataFrame([
             {"date": "2026-04-27", "action": "BUY", "shares": 13, "amount": 3.15},
         ])
-        result = compute_lifo_summary(df, "T1", "LUMN 270115 $7C", multiplier=100)
+        result = compute_matching_summary(df, "T1", "LUMN 270115 $7C", multiplier=100)
         assert result["Status"] == "OPEN"
         assert result["Total_Cost"] == pytest.approx(4095.0)
         assert result["Shares"] == 13.0
@@ -255,7 +255,7 @@ class TestOptionsMultiplier:
             {"date": "2026-01-10", "action": "BUY", "shares": 100, "amount": 50.0},
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 60.0},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result["Realized_PL"] == 1000.0
         assert result["Total_Cost"] == 5000.0
 
@@ -275,7 +275,7 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        err = validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "")
+        err = validate_post_edit_matching(df, 1, "DELETE", 0, 0, "")
         assert err is not None
         assert "unmatched" in err.lower()
 
@@ -284,14 +284,14 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        assert validate_post_edit_lifo(df, 2, "DELETE", 0, 0, "") is None
+        assert validate_post_edit_matching(df, 2, "DELETE", 0, 0, "") is None
 
     def test_delete_buy_when_no_sells_allowed(self) -> None:
         df = self._txns([
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-02", "action": "BUY", "shares": 50, "amount": 12.0},
         ])
-        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+        assert validate_post_edit_matching(df, 1, "DELETE", 0, 0, "") is None
 
     def test_delete_buy_when_prior_buy_absorbs_sells_allowed(self) -> None:
         df = self._txns([
@@ -299,14 +299,14 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-02", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        assert validate_post_edit_lifo(df, 2, "DELETE", 0, 0, "") is None
+        assert validate_post_edit_matching(df, 2, "DELETE", 0, 0, "") is None
 
     def test_edit_buy_shares_down_below_sells_rejected(self) -> None:
         df = self._txns([
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        err = validate_post_edit_lifo(df, 1, "BUY", 20, 10.0, "2026-01-01")
+        err = validate_post_edit_matching(df, 1, "BUY", 20, 10.0, "2026-01-01")
         assert err is not None
         assert "30" in err
 
@@ -315,7 +315,7 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        err = validate_post_edit_lifo(df, 1, "BUY", 100, 10.0, "2026-01-10")
+        err = validate_post_edit_matching(df, 1, "BUY", 100, 10.0, "2026-01-10")
         assert err is not None
 
     def test_edit_unrelated_field_allowed(self) -> None:
@@ -323,7 +323,7 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        assert validate_post_edit_lifo(df, 1, "BUY", 100, 12.50, "2026-01-01") is None
+        assert validate_post_edit_matching(df, 1, "BUY", 100, 12.50, "2026-01-01") is None
 
     def test_empty_action_falls_back_to_existing(self) -> None:
         # Caller omits `action`. Validator should treat the row as keeping
@@ -334,17 +334,17 @@ class TestValidatePostEditLifo:
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
             {"date": "2026-01-05", "action": "SELL", "shares": 50, "amount": 15.0},
         ])
-        assert validate_post_edit_lifo(df, 1, "", 100, 10.0, "2026-01-01") is None
+        assert validate_post_edit_matching(df, 1, "", 100, 10.0, "2026-01-01") is None
 
     def test_empty_txns_allowed(self) -> None:
         df = pd.DataFrame(columns=["date", "action", "shares", "amount", "detail_id"])
-        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+        assert validate_post_edit_matching(df, 1, "DELETE", 0, 0, "") is None
 
     def test_delete_only_remaining_txn_allowed(self) -> None:
         df = self._txns([
             {"date": "2026-01-01", "action": "BUY", "shares": 100, "amount": 10.0},
         ])
-        assert validate_post_edit_lifo(df, 1, "DELETE", 0, 0, "") is None
+        assert validate_post_edit_matching(df, 1, "DELETE", 0, 0, "") is None
 
 
 class TestComputeTradeRisk:
@@ -541,7 +541,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0,
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         assert result["Realized_PL"] == 1000.0
         assert result["Shares"] == 200.0
@@ -562,7 +562,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 80,  "amount": 70.0,
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         assert result["Realized_PL"] == 1400.0
         assert result["Shares"] == 70.0
@@ -585,7 +585,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 50,  "amount": 60.0,
              "match_method": "HCFO", "trx_id": "S1"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        result = compute_matching_summary(df, "T1", "AAPL", with_closures=True)
         assert result is not None
         summary, closures = result
         # Same price for both BUYs → realized PL identical regardless of which
@@ -607,7 +607,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 45.0,
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         assert result["Realized_PL"] == -1500.0
         assert result["Shares"] == 100.0
@@ -623,7 +623,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 100, "amount": 70.0, "trx_id": "S1",
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        result = compute_matching_summary(df, "T1", "AAPL", with_closures=True)
         assert result is not None
         summary, closures = result
         assert len(closures) == 1
@@ -649,7 +649,7 @@ class TestComputeLifoSummaryHcfoBranch:
             {"date": "2026-01-20", "action": "SELL", "shares": 150, "amount": 70.0,
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         # 100×(70−60) + 50×(70−50) = 1000 + 1000 = 2000
         assert result["Realized_PL"] == 2000.0
@@ -693,7 +693,7 @@ class TestComputeLifoSummaryMixedMethods:
              "match_method": "LIFO"},
         ])
         for df in (df_no_col, df_null, df_lifo):
-            result = compute_lifo_summary(df, "T1", "AAPL")
+            result = compute_matching_summary(df, "T1", "AAPL")
             assert result is not None
             # LIFO eats the newest lot (50 @ $55): realized = 50×(60−55) = 250
             assert result["Realized_PL"] == 250.0
@@ -717,7 +717,7 @@ class TestComputeLifoSummaryMixedMethods:
             {"date": "2026-01-22", "action": "SELL", "shares": 100, "amount": 80.0,
              "match_method": "HCFO"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL")
+        result = compute_matching_summary(df, "T1", "AAPL")
         assert result is not None
         assert result["Realized_PL"] == 4000.0
         assert result["Shares"] == 100.0
@@ -744,7 +744,7 @@ class TestComputeLifoSummaryMixedMethods:
             {"date": "2026-01-22", "action": "SELL", "shares": 100, "amount": 75.0,
              "match_method": "LIFO", "trx_id": "S2"},
         ])
-        result = compute_lifo_summary(df, "T1", "AAPL", with_closures=True)
+        result = compute_matching_summary(df, "T1", "AAPL", with_closures=True)
         assert result is not None
         summary, closures = result
         assert summary["Realized_PL"] == 3500.0
@@ -853,7 +853,7 @@ class TestComputeOpenInventory:
     compute_open_inventory wraps _walk_inventory(emit_closures=False)
     and is the sole interface for callers that need the residual lot
     list — exercise_option and compute_trade_risk. Closure-emitting
-    callers (compute_lifo_summary) use the same private walker but
+    callers (compute_matching_summary) use the same private walker but
     with emit_closures=True.
     """
 

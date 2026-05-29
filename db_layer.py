@@ -1630,7 +1630,7 @@ def save_summary_with_closures(portfolio_name, trade_id, summary_row, closures):
     manual_price, and be_stop_moved_at are NEVER touched here — the
     recompute path doesn't own those columns.
 
-    `closures` is the list returned by compute_lifo_summary(..., with_closures=True);
+    `closures` is the list returned by compute_matching_summary(..., with_closures=True);
     pass `[]` for an open-only trade (the DELETE still clears any prior closures).
 
     Returns the summary row id.
@@ -2099,7 +2099,7 @@ def mirror_detail_edit_to_summary(portfolio_name: str, trade_id: str) -> None:
         (those edits are detail-level only)
 
     Called from edit_transaction_endpoint AFTER update_detail_row so the
-    helper sees the post-edit state, and BEFORE _recompute_summary_lifo so
+    helper sees the post-edit state, and BEFORE _recompute_summary_matching so
     the recompute's preservation block reads the just-mirrored values
     instead of the stale pre-edit ones.
 

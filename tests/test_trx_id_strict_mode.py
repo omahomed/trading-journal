@@ -106,7 +106,7 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(db_layer, "generate_unique_trx_id",
                         lambda p, t, prefix: f"{prefix}99")
     monkeypatch.setattr(db_layer, "log_audit", lambda *a, **kw: None)
-    monkeypatch.setattr(main, "validate_post_edit_lifo",
+    monkeypatch.setattr(main, "validate_post_edit_matching",
                         lambda *a, **kw: None)
 
     if hasattr(main.limiter, "enabled"):

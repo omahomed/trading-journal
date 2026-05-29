@@ -68,7 +68,7 @@ def calc_risk_budget(
     every state change via compute_trade_risk. This single-lot helper remains
     for log_buy's initial inline write (where it equals compute_trade_risk
     for the single-BUY case), but the canonical source of trades_summary.
-    risk_budget is now compute_trade_risk called from _recompute_summary_lifo.
+    risk_budget is now compute_trade_risk called from _recompute_summary_matching.
     """
     if not (stop_loss and stop_loss > 0 and entry > stop_loss and shares > 0):
         return 0.0
@@ -86,7 +86,7 @@ def _walk_inventory(
 
     This is the canonical matching walker — sole source of truth for the
     per-SELL LIFO/HCFO switch. Wrappers above (compute_open_inventory,
-    compute_lifo_summary) layer their domain-specific assembly on top of
+    compute_matching_summary) layer their domain-specific assembly on top of
     this output. compute_trade_risk uses compute_open_inventory
     transitively; that's the third and final consumer.
 
@@ -202,7 +202,7 @@ def compute_open_inventory(txns: pd.DataFrame) -> list[dict[str, Any]]:
 
     Each entry is a canonical lot dict — see _walk_inventory for the
     full shape. Closures are not emitted (the caller doesn't need them);
-    callers wanting closures should use compute_lifo_summary with
+    callers wanting closures should use compute_matching_summary with
     with_closures=True.
 
     Used by:
@@ -239,7 +239,7 @@ def compute_trade_risk(
 
     Phase 2 B-2: walks via the canonical compute_open_inventory helper,
     which itself wraps _walk_inventory — same per-SELL LIFO/HCFO switch
-    as compute_lifo_summary. Risk is computed against the final lot
+    as compute_matching_summary. Risk is computed against the final lot
     residue, which under HCFO holds the lowest-cost lots (opposite of
     LIFO's residual).
 
@@ -275,7 +275,7 @@ def compute_trade_risk(
     return round(total_risk, 2)
 
 
-def compute_lifo_summary(
+def compute_matching_summary(
     txns: pd.DataFrame,
     trade_id: str,
     ticker: str,
@@ -358,7 +358,7 @@ def compute_lifo_summary(
     return (summary, closures) if with_closures else summary
 
 
-def validate_post_edit_lifo(
+def validate_post_edit_matching(
     txns_for_trade: pd.DataFrame,
     detail_id: int,
     proposed_action: str,
@@ -372,7 +372,7 @@ def validate_post_edit_lifo(
     SELL precedes its only supporting BUY); returns None if the edit is safe.
 
     Why this exists: the recompute path silently drops unmatched SELLs
-    (compute_lifo_summary's `while to_sell > 0 and inventory:` loop just exits
+    (compute_matching_summary's `while to_sell > 0 and inventory:` loop just exits
     when inventory empties), which produces undetectable wrong realized_pl on
     the campaign card. Six production trades carried bad data because of
     edits that pre-dated this guard.
@@ -408,7 +408,7 @@ def validate_post_edit_lifo(
     if txns.empty:
         return None  # Whole campaign goes away — caller cleans up summary.
 
-    result = compute_lifo_summary(
+    result = compute_matching_summary(
         txns, trade_id="", ticker="", multiplier=1.0, with_closures=True,
     )
     if result is None:

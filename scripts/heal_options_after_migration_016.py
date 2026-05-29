@@ -11,7 +11,7 @@ This script walks every OPTION campaign and:
   1. Rewrites trades_details.value to the canonical `shares × amount × multiplier`
      when it drifts from notional. Re-emits the matching cash_transactions
      row so the NLV ledger stays consistent.
-  2. Calls _recompute_summary_lifo() per campaign so trades_summary.total_cost
+  2. Calls _recompute_summary_matching() per campaign so trades_summary.total_cost
      and realized_pl reflect the multiplier-aware LIFO output.
 
 Idempotent: safe to re-run. Rows already at the correct notional are skipped.
@@ -122,13 +122,13 @@ def heal(dry_run: bool) -> int:
                 print(f"  (dry-run) would recompute {c[0]} {c[1]}")
             return 0
 
-        # Lazy import — _recompute_summary_lifo lives in api/main.py and pulls
+        # Lazy import — _recompute_summary_matching lives in api/main.py and pulls
         # in the FastAPI app, so we only load it for the live run.
         sys.path.insert(0, str(REPO_ROOT / "api"))
-        from main import _recompute_summary_lifo
+        from main import _recompute_summary_matching
         for trade_id, ticker, portfolio in campaigns:
             try:
-                _recompute_summary_lifo(portfolio, trade_id, ticker)
+                _recompute_summary_matching(portfolio, trade_id, ticker)
                 print(f"  ✓ {trade_id} {ticker}")
             except Exception as e:
                 print(f"  ✗ {trade_id} {ticker}: {e}")

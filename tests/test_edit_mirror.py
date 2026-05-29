@@ -184,7 +184,7 @@ def stubbed(monkeypatch):
         })
     monkeypatch.setattr(db_layer, "log_audit", fake_log_audit)
 
-    monkeypatch.setattr(main, "validate_post_edit_lifo",
+    monkeypatch.setattr(main, "validate_post_edit_matching",
                         lambda *a, **kw: None)
 
     if hasattr(main.limiter, "enabled"):

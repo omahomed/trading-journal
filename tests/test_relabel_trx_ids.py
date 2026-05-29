@@ -485,7 +485,7 @@ class TestDuplicateApplySkip:
 class TestCacheClearHardGate:
     def test_load_details_cache_cleared_before_recompute(self, monkeypatch):
         """Phase C MUST clear load_details + load_summary caches BEFORE
-        calling _recompute_summary_lifo. Skipping is the documented
+        calling _recompute_summary_matching. Skipping is the documented
         silent-failure mode. Test asserts the call order."""
         call_log: list[str] = []
 

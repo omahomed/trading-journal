@@ -157,8 +157,8 @@ def buy_sell_stubs(monkeypatch):
                         lambda portfolio, trade_id, prefix: f"{prefix}1")
     monkeypatch.setattr(db_layer, "log_audit", lambda *a, **kw: None)
 
-    # validate_post_edit_lifo isn't called by buy/sell, but stub for safety.
-    monkeypatch.setattr(main, "validate_post_edit_lifo",
+    # validate_post_edit_matching isn't called by buy/sell, but stub for safety.
+    monkeypatch.setattr(main, "validate_post_edit_matching",
                         lambda *a, **kw: None)
 
     if hasattr(main.limiter, "enabled"):
@@ -307,7 +307,7 @@ def test_log_sell_with_nan_existing_row_writes_null_not_nan(buy_sell_stubs):
 
     Phase 2 B-2: the inline save_summary_row path was deleted; the
     recompute is now the sole writer. The NaN-strip behavior survives
-    via _recompute_summary_lifo's pd.notna(val) guard in its
+    via _recompute_summary_matching's pd.notna(val) guard in its
     preserve-existing-fields loop — NaN cells fail the guard and are
     NOT written into summary_row, so save_summary_with_closures sees
     no Rule/Buy_Notes keys and the DB column lands NULL (its DEFAULT).
@@ -344,7 +344,7 @@ def test_log_sell_with_nan_existing_row_writes_null_not_nan(buy_sell_stubs):
     assert state["saved_with_closures"], "Expected a recompute save call"
     saved = state["saved_with_closures"][-1]["summary_row"]
 
-    # NaN guard in _recompute_summary_lifo prevents NaN cells from being
+    # NaN guard in _recompute_summary_matching prevents NaN cells from being
     # copied into summary_row; absent keys → DB column = NULL/DEFAULT.
     assert saved.get("Rule") is None, \
         f"Rule should be None (was NaN-on-existing), got {saved.get('Rule')!r}"
