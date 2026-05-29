@@ -300,6 +300,184 @@ class TestPlanIdempotency:
 
 
 # ────────────────────────────────────────────────────────────────────────
+# Cyclic-rename / two-phase rename
+# ────────────────────────────────────────────────────────────────────────
+
+
+class TestCyclicRename:
+    def test_cyclic_rename_nbis_024_pattern(self):
+        """NBIS-024 rename plan creates an intra-trade cycle: A2→A1 collides
+        with the existing A1 still in place. The plan itself is computed
+        correctly; the cycle is handled at apply time via two-phase
+        UPDATE (see TestApplyTwoPhase below).
+
+        Rows match NBIS-024's actual production state (per the forensic
+        dig): B1, B2, A2, S1, A4, S2, A4-2, A5, A1.
+        """
+        rows = [
+            _row(2960, "B1", action="BUY",  created_at=datetime(2026, 4, 10, 22,  9, 56)),
+            _row(2961, "B2", action="BUY",  created_at=datetime(2026, 4, 10, 22, 11, 26)),
+            _row(3030, "A2", action="BUY",  created_at=datetime(2026, 4, 21, 22, 34, 38)),
+            _row(3044, "S1", action="SELL", created_at=datetime(2026, 4, 24, 20, 55, 10)),
+            _row(3059, "A4", action="BUY",  created_at=datetime(2026, 4, 28,  0, 32, 56)),
+            _row(3065, "S2", action="SELL", created_at=datetime(2026, 4, 29,  0, 46, 48)),
+            _row(3081, "A4-2", action="BUY", created_at=datetime(2026, 4, 30,  1, 47, 57)),
+            _row(3087, "A5", action="BUY",  created_at=datetime(2026, 5,  2,  1, 18, 16)),
+            _row(3663, "A1", action="BUY",  created_at=datetime(2026, 5, 28,  0,  4,  3)),
+        ]
+        plan = relabel_trx_ids.plan_for_trade(rows)
+        renames = {u["prev_trx_id"]: u["new_trx_id"] for u in plan["rename_updates"]}
+        # B and S sequences already canonical — untouched.
+        assert "B1" not in renames and "B2" not in renames
+        assert "S1" not in renames and "S2" not in renames
+        # A sequence renumbers by created_at order to A1..A5.
+        assert renames == {"A2": "A1", "A4": "A2", "A4-2": "A3",
+                           "A5": "A4", "A1": "A5"}
+        # Categories surface the conditions; no DUPLICATE.
+        assert "DUPLICATE" not in plan["categories"]
+
+
+class TestApplyTwoPhase:
+    """Apply path uses raw cur.execute calls; the test inspects the SQL
+    sequence to verify the two-phase pattern (B-1 temp markers, then B-2
+    final values) inside ONE atomic_transaction context manager."""
+
+    def test_two_phase_temp_markers_then_final(self, monkeypatch):
+        executed: list[tuple[str, tuple]] = []
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                executed.append((sql, params))
+
+        class FakeAtomicTx:
+            def __enter__(self):
+                return (None, FakeCursor())
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(relabel_trx_ids.db, "atomic_transaction",
+                            lambda: FakeAtomicTx())
+
+        # NBIS-024 cyclic plan: A2→A1, A4→A2, A4-2→A3, A5→A4, A1→A5.
+        plan = {
+            "notes_updates": [],
+            "rename_updates": [
+                {"detail_id": 3030, "prev_trx_id": "A2", "new_trx_id": "A1"},
+                {"detail_id": 3059, "prev_trx_id": "A4", "new_trx_id": "A2"},
+                {"detail_id": 3081, "prev_trx_id": "A4-2", "new_trx_id": "A3"},
+                {"detail_id": 3087, "prev_trx_id": "A5", "new_trx_id": "A4"},
+                {"detail_id": 3663, "prev_trx_id": "A1", "new_trx_id": "A5"},
+            ],
+        }
+        n = relabel_trx_ids.apply_one_trade(plan)
+        assert n == 5  # logical rename count
+
+        # Expect exactly 10 UPDATEs (5 temp + 5 final), in two clean phases.
+        assert len(executed) == 10
+        # B-1: first 5 UPDATEs route to _RELABEL_TMP_{detail_id}
+        for (sql, params), expected_id in zip(executed[:5],
+                                              [3030, 3059, 3081, 3087, 3663]):
+            assert "UPDATE trades_details SET trx_id" in sql
+            new_val, det_id = params
+            assert new_val == f"_RELABEL_TMP_{expected_id}"
+            assert det_id == expected_id
+        # B-2: next 5 UPDATEs write the final canonical values
+        for (sql, params), expected_final in zip(executed[5:],
+                                                  ["A1", "A2", "A3", "A4", "A5"]):
+            new_val, _ = params
+            assert new_val == expected_final
+        # No intermediate UPDATE ever writes a value that another live row
+        # of the trade already holds — guaranteed by the all-temp-first
+        # pattern.
+
+    def test_tmp_marker_never_matches_canonical_pattern(self):
+        """Belt-and-braces: if an apply transaction crashed mid-B-1 without
+        rolling back somehow, the orphan temp markers must still fail the
+        strict TRX_ID_PATTERN — so downstream import / edit paths would
+        refuse them."""
+        from db_layer import TRX_ID_PATTERN
+        for det_id in (1, 42, 99999):
+            tmp = relabel_trx_ids._tmp_marker(det_id)
+            assert tmp.startswith("_RELABEL_TMP_")
+            assert TRX_ID_PATTERN.match(tmp) is None
+
+
+# ────────────────────────────────────────────────────────────────────────
+# DUPLICATE detection + skip
+# ────────────────────────────────────────────────────────────────────────
+
+
+class TestDuplicateDetection:
+    def test_detect_duplicate_pairs_basic(self):
+        rows = [
+            _row(1, "B1"),
+            _row(2, "B1"),  # collides with row 1
+            _row(3, "S1", action="SELL"),
+        ]
+        pairs = relabel_trx_ids.detect_duplicate_pairs(rows)
+        assert pairs == [{"trx_id": "B1", "detail_ids": [1, 2]}]
+
+    def test_detect_no_duplicates_when_unique(self):
+        rows = [
+            _row(1, "B1"),
+            _row(2, "B2"),
+            _row(3, "S1", action="SELL"),
+        ]
+        assert relabel_trx_ids.detect_duplicate_pairs(rows) == []
+
+    def test_plan_classifies_duplicate_short_circuits(self):
+        """Plan for a DUPLICATE trade returns DUPLICATE in categories,
+        empty rename/notes updates, and the duplicate_pairs list."""
+        rows = [
+            _row(1, "B1"),
+            _row(2, "B1"),  # active dup
+            _row(3, "A1"),  # would otherwise need no rename
+            _row(4, "A3"),  # would otherwise rename A3→A2 (gap)
+        ]
+        plan = relabel_trx_ids.plan_for_trade(rows)
+        assert "DUPLICATE" in plan["categories"]
+        assert plan["rename_updates"] == []
+        assert plan["notes_updates"] == []
+        assert plan["duplicate_pairs"] == [
+            {"trx_id": "B1", "detail_ids": [1, 2]}
+        ]
+
+
+class TestDuplicateApplySkip:
+    """A DUPLICATE plan must short-circuit in apply_one_trade and never
+    open an atomic_transaction. Test by counting transactions opened."""
+
+    def test_duplicate_plan_no_atomic_tx_opened(self, monkeypatch):
+        tx_open_count = [0]
+
+        class FakeCursor:
+            def execute(self, *a): pass
+
+        class FakeAtomicTx:
+            def __enter__(self):
+                tx_open_count[0] += 1
+                return (None, FakeCursor())
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(relabel_trx_ids.db, "atomic_transaction",
+                            lambda: FakeAtomicTx())
+
+        # A plan flagged DUPLICATE has empty notes/rename lists, so
+        # apply_one_trade's existing short-circuit already returns 0 —
+        # which means no atomic_transaction opens. Confirm explicitly.
+        plan = {
+            "categories": {"DUPLICATE"},
+            "duplicate_pairs": [{"trx_id": "B1", "detail_ids": [1, 2]}],
+            "notes_updates": [],
+            "rename_updates": [],
+        }
+        n = relabel_trx_ids.apply_one_trade(plan)
+        assert n == 0
+        assert tx_open_count[0] == 0
+
+
+# ────────────────────────────────────────────────────────────────────────
 # cache_clear_and_recompute — hard-gate enforcement
 # ────────────────────────────────────────────────────────────────────────
 

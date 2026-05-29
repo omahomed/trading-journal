@@ -225,21 +225,47 @@ def _append_notes(prev: str | None, addition: str) -> str:
     return f"{prev} / {addition}"
 
 
+def detect_duplicate_pairs(rows_in_trade: list[dict]) -> list[dict]:
+    """Find every (trx_id) value held by 2+ active rows within this trade.
+    These violate migration-018's partial UNIQUE index. The script cannot
+    relabel them — running dedupe_trx_ids.py first is required so each
+    sibling row carries a distinct trx_id (e.g. B1 + B1-2 + B1-3).
+
+    Returns a list of {"trx_id": str, "detail_ids": [int, ...]} entries,
+    sorted by trx_id for determinism in the dry-run report.
+    """
+    by_trx: dict[str, list[int]] = defaultdict(list)
+    for r in rows_in_trade:
+        if r["trx_id"]:
+            by_trx[r["trx_id"]].append(r["detail_id"])
+    return [
+        {"trx_id": txid, "detail_ids": sorted(ids)}
+        for txid, ids in sorted(by_trx.items())
+        if len(ids) > 1
+    ]
+
+
 def plan_for_trade(rows_in_trade: list[dict]) -> dict[str, Any]:
     """Build the rename + notes-lift plan for one trade. Returns:
 
       {
-        "trade_id":        str,
-        "portfolio":       str,
-        "portfolio_id":    int,
-        "ticker":          str | None,
-        "categories":      set of strings (GAP / START_HIGH / DEDUPE_SUFFIX
-                                          / FREEFORM / DUPLICATE)
-        "notes_updates":   [{detail_id, prev_notes, new_notes, reason}],
-        "rename_updates":  [{detail_id, prev_trx_id, new_trx_id}],
+        "trade_id":         str,
+        "portfolio":        str,
+        "portfolio_id":     int,
+        "ticker":           str | None,
+        "categories":       set of strings (GAP / START_HIGH / DEDUPE_SUFFIX
+                                            / FREEFORM / DUPLICATE)
+        "duplicate_pairs":  [{trx_id, detail_ids}, ...] — non-empty iff
+                            DUPLICATE in categories
+        "notes_updates":    [{detail_id, prev_notes, new_notes, reason}],
+        "rename_updates":   [{detail_id, prev_trx_id, new_trx_id}],
       }
 
-    The `categories` set is informational — used only for the report.
+    The `categories` set is informational — used by the report. Apply
+    paths additionally check for DUPLICATE and skip those trades before
+    opening the per-trade atomic_transaction; their notes_updates and
+    rename_updates lists are returned empty so a stale call to
+    apply_one_trade would be a no-op.
     """
     portfolio = rows_in_trade[0]["portfolio"]
     portfolio_id = rows_in_trade[0]["portfolio_id"]
@@ -249,6 +275,25 @@ def plan_for_trade(rows_in_trade: list[dict]) -> dict[str, Any]:
     categories: set[str] = set()
     notes_updates: list[dict] = []
     rename_updates: list[dict] = []
+
+    # DUPLICATE detection comes first. The two failure modes the discovery
+    # missed: (a) the classifier never computed this category, and (b) any
+    # of these trades sent into the rename loop would violate the partial
+    # UNIQUE constraint mid-batch anyway. Short-circuit with an empty plan
+    # so the apply path's DUPLICATE check is the canonical skip point.
+    duplicate_pairs = detect_duplicate_pairs(rows_in_trade)
+    if duplicate_pairs:
+        categories.add("DUPLICATE")
+        return {
+            "trade_id": trade_id,
+            "portfolio": portfolio,
+            "portfolio_id": portfolio_id,
+            "ticker": ticker,
+            "categories": categories,
+            "duplicate_pairs": duplicate_pairs,
+            "notes_updates": [],
+            "rename_updates": [],
+        }
 
     # Per-prefix buckets keyed by the FOLDED prefix (i.e. dedupe-survivor and
     # -Auto siblings collapse into their base prefix).
@@ -371,6 +416,7 @@ def plan_for_trade(rows_in_trade: list[dict]) -> dict[str, Any]:
         "portfolio_id": portfolio_id,
         "ticker": ticker,
         "categories": categories,
+        "duplicate_pairs": [],
         "notes_updates": notes_updates,
         "rename_updates": rename_updates,
     }
@@ -383,7 +429,10 @@ def build_all_plans(rows: list[dict]) -> list[dict]:
     plans = []
     for key in sorted(by_trade.keys()):
         plan = plan_for_trade(by_trade[key])
-        if plan["notes_updates"] or plan["rename_updates"]:
+        # Keep DUPLICATE plans even with empty update lists so they show up
+        # in the report and the apply loop sees them to skip.
+        if plan["notes_updates"] or plan["rename_updates"] \
+                or "DUPLICATE" in plan["categories"]:
             plans.append(plan)
     return plans
 
@@ -451,8 +500,30 @@ def write_snapshot(plans: list[dict], rows: list[dict], snapshot_dir: Path) -> P
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _tmp_marker(detail_id: int) -> str:
+    """Per-row unique marker used during Phase B-1 to dodge the partial
+    UNIQUE constraint. Underscore prefix guarantees it never matches
+    TRX_ID_PATTERN, so an accidental commit would still fail strict
+    validation downstream. detail_id is the table PK → markers are unique
+    across the transaction."""
+    return f"_RELABEL_TMP_{detail_id}"
+
+
 def apply_one_trade(plan: dict) -> int:
-    """Phase A + B in one atomic_transaction. Returns the count of UPDATEs."""
+    """Phase A (notes-lift) + Phase B (two-phase rename) inside a SINGLE
+    atomic_transaction. Returns count of LOGICAL operations applied
+    (notes-lifts + final renames). The B-1 temp-marker UPDATEs are
+    infrastructure and not counted.
+
+    Two-phase rename rationale: the partial UNIQUE index
+    `unique_trx_id_per_trade` is checked per-statement, not deferred to
+    commit. A direct A2→A1 UPDATE collides with the still-present A1 row
+    even when that A1 row is itself queued for rename. Phase B-1 stages
+    every renaming row to a unique `_RELABEL_TMP_{detail_id}` marker
+    (markers unique because detail_id is unique); Phase B-2 then writes
+    the final canonical values (canonical values unique within the trade
+    by construction). Both phases share one transaction so a failure in
+    either rolls back the temp markers."""
     n = 0
     notes_updates = plan["notes_updates"]
     rename_updates = plan["rename_updates"]
@@ -466,7 +537,13 @@ def apply_one_trade(plan: dict) -> int:
                 (u["new_notes"], u["detail_id"]),
             )
             n += 1
-        # Phase B — rename
+        # Phase B-1 — stage every renaming row to a unique temp marker.
+        for u in rename_updates:
+            cur.execute(
+                "UPDATE trades_details SET trx_id = %s WHERE id = %s",
+                (_tmp_marker(u["detail_id"]), u["detail_id"]),
+            )
+        # Phase B-2 — temp → final canonical value.
         for u in rename_updates:
             cur.execute(
                 "UPDATE trades_details SET trx_id = %s WHERE id = %s",
@@ -585,22 +662,37 @@ def relabel(
         for cat in p["categories"]:
             category_counts[cat] += 1
 
+    duplicate_plans = [p for p in plans if "DUPLICATE" in p["categories"]]
+    work_plans = [p for p in plans if "DUPLICATE" not in p["categories"]]
+
     print("─" * 80)
     print("PLAN SUMMARY")
     print("─" * 80)
-    print(f"  Trades to relabel:            {len(plans)}")
-    total_notes = sum(len(p["notes_updates"]) for p in plans)
-    total_renames = sum(len(p["rename_updates"]) for p in plans)
+    print(f"  Total trades in plan:         {len(plans)}")
+    print(f"    Will be relabeled:          {len(work_plans)}")
+    print(f"    Will be SKIPPED (DUPLICATE):{len(duplicate_plans):>4}")
+    total_notes = sum(len(p["notes_updates"]) for p in work_plans)
+    total_renames = sum(len(p["rename_updates"]) for p in work_plans)
     print(f"  Phase A notes-lift UPDATEs:   {total_notes}")
     print(f"  Phase B rename UPDATEs:       {total_renames}")
-    print(f"  Total UPDATEs:                {total_notes + total_renames}")
+    print(f"  Total logical UPDATEs:        {total_notes + total_renames}")
     print()
     print("  Per-category trade counts (a trade can hit multiple categories):")
     for cat in ("START_HIGH", "GAP", "DEDUPE_SUFFIX", "FREEFORM", "DUPLICATE"):
         print(f"    {cat:<16} {category_counts.get(cat, 0)}")
     print()
-    print(f"  Sample plans (first 5 by portfolio+trade):")
-    for line in _sample_plans(plans):
+    if duplicate_plans:
+        print("  DUPLICATE-flagged trades (will be SKIPPED in --apply mode):")
+        for p in duplicate_plans:
+            pairs_disp = ", ".join(
+                f"{q['trx_id']}({len(q['detail_ids'])}×)"
+                for q in p["duplicate_pairs"]
+            )
+            print(f"    {p['portfolio']:<14} {p['trade_id']:<14} {p['ticker'] or '—':<8} "
+                  f"{pairs_disp}")
+        print()
+    print(f"  Sample plans (first 5 non-DUPLICATE by portfolio+trade):")
+    for line in _sample_plans(work_plans):
         print(line)
     print()
 
@@ -621,13 +713,37 @@ def relabel(
 
     rename_failures: list[tuple[str, str]] = []
     recompute_failures: list[tuple[str, str]] = []
+    duplicate_skips: list[tuple[str, str]] = []
     fully_succeeded = 0
+    no_op_count = 0
     n_updates_applied = 0
 
     for i, plan in enumerate(plans, start=1):
         trade_id = plan["trade_id"]
         portfolio = plan["portfolio"]
-        # Phase A + B
+        ticker = plan.get("ticker") or "?"
+
+        # DUPLICATE skip BEFORE opening the atomic_transaction. Pre-existing
+        # duplicate (trade_id, trx_id) pairs require scripts/dedupe_trx_ids
+        # .py to run first; this script cannot collapse them.
+        if "DUPLICATE" in plan["categories"]:
+            pairs_disp = ", ".join(
+                f"{p['trx_id']}({len(p['detail_ids'])}×)"
+                for p in plan["duplicate_pairs"]
+            )
+            duplicate_skips.append((trade_id, pairs_disp))
+            print(f"  [{i}/{len(plans)}] {portfolio} {trade_id} ({ticker}): "
+                  f"SKIP — DUPLICATE pairs present: {pairs_disp}. "
+                  f"Run scripts/dedupe_trx_ids.py --apply first.")
+            continue
+
+        # No-op short-circuit (idempotent re-runs against already-canonical
+        # trades). Reported separately from real work.
+        if not plan["notes_updates"] and not plan["rename_updates"]:
+            no_op_count += 1
+            continue
+
+        # Phase A + B (two-phase inside one atomic_transaction)
         try:
             n = apply_one_trade(plan)
             n_updates_applied += n
@@ -667,10 +783,16 @@ def relabel(
     print("─" * 80)
     print(f"  Trades attempted:        {len(plans)}")
     print(f"  Fully succeeded:         {fully_succeeded}")
+    print(f"  No-op (already clean):   {no_op_count}")
+    print(f"  DUPLICATE skipped:       {len(duplicate_skips)}")
     print(f"  Rename failed:           {len(rename_failures)}")
     print(f"  Rename OK, recompute X:  {len(recompute_failures)}")
     print(f"  Total UPDATEs applied:   {n_updates_applied}")
     print(f"  Snapshot CSV:            {csv_path}")
+    if duplicate_skips:
+        print("\n  DUPLICATE trades skipped (run dedupe_trx_ids.py first):")
+        for t, pairs in duplicate_skips:
+            print(f"    {t}: {pairs}")
     if rename_failures:
         print("\n  Rename failures (atomic rollback — no changes for these trades):")
         for t, m in rename_failures:
