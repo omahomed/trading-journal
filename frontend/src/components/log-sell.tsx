@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 import { SellRuleGlossary } from "./sell-rule-glossary";
+import { SearchSelect } from "./search-select";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -239,15 +240,27 @@ export function LogSell({ navColor }: { navColor: string }) {
           </div>
           <div className="p-5 flex flex-col gap-5">
             <FormField label="Select Campaign" hint={selected ? `${selected.shares} ${unitLabel.toLowerCase()} @ ${formatCurrency(selected.avg_entry || 0)} avg` : undefined}>
-              <select value={selectedTrade} onChange={e => setSelectedTrade(e.target.value)}
-                      className="w-full h-[38px] px-3 rounded-[10px] text-[13px] appearance-none" style={inputStyle}>
-                <option value="">Choose an open campaign...</option>
-                {openTrades.map(t => (
-                  <option key={t.trade_id} value={t.trade_id}>
-                    {t.trade_id} — {t.ticker} ({t.shares} {String((t as any).instrument_type || "").toUpperCase() === "OPTION" ? "contracts" : "shares"})
-                  </option>
-                ))}
-              </select>
+              {/* Searchable combobox shared with Log Buy's Scale In picker.
+                  Option labels lead with ticker + unit count so the user can
+                  scan the open-campaigns list visually; trade_id sits on
+                  the right after the pipe, and the SearchSelect filter
+                  matches on BOTH halves of the string (the ticker for "AAPL"
+                  searches and the trade_id for "202604" searches). On
+                  select we split on " | " and keep the right side — that's
+                  the bare trade_id the rest of this component expects in
+                  selectedTrade state. */}
+              <SearchSelect
+                value={selectedTrade ? `${openTrades.find(t => t.trade_id === selectedTrade)?.ticker || ""} (${selected?.shares ?? ""} ${unitLabel.toLowerCase()}) | ${selectedTrade}` : ""}
+                onChange={(v) => {
+                  const id = v.split(" | ")[1]?.trim() || "";
+                  setSelectedTrade(id);
+                }}
+                options={openTrades.map(t => {
+                  const unit = String((t as any).instrument_type || "").toUpperCase() === "OPTION" ? "contracts" : "shares";
+                  return `${t.ticker} (${t.shares} ${unit}) | ${t.trade_id}`;
+                })}
+                placeholder="Choose an open campaign..."
+              />
             </FormField>
 
             {isOption && (
