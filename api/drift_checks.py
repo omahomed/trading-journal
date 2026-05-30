@@ -462,16 +462,17 @@ DRIFT_CHECKS: list[DriftCheck] = [
         check_id="summary_realized_pl_vs_lot_closures_sum",
         description=(
             "trades_summary.realized_pl ≠ SUM of lot_closures.realized_pl "
-            "for the same trade (penny tolerance). Only checked on trades "
+            "for the same trade (~5-cent tolerance). Only checked on trades "
             "that have at least one SELL detail — trades with no SELLs "
             "should have realized_pl=0 and zero lot_closures, which match "
             "trivially and aren't drift."
         ),
         severity="warning",
-        # 0.01 tolerance: NUMERIC(15,2) for both columns means exact rounding,
-        # but lot_closures math might accumulate fractional cents in older
-        # data from before the persisted-LIFO migration. Loud enough to
-        # catch real drift, quiet enough to ignore one-cent rounding.
+        # 0.05 tolerance: summary.realized_pl is rounded once to NUMERIC(15,2),
+        # but lot_closures.sum_pl is SUM of separately-rounded per-lot values
+        # that can accumulate a few cents of half-up rounding drift. Penny
+        # tolerance flagged benign 2¢ gaps; ~5¢ ignores cents-level rounding
+        # while still catching real (dollar-level) drift.
         sql="""
             SELECT
                 s.trade_id,
@@ -498,7 +499,7 @@ DRIFT_CHECKS: list[DriftCheck] = [
                      AND d.action       = 'SELL'
                      AND d.deleted_at IS NULL
               )
-              AND ABS(s.realized_pl - COALESCE(lc.sum_pl, 0)) > 0.01
+              AND ABS(s.realized_pl - COALESCE(lc.sum_pl, 0)) > 0.05
         """,
         remediation=(
             "Recompute LIFO for the campaign — _recompute_summary_matching "
