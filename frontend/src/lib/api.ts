@@ -548,6 +548,23 @@ export const api = {
       body: JSON.stringify({ entity_type: entityType, entity_id: entityId }),
     }).then(r => r.json()) as Promise<{ pinned: boolean } | { error: string }>,
 
+  // Migration 042 — sidebar "Pinned" section. Separate from pinsToggle
+  // because route paths are strings (the underlying pinned_routes table
+  // is purpose-built for them). FIFO order from the server (oldest pin
+  // first); pinned_at survives unpin/re-pin cycles so the ordering is
+  // stable across toggle history.
+  pinnedRoutesList: () =>
+    fetchJSON<{ routes: { route_path: string; pinned_at: string }[] }>(
+      `/api/pinned-routes`,
+    ),
+
+  pinnedRoutesToggle: (routePath: string) =>
+    fetchWithAuth(`${API_BASE}/api/pinned-routes/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ route_path: routePath }),
+    }).then(r => r.json()) as Promise<{ pinned: boolean } | { error: string }>,
+
   weeklyRetroUpsert: (
     payload: Omit<WeeklyRetro, "id" | "created_at" | "updated_at">,
   ) =>

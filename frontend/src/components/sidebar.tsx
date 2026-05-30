@@ -3,10 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { NAV, getNavItemForHref } from "@/lib/nav";
+import { NAV, getNavItemForHref, getGroupForHref, type NavItem } from "@/lib/nav";
 import { Icons, NAV_ICONS } from "@/components/icons";
 import { usePortfolio } from "@/lib/portfolio-context";
-import type { Portfolio } from "@/lib/api";
+import { api, type Portfolio } from "@/lib/api";
 
 interface SidebarProps {
   rail?: boolean;
@@ -19,6 +19,66 @@ interface SidebarProps {
   onToggleDark?: () => void;
 }
 
+// Pinned-section accent. Same color the NotesRail uses for its star
+// glyph so the "Pinned" treatment reads consistently across surfaces.
+const PIN_ACCENT = "#f59f00";
+
+// Single nav-link renderer used by both the Pinned section and each
+// NAV group's items list. Extracted to avoid drift between the two
+// call sites — they must stay identical except for the active-state
+// color (passed in via groupColor) and the isPinned flag.
+function renderNavLink(
+  item: NavItem,
+  groupColor: string,
+  isActive: boolean,
+  isPinned: boolean,
+  togglePin: (routePath: string) => void,
+) {
+  const IconFn = NAV_ICONS[item.id] || Icons.grid;
+  return (
+    <Link key={item.id} href={item.href!}
+            data-testid="sidebar-nav-item"
+            data-href={item.href}
+            data-active={isActive ? "true" : "false"}
+            data-pinned={isPinned ? "true" : "false"}
+            className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem no-underline"
+            style={{
+              background: isActive ? `color-mix(in oklab, ${groupColor} 14%, transparent)` : "transparent",
+              color: isActive ? groupColor : "var(--ink-2)",
+              fontWeight: isActive ? 600 : 500,
+              ["--hover-color" as string]: groupColor,
+            }}
+            onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.background = `color-mix(in oklab, ${groupColor} 8%, transparent)`; e.currentTarget.style.color = groupColor; }}}
+            onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--ink-2)"; }}}>
+      {isActive && (
+        <span className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full"
+              style={{ background: groupColor }} />
+      )}
+      <span className="w-4 h-4 grid place-items-center opacity-85 shrink-0">{IconFn()}</span>
+      <span className="truncate flex-1">{item.label}</span>
+      {/* Pin button — always visible (filled) on pinned items; hidden
+          on unpinned items unless the row is hovered. Absolute so it
+          doesn't reflow the row when revealed. e.preventDefault stops
+          the Link's navigation; e.stopPropagation stops the Link's
+          mouse handlers from interpreting the click as a row select. */}
+      <button
+        type="button"
+        aria-label={isPinned ? "Unpin" : "Pin"}
+        title={isPinned ? "Unpin" : "Pin"}
+        data-testid="sidebar-pin-btn"
+        data-pinned={isPinned ? "true" : "false"}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); togglePin(item.href!); }}
+        className={`absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 grid place-items-center rounded transition-opacity ${
+          isPinned ? "opacity-100" : "opacity-0 group-hover/navitem:opacity-100"
+        }`}
+        style={{ color: isPinned ? PIN_ACCENT : "var(--ink-4)", background: "transparent", border: "none", cursor: "pointer" }}
+      >
+        {isPinned ? Icons.pinFilled() : Icons.pinOutline()}
+      </button>
+    </Link>
+  );
+}
+
 export function Sidebar({ rail = false, onToggleRail, privacy = false, onTogglePrivacy, focusMode = false, onToggleFocus, dark = false, onToggleDark }: SidebarProps) {
   const pathname = usePathname();
   const activePage = getNavItemForHref(pathname)?.id || "";
@@ -26,6 +86,58 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
   const { portfolios, activePortfolio, setActive } = usePortfolio();
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+
+  // Per-user route pins (Migration 042 / Commit 2). Stored as the set of
+  // pinned route paths in FIFO order — the server orders by pinned_at ASC
+  // so oldest pin shows first. Local state only; no Context indirection
+  // because Sidebar is the only consumer today.
+  const [pinnedPaths, setPinnedPaths] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.pinnedRoutesList()
+      .then(res => {
+        if (cancelled) return;
+        if ("error" in res) return;
+        setPinnedPaths(res.routes.map(r => r.route_path));
+      })
+      .catch(() => { /* sidebar must not crash on a failed pins fetch */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Optimistic toggle: flip local state immediately, fire request in
+  // background. On rejection we log + revert. Mirrors the NotesRail pin
+  // pattern (notes-rail.tsx:1014-1040). The server's response is the
+  // NEW state — we ignore it because our optimistic flip already
+  // matches; rollback only fires when the request errors.
+  const togglePin = (routePath: string) => {
+    const wasPinned = pinnedPaths.includes(routePath);
+    setPinnedPaths(prev =>
+      wasPinned ? prev.filter(p => p !== routePath) : [...prev, routePath]
+    );
+    api.pinnedRoutesToggle(routePath)
+      .then(res => {
+        if ("error" in res) {
+          console.error("[sidebar] pin toggle failed:", res.error);
+          setPinnedPaths(prev =>
+            wasPinned ? [...prev, routePath] : prev.filter(p => p !== routePath)
+          );
+        }
+      })
+      .catch(err => {
+        console.error("[sidebar] pin toggle network failure:", err);
+        setPinnedPaths(prev =>
+          wasPinned ? [...prev, routePath] : prev.filter(p => p !== routePath)
+        );
+      });
+  };
+
+  // Hydrate paths → NavItems. Stale paths (route deleted from nav.ts
+  // since a user pinned it) drop out silently so they don't render as
+  // broken links. Ordering matches pinnedPaths (FIFO from the server).
+  const pinnedItems: NavItem[] = pinnedPaths
+    .map(p => getNavItemForHref(p))
+    .filter((it): it is NavItem => !!it && !!it.href);
 
   // Close the portfolio picker on outside click or Escape
   useEffect(() => {
@@ -174,6 +286,40 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1 scrollbar-thin">
+        {/* Pinned section — Migration 042 / Commit 2. Renders only when
+            the user has pins AND we're not in rail mode (rail collapses
+            nav to colored dots; a "Pinned" dot has no natural single-
+            color representation, so we hide the section there entirely).
+            Items use each item's own group color for the active-state
+            highlight so the visual treatment matches what the user sees
+            when scrolling to the same item in its native group. */}
+        {!rail && pinnedItems.length > 0 && (
+          <div className="mb-2" data-testid="sidebar-pinned-section">
+            <div className="px-2.5 py-[9px] flex items-center gap-2.5">
+              <span className="w-[3px] h-[18px] rounded-full" style={{ background: PIN_ACCENT }} />
+              <span className="flex-1 text-left text-[11px] uppercase tracking-[0.10em] font-semibold"
+                    style={{ color: "var(--ink-3)" }}>
+                Pinned
+              </span>
+              <span className="text-[10px] rounded-full px-[7px] min-w-[18px] text-center"
+                    style={{
+                      fontFamily: "var(--font-jetbrains), monospace",
+                      background: "var(--bg-2)",
+                      color: "var(--ink-4)",
+                    }}>
+                {pinnedItems.length}
+              </span>
+            </div>
+            <div className="pl-5 pr-1.5 pb-1">
+              {pinnedItems.map((item) => {
+                const itemGroup = getGroupForHref(item.href!);
+                const groupColor = itemGroup?.color || PIN_ACCENT;
+                return renderNavLink(item, groupColor, activePage === item.id, true, togglePin);
+              })}
+            </div>
+          </div>
+        )}
+
         {NAV.map((group) => {
           const isOpen = !!openGroups[group.id] || rail;
           const hasActive = group.items.some((i) => i.id === activePage);
@@ -231,29 +377,9 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
                 <div className="grid transition-[grid-template-rows] duration-300 ease-out"
                      style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}>
                   <div className="min-h-0 overflow-hidden pl-5 pr-1.5 pb-1">
-                    {group.items.filter(item => !item.parentPage && item.href).map((item) => {
-                      const isActive = activePage === item.id;
-                      const IconFn = NAV_ICONS[item.id] || Icons.grid;
-                      return (
-                        <Link key={item.id} href={item.href!}
-                                className="w-full flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all duration-[120ms] relative text-left group/navitem no-underline"
-                                style={{
-                                  background: isActive ? `color-mix(in oklab, ${group.color} 14%, transparent)` : "transparent",
-                                  color: isActive ? group.color : "var(--ink-2)",
-                                  fontWeight: isActive ? 600 : 500,
-                                  ["--hover-color" as string]: group.color,
-                                }}
-                                onMouseEnter={(e) => { if (!isActive) { e.currentTarget.style.background = `color-mix(in oklab, ${group.color} 8%, transparent)`; e.currentTarget.style.color = group.color; }}}
-                                onMouseLeave={(e) => { if (!isActive) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--ink-2)"; }}}>
-                          {isActive && (
-                            <span className="absolute left-[-14px] top-1/2 -translate-y-1/2 w-[3px] h-4 rounded-full"
-                                  style={{ background: group.color }} />
-                          )}
-                          <span className="w-4 h-4 grid place-items-center opacity-85 shrink-0">{IconFn()}</span>
-                          <span>{item.label}</span>
-                        </Link>
-                      );
-                    })}
+                    {group.items.filter(item => !item.parentPage && item.href).map((item) =>
+                      renderNavLink(item, group.color, activePage === item.id, pinnedPaths.includes(item.href!), togglePin)
+                    )}
                   </div>
                 </div>
               )}
