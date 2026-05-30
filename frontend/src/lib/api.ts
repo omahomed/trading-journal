@@ -21,7 +21,28 @@ export async function fetchWithAuth(input: string, init?: RequestInit): Promise<
 
 async function fetchJSON<T>(path: string): Promise<T> {
   const res = await fetchWithAuth(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // Defensively read the response body BEFORE throwing so callers can show
+    // the backend's parsed error payload (e.g. {"error": "tag_name_exists"}
+    // or FastAPI's {"detail": "..."}). The body stream can be read only once
+    // and parsing must never throw — text() consumes once, JSON.parse runs
+    // in memory with a text fallback. The thrown Error's `.message` is kept
+    // BYTE-IDENTICAL to the prior shape so existing e.message consumers are
+    // undisturbed; new `.body` + `.status` props are purely additive.
+    let body: unknown = null;
+    try {
+      const txt = await res.text();
+      if (txt) {
+        try { body = JSON.parse(txt); } catch { body = txt; }
+      }
+    } catch { /* body stays null */ }
+    const err = new Error(
+      `API error: ${res.status} ${res.statusText}`,
+    ) as Error & { body?: unknown; status?: number };
+    err.body = body;
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
