@@ -407,6 +407,7 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
 
         return {"states": states}
     except Exception as e:
+        print(f"[journal_mct_state_by_date_range] handler failed: {e}")
         return {"error": str(e), "states": []}
 
 
@@ -1224,6 +1225,7 @@ def weekly_retro_get(
             return {"error": "not_found"}
         return row
     except Exception as e:
+        print(f"[weekly_retro_get] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1245,6 +1247,7 @@ def weekly_retro_list(
     try:
         return db.list_weekly_retros_rail(portfolio)
     except Exception as e:
+        print(f"[weekly_retro_list] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1271,6 +1274,7 @@ def pinned_routes_list(request: Request):
         ]
         return {"routes": routes}
     except Exception as e:
+        print(f"[pinned_routes_list] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1300,8 +1304,10 @@ def pinned_routes_toggle(request: Request, body: dict = Body(...)):
         pinned = db.toggle_pin_route(route_path)
         return {"pinned": pinned}
     except ValueError as e:
+        print(f"[pinned_routes_toggle] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[pinned_routes_toggle] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1334,8 +1340,10 @@ def pins_toggle(request: Request, body: dict = Body(...)):
         pinned = db.toggle_pin(entity_type, entity_id)
         return {"pinned": pinned}
     except ValueError as e:
+        print(f"[pins_toggle] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[pins_toggle] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1418,6 +1426,7 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
         # un-review affordance.
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
+        print(f"[weekly_retro_upsert] handler failed: {e}")
         return {"error": str(e)}
     except psycopg2.errors.CheckViolation as e:
         # Most likely the Monday CHECK or grade vocab CHECK firing — give a
@@ -1434,6 +1443,7 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
             return {"error": "invalid grade"}
         return {"error": "constraint violation"}
     except Exception as e:
+        print(f"[weekly_retro_upsert] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1449,6 +1459,7 @@ def weekly_retro_delete(retro_id: int, request: Request):
             return {"error": "not_found"}
         return {"status": "ok", "id": retro_id}
     except Exception as e:
+        print(f"[weekly_retro_delete] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1476,6 +1487,7 @@ def list_tags_endpoint(portfolio: str = Query("CanSlim")):
     try:
         return db.load_tags(portfolio)
     except Exception as e:
+        print(f"[list_tags_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1496,10 +1508,12 @@ def create_tag_endpoint(request: Request, body: dict = Body(...)):
     try:
         return db.create_tag(portfolio, name, color)
     except ValueError as e:
+        print(f"[create_tag_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except psycopg2.errors.UniqueViolation:
         return {"error": "tag_name_exists"}
     except Exception as e:
+        print(f"[create_tag_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1522,10 +1536,12 @@ def update_tag_endpoint(tag_id: int, request: Request, body: dict = Body(...)):
             return {"error": "not_found"}
         return row
     except ValueError as e:
+        print(f"[update_tag_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except psycopg2.errors.UniqueViolation:
         return {"error": "tag_name_exists"}
     except Exception as e:
+        print(f"[update_tag_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1541,6 +1557,7 @@ def delete_tag_endpoint(tag_id: int, request: Request):
             return {"error": "not_found"}
         return {"status": "ok", "id": tag_id}
     except Exception as e:
+        print(f"[delete_tag_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1557,6 +1574,7 @@ def list_tag_assignments_endpoint(
     try:
         return db.load_tag_assignments(entity_type, entity_id)
     except Exception as e:
+        print(f"[list_tag_assignments_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1592,8 +1610,10 @@ def create_tag_assignment_endpoint(request: Request, body: dict = Body(...)):
                 return {"error": "tag_limit_reached"}
         return db.create_tag_assignment(tag_id, entity_type, entity_id)
     except ValueError as e:
+        print(f"[create_tag_assignment_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[create_tag_assignment_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -1608,6 +1628,7 @@ def delete_tag_assignment_endpoint(assignment_id: int, request: Request):
             return {"error": "not_found"}
         return {"status": "ok", "id": assignment_id}
     except Exception as e:
+        print(f"[delete_tag_assignment_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2142,6 +2163,7 @@ def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", p
             })
         return {"ticker": t, "candles": candles}
     except Exception as e:
+        print(f"[chart_ohlcv] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2256,6 +2278,7 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
                             result[requested_upper[tkr]] = mp_f
         return result
     except Exception as e:
+        print(f"[batch_prices] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2483,6 +2506,7 @@ def rally_data(request: Request, ftd_date: str = "", index: str = "^IXIC"):
             "historical_rally_2025": historical_rally_2025,
         }
     except Exception as e:
+        print(f"[rally_data] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2522,6 +2546,7 @@ def get_recent_market_signals(request: Request, days: int = 30, signal_type: str
             })
         return {"signals": signals}
     except Exception as e:
+        print(f"[get_recent_market_signals] handler failed: {e}")
         return {"error": str(e), "signals": []}
 
 
@@ -2535,6 +2560,7 @@ def get_config(key: str):
         val = db.get_config(key)
         return {"key": key, "value": val}
     except Exception as e:
+        print(f"[get_config] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2633,6 +2659,7 @@ def list_strategies_endpoint(active: bool = True, portfolio: str | None = None):
         rows = db.load_strategies(active_only=active, portfolio_name=portfolio)
         return [_serialize_strategy(r) for r in rows]
     except Exception as e:
+        print(f"[list_strategies_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2675,10 +2702,12 @@ def create_strategy_endpoint(request: Request, body: dict = Body(...)):
         )
         return _serialize_strategy(row)
     except ValueError as e:
+        print(f"[create_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except psycopg2.errors.UniqueViolation:
         return {"error": f"Strategy '{body.get('name', '')}' already exists"}
     except Exception as e:
+        print(f"[create_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2706,8 +2735,10 @@ def update_strategy_endpoint(name: str, request: Request, body: dict = Body(...)
             return {"error": f"Strategy '{name}' not found"}
         return _serialize_strategy(row)
     except ValueError as e:
+        print(f"[update_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[update_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2741,6 +2772,7 @@ def patch_trade_strategy_endpoint(trade_id: str, request: Request, body: dict = 
             pass
         return {"ok": True, "trade_id": trade_id, "strategy": strategy}
     except Exception as e:
+        print(f"[patch_trade_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2782,6 +2814,7 @@ def bulk_set_trade_strategy_endpoint(request: Request, body: dict = Body(...)):
             pass
         return {"ok": True, "updated": updated, "failed": missing, "strategy": strategy}
     except Exception as e:
+        print(f"[bulk_set_trade_strategy_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2794,6 +2827,7 @@ def list_portfolios_endpoint():
         rows = db.list_portfolios()
         return [_serialize_portfolio(r) for r in rows]
     except Exception as e:
+        print(f"[list_portfolios_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2809,8 +2843,10 @@ def create_portfolio_endpoint(request: Request, body: dict = Body(...)):
         row = db.create_portfolio(name, starting_capital=starting_capital, reset_date=reset_date)
         return _serialize_portfolio(row)
     except ValueError as e:
+        print(f"[create_portfolio_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[create_portfolio_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2830,8 +2866,10 @@ def update_portfolio_endpoint(portfolio_id: int, request: Request, body: dict = 
             return {"error": "Portfolio not found"}
         return _serialize_portfolio(row)
     except ValueError as e:
+        print(f"[update_portfolio_endpoint] handler failed: {e}")
         return {"error": str(e)}
     except Exception as e:
+        print(f"[update_portfolio_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2846,6 +2884,7 @@ def delete_portfolio_endpoint(portfolio_id: int, request: Request):
             return {"error": "Portfolio not found"}
         return {"status": "ok"}
     except Exception as e:
+        print(f"[delete_portfolio_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2865,6 +2904,7 @@ def get_portfolio_nlv(portfolio_id: int, request: Request):
             return {"error": "Portfolio not found"}
         return nlv_service.compute_nlv(portfolio_id, match["name"])
     except Exception as e:
+        print(f"[get_portfolio_nlv] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2885,6 +2925,7 @@ def get_portfolio_returns(portfolio_id: int, request: Request):
             return {"error": "Portfolio not found"}
         return nlv_service.compute_returns(portfolio_id, match["name"], match)
     except Exception as e:
+        print(f"[get_portfolio_returns] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2907,6 +2948,7 @@ def get_portfolio_twr_returns(portfolio_id: int, request: Request):
             return {"error": "Portfolio not found"}
         return nlv_service.compute_twr_returns(match["name"])
     except Exception as e:
+        print(f"[get_portfolio_twr_returns] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2923,6 +2965,7 @@ def get_dashboard_metrics(portfolio_id: int, request: Request):
             return {"error": "Portfolio not found"}
         return nlv_service.dashboard_metrics(portfolio_id, match["name"])
     except Exception as e:
+        print(f"[get_dashboard_metrics] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2946,6 +2989,7 @@ def get_weekly_metrics(request: Request,
     try:
         return nlv_service.weekly_metrics(portfolio, week_start)
     except Exception as e:
+        print(f"[get_weekly_metrics] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -2968,6 +3012,7 @@ def list_cash_transactions_endpoint(portfolio_id: int, request: Request,
         )
         return [_serialize_cash_tx(r) for r in rows]
     except Exception as e:
+        print(f"[list_cash_transactions_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3039,6 +3084,7 @@ def create_cash_transaction_endpoint(portfolio_id: int, request: Request, body: 
         )
         return _serialize_cash_tx(row)
     except Exception as e:
+        print(f"[create_cash_transaction_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3108,6 +3154,7 @@ def update_cash_transaction_endpoint(portfolio_id: int, tx_id: int,
             return {"error": "Transaction not found"}
         return _serialize_cash_tx(row)
     except Exception as e:
+        print(f"[update_cash_transaction_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3131,6 +3178,7 @@ def delete_cash_transaction_endpoint(portfolio_id: int, tx_id: int, request: Req
         ok = db.delete_cash_transaction(tx_id)
         return {"status": "ok"} if ok else {"error": "Transaction not found"}
     except Exception as e:
+        print(f"[delete_cash_transaction_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3169,6 +3217,7 @@ def cleanup_auto_events():
                 conn.commit()
         return {"status": "ok", "deleted": deleted}
     except Exception as e:
+        print(f"[cleanup_auto_events] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3181,6 +3230,7 @@ def list_events(scope: str = "CanSlim"):
             return []
         return _df_to_records(df)
     except Exception as e:
+        print(f"[list_events] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3243,6 +3293,7 @@ def audit_trail(limit: int = 100, action_filter: str = None):
             return []
         return _df_to_records(df)
     except Exception as e:
+        print(f"[audit_trail] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3260,6 +3311,7 @@ def cleanup_marketsurge(request: Request, body: dict):
         result = db.cleanup_duplicate_marketsurge_images(dry_run=dry_run, user="admin")
         return result
     except Exception as e:
+        print(f"[cleanup_marketsurge] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3305,6 +3357,7 @@ def rebuild_mct_signals(request: Request):
         }
     except Exception as e:
         import traceback
+        print(f"[rebuild_mct_signals] handler failed: {e}")
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
@@ -3508,6 +3561,7 @@ Give me a behavioral profile and 3 specific things to work on."""
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
     except Exception as e:
+        print(f"[coach_chat] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3540,6 +3594,7 @@ def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
         next_seq = (max(seqs) + 1) if seqs else 1
         return {"trade_id": f"{ym}-{next_seq:03d}"}
     except Exception as e:
+        print(f"[next_trade_id] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3726,6 +3781,7 @@ def drift_scan_endpoint(
                 sample_limit=limit_samples,
             )
     except Exception as e:
+        print(f"[drift_scan_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -3752,6 +3808,7 @@ def import_ibkr_trades(request: Request):
                     r[k] = None
         return {"status": "ok", "trades": records, "count": len(records), "debug": debug or {}}
     except Exception as e:
+        print(f"[import_ibkr_trades] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4029,6 +4086,7 @@ def log_buy(request: Request, body: dict):
         # 200 with {"error": str(e)} and drop the status code.
         raise
     except Exception as e:
+        print(f"[log_buy] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4085,6 +4143,7 @@ def set_trade_grade(body: dict = Body(...)):
         summary_id = db.save_summary_row(portfolio, summary_row)
         return {"status": "ok", "trade_id": trade_id, "grade": grade_val, "summary_id": summary_id}
     except Exception as e:
+        print(f"[set_trade_grade] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4215,6 +4274,7 @@ def log_sell(request: Request, body: dict):
         # 200 with {"error": str(e)} and drop the status code.
         raise
     except Exception as e:
+        print(f"[log_sell] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4586,6 +4646,7 @@ def exercise_option(request: Request, body: dict = Body(...)):
             "stock_entry_price": float(round(stock_entry_price, 4)),
         }
     except Exception as e:
+        print(f"[exercise_option] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4740,6 +4801,7 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # 200 with {"error": str(e)} and drop the status code.
         raise
     except Exception as e:
+        print(f"[edit_transaction_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4799,6 +4861,7 @@ def delete_transaction_endpoint(request: Request,
         try:
             db.delete_detail_row(portfolio, int(detail_id))
         except ValueError as e:
+            print(f"[delete_transaction_endpoint] handler failed: {e}")
             return {"error": str(e)}
 
         if effective_trade_id:
@@ -4819,6 +4882,7 @@ def delete_transaction_endpoint(request: Request,
 
         return {"status": "ok", "detail_id": detail_id}
     except Exception as e:
+        print(f"[delete_transaction_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -4990,6 +5054,7 @@ def delete_transactions_by_date(date: str = Query(...), portfolio: str = Query("
 
         return {"status": "ok", "deleted": deleted, "trade_ids": list(ticker_by_tid.keys())}
     except Exception as e:
+        print(f"[delete_transactions_by_date] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5007,6 +5072,7 @@ def delete_trade_endpoint(trade_id: str = Query(...), portfolio: str = Query("Ca
             pass
         return {"status": "ok", "trade_id": trade_id}
     except Exception as e:
+        print(f"[delete_trade_endpoint] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5065,6 +5131,7 @@ def set_trade_manual_price(body: dict):
             updated["manual_price"] = float(updated["manual_price"])
         return {"status": "ok", **updated}
     except Exception as e:
+        print(f"[set_trade_manual_price] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5115,6 +5182,7 @@ def flag_be_rule(body: dict):
             pass
         return {"status": "ok", "trade_id": trade_id, "flagged": flagged, "updated": rowcount}
     except Exception as e:
+        print(f"[flag_be_rule] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5168,6 +5236,7 @@ def update_b1_max(trade_id: str, body: dict = Body(...)):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[update_b1_max] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5242,6 +5311,7 @@ def update_trade_stops(body: dict):
                 "be_applied": be_applied, "current_price": round(current_price, 4)}
     except Exception as e:
         import traceback
+        print(f"[update_trade_stops] handler failed: {e}")
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
@@ -5262,6 +5332,7 @@ def get_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
                     f[k] = v.isoformat()
         return funds or []
     except Exception as e:
+        print(f"[get_fundamentals] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5290,6 +5361,7 @@ def delete_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
             pass
         return {"status": "ok", "deleted": deleted}
     except Exception as e:
+        print(f"[delete_fundamentals] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5316,6 +5388,7 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
                     img["view_url"] = ""
         return images or []
     except Exception as e:
+        print(f"[get_trade_images] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5368,6 +5441,7 @@ async def upload_image(
 
         return {"status": "ok", "image_id": image_id, "object_key": object_key, "fundamentals": fundamentals}
     except Exception as e:
+        print(f"[upload_image] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5417,6 +5491,7 @@ async def upload_eod_snapshot(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[upload_eod_snapshot] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5446,6 +5521,7 @@ def list_eod_snapshots(day: str, portfolio: str = "CanSlim"):
                     img["view_url"] = ""
         return images or []
     except Exception as e:
+        print(f"[list_eod_snapshots] handler failed: {e}")
         return {"error": str(e)}
 
 
@@ -5462,6 +5538,7 @@ def delete_image(image_id: int):
             db.delete_trade_image_by_id(image_id)
         return {"status": "ok"}
     except Exception as e:
+        print(f"[delete_image] handler failed: {e}")
         return {"error": str(e)}
 
 
