@@ -485,7 +485,8 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
             weight_pct = (total_cost / equity) * 100
             heat += weight_pct * (atr_pct / 100)
         return round(heat, 4)
-    except Exception:
+    except Exception as e:
+        print(f"[portfolio_heat] heat aggregation failed: {e}")
         return 0.0
 
 
@@ -501,7 +502,8 @@ def _compute_cycle_state(as_of_date: str = "") -> str:
         if isinstance(result, dict):
             return str(result.get("state", "") or "")
         return ""
-    except Exception:
+    except Exception as e:
+        print(f"[mct_cycle] rally_prefix lookup failed: {e}")
         return ""
 
 
@@ -588,7 +590,8 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
             display_day_num = None
 
         return (state_name, display_day_num)
-    except Exception:
+    except Exception as e:
+        print(f"[mct_state] state + day_num resolve failed: {e}")
         return ("", None)
 
 
@@ -642,7 +645,8 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
         bars = result.bars.copy()
         bars["trade_date"] = pd.to_datetime(bars["trade_date"]).dt.date
         bar_index = bars.set_index("trade_date")
-    except Exception:
+    except Exception as e:
+        print(f"[mct_heal] engine setup failed: {e}")
         return
 
     for _, row in needs_heal.iterrows():
@@ -662,7 +666,8 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
         # partial dict.
         try:
             db.update_journal_mct_state(portfolio, day_str, state, day_num)
-        except Exception:
+        except Exception as e:
+            print(f"[mct_heal] update_journal_mct_state failed for {day_str}: {e}")
             continue
 
         df.loc[df["day"] == day_value, "market_cycle"] = state
@@ -2218,7 +2223,8 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
         if portfolio:
             try:
                 summary_df = db.load_summary(portfolio, status="OPEN")
-            except Exception:
+            except Exception as e:
+                print(f"[prices_batch] manual_price overlay load failed: {e}")
                 summary_df = None
             if summary_df is not None and not summary_df.empty:
                 manual_col = (
@@ -3529,7 +3535,7 @@ def next_trade_id(portfolio: str = "CanSlim", date: str = ""):
             try:
                 if "-" in x:
                     seqs.append(int(x.split("-")[-1]))
-            except:
+            except Exception:
                 pass
         next_seq = (max(seqs) + 1) if seqs else 1
         return {"trade_id": f"{ym}-{next_seq:03d}"}
@@ -4798,10 +4804,11 @@ def delete_transaction_endpoint(request: Request,
         if effective_trade_id:
             try:
                 _recompute_summary_matching(portfolio, effective_trade_id, effective_ticker)
-            except Exception:
+            except Exception as e:
                 # Summary recompute failure shouldn't roll back the delete —
                 # the row is gone; the worst case is a stale summary that
                 # the next edit/recompute will heal.
+                print(f"[delete_transaction] post-delete recompute failed for {effective_trade_id}: {e}")
                 pass
 
         try:
@@ -4963,13 +4970,15 @@ def delete_transactions_by_date(date: str = Query(...), portfolio: str = Query("
             try:
                 db.delete_detail_row(portfolio, int(did))
                 deleted += 1
-            except Exception:
+            except Exception as e:
+                print(f"[delete_by_date] per-detail delete failed for detail_id={did}: {e}")
                 pass
 
         for tid, ticker in ticker_by_tid.items():
             try:
                 _recompute_summary_matching(portfolio, tid, ticker)
-            except Exception:
+            except Exception as e:
+                print(f"[delete_by_date] post-batch recompute failed for {tid}: {e}")
                 pass
 
         try:
@@ -5201,7 +5210,8 @@ def update_trade_stops(body: dict):
                 data = yf.download(fetch_sym, period="1d", progress=False, auto_adjust=False)["Close"]
                 if not data.empty:
                     current_price = float(data.iloc[-1])
-            except Exception:
+            except Exception as e:
+                print(f"[stop_update] yfinance fetch failed for {ticker}: {e}")
                 pass
 
         # BE rule detection: new stop within 0.5% of avg_entry AND price
