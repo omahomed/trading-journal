@@ -1243,6 +1243,63 @@ def weekly_retro_list(
         return {"error": str(e)}
 
 
+@app.get("/api/pinned-routes")
+@limiter.limit("60/minute")
+def pinned_routes_list(request: Request):
+    """Return the caller's currently-pinned routes, FIFO-ordered
+    (oldest pin first). RLS scopes to the calling user.
+
+    Response: { routes: [{ route_path: str, pinned_at: iso8601 }, ...] }
+
+    pinned_at is preserved across pin/unpin/repin cycles (toggle_pin_route
+    revives rows instead of inserting fresh ones), so first-pinned-first
+    ordering is stable regardless of toggle history.
+    """
+    try:
+        rows = db.list_pinned_routes()
+        # Normalize pinned_at to ISO-8601 for the JSON response. psycopg2
+        # returns datetime objects; FastAPI's default encoder would str()
+        # them but we serialize explicitly so the contract is pinned.
+        routes = [
+            {"route_path": r["route_path"], "pinned_at": r["pinned_at"].isoformat()}
+            for r in rows
+        ]
+        return {"routes": routes}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/pinned-routes/toggle")
+@limiter.limit("60/minute")
+def pinned_routes_toggle(request: Request, body: dict = Body(...)):
+    """Idempotent pin/unpin for a single route_path. Mirrors the
+    /api/pins/toggle contract used by Phase 6 NotesRail (pinned_entities)
+    but keyed on route_path strings instead of (entity_type, entity_id).
+
+    Body: { route_path: "/log-buy" }
+    Returns: { pinned: bool } — the NEW state after the toggle.
+
+    Idempotency contract: the server tracks pin/unpin via soft-delete on
+    pinned_routes (Migration 042). Sending the same request twice
+    deterministically returns to the pre-call state, no bouncing. Revival
+    on re-pin preserves pinned_at so FIFO ordering is stable.
+
+    RLS scopes to the calling user — toggling another user's pin is
+    isolated (the SELECT can't see other users' rows; the INSERT path
+    creates the caller's own row).
+    """
+    route_path = (body or {}).get("route_path")
+    if not isinstance(route_path, str) or not route_path:
+        return {"error": "route_path must be a non-empty string"}
+    try:
+        pinned = db.toggle_pin_route(route_path)
+        return {"pinned": pinned}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/pins/toggle")
 @limiter.limit("60/minute")
 def pins_toggle(request: Request, body: dict = Body(...)):

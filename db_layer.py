@@ -5509,6 +5509,94 @@ def list_pinned_entity_ids(entity_type: str) -> set[int]:
             return {row[0] for row in cur.fetchall()}
 
 
+# ============================================================================
+# pinned_routes (Migration 042) — sidebar "Pinned" section
+# ============================================================================
+# Separate from pinned_entities because route paths are strings, not integer
+# FK refs. Same persistence idioms (soft-delete + revive, RLS) without
+# polymorphic gymnastics. See migration 042 preamble for the rationale.
+
+# Mirrors the DB CHECK constraint on route_path. Defense-in-depth so callers
+# get a ValueError before the DB raises IntegrityError on malformed input —
+# matches the _PIN_ENTITY_TYPES whitelist pattern in toggle_pin.
+_ROUTE_PATH_RE = re.compile(r'^/[a-z0-9-]+(/[a-z0-9-]+)*$')
+
+
+def toggle_pin_route(route_path: str) -> bool:
+    """Idempotent pin toggle for the pinned_routes table (Migration 042).
+
+    Contract:
+      - If a LIVE pin exists for (current user, route_path)
+        → soft-delete it. Returns False (now unpinned).
+      - If a SOFT-DELETED pin exists for the same pair → REVIVE it
+        (UPDATE deleted_at = NULL). Returns True (now pinned). Reuses the
+        same row id so pinned_at sort stability is preserved across
+        unpin/re-pin cycles. Same idiom as toggle_pin.
+      - Otherwise INSERT a new row. Returns True.
+
+    Tenant isolation is enforced by RLS — the SELECT below only sees the
+    caller's rows. The user_id column has a DEFAULT pulling from
+    current_setting('app.user_id', true), so the INSERT path doesn't have
+    to set it explicitly.
+
+    Raises ValueError on a route_path that doesn't match the conservative
+    pattern (^/[a-z0-9-]+(/[a-z0-9-]+)*$) — defense in depth vs. the CHECK
+    constraint, which would otherwise produce an IntegrityError that
+    callers find harder to interpret.
+    """
+    if not isinstance(route_path, str) or not _ROUTE_PATH_RE.match(route_path):
+        raise ValueError(f"Invalid route_path: {route_path!r}")
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, deleted_at FROM pinned_routes "
+                "WHERE route_path = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (route_path,),
+            )
+            existing = cur.fetchone()
+
+            if existing and existing["deleted_at"] is None:
+                cur.execute(
+                    "UPDATE pinned_routes SET deleted_at = NOW() WHERE id = %s",
+                    (existing["id"],),
+                )
+                conn.commit()
+                return False
+            if existing and existing["deleted_at"] is not None:
+                cur.execute(
+                    "UPDATE pinned_routes SET deleted_at = NULL WHERE id = %s",
+                    (existing["id"],),
+                )
+                conn.commit()
+                return True
+            cur.execute(
+                "INSERT INTO pinned_routes (route_path) VALUES (%s)",
+                (route_path,),
+            )
+            conn.commit()
+            return True
+
+
+def list_pinned_routes() -> list[dict]:
+    """Return the caller's live pins ordered by pinned_at ASC (FIFO,
+    oldest first), scoped via RLS.
+
+    Each dict: {route_path: str, pinned_at: datetime}. The pinned_at field
+    survives unpin/re-pin cycles because toggle_pin_route revives rows
+    instead of inserting fresh ones — first-pinned-first ordering is
+    stable across user toggle history.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT route_path, pinned_at FROM pinned_routes "
+                "WHERE deleted_at IS NULL "
+                "ORDER BY pinned_at ASC, id ASC",
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
 # ----------------------------------------------------------------------------
 # Avg grade — 4.3 GPA scale, bucketed back to letter
 # ----------------------------------------------------------------------------
