@@ -4703,11 +4703,23 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # return_pct reflect the edited detail. Without this the face card
         # keeps stale numbers (e.g. edit a buy price after the sell already
         # closed the trade — the card still shows the pre-edit P&L).
+        # The detail-row update already committed at update_detail_row above,
+        # so a recompute failure means the row is saved but the summary is
+        # stale — raise 500 (mirroring log_sell at L4172-4185) instead of
+        # swallowing, so the operator sees the divergence immediately.
         try:
             if effective_trade_id:
                 _recompute_summary_matching(portfolio, effective_trade_id, effective_ticker)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[edit_transaction] post-edit recompute failed for {effective_trade_id}: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Detail row edit saved (detail_id={detail_id}) but summary "
+                    f"recompute failed: {type(e).__name__}: {e}. Trigger a manual "
+                    f"recompute via Trade Manager → Edit any transaction → Save."
+                ),
+            )
 
         try:
             db.log_audit(portfolio, "EDIT", effective_trade_id, row_dict.get("Trx_ID", ""),
