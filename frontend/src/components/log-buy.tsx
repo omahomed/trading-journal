@@ -404,12 +404,24 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   const selectedCamp = openTrades.find(t => t.trade_id === selectedCampaign);
 
-  // Fetch live price when campaign is selected for scale-in
+  // Fetch live price + ATR when campaign is selected for scale-in. Mirrors
+  // the new-campaign priceLookup effect (~lines 345-364): the same response
+  // already carries atr_pct, so propagate it into atrPct (and flip
+  // atrResolved in .finally) — otherwise atrPct stays 0 and the UI falsely
+  // renders "ATR unavailable (insufficient history)" even on tickers the
+  // backend has ample history for.
   useEffect(() => {
     if (actionType !== "scalein" || !selectedCamp?.ticker) { setCampPrice(0); return; }
     api.priceLookup(selectedCamp.ticker).then(data => {
-      if (data && !("error" in data)) setCampPrice(data.price);
-    }).catch(() => {});
+      if (data && !("error" in data)) {
+        setCampPrice(data.price);
+        setAtrPct(data.atr_pct);
+      }
+    }).catch(() => {
+      setAtrPct(0);
+    }).finally(() => {
+      setAtrResolved(true);
+    });
   }, [actionType, selectedCamp?.ticker]);
 
   // Scale-in: inherit the parent campaign's strategy and lock the dropdown.
