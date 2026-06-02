@@ -381,7 +381,7 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     expect(screen.getByTestId("sr8-near-TER").textContent).toContain("NEAR");
   });
 
-  test("Fetch-failed row renders muted with 'price unavailable' + a disabled Retry stub", async () => {
+  test("Fetch-failed row renders muted with 'price unavailable' + a clickable Retry button", async () => {
     mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
     mMonitor.mockResolvedValue(makeResponse({
       positions: [
@@ -396,9 +396,10 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     expect(row.textContent).toContain("fetch failed");
     expect(row.textContent).toContain("price unavailable");
 
+    // Retry is now wired (Commit 4): clickable, with the live label.
     const retryBtn = screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement;
-    expect(retryBtn.disabled).toBe(true);
-    expect(retryBtn.title).toMatch(/Commit 4/);
+    expect(retryBtn.disabled).toBe(false);
+    expect(retryBtn.textContent).toContain("Retry");
   });
 
   test("ENTRY row shows '/ building' instead of a numeric target in the % NLV column", async () => {
@@ -414,7 +415,7 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     expect(screen.getByTestId("sr8-hold-row-SNDK").textContent).toContain("/ building");
   });
 
-  test("All-clear placeholder appears when no actions but positions exist", async () => {
+  test("All-clear panel appears when no actions but positions exist", async () => {
     mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
     mMonitor.mockResolvedValue(makeResponse({
       positions: [
@@ -426,7 +427,137 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     render(<Sr8Monitor navColor="#e5484d" />);
     await waitFor(() => expect(screen.getByTestId("sr8-action-section")).toBeInTheDocument());
 
-    expect(screen.getByTestId("sr8-all-clear-placeholder")).toBeInTheDocument();
+    expect(screen.getByTestId("sr8-all-clear")).toBeInTheDocument();
     expect(screen.queryByTestId("sr8-action-rows")).not.toBeInTheDocument();
+  });
+});
+
+// ─── Polished states (Commit 4) ─────────────────────────────────────
+
+describe("Sr8Monitor — polished states (Commit 4)", () => {
+  test("All-clear panel renders the heading + active-positions count", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "AAA", is_action: false }),
+        makePosition({ ticker: "BBB", is_action: false }),
+        makePosition({ ticker: "CCC", is_action: false }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-all-clear")).toBeInTheDocument());
+
+    const panel = screen.getByTestId("sr8-all-clear");
+    expect(panel.textContent).toContain("No actions today");
+    expect(panel.textContent).toContain("All");
+    // 3 priced holds (no failed rows in this fixture).
+    expect(panel.textContent).toContain("3");
+    expect(panel.textContent).toContain("holding to plan");
+  });
+
+  test("Empty state renders the calm panel + sr8 chip + tagging copy", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [],
+      summary: {
+        total_positions: 0,
+        flagged_count: 0,
+        at_risk_pct: 0,
+        to_trim_dollars: 0,
+        cascade_breakdown: { cascade_20: 0, cascade_15: 0 },
+      },
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-empty-state")).toBeInTheDocument());
+
+    const panel = screen.getByTestId("sr8-empty-state");
+    expect(panel.textContent).toContain("No positions tagged sr8");
+    expect(panel.textContent).toContain("hold / trim / exit");
+    // sr8 rendered as a chip (mono <code>).
+    const chip = panel.querySelector("code");
+    expect(chip?.textContent).toBe("sr8");
+  });
+
+  test("Loading state renders pulsing dot + 3 skeleton rows before first response", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    let resolveFetch: (v: any) => void = () => {};
+    mMonitor.mockReturnValueOnce(new Promise(r => { resolveFetch = r; }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+
+    await waitFor(() => expect(screen.getByTestId("sr8-loading")).toBeInTheDocument());
+    // 3 shimmer skeleton rows.
+    expect(screen.getByTestId("sr8-skeleton-0")).toBeInTheDocument();
+    expect(screen.getByTestId("sr8-skeleton-1")).toBeInTheDocument();
+    expect(screen.getByTestId("sr8-skeleton-2")).toBeInTheDocument();
+    // "Fetching latest prices…" copy.
+    expect(screen.getByTestId("sr8-loading").textContent).toContain("Fetching latest prices");
+
+    // Resolve fetch → loading state disappears.
+    resolveFetch(makeResponse());
+    await waitFor(() => expect(screen.queryByTestId("sr8-loading")).not.toBeInTheDocument());
+  });
+
+  test("Retry button on a failed row calls sr8Refresh", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", fetch_failed: true, current_price: null }),
+      ],
+    }));
+    mRefresh.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", fetch_failed: false, current_price: 200, current_pct_nlv: 8.5 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-retry-DELL")).toBeInTheDocument());
+
+    const btn = screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);  // no longer the disabled stub
+    expect(btn.textContent).toContain("Retry");
+
+    fireEvent.click(btn);
+
+    // sr8Refresh fired with the seeded NLV.
+    await waitFor(() => expect(mRefresh).toHaveBeenCalled());
+    expect(mRefresh.mock.calls[0][0]).toBe(500000);
+  });
+
+  test("Retry while in flight shows the 'Retrying…' label", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", fetch_failed: true, current_price: null }),
+      ],
+    }));
+    // Hold the refresh promise open so we can observe the in-flight state.
+    let resolveRefresh: (v: any) => void = () => {};
+    mRefresh.mockReturnValueOnce(new Promise(r => { resolveRefresh = r; }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-retry-DELL")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("sr8-retry-DELL"));
+
+    await waitFor(() => {
+      expect((screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement).textContent).toContain("Retrying");
+    });
+
+    // Resolve refresh → button label flips back (and the row resolves
+    // to a normal hold row if the refresh succeeded — fixture re-uses
+    // the same failed payload to keep the test focused on the label
+    // transition, not the row's post-retry rendering).
+    resolveRefresh(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", fetch_failed: true, current_price: null }),
+      ],
+    }));
+    await waitFor(() => {
+      expect((screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement).textContent).not.toContain("Retrying");
+    });
   });
 });
