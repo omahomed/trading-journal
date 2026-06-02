@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pandas
+openpyxl
 yfinance
 psycopg2-binary
 numpy

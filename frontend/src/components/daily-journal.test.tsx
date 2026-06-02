@@ -49,9 +49,10 @@ describe("DailyJournal — MCT State column (snapshotted on row)", () => {
   });
 
   test("POWERTREND with mct_display_day_num renders 'POWERTREND D{N}'", async () => {
+    const today = new Date().toISOString().slice(0, 10);
     mockedHistory.mockResolvedValue([
       {
-        day: "2026-04-24",
+        day: today,
         end_nlv: 100000,
         daily_pct_change: 0.5,
         portfolio_heat: 5,
