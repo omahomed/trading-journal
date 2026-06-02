@@ -695,17 +695,21 @@ export const api = {
 
   // SR8 Cascade Monitor — wraps the MORS Python engine. The GET path
   // reads the on-disk weekly cache; POST /refresh forces a fresh
-  // yfinance pull. Both share the same response envelope.
-  sr8Monitor: (nlv: number) =>
-    fetchJSON<SR8MonitorResponse | { error: string }>(
-      `/api/sr8/monitor?nlv=${encodeURIComponent(String(nlv))}`,
-    ),
+  // yfinance pull. Both share the same response envelope. Portfolio
+  // defaults to the active portfolio (same convention as tradesOpen)
+  // so the monitor matches what Active Campaign shows as SR8.
+  sr8Monitor: (nlv: number, portfolio = getActivePortfolio()) => {
+    const qs = new URLSearchParams({ nlv: String(nlv), portfolio });
+    return fetchJSON<SR8MonitorResponse | { error: string }>(
+      `/api/sr8/monitor?${qs.toString()}`,
+    );
+  },
 
-  sr8Refresh: (nlv: number) =>
+  sr8Refresh: (nlv: number, portfolio = getActivePortfolio()) =>
     fetchWithAuth(`${API_BASE}/api/sr8/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nlv }),
+      body: JSON.stringify({ nlv, portfolio }),
     }).then(r => r.json()) as Promise<SR8MonitorResponse | { error: string }>,
 
   weeklyRetroDelete: (retroId: number) =>
