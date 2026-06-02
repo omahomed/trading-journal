@@ -133,6 +133,12 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
     dir: "desc",
   });
 
+  // Per-row Retry state. While `rowLoading === ticker`, that row's
+  // Retry button shows a spinner instead of the ⟳ glyph. Reused
+  // across Retry attempts (a click on a second failed row replaces
+  // the in-flight one — design says clicks during retry are ignored).
+  const [rowLoading, setRowLoading] = useState<string | null>(null);
+
   // Seed NLV from the active portfolio's latest journal entry once on
   // mount — same anchor active-campaign uses. User edits override.
   useEffect(() => {
@@ -323,6 +329,26 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
       : { key, dir: HOLD_NUMERIC_KEYS.has(key) || key === "last_signal" ? "desc" : "asc" });
   };
 
+  // Per-row Retry — triggers a backend refresh which re-runs the engine
+  // for ALL positions (the existing /api/sr8/refresh endpoint). The
+  // failed ticker will resolve to a normal row in the next payload if
+  // yfinance succeeds; if not, it stays muted. UX is per-row so only
+  // this row shows a spinner. Ignores re-clicks while in flight.
+  const onRowRetry = useCallback(async (ticker: string) => {
+    if (rowLoading) return;
+    setRowLoading(ticker);
+    try {
+      const r = await api.sr8Refresh(nlv);
+      if (r && !("error" in r)) {
+        setData(r as SR8MonitorResponse);
+      }
+    } catch (e) {
+      log.error("sr8-monitor", "row retry failed", e);
+    } finally {
+      setRowLoading(null);
+    }
+  }, [nlv, rowLoading]);
+
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="sr8-root">
       {/* Page header */}
@@ -431,26 +457,18 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
         </div>
       </div>
 
-      {/* Action / Hold sections placeholder for Commit 3. Loading skeleton
-          renders here for now so the page doesn't look empty during fetch. */}
+      {/* Action / Hold sections — or one of three polished alt-states. */}
       {loading && !data ? (
-        <div data-testid="sr8-loading" className="animate-pulse">
-          <div className="h-[100px] rounded-[14px] mb-3" style={{ background: "var(--bg-2)" }} />
-          <div className="h-[100px] rounded-[14px] mb-3" style={{ background: "var(--bg-2)" }} />
-          <div className="h-[100px] rounded-[14px]" style={{ background: "var(--bg-2)" }} />
-        </div>
+        <LoadingState />
       ) : data && data.positions.length === 0 ? (
-        <div className="px-4 py-8 text-center text-[12px] rounded-[14px]"
-             data-testid="sr8-empty-state"
-             style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
-          No positions tagged sr8. (Empty-state polish lands in Commit 4.)
-        </div>
+        <EmptyState />
       ) : (
         <>
           {/* Action needed */}
           <ActionSection
             actions={actions}
             doneCount={done.length}
+            activeHoldCount={holds.filter(h => !h.fetch_failed).length}
             exiting={exiting}
             onMarkDone={onMarkDone}
             navColor={navColor}
@@ -462,6 +480,8 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
             sort={sort}
             onSort={onSortHold}
             navColor={navColor}
+            rowLoading={rowLoading}
+            onRetry={onRowRetry}
           />
         </>
       )}
@@ -471,9 +491,10 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
 
 // ─── Action section ──────────────────────────────────────────────────
 
-function ActionSection({ actions, doneCount, exiting, onMarkDone, navColor }: {
+function ActionSection({ actions, doneCount, activeHoldCount, exiting, onMarkDone, navColor }: {
   actions: SR8AnalyzedPosition[];
   doneCount: number;
+  activeHoldCount: number;
   exiting: Set<string>;
   onMarkDone: (ticker: string) => void;
   navColor: string;
@@ -500,11 +521,7 @@ function ActionSection({ actions, doneCount, exiting, onMarkDone, navColor }: {
       </div>
 
       {isAllClear ? (
-        <div className="px-4 py-6 text-center text-[12px] rounded-[14px]"
-             data-testid="sr8-all-clear-placeholder"
-             style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
-          No actions today. (All-clear panel polish lands in Commit 4.)
-        </div>
+        <AllClearPanel activeHoldCount={activeHoldCount} doneCount={doneCount} />
       ) : (
         <div className="flex flex-col gap-2.5" data-testid="sr8-action-rows">
           {actions.map(p => (
@@ -517,6 +534,36 @@ function ActionSection({ actions, doneCount, exiting, onMarkDone, navColor }: {
         </div>
       )}
     </section>
+  );
+}
+
+// "Pilot's panel — calm when nothing's wrong." Renders when no
+// actions are currently flagged but positions exist. Per the
+// handoff spec: --up at 9% bg over surface, --up at 32% border,
+// 48px rounded check-circle tile, Fraunces italic 22px heading.
+function AllClearPanel({ activeHoldCount, doneCount }: { activeHoldCount: number; doneCount: number }) {
+  return (
+    <div className="px-6 py-7 rounded-[14px] flex items-center gap-4"
+         data-testid="sr8-all-clear"
+         style={{
+           background: "color-mix(in oklab, var(--up) 9%, var(--surface))",
+           border: "1px solid color-mix(in oklab, var(--up) 32%, var(--border))",
+         }}>
+      <div className="w-12 h-12 rounded-full flex items-center justify-center text-[22px] shrink-0"
+           style={{ background: "color-mix(in oklab, var(--up) 16%, var(--surface))", color: "var(--up)" }}>
+        ✓
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[22px] italic font-normal mb-0.5"
+             style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink)" }}>
+          No actions today
+        </div>
+        <div className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+          All <b style={{ color: "var(--ink)" }}>{activeHoldCount}</b> active sr8 position{activeHoldCount === 1 ? "" : "s"} are holding to plan
+          {doneCount > 0 ? <>. <b style={{ color: "var(--up)" }}>{doneCount}</b> trim{doneCount === 1 ? "" : "s"} marked done.</> : "."}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -632,11 +679,13 @@ function SignalBadge({ signal }: { signal: string }) {
 
 // ─── Hold section ────────────────────────────────────────────────────
 
-function HoldSection({ holds, sort, onSort, navColor }: {
+function HoldSection({ holds, sort, onSort, navColor, rowLoading, onRetry }: {
   holds: SR8AnalyzedPosition[];
   sort: { key: HoldSortKey; dir: "asc" | "desc" };
   onSort: (key: HoldSortKey) => void;
   navColor: string;
+  rowLoading: string | null;
+  onRetry: (ticker: string) => void;
 }) {
   if (holds.length === 0) return null;
   return (
@@ -686,7 +735,12 @@ function HoldSection({ holds, sort, onSort, navColor }: {
               </tr>
             </thead>
             <tbody>
-              {holds.map(p => <HoldRow key={p.ticker} p={p} />)}
+              {holds.map(p => (
+                <HoldRow key={p.ticker}
+                         p={p}
+                         retrying={rowLoading === p.ticker}
+                         onRetry={onRetry} />
+              ))}
             </tbody>
           </table>
         </div>
@@ -695,16 +749,20 @@ function HoldSection({ holds, sort, onSort, navColor }: {
   );
 }
 
-function HoldRow({ p }: { p: SR8AnalyzedPosition }) {
+function HoldRow({ p, retrying, onRetry }: {
+  p: SR8AnalyzedPosition;
+  retrying: boolean;
+  onRetry: (ticker: string) => void;
+}) {
   const sig = signalDisplay(p.last_signal);
   const isEntry = sig.label === "ENTRY";
   const plUp = p.unreal_dollars > 0;
   const plColor = plUp ? "var(--up)" : p.unreal_dollars < 0 ? "var(--down)" : "var(--ink-3)";
 
   if (p.fetch_failed) {
-    // Fetch-failed row: muted, with a left-edge red insert + a small
-    // ⚠ pill. Retry button is a Commit-4 polish — for now it's a
-    // visible-but-disabled stub so the layout doesn't shift.
+    // Fetch-failed row: muted with a left-edge --down insert, ⚠ pill,
+    // and a per-row Retry button that triggers the full /api/sr8/refresh.
+    // The spinner during retry is the design's "~0.8s per-row" UX.
     return (
       <tr data-testid={`sr8-hold-row-${p.ticker}`}
           style={{ borderBottom: "1px solid var(--border)", background: "color-mix(in oklab, var(--down) 4%, var(--surface))" }}>
@@ -726,12 +784,15 @@ function HoldRow({ p }: { p: SR8AnalyzedPosition }) {
         </td>
         <td className="px-3 py-2.5 text-right" colSpan={3} style={{ color: "var(--ink-4)", fontStyle: "italic" }}>
           price unavailable
-          <button type="button" disabled
+          <button type="button"
+                  onClick={() => onRetry(p.ticker)}
+                  disabled={retrying}
                   data-testid={`sr8-retry-${p.ticker}`}
-                  title="Retry wiring lands in Commit 4"
-                  className="ml-3 px-2 py-0.5 rounded-md text-[10.5px] font-semibold cursor-not-allowed opacity-60"
+                  title="Re-fetch the weekly snapshot from yfinance"
+                  className="ml-3 px-2 py-0.5 rounded-md text-[10.5px] font-semibold transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
                   style={{ background: "var(--surface)", border: "1px solid var(--down)", color: "var(--down)" }}>
-            ⟳ Retry
+            <span className={retrying ? "inline-block animate-spin mr-1" : "inline-block mr-1"}>⟳</span>
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </td>
       </tr>
@@ -812,6 +873,79 @@ function SummaryChip({ label, value, sub, valueColor, testId, divider, small }: 
       {sub && (
         <div className="text-[10px] mt-1" style={{ color: "var(--ink-4)" }}>{sub}</div>
       )}
+    </div>
+  );
+}
+
+// Loading state — pulsing rose dot + "Fetching latest prices…" line
+// + three 70px skeleton rows with a left-to-right gradient sweep. Lands
+// when initial mount fires before the first sr8Monitor response.
+function LoadingState() {
+  return (
+    <section data-testid="sr8-loading">
+      <div className="flex items-center gap-2 mb-3 text-[12px] font-medium" style={{ color: "var(--ink-3)" }}>
+        <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: "var(--down)" }} />
+        Fetching latest prices from yfinance…
+      </div>
+      <div className="flex flex-col gap-2.5">
+        {[0, 1, 2].map(i => (
+          <div key={i}
+               data-testid={`sr8-skeleton-${i}`}
+               className="rounded-[14px] overflow-hidden relative"
+               style={{
+                 height: 70,
+                 background: "var(--surface-2)",
+                 border: "1px solid var(--border)",
+               }}>
+            <div className="absolute inset-0"
+                 style={{
+                   background: "linear-gradient(90deg, transparent 0%, color-mix(in oklab, var(--ink) 6%, transparent) 50%, transparent 100%)",
+                   animation: "sr8-shimmer 1.3s linear infinite",
+                 }} />
+          </div>
+        ))}
+      </div>
+      <style jsx global>{`
+        @keyframes sr8-shimmer {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          [data-testid^="sr8-skeleton-"] > div { animation: none !important; }
+        }
+      `}</style>
+    </section>
+  );
+}
+
+// Empty state — dashed panel with the design's calm "no positions
+// tagged sr8 yet" copy. `sr8` rendered as a mono rose chip inline.
+function EmptyState() {
+  return (
+    <div className="px-8 py-10 rounded-[14px] flex items-center gap-5"
+         data-testid="sr8-empty-state"
+         style={{
+           background: "var(--surface)",
+           border: "1.5px dashed color-mix(in oklab, var(--g-risk) 30%, var(--border))",
+         }}>
+      <div className="w-14 h-14 rounded-full flex items-center justify-center text-[26px] shrink-0"
+           style={{ background: "color-mix(in oklab, var(--g-risk) 14%, var(--surface))", color: "var(--g-risk)" }}>
+        ⚡
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[24px] italic font-normal mb-1"
+             style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink)" }}>
+          No positions tagged sr8
+        </div>
+        <div className="text-[13px]" style={{ color: "var(--ink-3)" }}>
+          Tag an open campaign with{" "}
+          <code className="px-1.5 py-0.5 rounded-md text-[11px] font-semibold"
+                style={{ background: "var(--g-risk-soft)", color: "var(--g-risk)", fontFamily: mono }}>
+            sr8
+          </code>{" "}
+          to start monitoring its cascade. Tagged positions surface here with a daily hold / trim / exit signal computed against SPY.
+        </div>
+      </div>
     </div>
   );
 }
