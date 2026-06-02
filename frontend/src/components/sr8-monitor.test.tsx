@@ -98,9 +98,12 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     // Wait until summary chips render.
     await waitFor(() => expect(screen.getByTestId("sr8-summary")).toBeInTheDocument());
 
-    // sr8Monitor was called with the seeded NLV from journalLatest.
+    // sr8Monitor was called with the seeded NLV from journalLatest, plus
+    // the active portfolio (so the backend filter matches what Active
+    // Campaign shows).
     await waitFor(() => expect(mMonitor).toHaveBeenCalled());
     expect(mMonitor.mock.calls[0][0]).toBeCloseTo(448382, 0);
+    expect(mMonitor.mock.calls[0][1]).toBe("CanSlim");
 
     // Summary chips render the response values.
     expect(screen.getByTestId("sr8-chip-positions").textContent).toContain("10");
@@ -145,6 +148,7 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     // and is covered by the existing setData path in the happy-path test).
     await waitFor(() => expect(mRefresh).toHaveBeenCalled());
     expect(mRefresh.mock.calls[0][0]).toBeCloseTo(448382, 0);
+    expect(mRefresh.mock.calls[0][1]).toBe("CanSlim");
   });
 
   test("empty positions render the placeholder copy without crashing", async () => {
@@ -522,9 +526,10 @@ describe("Sr8Monitor — polished states (Commit 4)", () => {
 
     fireEvent.click(btn);
 
-    // sr8Refresh fired with the seeded NLV.
+    // sr8Refresh fired with the seeded NLV and the active portfolio.
     await waitFor(() => expect(mRefresh).toHaveBeenCalled());
     expect(mRefresh.mock.calls[0][0]).toBe(500000);
+    expect(mRefresh.mock.calls[0][1]).toBe("CanSlim");
   });
 
   test("Retry while in flight shows the 'Retrying…' label", async () => {

@@ -163,7 +163,7 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
   const fetchData = useCallback(async (nlvForFetch: number) => {
     setError(null);
     try {
-      const r = await api.sr8Monitor(nlvForFetch);
+      const r = await api.sr8Monitor(nlvForFetch, getActivePortfolio());
       if (r && "error" in r) {
         setError(r.error);
         setData(null);
@@ -203,7 +203,7 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
     setRefreshing(true);
     setError(null);
     try {
-      const r = await api.sr8Refresh(nlv);
+      const r = await api.sr8Refresh(nlv, getActivePortfolio());
       if (r && "error" in r) {
         setError(r.error);
       } else {
@@ -338,7 +338,7 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
     if (rowLoading) return;
     setRowLoading(ticker);
     try {
-      const r = await api.sr8Refresh(nlv);
+      const r = await api.sr8Refresh(nlv, getActivePortfolio());
       if (r && !("error" in r)) {
         setData(r as SR8MonitorResponse);
       }
