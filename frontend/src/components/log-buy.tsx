@@ -622,6 +622,22 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
+
+        // Refresh server-derived state so a same-page second submit reads
+        // fresh data. Without this, openTrades + allDetails stay at the
+        // pre-submit snapshot — scale-ins see old share counts, the next
+        // "new" buy reuses the just-consumed trade_id, etc.
+        const [refreshedOpen, refreshedDetails] = await Promise.all([
+          api.tradesOpen(getActivePortfolio()).catch(() => [] as TradePosition[]),
+          api.tradesOpenDetails(getActivePortfolio()).catch(() => ({ details: [] as TradeDetail[], lot_closures: [] })),
+        ]);
+        setOpenTrades(refreshedOpen as TradePosition[]);
+        setAllDetails(refreshedDetails.details);
+        if (actionType === "new") {
+          setTradeId("");
+          const next = await api.nextTradeId(getActivePortfolio(), date).catch(() => ({ trade_id: "" }));
+          if ((next as { trade_id?: string }).trade_id) setTradeId(String((next as { trade_id?: string }).trade_id));
+        }
       }
     } catch (err: any) {
       setSubmitResult({ ok: false, msg: err.message || "Failed to log buy" });
