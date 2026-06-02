@@ -54,7 +54,8 @@ export default function MoreClient() {
         <NavRow href="/overview" label="Trading Overview" />
       </Section>
       <Section title="Trading Ops">
-        <NavRow href="/active-campaign" label="Active Campaign" />
+        <NavRow href="/active-campaign" label="Campaign Summary" />
+        <NavRow href="/campaign-detail" label="Campaign Detail" />
         <NavRow href="/trade-manager" label="Trade Manager" />
         <NavRow href="/log-buy" label="Log Buy" />
         <NavRow href="/log-sell" label="Log Sell" />
