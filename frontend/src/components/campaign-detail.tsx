@@ -3,9 +3,11 @@
 // Campaign Detail page — fill-by-fill ledger across all open stock campaigns.
 // Build sequence:
 //   Commit 1: route stub + nav rename (merged)
-//   Commit 2 (this commit): page scaffold + data fetch + KPI strip
-//   Commit 3: ledger table (17 cols, sort, filter, totals footer)
-//   Commit 4: edit wiring (separate window — same flow as Trade Journal)
+//   Commit 2: page scaffold + KPI strip + data fetch (merged)
+//   Commit 3 (this commit): ledger table — 16 sortable cols + Edit col,
+//     filter toolbar, sticky totals footer, CSV export, empty state.
+//     The Edit pencil is rendered but disabled — Commit 4 wires it to
+//     the same separate-window edit flow Trade Journal uses.
 //
 // Stocks only — option fills (instrument_type='OPTION' or option-shaped
 // tickers) are filtered out at the campaign-scope step. Live prices only
@@ -13,14 +15,12 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type TradeDetailsBundle } from "@/lib/api";
-import { walkLedger } from "@/lib/campaign-detail-walk";
+import { walkLedger, type LedgerRowInfo } from "@/lib/campaign-detail-walk";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 
 const mono = "var(--font-jetbrains), monospace";
 
-// Per-tile gradient strings — matches the screenshot in the handoff.
-// Negative variants for Realized/Unrealized swap to red.
 const TILE_GRADIENTS = {
   indigo: "linear-gradient(135deg, #6366f1, #818cf8)",
   blue:   "linear-gradient(135deg, #2563eb, #60a5fa)",
@@ -30,9 +30,6 @@ const TILE_GRADIENTS = {
   red:    "linear-gradient(135deg, #e5484d, #f87171)",
 };
 
-// KPI tile component — same shape as ACS's KPITile (active-campaign.tsx:34)
-// but inlined here so the new page doesn't take a hard dependency on the
-// neighbour. Uses the same radial-glow + gradient idiom.
 function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
   return (
     <div className="relative overflow-hidden rounded-[14px] p-[18px] text-white flex flex-col justify-between min-h-[108px] transition-transform duration-150 hover:scale-[1.01]"
@@ -48,8 +45,6 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
   );
 }
 
-// Same option-detection regex used elsewhere (parseOptionTicker etc).
-// Kept local to avoid pulling in a module just for one regex.
 function isOptionTicker(t: string): boolean {
   return /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(t || "").trim());
 }
@@ -58,9 +53,110 @@ function isStockCampaign(t: TradePosition): boolean {
   const type = String((t as { instrument_type?: string }).instrument_type || "").toUpperCase();
   if (type === "STOCK") return true;
   if (type === "OPTION") return false;
-  // Legacy fallback for rows without instrument_type set: regex on ticker.
   return !isOptionTicker(t.ticker || "");
 }
+
+// ─── Enriched-row shape used by table body + filtering + sorting ────────
+// Sells expose blended cost basis (weighted-avg buy_price from
+// lot_closures) and the sum of per-pair realized_pl, per the build spec's
+// Option B. Buys carry remaining/status from the LIFO walker.
+interface LedgerRow {
+  detail_id: number;
+  trx_id: string;           // "B1" / "A1" / "S1" / …
+  trade_id: string;
+  ticker: string;
+  action: "BUY" | "SELL";
+  date: string;             // ISO datetime
+  shares: number;
+  // Buy: amount; Sell: weighted-avg cost basis from closures.
+  cost_basis: number;
+  // Buy: null; Sell: detail.amount (the sell price).
+  exit_price: number | null;
+  // Buy: remaining shares post-LIFO (0..shares); Sell: null.
+  remaining: number | null;
+  stop_loss: number;
+  status: "Open" | "Partial" | "Closed";
+  // Buy: null; Sell: sum of lot_closures.realized_pl for this sell_trx_id.
+  realized: number | null;
+  // Buy: (mark - cost) × remaining × multiplier; Sell: null.
+  unrealized: number | null;
+  // Buy: open-position return at mark; Sell: realized return on basis.
+  ret: number | null;
+  // Buy: mark × remaining × multiplier; Sell: shares × exit × multiplier.
+  value: number;
+  rule: string;
+  notes: string;
+  multiplier: number;
+  mark: number;
+}
+
+// Column config — keeps the table body + header in sync.
+type ColKey =
+  | "trx_id" | "date" | "ticker" | "action" | "status"
+  | "shares" | "remaining" | "cost_basis" | "exit_price" | "stop_loss"
+  | "value" | "realized" | "unrealized" | "ret" | "rule" | "notes";
+
+interface ColumnDef {
+  key: ColKey;
+  label: string;
+  numeric: boolean;
+  align: "left" | "right";
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: "trx_id",     label: "TRX ID",         numeric: false, align: "left" },
+  { key: "date",       label: "Date",           numeric: false, align: "left" },
+  { key: "ticker",     label: "Ticker",         numeric: false, align: "left" },
+  { key: "action",     label: "Action",         numeric: false, align: "left" },
+  { key: "status",     label: "Status",         numeric: false, align: "left" },
+  { key: "shares",     label: "Shares",         numeric: true,  align: "right" },
+  { key: "remaining",  label: "Remaining",      numeric: true,  align: "right" },
+  { key: "cost_basis", label: "Amount",         numeric: true,  align: "right" },
+  { key: "exit_price", label: "Exit Price",     numeric: true,  align: "right" },
+  { key: "stop_loss",  label: "Stop Loss",      numeric: true,  align: "right" },
+  { key: "value",      label: "Value",          numeric: true,  align: "right" },
+  { key: "realized",   label: "Realized P&L",   numeric: true,  align: "right" },
+  { key: "unrealized", label: "Unrealized P&L", numeric: true,  align: "right" },
+  { key: "ret",        label: "Return %",       numeric: true,  align: "right" },
+  { key: "rule",       label: "Rule",           numeric: false, align: "left" },
+  { key: "notes",      label: "Notes",          numeric: false, align: "left" },
+];
+const NUMERIC_KEYS: Set<ColKey> = new Set(COLUMNS.filter(c => c.numeric).map(c => c.key));
+
+// Return-heat chip tier classes — per spec (README §Design Tokens).
+function retChipStyle(n: number): { bg: string; color: string } {
+  if (n >= 15) return { bg: "#d1fae5", color: "#047857" };
+  if (n >= 5)  return { bg: "#ecfdf4", color: "#047857" };
+  if (n > 0)   return { bg: "#f0fdf4", color: "#15803d" };
+  if (n > -5)  return { bg: "#fef2f2", color: "#b91c1b" };
+  return       { bg: "#fde7e8", color: "#991b1b" };
+}
+
+function pctColor(n: number) { return n > 0 ? "#08a86b" : n < 0 ? "#e5484d" : "var(--ink-3)"; }
+
+// CSV cell escape — quotes any cell containing comma, quote, or newline.
+function csvCell(v: string | number | null): string {
+  if (v == null) return "";
+  const s = String(v);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+interface Filters {
+  q: string;
+  series: "all" | "B" | "A";
+  action: "all" | "BUY" | "SELL";
+  status: "all" | "Open" | "Partial" | "Closed";
+  ticker: string;        // ticker or "all"
+  rule: string;          // rule or "all"
+  pl: "all" | "realized" | "unrealized";
+  from: string;          // YYYY-MM-DD
+  to: string;            // YYYY-MM-DD
+}
+const EMPTY_FILTERS: Filters = {
+  q: "", series: "all", action: "all", status: "all",
+  ticker: "all", rule: "all", pl: "all", from: "", to: "",
+};
 
 export function CampaignDetail({ navColor }: { navColor: string }) {
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
@@ -71,6 +167,8 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "date", dir: "desc" });
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
   const fetchAll = useCallback(async () => {
     setError(null);
@@ -86,18 +184,12 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
         }),
       ]);
 
-      // Stocks only. Scope details + closures to the surviving trade_ids.
       const allOpen = openRaw as TradePosition[];
       const stockOpen = allOpen.filter(isStockCampaign);
       const stockIds = new Set(stockOpen.map(t => String(t.trade_id || "")));
-      const stockDetails = (bundleRaw.details || []).filter(d =>
-        stockIds.has(String(d.trade_id || ""))
-      );
-      const stockClosures = (bundleRaw.lot_closures || []).filter(c =>
-        stockIds.has(String(c.trade_id || ""))
-      );
+      const stockDetails = (bundleRaw.details || []).filter(d => stockIds.has(String(d.trade_id || "")));
+      const stockClosures = (bundleRaw.lot_closures || []).filter(c => stockIds.has(String(c.trade_id || "")));
 
-      // Live prices only — no portfolio arg means no manual_price overlay.
       const tickers = Array.from(new Set(stockOpen.map(t => t.ticker).filter(Boolean) as string[]));
       let prices: Record<string, number> = {};
       if (tickers.length > 0) {
@@ -133,55 +225,245 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
     setRefreshing(false);
   }, [fetchAll, refreshing]);
 
-  // Walker output — per-detail Status + Remaining; openLotCount KPI input.
+  // Walker — per-detail status + remaining.
   const walked = useMemo(() => walkLedger(details), [details]);
 
-  // KPI math (unfiltered — these tiles always reflect the WHOLE ledger
-  // per the spec; the filter toolbar arriving in Commit 3 only narrows
-  // the table body + footer totals).
-  const kpis = useMemo(() => {
-    const tradeMultiplier = new Map<string, number>();
-    for (const t of openTrades) {
-      const m = parseFloat(String((t as { multiplier?: string | number }).multiplier ?? 0));
-      tradeMultiplier.set(String(t.trade_id), m > 0 ? m : 1);
+  // Closure aggregation per sell_trx_id (composite with trade_id since
+  // trx_ids repeat across campaigns). Used for Option B: a Sell row's
+  // cost basis = weighted-avg buy_price; realized = sum across closures.
+  const closureBySell = useMemo(() => {
+    const map = new Map<string, { sumPl: number; sumShares: number; sumBuyCost: number }>();
+    for (const c of closures) {
+      const tid = String(c.trade_id || "");
+      const sellTrx = String((c as { sell_trx_id?: string }).sell_trx_id || "");
+      if (!tid || !sellTrx) continue;
+      const key = `${tid}|${sellTrx}`;
+      const shares = parseFloat(String(c.shares || 0)) || 0;
+      const buyPrice = parseFloat(String((c as { buy_price?: number | string }).buy_price || 0)) || 0;
+      const pl = parseFloat(String(c.realized_pl || 0)) || 0;
+      const cur = map.get(key) || { sumPl: 0, sumShares: 0, sumBuyCost: 0 };
+      cur.sumPl += pl;
+      cur.sumShares += shares;
+      cur.sumBuyCost += shares * buyPrice;
+      map.set(key, cur);
     }
+    return map;
+  }, [closures]);
 
+  // Per-trade multiplier lookup (campaigns are stocks so this should
+  // always resolve to 1, but the field exists on the row and we honor it).
+  const tradeMultiplier = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of openTrades) {
+      const v = parseFloat(String((t as { multiplier?: string | number }).multiplier ?? 0));
+      m.set(String(t.trade_id), v > 0 ? v : 1);
+    }
+    return m;
+  }, [openTrades]);
+
+  // ───── Enriched rows ────────────────────────────────────────────────
+  const enrichedRows = useMemo<LedgerRow[]>(() => {
+    return details.map(d => {
+      const action = String(d.action || "").toUpperCase() === "SELL" ? "SELL" : "BUY";
+      const detailId = Number((d as { detail_id?: number }).detail_id ?? -1);
+      const info: LedgerRowInfo | undefined = walked.perDetail.get(detailId);
+      const tradeId = String(d.trade_id || "");
+      const trxId = String(d.trx_id || "");
+      const ticker = String(d.ticker || "");
+      const shares = parseFloat(String(d.shares || 0)) || 0;
+      const amount = parseFloat(String(d.amount || 0)) || 0;
+      const stopLoss = parseFloat(String(d.stop_loss || 0)) || 0;
+      const mult = tradeMultiplier.get(tradeId) ?? 1;
+      const mark = livePrices[ticker] ?? amount;
+
+      let cost_basis: number;
+      let exit_price: number | null;
+      let remaining: number | null;
+      let realized: number | null;
+      let unrealized: number | null;
+      let ret: number | null;
+      let value: number;
+
+      if (action === "SELL") {
+        const key = `${tradeId}|${trxId}`;
+        const agg = closureBySell.get(key);
+        cost_basis = agg && agg.sumShares > 0 ? agg.sumBuyCost / agg.sumShares : amount;
+        exit_price = amount;
+        remaining = null;
+        realized = agg ? agg.sumPl : 0;
+        unrealized = null;
+        ret = cost_basis > 0 ? ((amount - cost_basis) / cost_basis) * 100 : 0;
+        value = shares * amount * mult;
+      } else {
+        cost_basis = amount;
+        exit_price = null;
+        remaining = info ? info.remaining : shares;
+        realized = null;
+        const rem = remaining ?? 0;
+        unrealized = rem > 0 ? (mark - amount) * rem * mult : 0;
+        ret = amount > 0 ? ((mark - amount) / amount) * 100 : 0;
+        value = rem > 0 ? mark * rem * mult : 0;
+      }
+
+      const status: "Open" | "Partial" | "Closed" = info ? info.status : (action === "SELL" ? "Closed" : "Open");
+
+      return {
+        detail_id: detailId,
+        trx_id: trxId,
+        trade_id: tradeId,
+        ticker,
+        action,
+        date: String(d.date || ""),
+        shares,
+        cost_basis,
+        exit_price,
+        remaining,
+        stop_loss: stopLoss,
+        status,
+        realized,
+        unrealized,
+        ret,
+        value,
+        rule: String(d.rule || ""),
+        notes: String(d.notes || ""),
+        multiplier: mult,
+        mark,
+      };
+    });
+  }, [details, walked, closureBySell, tradeMultiplier, livePrices]);
+
+  // ───── KPI numbers (whole ledger, unfiltered) ───────────────────────
+  const kpis = useMemo(() => {
     let unrealized = 0;
     let marketValue = 0;
-    for (const d of details) {
-      if (String(d.action || "").toUpperCase() !== "BUY") continue;
-      const detailId = (d as { detail_id?: number }).detail_id;
-      const info = detailId != null ? walked.perDetail.get(detailId) : undefined;
-      if (!info || info.remaining == null || info.remaining <= 0) continue;
-      const remaining = info.remaining;
-      const cost = parseFloat(String(d.amount || 0));
-      const mark = livePrices[d.ticker || ""] ?? cost;
-      const mult = tradeMultiplier.get(String(d.trade_id || "")) ?? 1;
-      unrealized += (mark - cost) * remaining * mult;
-      marketValue += mark * remaining * mult;
+    let realized = 0;
+    for (const r of enrichedRows) {
+      if (r.action === "BUY" && r.remaining && r.remaining > 0) {
+        unrealized += r.unrealized ?? 0;
+        marketValue += r.value;
+      }
+      if (r.action === "SELL") {
+        realized += r.realized ?? 0;
+      }
     }
-
-    const realized = closures.reduce((sum, c) => sum + (parseFloat(String(c.realized_pl || 0)) || 0), 0);
-    const transactionCount = details.length;
-    const activeCampaignCount = openTrades.length;
-
     return {
-      transactionCount,
-      activeCampaignCount,
+      transactionCount: enrichedRows.length,
+      activeCampaignCount: openTrades.length,
       openLotCount: walked.openLotCount,
       realized,
       unrealized,
       marketValue,
     };
-  }, [openTrades, details, closures, livePrices, walked]);
+  }, [enrichedRows, openTrades.length, walked.openLotCount]);
 
+  // ───── Filter dropdown options (derived from full ledger) ───────────
+  const tickerOptions = useMemo(
+    () => Array.from(new Set(enrichedRows.map(r => r.ticker).filter(Boolean))).sort(),
+    [enrichedRows],
+  );
+  const ruleOptions = useMemo(
+    () => Array.from(new Set(enrichedRows.map(r => r.rule).filter(Boolean))).sort(),
+    [enrichedRows],
+  );
+
+  // ───── Filter ───────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    const q = filters.q.trim().toLowerCase();
+    return enrichedRows.filter(r => {
+      if (q) {
+        const haystack = [r.ticker, r.trx_id, r.rule, r.notes].map(v => v.toLowerCase());
+        if (!haystack.some(s => s.includes(q))) return false;
+      }
+      if (filters.series !== "all" && r.trx_id.charAt(0).toUpperCase() !== filters.series) return false;
+      if (filters.action !== "all" && r.action !== filters.action) return false;
+      if (filters.status !== "all" && r.status !== filters.status) return false;
+      if (filters.ticker !== "all" && r.ticker !== filters.ticker) return false;
+      if (filters.rule !== "all" && r.rule !== filters.rule) return false;
+      if (filters.pl === "realized" && r.action !== "SELL") return false;
+      if (filters.pl === "unrealized" && !(r.action === "BUY" && (r.remaining ?? 0) > 0)) return false;
+      const d = r.date.slice(0, 10);
+      if (filters.from && d < filters.from) return false;
+      if (filters.to && d > filters.to) return false;
+      return true;
+    });
+  }, [enrichedRows, filters]);
+
+  // ───── Sort (nulls last regardless of direction) ────────────────────
+  const sorted = useMemo(() => {
+    const { key, dir } = sort;
+    const numeric = NUMERIC_KEYS.has(key);
+    return [...filtered].sort((a, b) => {
+      const va = (a as unknown as Record<string, unknown>)[key];
+      const vb = (b as unknown as Record<string, unknown>)[key];
+      const an = va == null;
+      const bn = vb == null;
+      if (an && bn) return 0;
+      if (an) return 1;
+      if (bn) return -1;
+      const cmp = numeric
+        ? (Number(va) - Number(vb))
+        : String(va).localeCompare(String(vb));
+      return dir === "asc" ? cmp : -cmp;
+    });
+  }, [filtered, sort]);
+
+  // ───── Totals (visible filtered+sorted set) ─────────────────────────
+  const totals = useMemo(() => sorted.reduce((t, r) => {
+    t.shares += r.shares;
+    t.remaining += r.remaining ?? 0;
+    t.value += r.value;
+    t.realized += r.realized ?? 0;
+    t.unrealized += r.unrealized ?? 0;
+    return t;
+  }, { shares: 0, remaining: 0, value: 0, realized: 0, unrealized: 0 }), [sorted]);
+
+  const onSort = (key: ColKey) => {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: NUMERIC_KEYS.has(key) ? "desc" : "asc" });
+  };
+
+  // Reset disabled when no filter is active.
+  const filtersDirty = useMemo(() => (
+    !!filters.q || filters.series !== "all" || filters.action !== "all"
+    || filters.status !== "all" || filters.ticker !== "all" || filters.rule !== "all"
+    || filters.pl !== "all" || !!filters.from || !!filters.to
+  ), [filters]);
+  const resetFilters = () => setFilters(EMPTY_FILTERS);
+
+  // ───── CSV export (filtered + sorted, raw values) ───────────────────
+  const onExportCsv = useCallback(() => {
+    const header = COLUMNS.map(c => c.label).join(",");
+    const rows = sorted.map(r => COLUMNS.map(c => {
+      const v: unknown = (r as unknown as Record<string, unknown>)[c.key];
+      if (v == null) return "";
+      if (typeof v === "number") return String(v);
+      return csvCell(String(v));
+    }).join(","));
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `campaign-detail-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [sorted]);
+
+  // ───── UI ───────────────────────────────────────────────────────────
   const lastUpdatedLabel = lastUpdatedAt
     ? lastUpdatedAt.toISOString().slice(0, 16).replace("T", " ")
     : "";
+  const uniqueTickerCount = useMemo(
+    () => new Set(enrichedRows.map(r => r.ticker).filter(Boolean)).size,
+    [enrichedRows],
+  );
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="campaign-detail-root">
-      {/* Page header — H1 + sub + Export / Refresh action buttons */}
+      {/* Page header */}
       <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
            style={{ borderBottom: "1px solid var(--border)" }}>
         <div>
@@ -195,11 +477,11 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
-          <button type="button" disabled
+          <button type="button" onClick={onExportCsv}
+                  disabled={enrichedRows.length === 0}
                   data-testid="export-csv-btn"
-                  className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 cursor-not-allowed opacity-50"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}
-                  title="CSV export lands with the ledger table in the next commit">
+                  className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
             ↓ Export CSV
           </button>
           <button type="button" onClick={onRefresh} disabled={refreshing}
@@ -219,9 +501,7 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
         </div>
       )}
 
-      {/* KPI strip — 5 gradient tiles. These ALWAYS reflect the whole
-          ledger (unfiltered). The Commit-3 filter toolbar will narrow
-          the table body + footer totals only. */}
+      {/* KPI strip */}
       {loading && !lastUpdatedAt ? (
         <div className="grid grid-cols-5 gap-[14px]" data-testid="kpi-strip-loading">
           {[0, 1, 2, 3, 4].map(i => (
@@ -231,45 +511,379 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
         </div>
       ) : (
         <div className="grid grid-cols-5 gap-[14px]" data-testid="kpi-strip">
-          <KPITile
-            label="Transactions"
-            value={String(kpis.transactionCount)}
-            sub={`${kpis.activeCampaignCount} active campaigns`}
-            gradient={TILE_GRADIENTS.indigo}
-          />
-          <KPITile
-            label="Open Lots"
-            value={String(kpis.openLotCount)}
-            sub="held, unrealized"
-            gradient={TILE_GRADIENTS.blue}
-          />
-          <KPITile
-            label="Realized P&L"
-            value={formatCurrency(kpis.realized, { decimals: 0 })}
-            sub="closed trims"
-            gradient={kpis.realized >= 0 ? TILE_GRADIENTS.green : TILE_GRADIENTS.red}
-          />
-          <KPITile
-            label="Unrealized P&L"
-            value={formatCurrency(kpis.unrealized, { decimals: 0 })}
-            sub="open at mark"
-            gradient={kpis.unrealized >= 0 ? TILE_GRADIENTS.pink : TILE_GRADIENTS.red}
-          />
-          <KPITile
-            label="Market Value"
-            value={formatCurrency(kpis.marketValue, { decimals: 0 })}
-            sub="open positions"
-            gradient={TILE_GRADIENTS.orange}
-          />
+          <KPITile label="Transactions" value={String(kpis.transactionCount)}
+                   sub={`${kpis.activeCampaignCount} active campaigns`} gradient={TILE_GRADIENTS.indigo} />
+          <KPITile label="Open Lots" value={String(kpis.openLotCount)}
+                   sub="held, unrealized" gradient={TILE_GRADIENTS.blue} />
+          <KPITile label="Realized P&L" value={formatCurrency(kpis.realized, { decimals: 0 })}
+                   sub="closed trims" gradient={kpis.realized >= 0 ? TILE_GRADIENTS.green : TILE_GRADIENTS.red} />
+          <KPITile label="Unrealized P&L" value={formatCurrency(kpis.unrealized, { decimals: 0 })}
+                   sub="open at mark" gradient={kpis.unrealized >= 0 ? TILE_GRADIENTS.pink : TILE_GRADIENTS.red} />
+          <KPITile label="Market Value" value={formatCurrency(kpis.marketValue, { decimals: 0 })}
+                   sub="open positions" gradient={TILE_GRADIENTS.orange} />
         </div>
       )}
 
-      {/* Placeholder where the ledger table lands in Commit 3. */}
-      <div className="mt-5 px-4 py-8 text-center text-[12px] rounded-[14px]"
-           data-testid="ledger-placeholder"
-           style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
-        Ledger table coming in Commit 3 — filter toolbar, 17 sortable columns, sticky totals footer, inline edit affordance.
+      {/* Card: Transaction Ledger */}
+      <div className="mt-5 rounded-[14px] overflow-hidden"
+           data-testid="ledger-card"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(14,20,38,0.04)" }}>
+        {/* Card header strip */}
+        <div className="px-[18px] py-[14px] flex items-center gap-2"
+             style={{ borderBottom: "1px solid var(--border)" }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+          <span className="text-[13px] font-semibold">Transaction Ledger</span>
+          <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+            {enrichedRows.length} fills · {uniqueTickerCount} tickers
+          </span>
+        </div>
+
+        {/* Filter toolbar */}
+        <div className="px-[18px] py-[14px] flex flex-wrap items-end gap-[12px_14px]"
+             style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
+          {/* Search */}
+          <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
+            <div className="relative">
+              <input type="text" value={filters.q}
+                     onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
+                     placeholder="Ticker, TRX ID, rule or note…"
+                     data-testid="filter-q"
+                     className="w-full h-[34px] pl-9 pr-8 rounded-[10px] text-[12px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: "var(--ink-4)" }}>⌕</span>
+              {filters.q && (
+                <button type="button" onClick={() => setFilters(f => ({ ...f, q: "" }))}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-[12px]"
+                        style={{ color: "var(--ink-4)" }}>✕</button>
+              )}
+            </div>
+          </div>
+
+          {/* Series */}
+          <SegmentedControl
+            label="Series"
+            value={filters.series}
+            onChange={v => setFilters(f => ({ ...f, series: v as Filters["series"] }))}
+            options={[{ v: "all", l: "All" }, { v: "B", l: "B · Original" }, { v: "A", l: "A · Add-on" }]}
+            testId="filter-series"
+          />
+
+          {/* Action */}
+          <SegmentedControl
+            label="Action"
+            value={filters.action}
+            onChange={v => setFilters(f => ({ ...f, action: v as Filters["action"] }))}
+            options={[{ v: "all", l: "All" }, { v: "BUY", l: "Buy" }, { v: "SELL", l: "Sell" }]}
+            testId="filter-action"
+          />
+
+          {/* P&L */}
+          <SegmentedControl
+            label="P&L"
+            value={filters.pl}
+            onChange={v => setFilters(f => ({ ...f, pl: v as Filters["pl"] }))}
+            options={[{ v: "all", l: "All" }, { v: "realized", l: "Realized" }, { v: "unrealized", l: "Unrealized" }]}
+            testId="filter-pl"
+          />
+
+          {/* Status */}
+          <FilterSelect
+            label="Status"
+            value={filters.status}
+            onChange={v => setFilters(f => ({ ...f, status: v as Filters["status"] }))}
+            options={[
+              { v: "all", l: "All status" },
+              { v: "Open", l: "Open" },
+              { v: "Partial", l: "Partial" },
+              { v: "Closed", l: "Closed" },
+            ]}
+            testId="filter-status"
+          />
+
+          {/* Ticker */}
+          <FilterSelect
+            label="Ticker"
+            value={filters.ticker}
+            onChange={v => setFilters(f => ({ ...f, ticker: v }))}
+            options={[{ v: "all", l: "All tickers" }, ...tickerOptions.map(t => ({ v: t, l: t }))]}
+            testId="filter-ticker"
+          />
+
+          {/* Rule */}
+          <FilterSelect
+            label="Rule"
+            value={filters.rule}
+            onChange={v => setFilters(f => ({ ...f, rule: v }))}
+            options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
+            testId="filter-rule"
+          />
+
+          {/* Date range */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Date range</span>
+            <div className="flex items-center gap-2">
+              <input type="date" value={filters.from}
+                     onChange={e => setFilters(f => ({ ...f, from: e.target.value }))}
+                     data-testid="filter-from"
+                     className="h-[34px] px-2 rounded-[10px] text-[12px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+              <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>–</span>
+              <input type="date" value={filters.to}
+                     onChange={e => setFilters(f => ({ ...f, to: e.target.value }))}
+                     data-testid="filter-to"
+                     className="h-[34px] px-2 rounded-[10px] text-[12px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+          </div>
+
+          {/* Tail: match count + Reset */}
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-[11px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+              <b>{sorted.length}</b> of {enrichedRows.length}
+            </span>
+            <button type="button" onClick={resetFilters} disabled={!filtersDirty}
+                    data-testid="filter-reset"
+                    className="text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ color: filtersDirty ? navColor : "var(--ink-4)" }}>
+              ✕ Reset
+            </button>
+          </div>
+        </div>
+
+        {/* Ledger table */}
+        <div className="overflow-auto" style={{ maxHeight: "clamp(340px, calc(100vh - 392px), 760px)" }}>
+          <table className="w-full text-[11.5px]" data-testid="ledger-table" style={{ borderCollapse: "collapse", whiteSpace: "nowrap" }}>
+            <thead>
+              <tr>
+                {COLUMNS.map(c => {
+                  const active = sort.key === c.key;
+                  const caret = active ? (sort.dir === "asc" ? "▲" : "▼") : "";
+                  return (
+                    <th key={c.key}
+                        onClick={() => onSort(c.key)}
+                        data-testid={`th-${c.key}`}
+                        className="px-3 py-2 text-[9.5px] font-bold uppercase tracking-[0.08em] cursor-pointer select-none sticky top-0"
+                        style={{
+                          background: "var(--surface-2)", zIndex: 3,
+                          color: active ? navColor : "var(--ink-4)",
+                          textAlign: c.align,
+                          borderBottom: "1px solid var(--border)",
+                        }}>
+                      {c.label}{caret ? ` ${caret}` : ""}
+                    </th>
+                  );
+                })}
+                {/* Edit column — header has no sort. */}
+                <th className="px-3 py-2 text-[9.5px] font-bold uppercase tracking-[0.08em] sticky top-0"
+                    style={{ background: "var(--surface-2)", zIndex: 3, color: "var(--ink-4)", textAlign: "right", borderBottom: "1px solid var(--border)" }}>
+                  Edit
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.length === 0 ? (
+                <tr>
+                  <td colSpan={COLUMNS.length + 1}
+                      data-testid="ledger-empty-state"
+                      className="px-3 py-14 text-center text-[12px]"
+                      style={{ color: "var(--ink-4)" }}>
+                    {enrichedRows.length === 0
+                      ? "No fills loaded yet. Adjust the date range or refresh."
+                      : `No transactions match these filters. Reset to see all ${enrichedRows.length} fills.`}
+                  </td>
+                </tr>
+              ) : sorted.map(r => <LedgerRowEl key={`${r.detail_id}-${r.trx_id}`} r={r} navColor={navColor} />)}
+            </tbody>
+            {sorted.length > 0 && (
+              <tfoot>
+                <tr style={{ background: "var(--bg-2)" }}>
+                  <td className="px-3 py-2 text-[9.5px] font-bold uppercase tracking-[0.06em] sticky bottom-0"
+                      colSpan={5}
+                      style={{ background: "var(--bg-2)", color: "var(--ink-3)", borderTop: "2px solid var(--border-2)" }}>
+                    Totals · {sorted.length} rows
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold sticky bottom-0"
+                      data-testid="footer-shares"
+                      style={{ background: "var(--bg-2)", fontFamily: mono, borderTop: "2px solid var(--border-2)" }}>
+                    {Math.round(totals.shares).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold sticky bottom-0"
+                      data-testid="footer-remaining"
+                      style={{ background: "var(--bg-2)", fontFamily: mono, borderTop: "2px solid var(--border-2)" }}>
+                    {Math.round(totals.remaining).toLocaleString()}
+                  </td>
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="px-3 py-2 text-right font-bold privacy-mask sticky bottom-0"
+                      data-testid="footer-value"
+                      style={{ background: "var(--bg-2)", fontFamily: mono, borderTop: "2px solid var(--border-2)" }}>
+                    {formatCurrency(totals.value, { decimals: 0 })}
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold privacy-mask sticky bottom-0"
+                      data-testid="footer-realized"
+                      style={{ background: "var(--bg-2)", fontFamily: mono, color: pctColor(totals.realized), borderTop: "2px solid var(--border-2)" }}>
+                    {formatCurrency(totals.realized, { showSign: true, decimals: 0 })}
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold privacy-mask sticky bottom-0"
+                      data-testid="footer-unrealized"
+                      style={{ background: "var(--bg-2)", fontFamily: mono, color: pctColor(totals.unrealized), borderTop: "2px solid var(--border-2)" }}>
+                    {formatCurrency(totals.unrealized, { showSign: true, decimals: 0 })}
+                  </td>
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                  <td className="sticky bottom-0" style={{ background: "var(--bg-2)", borderTop: "2px solid var(--border-2)" }} />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
       </div>
     </div>
+  );
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────
+
+function SegmentedControl<T extends string>({ label, value, onChange, options, testId }: {
+  label: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: { v: T; l: string }[];
+  testId: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{label}</span>
+      <div className="flex p-0.5 rounded-[10px] gap-0.5 h-[34px]" style={{ background: "var(--bg-2)", border: "1px solid var(--border)" }}>
+        {options.map(o => (
+          <button key={o.v} type="button"
+                  onClick={() => onChange(o.v)}
+                  data-testid={`${testId}-${o.v}`}
+                  className="px-3 rounded-[8px] text-[11px] font-medium transition-all"
+                  style={{
+                    background: value === o.v ? "var(--surface)" : "transparent",
+                    color: value === o.v ? "var(--ink)" : "var(--ink-4)",
+                    boxShadow: value === o.v ? "0 1px 2px rgba(14,20,38,0.04)" : "none",
+                  }}>
+            {o.l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FilterSelect({ label, value, onChange, options, testId }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { v: string; l: string }[];
+  testId: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{label}</span>
+      <select value={value}
+              onChange={e => onChange(e.target.value)}
+              data-testid={testId}
+              className="h-[34px] px-2.5 rounded-[10px] text-[12px] min-w-[120px]"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as never }}>
+        {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function LedgerRowEl({ r, navColor }: { r: LedgerRow; navColor: string }) {
+  const isSell = r.action === "SELL";
+  const seriesChar = (r.trx_id || "").charAt(0).toUpperCase();
+  const seriesTagColor = seriesChar === "B" ? "var(--g-ops, #08a86b)" : "var(--g-mkt, #8b5cf6)";
+  const statusBg =
+    r.status === "Open" ? "color-mix(in oklab, #08a86b 14%, var(--surface))" :
+    r.status === "Partial" ? "color-mix(in oklab, #f59f00 18%, var(--surface))" :
+    "var(--bg-2)";
+  const statusColor =
+    r.status === "Open" ? "#08a86b" :
+    r.status === "Partial" ? "#a87108" :
+    "var(--ink-4)";
+  const retStyle = r.ret != null ? retChipStyle(r.ret) : null;
+  return (
+    <tr className="hover:bg-[var(--surface-2)]" data-testid={`row-${r.detail_id}`}
+        style={{ borderBottom: "1px solid var(--border)" }}>
+      <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{r.trx_id || "—"}</td>
+      <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+        {r.date.length >= 16 ? r.date.slice(0, 16).replace("T", " ") : r.date.slice(0, 10)}
+      </td>
+      <td className="px-3 py-2.5 text-[11.5px] font-semibold" style={{ fontFamily: mono }}>{r.ticker}</td>
+      <td className="px-3 py-2.5 text-[11.5px]">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSell ? "#e5484d" : "#08a86b" }} />
+          <span style={{ color: isSell ? "#e5484d" : "#08a86b" }}>{isSell ? "Sell" : "Buy"}</span>
+          {r.trx_id && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold"
+                  style={{ background: `color-mix(in oklab, ${seriesTagColor} 14%, var(--surface))`, color: seriesTagColor }}>
+              {r.trx_id}
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 text-[11.5px]">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold"
+              style={{ background: statusBg, color: statusColor }}>
+          <span className="w-1 h-1 rounded-full" style={{ background: statusColor }} />
+          {r.status}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono }}>{r.shares > 0 ? Math.round(r.shares).toLocaleString() : "—"}</td>
+      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: r.remaining == null ? "var(--ink-4)" : "var(--ink)" }}>
+        {r.remaining == null ? "—" : Math.round(r.remaining).toLocaleString()}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+        {r.cost_basis > 0 ? `$${r.cost_basis.toFixed(2)}` : "—"}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, color: r.exit_price == null ? "var(--ink-4)" : "var(--ink)" }}>
+        {r.exit_price == null ? "—" : `$${r.exit_price.toFixed(2)}`}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+        {r.stop_loss > 0 ? `$${r.stop_loss.toFixed(2)}` : "—"}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+        {r.value !== 0 ? formatCurrency(r.value, { decimals: 0 }) : "—"}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, color: r.realized == null ? "var(--ink-4)" : pctColor(r.realized) }}>
+        {r.realized == null ? "—" : formatCurrency(r.realized, { showSign: true, decimals: 2 })}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, color: r.unrealized == null ? "var(--ink-4)" : pctColor(r.unrealized) }}>
+        {r.unrealized == null ? "—" : formatCurrency(r.unrealized, { showSign: true, decimals: 2 })}
+      </td>
+      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono }}>
+        {r.ret == null || retStyle == null ? "—" : (
+          <span className="inline-block px-2 py-0.5 rounded-md font-semibold text-[10.5px]"
+                style={{ background: retStyle.bg, color: retStyle.color }}>
+            {r.ret >= 0 ? "+" : ""}{r.ret.toFixed(1)}%
+          </span>
+        )}
+      </td>
+      <td className="px-3 py-2.5 text-[11px]" style={{ color: isSell ? "#e5484d" : "var(--ink-2)", fontFamily: mono }}>
+        {r.rule || "—"}
+      </td>
+      <td className="px-3 py-2.5 text-[11px]" style={{ color: r.notes ? "var(--ink-2)" : "var(--ink-4)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}
+          title={r.notes || ""}>
+        {r.notes || "—"}
+      </td>
+      <td className="px-3 py-2.5 text-right">
+        <button type="button"
+                disabled
+                title="Edit wiring lands in Commit 4 — opens the same separate window Trade Journal uses."
+                data-testid={`edit-${r.detail_id}`}
+                className="w-[26px] h-[26px] rounded-[8px] inline-flex items-center justify-center cursor-not-allowed opacity-50 transition-all"
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+          ✎
+        </button>
+      </td>
+    </tr>
   );
 }
