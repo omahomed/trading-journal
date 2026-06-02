@@ -3382,9 +3382,10 @@ def _empty_add_effectiveness_response(
 
 # ─────────────────────────────────────────────────────────────────────
 # SR8 Cascade Monitor — wraps mors.monitor.analyze() per position in
-# mors/positions.json and returns hold/trim/exit recommendations.
+# the user's portfolio that the Active Campaign view classifies as
+# SR8-tier, and returns hold/trim/exit recommendations.
 #
-# Architecture (from the audit, confirmed by the user):
+# Architecture:
 #   - Source of truth: mors/monitor.py + mors/mors_backtest.py
 #     (Python engine that replays the weekly cascade from each
 #     position's B1 date through today).
@@ -3392,29 +3393,102 @@ def _empty_add_effectiveness_response(
 #     from yfinance if the per-ticker CSV is missing. First request
 #     on a fresh Railway container is slow (~1s per ticker); subsequent
 #     hits use the on-disk cache for the container lifetime.
-#   - Positions source: mors/positions.json (hand-maintained list).
-#     Path α from the audit — kept as-is for v1; potential migration
-#     to trades_summary tags is a follow-up.
+#   - Positions source: trades_summary rows in the active portfolio
+#     where shares > 0 and b1_max_return_pct >= 50. Mirrors the
+#     frontend's classifySellRuleTier() — see frontend/src/lib/sell-rule.ts.
+#     A small lag exists for fresh SR8 promotions (b1_max_return_pct
+#     is auto-promoted on Active Campaign load via /api/trades/{id}/update-b1-max).
 # ─────────────────────────────────────────────────────────────────────
 
 _MORS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mors")
-_SR8_POSITIONS_PATH = os.path.join(_MORS_DIR, "positions.json")
 _SR8_SPY_CSV_PATH = os.path.join(_MORS_DIR, "data", "SPY_daily.csv")
 
+# Persistent-peak threshold that defines the SR8 tier. Mirrors
+# classifySellRuleTier(b1_return_pct >= 50) in frontend/src/lib/sell-rule.ts.
+_SR8_TIER_THRESHOLD = 50.0
 
-def _sr8_load_positions() -> list[dict[str, Any]]:
-    """Load the hand-maintained sr8 positions list. Returns [] if the
-    file is missing — the endpoint surfaces that as an empty response
-    rather than a 500."""
-    if not os.path.exists(_SR8_POSITIONS_PATH):
-        return []
+
+def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
+    """Open positions in `portfolio` that are SR8-tier — synthesizes the
+    MORS analyze() input shape from trades_summary + trades_details.
+
+    Filter mirrors the frontend sell-rule classifier: a position is SR8
+    iff its persistent-peak b1_max_return_pct >= 50. Options are excluded
+    (cascade engine is stock-only). Positions missing a first BUY (rare
+    History-import rows) or a valid B1 price are skipped, since MORS
+    needs both to replay the cascade.
+
+    Returns [] on any DB error so the endpoint surfaces an empty page
+    rather than a 500.
+    """
     try:
-        with open(_SR8_POSITIONS_PATH) as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
+        summary_df = db.load_summary(portfolio)
     except Exception as e:
-        print(f"[sr8_monitor] positions.json load failed: {e}")
+        print(f"[sr8_monitor] load_summary failed for portfolio={portfolio}: {e}")
         return []
+    if summary_df.empty:
+        return []
+    summary_df = _normalize_trades(summary_df)
+
+    status_col = "status" if "status" in summary_df.columns else "Status"
+    open_df = summary_df[summary_df[status_col].astype(str).str.upper() == "OPEN"].copy()
+    if open_df.empty:
+        return []
+
+    open_df["_shares_num"] = pd.to_numeric(open_df.get("shares"), errors="coerce").fillna(0)
+    open_df["_b1_max_num"] = pd.to_numeric(open_df.get("b1_max_return_pct"), errors="coerce")
+    open_df["_b1_entry_num"] = pd.to_numeric(open_df.get("b1_entry_price"), errors="coerce")
+    open_df["_avg_entry_num"] = pd.to_numeric(open_df.get("avg_entry"), errors="coerce").fillna(0)
+
+    sr8_df = open_df[
+        (open_df["_shares_num"] > 0)
+        & (open_df["_b1_max_num"].notna())
+        & (open_df["_b1_max_num"] >= _SR8_TIER_THRESHOLD)
+    ]
+    if "instrument_type" in sr8_df.columns:
+        sr8_df = sr8_df[sr8_df["instrument_type"].astype(str).str.upper() != "OPTION"]
+    if sr8_df.empty:
+        return []
+
+    # First BUY date per trade_id — one details query for the whole portfolio.
+    try:
+        details_df = db.load_details(portfolio)
+    except Exception as e:
+        print(f"[sr8_monitor] load_details failed for portfolio={portfolio}: {e}")
+        return []
+    if details_df.empty:
+        return []
+    details_df = _normalize_trades(details_df)
+    buys = details_df[details_df["action"].astype(str).str.upper() == "BUY"].copy()
+    buys["date"] = pd.to_datetime(buys["date"], errors="coerce")
+    buys = buys.dropna(subset=["date"]).sort_values(["trade_id", "date"])
+    first_buy_dates = buys.groupby("trade_id")["date"].first().to_dict()
+
+    positions: list[dict[str, Any]] = []
+    for _, row in sr8_df.iterrows():
+        trade_id = row.get("trade_id")
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if not ticker:
+            continue
+        b1_date_val = first_buy_dates.get(trade_id)
+        if b1_date_val is None:
+            continue
+        b1_date_iso = (
+            b1_date_val.strftime("%Y-%m-%d")
+            if hasattr(b1_date_val, "strftime")
+            else str(b1_date_val)
+        )
+        b1_entry = row["_b1_entry_num"]
+        if pd.isna(b1_entry) or float(b1_entry) <= 0:
+            continue
+        positions.append({
+            "ticker": ticker,
+            "b1_date": b1_date_iso,
+            "b1_price": float(b1_entry),
+            "shares_held": float(row["_shares_num"]),
+            "avg_price": float(row["_avg_entry_num"]),
+        })
+    return positions
 
 
 def _sr8_fetched_at_iso() -> str:
@@ -3517,13 +3591,14 @@ def _sr8_enrich(pos: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _sr8_run_monitor(nlv: float, refresh: bool = False) -> dict[str, Any]:
-    """Walk positions.json, run mors.monitor.analyze() per position, and
-    assemble the response payload. Errors per-position bucket into
-    fetch_failed rows so a single bad ticker doesn't break the page."""
+def _sr8_run_monitor(nlv: float, portfolio: str = "CanSlim", refresh: bool = False) -> dict[str, Any]:
+    """Pull SR8 positions for `portfolio` from the trades DB, run
+    mors.monitor.analyze() per position, and assemble the response
+    payload. Errors per-position bucket into fetch_failed rows so a
+    single bad ticker doesn't break the page."""
     from mors.monitor import analyze as mors_analyze
 
-    positions = _sr8_load_positions()
+    positions = _sr8_load_db_positions(portfolio)
     rows: list[dict[str, Any]] = []
     for pos in positions:
         try:
@@ -3556,29 +3631,32 @@ def _sr8_run_monitor(nlv: float, refresh: bool = False) -> dict[str, Any]:
         "meta": {
             "fetched_at": _sr8_fetched_at_iso(),
             "nlv": nlv,
+            "portfolio": portfolio,
         },
     }
 
 
 @app.get("/api/sr8/monitor")
 @limiter.limit("30/minute")
-def sr8_monitor(request: Request, nlv: float = Query(..., gt=0)):
+def sr8_monitor(request: Request, nlv: float = Query(..., gt=0), portfolio: str = "CanSlim"):
     """Daily SR8 cascade monitor — per-position hold/trim/exit decisions.
 
-    Wraps mors.monitor.analyze() across every position listed in
-    mors/positions.json. Reads weekly-cached prices from mors/data/
-    (auto-fetched from yfinance if missing). Returns a single payload
-    the SR8 Monitor frontend page renders directly.
+    Wraps mors.monitor.analyze() across every open position in `portfolio`
+    that classifies as SR8 (persistent peak b1_max_return_pct >= 50).
+    Reads weekly-cached prices from mors/data/ (auto-fetched from yfinance
+    if missing). Returns a single payload the SR8 Monitor frontend page
+    renders directly.
 
     Query:
       nlv (float, > 0): current Net Liq Value driving cascade math.
         Edits to NLV on the page re-call this endpoint.
+      portfolio (str): portfolio name — same convention as /api/trades/open.
 
     Response: see _sr8_run_monitor(). Stable shape; fetch failures
     bucket per-position into rows with `fetch_failed: true`.
     """
     try:
-        return _sr8_run_monitor(nlv, refresh=False)
+        return _sr8_run_monitor(nlv, portfolio=portfolio, refresh=False)
     except Exception as e:
         print(f"[sr8_monitor] handler failed: {e}")
         return {"error": str(e)}
@@ -3593,12 +3671,14 @@ def sr8_refresh(request: Request, body: dict = Body(...)):
 
     Body:
       nlv (float, > 0): same as GET /api/sr8/monitor's query param.
+      portfolio (str, optional): defaults to "CanSlim".
     """
     try:
         nlv = float(body.get("nlv") or 0)
+        portfolio = str(body.get("portfolio") or "CanSlim")
         if nlv <= 0:
             return {"error": "nlv must be a positive number"}
-        return _sr8_run_monitor(nlv, refresh=True)
+        return _sr8_run_monitor(nlv, portfolio=portfolio, refresh=True)
     except Exception as e:
         print(f"[sr8_refresh] handler failed: {e}")
         return {"error": str(e)}
