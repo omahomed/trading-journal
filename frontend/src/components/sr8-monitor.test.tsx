@@ -50,6 +50,39 @@ function makeResponse(overrides: Partial<any> = {}) {
   };
 }
 
+// Helper — build an SR8AnalyzedPosition with sensible defaults so each
+// test only specifies what's load-bearing.
+function makePosition(overrides: Partial<any> = {}) {
+  return {
+    ticker: "AAA",
+    b1_date: "2026-04-01",
+    b1_price: 100,
+    shares_held: 100,
+    avg_price: 100,
+    current_price: 120,
+    current_dollars: 12000,
+    current_pct_nlv: 12.0,
+    cascade_core: 15,
+    tier_pct_nlv: 15.0,
+    target_dollars: 60000,
+    delta_dollars: 0,
+    delta_shares: 0,
+    unreal_dollars: 2000,
+    unreal_pct: 20,
+    last_signal: "GREEN",
+    last_signal_date: "2026-04-13",
+    last_bar_date: "2026-04-18",
+    signal_today: false,
+    terminated: false,
+    phase: 2,
+    is_action: false,
+    early_warn: false,
+    fetch_failed: false,
+    fetch_error: "",
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
@@ -128,8 +161,8 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     }));
 
     render(<Sr8Monitor navColor="#e5484d" />);
-    await waitFor(() => expect(screen.getByTestId("sr8-body-placeholder")).toBeInTheDocument());
-    expect(screen.getByTestId("sr8-body-placeholder").textContent).toMatch(/No positions tagged sr8/);
+    await waitFor(() => expect(screen.getByTestId("sr8-empty-state")).toBeInTheDocument());
+    expect(screen.getByTestId("sr8-empty-state").textContent).toMatch(/No positions tagged sr8/);
   });
 
   test("error from endpoint renders an inline error message", async () => {
@@ -154,5 +187,246 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     // Resolve the fetch — skeleton should give way to the body placeholder.
     resolveFetch(makeResponse());
     await waitFor(() => expect(screen.queryByTestId("sr8-loading")).not.toBeInTheDocument());
+  });
+});
+
+// ─── Action / Hold sections + Mark-done (Commit 3) ──────────────────
+
+describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
+  beforeEach(() => {
+    // Ensure localStorage starts clean for the mark-done tests.
+    window.localStorage.clear();
+  });
+
+  test("flagged positions render as Action rows; non-flagged in Hold table", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "FOO", is_action: true, delta_shares: 50, tier_pct_nlv: 15, last_signal: "GREEN", current_pct_nlv: 22 }),
+        makePosition({ ticker: "BAR", is_action: false, last_signal: "ENTRY", current_pct_nlv: 5.2 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+
+    await waitFor(() => expect(screen.getByTestId("sr8-action-section")).toBeInTheDocument());
+
+    // FOO renders as an action row; BAR as a hold row.
+    expect(screen.getByTestId("sr8-action-FOO")).toBeInTheDocument();
+    expect(screen.getByTestId("sr8-hold-row-BAR")).toBeInTheDocument();
+    expect(screen.queryByTestId("sr8-action-BAR")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sr8-hold-row-FOO")).not.toBeInTheDocument();
+  });
+
+  test("EXIT action (terminated) renders 'EXIT all N sh' verb", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DEAD", is_action: true, terminated: true, last_signal: "GD", shares_held: 80, current_pct_nlv: 8.7 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-DEAD")).toBeInTheDocument());
+
+    const row = screen.getByTestId("sr8-action-DEAD");
+    expect(row.textContent).toContain("EXIT");
+    expect(row.textContent).toContain("80 sh");
+    expect(row.textContent).toContain("full exit ends campaign");
+  });
+
+  test("TRIM action renders 'TRIM N sh → tier% NLV target'", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "FOO", is_action: true, last_signal: "GREEN", delta_shares: 168, tier_pct_nlv: 20, current_pct_nlv: 26.3, cascade_core: 20 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-FOO")).toBeInTheDocument());
+
+    const row = screen.getByTestId("sr8-action-FOO");
+    expect(row.textContent).toContain("TRIM");
+    expect(row.textContent).toContain("168 sh");
+    expect(row.textContent).toContain("20% NLV target");
+    expect(row.textContent).toContain("20-cascade");
+  });
+
+  test("Mark done removes the row from the Action section after the 320ms animation", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "FOO", is_action: true, delta_shares: 50, tier_pct_nlv: 15, last_signal: "GREEN", current_pct_nlv: 22 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-FOO")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("sr8-mark-done-FOO"));
+
+    // Wait past the 320ms collapse animation — waitFor polls until the
+    // assertion passes or times out (default 1000ms, plenty of headroom).
+    await waitFor(() => {
+      expect(screen.queryByTestId("sr8-action-FOO")).not.toBeInTheDocument();
+    });
+  });
+
+  test("Mark done writes the ticker to localStorage, namespaced by fetched_at", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "FOO", is_action: true, delta_shares: 50, tier_pct_nlv: 15, last_signal: "GREEN", current_pct_nlv: 22 }),
+      ],
+      meta: { fetched_at: "2026-04-13T16:00:00", nlv: 500000 },
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-FOO")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("sr8-mark-done-FOO"));
+
+    // Wait until the localStorage write happens (post-animation).
+    await waitFor(() => {
+      const raw = window.localStorage.getItem("sr8_monitor_done_v1");
+      expect(raw).toBeTruthy();
+    });
+    const parsed = JSON.parse(window.localStorage.getItem("sr8_monitor_done_v1")!);
+    expect(parsed.fetched_at).toBe("2026-04-13T16:00:00");
+    expect(parsed.tickers).toContain("FOO");
+  });
+
+  test("done list resets when fetched_at changes (new snapshot week)", async () => {
+    // Pre-seed localStorage with a done entry under an OLD fetched_at.
+    window.localStorage.setItem("sr8_monitor_done_v1", JSON.stringify({
+      fetched_at: "2026-04-06T16:00:00",  // last week
+      tickers: ["FOO"],
+    }));
+
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "FOO", is_action: true, delta_shares: 50, tier_pct_nlv: 15, last_signal: "GREEN", current_pct_nlv: 22 }),
+      ],
+      meta: { fetched_at: "2026-04-13T16:00:00", nlv: 500000 },  // new week
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+
+    // FOO should appear in the Action list — the previous-week's done
+    // entry is stale (fetched_at mismatch) and doesn't carry over.
+    await waitFor(() => expect(screen.getByTestId("sr8-action-FOO")).toBeInTheDocument());
+  });
+
+  test("Hold table renders sortable headers with default sort indicator", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "A", is_action: false, current_pct_nlv: 5.0 }),
+        makePosition({ ticker: "B", is_action: false, current_pct_nlv: 12.5 }),
+        makePosition({ ticker: "C", is_action: false, current_pct_nlv: 8.0 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-table")).toBeInTheDocument());
+
+    // Default sort: % NLV desc → B (12.5) first, C (8.0), A (5.0).
+    const rows = screen.getByTestId("sr8-hold-table").querySelectorAll("tbody tr");
+    expect(rows[0].textContent).toContain("B");
+    expect(rows[1].textContent).toContain("C");
+    expect(rows[2].textContent).toContain("A");
+
+    // The % NLV header carries the active sort caret.
+    expect(screen.getByTestId("sr8-hold-th-current_pct_nlv").textContent).toContain("▼");
+  });
+
+  test("Clicking the Ticker header toggles to ascending alphabetical sort", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "MU", is_action: false, current_pct_nlv: 5 }),
+        makePosition({ ticker: "ALAB", is_action: false, current_pct_nlv: 8 }),
+        makePosition({ ticker: "ZZZ", is_action: false, current_pct_nlv: 3 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("sr8-hold-th-ticker"));
+
+    await waitFor(() => {
+      const rows = screen.getByTestId("sr8-hold-table").querySelectorAll("tbody tr");
+      // After click → asc → ALAB, MU, ZZZ.
+      expect(rows[0].textContent).toContain("ALAB");
+      expect(rows[1].textContent).toContain("MU");
+      expect(rows[2].textContent).toContain("ZZZ");
+    });
+  });
+
+  test("Early-warning row carries the NEAR pill", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "TER", is_action: false, early_warn: true, last_signal: "QUICK", current_pct_nlv: 11.1, tier_pct_nlv: 11.25 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-TER")).toBeInTheDocument());
+
+    expect(screen.getByTestId("sr8-near-TER")).toBeInTheDocument();
+    expect(screen.getByTestId("sr8-near-TER").textContent).toContain("NEAR");
+  });
+
+  test("Fetch-failed row renders muted with 'price unavailable' + a disabled Retry stub", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", fetch_failed: true, fetch_error: "yfinance 429", current_price: null }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-DELL")).toBeInTheDocument());
+
+    const row = screen.getByTestId("sr8-hold-row-DELL");
+    expect(row.textContent).toContain("fetch failed");
+    expect(row.textContent).toContain("price unavailable");
+
+    const retryBtn = screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement;
+    expect(retryBtn.disabled).toBe(true);
+    expect(retryBtn.title).toMatch(/Commit 4/);
+  });
+
+  test("ENTRY row shows '/ building' instead of a numeric target in the % NLV column", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "SNDK", is_action: false, last_signal: "ENTRY", current_pct_nlv: 5.2 }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-SNDK")).toBeInTheDocument());
+    expect(screen.getByTestId("sr8-hold-row-SNDK").textContent).toContain("/ building");
+  });
+
+  test("All-clear placeholder appears when no actions but positions exist", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "AAA", is_action: false }),
+        makePosition({ ticker: "BBB", is_action: false }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-section")).toBeInTheDocument());
+
+    expect(screen.getByTestId("sr8-all-clear-placeholder")).toBeInTheDocument();
+    expect(screen.queryByTestId("sr8-action-rows")).not.toBeInTheDocument();
   });
 });

@@ -157,11 +157,14 @@
   --kpi-shadow: 0 4px 14px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04);
   /* SR8 signal-tint dark-mode overrides. The base shades (#eab308 yellow,
      #f97316 orange) are darkened over the dark surface so contrast holds
-     and the badges read as signals, not buttons. */
-  --color-sig-quick-text: color-mix(in oklab, #eab308 70%, #ffffff);
-  --color-sig-quick-bg:   color-mix(in oklab, #eab308 16%, #1a1d27);
-  --color-sig-qs-text:    color-mix(in oklab, #f97316 70%, #ffffff);
-  --color-sig-qs-bg:      color-mix(in oklab, #f97316 16%, #1a1d27);
+     and the badges read as signals, not buttons. Override uses the
+     UNPREFIXED runtime var names — Tailwind v4's @theme mirrors
+     --color-sig-* into --sig-* at runtime; .dark must touch the
+     unprefixed form to win the cascade. */
+  --sig-quick-text: color-mix(in oklab, #eab308 70%, #ffffff);
+  --sig-quick-bg:   color-mix(in oklab, #eab308 16%, #1a1d27);
+  --sig-qs-text:    color-mix(in oklab, #f97316 70%, #ffffff);
+  --sig-qs-bg:      color-mix(in oklab, #f97316 16%, #1a1d27);
 }
 
 body {

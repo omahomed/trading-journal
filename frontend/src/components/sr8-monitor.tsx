@@ -3,17 +3,16 @@
 // SR8 Cascade Monitor — daily position-management screen for positions
 // tagged sr8. Build sequence:
 //   Commit 1: backend endpoint + route stub + nav rename (merged).
-//   Commit 2 (this commit): page scaffold — control strip + summary
-//     chips + weekly snapshot card + data fetch. Action/Hold sections
-//     still a placeholder.
-//   Commit 3: Action / Hold sections + Mark-done state.
+//   Commit 2: page scaffold — control strip + summary chips + weekly
+//     snapshot + data fetch (merged).
+//   Commit 3 (this commit): Action / Hold sections + Mark-done state.
 //   Commit 4: All-clear / Loading / Empty / Retry states.
 //
 // The cascade math lives in mors/monitor.py (Python). The
 // /api/sr8/monitor endpoint wraps it; this page renders the response.
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { api, getActivePortfolio, type SR8MonitorResponse } from "@/lib/api";
+import { api, getActivePortfolio, type SR8MonitorResponse, type SR8AnalyzedPosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 
@@ -51,6 +50,66 @@ function shortMonthDay(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// Signal display — collapses MORS's verbose "QUICKSAND" into the design's
+// short "QS" badge, and aliases the GREEN sub-entry variant. The 5 visible
+// signal classes (ENTRY/GREEN/QUICK/QS/GD) each map to a (bg, text) color
+// pair sourced from the existing theme tokens. Unknown signals fall back
+// to a muted neutral (defensive — engine should never emit one).
+function signalDisplay(signal: string): { label: string; bg: string; text: string; severity: number } {
+  const s = (signal || "").toUpperCase();
+  if (s === "ENTRY") return { label: "ENTRY", bg: "var(--g-deep-soft)", text: "var(--g-deep)", severity: 0 };
+  if (s === "GREEN" || s === "GREEN(SUB-ENTRY)") return { label: "GREEN", bg: "var(--up-soft)", text: "var(--up)", severity: 1 };
+  if (s === "QUICK") return { label: "QUICK", bg: "var(--sig-quick-bg)", text: "var(--sig-quick-text)", severity: 2 };
+  if (s === "QUICKSAND" || s === "QS") return { label: "QS", bg: "var(--sig-qs-bg)", text: "var(--sig-qs-text)", severity: 3 };
+  if (s === "GD" || s === "TERMINATED") return { label: "GD", bg: "var(--down-soft)", text: "var(--down)", severity: 4 };
+  return { label: s || "—", bg: "var(--surface-2)", text: "var(--ink-3)", severity: -1 };
+}
+
+// localStorage key for the per-snapshot Mark-done list. We namespace by
+// the snapshot's fetched_at so a new weekly refresh implicitly resets
+// the done set (new bar = fresh decisions) without an explicit clear.
+const SR8_DONE_KEY = "sr8_monitor_done_v1";
+
+interface DoneCache {
+  fetched_at: string;
+  tickers: string[];
+}
+
+function loadDoneCache(): DoneCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SR8_DONE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.fetched_at === "string" && Array.isArray(parsed.tickers)) {
+      return { fetched_at: parsed.fetched_at, tickers: parsed.tickers.filter((t: unknown) => typeof t === "string") };
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+function saveDoneCache(fetched_at: string, tickers: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SR8_DONE_KEY, JSON.stringify({ fetched_at, tickers }));
+  } catch { /* localStorage may be full or disabled — non-fatal */ }
+}
+
+// Mark-done animation: ms before we commit to state. Matches the
+// 320ms collapse the design specifies.
+const MARK_DONE_ANIMATION_MS = 320;
+
+// Numeric vs text columns for Hold-table sort. Comparing signal uses
+// severity order (ENTRY < GREEN < QUICK < QS < GD); failed rows always
+// pinned to the bottom regardless of direction.
+const HOLD_NUMERIC_KEYS = new Set<keyof SR8AnalyzedPosition>([
+  "current_pct_nlv", "shares_held", "avg_price", "current_price",
+  "unreal_dollars", "unreal_pct",
+]);
+type HoldSortKey =
+  | "ticker" | "last_signal" | "current_pct_nlv" | "shares_held"
+  | "avg_price" | "current_price" | "unreal_dollars" | "unreal_pct";
+
 export function Sr8Monitor({ navColor }: { navColor: string }) {
   const [nlv, setNlv] = useState<number>(DEFAULT_NLV);
   const [nlvDraft, setNlvDraft] = useState<string>(String(DEFAULT_NLV));
@@ -59,6 +118,20 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [nlvSeeded, setNlvSeeded] = useState<boolean>(false);
+
+  // Mark-done state. `done` is the set of tickers the user has
+  // dismissed from the Action list this snapshot week; `exiting` is
+  // mid-animation (320ms collapse). Both persist by namespacing on the
+  // snapshot's fetched_at so a Refresh implicitly resets them.
+  const [done, setDone] = useState<string[]>([]);
+  const [exiting, setExiting] = useState<Set<string>>(() => new Set());
+
+  // Hold-table sort. Default: % NLV desc — the biggest positions
+  // floating to the top reads as "what's most concentrated."
+  const [sort, setSort] = useState<{ key: HoldSortKey; dir: "asc" | "desc" }>({
+    key: "current_pct_nlv",
+    dir: "desc",
+  });
 
   // Seed NLV from the active portfolio's latest journal entry once on
   // mount — same anchor active-campaign uses. User edits override.
@@ -160,6 +233,95 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
   }, [fetchedAt, ageDays]);
 
   const summary = data?.summary;
+
+  // Hydrate done from localStorage whenever the snapshot's fetched_at
+  // changes. The cache is namespaced by fetched_at — if the cached
+  // payload's fetched_at no longer matches (i.e., a refresh produced a
+  // new snapshot), the done list implicitly resets. This is why we
+  // don't need an explicit "clear on refresh" branch.
+  useEffect(() => {
+    if (!fetchedAt) return;
+    const cached = loadDoneCache();
+    if (cached && cached.fetched_at === fetchedAt) {
+      setDone(cached.tickers);
+    } else {
+      setDone([]);
+    }
+  }, [fetchedAt]);
+
+  const onMarkDone = useCallback((ticker: string) => {
+    if (!ticker) return;
+    setExiting(prev => {
+      if (prev.has(ticker)) return prev;
+      const next = new Set(prev);
+      next.add(ticker);
+      return next;
+    });
+    // Commit after the collapse animation finishes so the row doesn't
+    // snap out — visual continuity with the design's 320ms fade.
+    setTimeout(() => {
+      setDone(prevDone => {
+        if (prevDone.includes(ticker)) return prevDone;
+        const nextDone = [...prevDone, ticker];
+        saveDoneCache(fetchedAt, nextDone);
+        return nextDone;
+      });
+      setExiting(prev => {
+        if (!prev.has(ticker)) return prev;
+        const next = new Set(prev);
+        next.delete(ticker);
+        return next;
+      });
+    }, MARK_DONE_ANIMATION_MS);
+  }, [fetchedAt]);
+
+  // Split derived rows: actions (flagged + not failed + not done) vs
+  // holds (everything else). Failed rows go in the Hold table per spec.
+  const positions = data?.positions ?? [];
+  const doneSet = useMemo(() => new Set(done), [done]);
+
+  const actions = useMemo(
+    () => positions.filter(p => p.is_action && !p.fetch_failed && !doneSet.has(p.ticker)),
+    [positions, doneSet],
+  );
+  const holds = useMemo(
+    () => positions.filter(p => p.fetch_failed || !p.is_action || doneSet.has(p.ticker)),
+    [positions, doneSet],
+  );
+
+  // Hold-table sort comparator. Failed rows ALWAYS pin to the bottom
+  // (regardless of sort key/direction) — they don't have meaningful
+  // numeric values, so sorting them mixed in with priced rows reads
+  // as confusing.
+  const sortedHolds = useMemo(() => {
+    const arr = [...holds];
+    arr.sort((a, b) => {
+      if (a.fetch_failed !== b.fetch_failed) return a.fetch_failed ? 1 : -1;
+      let va: number | string;
+      let vb: number | string;
+      if (sort.key === "last_signal") {
+        va = signalDisplay(a.last_signal).severity;
+        vb = signalDisplay(b.last_signal).severity;
+      } else if (HOLD_NUMERIC_KEYS.has(sort.key)) {
+        va = Number((a as unknown as Record<string, unknown>)[sort.key] ?? 0);
+        vb = Number((b as unknown as Record<string, unknown>)[sort.key] ?? 0);
+      } else {
+        va = String((a as unknown as Record<string, unknown>)[sort.key] ?? "");
+        vb = String((b as unknown as Record<string, unknown>)[sort.key] ?? "");
+      }
+      const cmp = typeof va === "number" && typeof vb === "number"
+        ? va - vb
+        : String(va).localeCompare(String(vb));
+      return sort.dir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [holds, sort]);
+
+  const onSortHold = (key: HoldSortKey) => {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+      : { key, dir: HOLD_NUMERIC_KEYS.has(key) || key === "last_signal" ? "desc" : "asc" });
+  };
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="sr8-root">
@@ -277,16 +439,354 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
           <div className="h-[100px] rounded-[14px] mb-3" style={{ background: "var(--bg-2)" }} />
           <div className="h-[100px] rounded-[14px]" style={{ background: "var(--bg-2)" }} />
         </div>
-      ) : (
+      ) : data && data.positions.length === 0 ? (
         <div className="px-4 py-8 text-center text-[12px] rounded-[14px]"
-             data-testid="sr8-body-placeholder"
+             data-testid="sr8-empty-state"
              style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
-          {data && data.positions.length === 0
-            ? "No positions tagged sr8. (Empty-state polish lands in Commit 4.)"
-            : "Action / Hold sections coming in Commit 3 — for each position, a hold/trim/exit recommendation rendered from the cascade engine."}
+          No positions tagged sr8. (Empty-state polish lands in Commit 4.)
         </div>
+      ) : (
+        <>
+          {/* Action needed */}
+          <ActionSection
+            actions={actions}
+            doneCount={done.length}
+            exiting={exiting}
+            onMarkDone={onMarkDone}
+            navColor={navColor}
+          />
+
+          {/* Hold table */}
+          <HoldSection
+            holds={sortedHolds}
+            sort={sort}
+            onSort={onSortHold}
+            navColor={navColor}
+          />
+        </>
       )}
     </div>
+  );
+}
+
+// ─── Action section ──────────────────────────────────────────────────
+
+function ActionSection({ actions, doneCount, exiting, onMarkDone, navColor }: {
+  actions: SR8AnalyzedPosition[];
+  doneCount: number;
+  exiting: Set<string>;
+  onMarkDone: (ticker: string) => void;
+  navColor: string;
+}) {
+  const isAllClear = actions.length === 0;
+  return (
+    <section className="mb-6" data-testid="sr8-action-section">
+      <div className="flex items-center gap-2 mb-3">
+        <h2 className="text-[19px] font-normal m-0"
+            style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+          Action needed
+        </h2>
+        {!isAllClear && (
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold"
+                style={{ background: "color-mix(in oklab, var(--down) 14%, var(--surface))", color: "var(--down)", fontFamily: mono }}>
+            {actions.length}
+          </span>
+        )}
+        {doneCount > 0 && (
+          <span className="ml-auto text-[11px] font-medium" style={{ color: "var(--up)" }}>
+            ✓ {doneCount} done today
+          </span>
+        )}
+      </div>
+
+      {isAllClear ? (
+        <div className="px-4 py-6 text-center text-[12px] rounded-[14px]"
+             data-testid="sr8-all-clear-placeholder"
+             style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+          No actions today. (All-clear panel polish lands in Commit 4.)
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2.5" data-testid="sr8-action-rows">
+          {actions.map(p => (
+            <ActionRow key={p.ticker}
+                       p={p}
+                       exiting={exiting.has(p.ticker)}
+                       onMarkDone={onMarkDone}
+                       navColor={navColor} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ActionRow({ p, exiting, onMarkDone, navColor: _navColor }: {
+  p: SR8AnalyzedPosition;
+  exiting: boolean;
+  onMarkDone: (ticker: string) => void;
+  navColor: string;
+}) {
+  const sig = signalDisplay(p.last_signal);
+  const isExit = p.terminated;
+  return (
+    <div className="rounded-[14px] transition-all duration-200 hover:shadow-md"
+         data-testid={`sr8-action-${p.ticker}`}
+         style={{
+           background: "var(--surface)",
+           border: "1px solid var(--border)",
+           borderLeft: `4px solid ${sig.text}`,
+           boxShadow: "0 1px 2px rgba(14,20,38,0.04)",
+           padding: "14px 16px",
+           // Collapse animation: when exiting, snap maxHeight + opacity to 0
+           // over MARK_DONE_ANIMATION_MS so the row visibly slides away.
+           maxHeight: exiting ? 0 : 240,
+           opacity: exiting ? 0 : 1,
+           overflow: "hidden",
+           marginBottom: exiting ? -10 : 0,  // collapse the gap too
+           transition: `max-height ${MARK_DONE_ANIMATION_MS}ms ease, opacity ${MARK_DONE_ANIMATION_MS}ms ease, margin-bottom ${MARK_DONE_ANIMATION_MS}ms ease`,
+         }}>
+      <div className="grid items-center gap-[14px]"
+           style={{ gridTemplateColumns: "72px minmax(116px,0.9fr) minmax(196px,1.5fr) 116px auto" }}>
+        {/* Signal badge */}
+        <SignalBadge signal={p.last_signal} />
+
+        {/* Ticker block */}
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <div className="text-[19px] font-bold leading-none" style={{ fontFamily: mono, color: "var(--ink)" }}>
+            {p.ticker}
+          </div>
+          <div className="text-[11px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+            {Math.round(p.shares_held).toLocaleString()} sh{" "}
+            <span className="ml-1 inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold"
+                  style={{ background: "color-mix(in oklab, var(--g-mkt) 12%, var(--surface))", color: "var(--g-mkt)" }}>
+              Phase {p.phase}
+            </span>
+          </div>
+        </div>
+
+        {/* Recommended action */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-[30px] h-[30px] rounded-[8px] flex items-center justify-center text-[15px] shrink-0"
+               style={{ background: `color-mix(in oklab, ${sig.text} 14%, var(--surface))`, color: sig.text }}>
+            {isExit ? "↗" : "✂"}
+          </div>
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <div className="text-[15px] leading-tight" style={{ color: "var(--ink)" }}>
+              {isExit ? (
+                <>
+                  <span className="font-bold">EXIT</span>{" "}
+                  <span style={{ color: sig.text }}>all {Math.round(p.shares_held).toLocaleString()} sh</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-bold">TRIM</span>{" "}
+                  <span style={{ color: sig.text, fontFamily: mono }}>{Math.round(p.delta_shares).toLocaleString()} sh</span>
+                  <span className="mx-1.5" style={{ color: "var(--ink-5)" }}>→</span>
+                  <span style={{ fontFamily: mono }}>{p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% NLV target</span>
+                </>
+              )}
+            </div>
+            <div className="text-[11px] truncate" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+              {isExit
+                ? "Weekly GD · full exit ends campaign"
+                : `${p.cascade_core}-cascade · ${p.current_pct_nlv.toFixed(1)}% → ${p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% · ${formatCurrency(p.delta_dollars, { decimals: 0 })}`}
+            </div>
+          </div>
+        </div>
+
+        {/* Price / NLV */}
+        <div className="text-right" style={{ fontFamily: mono }}>
+          <div className="text-[16px] font-semibold leading-none privacy-mask" style={{ color: "var(--ink)" }}>
+            {p.current_price != null && p.current_price > 0 ? `$${p.current_price.toFixed(2)}` : "—"}
+          </div>
+          <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>
+            <span className="font-bold" style={{ color: sig.text }}>{p.current_pct_nlv.toFixed(1)}%</span> NLV now
+          </div>
+        </div>
+
+        {/* Mark done */}
+        <button type="button"
+                onClick={() => onMarkDone(p.ticker)}
+                disabled={exiting}
+                data-testid={`sr8-mark-done-${p.ticker}`}
+                className="h-[38px] px-4 rounded-[10px] text-[12px] font-semibold flex items-center gap-1.5 transition-all hover:brightness-110 disabled:opacity-60"
+                style={{ background: "var(--ink)", color: "#ffffff" }}>
+          <span>✓</span>
+          <span>Mark done</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SignalBadge({ signal }: { signal: string }) {
+  const sig = signalDisplay(signal);
+  return (
+    <span className="inline-flex items-center justify-center px-2.5 h-[26px] rounded-[8px] text-[10.5px] font-bold uppercase tracking-[0.06em]"
+          data-testid={`sr8-signal-${sig.label}`}
+          style={{ background: sig.bg, color: sig.text, fontFamily: mono }}>
+      {sig.label}
+    </span>
+  );
+}
+
+// ─── Hold section ────────────────────────────────────────────────────
+
+function HoldSection({ holds, sort, onSort, navColor }: {
+  holds: SR8AnalyzedPosition[];
+  sort: { key: HoldSortKey; dir: "asc" | "desc" };
+  onSort: (key: HoldSortKey) => void;
+  navColor: string;
+}) {
+  if (holds.length === 0) return null;
+  return (
+    <section data-testid="sr8-hold-section">
+      <div className="rounded-[14px] overflow-hidden"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(14,20,38,0.04)" }}>
+        <div className="px-[18px] py-[14px] flex items-center gap-2"
+             style={{ borderBottom: "1px solid var(--border)" }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+          <span className="text-[13px] font-semibold">Hold</span>
+          <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+            {holds.length} position{holds.length === 1 ? "" : "s"} · within plan
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" data-testid="sr8-hold-table"
+                 style={{ borderCollapse: "collapse", whiteSpace: "nowrap" }}>
+            <thead>
+              <tr>
+                {([
+                  ["ticker", "Ticker", "left"],
+                  ["last_signal", "Signal", "left"],
+                  ["current_pct_nlv", "% NLV / target", "right"],
+                  ["shares_held", "Shares", "right"],
+                  ["avg_price", "Avg", "right"],
+                  ["current_price", "Price", "right"],
+                  ["unreal_dollars", "P&L $", "right"],
+                  ["unreal_pct", "P&L %", "right"],
+                ] as const).map(([key, label, align]) => {
+                  const active = sort.key === key;
+                  const caret = active ? (sort.dir === "asc" ? "▲" : "▼") : "";
+                  return (
+                    <th key={key as string}
+                        onClick={() => onSort(key as HoldSortKey)}
+                        data-testid={`sr8-hold-th-${key}`}
+                        className="px-3 py-2.5 text-[9.5px] font-bold uppercase tracking-[0.08em] cursor-pointer select-none"
+                        style={{
+                          background: "var(--surface-2)",
+                          color: active ? "var(--g-risk)" : "var(--ink-4)",
+                          textAlign: align,
+                          borderBottom: "1px solid var(--border)",
+                        }}>
+                      {label}{caret ? ` ${caret}` : ""}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {holds.map(p => <HoldRow key={p.ticker} p={p} />)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HoldRow({ p }: { p: SR8AnalyzedPosition }) {
+  const sig = signalDisplay(p.last_signal);
+  const isEntry = sig.label === "ENTRY";
+  const plUp = p.unreal_dollars > 0;
+  const plColor = plUp ? "var(--up)" : p.unreal_dollars < 0 ? "var(--down)" : "var(--ink-3)";
+
+  if (p.fetch_failed) {
+    // Fetch-failed row: muted, with a left-edge red insert + a small
+    // ⚠ pill. Retry button is a Commit-4 polish — for now it's a
+    // visible-but-disabled stub so the layout doesn't shift.
+    return (
+      <tr data-testid={`sr8-hold-row-${p.ticker}`}
+          style={{ borderBottom: "1px solid var(--border)", background: "color-mix(in oklab, var(--down) 4%, var(--surface))" }}>
+        <td className="px-3 py-2.5 font-semibold" style={{ fontFamily: mono, color: "var(--ink-3)", borderLeft: "3px solid var(--down)" }}>
+          {p.ticker}
+        </td>
+        <td className="px-3 py-2.5">
+          <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold px-2 py-0.5 rounded-md"
+                style={{ background: "var(--down-soft)", color: "var(--down)" }}>
+            ⚠ fetch failed
+          </span>
+        </td>
+        <td className="px-3 py-2.5 text-right" style={{ color: "var(--ink-4)", fontFamily: mono }}>—</td>
+        <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+          {Math.round(p.shares_held).toLocaleString()}
+        </td>
+        <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+          ${p.avg_price.toFixed(2)}
+        </td>
+        <td className="px-3 py-2.5 text-right" colSpan={3} style={{ color: "var(--ink-4)", fontStyle: "italic" }}>
+          price unavailable
+          <button type="button" disabled
+                  data-testid={`sr8-retry-${p.ticker}`}
+                  title="Retry wiring lands in Commit 4"
+                  className="ml-3 px-2 py-0.5 rounded-md text-[10.5px] font-semibold cursor-not-allowed opacity-60"
+                  style={{ background: "var(--surface)", border: "1px solid var(--down)", color: "var(--down)" }}>
+            ⟳ Retry
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr data-testid={`sr8-hold-row-${p.ticker}`}
+        style={{
+          borderBottom: "1px solid var(--border)",
+          background: p.early_warn ? "color-mix(in oklab, var(--warn) 7%, transparent)" : undefined,
+        }}>
+      <td className="px-3 py-2.5 font-bold" style={{
+            fontFamily: mono,
+            color: "var(--ink)",
+            borderLeft: p.early_warn ? "3px solid var(--warn)" : "3px solid transparent",
+          }}>
+        {p.ticker}
+      </td>
+      <td className="px-3 py-2.5">
+        <span className="inline-flex items-center gap-2">
+          <SignalBadge signal={p.last_signal} />
+          {p.early_warn && (
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
+                  data-testid={`sr8-near-${p.ticker}`}
+                  style={{ background: "var(--warn-soft)", color: "#a87108" }}>
+              ⚠ NEAR
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono }}>
+        <span className="font-bold" style={{ color: "var(--ink)" }}>{p.current_pct_nlv.toFixed(1)}%</span>{" "}
+        <span style={{ color: isEntry ? "var(--ink-5)" : "var(--ink-4)" }}>
+          / {isEntry ? "building" : `${p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% tgt`}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono }}>
+        {Math.round(p.shares_held).toLocaleString()}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+        ${p.avg_price.toFixed(2)}
+      </td>
+      <td className="px-3 py-2.5 text-right privacy-mask" style={{ fontFamily: mono }}>
+        {p.current_price != null && p.current_price > 0 ? `$${p.current_price.toFixed(2)}` : "—"}
+      </td>
+      <td className="px-3 py-2.5 text-right font-semibold privacy-mask"
+          style={{ fontFamily: mono, color: plColor }}>
+        {formatCurrency(p.unreal_dollars, { showSign: true, decimals: 0 })}
+      </td>
+      <td className="px-3 py-2.5 text-right font-semibold"
+          style={{ fontFamily: mono, color: plColor }}>
+        {(p.unreal_pct >= 0 ? "+" : "")}{p.unreal_pct.toFixed(1)}%
+      </td>
+    </tr>
   );
 }
 
