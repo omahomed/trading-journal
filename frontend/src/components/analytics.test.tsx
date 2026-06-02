@@ -39,6 +39,7 @@ vi.mock("@/lib/api", () => ({
     ]),
     setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
     bulkSetStrategy: vi.fn().mockResolvedValue({ ok: true, updated: 0, failed: [] }),
+    addEffectiveness: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -418,5 +419,177 @@ describe("Analytics — All Campaigns filters", () => {
       expect(screen.queryByText("MSFT")).not.toBeInTheDocument();
       expect(screen.queryByText("NVDA")).not.toBeInTheDocument();
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Add Effectiveness tab
+// ---------------------------------------------------------------------------
+
+
+const mAddEff = vi.mocked(api.addEffectiveness);
+
+const aeRow = (overrides: Partial<any> = {}) => ({
+  rule: "br3.2 Reclaim 50s",
+  add_count: 3,
+  realized_pl: 450,
+  unrealized_pl: 200,
+  closed_count: 2,
+  win_rate: 0.5,
+  avg_realized_per_add: 225,
+  avg_extension_at_add: 7.5,
+  ...overrides,
+});
+
+const aeResponse = (overrides: Partial<any> = {}) => ({
+  rules: [aeRow()],
+  totals: {
+    total_adds: 3,
+    total_realized_pl: 450,
+    total_unrealized_pl: 200,
+    overall_win_rate: 0.5,
+    avg_realized_per_add: 225,
+  },
+  discipline: { average_down_count: 0, average_downs: [] },
+  window: { portfolio: "CanSlim", start: null, end: null, strategy: null },
+  ...overrides,
+});
+
+describe("Analytics — Add Effectiveness tab", () => {
+  test("renders hero cards + table rows from endpoint data", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    mAddEff.mockResolvedValue(aeResponse({
+      rules: [
+        aeRow({ rule: "br3.2 Reclaim 50s", add_count: 5, realized_pl: 1200 }),
+        aeRow({ rule: "br1.3 Cup w/o Handle", add_count: 2, realized_pl: -300 }),
+      ],
+      totals: {
+        total_adds: 7,
+        total_realized_pl: 900,
+        total_unrealized_pl: 200,
+        overall_win_rate: 0.6,
+        avg_realized_per_add: 180,
+      },
+    }));
+
+    render(<Analytics navColor="#0d6efd" initialTab="add-effectiveness" />);
+
+    // Hero card labels
+    expect(await screen.findByText("Total Adds")).toBeInTheDocument();
+    expect(screen.getByText("Realized P&L · Adds")).toBeInTheDocument();
+    expect(screen.getByText("Win Rate")).toBeInTheDocument();
+    expect(screen.getByText("Avg P&L / Add")).toBeInTheDocument();
+
+    // Table rows present (rule cell text).
+    expect(await screen.findByText("br3.2 Reclaim 50s")).toBeInTheDocument();
+    expect(screen.getByText("br1.3 Cup w/o Handle")).toBeInTheDocument();
+
+    // Endpoint was called with the active portfolio.
+    expect(mAddEff).toHaveBeenCalled();
+    expect(mAddEff.mock.calls[0][0]).toBe("CanSlim");
+  });
+
+  test("sort toggles a column — clicking the 'Adds' header flips direction", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    mAddEff.mockResolvedValue(aeResponse({
+      rules: [
+        aeRow({ rule: "A-rule", add_count: 1 }),
+        aeRow({ rule: "B-rule", add_count: 5 }),
+        aeRow({ rule: "C-rule", add_count: 3 }),
+      ],
+    }));
+
+    render(<Analytics navColor="#0d6efd" initialTab="add-effectiveness" />);
+    await screen.findByTestId("ae-table");
+
+    // Default sort is add_count desc → first row is B-rule (5).
+    const firstRowInitial = screen.getByTestId("ae-table").querySelector("tbody tr:first-child td")?.textContent;
+    expect(firstRowInitial).toBe("B-rule");
+
+    // Click the Adds header → toggles to asc → first row becomes A-rule (1).
+    fireEvent.click(screen.getByTestId("ae-th-add_count"));
+    await waitFor(() => {
+      const firstAfter = screen.getByTestId("ae-table").querySelector("tbody tr:first-child td")?.textContent;
+      expect(firstAfter).toBe("A-rule");
+    });
+
+    // Click again → back to desc → first row is B-rule (5).
+    fireEvent.click(screen.getByTestId("ae-th-add_count"));
+    await waitFor(() => {
+      const firstAgain = screen.getByTestId("ae-table").querySelector("tbody tr:first-child td")?.textContent;
+      expect(firstAgain).toBe("B-rule");
+    });
+  });
+
+  test("empty state renders cleanly when no adds in window", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    mAddEff.mockResolvedValue(aeResponse({
+      rules: [],
+      totals: {
+        total_adds: 0,
+        total_realized_pl: 0,
+        total_unrealized_pl: 0,
+        overall_win_rate: 0,
+        avg_realized_per_add: 0,
+      },
+    }));
+
+    render(<Analytics navColor="#0d6efd" initialTab="add-effectiveness" />);
+
+    // Empty-table placeholder appears, not the table.
+    expect(await screen.findByTestId("ae-empty-table")).toBeInTheDocument();
+    expect(screen.queryByTestId("ae-table")).not.toBeInTheDocument();
+    // Hero cards still render — Total Adds shows 0.
+    expect(screen.getByText("Total Adds")).toBeInTheDocument();
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
+  test("discipline line uses success variant at 0", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    mAddEff.mockResolvedValue(aeResponse({
+      // Default discipline: average_down_count = 0
+    }));
+
+    render(<Analytics navColor="#0d6efd" initialTab="add-effectiveness" />);
+
+    const disc = await screen.findByTestId("ae-discipline");
+    // Success variant: green color token #08a86b.
+    expect(disc).toHaveTextContent("0 of 3 adds were average-downs");
+    expect(disc.textContent).toContain("✅");
+    expect(disc.style.color).toBe("rgb(8, 168, 107)");  // #08a86b
+  });
+
+  test("discipline line uses warning variant when >0", async () => {
+    mClosed.mockResolvedValue([]);
+    mOpen.mockResolvedValue([]);
+    mAddEff.mockResolvedValue(aeResponse({
+      totals: {
+        total_adds: 5,
+        total_realized_pl: -200,
+        total_unrealized_pl: 0,
+        overall_win_rate: 0.2,
+        avg_realized_per_add: -100,
+      },
+      discipline: {
+        average_down_count: 2,
+        average_downs: [
+          { trade_id: "T1", trx_id: "A1", ticker: "FOO", rule: "rA", add_price: 90, blended_cost_pre_add: 100 },
+          { trade_id: "T2", trx_id: "A1", ticker: "BAR", rule: "rB", add_price: 50, blended_cost_pre_add: 60 },
+        ],
+      },
+    }));
+
+    render(<Analytics navColor="#0d6efd" initialTab="add-effectiveness" />);
+
+    const disc = await screen.findByTestId("ae-discipline");
+    expect(disc).toHaveTextContent("2 of 5 adds were average-downs");
+    expect(disc.textContent).toContain("⚠️");
+    // Warning variant: amber color token #d97706.
+    expect(disc.style.color).toBe("rgb(217, 119, 6)");  // #d97706
   });
 });
