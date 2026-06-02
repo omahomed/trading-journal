@@ -18,8 +18,30 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Lot
 import { walkLedger, type LedgerRowInfo } from "@/lib/campaign-detail-walk";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 
 const mono = "var(--font-jetbrains), monospace";
+
+// Buy-rule dropdown list. Mirrors trade-journal.tsx:20-34 — same constant,
+// kept inline here to match Trade Journal's edit flow exactly (the user
+// confirmed: "exact same as the current trade journal"). When the buy-rule
+// taxonomy gets its single-source-of-truth cleanup, both inline copies
+// should migrate together to lib/trade-rules.
+const BUY_RULES = [
+  "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
+  "br1.5 IPO Base", "br1.6 Flat Base", "br1.7 Consolidation Pivot", "br1.8 High Tight Flag",
+  "br2.1 HVE", "br2.2 HVSI", "br2.3 HV1",
+  "br3.1 Reclaim 21e", "br3.2 Reclaim 50s", "br3.3 Reclaim 200s", "br3.4 Reclaim 10W", "br3.5 Reclaim 8e",
+  "br4.1 PB 21e", "br4.2 PB 50s", "br4.3 PB 10w", "br4.4 PB 200s", "br4.5 PB 8e", "br4.6 VWAP",
+  "br5.1 Undercut & Rally", "br5.2 Upside Reversal",
+  "br6.1 Gapper", "br6.2 Continuation Gap Up",
+  "br7.1 TQQQ Strategy", "br7.2 New High after Gentle PB", "br7.3 JL Century Mark",
+  "br8.1 Daily STL Break", "br8.2 Weekly STL Break", "br8.3 Monthly STL Break",
+  "br9.1 21e Strategy",
+  "br10.1 Hedging with leverage product",
+  "br11.1 Shorting",
+  "br12.1 Option Play",
+];
 
 const TILE_GRADIENTS = {
   indigo: "linear-gradient(135deg, #6366f1, #818cf8)",
@@ -170,6 +192,27 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
   const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "date", dir: "desc" });
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
+  // ── Edit modal state ───────────────────────────────────────────────
+  // Same shape Trade Journal uses (trade-journal.tsx:441-452). The
+  // user's clarification was explicit: "the edit should be the same
+  // function that we have in trade journal. exact same. with open a
+  // separate window to edit a transactions." So we mirror the modal
+  // chrome + Save/Delete handlers verbatim and add only one extension:
+  // a read-only "Lots consumed" subtable for Sell rows (Option B from
+  // the audit), wired off lot_closures.
+  const [editingTxn, setEditingTxn] = useState<TradeDetail | null>(null);
+  const [editForm, setEditForm] = useState<{
+    date: string;
+    shares: string;
+    amount: string;
+    stop_loss: string;
+    rule: string;
+    notes: string;
+  }>({ date: "", shares: "", amount: "", stop_loss: "", rule: "", notes: "" });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
   const fetchAll = useCallback(async () => {
     setError(null);
     try {
@@ -224,6 +267,109 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
     await fetchAll();
     setRefreshing(false);
   }, [fetchAll, refreshing]);
+
+  // ── Edit modal handlers ────────────────────────────────────────────
+  // openEditModal mirrors trade-journal.tsx:454-467: populate editForm
+  // from the chosen detail row, clear any prior error / delete-confirm
+  // state. The pencil button on each row passes its detail_id; we look
+  // up the raw TradeDetail in state.
+  const openEditModal = useCallback((detailId: number) => {
+    const tx = details.find(d => Number((d as { detail_id?: number }).detail_id) === detailId);
+    if (!tx) return;
+    setEditingTxn(tx);
+    setEditForm({
+      date: String(tx.date || "").slice(0, 16),
+      shares: String(tx.shares ?? ""),
+      amount: String(tx.amount ?? ""),
+      stop_loss: String((tx as { stop_loss?: number }).stop_loss ?? ""),
+      rule: tx.rule || "",
+      notes: String((tx as { notes?: string }).notes ?? ""),
+    });
+    setEditError(null);
+    setConfirmingDelete(false);
+    setEditLoading(false);
+  }, [details]);
+
+  const closeEditModal = useCallback(() => {
+    setEditingTxn(null);
+    setEditError(null);
+    setConfirmingDelete(false);
+    setEditLoading(false);
+  }, []);
+
+  // ESC dismisses the modal (gated on !editLoading so an in-flight
+  // save/delete can't be cancelled mid-request) — matches trade-
+  // journal.tsx:609-616.
+  useEffect(() => {
+    if (!editingTxn) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !editLoading) closeEditModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editingTxn, editLoading, closeEditModal]);
+
+  const saveEdit = useCallback(async () => {
+    if (!editingTxn) return;
+    setEditLoading(true);
+    setEditError(null);
+    try {
+      const shares = parseFloat(editForm.shares || "0") || 0;
+      const amount = parseFloat(editForm.amount || "0") || 0;
+      const res = await api.editTransaction({
+        detail_id: Number((editingTxn as { detail_id?: number }).detail_id),
+        trade_id: editingTxn.trade_id,
+        ticker: editingTxn.ticker,
+        action: editingTxn.action,
+        date: editForm.date,
+        shares,
+        amount,
+        value: shares * amount,
+        rule: editForm.rule,
+        notes: editForm.notes,
+        stop_loss: parseFloat(editForm.stop_loss || "0") || 0,
+        trx_id: String((editingTxn as { trx_id?: string }).trx_id || ""),
+      });
+      if (res.error) {
+        setEditError(res.error);
+      } else {
+        await fetchAll();
+        closeEditModal();
+      }
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditLoading(false);
+    }
+  }, [editingTxn, editForm, fetchAll, closeEditModal]);
+
+  const deleteTxn = useCallback(async () => {
+    if (!editingTxn) return;
+    // Two-click confirm — same pattern as trade-journal.tsx:580-583.
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+    setEditLoading(true);
+    setEditError(null);
+    try {
+      const res = await api.deleteTransaction(
+        Number((editingTxn as { detail_id?: number }).detail_id),
+        editingTxn.trade_id,
+        editingTxn.ticker,
+      );
+      if (res && (res as { error?: string }).error) {
+        setEditError((res as { error: string }).error);
+      } else {
+        await fetchAll();
+        closeEditModal();
+      }
+    } catch (err: unknown) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEditLoading(false);
+    }
+  }, [editingTxn, confirmingDelete, fetchAll, closeEditModal]);
 
   // Walker — per-detail status + remaining.
   const walked = useMemo(() => walkLedger(details), [details]);
@@ -693,7 +839,13 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
                       : `No transactions match these filters. Reset to see all ${enrichedRows.length} fills.`}
                   </td>
                 </tr>
-              ) : sorted.map(r => <LedgerRowEl key={`${r.detail_id}-${r.trx_id}`} r={r} navColor={navColor} />)}
+              ) : sorted.map(r => (
+                <LedgerRowEl key={`${r.detail_id}-${r.trx_id}`}
+                             r={r}
+                             navColor={navColor}
+                             onEdit={openEditModal}
+                             isEditing={editingTxn != null && Number((editingTxn as { detail_id?: number }).detail_id) === r.detail_id} />
+              ))}
             </tbody>
             {sorted.length > 0 && (
               <tfoot>
@@ -741,11 +893,262 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
           </table>
         </div>
       </div>
+
+      {/* Edit modal — mirrors trade-journal.tsx:1491-1623 chrome + Save/
+          Delete handlers, plus the per-Sell "Lots consumed" subtable
+          (Option B) directly below the form when editing a SELL row. */}
+      {editingTxn && (
+        <EditModal
+          editingTxn={editingTxn}
+          editForm={editForm}
+          editError={editError}
+          editLoading={editLoading}
+          confirmingDelete={confirmingDelete}
+          closures={closures}
+          navColor={navColor}
+          setEditForm={setEditForm}
+          onClose={closeEditModal}
+          onSave={saveEdit}
+          onDelete={deleteTxn}
+        />
+      )}
     </div>
   );
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────
+
+interface EditModalProps {
+  editingTxn: TradeDetail;
+  editForm: { date: string; shares: string; amount: string; stop_loss: string; rule: string; notes: string };
+  editError: string | null;
+  editLoading: boolean;
+  confirmingDelete: boolean;
+  closures: LotClosure[];
+  navColor: string;
+  setEditForm: React.Dispatch<React.SetStateAction<{ date: string; shares: string; amount: string; stop_loss: string; rule: string; notes: string }>>;
+  onClose: () => void;
+  onSave: () => void;
+  onDelete: () => void;
+}
+
+function EditModal({ editingTxn, editForm, editError, editLoading, confirmingDelete, closures, navColor, setEditForm, onClose, onSave, onDelete }: EditModalProps) {
+  const isSell = String(editingTxn.action).toUpperCase() === "SELL";
+  const trxId = String((editingTxn as { trx_id?: string }).trx_id || "");
+  const detailId = (editingTxn as { detail_id?: number }).detail_id;
+  // For Option B: when editing a Sell row, surface the lot_closures the
+  // matching engine wrote so the trader can audit cost-basis attribution.
+  // Read-only — re-running the match is out of scope (and is the
+  // explicit guidance in the handoff README).
+  const consumedLots = isSell ? closures.filter(c =>
+    String(c.trade_id) === editingTxn.trade_id
+    && String((c as { sell_trx_id?: string }).sell_trx_id || "") === trxId
+  ) : [];
+
+  return (
+    <div data-testid="cd-edit-modal-backdrop"
+         className="fixed inset-0 z-[100] grid place-items-start justify-center pt-[10vh]"
+         style={{ background: "rgba(0,0,0,0.4)", backdropFilter: "blur(4px)" }}
+         onClick={() => { if (!editLoading) onClose(); }}>
+      <div className="w-[640px] max-w-[92vw] rounded-[14px] overflow-hidden"
+           data-testid="cd-edit-modal"
+           style={{ background: "var(--surface)", boxShadow: "0 20px 48px rgba(0,0,0,0.2), 0 0 0 1px var(--border)", animation: "cmdk-rise 0.22s cubic-bezier(.2,.9,.3,1.1)" }}
+           onClick={e => e.stopPropagation()}>
+        <div className="px-[18px] py-3.5 flex items-center" style={{ borderBottom: "1px solid var(--border)" }}>
+          <div>
+            <div className="text-[14px] font-semibold">
+              Edit · {editingTxn.action} · {editingTxn.ticker}
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+              Trade {editingTxn.trade_id} · transaction {trxId || `#${detailId}`}
+            </div>
+          </div>
+          <kbd className="ml-auto text-[10px] rounded px-1.5 py-0.5"
+               style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-4)", fontFamily: mono }}>ESC</kbd>
+        </div>
+        <div className="p-4 flex flex-col gap-3 max-h-[70vh] overflow-y-auto">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Date / Time</label>
+              <input type="datetime-local" value={editForm.date}
+                     onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))}
+                     disabled={editLoading}
+                     data-testid="cd-edit-date"
+                     className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Trx ID</label>
+              <input type="text" value={trxId} readOnly
+                     data-testid="cd-edit-trx-id"
+                     className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", opacity: 0.6, cursor: "not-allowed", fontFamily: mono }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Shares</label>
+              <input type="number" step="any" value={editForm.shares}
+                     onChange={e => setEditForm(f => ({ ...f, shares: e.target.value }))}
+                     disabled={editLoading}
+                     data-testid="cd-edit-shares"
+                     className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Price ($)</label>
+              <input type="number" step="0.01" value={editForm.amount}
+                     onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))}
+                     disabled={editLoading}
+                     data-testid="cd-edit-amount"
+                     className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Stop Loss ($)</label>
+              <input type="number" step="0.01" value={editForm.stop_loss}
+                     onChange={e => setEditForm(f => ({ ...f, stop_loss: e.target.value }))}
+                     disabled={editLoading}
+                     data-testid="cd-edit-stop"
+                     className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                     style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Rule (Strategy)</label>
+              <select value={editForm.rule}
+                      onChange={e => setEditForm(f => ({ ...f, rule: e.target.value }))}
+                      disabled={editLoading}
+                      data-testid="cd-edit-rule"
+                      className="w-full h-[38px] px-3 rounded-[8px] text-[12px] outline-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", WebkitAppearance: "none", MozAppearance: "none", appearance: "none" }}>
+                <option value="">Select...</option>
+                {(isSell ? SELL_RULES : BUY_RULES).map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Notes</label>
+            <textarea value={editForm.notes}
+                      onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                      disabled={editLoading} rows={2}
+                      data-testid="cd-edit-notes"
+                      className="w-full px-3 py-2 rounded-[8px] text-[12px] outline-none resize-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+          </div>
+
+          {/* Option B: "Lots consumed" subtable for Sell rows. Read-only —
+              lot matching is immutable once written by Log Sell. */}
+          {isSell && consumedLots.length > 0 && (
+            <div data-testid="cd-lots-consumed" className="mt-1">
+              <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
+                Lots consumed ({consumedLots.length})
+              </label>
+              <div className="rounded-[8px] overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
+                      <th className="px-2.5 py-1.5 text-left text-[9.5px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-4)" }}>Lot</th>
+                      <th className="px-2.5 py-1.5 text-right text-[9.5px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-4)" }}>Shares</th>
+                      <th className="px-2.5 py-1.5 text-right text-[9.5px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-4)" }}>Buy Price</th>
+                      <th className="px-2.5 py-1.5 text-right text-[9.5px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-4)" }}>Sell Price</th>
+                      <th className="px-2.5 py-1.5 text-right text-[9.5px] uppercase tracking-[0.08em] font-bold" style={{ color: "var(--ink-4)" }}>Realized P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {consumedLots.map(c => {
+                      const shares = parseFloat(String(c.shares || 0)) || 0;
+                      const buyPrice = parseFloat(String((c as { buy_price?: number | string }).buy_price || 0)) || 0;
+                      const sellPrice = parseFloat(String((c as { sell_price?: number | string }).sell_price || 0)) || 0;
+                      const pl = parseFloat(String(c.realized_pl || 0)) || 0;
+                      const buyTrxId = String((c as { buy_trx_id?: string }).buy_trx_id || "—");
+                      return (
+                        <tr key={buyTrxId + shares + buyPrice} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td className="px-2.5 py-1.5 text-[11px] font-semibold" style={{ fontFamily: mono }}>{buyTrxId}</td>
+                          <td className="px-2.5 py-1.5 text-right" style={{ fontFamily: mono }}>{Math.round(shares).toLocaleString()}</td>
+                          <td className="px-2.5 py-1.5 text-right" style={{ fontFamily: mono }}>${buyPrice.toFixed(2)}</td>
+                          <td className="px-2.5 py-1.5 text-right" style={{ fontFamily: mono }}>${sellPrice.toFixed(2)}</td>
+                          <td className="px-2.5 py-1.5 text-right font-bold privacy-mask" style={{ fontFamily: mono, color: pl > 0 ? "#08a86b" : pl < 0 ? "#e5484d" : "var(--ink-3)" }}>
+                            {formatCurrency(pl, { showSign: true, decimals: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {/* Total row */}
+                    <tr style={{ background: "var(--bg-2)" }}>
+                      <td className="px-2.5 py-1.5 text-[9.5px] uppercase tracking-[0.06em] font-bold" style={{ color: "var(--ink-3)" }}>Total</td>
+                      <td className="px-2.5 py-1.5 text-right font-bold" style={{ fontFamily: mono }}>
+                        {Math.round(consumedLots.reduce((s, c) => s + (parseFloat(String(c.shares || 0)) || 0), 0)).toLocaleString()}
+                      </td>
+                      <td />
+                      <td />
+                      <td className="px-2.5 py-1.5 text-right font-bold privacy-mask"
+                          data-testid="cd-lots-total-realized"
+                          style={{ fontFamily: mono, color: (() => { const t = consumedLots.reduce((s, c) => s + (parseFloat(String(c.realized_pl || 0)) || 0), 0); return t > 0 ? "#08a86b" : t < 0 ? "#e5484d" : "var(--ink-3)"; })() }}>
+                        {formatCurrency(consumedLots.reduce((s, c) => s + (parseFloat(String(c.realized_pl || 0)) || 0), 0), { showSign: true, decimals: 2 })}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-[10px] mt-1.5" style={{ color: "var(--ink-4)" }}>
+                Lot matching is set at the time of sale and is read-only here.
+              </div>
+            </div>
+          )}
+
+          {editError && (
+            <div data-testid="cd-edit-error"
+                 className="px-3 py-2 rounded-[8px] text-[11px] leading-relaxed"
+                 style={{
+                   background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                   border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                   color: "#991b1b",
+                 }}>
+              {editError}
+            </div>
+          )}
+        </div>
+        <div className="px-[18px] py-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--border)" }}>
+          <button onClick={onDelete}
+                  disabled={editLoading}
+                  data-testid="cd-edit-delete"
+                  className="h-[32px] px-3 rounded-md text-[12px] font-medium transition-colors hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                  style={{
+                    background: confirmingDelete ? "#e5484d" : "var(--surface)",
+                    color: confirmingDelete ? "white" : "#e5484d",
+                    border: confirmingDelete ? "1px solid #e5484d" : "1px solid color-mix(in oklab, #e5484d 35%, var(--border))",
+                  }}>
+            {confirmingDelete ? "Confirm Delete" : "Delete Transaction"}
+          </button>
+          <button onClick={onClose}
+                  disabled={editLoading}
+                  data-testid="cd-edit-cancel"
+                  className="ml-auto h-[32px] px-3 rounded-md text-[12px] font-medium hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+            Cancel
+          </button>
+          <button onClick={onSave}
+                  disabled={editLoading}
+                  data-testid="cd-edit-save"
+                  className="h-[32px] px-3.5 rounded-md text-[12px] font-medium text-white flex items-center gap-1.5 hover:brightness-95 disabled:opacity-60 disabled:cursor-wait"
+                  style={{ background: navColor }}>
+            {editLoading && (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+              </svg>
+            )}
+            {editLoading ? "Saving…" : "Save Changes"}
+          </button>
+        </div>
+      </div>
+      <style jsx global>{`@keyframes cmdk-rise { from { transform: translateY(-10px) scale(0.97); opacity: 0; } }`}</style>
+    </div>
+  );
+}
 
 function SegmentedControl<T extends string>({ label, value, onChange, options, testId }: {
   label: string;
@@ -797,7 +1200,7 @@ function FilterSelect({ label, value, onChange, options, testId }: {
   );
 }
 
-function LedgerRowEl({ r, navColor }: { r: LedgerRow; navColor: string }) {
+function LedgerRowEl({ r, navColor, onEdit, isEditing }: { r: LedgerRow; navColor: string; onEdit: (detailId: number) => void; isEditing: boolean }) {
   const isSell = r.action === "SELL";
   const seriesChar = (r.trx_id || "").charAt(0).toUpperCase();
   const seriesTagColor = seriesChar === "B" ? "var(--g-ops, #08a86b)" : "var(--g-mkt, #8b5cf6)";
@@ -812,7 +1215,10 @@ function LedgerRowEl({ r, navColor }: { r: LedgerRow; navColor: string }) {
   const retStyle = r.ret != null ? retChipStyle(r.ret) : null;
   return (
     <tr className="hover:bg-[var(--surface-2)]" data-testid={`row-${r.detail_id}`}
-        style={{ borderBottom: "1px solid var(--border)" }}>
+        style={{
+          borderBottom: "1px solid var(--border)",
+          background: isEditing ? "color-mix(in oklab, " + navColor + " 6%, transparent)" : undefined,
+        }}>
       <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{r.trx_id || "—"}</td>
       <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
         {r.date.length >= 16 ? r.date.slice(0, 16).replace("T", " ") : r.date.slice(0, 10)}
@@ -876,11 +1282,15 @@ function LedgerRowEl({ r, navColor }: { r: LedgerRow; navColor: string }) {
       </td>
       <td className="px-3 py-2.5 text-right">
         <button type="button"
-                disabled
-                title="Edit wiring lands in Commit 4 — opens the same separate window Trade Journal uses."
+                onClick={() => onEdit(r.detail_id)}
+                title="Edit this fill"
                 data-testid={`edit-${r.detail_id}`}
-                className="w-[26px] h-[26px] rounded-[8px] inline-flex items-center justify-center cursor-not-allowed opacity-50 transition-all"
-                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+                className="w-[26px] h-[26px] rounded-[8px] inline-flex items-center justify-center cursor-pointer transition-all hover:brightness-95"
+                style={{
+                  background: isEditing ? `color-mix(in oklab, ${navColor} 14%, var(--surface))` : "var(--surface-2)",
+                  border: `1px solid ${isEditing ? navColor : "var(--border)"}`,
+                  color: isEditing ? navColor : "var(--ink-3)",
+                }}>
           ✎
         </button>
       </td>
