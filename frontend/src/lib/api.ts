@@ -191,6 +191,56 @@ export interface AddEffectivenessResponse {
   };
 }
 
+// /api/sr8/monitor + /api/sr8/refresh response shape. The server-side
+// engine (mors/monitor.py) computes the cascade math; this client just
+// renders the result. Field naming is snake_case to match the rest of
+// the API surface.
+export interface SR8AnalyzedPosition {
+  ticker: string;
+  b1_date: string;
+  b1_price: number;
+  shares_held: number;
+  avg_price: number;
+  current_price: number | null;       // null when fetch_failed
+  current_dollars: number;
+  current_pct_nlv: number;
+  cascade_core: number;                // 20 or 15
+  tier_pct_nlv: number;
+  target_dollars: number;
+  delta_dollars: number;
+  delta_shares: number;
+  unreal_dollars: number;
+  unreal_pct: number;
+  last_signal: string;                 // "ENTRY" | "GREEN" | "QUICK" | "QUICKSAND" | "GD" | "TERMINATED" | …
+  last_signal_date: string;
+  last_bar_date: string;
+  signal_today: boolean;
+  terminated: boolean;
+  phase: number;                       // 1 = pre-cushion, 2 = latched (≥1.5×B1)
+  is_action: boolean;
+  early_warn: boolean;
+  fetch_failed: boolean;
+  fetch_error: string;
+}
+
+export interface SR8MonitorResponse {
+  summary: {
+    total_positions: number;
+    flagged_count: number;
+    at_risk_pct: number;
+    to_trim_dollars: number;
+    cascade_breakdown: {
+      cascade_20: number;
+      cascade_15: number;
+    };
+  };
+  positions: SR8AnalyzedPosition[];
+  meta: {
+    fetched_at: string;
+    nlv: number;
+  };
+}
+
 export interface WeeklyRetro {
   id: number;
   portfolio: string;
@@ -642,6 +692,21 @@ export const api = {
       `/api/analytics/add-effectiveness?${params.toString()}`
     );
   },
+
+  // SR8 Cascade Monitor — wraps the MORS Python engine. The GET path
+  // reads the on-disk weekly cache; POST /refresh forces a fresh
+  // yfinance pull. Both share the same response envelope.
+  sr8Monitor: (nlv: number) =>
+    fetchJSON<SR8MonitorResponse | { error: string }>(
+      `/api/sr8/monitor?nlv=${encodeURIComponent(String(nlv))}`,
+    ),
+
+  sr8Refresh: (nlv: number) =>
+    fetchWithAuth(`${API_BASE}/api/sr8/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nlv }),
+    }).then(r => r.json()) as Promise<SR8MonitorResponse | { error: string }>,
 
   weeklyRetroDelete: (retroId: number) =>
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {
