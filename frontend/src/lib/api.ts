@@ -149,6 +149,48 @@ export interface WeeklyMetrics {
   as_of: string;
 }
 
+// /api/analytics/add-effectiveness — rule-grouped aggregate over
+// scale-in (trx_id LIKE 'A%') BUYs in [start, end]. Shape is stable
+// across empty / non-empty windows.
+export interface AddEffectivenessRuleRow {
+  rule: string;
+  add_count: number;
+  realized_pl: number;
+  unrealized_pl: number;
+  closed_count: number;
+  win_rate: number;                 // 0..1
+  avg_realized_per_add: number;
+  avg_extension_at_add: number;     // percent
+}
+export interface AddEffectivenessAverageDown {
+  trade_id: string;
+  trx_id: string;
+  ticker: string;
+  rule: string;
+  add_price: number;
+  blended_cost_pre_add: number;
+}
+export interface AddEffectivenessResponse {
+  rules: AddEffectivenessRuleRow[];
+  totals: {
+    total_adds: number;
+    total_realized_pl: number;
+    total_unrealized_pl: number;
+    overall_win_rate: number;       // 0..1
+    avg_realized_per_add: number;
+  };
+  discipline: {
+    average_down_count: number;
+    average_downs: AddEffectivenessAverageDown[];
+  };
+  window: {
+    portfolio: string;
+    start: string | null;
+    end: string | null;
+    strategy: string | null;
+  };
+}
+
 export interface WeeklyRetro {
   id: number;
   portfolio: string;
@@ -581,6 +623,25 @@ export const api = {
     fetchJSON<WeeklyMetrics | { error: string }>(
       `/api/analytics/weekly-metrics?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
     ),
+
+  // Add Effectiveness — rule-grouped aggregate over scale-in BUYs in
+  // [start, end]. `strategy` empty or "all" disables the strategy
+  // filter on the backend. Response shape is stable across empty / non-
+  // empty windows (same keys, zero values when nothing matches).
+  addEffectiveness: (
+    portfolio: string,
+    start: string,
+    end: string,
+    strategy: string = "",
+  ) => {
+    const params = new URLSearchParams({ portfolio });
+    if (start) params.set("start", start);
+    if (end) params.set("end", end);
+    if (strategy) params.set("strategy", strategy);
+    return fetchJSON<AddEffectivenessResponse | { error: string }>(
+      `/api/analytics/add-effectiveness?${params.toString()}`
+    );
+  },
 
   weeklyRetroDelete: (retroId: number) =>
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy, type AddEffectivenessResponse } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { LESSON_CATEGORIES, CAT_COLORS } from "@/lib/lesson-categories";
 import { formatCurrency } from "@/lib/format";
@@ -17,7 +17,7 @@ import {
 } from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
-type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns";
+type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns" | "add-effectiveness";
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
@@ -90,7 +90,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(initialTradeId ?? null);
 
   useEffect(() => {
-    if (initialTab && ["overview", "buyrules", "sellrules", "drawdown", "review", "campaigns"].includes(initialTab)) {
+    if (initialTab && ["overview", "buyrules", "sellrules", "drawdown", "review", "campaigns", "add-effectiveness"].includes(initialTab)) {
       setTab(initialTab as Tab);
       onTabConsumed?.();
     }
@@ -102,6 +102,20 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       onTradeIdConsumed?.();
     }
   }, [initialTradeId, onTradeIdConsumed]);
+
+  // Add effectiveness tab state. Default date window = year-to-date.
+  // Stored as YYYY-MM-DD strings so the date inputs can bind directly.
+  const _today = new Date();
+  const _yearStart = `${_today.getFullYear()}-01-01`;
+  const _todayIso = _today.toISOString().slice(0, 10);
+  const [aeStart, setAeStart] = useState<string>(_yearStart);
+  const [aeEnd, setAeEnd] = useState<string>(_todayIso);
+  const [aeStrategy, setAeStrategy] = useState<string>("");
+  const [aeData, setAeData] = useState<AddEffectivenessResponse | null>(null);
+  const [aeLoading, setAeLoading] = useState(false);
+  const [aeError, setAeError] = useState<string | null>(null);
+  const [aeSortKey, setAeSortKey] = useState<keyof AddEffectivenessResponse["rules"][number]>("add_count");
+  const [aeSortDir, setAeSortDir] = useState<"asc" | "desc">("desc");
   const [scope, setScope] = useState<"ltd" | "2026">("ltd");
   // drillRule kept for sell rules tab (TODO)
 
@@ -203,6 +217,34 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [strategyFilterOpen]);
+
+  // Add effectiveness fetch. Fires whenever the user enters the tab or
+  // changes a filter. The backend caches load_summary / load_details,
+  // so quick filter toggles stay snappy.
+  useEffect(() => {
+    if (tab !== "add-effectiveness") return;
+    let cancelled = false;
+    setAeLoading(true);
+    setAeError(null);
+    api.addEffectiveness(getActivePortfolio(), aeStart, aeEnd, aeStrategy)
+      .then(res => {
+        if (cancelled) return;
+        if (res && "error" in res) {
+          setAeError(String(res.error));
+          setAeData(null);
+        } else {
+          setAeData(res as AddEffectivenessResponse);
+        }
+      })
+      .catch(err => {
+        if (cancelled) return;
+        log.error("analytics", "addEffectiveness fetch failed", err);
+        setAeError(err instanceof Error ? err.message : String(err));
+        setAeData(null);
+      })
+      .finally(() => { if (!cancelled) setAeLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, aeStart, aeEnd, aeStrategy]);
 
   // Single-trade retag from the right-click menu. Refreshes after success
   // so the table re-renders with the new strategy on the row.
@@ -437,7 +479,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       {/* Tabs */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex gap-1 pb-0.5" style={{ borderBottom: "2px solid var(--border)" }}>
-          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" } ]).map(t => (
+          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" }, { key: "add-effectiveness" as Tab, label: "➕ Add effectiveness" } ]).map(t => (
             <button key={t.key} onClick={() => { setTab(t.key); setBrDrill(""); }}
                     className="px-4 py-2 text-[12px] font-medium transition-all"
                     style={{ color: tab === t.key ? navColor : "var(--ink-4)", borderBottom: tab === t.key ? `2px solid ${navColor}` : "2px solid transparent", marginBottom: -2 }}>
@@ -2050,6 +2092,182 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                 </table>
               </div>
             </div>
+          </>
+        );
+      })()}
+
+      {/* ═══ ADD EFFECTIVENESS ═══ */}
+      {tab === "add-effectiveness" && (() => {
+        const totals = aeData?.totals ?? {
+          total_adds: 0, total_realized_pl: 0, total_unrealized_pl: 0,
+          overall_win_rate: 0, avg_realized_per_add: 0,
+        };
+        const rules = aeData?.rules ?? [];
+        const avgDownCount = aeData?.discipline?.average_down_count ?? 0;
+        const winRatePct = totals.overall_win_rate * 100;
+        // Sort rules per current sort state. Strings sort case-insensitive
+        // alphabetically; numbers numerically. Sort is stable across keys
+        // because the backend orders by add_count desc as a tiebreak.
+        const sortedRules = [...rules].sort((a, b) => {
+          const va = a[aeSortKey]; const vb = b[aeSortKey];
+          const cmp = (typeof va === "string" && typeof vb === "string")
+            ? va.localeCompare(vb)
+            : ((va as number) - (vb as number));
+          return aeSortDir === "asc" ? cmp : -cmp;
+        });
+        const onSort = (k: keyof AddEffectivenessResponse["rules"][number]) => {
+          if (aeSortKey === k) { setAeSortDir(d => d === "asc" ? "desc" : "asc"); }
+          else { setAeSortKey(k); setAeSortDir(k === "rule" ? "asc" : "desc"); }
+        };
+        const sortArrow = (k: keyof AddEffectivenessResponse["rules"][number]) =>
+          aeSortKey === k ? (aeSortDir === "asc" ? " ▲" : " ▼") : "";
+
+        return (
+          <>
+            <div className="text-[14px] font-semibold mb-1">➕ Add Effectiveness</div>
+            <div className="text-[12px] mb-4" style={{ color: "var(--ink-4)" }}>
+              Group your scale-in (add) buys by their buy rule. Pyramid-up adds (above blended cost) build winners; average-down adds erode them.
+            </div>
+
+            {/* Filters: date range + strategy pills. Mirrors the All
+                Campaigns filter row's idiom — same control sizes,
+                spacing, and pill-toggle pattern. */}
+            <div className="flex items-center gap-3 mb-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-medium" style={{ color: "var(--ink-4)" }}>From</span>
+                <input type="date" value={aeStart} onChange={e => setAeStart(e.target.value)}
+                       data-testid="ae-start"
+                       className="h-[32px] px-2 rounded-[8px] text-[11px]"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+                <span className="text-[11px] font-medium" style={{ color: "var(--ink-4)" }}>to</span>
+                <input type="date" value={aeEnd} onChange={e => setAeEnd(e.target.value)}
+                       data-testid="ae-end"
+                       className="h-[32px] px-2 rounded-[8px] text-[11px]"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+              </div>
+
+              {/* Strategy pill row — same idiom as the All-Campaigns
+                  status pill toggle. "All" maps to empty string, which
+                  the backend reads as "no filter". */}
+              <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                <button onClick={() => setAeStrategy("")}
+                        className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
+                        style={{ background: aeStrategy === "" ? "var(--surface)" : "transparent", color: aeStrategy === "" ? "var(--ink)" : "var(--ink-4)" }}>
+                  All
+                </button>
+                {allStrategies.map(s => (
+                  <button key={s.name} onClick={() => setAeStrategy(s.name)}
+                          className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
+                          style={{ background: aeStrategy === s.name ? "var(--surface)" : "transparent", color: aeStrategy === s.name ? "var(--ink)" : "var(--ink-4)" }}>
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Loading / error states — match the existing skeleton +
+                inline error idiom used elsewhere in the file. */}
+            {aeError && (
+              <div className="mb-4 px-4 py-3 rounded-[10px]"
+                   style={{ background: "color-mix(in oklab, #e5484d 8%, var(--surface))", border: "1px solid var(--border)", color: "#e5484d" }}>
+                Failed to load add effectiveness: {aeError}
+              </div>
+            )}
+            {aeLoading && !aeData && (
+              <div className="animate-pulse"><div className="h-[120px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>
+            )}
+
+            {/* Hero cards — same component as the Overview tab so the
+                section reads as part of the same flight deck. */}
+            {!aeLoading && !aeError && (
+              <>
+                <div className="grid grid-cols-4 gap-3 mb-4">
+                  <HeroCard label="Total Adds" value={String(totals.total_adds)} sub={`in window`} ok={totals.total_adds > 0} />
+                  <HeroCard label="Realized P&L · Adds" value={formatCurrency(totals.total_realized_pl, { decimals: 0 })} sub={`unrealized ${formatCurrency(totals.total_unrealized_pl, { decimals: 0 })}`} ok={totals.total_realized_pl >= 0} />
+                  <HeroCard label="Win Rate" value={`${winRatePct.toFixed(1)}%`} sub={`on adds with closures`} ok={winRatePct >= 40} />
+                  <HeroCard label="Avg P&L / Add" value={formatCurrency(totals.avg_realized_per_add, { decimals: 0 })} sub={`per closed add`} ok={totals.avg_realized_per_add >= 0} />
+                </div>
+
+                {/* Discipline line — single line, success-styled at zero,
+                    warning-styled when >0 since these are the exceptions
+                    to investigate. */}
+                <div className="mb-5 px-4 py-3 rounded-[12px] text-[12px] font-semibold flex items-center gap-2"
+                     data-testid="ae-discipline"
+                     style={{
+                       background: avgDownCount === 0
+                         ? "color-mix(in oklab, #08a86b 8%, var(--surface))"
+                         : "color-mix(in oklab, #d97706 8%, var(--surface))",
+                       border: "1px solid var(--border)",
+                       color: avgDownCount === 0 ? "#08a86b" : "#d97706",
+                     }}>
+                  <span>{avgDownCount === 0 ? "✅" : "⚠️"}</span>
+                  <span>
+                    {avgDownCount} of {totals.total_adds} adds were average-downs
+                    {avgDownCount === 0 ? " — all adds extended at or above blended cost." : "."}
+                  </span>
+                </div>
+
+                {/* Rule-effectiveness table. Same shape + styling as the
+                    Buy Rules drill-down table — sortable headers, mono
+                    numeric cells, success/danger color by sign. */}
+                {sortedRules.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-[12px] rounded-[14px]"
+                       data-testid="ae-empty-table"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+                    No adds in this window. Try widening the date range or switching strategies.
+                  </div>
+                ) : (
+                  <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <table className="w-full text-[11px]" data-testid="ae-table">
+                      <thead>
+                        <tr style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
+                          {([
+                            ["rule", "Add rule", "left"],
+                            ["add_count", "Adds", "right"],
+                            ["realized_pl", "Realized", "right"],
+                            ["unrealized_pl", "Open P&L", "right"],
+                            ["avg_extension_at_add", "Avg ext at add", "right"],
+                            ["win_rate", "Win", "right"],
+                            ["avg_realized_per_add", "Avg / add", "right"],
+                          ] as const).map(([k, label, align]) => (
+                            <th key={k as string}
+                                onClick={() => onSort(k as keyof AddEffectivenessResponse["rules"][number])}
+                                data-testid={`ae-th-${k}`}
+                                className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.06em] cursor-pointer select-none"
+                                style={{ color: "var(--ink-4)", textAlign: align }}>
+                              {label}{sortArrow(k as keyof AddEffectivenessResponse["rules"][number])}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedRules.map((r, i) => (
+                          <tr key={r.rule + i} style={{ borderBottom: "1px solid var(--border)" }}>
+                            <td className="px-3 py-2 text-[11px]" style={{ color: "var(--ink-2)" }}>{r.rule}</td>
+                            <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.add_count}</td>
+                            <td className="px-3 py-2 text-right font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(r.realized_pl) }}>
+                              {formatCurrency(r.realized_pl, { showSign: true, decimals: 0 })}
+                            </td>
+                            <td className="px-3 py-2 text-right privacy-mask" style={{ fontFamily: mono, color: pctColor(r.unrealized_pl) }}>
+                              {formatCurrency(r.unrealized_pl, { showSign: true, decimals: 0 })}
+                            </td>
+                            <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: pctColor(r.avg_extension_at_add) }}>
+                              {r.avg_extension_at_add >= 0 ? "+" : ""}{r.avg_extension_at_add.toFixed(1)}%
+                            </td>
+                            <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>
+                              {r.closed_count > 0 ? `${(r.win_rate * 100).toFixed(0)}%` : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right privacy-mask" style={{ fontFamily: mono, color: pctColor(r.avg_realized_per_add) }}>
+                              {r.closed_count > 0 ? formatCurrency(r.avg_realized_per_add, { showSign: true, decimals: 0 }) : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </>
         );
       })()}
