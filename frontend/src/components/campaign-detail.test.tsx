@@ -21,6 +21,8 @@ vi.mock("@/lib/api", () => ({
     tradesOpen: vi.fn(),
     tradesOpenDetails: vi.fn(),
     batchPrices: vi.fn(),
+    editTransaction: vi.fn(),
+    deleteTransaction: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -388,14 +390,14 @@ describe("CampaignDetail — ledger table (Commit 3)", () => {
     expect(btn.disabled).toBe(true);
   });
 
-  test("Edit pencil is rendered but disabled (Commit 4 wiring)", async () => {
+  test("Edit pencil is rendered and clickable (Commit 4 wiring)", async () => {
     setupThreeRowFixture();
     render(<CampaignDetail navColor="#08a86b" />);
     await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
 
     const editBtn = screen.getByTestId("edit-1") as HTMLButtonElement;
-    expect(editBtn.disabled).toBe(true);
-    expect(editBtn.title).toMatch(/Commit 4/);
+    expect(editBtn.disabled).toBe(false);
+    expect(editBtn.title).toBe("Edit this fill");
   });
 
   test("Sell row shows blended cost basis from lot_closures (Option B)", async () => {
@@ -424,5 +426,157 @@ describe("CampaignDetail — ledger table (Commit 3)", () => {
     expect(sellRow_.textContent).toContain("$106.25");
     // The Exit Price column shows $120.00
     expect(sellRow_.textContent).toContain("$120.00");
+  });
+});
+
+// ─── Edit modal tests (Commit 4) ─────────────────────────────────────
+
+const mEdit = vi.mocked(api.editTransaction);
+const mDel = vi.mocked(api.deleteTransaction);
+
+describe("CampaignDetail — edit modal (Commit 4)", () => {
+  test("clicking Edit pencil opens the modal pre-populated from the row", async () => {
+    setupThreeRowFixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+    expect(screen.getByTestId("cd-edit-modal").textContent).toContain("AAPL");
+
+    // Form fields pre-populated from the loaded detail row.
+    const sharesInput = screen.getByTestId("cd-edit-shares") as HTMLInputElement;
+    const amountInput = screen.getByTestId("cd-edit-amount") as HTMLInputElement;
+    expect(sharesInput.value).toBe("100");
+    expect(amountInput.value).toBe("100");
+  });
+
+  test("Save calls api.editTransaction with the form payload + closes modal on success", async () => {
+    setupThreeRowFixture();
+    mEdit.mockResolvedValue({ status: "ok", detail_id: 1 } as any);
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    // Edit shares from 100 → 75.
+    const sharesInput = screen.getByTestId("cd-edit-shares") as HTMLInputElement;
+    fireEvent.change(sharesInput, { target: { value: "75" } });
+
+    fireEvent.click(screen.getByTestId("cd-edit-save"));
+
+    await waitFor(() => expect(mEdit).toHaveBeenCalled());
+    const call = mEdit.mock.calls[0][0];
+    expect(call.detail_id).toBe(1);
+    expect(call.trade_id).toBe("T1");
+    expect(call.ticker).toBe("AAPL");
+    expect(call.shares).toBe(75);
+    expect(call.amount).toBe(100);
+    expect(call.value).toBe(75 * 100);
+    expect(call.trx_id).toBe("B1");
+
+    // Modal closes on success.
+    await waitFor(() => expect(screen.queryByTestId("cd-edit-modal")).not.toBeInTheDocument());
+  });
+
+  test("Save shows inline error when the endpoint returns {error}", async () => {
+    setupThreeRowFixture();
+    mEdit.mockResolvedValue({ error: "Unmatched SELL shares" } as any);
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("cd-edit-save"));
+
+    await waitFor(() => expect(screen.getByTestId("cd-edit-error")).toBeInTheDocument());
+    expect(screen.getByTestId("cd-edit-error").textContent).toContain("Unmatched SELL shares");
+    // Modal stays open so the user can correct.
+    expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument();
+  });
+
+  test("Cancel button closes the modal without calling editTransaction", async () => {
+    setupThreeRowFixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("cd-edit-cancel"));
+
+    await waitFor(() => expect(screen.queryByTestId("cd-edit-modal")).not.toBeInTheDocument());
+    expect(mEdit).not.toHaveBeenCalled();
+  });
+
+  test("Delete is a two-click confirm; second click calls deleteTransaction", async () => {
+    setupThreeRowFixture();
+    mDel.mockResolvedValue({ status: "ok" } as any);
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    const deleteBtn = screen.getByTestId("cd-edit-delete");
+    // First click arms — no endpoint call yet.
+    fireEvent.click(deleteBtn);
+    expect(mDel).not.toHaveBeenCalled();
+    expect(deleteBtn.textContent).toContain("Confirm Delete");
+
+    // Second click executes.
+    fireEvent.click(deleteBtn);
+    await waitFor(() => expect(mDel).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("cd-edit-modal")).not.toBeInTheDocument());
+  });
+
+  test("Sell row's edit modal renders the Lots Consumed subtable from lot_closures (Option B)", async () => {
+    mOpen.mockResolvedValue([stockTrade({ trade_id: "T1", ticker: "AAPL" })]);
+    mDetails.mockResolvedValue({
+      details: [
+        buyRow(1, "T1", "AAPL", 100, 100, "2026-01-05", "B1"),
+        buyRow(2, "T1", "AAPL", 50, 110, "2026-02-01", "A1"),
+        sellRow(3, "T1", "AAPL", 80, 120, "2026-03-05", "S1"),
+      ],
+      lot_closures: [
+        { trade_id: "T1", buy_trx_id: "A1", sell_trx_id: "S1", shares: 50, buy_price: 110, sell_price: 120, multiplier: 1, realized_pl: 500, closed_at: "2026-03-05" } as any,
+        { trade_id: "T1", buy_trx_id: "B1", sell_trx_id: "S1", shares: 30, buy_price: 100, sell_price: 120, multiplier: 1, realized_pl: 600, closed_at: "2026-03-05" } as any,
+      ],
+    });
+    mPrices.mockResolvedValue({ AAPL: 125 });
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    // Open the Sell row's modal.
+    fireEvent.click(screen.getByTestId("edit-3"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    // Lots Consumed subtable appears with both lots + total realized.
+    expect(screen.getByTestId("cd-lots-consumed")).toBeInTheDocument();
+    const subtable = screen.getByTestId("cd-lots-consumed");
+    expect(subtable.textContent).toContain("A1");
+    expect(subtable.textContent).toContain("B1");
+    expect(subtable.textContent).toContain("$110.00");
+    expect(subtable.textContent).toContain("$100.00");
+    // Total realized = 500 + 600 = 1100.
+    expect(screen.getByTestId("cd-lots-total-realized").textContent).toContain("1,100");
+  });
+
+  test("Buy row's edit modal does NOT render the Lots Consumed subtable", async () => {
+    setupThreeRowFixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("edit-1"));
+    await waitFor(() => expect(screen.getByTestId("cd-edit-modal")).toBeInTheDocument());
+
+    expect(screen.queryByTestId("cd-lots-consumed")).not.toBeInTheDocument();
   });
 });
