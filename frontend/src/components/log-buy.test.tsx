@@ -904,3 +904,94 @@ describe("LogBuy — ATR Live Sizer info row + pill rendering", () => {
     expect(screen.queryByText(/replaces the old 5% percentage default/)).not.toBeInTheDocument();
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Post-submit state refresh.
+// After a successful buy the page must refetch tradesOpen + details
+// (so openTrades / allDetails reflect the new lot) and pull a fresh
+// nextTradeId (the one we just used is consumed). Without this the
+// next same-page submission reads pre-submit state.
+// ─────────────────────────────────────────────────────────────────────
+describe("LogBuy — post-submit state refresh", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+    vi.mocked(api.priceLookup).mockReturnValue(new Promise(() => {}) as any);
+    vi.mocked(api.logBuy).mockResolvedValue({ trx_id: "B1", trade_id: "202604-001" } as any);
+  });
+
+  test("refetches tradesOpen + tradesOpenDetails + nextTradeId after a successful new buy", async () => {
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    // Wait for initial fetches to settle before counting.
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.nextTradeId).toHaveBeenCalledTimes(1));
+
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await selectBuyRule(FIRST_RULE);
+    fillByLabel("Shares to Add", "10");
+    fillByLabel("Price ($)", "150.00");
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG BUY ORDER"));
+    });
+
+    // The post-submit refresh fires one more call per endpoint.
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.nextTradeId).toHaveBeenCalledTimes(2));
+  });
+
+  test("refetches tradesOpen + tradesOpenDetails after a successful scale-in (no nextTradeId)", async () => {
+    // Seed openTrades with one campaign so the scale-in mode has something
+    // to pick. Re-running setupDefaults() inside the test would override
+    // beforeEach's mocks — use mockResolvedValueOnce instead so the initial
+    // mount fetch returns the seeded list.
+    vi.mocked(api.tradesOpen).mockResolvedValueOnce([
+      { trade_id: "202604-001", ticker: "AAPL", status: "OPEN", shares: 100, avg_entry: 140, total_cost: 14000,
+        realized_pl: 0, rule: "br1.1 Consolidation", strategy: "CanSlim" } as any,
+    ]);
+    vi.mocked(api.tradesOpenDetails).mockResolvedValueOnce({
+      details: [{ trade_id: "202604-001", ticker: "AAPL", action: "BUY", date: "2026-04-01",
+                  shares: 100, amount: 140, value: 14000, rule: "br1.1 Consolidation" } as any],
+      lot_closures: [],
+    });
+
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalledTimes(1));
+    const nextTradeIdInitialCount = vi.mocked(api.nextTradeId).mock.calls.length;
+
+    // Switch to scale-in mode.
+    await act(async () => {
+      fireEvent.click(screen.getByText("Scale In (Add to Existing)"));
+    });
+
+    // Pick the seeded campaign via the SearchSelect.
+    const campField = screen.getByText("Select Existing Campaign");
+    const campTrigger = campField.parentElement?.querySelector("button") as HTMLButtonElement;
+    await act(async () => { fireEvent.click(campTrigger); });
+    await act(async () => { fireEvent.click(screen.getByText(/AAPL/)); });
+
+    await selectBuyRule(FIRST_RULE);
+    fillByLabel("Shares to Add", "20");
+    fillByLabel("Price ($)", "150.00");
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG BUY ORDER"));
+    });
+
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+    // Scale-in path refreshes trades data the same way…
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalledTimes(2));
+    // …but does NOT fetch a fresh trade_id (no new trade_id is consumed —
+    // the lot lands on the existing campaign).
+    expect(vi.mocked(api.nextTradeId).mock.calls.length).toBe(nextTradeIdInitialCount);
+  });
+});
