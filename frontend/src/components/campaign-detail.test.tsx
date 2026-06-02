@@ -580,3 +580,52 @@ describe("CampaignDetail — edit modal (Commit 4)", () => {
     expect(screen.queryByTestId("cd-lots-consumed")).not.toBeInTheDocument();
   });
 });
+
+// ─── TRX ID pill color scheme tweak (post-Commit-4 polish) ───────────
+
+describe("CampaignDetail — TRX ID pill colors", () => {
+  test("TRX ID cell shows a colored pill (B green / A violet / S red); Action cell no longer carries trx_id", async () => {
+    mOpen.mockResolvedValue([stockTrade({ trade_id: "T1", ticker: "AAPL" })]);
+    mDetails.mockResolvedValue({
+      details: [
+        buyRow(1, "T1", "AAPL", 100, 100, "2026-01-05", "B1"),
+        buyRow(2, "T1", "AAPL", 50, 110, "2026-02-01", "A1"),
+        sellRow(3, "T1", "AAPL", 30, 120, "2026-03-05", "S1"),
+      ],
+      lot_closures: [
+        { trade_id: "T1", buy_trx_id: "A1", sell_trx_id: "S1", shares: 30, buy_price: 110, sell_price: 120, multiplier: 1, realized_pl: 300, closed_at: "2026-03-05" } as any,
+      ],
+    });
+    mPrices.mockResolvedValue({ AAPL: 125 });
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    // TRX ID cell — pill text present.
+    expect(screen.getByTestId("row-1-trx").textContent).toContain("B1");
+    expect(screen.getByTestId("row-2-trx").textContent).toContain("A1");
+    expect(screen.getByTestId("row-3-trx").textContent).toContain("S1");
+
+    // TRX ID pill color tint:
+    //   B → ops-green token (resolves to #08a86b inline fallback)
+    //   A → --g-mkt violet (#8b5cf6)
+    //   S → red #e5484d
+    const bSpan = screen.getByTestId("row-1-trx").querySelector("span") as HTMLElement;
+    const aSpan = screen.getByTestId("row-2-trx").querySelector("span") as HTMLElement;
+    const sSpan = screen.getByTestId("row-3-trx").querySelector("span") as HTMLElement;
+    // Inline `color:` is set via the CSS custom-property fallback syntax —
+    // assert the source string the component emits rather than the
+    // resolved RGB (jsdom won't compute color-mix tokens).
+    expect(bSpan.style.color).toMatch(/g-ops|#08a86b/);
+    expect(aSpan.style.color).toMatch(/g-mkt|#8b5cf6/);
+    expect(sSpan.style.color).toBe("rgb(229, 72, 77)"); // #e5484d
+
+    // Action cell no longer carries the trx_id label — only the dot + "Buy" / "Sell".
+    expect(screen.getByTestId("row-1-action").textContent).not.toContain("B1");
+    expect(screen.getByTestId("row-2-action").textContent).not.toContain("A1");
+    expect(screen.getByTestId("row-3-action").textContent).not.toContain("S1");
+    // Action label still present.
+    expect(screen.getByTestId("row-1-action").textContent).toContain("Buy");
+    expect(screen.getByTestId("row-3-action").textContent).toContain("Sell");
+  });
+});

@@ -1203,7 +1203,16 @@ function FilterSelect({ label, value, onChange, options, testId }: {
 function LedgerRowEl({ r, navColor, onEdit, isEditing }: { r: LedgerRow; navColor: string; onEdit: (detailId: number) => void; isEditing: boolean }) {
   const isSell = r.action === "SELL";
   const seriesChar = (r.trx_id || "").charAt(0).toUpperCase();
-  const seriesTagColor = seriesChar === "B" ? "var(--g-ops, #08a86b)" : "var(--g-mkt, #8b5cf6)";
+  // TRX ID pill color by series:
+  //   B-prefix (original buys) → ops-green tint
+  //   A-prefix (add-ons)       → violet tint (--g-mkt)
+  //   S-prefix (sells)         → red tint (--down)
+  //   anything else            → muted ink (defensive fallback)
+  const seriesTagColor =
+    seriesChar === "B" ? "var(--g-ops, #08a86b)" :
+    seriesChar === "A" ? "var(--g-mkt, #8b5cf6)" :
+    seriesChar === "S" ? "#e5484d" :
+    "var(--ink-4)";
   const statusBg =
     r.status === "Open" ? "color-mix(in oklab, #08a86b 14%, var(--surface))" :
     r.status === "Partial" ? "color-mix(in oklab, #f59f00 18%, var(--surface))" :
@@ -1219,21 +1228,22 @@ function LedgerRowEl({ r, navColor, onEdit, isEditing }: { r: LedgerRow; navColo
           borderBottom: "1px solid var(--border)",
           background: isEditing ? "color-mix(in oklab, " + navColor + " 6%, transparent)" : undefined,
         }}>
-      <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{r.trx_id || "—"}</td>
+      <td className="px-3 py-2.5 text-[11.5px]" data-testid={`row-${r.detail_id}-trx`}>
+        {r.trx_id ? (
+          <span className="inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold"
+                style={{ background: `color-mix(in oklab, ${seriesTagColor} 14%, var(--surface))`, color: seriesTagColor, fontFamily: mono }}>
+            {r.trx_id}
+          </span>
+        ) : <span style={{ color: "var(--ink-4)" }}>—</span>}
+      </td>
       <td className="px-3 py-2.5 text-[11.5px]" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
         {r.date.length >= 16 ? r.date.slice(0, 16).replace("T", " ") : r.date.slice(0, 10)}
       </td>
       <td className="px-3 py-2.5 text-[11.5px] font-semibold" style={{ fontFamily: mono }}>{r.ticker}</td>
-      <td className="px-3 py-2.5 text-[11.5px]">
+      <td className="px-3 py-2.5 text-[11.5px]" data-testid={`row-${r.detail_id}-action`}>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: isSell ? "#e5484d" : "#08a86b" }} />
           <span style={{ color: isSell ? "#e5484d" : "#08a86b" }}>{isSell ? "Sell" : "Buy"}</span>
-          {r.trx_id && (
-            <span className="ml-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold"
-                  style={{ background: `color-mix(in oklab, ${seriesTagColor} 14%, var(--surface))`, color: seriesTagColor }}>
-              {r.trx_id}
-            </span>
-          )}
         </span>
       </td>
       <td className="px-3 py-2.5 text-[11.5px]">
