@@ -28,7 +28,8 @@ export const NAV: NavGroup[] = [
   {
     id: "ops", label: "Trading Ops", color: "#08a86b", softColor: "#e6f8ef",
     items: [
-      { id: "campaign", label: "Active Campaign", href: "/active-campaign" },
+      { id: "campaign", label: "Campaign Summary", href: "/active-campaign" },
+      { id: "campaign-detail", label: "Campaign Detail", href: "/campaign-detail" },
       { id: "import", label: "Import Trades", href: "/import-trades" },
       { id: "logbuy", label: "Log Buy", href: "/log-buy" },
       { id: "logsell", label: "Log Sell", href: "/log-sell" },
