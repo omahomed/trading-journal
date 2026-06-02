@@ -47,3 +47,12 @@ portfolios/*/Audit_Trail.csv
 # Phase 1b relabel runner — per-run snapshot CSVs of affected_rows go here.
 # Auditable on the operator's local machine but not version-controlled.
 snapshots/
+
+# MORS local artifacts. Code + positions.json are tracked; data CSVs are
+# fetched on demand by mors_backtest.ensure_data() via yfinance on first
+# /api/sr8/monitor request (Railway containers re-download per cold start
+# but cache for the container lifetime). Per-run report markdowns and
+# Python pyc caches don't belong in git either.
+mors/data/
+mors/__pycache__/
+mors/results/

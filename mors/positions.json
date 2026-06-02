@@ -1,0 +1,15 @@
+[
+  {"ticker": "ARM",  "b1_date": "2026-05-18", "b1_price": 215.12, "shares_held": 250,   "avg_price": 224.92},
+  {"ticker": "PENG", "b1_date": "2026-05-06", "b1_price": 36.98,  "shares_held": 800,   "avg_price": 36.98},
+  {"ticker": "OSS",  "b1_date": "2026-05-01", "b1_price": 10.03,  "shares_held": 500,   "avg_price": 14.62},
+  {"ticker": "VLN",  "b1_date": "2026-04-30", "b1_price": 2.17,   "shares_held": 11000, "avg_price": 2.44},
+  {"ticker": "FPS",  "b1_date": "2026-04-22", "b1_price": 34.49,  "shares_held": 700,   "avg_price": 35.69},
+  {"ticker": "ALAB", "b1_date": "2026-04-14", "b1_price": 161.92, "shares_held": 360,   "avg_price": 167.76},
+  {"ticker": "BE",   "b1_date": "2026-04-10", "b1_price": 165.90, "shares_held": 350,   "avg_price": 207.84},
+  {"ticker": "NBIS", "b1_date": "2026-04-08", "b1_price": 137.95, "shares_held": 350,   "avg_price": 154.39},
+  {"ticker": "MU",   "b1_date": "2026-04-08", "b1_price": 411.35, "shares_held": 130,   "avg_price": 464.51},
+  {"ticker": "TQQQ", "b1_date": "2026-04-08", "b1_price": 48.37,  "shares_held": 300,   "avg_price": 51.60},
+  {"ticker": "SNDK", "b1_date": "2026-04-06", "b1_price": 726.15, "shares_held": 106,   "avg_price": 1038.87},
+  {"ticker": "DELL", "b1_date": "2026-04-03", "b1_price": 176.21, "shares_held": 318,   "avg_price": 200.57},
+  {"ticker": "COHR", "b1_date": "2026-04-01", "b1_price": 246.53, "shares_held": 302,   "avg_price": 286.55}
+]
