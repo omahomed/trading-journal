@@ -3380,6 +3380,230 @@ def _empty_add_effectiveness_response(
     }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# SR8 Cascade Monitor — wraps mors.monitor.analyze() per position in
+# mors/positions.json and returns hold/trim/exit recommendations.
+#
+# Architecture (from the audit, confirmed by the user):
+#   - Source of truth: mors/monitor.py + mors/mors_backtest.py
+#     (Python engine that replays the weekly cascade from each
+#     position's B1 date through today).
+#   - On-demand price fetching: mors_backtest.ensure_data() auto-pulls
+#     from yfinance if the per-ticker CSV is missing. First request
+#     on a fresh Railway container is slow (~1s per ticker); subsequent
+#     hits use the on-disk cache for the container lifetime.
+#   - Positions source: mors/positions.json (hand-maintained list).
+#     Path α from the audit — kept as-is for v1; potential migration
+#     to trades_summary tags is a follow-up.
+# ─────────────────────────────────────────────────────────────────────
+
+_MORS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mors")
+_SR8_POSITIONS_PATH = os.path.join(_MORS_DIR, "positions.json")
+_SR8_SPY_CSV_PATH = os.path.join(_MORS_DIR, "data", "SPY_daily.csv")
+
+
+def _sr8_load_positions() -> list[dict[str, Any]]:
+    """Load the hand-maintained sr8 positions list. Returns [] if the
+    file is missing — the endpoint surfaces that as an empty response
+    rather than a 500."""
+    if not os.path.exists(_SR8_POSITIONS_PATH):
+        return []
+    try:
+        with open(_SR8_POSITIONS_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"[sr8_monitor] positions.json load failed: {e}")
+        return []
+
+
+def _sr8_fetched_at_iso() -> str:
+    """SPY CSV mtime as a freshness anchor for the snapshot's 'as of'
+    label. Empty string when the CSV doesn't exist yet (first request
+    will fetch it; subsequent requests will resolve mtime correctly)."""
+    try:
+        if os.path.exists(_SR8_SPY_CSV_PATH):
+            return datetime.fromtimestamp(
+                os.path.getmtime(_SR8_SPY_CSV_PATH)
+            ).isoformat()
+    except Exception:
+        pass
+    return ""
+
+
+def _sr8_fetch_failed_row(pos: dict[str, Any], err_msg: str) -> dict[str, Any]:
+    """Shape an entry for a position whose analyze() raised. Mirrors
+    the design's 'fetch failed' UI state — non-null shares/avg/b1 so
+    the row still renders meaningful info, null current_price + 0
+    derived metrics."""
+    return {
+        "ticker": str(pos.get("ticker") or ""),
+        "b1_date": str(pos.get("b1_date") or ""),
+        "b1_price": float(pos.get("b1_price") or 0),
+        "shares_held": float(pos.get("shares_held") or 0),
+        "avg_price": float(pos.get("avg_price") or 0),
+        "current_price": None,
+        "current_dollars": 0.0,
+        "current_pct_nlv": 0.0,
+        "cascade_core": 15,
+        "tier_pct_nlv": 0.0,
+        "target_dollars": 0.0,
+        "delta_dollars": 0.0,
+        "delta_shares": 0,
+        "unreal_dollars": 0.0,
+        "unreal_pct": 0.0,
+        "last_signal": "",
+        "last_signal_date": "",
+        "last_bar_date": "",
+        "signal_today": False,
+        "terminated": False,
+        "phase": 1,
+        "is_action": False,
+        "early_warn": False,
+        "fetch_failed": True,
+        "fetch_error": err_msg[:200],
+    }
+
+
+def _sr8_enrich(pos: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
+    """Augment monitor.analyze()'s return dict with the b1_date/b1_price
+    pass-through fields + the design-additions (is_action, early_warn,
+    fetch_failed=False). Coerces date objects to ISO strings so the
+    response is JSON-serializable."""
+    is_action = bool(r.get("terminated")) or (
+        bool(r.get("signal_today"))
+        and float(r.get("delta_dollars") or 0) > 500.0  # AT_TARGET_TOL in monitor.py
+    )
+    # Early-warning: held position within 2 points BELOW its tier target.
+    # Design's earlyWarn definition (README:113-115); a small UI hint
+    # the engine doesn't compute but is cheap to derive here.
+    tier = float(r.get("tier_pct_nlv") or 0)
+    cur_pct = float(r.get("current_pct_nlv") or 0)
+    early_warn = (not is_action) and tier > 0 and 0 <= (tier - cur_pct) <= 2
+
+    def _iso(v: Any) -> str:
+        if v is None:
+            return ""
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v)
+
+    return {
+        "ticker": str(r.get("ticker") or pos.get("ticker") or ""),
+        "b1_date": str(pos.get("b1_date") or ""),
+        "b1_price": float(pos.get("b1_price") or 0),
+        "shares_held": float(r.get("shares_held") or 0),
+        "avg_price": float(r.get("avg_price") or 0),
+        "current_price": float(r.get("current_price") or 0),
+        "current_dollars": float(r.get("current_dollars") or 0),
+        "current_pct_nlv": float(r.get("current_pct_nlv") or 0),
+        "cascade_core": int(r.get("cascade_core") or 15),
+        "tier_pct_nlv": tier,
+        "target_dollars": float(r.get("target_dollars") or 0),
+        "delta_dollars": float(r.get("delta_dollars") or 0),
+        "delta_shares": int(r.get("delta_shares") or 0),
+        "unreal_dollars": float(r.get("unreal_dollars") or 0),
+        "unreal_pct": float(r.get("unreal_pct") or 0),
+        "last_signal": str(r.get("last_signal") or ""),
+        "last_signal_date": _iso(r.get("last_signal_date")),
+        "last_bar_date": _iso(r.get("last_bar_date")),
+        "signal_today": bool(r.get("signal_today")),
+        "terminated": bool(r.get("terminated")),
+        "phase": int(r.get("phase") or 1),
+        "is_action": is_action,
+        "early_warn": bool(early_warn),
+        "fetch_failed": False,
+        "fetch_error": "",
+    }
+
+
+def _sr8_run_monitor(nlv: float, refresh: bool = False) -> dict[str, Any]:
+    """Walk positions.json, run mors.monitor.analyze() per position, and
+    assemble the response payload. Errors per-position bucket into
+    fetch_failed rows so a single bad ticker doesn't break the page."""
+    from mors.monitor import analyze as mors_analyze
+
+    positions = _sr8_load_positions()
+    rows: list[dict[str, Any]] = []
+    for pos in positions:
+        try:
+            r = mors_analyze(pos, nlv, refresh=refresh)
+            rows.append(_sr8_enrich(pos, r))
+        except Exception as e:
+            ticker = str(pos.get("ticker") or "")
+            print(f"[sr8_monitor] analyze failed for {ticker}: {e}")
+            rows.append(_sr8_fetch_failed_row(pos, f"{type(e).__name__}: {e}"))
+
+    actionable = [r for r in rows if r["is_action"] and not r["fetch_failed"]]
+    priced = [r for r in rows if not r["fetch_failed"]]
+    cas20 = sum(1 for r in priced if r["cascade_core"] == 20)
+    cas15 = sum(1 for r in priced if r["cascade_core"] == 15)
+    at_risk_pct = sum(r["current_pct_nlv"] for r in actionable)
+    to_trim_dollars = sum(r["delta_dollars"] for r in actionable)
+
+    return {
+        "summary": {
+            "total_positions": len(rows),
+            "flagged_count": len(actionable),
+            "at_risk_pct": round(at_risk_pct, 2),
+            "to_trim_dollars": round(to_trim_dollars, 2),
+            "cascade_breakdown": {
+                "cascade_20": cas20,
+                "cascade_15": cas15,
+            },
+        },
+        "positions": rows,
+        "meta": {
+            "fetched_at": _sr8_fetched_at_iso(),
+            "nlv": nlv,
+        },
+    }
+
+
+@app.get("/api/sr8/monitor")
+@limiter.limit("30/minute")
+def sr8_monitor(request: Request, nlv: float = Query(..., gt=0)):
+    """Daily SR8 cascade monitor — per-position hold/trim/exit decisions.
+
+    Wraps mors.monitor.analyze() across every position listed in
+    mors/positions.json. Reads weekly-cached prices from mors/data/
+    (auto-fetched from yfinance if missing). Returns a single payload
+    the SR8 Monitor frontend page renders directly.
+
+    Query:
+      nlv (float, > 0): current Net Liq Value driving cascade math.
+        Edits to NLV on the page re-call this endpoint.
+
+    Response: see _sr8_run_monitor(). Stable shape; fetch failures
+    bucket per-position into rows with `fetch_failed: true`.
+    """
+    try:
+        return _sr8_run_monitor(nlv, refresh=False)
+    except Exception as e:
+        print(f"[sr8_monitor] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/sr8/refresh")
+@limiter.limit("2/minute")
+def sr8_refresh(request: Request, body: dict = Body(...)):
+    """Force-refresh weekly cached prices from yfinance, then return
+    the updated monitor payload. Heavier than GET /api/sr8/monitor —
+    rate-limited to 2/min to discourage abuse.
+
+    Body:
+      nlv (float, > 0): same as GET /api/sr8/monitor's query param.
+    """
+    try:
+        nlv = float(body.get("nlv") or 0)
+        if nlv <= 0:
+            return {"error": "nlv must be a positive number"}
+        return _sr8_run_monitor(nlv, refresh=True)
+    except Exception as e:
+        print(f"[sr8_refresh] handler failed: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
 @limiter.limit("60/minute")
 def list_cash_transactions_endpoint(portfolio_id: int, request: Request,

@@ -53,6 +53,7 @@ export const NAV: NavGroup[] = [
       { id: "earnings", label: "Earnings Planner", href: "/earnings" },
       { id: "heat", label: "Portfolio Heat", href: "/portfolio-heat" },
       { id: "riskmgr", label: "Risk Manager", href: "/risk-manager" },
+      { id: "sr8mon", label: "SR8 Monitor", href: "/sr8-monitor" },
     ],
   },
   {

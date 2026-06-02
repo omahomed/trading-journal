@@ -101,6 +101,7 @@ export const NAV_ICONS: Record<string, (p?: any) => React.ReactElement> = {
   earnings: Icons.calendar,
   heat: Icons.flame,
   riskmgr: Icons.shield,
+  sr8mon: Icons.trending,
   djournal: Icons.pen,
   report: Icons.clipboard,
   routine: Icons.check,
