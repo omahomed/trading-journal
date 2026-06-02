@@ -1560,7 +1560,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             <div className="max-h-[60vh] overflow-y-auto p-2">
               {options.length === 0 ? (
                 <div className="px-3 py-6 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>No open option positions.</div>
-              ) : options.map(opt => (
+              ) : [...options].sort((a, b) => a.ticker.localeCompare(b.ticker)).map(opt => (
                 <div key={opt.trade_id} className="grid grid-cols-[1fr_auto_140px] items-center gap-3 px-3 py-2 rounded-[8px]"
                      style={{ background: "var(--surface)" }}>
                   <div className="text-[12px] font-semibold truncate" style={{ fontFamily: mono }} title={opt.ticker}>
