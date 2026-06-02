@@ -2207,79 +2207,90 @@ def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
                 target,
             )
 
+    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+    if not ticker_list:
+        return {}
+    try:
+        return _fetch_live_prices_with_manual_overlay(ticker_list, portfolio)
+    except Exception as e:
+        print(f"[batch_prices] handler failed: {e}")
+        return {"error": str(e)}
+
+
+def _fetch_live_prices_with_manual_overlay(
+    ticker_list: list[str], portfolio: str = "",
+) -> dict[str, float]:
+    """Shared live-price fetch + manual_price overlay.
+
+    Mirrors batch_prices' live-path behavior 1:1 — extracted so other
+    endpoints (e.g. /api/analytics/add-effectiveness) can reuse the
+    same price semantics without duplicating the provider call + the
+    manual_price overlay. Do NOT add a second copy of this logic.
+
+    Behavior:
+      * yfinance can't reliably resolve OCC option symbols, so options
+        skip the live fetch. They get priced solely by the manual_price
+        overlay when portfolio is set; options without a manual_price
+        are omitted (same shape as a yfinance miss).
+      * Result is re-keyed to the caller's readable ticker, including
+        the user's original casing.
+      * manual_price overlay loads trades_summary at status='OPEN' and
+        replaces the live value for any matching open position with a
+        finite positive Manual_Price/manual_price (matching the same
+        NaN / type guards as batch_prices).
+
+    Returns {readable_ticker: price}. May raise — caller wraps.
+    """
     from price_providers import get_price_provider
 
-    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
     yf_to_readable: dict[str, str] = {}
     yf_symbols: list[str] = []
     for t in ticker_list:
-        # yfinance can't reliably resolve OCC option symbols, so skip the
-        # fetch for options entirely. They stay in ticker_list and get
-        # priced by the manual_price override layer below when portfolio
-        # is set; options without a manual_price are omitted from the
-        # response, matching the prior behavior when the yfinance fetch
-        # failed.
         if _is_option_ticker(t):
             continue
         yf_symbols.append(t)
         yf_to_readable[t] = t
 
-    if not yf_symbols:
-        # No yfinance work to do, but overrides may still apply if portfolio
-        # is set and the requested tickers map to open positions.
-        if not portfolio:
-            return {}
+    if not yf_symbols and not portfolio:
+        # No yfinance work and no overlay would apply.
+        return {}
 
-    try:
-        live = (get_price_provider().get_current_prices(yf_symbols)
-                if yf_symbols else {})
-        # Re-key by the readable ticker so callers can look up by the format
-        # they know (e.g. "LUMN 260717 $8C" instead of the OCC-encoded symbol).
-        result: dict[str, float] = {
-            yf_to_readable.get(yf_sym, yf_sym): price
-            for yf_sym, price in live.items()
-        }
+    live = (get_price_provider().get_current_prices(yf_symbols)
+            if yf_symbols else {})
+    result: dict[str, float] = {
+        yf_to_readable.get(yf_sym, yf_sym): price
+        for yf_sym, price in live.items()
+    }
 
-        # Layer manual_price overrides for open positions in the requested
-        # portfolio. Keyed by upper-cased readable ticker.
-        if portfolio:
-            try:
-                summary_df = db.load_summary(portfolio, status="OPEN")
-            except Exception as e:
-                print(f"[prices_batch] manual_price overlay load failed: {e}")
-                summary_df = None
-            if summary_df is not None and not summary_df.empty:
-                manual_col = (
-                    "Manual_Price" if "Manual_Price" in summary_df.columns
-                    else ("manual_price" if "manual_price" in summary_df.columns
-                          else None)
-                )
-                ticker_col = "Ticker" if "Ticker" in summary_df.columns else "ticker"
-                if manual_col is not None:
-                    requested_upper = {t.upper(): t for t in ticker_list}
-                    for _, row in summary_df.iterrows():
-                        mp = row.get(manual_col)
-                        # Filter None AND pandas NaN — load_summary's
-                        # Decimal-to-numeric conversion turns DB NULLs into
-                        # NaN, which slips past `mp is None` and survives
-                        # `float()` + `<= 0`, then crashes the response on
-                        # starlette's allow_nan=False JSON encoder.
-                        if pd.isna(mp):
-                            continue
-                        try:
-                            mp_f = float(mp)
-                        except (TypeError, ValueError):
-                            continue
-                        if not math.isfinite(mp_f) or mp_f <= 0:
-                            continue
-                        tkr = str(row.get(ticker_col, "") or "").upper()
-                        if tkr in requested_upper:
-                            # Re-key with the caller's original casing.
-                            result[requested_upper[tkr]] = mp_f
-        return result
-    except Exception as e:
-        print(f"[batch_prices] handler failed: {e}")
-        return {"error": str(e)}
+    if portfolio:
+        try:
+            summary_df = db.load_summary(portfolio, status="OPEN")
+        except Exception as e:
+            print(f"[prices_batch] manual_price overlay load failed: {e}")
+            summary_df = None
+        if summary_df is not None and not summary_df.empty:
+            manual_col = (
+                "Manual_Price" if "Manual_Price" in summary_df.columns
+                else ("manual_price" if "manual_price" in summary_df.columns
+                      else None)
+            )
+            ticker_col = "Ticker" if "Ticker" in summary_df.columns else "ticker"
+            if manual_col is not None:
+                requested_upper = {t.upper(): t for t in ticker_list}
+                for _, row in summary_df.iterrows():
+                    mp = row.get(manual_col)
+                    if pd.isna(mp):
+                        continue
+                    try:
+                        mp_f = float(mp)
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(mp_f) or mp_f <= 0:
+                        continue
+                    tkr = str(row.get(ticker_col, "") or "").upper()
+                    if tkr in requested_upper:
+                        result[requested_upper[tkr]] = mp_f
+    return result
 
 
 # ============================================================
@@ -2991,6 +3002,382 @@ def get_weekly_metrics(request: Request,
     except Exception as e:
         print(f"[get_weekly_metrics] handler failed: {e}")
         return {"error": str(e)}
+
+
+@app.get("/api/analytics/add-effectiveness")
+@limiter.limit("30/minute")
+def add_effectiveness(
+    request: Request,
+    portfolio: str = Query(...),
+    start: str = Query(""),
+    end: str = Query(""),
+    strategy: str = Query(""),
+):
+    """Group scale-in (add) buys by their own buy rule over a date window
+    and report effectiveness.
+
+    An "add" = a trades_details row with trx_id starting 'A' (the prefix
+    log_buy assigns to every non-opening BUY — see api/main.py log_buy
+    handler), action='BUY', deleted_at IS NULL, in the requested portfolio,
+    with detail-row date inside [start, end] (both inclusive).
+
+    Per-add metrics reuse existing functions verbatim — no LIFO or price-
+    fetch reimplementation:
+      * Realized P&L → SUM(lot_closures.realized_pl WHERE buy_trx_id =
+        add.trx_id) — already multiplier-scaled by save_summary_with_closures.
+      * Open shares → compute_open_inventory(campaign_txns), filtered to
+        the lot whose trx_id matches this add.
+      * Unrealized P&L → (current_price − add.amount) × open_shares ×
+        multiplier. Current price comes from one batched call to
+        _fetch_live_prices_with_manual_overlay (the same path /api/prices/
+        batch uses), including manual_price overlay for open positions.
+      * Extension at add + pyramid-up vs average-down classification →
+        replay _walk_inventory on txns with date < add.date to derive
+        the pre-add open lots; blended_cost =
+        Σ(lot.shares × lot.price) / Σ(lot.shares).
+        extension_pct = (add.price − blended_cost) / blended_cost × 100.
+        Ties (add.price >= blended_cost) classify as pyramid-up; strictly
+        below = average-down.
+
+    Aggregates per rule (grouped by the DETAIL row's rule, NOT the
+    summary's rule — an add can carry a different rule than the opening
+    buy, and using the summary rule would erase the point of the view):
+      rule, add_count, realized_pl, unrealized_pl, closed_count
+      (adds with ≥1 lot_closures row), win_rate, avg_realized_per_add,
+      avg_extension_at_add.
+
+    Headline totals + a discipline guardrail (average_down_count and a
+    list of those add identifiers — normally 0; surfaces exceptions or
+    mis-tagged rule rows).
+
+    Query:
+      portfolio: required, name (e.g. "CanSlim")
+      start, end: YYYY-MM-DD inclusive; empty/omitted → unbounded on that side
+      strategy: filter trades_summary.strategy; empty or "all" → no filter
+    """
+    try:
+        # Parse window — empty params mean unbounded on that side.
+        try:
+            start_ts = pd.Timestamp(start) if start else pd.Timestamp.min
+        except Exception:
+            return {"error": f"Invalid start date: {start!r} (expected YYYY-MM-DD)"}
+        try:
+            # End is INCLUSIVE — extend a date-only "end" to end-of-day so
+            # rows logged later that day (with HH:MM:SS) still fall inside.
+            end_ts = (pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)) \
+                if end else pd.Timestamp.max
+        except Exception:
+            return {"error": f"Invalid end date: {end!r} (expected YYYY-MM-DD)"}
+
+        df_s = db.load_summary(portfolio)
+        if df_s.empty:
+            return _empty_add_effectiveness_response(portfolio, start, end, strategy)
+        df_s = _normalize_trades(df_s)
+
+        # Strategy filter — "all" or empty means no filter. Case-insensitive.
+        strategy_filter = (strategy or "").strip()
+        if strategy_filter and strategy_filter.lower() != "all":
+            if "strategy" not in df_s.columns:
+                return _empty_add_effectiveness_response(portfolio, start, end, strategy)
+            df_s = df_s[
+                df_s["strategy"].astype(str).str.lower() == strategy_filter.lower()
+            ].copy()
+        if df_s.empty:
+            return _empty_add_effectiveness_response(portfolio, start, end, strategy)
+
+        in_scope_trade_ids: set[str] = set(df_s["trade_id"].astype(str))
+        # Summary lookup: trade_id → {ticker, multiplier}
+        summary_lookup: dict[str, dict[str, Any]] = {}
+        for _, srow in df_s.iterrows():
+            tid = str(srow.get("trade_id") or "")
+            if not tid:
+                continue
+            mult_raw = srow.get("multiplier")
+            try:
+                mult = float(mult_raw) if mult_raw is not None and not pd.isna(mult_raw) else 1.0
+            except (TypeError, ValueError):
+                mult = 1.0
+            if mult <= 0:
+                mult = 1.0
+            summary_lookup[tid] = {
+                "ticker": str(srow.get("ticker") or "").strip(),
+                "multiplier": mult,
+            }
+
+        df_d = db.load_details(portfolio)
+        if df_d.empty:
+            return _empty_add_effectiveness_response(portfolio, start, end, strategy)
+        df_d = _normalize_trades(df_d)
+        df_d["date_parsed"] = pd.to_datetime(df_d["date"], errors="coerce")
+        # Drop rows whose date couldn't be parsed — they'd silently slip the
+        # window filter (NaT < anything → False; <= anything → False).
+        df_d = df_d.dropna(subset=["date_parsed"])
+
+        # Identify ADD rows (the spec: trx_id LIKE 'A%' + BUY + in scope +
+        # inside window). deleted_at is already filtered by load_details.
+        action_col = df_d["action"].astype(str).str.upper()
+        trx_col = df_d["trx_id"].astype(str)
+        adds = df_d[
+            df_d["trade_id"].astype(str).isin(in_scope_trade_ids)
+            & (action_col == "BUY")
+            & trx_col.str.startswith("A")
+            & (df_d["date_parsed"] >= start_ts)
+            & (df_d["date_parsed"] <= end_ts)
+        ].copy()
+
+        if adds.empty:
+            return _empty_add_effectiveness_response(portfolio, start, end, strategy)
+
+        # ONE batched price fetch for every distinct in-scope ticker. The
+        # window restricts adds, not tickers — campaigns with adds in the
+        # window may have open shares that need a current price for
+        # unrealized P&L. Use the in-scope set, not just adds' tickers.
+        distinct_tickers = sorted({
+            v["ticker"] for v in summary_lookup.values() if v["ticker"]
+        })
+        try:
+            prices = _fetch_live_prices_with_manual_overlay(
+                distinct_tickers, portfolio,
+            ) if distinct_tickers else {}
+        except Exception as e:
+            print(f"[add_effectiveness] price fetch failed: {e}")
+            prices = {}
+
+        # lot_closures for in-scope trades — one DB round-trip.
+        try:
+            df_lc = db.load_lot_closures(
+                portfolio, trade_ids=list(in_scope_trade_ids),
+            )
+        except Exception as e:
+            print(f"[add_effectiveness] load_lot_closures failed: {e}")
+            df_lc = pd.DataFrame(columns=[
+                "trade_id", "buy_trx_id", "realized_pl",
+            ])
+        # Index closures by (trade_id, buy_trx_id) → (sum_pl, count).
+        closure_index: dict[tuple[str, str], tuple[float, int]] = {}
+        if df_lc is not None and not df_lc.empty:
+            for (tid, btid), grp in df_lc.groupby(["trade_id", "buy_trx_id"]):
+                closure_index[(str(tid), str(btid))] = (
+                    float(grp["realized_pl"].sum()),
+                    int(len(grp)),
+                )
+
+        # Pre-compute the full-campaign open inventory once per in-scope
+        # trade_id (cheaper than re-walking per-add for open-share lookup).
+        open_inv_by_trade: dict[str, dict[str, float]] = {}
+        # Pre-bucket details by trade_id so we don't repeatedly filter
+        # the global DataFrame in the per-add loop.
+        details_by_trade: dict[str, pd.DataFrame] = {}
+        for tid, grp in df_d.groupby(df_d["trade_id"].astype(str)):
+            details_by_trade[tid] = grp
+            if tid in in_scope_trade_ids:
+                try:
+                    inv = compute_open_inventory(grp)
+                except Exception as e:
+                    print(f"[add_effectiveness] compute_open_inventory failed for {tid}: {e}")
+                    inv = []
+                by_trx: dict[str, float] = {}
+                for lot in inv:
+                    by_trx[str(lot.get("trx_id", "") or "")] = float(
+                        lot.get("shares", 0) or 0,
+                    )
+                open_inv_by_trade[tid] = by_trx
+
+        # Per-rule accumulator
+        rules_acc: dict[str, dict[str, Any]] = {}
+        average_down_list: list[dict[str, Any]] = []
+        total_adds_with_closure = 0
+        total_wins = 0
+
+        for _, add_row in adds.iterrows():
+            tid = str(add_row.get("trade_id") or "")
+            trx_id = str(add_row.get("trx_id") or "")
+            try:
+                add_price = float(add_row.get("amount") or 0)
+            except (TypeError, ValueError):
+                add_price = 0.0
+            add_date = add_row["date_parsed"]
+            rule_raw = add_row.get("rule")
+            rule = (
+                str(rule_raw).strip()
+                if rule_raw is not None and not pd.isna(rule_raw) and str(rule_raw).strip()
+                else "(no rule)"
+            )
+
+            summ = summary_lookup.get(tid, {})
+            ticker = str(summ.get("ticker") or "")
+            multiplier = float(summ.get("multiplier") or 1.0)
+
+            # Pre-add blended cost via _walk_inventory on the slice of
+            # campaign txns strictly before this add. Reuses the canonical
+            # walker — no parallel implementation.
+            campaign_txns = details_by_trade.get(tid)
+            blended_cost = 0.0
+            blended_shares = 0.0
+            if campaign_txns is not None and not campaign_txns.empty:
+                pre_add = campaign_txns[campaign_txns["date_parsed"] < add_date]
+                if not pre_add.empty:
+                    try:
+                        pre_inv = compute_open_inventory(pre_add)
+                    except Exception as e:
+                        print(f"[add_effectiveness] pre-add walk failed for {tid}/{trx_id}: {e}")
+                        pre_inv = []
+                    for lot in pre_inv:
+                        s = float(lot.get("shares", 0) or 0)
+                        p = float(lot.get("price", 0) or 0)
+                        blended_shares += s
+                        blended_cost += s * p
+                    if blended_shares > 0:
+                        blended_cost = blended_cost / blended_shares
+                    else:
+                        blended_cost = 0.0
+
+            # Classify. Spec: ties (add.price >= blended_cost) = pyramid-up.
+            # Adds with no prior open lots (blended_shares == 0) shouldn't
+            # happen given trx_id 'A%' definition, but if encountered
+            # default to pyramid-up (treat as if add opened the campaign).
+            extension_pct: float | None = None
+            is_average_down = False
+            if blended_cost > 0:
+                extension_pct = (add_price - blended_cost) / blended_cost * 100.0
+                is_average_down = add_price < blended_cost
+
+            # Realized P&L for this add — sum of multiplier-scaled
+            # lot_closures rows whose buy_trx_id matches.
+            realized_pl, closure_rows = closure_index.get((tid, trx_id), (0.0, 0))
+
+            # Open shares for THIS add (filter the precomputed inventory).
+            open_shares = float(
+                open_inv_by_trade.get(tid, {}).get(trx_id, 0.0),
+            )
+
+            # Unrealized P&L = (current_price - add_price) × open_shares × mult.
+            current_price = float(prices.get(ticker, 0) or 0)
+            unrealized_pl = (
+                (current_price - add_price) * open_shares * multiplier
+                if open_shares > 0 and current_price > 0 and add_price > 0
+                else 0.0
+            )
+
+            # Accumulate per-rule.
+            acc = rules_acc.setdefault(rule, {
+                "rule": rule,
+                "add_count": 0,
+                "realized_pl": 0.0,
+                "unrealized_pl": 0.0,
+                "closed_count": 0,
+                "win_count": 0,
+                "ext_sum": 0.0,
+                "ext_count": 0,
+            })
+            acc["add_count"] += 1
+            acc["realized_pl"] += realized_pl
+            acc["unrealized_pl"] += unrealized_pl
+            if closure_rows > 0:
+                acc["closed_count"] += 1
+                total_adds_with_closure += 1
+                if realized_pl > 0:
+                    acc["win_count"] += 1
+                    total_wins += 1
+            if extension_pct is not None:
+                acc["ext_sum"] += extension_pct
+                acc["ext_count"] += 1
+            if is_average_down:
+                average_down_list.append({
+                    "trade_id": tid, "trx_id": trx_id, "ticker": ticker,
+                    "rule": rule,
+                    "add_price": round(add_price, 4),
+                    "blended_cost_pre_add": round(blended_cost, 4),
+                })
+
+        # Build per-rule output rows.
+        rule_rows: list[dict[str, Any]] = []
+        total_adds = 0
+        total_realized = 0.0
+        total_unrealized = 0.0
+        for r in rules_acc.values():
+            cc = r["closed_count"]
+            win_rate = (r["win_count"] / cc) if cc > 0 else 0.0
+            avg_realized = (r["realized_pl"] / cc) if cc > 0 else 0.0
+            avg_ext = (r["ext_sum"] / r["ext_count"]) if r["ext_count"] > 0 else 0.0
+            rule_rows.append({
+                "rule": r["rule"],
+                "add_count": r["add_count"],
+                "realized_pl": round(r["realized_pl"], 2),
+                "unrealized_pl": round(r["unrealized_pl"], 2),
+                "closed_count": cc,
+                "win_rate": round(win_rate, 4),
+                "avg_realized_per_add": round(avg_realized, 2),
+                "avg_extension_at_add": round(avg_ext, 4),
+            })
+            total_adds += r["add_count"]
+            total_realized += r["realized_pl"]
+            total_unrealized += r["unrealized_pl"]
+        # Sort by add_count desc, then realized_pl desc for ties.
+        rule_rows.sort(
+            key=lambda r: (-r["add_count"], -r["realized_pl"]),
+        )
+
+        return {
+            "rules": rule_rows,
+            "totals": {
+                "total_adds": total_adds,
+                "total_realized_pl": round(total_realized, 2),
+                "total_unrealized_pl": round(total_unrealized, 2),
+                "overall_win_rate": round(
+                    (total_wins / total_adds_with_closure)
+                    if total_adds_with_closure > 0 else 0.0,
+                    4,
+                ),
+                "avg_realized_per_add": round(
+                    (total_realized / total_adds_with_closure)
+                    if total_adds_with_closure > 0 else 0.0,
+                    2,
+                ),
+            },
+            "discipline": {
+                "average_down_count": len(average_down_list),
+                "average_downs": average_down_list,
+            },
+            "window": {
+                "portfolio": portfolio,
+                "start": start or None,
+                "end": end or None,
+                "strategy": (strategy or None) if (strategy and strategy.lower() != "all") else None,
+            },
+        }
+    except Exception as e:
+        print(f"[add_effectiveness] handler failed: {e}")
+        return {"error": str(e)}
+
+
+def _empty_add_effectiveness_response(
+    portfolio: str, start: str, end: str, strategy: str,
+) -> dict[str, Any]:
+    """Zero-state response used by add_effectiveness when there are no
+    in-scope campaigns or no adds in the window. Preserves the response
+    shape so frontend callers can render an empty-state view without
+    special-casing."""
+    return {
+        "rules": [],
+        "totals": {
+            "total_adds": 0,
+            "total_realized_pl": 0.0,
+            "total_unrealized_pl": 0.0,
+            "overall_win_rate": 0.0,
+            "avg_realized_per_add": 0.0,
+        },
+        "discipline": {
+            "average_down_count": 0,
+            "average_downs": [],
+        },
+        "window": {
+            "portfolio": portfolio,
+            "start": start or None,
+            "end": end or None,
+            "strategy": (strategy or None) if (strategy and strategy.lower() != "all") else None,
+        },
+    }
 
 
 @app.get("/api/portfolios/{portfolio_id}/cash-transactions")
