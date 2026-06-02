@@ -396,6 +396,32 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
     return map;
   }, [closures]);
 
+  // Closure aggregation per buy_trx_id — the Buy-side mirror. A Buy lot
+  // that's been sold off (fully or partially) has its realized P&L
+  // attributed via the closures' buy_trx_id field; we use that to surface
+  // the realized return on the Buy row itself rather than computing a
+  // misleading mark-based return. Without this, a fully-closed Buy lot
+  // shows +146% (current price vs entry) when the actual realized return
+  // was −2.77% (sell price vs entry).
+  const closureByBuy = useMemo(() => {
+    const map = new Map<string, { sumPl: number; sumShares: number; sumSellRevenue: number }>();
+    for (const c of closures) {
+      const tid = String(c.trade_id || "");
+      const buyTrx = String((c as { buy_trx_id?: string }).buy_trx_id || "");
+      if (!tid || !buyTrx) continue;
+      const key = `${tid}|${buyTrx}`;
+      const shares = parseFloat(String(c.shares || 0)) || 0;
+      const sellPrice = parseFloat(String((c as { sell_price?: number | string }).sell_price || 0)) || 0;
+      const pl = parseFloat(String(c.realized_pl || 0)) || 0;
+      const cur = map.get(key) || { sumPl: 0, sumShares: 0, sumSellRevenue: 0 };
+      cur.sumPl += pl;
+      cur.sumShares += shares;
+      cur.sumSellRevenue += shares * sellPrice;
+      map.set(key, cur);
+    }
+    return map;
+  }, [closures]);
+
   // Per-trade multiplier lookup (campaigns are stocks so this should
   // always resolve to 1, but the field exists on the row and we honor it).
   const tradeMultiplier = useMemo(() => {
@@ -438,17 +464,44 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
         remaining = null;
         realized = agg ? agg.sumPl : 0;
         unrealized = null;
-        ret = cost_basis > 0 ? ((amount - cost_basis) / cost_basis) * 100 : 0;
+        // Sell rows no longer carry a Return %. The realized $ already
+        // captures the outcome of the sale; the % was redundant and the
+        // user asked for it removed.
+        ret = null;
         value = shares * amount * mult;
       } else {
         cost_basis = amount;
-        exit_price = null;
         remaining = info ? info.remaining : shares;
-        realized = null;
         const rem = remaining ?? 0;
+        // Look up the closures attributed to THIS Buy lot. Used both to
+        // surface the realized P&L on the row (matching Trade Journal)
+        // and to drive the realized-return branch when the lot is fully
+        // closed (remaining = 0). Without the latter, a fully-closed Buy
+        // would render +146 % (mark vs entry) instead of the actual
+        // realized −2.77 % (avg sell vs entry).
+        const buyKey = `${tradeId}|${trxId}`;
+        const buyAgg = closureByBuy.get(buyKey);
+        const avgSellPrice = buyAgg && buyAgg.sumShares > 0
+          ? buyAgg.sumSellRevenue / buyAgg.sumShares
+          : null;
+
+        realized = buyAgg ? buyAgg.sumPl : 0;
+        exit_price = avgSellPrice;
         unrealized = rem > 0 ? (mark - amount) * rem * mult : 0;
-        ret = amount > 0 ? ((mark - amount) / amount) * 100 : 0;
-        value = rem > 0 ? mark * rem * mult : 0;
+        // Value: cost-basis value of the lot (matches Trade Journal's
+        // Value column). Previous formula `mark × remaining × mult`
+        // collapsed to $0 for fully-closed Buys, hiding the lot's cost
+        // basis entirely from the row.
+        value = shares * amount * mult;
+        // Return %: mark-based while shares remain open; realized when
+        // the lot is fully closed by sells.
+        if (rem > 0) {
+          ret = amount > 0 ? ((mark - amount) / amount) * 100 : 0;
+        } else if (avgSellPrice != null && amount > 0) {
+          ret = ((avgSellPrice - amount) / amount) * 100;
+        } else {
+          ret = 0;
+        }
       }
 
       const status: "Open" | "Partial" | "Closed" = info ? info.status : (action === "SELL" ? "Closed" : "Open");
@@ -476,7 +529,7 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
         mark,
       };
     });
-  }, [details, walked, closureBySell, tradeMultiplier, livePrices]);
+  }, [details, walked, closureBySell, closureByBuy, tradeMultiplier, livePrices]);
 
   // ───── KPI numbers (whole ledger, unfiltered) ───────────────────────
   const kpis = useMemo(() => {
@@ -486,9 +539,17 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
     for (const r of enrichedRows) {
       if (r.action === "BUY" && r.remaining && r.remaining > 0) {
         unrealized += r.unrealized ?? 0;
-        marketValue += r.value;
+        // Market Value tile keeps its "current market value of OPEN
+        // positions" semantic — `mark × remaining × multiplier` — even
+        // though the row-level Value column now shows cost basis to
+        // match Trade Journal. Computed directly here so the two
+        // surfaces stay decoupled.
+        marketValue += r.mark * r.remaining * r.multiplier;
       }
       if (r.action === "SELL") {
+        // Realized P&L tile sums only Sell-side closures. Sums on Buys
+        // would double-count (every closure pair shows up on both
+        // sides post-fix).
         realized += r.realized ?? 0;
       }
     }
@@ -554,11 +615,15 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
   }, [filtered, sort]);
 
   // ───── Totals (visible filtered+sorted set) ─────────────────────────
+  // Realized is summed from Sells only — Buy rows now carry their own
+  // attributed realized too, and summing both sides would double-count
+  // (each lot_closures row contributes equally to a Buy AND a Sell).
+  // Unrealized naturally lives on Buys only (Sells are null).
   const totals = useMemo(() => sorted.reduce((t, r) => {
     t.shares += r.shares;
     t.remaining += r.remaining ?? 0;
     t.value += r.value;
-    t.realized += r.realized ?? 0;
+    if (r.action === "SELL") t.realized += r.realized ?? 0;
     t.unrealized += r.unrealized ?? 0;
     return t;
   }, { shares: 0, remaining: 0, value: 0, realized: 0, unrealized: 0 }), [sorted]);

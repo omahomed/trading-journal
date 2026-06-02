@@ -629,3 +629,110 @@ describe("CampaignDetail — TRX ID pill colors", () => {
     expect(screen.getByTestId("row-3-action").textContent).toContain("Sell");
   });
 });
+
+// ─── Fully-closed Buy lots show realized attribution; Sells lose Return % ───
+
+describe("CampaignDetail — closed-Buy realized attribution + no Sell Return %", () => {
+  // Helper: 12-share Buy fully consumed by a 12-share Sell. Mirrors the
+  // SNDK A1 fixture from the user's screenshot comparison.
+  function setupClosedA1Fixture() {
+    mOpen.mockResolvedValue([stockTrade({ trade_id: "T1", ticker: "SNDK" })]);
+    mDetails.mockResolvedValue({
+      details: [
+        buyRow(1, "T1", "SNDK", 50, 726.15, "2026-04-06", "B1"),   // still open
+        buyRow(2, "T1", "SNDK", 12, 714.78, "2026-04-07 11:34", "A1"),  // fully closed below
+        sellRow(3, "T1", "SNDK", 12, 695.01, "2026-04-07 13:55", "SA1"),
+      ],
+      lot_closures: [
+        {
+          trade_id: "T1", buy_trx_id: "A1", sell_trx_id: "SA1",
+          shares: 12, buy_price: 714.78, sell_price: 695.01,
+          multiplier: 1, realized_pl: -237.24, closed_at: "2026-04-07",
+        } as any,
+      ],
+    });
+    mPrices.mockResolvedValue({ SNDK: 1758.23 });
+  }
+
+  test("fully-closed Buy row pulls Exit Price + Realized + Return % from lot_closures (not mark-based)", async () => {
+    setupClosedA1Fixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    const a1Row = screen.getByTestId("row-2");
+    // Exit Price = weighted-avg sell price ($695.01).
+    expect(a1Row.textContent).toContain("$695.01");
+    // Realized P&L from closures (−$237.24).
+    expect(a1Row.textContent).toContain("-$237.24");
+    // Return % = (695.01 − 714.78) / 714.78 × 100 ≈ −2.77 % — NOT the
+    // mark-based +146 % bug.
+    expect(a1Row.textContent).toContain("-2.8%");
+    expect(a1Row.textContent).not.toContain("+146");
+  });
+
+  test("fully-closed Buy row Value column shows cost basis (shares × amount), not $0", async () => {
+    setupClosedA1Fixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    const a1Row = screen.getByTestId("row-2");
+    // 12 × $714.78 = $8,577.36 → rendered as $8,577 (decimals: 0).
+    expect(a1Row.textContent).toContain("$8,577");
+  });
+
+  test("Open Buy row keeps mark-based Return % when remaining > 0", async () => {
+    setupClosedA1Fixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    // B1 is the Open 50-sh lot. Return % = (1758.23 − 726.15) / 726.15 × 100
+    // ≈ 142.1 %. (Note: the row may also contain the 142% in unrealized $;
+    // assert on the cell content keyword presence.)
+    const b1Row = screen.getByTestId("row-1");
+    expect(b1Row.textContent).toContain("+142");
+  });
+
+  test("Open Buy with no closures shows $0.00 in Realized (not em-dash)", async () => {
+    mOpen.mockResolvedValue([stockTrade({ trade_id: "T1", ticker: "AAPL" })]);
+    mDetails.mockResolvedValue({
+      details: [buyRow(1, "T1", "AAPL", 100, 100, "2026-01-05", "B1")],
+      lot_closures: [],
+    });
+    mPrices.mockResolvedValue({ AAPL: 120 });
+
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    const row = screen.getByTestId("row-1");
+    // Realized cell shows $0.00 (numeric) — matches Trade Journal display.
+    expect(row.textContent).toContain("$0.00");
+  });
+
+  test("Sell row Return % cell renders em-dash, not a heat chip", async () => {
+    setupClosedA1Fixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    // SA1 is the Sell. Find its cells in DOM order — Return % is col #14
+    // (0-indexed 13) before Rule + Notes + Edit. Easier: assert the row
+    // does NOT carry a "−" or "+" percentage anywhere in its text.
+    const sellRow = screen.getByTestId("row-3");
+    // The −$237 realized lives in the Realized P&L cell. The Return %
+    // cell should now be "—". Negative pct chip would render "-2.8%" etc.
+    // Make the assertion specific: no "%" in the row at all (the cost
+    // basis cell is also dollar-based, so no other % source exists).
+    expect(sellRow.textContent || "").not.toMatch(/[+\-]\d+(\.\d+)?%/);
+  });
+
+  test("Footer Σ Realized sums Sells only (no double-count after closed Buys carry realized)", async () => {
+    setupClosedA1Fixture();
+    render(<CampaignDetail navColor="#08a86b" />);
+    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+
+    // SA1 Sell carries realized = −237.24. Closed Buy A1 ALSO carries
+    // realized = −237.24 (its attributed side). Footer must show
+    // ONE copy, not −474.48.
+    expect(screen.getByTestId("footer-realized").textContent).toContain("-$237");
+    expect(screen.getByTestId("footer-realized").textContent).not.toContain("-$474");
+  });
+});
