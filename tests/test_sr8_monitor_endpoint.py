@@ -1,10 +1,10 @@
 """Tests for the SR8 Cascade Monitor endpoint.
 
-The endpoint wraps mors.monitor.analyze() per position in
-mors/positions.json. These tests mock mors.monitor.analyze (the heavy
-function — it replays cascade history) so we can assert on the
-endpoint's enrichment + summary aggregation without spinning up the
-MORS engine or hitting yfinance.
+The endpoint pulls SR8 positions from the trades DB (open positions in the
+named portfolio where b1_max_return_pct >= 50) and wraps mors.monitor.analyze()
+per position. These tests mock both:
+  - _sr8_load_db_positions (so we don't need a real DB)
+  - mors.monitor.analyze (so we don't replay cascade history or hit yfinance)
 
 Coverage:
   1. Happy path — analyze() succeeds for all positions; response shape
@@ -20,7 +20,11 @@ Coverage:
      tier target.
   5. /api/sr8/refresh wires refresh=True through to analyze().
   6. refresh rejects nlv <= 0.
-  7. Empty positions.json returns an empty payload (not a crash).
+  7. Empty position list returns an empty payload (not a crash).
+  8. Portfolio query param threads to _sr8_load_db_positions and lands in
+     meta.portfolio.
+  9. _sr8_load_db_positions filters to b1_max_return_pct >= 50, excludes
+     options, and synthesizes b1_date from the first BUY in trades_details.
 """
 from __future__ import annotations
 
@@ -94,9 +98,14 @@ def stubbed(monkeypatch):
         "positions": [],
         "analyze_by_ticker": {},  # ticker → (callable | result_dict | exception)
         "analyze_calls": [],       # capture (pos_ticker, nlv, refresh)
+        "load_calls": [],          # capture portfolio names the loader saw
     }
 
-    monkeypatch.setattr(main, "_sr8_load_positions", lambda: list(state["positions"]))
+    def fake_load(portfolio: str):
+        state["load_calls"].append(portfolio)
+        return list(state["positions"])
+
+    monkeypatch.setattr(main, "_sr8_load_db_positions", fake_load)
 
     # Replace the module-level import indirection inside _sr8_run_monitor.
     # That helper does `from mors.monitor import analyze as mors_analyze`
@@ -293,7 +302,7 @@ def test_refresh_rejects_non_positive_nlv(stubbed):
 
 
 def test_empty_positions_returns_clean_envelope(stubbed):
-    """No positions in positions.json → endpoint returns the envelope
+    """No SR8 positions in the portfolio → endpoint returns the envelope
     with zero-state values, no crash."""
     state, client = stubbed
     state["positions"] = []
@@ -304,3 +313,101 @@ def test_empty_positions_returns_clean_envelope(stubbed):
     assert body["summary"]["total_positions"] == 0
     assert body["summary"]["flagged_count"] == 0
     assert body["positions"] == []
+
+
+def test_portfolio_param_threads_to_loader_and_meta(stubbed):
+    """?portfolio=X is forwarded to the DB loader and echoed in meta."""
+    state, client = stubbed
+    state["positions"] = [
+        {"ticker": "AAA", "b1_date": "2026-04-01", "b1_price": 100, "shares_held": 100, "avg_price": 100},
+    ]
+
+    r = client.get("/api/sr8/monitor?nlv=500000&portfolio=TQQQ%20Strategy")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["meta"]["portfolio"] == "TQQQ Strategy"
+    assert state["load_calls"] == ["TQQQ Strategy"]
+
+    # Default falls back to CanSlim when omitted.
+    state["load_calls"].clear()
+    r2 = client.get("/api/sr8/monitor?nlv=500000")
+    assert r2.json()["meta"]["portfolio"] == "CanSlim"
+    assert state["load_calls"] == ["CanSlim"]
+
+
+def test_load_db_positions_filters_and_synthesizes(monkeypatch):
+    """_sr8_load_db_positions: filters by status=OPEN, b1_max_return_pct>=50,
+    drops options, drops rows missing b1_price, and synthesizes b1_date
+    from the first BUY in trades_details."""
+    import pandas as pd
+    import api.main as main
+
+    summary_rows = [
+        # SR8 stock — included
+        {"Trade_ID": "T1", "Ticker": "MU",  "Status": "OPEN", "Shares": 135,
+         "Avg_Entry": 80.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 119.14,
+         "Instrument_Type": "STOCK"},
+        # b1_max_return_pct exactly 50 — included (>=)
+        {"Trade_ID": "T2", "Ticker": "DELL", "Status": "OPEN", "Shares": 318,
+         "Avg_Entry": 70.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 50.0,
+         "Instrument_Type": "STOCK"},
+        # Below 50 — excluded
+        {"Trade_ID": "T3", "Ticker": "SNOW", "Status": "OPEN", "Shares": 30,
+         "Avg_Entry": 100.0, "B1_Entry_Price": 95.0, "B1_Max_Return_Pct": 12.0,
+         "Instrument_Type": "STOCK"},
+        # Closed — excluded
+        {"Trade_ID": "T4", "Ticker": "PLTR", "Status": "CLOSED", "Shares": 0,
+         "Avg_Entry": 0, "B1_Entry_Price": 20.0, "B1_Max_Return_Pct": 200.0,
+         "Instrument_Type": "STOCK"},
+        # SR8-tier but option — excluded
+        {"Trade_ID": "T5", "Ticker": "NVDA250620C500", "Status": "OPEN", "Shares": 10,
+         "Avg_Entry": 5.0, "B1_Entry_Price": 4.0, "B1_Max_Return_Pct": 80.0,
+         "Instrument_Type": "OPTION"},
+        # SR8 but b1_max is NaN — excluded (peak never persisted)
+        {"Trade_ID": "T6", "Ticker": "NEW", "Status": "OPEN", "Shares": 100,
+         "Avg_Entry": 50.0, "B1_Entry_Price": 50.0, "B1_Max_Return_Pct": None,
+         "Instrument_Type": "STOCK"},
+    ]
+    details_rows = [
+        # MU: first BUY 2026-02-08, then add-on
+        {"Trade_ID": "T1", "Ticker": "MU", "Action": "BUY", "Date": "2026-02-08", "Amount": 60.0},
+        {"Trade_ID": "T1", "Ticker": "MU", "Action": "BUY", "Date": "2026-02-15", "Amount": 65.0},
+        # DELL: single BUY
+        {"Trade_ID": "T2", "Ticker": "DELL", "Action": "BUY", "Date": "2026-02-06", "Amount": 60.0},
+        # SNOW (will be filtered out anyway)
+        {"Trade_ID": "T3", "Ticker": "SNOW", "Action": "BUY", "Date": "2026-04-01", "Amount": 95.0},
+    ]
+
+    def fake_load_summary(portfolio: str) -> pd.DataFrame:
+        assert portfolio == "CanSlim"
+        return pd.DataFrame(summary_rows)
+
+    def fake_load_details(portfolio: str) -> pd.DataFrame:
+        assert portfolio == "CanSlim"
+        return pd.DataFrame(details_rows)
+
+    monkeypatch.setattr(main.db, "load_summary", fake_load_summary)
+    monkeypatch.setattr(main.db, "load_details", fake_load_details)
+
+    positions = main._sr8_load_db_positions("CanSlim")
+    by_ticker = {p["ticker"]: p for p in positions}
+
+    assert set(by_ticker.keys()) == {"MU", "DELL"}, positions
+    assert by_ticker["MU"]["b1_date"] == "2026-02-08"  # first BUY, not the add-on
+    assert by_ticker["MU"]["b1_price"] == 60.0
+    assert by_ticker["MU"]["shares_held"] == 135
+    assert by_ticker["MU"]["avg_price"] == 80.0
+    assert by_ticker["DELL"]["b1_date"] == "2026-02-06"
+    assert by_ticker["DELL"]["b1_price"] == 60.0
+
+
+def test_load_db_positions_returns_empty_on_db_error(monkeypatch):
+    """DB errors surface as an empty list — the endpoint shows an empty
+    page, not a 500."""
+    import api.main as main
+
+    def boom(portfolio: str):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(main.db, "load_summary", boom)
+    assert main._sr8_load_db_positions("CanSlim") == []
