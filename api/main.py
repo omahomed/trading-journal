@@ -6059,7 +6059,7 @@ def delete_fundamentals(trade_id: str, portfolio: str = "CanSlim"):
 # ============================================================
 # R2 IMAGE ENDPOINTS
 # ============================================================
-from fastapi import UploadFile, File, Form
+from fastapi import UploadFile, File, Form, BackgroundTasks
 
 @app.get("/api/images/{trade_id}")
 def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
@@ -6083,10 +6083,36 @@ def get_trade_images(trade_id: str, portfolio: str = "CanSlim"):
         return {"error": str(e)}
 
 
+def _run_marketsurge_vision_extract(
+    content: bytes,
+    filename: str,
+    portfolio: str,
+    trade_id: str,
+    ticker: str,
+    image_id: int,
+) -> None:
+    """Background task: pull fundamentals out of a MarketSurge screenshot
+    via Claude Vision and persist them. Runs AFTER the upload response
+    returns so the Vision API latency (5-15s typical, sometimes hangs)
+    never blocks the user's submit. Failures here only mean fundamentals
+    didn't extract — the image itself is already in R2 + DB."""
+    try:
+        import vision_extract
+        extracted = vision_extract.extract_fundamentals(content, filename)
+        if extracted:
+            db.save_trade_fundamentals(portfolio, trade_id, ticker, extracted, image_id)
+            print(f"[Vision] Extracted fundamentals for {ticker} ({trade_id})")
+        else:
+            print(f"[Vision] No data extracted for {ticker}")
+    except Exception as ve:
+        print(f"[Vision] Extraction failed for {ticker} ({trade_id}): {ve}")
+
+
 @app.post("/api/images/upload")
 @limiter.limit("5/minute")
 async def upload_image(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     portfolio: str = Form("CanSlim"),
     trade_id: str = Form(...),
@@ -6094,43 +6120,49 @@ async def upload_image(
     image_type: str = Form(...),
 ):
     """Upload a trade image to R2 and save metadata to DB.
-    For marketsurge images, also extracts fundamentals via Claude Vision."""
+
+    For marketsurge images, fundamentals extraction (Claude Vision OCR)
+    runs as a FastAPI background task so the upload response returns
+    once R2 + DB metadata are saved. The Vision call can take 5-15s on a
+    good day and has been observed to hang indefinitely — running it
+    inline blocks the Log Buy submit and the user sees "Saving…" until
+    they refresh (which kills the in-flight upload). Decoupling means
+    the chart is durably saved before we touch Vision at all."""
     if not _is_r2_available():
         return {"error": "R2 storage not configured"}
     try:
-        # Read file content
         content = await file.read()
         file_like = io.BytesIO(content)
         file_like.name = file.filename or "upload.png"
 
-        # For MarketSurge screenshots, save as 'entry' type so it appears
-        # in Entry Charts, and also run AI extraction
+        # MarketSurge screenshots are saved as 'entry' type so they appear
+        # in Entry Charts alongside the user's manually attached charts.
         save_type = "entry" if image_type == "marketsurge" else image_type
 
-        # Upload to R2
         object_key = r2.upload_image(file_like, portfolio, trade_id, ticker, save_type)
         if not object_key:
             return {"error": "Upload to R2 failed"}
 
-        # Save metadata to DB
         image_id = db.save_trade_image(portfolio, trade_id, ticker, save_type, object_key, file.filename)
 
-        # Extract fundamentals from MarketSurge screenshots
-        fundamentals = None
+        # Schedule Vision OCR off the request path. Response returns now;
+        # fundamentals land in trade_fundamentals when Vision finishes.
         if image_type == "marketsurge":
-            try:
-                import vision_extract
-                extracted = vision_extract.extract_fundamentals(content, file.filename or "image.png")
-                if extracted:
-                    db.save_trade_fundamentals(portfolio, trade_id, ticker, extracted, image_id)
-                    fundamentals = extracted
-                    print(f"[Vision] Extracted fundamentals for {ticker} ({trade_id})")
-                else:
-                    print(f"[Vision] No data extracted for {ticker}")
-            except Exception as ve:
-                print(f"[Vision] Extraction failed: {ve}")
+            background_tasks.add_task(
+                _run_marketsurge_vision_extract,
+                content,
+                file.filename or "image.png",
+                portfolio,
+                trade_id,
+                ticker,
+                image_id,
+            )
 
-        return {"status": "ok", "image_id": image_id, "object_key": object_key, "fundamentals": fundamentals}
+        # `fundamentals` is always null in the immediate response — the
+        # frontend never relied on the synchronous value (the upload page
+        # just acks success). Fundamentals are read from
+        # /api/trades/{id}/fundamentals on demand once they're persisted.
+        return {"status": "ok", "image_id": image_id, "object_key": object_key, "fundamentals": None}
     except Exception as e:
         print(f"[upload_image] handler failed: {e}")
         return {"error": str(e)}
