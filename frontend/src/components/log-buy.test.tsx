@@ -47,6 +47,11 @@ vi.mock("@/lib/api", () => ({
   getActivePortfolio: () => "CanSlim",
 }));
 
+vi.mock("@/lib/upload-with-timeout", () => ({
+  uploadWithTimeout: vi.fn(),
+  DEFAULT_UPLOAD_TIMEOUT_MS: 60_000,
+}));
+
 const SEED_STRATEGIES = [
   { name: "CanSlim",     description: "primary",   color: "#6366f1", is_active: true, created_at: "2026-01-01T00:00:00" },
   { name: "StockTalk",   description: "small-cap", color: "#d97706", is_active: true, created_at: "2026-01-01T00:00:01" },
@@ -54,9 +59,11 @@ const SEED_STRATEGIES = [
 ];
 
 import { api } from "@/lib/api";
+import { uploadWithTimeout } from "@/lib/upload-with-timeout";
 import { LogBuy } from "./log-buy";
 
 const mRally = vi.mocked(api.rallyPrefix);
+const mUpload = vi.mocked(uploadWithTimeout);
 
 function setupDefaults() {
   vi.mocked(api.journalLatest).mockResolvedValue({ end_nlv: 100000 } as any);
@@ -993,5 +1000,143 @@ describe("LogBuy — post-submit state refresh", () => {
     // …but does NOT fetch a fresh trade_id (no new trade_id is consumed —
     // the lot lands on the existing campaign).
     expect(vi.mocked(api.nextTradeId).mock.calls.length).toBe(nextTradeIdInitialCount);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Background upload tracker.
+// After a successful submit, image uploads run in the background via
+// uploadWithTimeout. Per-file status appears in <UploadTracker>; failed
+// uploads expose a Retry button. The submit chain no longer awaits
+// uploads, so a stalled R2 / Vision call can't hang the "Saving…" state.
+// ─────────────────────────────────────────────────────────────────────
+describe("LogBuy — background upload tracker", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaults();
+    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+    vi.mocked(api.priceLookup).mockReturnValue(new Promise(() => {}) as any);
+    vi.mocked(api.logBuy).mockResolvedValue({ trx_id: "B1", trade_id: "202604-001" } as any);
+  });
+
+  async function attachFileToEntryCharts(file: File) {
+    // FileInput renders a hidden <input type="file" multiple>; Entry Charts
+    // is the first file input on the page (followed by Position Changes,
+    // then the MarketSurge single-file input). Drive the onChange directly.
+    const fileInputs = document.querySelectorAll('input[type="file"]') as NodeListOf<HTMLInputElement>;
+    expect(fileInputs.length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.change(fileInputs[0], { target: { files: [file] } });
+    });
+  }
+
+  async function fillRequiredAndSubmit() {
+    fillByLabel("Ticker Symbol", STOCK_TICKER);
+    await selectBuyRule(FIRST_RULE);
+    fillByLabel("Shares to Add", "10");
+    fillByLabel("Price ($)", "150.00");
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG BUY ORDER"));
+    });
+  }
+
+  test("submit with no files: tracker does not render", async () => {
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    await fillRequiredAndSubmit();
+
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+    expect(mUpload).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("upload-tracker")).not.toBeInTheDocument();
+  });
+
+  test("submit with attached entry chart: tracker renders, uploadWithTimeout fires", async () => {
+    // Keep the upload promise pending so we can assert the "Uploading…"
+    // state without a race against resolution.
+    let resolveUpload: (v: { ok: boolean }) => void = () => {};
+    mUpload.mockReturnValue(new Promise(r => { resolveUpload = r; }));
+
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    const file = new File(["entry-bytes"], "entry-chart.png", { type: "image/png" });
+    await attachFileToEntryCharts(file);
+
+    await fillRequiredAndSubmit();
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+
+    // Tracker appeared with the file in "Uploading…" state.
+    const tracker = await screen.findByTestId("upload-tracker");
+    expect(tracker).toBeInTheDocument();
+    expect(tracker.textContent).toContain("entry-chart.png");
+    expect(tracker.textContent).toContain("Uploading");
+
+    // uploadWithTimeout was called once with the file + "entry" kind.
+    expect(mUpload).toHaveBeenCalledTimes(1);
+    const [calledFile, , , , kind] = mUpload.mock.calls[0];
+    expect(calledFile).toBe(file);
+    expect(kind).toBe("entry");
+
+    // Now resolve and confirm the entry transitions to "Uploaded".
+    await act(async () => { resolveUpload({ ok: true }); await Promise.resolve(); });
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-tracker").textContent).toContain("Uploaded");
+    });
+  });
+
+  test("failed upload shows Retry button; clicking it re-fires uploadWithTimeout", async () => {
+    mUpload.mockResolvedValueOnce({ ok: false, error: "Upload timed out (60s)" });
+
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    const file = new File(["entry-bytes"], "entry-chart.png", { type: "image/png" });
+    await attachFileToEntryCharts(file);
+
+    await fillRequiredAndSubmit();
+
+    // Wait for the failure to propagate to the tracker.
+    const tracker = await screen.findByTestId("upload-tracker");
+    await waitFor(() => expect(tracker.textContent).toContain("Failed"));
+    expect(tracker.textContent).toContain("Upload timed out (60s)");
+
+    // Find the retry button (data-testid is keyed off the entry's id —
+    // pick whichever match shows up).
+    const retryButton = tracker.querySelector('[data-testid^="upload-retry-"]') as HTMLButtonElement;
+    expect(retryButton).toBeTruthy();
+
+    // Second call will resolve OK.
+    mUpload.mockResolvedValueOnce({ ok: true });
+    await act(async () => { fireEvent.click(retryButton); });
+
+    await waitFor(() => expect(mUpload).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-tracker").textContent).toContain("Uploaded");
+    });
+  });
+
+  test("submit chain does NOT await uploads (Saving stops even if upload stalls)", async () => {
+    // Never-resolving upload — proves handleSubmit doesn't await it.
+    mUpload.mockReturnValue(new Promise(() => {}));
+
+    render(<LogBuy navColor="#6366f1" />);
+    await screen.findByTestId("logbuy-sizing-mode-indicator");
+
+    const file = new File(["entry-bytes"], "stalled.png", { type: "image/png" });
+    await attachFileToEntryCharts(file);
+
+    await fillRequiredAndSubmit();
+    await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
+
+    // The post-submit refetch chain still runs to completion, which is
+    // the proxy for "submitting flipped back to false". If handleSubmit
+    // were still awaiting the upload, nextTradeId would never be called.
+    await waitFor(() => expect(api.nextTradeId).toHaveBeenCalledTimes(2));
+
+    // Submit button is no longer disabled — user can start the next entry.
+    const submitBtn = screen.getByText(/LOG BUY ORDER/) as HTMLButtonElement;
+    expect(submitBtn.disabled).toBe(false);
   });
 });

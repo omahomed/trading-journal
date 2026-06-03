@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 import { SellRuleGlossary } from "./sell-rule-glossary";
 import { SearchSelect } from "./search-select";
+import { uploadWithTimeout } from "@/lib/upload-with-timeout";
+import { UploadTracker, type UploadEntry, type UploadKind } from "./upload-tracker";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -107,6 +109,36 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // Background upload tracker — populated when a submit succeeds, then
+  // updated as each upload resolves or fails. Submit button re-enables
+  // as soon as the DB write is done; uploads run independently and
+  // surface their status here. See [[upload-tracker]].
+  const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>([]);
+  const uploadEntriesRef = useRef<UploadEntry[]>([]);
+  uploadEntriesRef.current = uploadEntries;
+
+  const fireUpload = useCallback((entry: UploadEntry) => {
+    uploadWithTimeout(entry.file, entry.portfolio, entry.tradeId, entry.ticker, entry.kind)
+      .then(result => {
+        setUploadEntries(prev => prev.map(e =>
+          e.id === entry.id
+            ? { ...e, status: result.ok ? "done" : "failed", error: result.error }
+            : e,
+        ));
+      });
+  }, []);
+
+  const onRetryUpload = useCallback((id: string) => {
+    const entry = uploadEntriesRef.current.find(e => e.id === id);
+    if (!entry) return;
+    setUploadEntries(prev => prev.map(e =>
+      e.id === id ? { ...e, status: "uploading", error: undefined } : e,
+    ));
+    fireUpload({ ...entry, status: "uploading", error: undefined });
+  }, [fireUpload]);
+
+  const onDismissTracker = useCallback(() => setUploadEntries([]), []);
+
   useEffect(() => {
     api.tradesOpen(getActivePortfolio()).then(trades => {
       setOpenTrades(trades);
@@ -182,18 +214,30 @@ export function LogSell({ navColor }: { navColor: string }) {
       if (result.error) {
         setSubmitResult({ ok: false, msg: result.error });
       } else {
-        // Upload position change charts
-        if (positionCharts.length > 0) {
-          for (const file of positionCharts) {
-            await api.uploadImage(file, getActivePortfolio(), selectedTrade, selected.ticker, "position_change");
-          }
+        // Snapshot attached files into the background upload tracker — same
+        // pattern as Log Buy. The submit chain no longer awaits uploads, so
+        // a stalled R2 call can't hang the "Saving…" button. Per-file
+        // status (uploading / done / failed) is rendered by <UploadTracker>.
+        const portfolio = getActivePortfolio();
+        const entriesToFire: UploadEntry[] = [];
+        const kind: UploadKind = "position_change";
+        for (const f of positionCharts) {
+          entriesToFire.push({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${entriesToFire.length}`,
+            file: f, fileName: f.name, kind, portfolio,
+            tradeId: selectedTrade, ticker: selected.ticker, status: "uploading",
+          });
+        }
+        if (entriesToFire.length > 0) {
+          setUploadEntries(prev => [...prev, ...entriesToFire]);
+          for (const entry of entriesToFire) fireUpload(entry);
         }
 
         const plStr = result.realized_pl != null ? ` | P&L: ${formatCurrency(result.realized_pl)}` : "";
         const closedStr = result.is_closed ? " (CLOSED)" : ` (${result.remaining_shares} remaining)`;
         setSubmitResult({ ok: true, msg: `Sold ${result.trx_id || "S1"}: ${shares} shs of ${selected.ticker} @ $${price}${plStr}${closedStr}` });
 
-        // Reset form
+        // Reset form — File refs are already captured in uploadEntries.
         setShares(""); setPrice(""); setNotes(""); setGrade(null); setPositionCharts([]);
 
         // Refresh open trades
@@ -231,6 +275,8 @@ export function LogSell({ navColor }: { navColor: string }) {
           {submitResult.msg}
         </div>
       )}
+
+      <UploadTracker entries={uploadEntries} onRetry={onRetryUpload} onDismiss={onDismissTracker} />
 
       <div className="grid gap-6" style={{ gridTemplateColumns: "2fr 1fr" }}>
         <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>

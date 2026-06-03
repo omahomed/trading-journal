@@ -40,8 +40,16 @@ vi.mock("@/lib/api", () => ({
   getActivePortfolio: () => "CanSlim",
 }));
 
+vi.mock("@/lib/upload-with-timeout", () => ({
+  uploadWithTimeout: vi.fn(),
+  DEFAULT_UPLOAD_TIMEOUT_MS: 60_000,
+}));
+
 import { api } from "@/lib/api";
+import { uploadWithTimeout } from "@/lib/upload-with-timeout";
 import { LogSell } from "./log-sell";
+
+const mUpload = vi.mocked(uploadWithTimeout);
 
 // Five open campaigns covering the search + option scenarios the tests
 // need. Mixes stocks and one option so the OPTION ×100 banner test has
@@ -225,5 +233,105 @@ describe("LogSell — campaign combobox (Audit-c extraction)", () => {
     expect(body.trade_id).toBe("202605-007");
     expect(body.shares).toBe(50);
     expect(body.price).toBe(145);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Background upload tracker — Log Sell side.
+// Same UX as Log Buy: position-change uploads run in the background via
+// uploadWithTimeout, surface per-file status in <UploadTracker>, and
+// the submit chain doesn't await them.
+// ─────────────────────────────────────────────────────────────────────
+describe("LogSell — background upload tracker", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.tradesOpen).mockResolvedValue([STOCK_NVDA] as any);
+    vi.mocked(api.logSell).mockResolvedValue({ trx_id: "S1", remaining_shares: 150, is_closed: false, realized_pl: 720 } as any);
+  });
+
+  async function setupAndSubmitWithChart() {
+    render(<LogSell navColor="#08a86b" />);
+    await screen.findByText("Select Campaign");
+    await openCampaignPicker();
+    await act(async () => {
+      fireEvent.click(screen.getByText("NVDA (200 shares) | 202605-007"));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/200 shares @ \$130\.50 avg/)).toBeInTheDocument();
+    });
+    fillByLabel("Shares to Sell", "50");
+    fillByLabel("Sell Price ($)", "145.00");
+
+    // Attach a position-change chart via the hidden file input.
+    const fileInputs = document.querySelectorAll('input[type="file"]') as NodeListOf<HTMLInputElement>;
+    expect(fileInputs.length).toBeGreaterThan(0);
+    const file = new File(["trim-bytes"], "trim-chart.png", { type: "image/png" });
+    await act(async () => {
+      fireEvent.change(fileInputs[0], { target: { files: [file] } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("LOG SELL ORDER"));
+    });
+
+    return file;
+  }
+
+  test("submit with chart fires uploadWithTimeout (position_change) and shows tracker", async () => {
+    let resolveUpload: (v: { ok: boolean }) => void = () => {};
+    mUpload.mockReturnValue(new Promise(r => { resolveUpload = r; }));
+
+    const file = await setupAndSubmitWithChart();
+    await waitFor(() => expect(api.logSell).toHaveBeenCalled());
+
+    const tracker = await screen.findByTestId("upload-tracker");
+    expect(tracker.textContent).toContain("trim-chart.png");
+    expect(tracker.textContent).toContain("Uploading");
+
+    expect(mUpload).toHaveBeenCalledTimes(1);
+    const [calledFile, , , , kind] = mUpload.mock.calls[0];
+    expect(calledFile).toBe(file);
+    expect(kind).toBe("position_change");
+
+    await act(async () => { resolveUpload({ ok: true }); await Promise.resolve(); });
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-tracker").textContent).toContain("Uploaded");
+    });
+  });
+
+  test("failed upload shows Retry button; clicking it re-fires uploadWithTimeout", async () => {
+    mUpload.mockResolvedValueOnce({ ok: false, error: "R2 unreachable" });
+
+    await setupAndSubmitWithChart();
+    const tracker = await screen.findByTestId("upload-tracker");
+    await waitFor(() => expect(tracker.textContent).toContain("Failed"));
+    expect(tracker.textContent).toContain("R2 unreachable");
+
+    const retryButton = tracker.querySelector('[data-testid^="upload-retry-"]') as HTMLButtonElement;
+    expect(retryButton).toBeTruthy();
+
+    mUpload.mockResolvedValueOnce({ ok: true });
+    await act(async () => { fireEvent.click(retryButton); });
+
+    await waitFor(() => expect(mUpload).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-tracker").textContent).toContain("Uploaded");
+    });
+  });
+
+  test("submit chain does NOT await uploads (button re-enables even if upload stalls)", async () => {
+    mUpload.mockReturnValue(new Promise(() => {})); // never resolves
+
+    await setupAndSubmitWithChart();
+    await waitFor(() => expect(api.logSell).toHaveBeenCalled());
+
+    // Proxy for "submitting flipped back to false": the post-submit
+    // tradesOpen refetch ran (mount call + this one = 2). If handleSubmit
+    // were awaiting the upload, this second call would never fire.
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalledTimes(2));
+
+    const submitBtn = screen.getByText(/LOG SELL ORDER/) as HTMLButtonElement;
+    expect(submitBtn.disabled).toBe(false);
   });
 });
