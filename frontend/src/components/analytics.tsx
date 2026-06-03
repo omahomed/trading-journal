@@ -1761,11 +1761,11 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
           { k: "Avg Days Held",      v: oAvgDays.toFixed(0) },
         ] : [
           { k: "Trades",         v: String(filtered.length) },
-          { k: "Total P&L",      v: formatCurrency(mTotal, { showSign: true, decimals: 0 }), color: pctColor(mTotal) },
           { k: "Closed / Open",  v: `${filteredClosed.length} · ${filteredOpen.length}` },
           { k: "Win Rate",       v: `${cWinRate.toFixed(0)}%`, sub: "closed only", color: cWinRate >= 50 ? "#08a86b" : "#e5484d" },
           { k: "Net Realized",   v: formatCurrency(mRealized, { showSign: true, decimals: 0 }), color: pctColor(mRealized) },
           { k: "Net Unrealized", v: formatCurrency(mUnrealized, { showSign: true, decimals: 0 }), color: pctColor(mUnrealized) },
+          { k: "Total P&L",      v: formatCurrency(mTotal, { showSign: true, decimals: 0 }), color: pctColor(mTotal) },
         ];
 
         // Unique tickers for filter dropdown
@@ -2002,11 +2002,12 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                 <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                   <thead><tr>
                     {([
-                      { label: "Ticker", key: "ticker" }, { label: "Trade ID", key: "trade_id" }, { label: "Status", key: "status" },
-                      { label: "Buy Rule", key: "buy_rule" }, { label: "Sell Rule", key: "sell_rule" },
+                      { label: "Ticker", key: "ticker" }, { label: "Trade ID", key: "trade_id" },
                       { label: "Open", key: "open" }, { label: "Close", key: "close" },
+                      { label: "Status", key: "status" },
                       { label: "Shares", key: "shares" }, { label: "Entry", key: "entry" }, { label: "Exit", key: "exit" },
                       { label: "P&L", key: "pl" }, { label: "Return %", key: "return" }, { label: "R", key: "r" },
+                      { label: "Buy Rule", key: "buy_rule" }, { label: "Sell Rule", key: "sell_rule" },
                     ] as const).map(h => (
                       <th key={h.key}
                           className="text-left px-3 py-2.5 text-[9px] uppercase font-semibold whitespace-nowrap sticky top-0 cursor-pointer select-none"
@@ -2068,16 +2069,14 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                           onContextMenu={e => { e.preventDefault(); setCampCtxMenu({ x: e.clientX, y: e.clientY, trade: t }); }}>
                         <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)" }}>{t.trade_id}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(0, 10)}</td>
+                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{isOpen ? "—" : (displayCloseDate || "—")}</td>
                         <td className="px-3 py-2">
                           <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
                                 style={{ background: `color-mix(in oklab, ${isOpen ? "#08a86b" : "#888"} 10%, var(--surface))`, color: isOpen ? "#08a86b" : "var(--ink-4)" }}>
                             {t.status}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{(t as any).buy_rule || t.rule || "—"}</td>
-                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{isOpen ? "—" : ((t as any).sell_rule || "—")}</td>
-                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(0, 10)}</td>
-                        <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{isOpen ? "—" : (displayCloseDate || "—")}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{displayShares > 0 ? displayShares : "—"}</td>
                         <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{displayEntry > 0 ? formatCurrency(displayEntry) : "—"}</td>
                         <td className="px-3 py-2 privacy-mask" style={{ fontFamily: mono }}>{!isOpen && displayExit > 0 ? formatCurrency(displayExit) : "—"}</td>
@@ -2086,6 +2085,8 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                         </td>
                         <td className="px-3 py-2" style={{ fontFamily: mono, color: pctColor(isOpen ? 0 : displayRet) }}>{!isOpen && displayRet !== 0 ? `${displayRet >= 0 ? "+" : ""}${displayRet.toFixed(1)}%` : "—"}</td>
                         <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
+                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{(t as any).buy_rule || t.rule || "—"}</td>
+                        <td className="px-3 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{isOpen ? "—" : ((t as any).sell_rule || "—")}</td>
                       </tr>
                     );
                   })}</tbody>
