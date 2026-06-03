@@ -442,6 +442,21 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     router.push(`/position-sizer?tab=pyramid&trade_id=${encodeURIComponent(trade_id)}`);
   }, [router]);
 
+  // Increase position → opens Log Buy in scale-in mode with the campaign
+  // pre-selected via the existing ps_prefill handshake (log-buy.tsx reads
+  // the {action: "scale_in", trade_id} payload on mount and clears it).
+  const ctxIncreasePosition = useCallback((p: EnrichedPosition) => {
+    localStorage.setItem("ps_prefill", JSON.stringify({ action: "scale_in", trade_id: p.trade_id }));
+    if (onNavigate) onNavigate("logbuy");
+  }, [onNavigate]);
+
+  // Decrease position → opens Log Sell with the campaign pre-selected via
+  // ps_prefill_sell (log-sell.tsx reads {trade_id} on mount and clears it).
+  const ctxDecreasePosition = useCallback((p: EnrichedPosition) => {
+    localStorage.setItem("ps_prefill_sell", JSON.stringify({ trade_id: p.trade_id }));
+    if (onNavigate) onNavigate("logsell");
+  }, [onNavigate]);
+
   // Phase 2 — retag the campaign via PATCH /api/trades/{id}/strategy.
   // Optimistic UX: close the menu, fire the request, refresh on success.
   // The TradePosition.strategy on positions[] is computed from
@@ -1240,6 +1255,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                   onClick={e => { e.stopPropagation(); ctxOpenPyramid(ctxMenu.position.trade_id); setCtxMenu(null); }}>
             <span style={{ color: "var(--ink-4)" }}>&#x1F53A;</span> Open Position Sizer Pyramid
+          </button>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  data-testid="ctx-increase-position"
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxIncreasePosition(ctxMenu.position); setCtxMenu(null); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x2795;</span> Increase position
+          </button>
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  data-testid="ctx-decrease-position"
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); ctxDecreasePosition(ctxMenu.position); setCtxMenu(null); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x2796;</span> Decrease position
           </button>
           {/* Phase 2 — Set strategy. Desktop: hover-flyout. Touch: flat list. */}
           {strategies.length > 0 && (coarsePointer ? (

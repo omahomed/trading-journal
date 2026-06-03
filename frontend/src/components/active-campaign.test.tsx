@@ -381,3 +381,74 @@ describe("ActiveCampaign — Set strategy submenu", () => {
     await waitFor(() => expect(api.listStrategies).toHaveBeenCalled());
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// Test cases — Increase / Decrease position context-menu actions.
+// Both items show on every row (stock and option) and route to Log Buy
+// (scale-in mode) and Log Sell respectively, with the campaign pre-selected
+// via the same localStorage handshake those pages already read on mount.
+// ---------------------------------------------------------------------------
+
+describe("ActiveCampaign — Increase / Decrease position flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  test("right-click on STOCK row shows Increase + Decrease items", async () => {
+    setupApi([stockPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+
+    const tickerEl = await screen.findByText(/^AAPL$/);
+    fireEvent.contextMenu(tickerEl, { clientX: 100, clientY: 100 });
+
+    expect(screen.getByTestId("ctx-increase-position")).toBeInTheDocument();
+    expect(screen.getByTestId("ctx-decrease-position")).toBeInTheDocument();
+    expect(screen.getByText("Increase position")).toBeInTheDocument();
+    expect(screen.getByText("Decrease position")).toBeInTheDocument();
+  });
+
+  test("right-click on OPTION row shows Increase + Decrease items", async () => {
+    setupApi([optionPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+
+    const tickerEl = await screen.findByText(/AMZN 270115 \$270C/);
+    fireEvent.contextMenu(tickerEl, { clientX: 100, clientY: 100 });
+
+    expect(screen.getByTestId("ctx-increase-position")).toBeInTheDocument();
+    expect(screen.getByTestId("ctx-decrease-position")).toBeInTheDocument();
+  });
+
+  test("clicking Increase position writes ps_prefill (scale_in) and navigates to logbuy", async () => {
+    const onNavigate = vi.fn();
+    setupApi([optionPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" onNavigate={onNavigate} />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+
+    const tickerEl = await screen.findByText(/AMZN 270115 \$270C/);
+    fireEvent.contextMenu(tickerEl, { clientX: 100, clientY: 100 });
+    fireEvent.click(screen.getByTestId("ctx-increase-position"));
+
+    const prefill = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
+    expect(prefill).toEqual({ action: "scale_in", trade_id: "202604-001" });
+    expect(onNavigate).toHaveBeenCalledWith("logbuy");
+  });
+
+  test("clicking Decrease position writes ps_prefill_sell and navigates to logsell", async () => {
+    const onNavigate = vi.fn();
+    setupApi([stockPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" onNavigate={onNavigate} />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+
+    const tickerEl = await screen.findByText(/^AAPL$/);
+    fireEvent.contextMenu(tickerEl, { clientX: 100, clientY: 100 });
+    fireEvent.click(screen.getByTestId("ctx-decrease-position"));
+
+    const prefill = JSON.parse(localStorage.getItem("ps_prefill_sell") || "{}");
+    expect(prefill).toEqual({ trade_id: "202603-005" });
+    expect(onNavigate).toHaveBeenCalledWith("logsell");
+  });
+});
