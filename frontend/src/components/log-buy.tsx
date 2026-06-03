@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
+import { uploadWithTimeout } from "@/lib/upload-with-timeout";
+import { UploadTracker, type UploadEntry, type UploadKind } from "./upload-tracker";
 import { StrategyChip } from "./strategy-chip";
 import { SearchSelect } from "./search-select";
 import { formatCurrency } from "@/lib/format";
@@ -569,6 +571,36 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // Background upload tracker — populated when a submit succeeds, then
+  // updated as each upload resolves or fails. Separate from `submitting`
+  // so the submit button re-enables once the DB write is done; uploads
+  // run independently and surface their status here.
+  const [uploadEntries, setUploadEntries] = useState<UploadEntry[]>([]);
+  const uploadEntriesRef = useRef<UploadEntry[]>([]);
+  uploadEntriesRef.current = uploadEntries;
+
+  const fireUpload = useCallback((entry: UploadEntry) => {
+    uploadWithTimeout(entry.file, entry.portfolio, entry.tradeId, entry.ticker, entry.kind)
+      .then(result => {
+        setUploadEntries(prev => prev.map(e =>
+          e.id === entry.id
+            ? { ...e, status: result.ok ? "done" : "failed", error: result.error }
+            : e,
+        ));
+      });
+  }, []);
+
+  const onRetryUpload = useCallback((id: string) => {
+    const entry = uploadEntriesRef.current.find(e => e.id === id);
+    if (!entry) return;
+    setUploadEntries(prev => prev.map(e =>
+      e.id === id ? { ...e, status: "uploading", error: undefined } : e,
+    ));
+    fireUpload({ ...entry, status: "uploading", error: undefined });
+  }, [fireUpload]);
+
+  const onDismissTracker = useCallback(() => setUploadEntries([]), []);
+
   const handleSubmit = async () => {
     if (!validate()) return;
     setSubmitting(true);
@@ -601,24 +633,31 @@ export function LogBuy({ navColor }: { navColor: string }) {
       if (result.error) {
         setSubmitResult({ ok: false, msg: result.error });
       } else {
-        // Upload images if any
+        // Snapshot attached files into the upload tracker, then fire each
+        // upload in the background. The submit chain no longer blocks on
+        // them — a stalled R2 / Vision call can't hang the "Saving…"
+        // button anymore. Per-file status (uploading / done / failed) is
+        // rendered by <UploadTracker> with a Retry button on failures.
         const tid = actionType === "scalein" ? selectedCampaign : tradeId;
-        const uploadPromises: Promise<any>[] = [];
-        for (const file of entryCharts) {
-          uploadPromises.push(api.uploadImage(file, getActivePortfolio(), tid, ticker, "entry"));
-        }
-        for (const file of positionCharts) {
-          uploadPromises.push(api.uploadImage(file, getActivePortfolio(), tid, ticker, "position_change"));
-        }
-        if (msScreenshot) {
-          uploadPromises.push(api.uploadImage(msScreenshot, getActivePortfolio(), tid, ticker, "marketsurge"));
-        }
-        if (uploadPromises.length > 0) {
-          await Promise.all(uploadPromises);
+        const portfolio = getActivePortfolio();
+        const entriesToFire: UploadEntry[] = [];
+        const mk = (file: File, kind: UploadKind): UploadEntry => ({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${entriesToFire.length}`,
+          file, fileName: file.name, kind, portfolio, tradeId: tid, ticker, status: "uploading",
+        });
+        for (const f of entryCharts) entriesToFire.push(mk(f, "entry"));
+        for (const f of positionCharts) entriesToFire.push(mk(f, "position_change"));
+        if (msScreenshot) entriesToFire.push(mk(msScreenshot, "marketsurge"));
+
+        if (entriesToFire.length > 0) {
+          setUploadEntries(prev => [...prev, ...entriesToFire]);
+          for (const entry of entriesToFire) fireUpload(entry);
         }
 
         setSubmitResult({ ok: true, msg: `Logged ${result.trx_id || "B1"}: ${shares} shs of ${ticker} @ $${price}` });
-        // Reset form
+        // Reset form — file lists are cleared here, but the File refs are
+        // already captured in uploadEntries so the background uploads are
+        // unaffected.
         setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
@@ -910,6 +949,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 {submitResult.ok ? "✅" : "❌"} {submitResult.msg}
               </div>
             )}
+            <UploadTracker entries={uploadEntries} onRetry={onRetryUpload} onDismiss={onDismissTracker} />
             <button onClick={handleSubmit} disabled={submitting}
                     className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 cursor-pointer disabled:opacity-50"
                     style={{ background: "#08a86b" }}>

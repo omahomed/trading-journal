@@ -1129,14 +1129,14 @@ export const api = {
       `/api/snapshots/${day}?portfolio=${portfolio}`
     ),
 
-  uploadImage: (file: File, portfolio: string, tradeId: string, ticker: string, imageType: string) => {
+  uploadImage: (file: File, portfolio: string, tradeId: string, ticker: string, imageType: string, signal?: AbortSignal) => {
     const form = new FormData();
     form.append("file", file);
     form.append("portfolio", portfolio);
     form.append("trade_id", tradeId);
     form.append("ticker", ticker);
     form.append("image_type", imageType);
-    return fetchWithAuth(`${API_BASE}/api/images/upload`, { method: "POST", body: form }).then(r => r.json());
+    return fetchWithAuth(`${API_BASE}/api/images/upload`, { method: "POST", body: form, signal }).then(r => r.json());
   },
 
   deleteImage: (imageId: number) =>
