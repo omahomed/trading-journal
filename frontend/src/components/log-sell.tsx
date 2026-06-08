@@ -459,7 +459,7 @@ export function LogSell({ navColor }: { navColor: string }) {
               <span className="text-xs" style={{ color: "var(--ink-4)" }}>{openTrades.length}</span>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {openTrades.map(t => {
+              {[...openTrades].sort((a, b) => a.ticker.localeCompare(b.ticker)).map(t => {
                 const isSelected = selectedTrade === t.trade_id;
                 return (
                   <button key={t.trade_id} onClick={() => setSelectedTrade(t.trade_id)}
