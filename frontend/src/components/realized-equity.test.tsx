@@ -213,3 +213,75 @@ describe("RealizedEquity — empty state", () => {
     );
   });
 });
+
+
+// ─────────────────────────────────────────────────────────────────────
+// Regression: realized.series can extend PAST the latest journal day
+// (e.g. a close lands on today before the user has saved the Daily
+// Routine). The chart's date axis must be the UNION of journal days and
+// realized-series days — anchoring only to journal would chop the curve
+// short and the legend chip would show the second-to-last cumulative
+// pct instead of the true final value, contradicting the summary cards.
+//
+// User-reported case 2026-06-08: cards showed +$92,206 / +41.19%, chart
+// legend showed -16.9% (the prior-day cum). Pin both behaviors here.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("RealizedEquity — date-axis union (journal ∪ realized)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mEvents.mockResolvedValue([]);
+  });
+
+  test("close on a non-journaled day still renders at the rightmost edge", async () => {
+    // Journal stops at 2026-06-05 (Fri); realized series carries through
+    // 2026-06-08 (Mon, today, before the user has journaled). Without
+    // the union fix the chip would read -16.87% (the 2026-06-05 entry's
+    // cum_pct). With the fix it reads +41.19% — same as the card.
+    mHistory.mockResolvedValue([
+      { id: 1, day: "2026-01-01", end_nlv: 100000, beg_nlv: 100000,
+        daily_pct_change: 0, portfolio_ltd: 0, spy_ltd: 0, ndx_ltd: 0,
+        pct_invested: 0, portfolio_heat: 0 },
+      { id: 2, day: "2026-06-05", end_nlv: 100000, beg_nlv: 100000,
+        daily_pct_change: 0, portfolio_ltd: 0, spy_ltd: 9.8, ndx_ltd: 14.0,
+        pct_invested: 0, portfolio_heat: 0 },
+    ] as any);
+
+    mRealized.mockResolvedValue({
+      series: [
+        { day: "2026-06-05", cum_realized_pl: -37755.03, cum_realized_pct: -16.87 },
+        { day: "2026-06-08", cum_realized_pl:  92205.77, cum_realized_pct:  41.19 },
+      ],
+      summary: {
+        total_realized_pl: 92205.77,
+        realized_pct: 41.19,
+        closed_count: 471,
+        start_nlv: 223833.19,
+        start_date: "2026-01-01",
+        baseline_source: "journal",
+      },
+    } as any);
+
+    render(<RealizedEquity navColor="#6366f1" />);
+    const panel = await screen.findByTestId("realized-equity-chart-panel");
+
+    // Legend chip must match the summary's final value, not the journal's
+    // last-day forward-fill of an earlier series entry.
+    await waitFor(() => {
+      expect(panel.textContent).toMatch(/Realized \(\+41\.2%\)/);
+    });
+
+    // SPY/Nasdaq carry forward from the latest journal day onto the
+    // realized-only date (2026-06-08): rebased to start, SPY=+9.8%,
+    // Nasdaq=+14.0%.
+    expect(panel.textContent).toMatch(/SPY \(\+9\.8%\)/);
+    expect(panel.textContent).toMatch(/Nasdaq \(\+14\.0%\)/);
+
+    // Headline cards stay correct (they were always reading summary
+    // directly — this regression is a chart-only consistency fix).
+    const hero = screen.getByTestId("realized-equity-hero");
+    expect(hero.textContent).toContain("+$92,206");
+    expect(hero.textContent).toContain("+41.19%");
+    expect(hero.textContent).toContain("471");
+  });
+});

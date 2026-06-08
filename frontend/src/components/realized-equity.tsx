@@ -108,39 +108,63 @@ export function RealizedEquity({ navColor }: { navColor: string }) {
     });
   }, []);
 
-  // Build daily-axis chart data from journal history filtered to >=
-  // REALIZED_START. Realized values forward-fill (0% before the first
-  // close). SPY/Nasdaq cumulative % values are rebased so they too
-  // start at 0% on the anchor date.
+  // Build chart data on the UNION of journal days ∪ realized-series days
+  // (both filtered to >= REALIZED_START), iterated chronologically. Forward-
+  // fill in both directions:
+  //   - Days the journal has but realized doesn't → carry the last realized
+  //     value (the common case — non-closure trading day).
+  //   - Days the realized series has but the journal doesn't → carry the
+  //     last benchmark values. This happens when a close lands on a day
+  //     the user hasn't journaled yet (e.g. mid-day today, before the
+  //     Daily Routine save) — without the union, the chart's rightmost
+  //     point would lag behind the summary's `total_realized_pl`.
+  //
+  // SPY/Nasdaq cumulative % values are rebased so they start at 0% on the
+  // first journal day in the window — same anchor as before.
   const ecData: ChartRow[] = useMemo(() => {
-    if (history.length === 0) return [];
-    const filtered = history
-      .filter(h => String(h.day).slice(0, 10) >= REALIZED_START)
-      .map(h => ({ ...h, day: String(h.day).slice(0, 10) }))
-      .sort((a, b) => a.day.localeCompare(b.day));
-    if (filtered.length === 0) return [];
+    if (history.length === 0 && (realized?.series?.length ?? 0) === 0) return [];
 
-    const baseSpy = filtered[0].spy_ltd || 0;
-    const baseNdx = filtered[0].ndx_ltd || 0;
+    const journalByDay: Record<string, JournalHistoryPoint> = {};
+    for (const h of history) {
+      const k = String(h.day).slice(0, 10);
+      if (k >= REALIZED_START) journalByDay[k] = h;
+    }
 
-    // Map realized series → day for O(1) lookup during forward-fill.
     const realByDay: Record<string, { pl: number; pct: number }> = {};
     for (const p of (realized?.series ?? [])) {
-      const dayKey = String(p.day).slice(0, 10);
-      realByDay[dayKey] = { pl: p.cum_realized_pl, pct: p.cum_realized_pct };
+      const k = String(p.day).slice(0, 10);
+      if (k >= REALIZED_START) realByDay[k] = { pl: p.cum_realized_pl, pct: p.cum_realized_pct };
     }
+
+    const allDays = Array.from(
+      new Set([...Object.keys(journalByDay), ...Object.keys(realByDay)]),
+    ).sort();
+    if (allDays.length === 0) return [];
+
+    // Rebase baseline = first journal day in the window. If only realized
+    // data exists (no journal at all in the window), SPY/Nasdaq stay at 0%.
+    const firstJournalDay = Object.keys(journalByDay).sort()[0];
+    const baseSpy = firstJournalDay ? (journalByDay[firstJournalDay].spy_ltd || 0) : 0;
+    const baseNdx = firstJournalDay ? (journalByDay[firstJournalDay].ndx_ltd || 0) : 0;
 
     let lastPct = 0;
     let lastPl = 0;
-    return filtered.map(h => {
-      const r = realByDay[h.day];
+    let lastSpy = 0;
+    let lastNdx = 0;
+    return allDays.map(day => {
+      const j = journalByDay[day];
+      if (j) {
+        lastSpy = (j.spy_ltd || 0) - baseSpy;
+        lastNdx = (j.ndx_ltd || 0) - baseNdx;
+      }
+      const r = realByDay[day];
       if (r) { lastPct = r.pct; lastPl = r.pl; }
       return {
-        day: h.day,
+        day,
         realized: parseFloat(lastPct.toFixed(2)),
         realized_pl: lastPl,
-        spy: parseFloat(((h.spy_ltd || 0) - baseSpy).toFixed(2)),
-        ndx: parseFloat(((h.ndx_ltd || 0) - baseNdx).toFixed(2)),
+        spy: parseFloat(lastSpy.toFixed(2)),
+        ndx: parseFloat(lastNdx.toFixed(2)),
       };
     });
   }, [history, realized]);
