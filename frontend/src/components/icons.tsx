@@ -90,6 +90,7 @@ export const Icons = {
 export const NAV_ICONS: Record<string, (p?: any) => React.ReactElement> = {
   dashboard: Icons.grid,
   overview: Icons.chart,
+  realized: Icons.trending,
   campaign: Icons.flag,
   "campaign-detail": Icons.table,
   import: Icons.download,

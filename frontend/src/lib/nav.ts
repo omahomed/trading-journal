@@ -23,6 +23,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "dashboard", label: "Dashboard", href: "/dashboard" },
       { id: "overview", label: "Trading Overview", href: "/overview" },
+      { id: "realized", label: "Realized Equity", href: "/realized-equity" },
     ],
   },
   {
