@@ -73,9 +73,9 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [hoveredSquareIdx, setHoveredSquareIdx] = useState<number | null>(null);
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("1Y");
+  const [ecRange, setEcRange] = useState<"1Y" | "6M" | "3M" | "All">("All");
   const [ecMaximized, setEcMaximized] = useState(false);
-  const [showEvents, setShowEvents] = useState(true);
+  const [showEvents, setShowEvents] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
 
   // Throttle + in-flight guards so the visibility/focus listener below
