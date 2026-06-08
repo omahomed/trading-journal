@@ -324,6 +324,173 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
     return _df_to_records(df[available_cols])
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Realized Equity Curve — closed-positions-only cumulative P&L by date.
+#
+# Source: lot_closures.realized_pl (multiplier-scaled at write time —
+# do NOT re-scale) summed by lot_closures.closed_at::date. Sister to
+# /api/journal/history but movement is event-driven (only on closes)
+# instead of mark-to-market daily.
+#
+# Caveat: a small set of legacy "deferred" trades may lack lot_closures
+# rows even though trades_summary.realized_pl is correct (per migration
+# 017/033). v1 accepts this — the curve is the durable closure record.
+# ─────────────────────────────────────────────────────────────────────
+
+def _realized_curve_baseline_nlv(portfolio: str, start_date: pd.Timestamp) -> tuple[float, str]:
+    """Resolve the baseline NLV for the realized curve at `start_date`.
+
+    Preference order:
+      1. trading_journal row ON start_date     → beg_nlv (open-of-day NLV)
+      2. latest trading_journal row BEFORE it  → end_nlv (close-of-prior-day)
+      3. portfolios.starting_capital
+      4. (0.0, "none") — caller then renders 0% for every point
+    """
+    try:
+        journal = db.load_journal(portfolio)
+    except Exception:
+        journal = pd.DataFrame()
+
+    if not journal.empty:
+        j = journal.copy()
+        j["day"] = pd.to_datetime(j["day"], errors="coerce")
+        j = j.dropna(subset=["day"])
+        on_start = j[j["day"].dt.normalize() == start_date]
+        if not on_start.empty:
+            beg = pd.to_numeric(on_start.iloc[0].get("beg_nlv"), errors="coerce")
+            if pd.notna(beg) and beg > 0:
+                return float(beg), "journal"
+        before_start = j[j["day"].dt.normalize() < start_date].sort_values("day")
+        if not before_start.empty:
+            end = pd.to_numeric(before_start.iloc[-1].get("end_nlv"), errors="coerce")
+            if pd.notna(end) and end > 0:
+                return float(end), "journal"
+
+    # Fallback: portfolios.starting_capital. Read directly — there's no
+    # db.get_portfolio_by_name() helper and list_portfolios() is RLS-scoped
+    # to the current user, which we may not have a session for in unit
+    # tests. A small direct SELECT keeps the path testable via monkeypatch
+    # of db.get_db_connection.
+    try:
+        with db.get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT starting_capital FROM portfolios WHERE name = %s",
+                    (portfolio,),
+                )
+                row = cur.fetchone()
+                if row is not None and row[0] is not None:
+                    sc = float(row[0])
+                    if sc > 0:
+                        return sc, "starting_capital"
+    except Exception as e:
+        print(f"[realized_curve] starting_capital lookup failed: {e}")
+
+    return 0.0, "none"
+
+
+def _compute_realized_curve(
+    closures: pd.DataFrame,
+    start_nlv: float,
+    start_date: pd.Timestamp,
+) -> tuple[list[dict[str, Any]], float, int]:
+    """Group lot_closures.realized_pl by closed_at::date, prefix-sum,
+    return (series, total_realized_pl, closed_count).
+
+    One series point per date that had at least one closure — gaps are
+    intentional; the frontend stair-steps / forward-fills between them
+    onto its date axis. Pre-start closures are dropped entirely (the
+    curve begins at 0 on start_date; no merged "carry" point).
+    """
+    if closures is None or closures.empty:
+        return [], 0.0, 0
+    df = closures.copy()
+    df["closed_at"] = pd.to_datetime(df["closed_at"], errors="coerce")
+    df = df.dropna(subset=["closed_at"])
+    df = df[df["closed_at"].dt.normalize() >= start_date]
+    if df.empty:
+        return [], 0.0, 0
+    df["realized_pl"] = pd.to_numeric(df["realized_pl"], errors="coerce").fillna(0)
+    df["day"] = df["closed_at"].dt.strftime("%Y-%m-%d")
+    by_day = df.groupby("day", as_index=False)["realized_pl"].sum().sort_values("day")
+
+    series: list[dict[str, Any]] = []
+    cum = 0.0
+    for _, r in by_day.iterrows():
+        cum += float(r["realized_pl"])
+        pct = (cum / start_nlv * 100.0) if start_nlv > 0 else 0.0
+        series.append({
+            "day": str(r["day"]),
+            "cum_realized_pl": round(cum, 2),
+            "cum_realized_pct": round(pct, 2),
+        })
+    return series, round(cum, 2), int(len(df))
+
+
+@app.get("/api/realized/curve")
+@limiter.limit("60/minute")
+def realized_curve(
+    request: Request,
+    portfolio: str = "CanSlim",
+    start: str = "2026-01-01",
+):
+    """Cumulative realized P&L by close date for a portfolio.
+
+    Movement is event-driven: the series has one point per date that had
+    at least one SELL closure (lot_closures row) on or after `start`. The
+    frontend stair-steps between points. Multiplier is already applied at
+    write time (trade_calc.py:189) — options notional is correct.
+
+    Query:
+      portfolio (str): portfolio name (default "CanSlim").
+      start     (date, default 2026-01-01): inclusive lower bound on
+                closure dates. The curve begins at 0 P&L on this date;
+                pre-start closures are not folded into a carry.
+
+    Response:
+      {
+        "series": [ { "day": "YYYY-MM-DD",
+                      "cum_realized_pl": float,
+                      "cum_realized_pct": float }, ... ],
+        "summary": {
+          "total_realized_pl": float,   # final cum value (0 when empty)
+          "realized_pct":      float,   # total / start_nlv × 100
+          "closed_count":      int,     # # of lot_closures rows in range
+          "start_nlv":         float,   # baseline used for the % anchor
+          "start_date":        "YYYY-MM-DD",
+          "baseline_source":   "journal" | "starting_capital" | "none"
+        }
+      }
+    """
+    try:
+        start_date = pd.Timestamp(start).normalize()
+    except Exception:
+        return {"error": "start must be a date in YYYY-MM-DD form"}
+
+    start_nlv, baseline_source = _realized_curve_baseline_nlv(portfolio, start_date)
+
+    try:
+        closures = db.load_lot_closures(portfolio)
+    except Exception as e:
+        print(f"[realized_curve] load_lot_closures failed for portfolio={portfolio}: {e}")
+        return {"error": str(e)}
+
+    series, total, count = _compute_realized_curve(closures, start_nlv, start_date)
+    pct = (total / start_nlv * 100.0) if start_nlv > 0 else 0.0
+
+    return {
+        "series": series,
+        "summary": {
+            "total_realized_pl": round(total, 2),
+            "realized_pct":      round(pct, 2),
+            "closed_count":      count,
+            "start_nlv":         round(start_nlv, 2),
+            "start_date":        start_date.strftime("%Y-%m-%d"),
+            "baseline_source":   baseline_source,
+        },
+    }
+
+
 @app.get("/api/journal/mct-state-by-date-range")
 def journal_mct_state_by_date_range(start_date: str, end_date: str):
     """Per-day MCT V11 state for a journal date range.
