@@ -352,19 +352,25 @@ def _realized_curve_baseline_nlv(portfolio: str, start_date: pd.Timestamp) -> tu
         journal = pd.DataFrame()
 
     if not journal.empty:
-        j = journal.copy()
-        j["day"] = pd.to_datetime(j["day"], errors="coerce")
-        j = j.dropna(subset=["day"])
-        on_start = j[j["day"].dt.normalize() == start_date]
-        if not on_start.empty:
-            beg = pd.to_numeric(on_start.iloc[0].get("beg_nlv"), errors="coerce")
-            if pd.notna(beg) and beg > 0:
-                return float(beg), "journal"
-        before_start = j[j["day"].dt.normalize() < start_date].sort_values("day")
-        if not before_start.empty:
-            end = pd.to_numeric(before_start.iloc[-1].get("end_nlv"), errors="coerce")
-            if pd.notna(end) and end > 0:
-                return float(end), "journal"
+        # db.load_journal returns capitalized column names ("Day", "Beg_NLV",
+        # "End_NLV"); _normalize_journal lowercases them to match what the
+        # rest of this module reads. /api/journal/history applies the same
+        # normalization at line 265 — we mirror that here so a deployed
+        # portfolio with real journal rows doesn't KeyError on "day".
+        j = _normalize_journal(journal.copy())
+        if "day" in j.columns:
+            j["day"] = pd.to_datetime(j["day"], errors="coerce")
+            j = j.dropna(subset=["day"])
+            on_start = j[j["day"].dt.normalize() == start_date]
+            if not on_start.empty:
+                beg = pd.to_numeric(on_start.iloc[0].get("beg_nlv"), errors="coerce")
+                if pd.notna(beg) and beg > 0:
+                    return float(beg), "journal"
+            before_start = j[j["day"].dt.normalize() < start_date].sort_values("day")
+            if not before_start.empty:
+                end = pd.to_numeric(before_start.iloc[-1].get("end_nlv"), errors="coerce")
+                if pd.notna(end) and end > 0:
+                    return float(end), "journal"
 
     # Fallback: portfolios.starting_capital. Read directly — there's no
     # db.get_portfolio_by_name() helper and list_portfolios() is RLS-scoped

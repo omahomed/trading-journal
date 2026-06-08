@@ -389,3 +389,54 @@ def test_default_start_is_2026_01_01_when_omitted(stubbed):
     r = client.get("/api/realized/curve?portfolio=CanSlim")
     body = r.json()
     assert body["summary"]["start_date"] == "2026-01-01"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Regression: db.load_journal returns capitalized columns ("Day",
+# "Beg NLV", "End NLV"); the baseline helper must run them through
+# _normalize_journal before reading "day" / "beg_nlv" / "end_nlv". The
+# earlier tests fed already-lowercased frames so the bug never showed
+# up in CI — it surfaced as a 500 KeyError("day") in production.
+# ─────────────────────────────────────────────────────────────────────
+
+def test_baseline_handles_raw_journal_column_names_from_db(stubbed):
+    """Real-shape input from db.load_journal uses 'Day', 'Beg NLV', 'End NLV'
+    — the endpoint must normalize before indexing or it KeyErrors."""
+    state, client = stubbed
+    # Exact column names db.load_journal returns (mapped by
+    # trade_calc._JOURNAL_COLUMN_RENAME).
+    state["journal"] = pd.DataFrame([
+        {"Day": "2026-01-01", "Beg NLV": 80000.0, "End NLV": 81000.0},
+        {"Day": "2026-01-02", "Beg NLV": 81000.0, "End NLV": 82500.0},
+    ])
+    state["closures"] = _closures_df([
+        {"realized_pl": 1000.0, "closed_at": "2026-01-15 10:00:00"},
+    ])
+
+    r = client.get("/api/realized/curve?portfolio=CanSlim&start=2026-01-01")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "error" not in body
+    # Baseline is beg_nlv from the row ON start_date (Jan 1) — 80000.
+    # 1000 / 80000 * 100 = 1.25
+    assert body["summary"]["baseline_source"] == "journal"
+    assert body["summary"]["start_nlv"] == 80000.0
+    assert body["series"][0]["cum_realized_pct"] == 1.25
+
+
+def test_baseline_skips_journal_when_normalized_lacks_day_column(stubbed):
+    """Defensive: if load_journal returns a frame with no 'Day'/'day'
+    column at all (corrupt / unexpected shape), the helper must fall
+    back to starting_capital instead of crashing."""
+    state, client = stubbed
+    state["journal"] = pd.DataFrame([{"unrelated": "value"}])
+    state["starting_capital"] = 50000.0
+    state["closures"] = _closures_df([
+        {"realized_pl": 500.0, "closed_at": "2026-01-15 10:00:00"},
+    ])
+
+    r = client.get("/api/realized/curve?portfolio=CanSlim&start=2026-01-01")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["summary"]["baseline_source"] == "starting_capital"
+    assert body["summary"]["start_nlv"] == 50000.0
