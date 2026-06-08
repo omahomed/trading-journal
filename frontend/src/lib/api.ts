@@ -241,6 +241,34 @@ export interface SR8MonitorResponse {
   };
 }
 
+// Realized-equity curve (Realized Equity page). Backend computes one
+// point per close date as cumulative realized P&L (lot_closures.realized_pl
+// summed by closed_at::date, prefix-summed). The series is SPARSE — only
+// dates that had a close appear. The frontend forward-fills/steps it onto
+// the chart's daily date axis.
+export interface RealizedCurvePoint {
+  day: string;             // YYYY-MM-DD
+  cum_realized_pl: number; // cumulative dollars, multiplier-scaled
+  cum_realized_pct: number;// cumulative / start_nlv * 100
+}
+
+export interface RealizedCurveSummary {
+  total_realized_pl: number;
+  realized_pct: number;
+  closed_count: number;
+  start_nlv: number;
+  start_date: string;
+  // "journal"          — anchor came from trading_journal beg/end NLV at/before start_date
+  // "starting_capital" — fell back to portfolios.starting_capital
+  // "none"             — neither source available (pct rendered as 0 throughout)
+  baseline_source: "journal" | "starting_capital" | "none";
+}
+
+export interface RealizedCurveResponse {
+  series: RealizedCurvePoint[];
+  summary: RealizedCurveSummary;
+}
+
 export interface WeeklyRetro {
   id: number;
   portfolio: string;
@@ -711,6 +739,16 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nlv, portfolio }),
     }).then(r => r.json()) as Promise<SR8MonitorResponse | { error: string }>,
+
+  // Realized-equity curve — drives the Realized Equity page. `start`
+  // defaults to 2026-01-01 server-side; pass an override to anchor the
+  // % math to a different baseline date.
+  realizedCurve: (portfolio = getActivePortfolio(), start = "2026-01-01") => {
+    const qs = new URLSearchParams({ portfolio, start });
+    return fetchJSON<RealizedCurveResponse | { error: string }>(
+      `/api/realized/curve?${qs.toString()}`,
+    );
+  },
 
   weeklyRetroDelete: (retroId: number) =>
     fetchWithAuth(`${API_BASE}/api/weekly-retros/${retroId}`, {
