@@ -50,6 +50,22 @@ const ALLOWED_EMAILS = new Set(envList && envList.length > 0 ? envList : OWNER_F
 // Staging tester signs in via Credentials; admit them through the allowlist too.
 if (STAGING_PASSWORD) ALLOWED_EMAILS.add(STAGING_TESTER_EMAIL);
 
+// Shared-account aliasing — these emails sign in with their own Google account
+// (the adapter still creates their `users` row) but operate ON the founder's
+// tenant rather than their own. We force their session + minted API token to
+// carry the founder UUID as `sub`, so Postgres RLS scopes every query to the
+// owner's data. Tradeoff: their actions are attributed to the founder in the
+// audit trail — there is no separate actor record. Set via env on the frontend
+// host, comma-separated, e.g. SHARED_ACCOUNT_EMAILS="brother@gmail.com".
+const FOUNDER_USER_ID =
+  process.env.FOUNDER_USER_ID ?? "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a";
+const SHARED_ACCOUNT_EMAILS = new Set(
+  (process.env.SHARED_ACCOUNT_EMAILS ?? "")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+// Shared-account users must also clear the sign-in allowlist.
+for (const e of SHARED_ACCOUNT_EMAILS) ALLOWED_EMAILS.add(e);
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   adapter: PostgresAdapter(pool),
   session: { strategy: "jwt" },
@@ -75,7 +91,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return !!email && ALLOWED_EMAILS.has(email);
     },
     async jwt({ token, user }) {
-      if (user) token.sub = user.id;
+      if (user) {
+        // Shared-account users alias onto the founder's tenant; everyone else
+        // keeps their own UUID.
+        token.sub =
+          user.email && SHARED_ACCOUNT_EMAILS.has(user.email.toLowerCase())
+            ? FOUNDER_USER_ID
+            : user.id;
+      }
       return token;
     },
     async session({ session, token }) {
