@@ -240,18 +240,24 @@ def test_is_action_terminated(stubbed):
     assert body["positions"][0]["is_action"] is True
 
 
-def test_is_action_signal_today_above_tolerance(stubbed):
-    """signal_today=True AND delta_dollars > 500 → actionable."""
+def test_is_action_non_green_above_tolerance(stubbed):
+    """A non-Green tier (QUICK here) with delta_dollars > $500 floor
+    tolerance is actionable; the same tier below tolerance is hold.
+    signal_today is intentionally NOT set — the new gate is tier+floor,
+    not "did the signal fire today" (see test_is_action_stale_signal_
+    no_longer_gates for the load-bearing case)."""
     state, client = stubbed
     state["positions"] = [
         {"ticker": "AAA", "b1_date": "2026-04-01", "b1_price": 100, "shares_held": 100, "avg_price": 100},
         {"ticker": "BBB", "b1_date": "2026-04-02", "b1_price": 200, "shares_held": 50, "avg_price": 200},
     ]
     state["analyze_by_ticker"] = {
-        # signal_today + above tolerance → action
-        "AAA": _analyze_result("AAA", signal_today=True, delta_dollars=12345.0, current_pct_nlv=22.0),
-        # signal_today but BELOW tolerance ($300 < $500 epsilon) → hold
-        "BBB": _analyze_result("BBB", signal_today=True, delta_dollars=300.0),
+        # QUICK + above tolerance → action
+        "AAA": _analyze_result("AAA", current_tier="QUICK", tier_pct_nlv=10.0,
+                               delta_dollars=12345.0, current_pct_nlv=22.0),
+        # QUICK but BELOW tolerance ($300 < $500 epsilon) → hold
+        "BBB": _analyze_result("BBB", current_tier="QUICK", tier_pct_nlv=10.0,
+                               delta_dollars=300.0, current_pct_nlv=10.05),
     }
 
     r = client.get("/api/sr8/monitor?nlv=500000")
@@ -259,6 +265,59 @@ def test_is_action_signal_today_above_tolerance(stubbed):
     rows = {p["ticker"]: p for p in body["positions"]}
     assert rows["AAA"]["is_action"] is True
     assert rows["BBB"]["is_action"] is False
+
+
+def test_is_action_stale_signal_no_longer_gates(stubbed):
+    """The load-bearing case for this build: a QUICK position whose
+    weekly bar already passed (signal_today=False) but is STILL above
+    its floor (delta_dollars > tol) must remain actionable. Pre-change,
+    the signal_today gate dropped it into Hold the moment the firing
+    week elapsed — even though the user never trimmed."""
+    state, client = stubbed
+    state["positions"] = [
+        {"ticker": "STALE", "b1_date": "2026-03-01", "b1_price": 60, "shares_held": 320, "avg_price": 75},
+    ]
+    state["analyze_by_ticker"] = {
+        # signal fired 2 weeks ago — last_signal_date != last_bar_date.
+        "STALE": _analyze_result(
+            "STALE",
+            current_tier="QUICK", tier_pct_nlv=10.0,
+            current_pct_nlv=14.3,                # still above the 10% floor
+            delta_dollars=21_500.0,              # well above $500 tol
+            delta_shares=215,
+            signal_today=False,                  # ← would have killed action under old gate
+            last_signal="QUICK",
+        ),
+    }
+
+    r = client.get("/api/sr8/monitor?nlv=500000")
+    body = r.json()
+    row = body["positions"][0]
+    assert row["is_action"] is True
+    # Sanity: the delta_shares the UI needs to render "TRIM N sh"
+    # is still on the row.
+    assert row["delta_shares"] == 215
+
+
+def test_is_action_green_tier_never_actionable(stubbed):
+    """Green never sells — even if the engine somehow surfaces a
+    non-zero delta (it shouldn't, but defense-in-depth). Both the
+    plain GREEN label and the GREEN(sub-entry) variant fold into the
+    same hold path."""
+    state, client = stubbed
+    state["positions"] = [
+        {"ticker": "GRN",     "b1_date": "2026-04-01", "b1_price": 100, "shares_held": 100, "avg_price": 100},
+        {"ticker": "GRN_SUB", "b1_date": "2026-04-02", "b1_price": 200, "shares_held": 50,  "avg_price": 200},
+    ]
+    state["analyze_by_ticker"] = {
+        "GRN":     _analyze_result("GRN",     current_tier="GREEN",            delta_dollars=99_999.0),
+        "GRN_SUB": _analyze_result("GRN_SUB", current_tier="GREEN(sub-entry)", delta_dollars=99_999.0),
+    }
+
+    r = client.get("/api/sr8/monitor?nlv=500000")
+    rows = {p["ticker"]: p for p in r.json()["positions"]}
+    assert rows["GRN"]["is_action"] is False
+    assert rows["GRN_SUB"]["is_action"] is False
 
 
 def test_early_warn_within_two_points_of_target(stubbed):

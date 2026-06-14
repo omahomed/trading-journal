@@ -1,0 +1,72 @@
+name: SR8 weekly refresh
+
+# Pulls fresh weekly closes from yfinance for every SR8 position
+# (anything currently classified as max(live B1 return, stored b1_max)
+# >= 50% in the active portfolio) by POSTing to /api/sr8/refresh.
+# nlv=1 is intentional — the refresh endpoint requires nlv > 0 but
+# only uses it for the trim-math denominator. The side-effect we
+# want is the yfinance pull that the analyze() loop drives; the
+# returned trim numbers are noise at nlv=1 and discarded.
+#
+# Schedule: Saturday 08:00 UTC (≈Sat 03:00 America/Chicago) — Friday's
+# US close has fully settled and the data feed has had several hours
+# to ship the bar. Lands well before the weekend review window.
+#
+# Manual runs: workflow_dispatch — handy for an ad-hoc pull or to
+# debug the secrets wiring after a deploy.
+#
+# Auth: the API protects every /api/* path with a JWT middleware
+# (api/main.py:128). We mint a short-TTL HS256 token here using the
+# Railway-shared AUTH_SECRET, with `sub` = founder UUID so the
+# downstream DB connection uses the founder tenant.
+
+on:
+  schedule:
+    - cron: "0 8 * * 6"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: POST /api/sr8/refresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyJWT
+        run: pip install --quiet "PyJWT>=2.8,<3"
+
+      - name: Mint short-TTL bearer token
+        env:
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+        run: |
+          python <<'PY' >> "$GITHUB_ENV"
+          import os, time, jwt
+          secret = os.environ["AUTH_SECRET"]
+          # Inline founder UUID — auth rests on AUTH_SECRET, not the id.
+          # 5-min expiry: covers the curl + yfinance latency with margin
+          # but doesn't leave a stale token usable if logs leak.
+          token = jwt.encode(
+              {"sub": "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a",
+               "iat": int(time.time()),
+               "exp": int(time.time()) + 300},
+              secret, algorithm="HS256",
+          )
+          print(f"BEARER={token}")
+          PY
+
+      - name: POST refresh
+        run: |
+          set -eo pipefail
+          # --fail-with-body: non-2xx → curl exits non-zero AND prints
+          # the response body so the Actions log shows the error.
+          # -sS: silent except errors. yfinance pulls one CSV per
+          # position so the call can take 30-90s for an 8-name basket
+          # — bump --max-time to 5 min for headroom.
+          curl --fail-with-body -sS --max-time 300 \
+            -X POST "https://web-production-ad135.up.railway.app/api/sr8/refresh" \
+            -H "Authorization: Bearer ${BEARER}" \
+            -H "Content-Type: application/json" \
+            -d '{"nlv": 1, "portfolio": "CanSlim"}'
+          echo  # trailing newline so the log reads cleanly
