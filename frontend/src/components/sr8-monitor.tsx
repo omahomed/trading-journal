@@ -51,17 +51,18 @@ function shortMonthDay(iso: string): string {
 }
 
 // Signal display — collapses MORS's verbose "QUICKSAND" into the design's
-// short "QS" badge, and aliases the GREEN sub-entry variant. The 5 visible
-// signal classes (ENTRY/GREEN/QUICK/QS/GD) each map to a (bg, text) color
-// pair sourced from the existing theme tokens. Unknown signals fall back
-// to a muted neutral (defensive — engine should never emit one).
+// short "QS" badge, and aliases the GREEN sub-entry variant. Driven by
+// the live cascade tier (current_tier on the position) — the 4 visible
+// tier classes (GREEN/QUICK/QS/GD) each map to a (bg, text) color pair
+// from the existing theme tokens. ENTRY remains tolerated as a legacy
+// fallback (defensive — current_tier always returns a real tier name).
 function signalDisplay(signal: string): { label: string; bg: string; text: string; severity: number } {
   const s = (signal || "").toUpperCase();
-  if (s === "ENTRY") return { label: "ENTRY", bg: "var(--g-deep-soft)", text: "var(--g-deep)", severity: 0 };
   if (s === "GREEN" || s === "GREEN(SUB-ENTRY)") return { label: "GREEN", bg: "var(--up-soft)", text: "var(--up)", severity: 1 };
   if (s === "QUICK") return { label: "QUICK", bg: "var(--sig-quick-bg)", text: "var(--sig-quick-text)", severity: 2 };
   if (s === "QUICKSAND" || s === "QS") return { label: "QS", bg: "var(--sig-qs-bg)", text: "var(--sig-qs-text)", severity: 3 };
   if (s === "GD" || s === "TERMINATED") return { label: "GD", bg: "var(--down-soft)", text: "var(--down)", severity: 4 };
+  if (s === "ENTRY") return { label: "ENTRY", bg: "var(--g-deep-soft)", text: "var(--g-deep)", severity: 0 };
   return { label: s || "—", bg: "var(--surface-2)", text: "var(--ink-3)", severity: -1 };
 }
 
@@ -306,8 +307,11 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
       let va: number | string;
       let vb: number | string;
       if (sort.key === "last_signal") {
-        va = signalDisplay(a.last_signal).severity;
-        vb = signalDisplay(b.last_signal).severity;
+        // Sort by live cascade tier severity, not the last log emission.
+        // (Column key kept as "last_signal" for sort-state stability; the
+        // user-facing column label is "Signal" — see HoldSection header.)
+        va = signalDisplay(a.current_tier).severity;
+        vb = signalDisplay(b.current_tier).severity;
       } else if (HOLD_NUMERIC_KEYS.has(sort.key)) {
         va = Number((a as unknown as Record<string, unknown>)[sort.key] ?? 0);
         vb = Number((b as unknown as Record<string, unknown>)[sort.key] ?? 0);
@@ -420,12 +424,12 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
             divider
           />
           <SummaryChip
-            label="Cascades"
+            label="Tiers"
             value={summary
-              ? `${summary.cascade_breakdown.cascade_20} 20-cas / ${summary.cascade_breakdown.cascade_15} 15-cas`
+              ? `${summary.tier_breakdown.green}G · ${summary.tier_breakdown.quick}Q · ${summary.tier_breakdown.quicksand}QS · ${summary.tier_breakdown.gd}GD`
               : "—"}
             sub=""
-            testId="sr8-chip-cascades"
+            testId="sr8-chip-tiers"
             divider
             small
           />
@@ -573,7 +577,7 @@ function ActionRow({ p, exiting, onMarkDone, navColor: _navColor }: {
   onMarkDone: (ticker: string) => void;
   navColor: string;
 }) {
-  const sig = signalDisplay(p.last_signal);
+  const sig = signalDisplay(p.current_tier);
   const isExit = p.terminated;
   return (
     <div className="rounded-[14px] transition-all duration-200 hover:shadow-md"
@@ -594,8 +598,10 @@ function ActionRow({ p, exiting, onMarkDone, navColor: _navColor }: {
          }}>
       <div className="grid items-center gap-[14px]"
            style={{ gridTemplateColumns: "72px minmax(116px,0.9fr) minmax(196px,1.5fr) 116px auto" }}>
-        {/* Signal badge */}
-        <SignalBadge signal={p.last_signal} />
+        {/* Signal badge — bound to live cascade tier, not the last
+            emission (the emission can be ENTRY for newly-entered SR8
+            positions; the tier is GREEN/QUICK/QS/GD from the ratchet). */}
+        <SignalBadge signal={p.current_tier} />
 
         {/* Ticker block */}
         <div className="flex flex-col gap-0.5 min-w-0">
@@ -636,7 +642,7 @@ function ActionRow({ p, exiting, onMarkDone, navColor: _navColor }: {
             <div className="text-[11px] truncate" style={{ color: "var(--ink-4)", fontFamily: mono }}>
               {isExit
                 ? "Weekly GD · full exit ends campaign"
-                : `${p.cascade_core}-cascade · ${p.current_pct_nlv.toFixed(1)}% → ${p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% · ${formatCurrency(p.delta_dollars, { decimals: 0 })}`}
+                : `${p.current_pct_nlv.toFixed(1)}% → ${p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% · ${formatCurrency(p.delta_dollars, { decimals: 0 })}`}
             </div>
           </div>
         </div>
@@ -754,7 +760,10 @@ function HoldRow({ p, retrying, onRetry }: {
   retrying: boolean;
   onRetry: (ticker: string) => void;
 }) {
-  const sig = signalDisplay(p.last_signal);
+  // Signal badge + early-warn coloring reads live tier, not last log
+  // emission. isEntry stays as a defensive fallback for the legacy
+  // ENTRY display path; current_tier shouldn't produce it.
+  const sig = signalDisplay(p.current_tier);
   const isEntry = sig.label === "ENTRY";
   const plUp = p.unreal_dollars > 0;
   const plColor = plUp ? "var(--up)" : p.unreal_dollars < 0 ? "var(--down)" : "var(--ink-3)";
@@ -814,7 +823,7 @@ function HoldRow({ p, retrying, onRetry }: {
       </td>
       <td className="px-3 py-2.5">
         <span className="inline-flex items-center gap-2">
-          <SignalBadge signal={p.last_signal} />
+          <SignalBadge signal={p.current_tier} />
           {p.early_warn && (
             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md"
                   data-testid={`sr8-near-${p.ticker}`}

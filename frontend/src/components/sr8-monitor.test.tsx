@@ -39,7 +39,7 @@ function makeResponse(overrides: Partial<any> = {}) {
       flagged_count: 3,
       at_risk_pct: 85.7,
       to_trim_dollars: 161000,
-      cascade_breakdown: { cascade_20: 2, cascade_15: 7 },
+      tier_breakdown: { green: 6, quick: 2, quicksand: 1, gd: 0 },
     },
     positions: [],
     meta: {
@@ -62,7 +62,7 @@ function makePosition(overrides: Partial<any> = {}) {
     current_price: 120,
     current_dollars: 12000,
     current_pct_nlv: 12.0,
-    cascade_core: 15,
+    current_tier: "GREEN",
     tier_pct_nlv: 15.0,
     target_dollars: 60000,
     delta_dollars: 0,
@@ -109,7 +109,8 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     expect(screen.getByTestId("sr8-chip-positions").textContent).toContain("10");
     expect(screen.getByTestId("sr8-chip-at-risk").textContent).toContain("85.7%");
     expect(screen.getByTestId("sr8-chip-to-trim").textContent).toContain("$161K");
-    expect(screen.getByTestId("sr8-chip-cascades").textContent).toContain("2 20-cas / 7 15-cas");
+    // Tiers chip replaces the obsolete "2 20-cas / 7 15-cas" cascade chip.
+    expect(screen.getByTestId("sr8-chip-tiers").textContent).toContain("6G · 2Q · 1QS · 0GD");
   });
 
   test("NLV input edit on blur re-fetches with the new value", async () => {
@@ -159,7 +160,7 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
         flagged_count: 0,
         at_risk_pct: 0,
         to_trim_dollars: 0,
-        cascade_breakdown: { cascade_20: 0, cascade_15: 0 },
+        tier_breakdown: { green: 0, quick: 0, quicksand: 0, gd: 0 },
       },
       positions: [],
     }));
@@ -243,7 +244,10 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
     mMonitor.mockResolvedValue(makeResponse({
       positions: [
-        makePosition({ ticker: "FOO", is_action: true, last_signal: "GREEN", delta_shares: 168, tier_pct_nlv: 20, current_pct_nlv: 26.3, cascade_core: 20 }),
+        // QUICK tier with the new single 15/10/5/0 schedule → floor 10%.
+        // 168 sh trim to bring position down to 10% NLV.
+        makePosition({ ticker: "FOO", is_action: true, current_tier: "QUICK", last_signal: "QUICK",
+                       delta_shares: 168, tier_pct_nlv: 10, current_pct_nlv: 16.3 }),
       ],
     }));
 
@@ -253,8 +257,38 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     const row = screen.getByTestId("sr8-action-FOO");
     expect(row.textContent).toContain("TRIM");
     expect(row.textContent).toContain("168 sh");
-    expect(row.textContent).toContain("20% NLV target");
-    expect(row.textContent).toContain("20-cascade");
+    expect(row.textContent).toContain("10% NLV target");
+    // The hint line now omits the cascade-core prefix (single schedule).
+    expect(row.textContent).toContain("16.3% → 10%");
+    expect(row.textContent).not.toContain("-cascade");
+  });
+
+  test("Signal badge binds to current_tier (live ratchet), not last_signal", async () => {
+    // Newly-entered SR8 position: log emission is "ENTRY" (the engine's
+    // initial deploy bar) but the live cascade tier is GREEN. Pre-fix,
+    // the badge would read ENTRY; post-fix it must read GREEN so SNDK-
+    // style positions show their true tier.
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({
+          ticker: "SNDK",
+          // Below 15% threshold so it lands in the Hold section (not Action).
+          current_pct_nlv: 14.2,
+          is_action: false,
+          last_signal: "ENTRY",      // log says ENTRY
+          current_tier: "GREEN",     // ratchet says GREEN
+        }),
+      ],
+    }));
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-SNDK")).toBeInTheDocument());
+
+    // SignalBadge renders data-testid=`sr8-signal-${label}`. The badge
+    // must reflect the live tier, not the last log emission.
+    expect(screen.getByTestId("sr8-signal-GREEN")).toBeInTheDocument();
+    expect(screen.queryByTestId("sr8-signal-ENTRY")).not.toBeInTheDocument();
   });
 
   test("Mark done removes the row from the Action section after the 320ms animation", async () => {
@@ -406,11 +440,18 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     expect(retryBtn.textContent).toContain("Retry");
   });
 
-  test("ENTRY row shows '/ building' instead of a numeric target in the % NLV column", async () => {
+  test("ENTRY-tier row (defensive fallback) shows '/ building' in the % NLV column", async () => {
+    // Under the SR8-weekly conform, current_tier is always one of
+    // GREEN/QUICK/QUICKSAND/GD — the engine never surfaces "ENTRY" as
+    // a live tier (it's a log-emission label only). The "/ building"
+    // UX is kept as a defensive fallback in HoldRow; this test pins
+    // that fallback by forcing current_tier="ENTRY" explicitly.
     mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
     mMonitor.mockResolvedValue(makeResponse({
       positions: [
-        makePosition({ ticker: "SNDK", is_action: false, last_signal: "ENTRY", current_pct_nlv: 5.2 }),
+        makePosition({ ticker: "SNDK", is_action: false,
+                       current_tier: "ENTRY", last_signal: "ENTRY",
+                       current_pct_nlv: 5.2 }),
       ],
     }));
 
@@ -469,7 +510,7 @@ describe("Sr8Monitor — polished states (Commit 4)", () => {
         flagged_count: 0,
         at_risk_pct: 0,
         to_trim_dollars: 0,
-        cascade_breakdown: { cascade_20: 0, cascade_15: 0 },
+        tier_breakdown: { green: 0, quick: 0, quicksand: 0, gd: 0 },
       },
     }));
 

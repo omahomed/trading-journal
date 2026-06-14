@@ -233,7 +233,13 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         mode="terminate", refresh=False, cascade=DEFAULT_CASCADE, quiet=False,
         entry_px_override=None, sr7=True, sr7_arm_bars=2, atr_trim=None,
         weekly_variant="default", phase2_daily=False,
-        sr6=False, sr6_activate_bars=10):
+        sr6=False, sr6_activate_bars=10, force_weekly=False):
+    # `force_weekly=True` starts the position in Phase 2 (weekly governance)
+    # from the entry bar instead of waiting for the +50% cushion to latch.
+    # Used by the SR8 Monitor: positions tagged SR8 (peak >= 50%) are the
+    # weekly-cascade audience by definition, regardless of whether the
+    # CURRENT cushion is still above 1.5×B1 (peak gain ratchets, current
+    # cushion doesn't). Phase 1 daily-cascade (21/34/50) is skipped entirely.
     unit = POSITION_PCT * nav          # dollars deployed at entry (1.0 unit)
     # Daily cascade always uses the legacy 4-tier (--cascade flag still applies here)
     daily_target_frac = {"GREEN": cascade[0], "QUICK": cascade[1],
@@ -290,7 +296,11 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
     realized = 0.0
     peak = float(entry.High)
     peak_date = entry.Date
-    phase = 1
+    # `force_weekly` starts in Phase 2 — the daily-cascade phase is skipped
+    # entirely and the +50% cushion latch (line ~589) becomes a no-op since
+    # phase is already 2. The PHASE2 LATCH log entry isn't emitted because
+    # the gate (`phase == 1`) is false.
+    phase = 2 if force_weekly else 1
     awaiting_new_entry = False         # set True after weekly GD; cleared on next daily GREEN
     current_cascade_frac = 1.0         # tracks last cascade-signal frac (1.0/0.75/0.50/0.0)
     # SR7 "Holding Winners" state: WATCHING / ARMED. FIRE on intraday low < trigger.
@@ -487,9 +497,10 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
             "CumReal%": round(realized / unit * 100, 2),
         })
 
-    # log entry — initial deploy is exactly 20% NAV at B1
+    # log entry — initial deploy is exactly 20% NAV at B1. Phase is 2 when
+    # force_weekly is set (SR8 monitor); otherwise 1 (legacy backtest path).
     log.append({
-        "Date": entry.Date.date(), "Phase": 1, "TF": "daily", "Signal": "ENTRY",
+        "Date": entry.Date.date(), "Phase": phase, "TF": "daily", "Signal": "ENTRY",
         "Action": "BUY -> 100% unit",
         "SharesDelta": round(initial_shares, 0),
         "Price": round(entry_px, 4),
@@ -748,6 +759,20 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         if not quiet:
             print(f"[wrote] {out_path}  ({len(ldf)} rows)")
 
+    # Live cascade tier — the ratchet's CURRENT state, distinct from the
+    # last emission in the log. For force_weekly callers (SR8 monitor) this
+    # is the weekly cascade's tier after seeding + all weekly steps; for the
+    # legacy backtest path it's still w_cas (the phase-2 cascade, set on
+    # latch). If no weekly bar has run yet (extremely rare for SR8: those
+    # positions have peak ≥50% so they've spanned multiple weeks), the
+    # cascade hasn't seeded — tier defaults to 0 (GREEN).
+    live_tier_idx = w_cas.tier
+    live_tier_label = (
+        w_cas.tier_labels[live_tier_idx]
+        if 0 <= live_tier_idx < len(w_cas.tier_labels)
+        else weekly_tier_labels[0]
+    )
+
     return {
         "ticker": ticker,
         "entry_date": entry.Date.date(),
@@ -764,6 +789,9 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         "total_pct": total / unit * 100.0,
         "signals": len(ldf) - 1,
         "log": ldf,
+        "current_tier_idx": live_tier_idx,
+        "current_tier_label": live_tier_label,
+        "current_tier_seeded": w_seeded,
     }
 
 

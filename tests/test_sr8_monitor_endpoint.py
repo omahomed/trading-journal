@@ -51,7 +51,7 @@ def _analyze_result(
     avg_price: float = 100.0,
     current_price: float = 120.0,
     current_pct_nlv: float = 15.0,
-    cascade_core: int = 15,
+    current_tier: str = "GREEN",
     tier_pct_nlv: float = 15.0,
     target_dollars: float = 60000.0,
     delta_dollars: float = 0.0,
@@ -68,7 +68,7 @@ def _analyze_result(
         "current_price": current_price,
         "current_dollars": shares_held * current_price,
         "current_pct_nlv": current_pct_nlv,
-        "cascade_core": cascade_core,
+        "current_tier": current_tier,
         "tier_pct_nlv": tier_pct_nlv,
         "target_dollars": target_dollars,
         "delta_dollars": delta_dollars,
@@ -149,8 +149,9 @@ def stubbed(monkeypatch):
 
 def test_happy_path_response_envelope(stubbed):
     """All 3 positions analyze cleanly. Response shape = the documented
-    envelope with summary + positions + meta. cascade_breakdown reflects
-    the per-position cascade_core."""
+    envelope with summary + positions + meta. tier_breakdown reflects
+    the per-position current_tier distribution (replaces the obsolete
+    20-cas / 15-cas split — only one floor schedule exists now)."""
     state, client = stubbed
     state["positions"] = [
         {"ticker": "AAA", "b1_date": "2026-04-01", "b1_price": 100, "shares_held": 100, "avg_price": 100},
@@ -158,9 +159,9 @@ def test_happy_path_response_envelope(stubbed):
         {"ticker": "CCC", "b1_date": "2026-04-03", "b1_price": 300, "shares_held": 30, "avg_price": 300},
     ]
     state["analyze_by_ticker"] = {
-        "AAA": _analyze_result("AAA", cascade_core=20, current_pct_nlv=25.0),
-        "BBB": _analyze_result("BBB", cascade_core=15, current_pct_nlv=12.0),
-        "CCC": _analyze_result("CCC", cascade_core=15, current_pct_nlv=8.0),
+        "AAA": _analyze_result("AAA", current_tier="GREEN",     current_pct_nlv=25.0),
+        "BBB": _analyze_result("BBB", current_tier="QUICK",     current_pct_nlv=12.0),
+        "CCC": _analyze_result("CCC", current_tier="QUICKSAND", current_pct_nlv=8.0),
     }
 
     r = client.get("/api/sr8/monitor?nlv=500000")
@@ -179,11 +180,15 @@ def test_happy_path_response_envelope(stubbed):
     for p in body["positions"]:
         assert p["fetch_failed"] is False
         assert "b1_date" in p and "b1_price" in p  # pass-through fields
+        assert "current_tier" in p  # live cascade tier surfaced
+        assert "cascade_core" not in p  # legacy field removed
 
-    # Summary
+    # Summary tier_breakdown
     assert body["summary"]["total_positions"] == 3
-    assert body["summary"]["cascade_breakdown"]["cascade_20"] == 1
-    assert body["summary"]["cascade_breakdown"]["cascade_15"] == 2
+    assert "cascade_breakdown" not in body["summary"]  # legacy field removed
+    assert body["summary"]["tier_breakdown"] == {
+        "green": 1, "quick": 1, "quicksand": 1, "gd": 0,
+    }
 
 
 def test_per_position_fetch_failure_isolated(stubbed):
@@ -254,7 +259,8 @@ def test_is_action_signal_today_above_tolerance(stubbed):
 
 def test_early_warn_within_two_points_of_target(stubbed):
     """Held position is NEAR when 0 <= (target - current_pct_nlv) <= 2.
-    Tier target 11.25, current 10.0 → diff 1.25 → NEAR."""
+    Spec floors are 15/10/5/0 now — a QUICK-tier position with 10%
+    floor and 8.5% current % NLV is 1.5 points below the floor → NEAR."""
     state, client = stubbed
     state["positions"] = [
         {"ticker": "NEAR", "b1_date": "2026-04-01", "b1_price": 100, "shares_held": 100, "avg_price": 100},
@@ -262,10 +268,10 @@ def test_early_warn_within_two_points_of_target(stubbed):
     ]
     state["analyze_by_ticker"] = {
         "NEAR": _analyze_result(
-            "NEAR", tier_pct_nlv=11.25, current_pct_nlv=10.0, signal_today=False
+            "NEAR", current_tier="QUICK", tier_pct_nlv=10.0, current_pct_nlv=8.5, signal_today=False
         ),
         "FAR": _analyze_result(
-            "FAR", tier_pct_nlv=15.0, current_pct_nlv=5.0, signal_today=False
+            "FAR", current_tier="GREEN", tier_pct_nlv=15.0, current_pct_nlv=5.0, signal_today=False
         ),
     }
 
