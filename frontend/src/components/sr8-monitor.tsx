@@ -53,34 +53,53 @@ function shortMonthDay(iso: string): string {
 // Signal display — collapses MORS's verbose "QUICKSAND" into the design's
 // short "QS" badge, and aliases the GREEN sub-entry variant. Driven by
 // the live cascade tier (current_tier on the position) — the 4 visible
-// tier classes (GREEN/QUICK/QS/GD) each map to a (bg, text) color pair
-// from the existing theme tokens. ENTRY remains tolerated as a legacy
-// fallback (defensive — current_tier always returns a real tier name).
+// tier classes (GREEN/QUICK/QS/GD) each map to a (bg, text) color pair.
+// ENTRY remains tolerated as a legacy fallback (defensive — current_tier
+// always returns a real tier name).
 //
-// Palette is the MO RS 2.0 indicator + Active Campaign convention:
-//   GREEN  → emerald (--up)
-//   QUICK  → amber   (--sig-quick-*)
-//   QS     → orange  (--sig-qs-*)
-//   GD     → rose    (--down)
+// Tokens follow the campaign's SellRuleBadge convention — a `color-mix`
+// soft tint over `var(--surface)` for the bg, raw hex for the text —
+// because the unprefixed runtime vars (`--up`, `--sig-quick-text`, …)
+// the badges used to reference aren't defined in `:root` (Tailwind v4's
+// `@theme` exposes them as `--color-*`, not `--*`), so on the live light
+// theme every pill was falling back to inherited grey. The three tiers
+// that overlap with the campaign's sell-rule palette intentionally use
+// the same hex pairs as `SellRuleBadge` so SR8/SR11/SR1 → GREEN/QUICK/GD
+// read identically; QS uses the orange-600 family for the orange step
+// between QUICK (amber) and GD (rose).
+//
+// Palette:
+//   GREEN  → emerald  bg #08a86b @ 12% / fg #16a34a  (= SellRuleBadge.sr8)
+//   QUICK  → amber    bg #f59f00 @ 12% / fg #d97706  (= SellRuleBadge.sr11)
+//   QS     → orange   bg #f97316 @ 12% / fg #ea580c
+//   GD     → rose     bg #e5484d @ 14% / fg #dc2626  (= SellRuleBadge.sr1)
+const TIER_PALETTE = {
+  GREEN: { bg: "color-mix(in oklab, #08a86b 12%, var(--surface))", text: "#16a34a" },
+  QUICK: { bg: "color-mix(in oklab, #f59f00 12%, var(--surface))", text: "#d97706" },
+  QS:    { bg: "color-mix(in oklab, #f97316 12%, var(--surface))", text: "#ea580c" },
+  GD:    { bg: "color-mix(in oklab, #e5484d 14%, var(--surface))", text: "#dc2626" },
+  ENTRY: { bg: "color-mix(in oklab, #0d6efd 12%, var(--surface))", text: "#1d4ed8" },
+} as const;
+
 function signalDisplay(signal: string): { label: string; bg: string; text: string; severity: number } {
   const s = (signal || "").toUpperCase();
-  if (s === "GREEN" || s === "GREEN(SUB-ENTRY)") return { label: "GREEN", bg: "var(--up-soft)", text: "var(--up)", severity: 1 };
-  if (s === "QUICK") return { label: "QUICK", bg: "var(--sig-quick-bg)", text: "var(--sig-quick-text)", severity: 2 };
-  if (s === "QUICKSAND" || s === "QS") return { label: "QS", bg: "var(--sig-qs-bg)", text: "var(--sig-qs-text)", severity: 3 };
-  if (s === "GD" || s === "TERMINATED") return { label: "GD", bg: "var(--down-soft)", text: "var(--down)", severity: 4 };
-  if (s === "ENTRY") return { label: "ENTRY", bg: "var(--g-deep-soft)", text: "var(--g-deep)", severity: 0 };
+  if (s === "GREEN" || s === "GREEN(SUB-ENTRY)") return { label: "GREEN", ...TIER_PALETTE.GREEN, severity: 1 };
+  if (s === "QUICK") return { label: "QUICK", ...TIER_PALETTE.QUICK, severity: 2 };
+  if (s === "QUICKSAND" || s === "QS") return { label: "QS", ...TIER_PALETTE.QS, severity: 3 };
+  if (s === "GD" || s === "TERMINATED") return { label: "GD", ...TIER_PALETTE.GD, severity: 4 };
+  if (s === "ENTRY") return { label: "ENTRY", ...TIER_PALETTE.ENTRY, severity: 0 };
   return { label: s || "—", bg: "var(--surface-2)", text: "var(--ink-3)", severity: -1 };
 }
 
-// Per-tier text color for the Tiers KPI counts. Same four tokens as
-// signalDisplay() so a "Q" in the chip reads as amber and the QUICK
-// badges on the rows below also read as amber — single palette across
-// the page.
+// Per-tier text color for the Tiers KPI counts — same hex as the row
+// badges' text color so "Q" in the chip reads the same amber as the
+// QUICK pill below it. Pinned to the table above so a palette change
+// only needs one edit.
 const TIER_KPI_COLOR = {
-  green: "var(--up)",
-  quick: "var(--sig-quick-text)",
-  quicksand: "var(--sig-qs-text)",
-  gd: "var(--down)",
+  green: TIER_PALETTE.GREEN.text,
+  quick: TIER_PALETTE.QUICK.text,
+  quicksand: TIER_PALETTE.QS.text,
+  gd: TIER_PALETTE.GD.text,
 } as const;
 
 // NLV currency formatter — display "792,792" in the input while keeping
@@ -724,7 +743,7 @@ function ActionRow({ p, exiting, onMarkDone, navColor: _navColor }: {
 function SignalBadge({ signal }: { signal: string }) {
   const sig = signalDisplay(signal);
   return (
-    <span className="inline-flex items-center justify-center px-2.5 h-[26px] rounded-[8px] text-[10.5px] font-bold uppercase tracking-[0.06em]"
+    <span className="inline-flex items-center justify-center px-2.5 h-[26px] rounded-full text-[10.5px] font-bold uppercase tracking-[0.06em]"
           data-testid={`sr8-signal-${sig.label}`}
           style={{ background: sig.bg, color: sig.text, fontFamily: mono }}>
       {sig.label}

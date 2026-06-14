@@ -136,14 +136,16 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     expect(qs.textContent).toBe("1QS");
     expect(gd.textContent).toBe("0GD");
 
-    // Each count is wrapped in a span with its own inline color from
-    // the shared signal-tier tokens. The exact CSS var value matters
-    // less than the four counts each having distinct colors, but
-    // pinning the var names guards against accidental palette drift.
-    expect(green.style.color).toContain("--up");
-    expect(quick.style.color).toContain("--sig-quick-text");
-    expect(qs.style.color).toContain("--sig-qs-text");
-    expect(gd.style.color).toContain("--down");
+    // Each count is wrapped in a span with the per-tier text color —
+    // same palette as the row badges below. Pinning the rgb values
+    // (jsdom normalizes the `color:` channel from hex → rgb when
+    // serializing the style attribute) guards against the prior bug
+    // where `var(--up)` etc. weren't defined in `:root` and every
+    // count fell back to inherited grey.
+    expect(green.style.color).toBe("rgb(22, 163, 74)");   // #16a34a
+    expect(quick.style.color).toBe("rgb(217, 119, 6)");   // #d97706
+    expect(qs.style.color).toBe("rgb(234, 88, 12)");      // #ea580c
+    expect(gd.style.color).toBe("rgb(220, 38, 38)");      // #dc2626
   });
 
   test("NLV input renders the seeded value with thousands separators", async () => {
@@ -540,6 +542,87 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
 
     expect(screen.getByTestId("sr8-all-clear")).toBeInTheDocument();
     expect(screen.queryByTestId("sr8-action-rows")).not.toBeInTheDocument();
+  });
+
+  // ─── Signal-badge palette (fix/sr8-signal-colors) ────────────────
+  //
+  // Each tier renders as a tinted pill with its own bg + text color,
+  // matching the campaign's SellRuleBadge palette. The four tests
+  // below pin one tier each at the row level (NOT just the KPI chip),
+  // because the live bug was the row badges falling back to inherited
+  // grey while the chip still rendered the labels in plain text.
+
+  test("Signal badge — GREEN tier renders emerald pill (= campaign sr8 palette)", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "MU", current_tier: "GREEN", current_pct_nlv: 14.2 }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-MU")).toBeInTheDocument());
+    const badge = screen.getByTestId("sr8-signal-GREEN");
+    // Emerald — same hex pair SellRuleBadge.sr8 uses (#08a86b @ 12% bg,
+    // #16a34a fg). The bg is rendered inside color-mix() which jsdom
+    // preserves as-written, so the hex stays in the style attribute.
+    // The text color jsdom normalizes from hex → rgb on serialize, so
+    // assert that channel via the rgb form.
+    const style = badge.getAttribute("style")?.toLowerCase() ?? "";
+    expect(style).toContain("#08a86b");
+    expect(badge.style.color).toBe("rgb(22, 163, 74)");
+    // Pill chrome — rounded-full matches the campaign pill shape.
+    expect(badge.className).toContain("rounded-full");
+  });
+
+  test("Signal badge — QUICK tier renders amber pill (= campaign sr11 palette)", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "DELL", current_tier: "QUICK", current_pct_nlv: 9.2 }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-DELL")).toBeInTheDocument());
+    const badge = screen.getByTestId("sr8-signal-QUICK");
+    const style = badge.getAttribute("style")?.toLowerCase() ?? "";
+    expect(style).toContain("#f59f00");
+    expect(badge.style.color).toBe("rgb(217, 119, 6)");
+  });
+
+  test("Signal badge — QUICKSAND tier renders orange pill", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "PENG", current_tier: "QUICKSAND", current_pct_nlv: 4.2 }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-hold-row-PENG")).toBeInTheDocument());
+    // signalDisplay() collapses QUICKSAND → "QS" for the badge label.
+    const badge = screen.getByTestId("sr8-signal-QS");
+    const style = badge.getAttribute("style")?.toLowerCase() ?? "";
+    expect(style).toContain("#f97316");
+    expect(badge.style.color).toBe("rgb(234, 88, 12)");
+  });
+
+  test("Signal badge — GD tier renders rose pill (= campaign sr1 palette)", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        // GD is terminal — flagged as actionable EXIT, so it lands in
+        // the Action section (NOT the Hold table). The badge still
+        // routes through the same SignalBadge component, so the color
+        // assertion lives on whichever row tier resolves.
+        makePosition({ ticker: "FPS", current_tier: "GD", terminated: true, is_action: true,
+                       last_signal: "GD", current_pct_nlv: 0 }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-action-FPS")).toBeInTheDocument());
+    const badge = screen.getByTestId("sr8-signal-GD");
+    const style = badge.getAttribute("style")?.toLowerCase() ?? "";
+    expect(style).toContain("#e5484d");
+    expect(badge.style.color).toBe("rgb(220, 38, 38)");
   });
 });
 
