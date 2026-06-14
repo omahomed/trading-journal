@@ -3784,8 +3784,19 @@ def _sr8_enrich(pos: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
     pass-through fields + the design-additions (is_action, early_warn,
     fetch_failed=False). Coerces date objects to ISO strings so the
     response is JSON-serializable."""
+    # Action gate: surface anything that's NOT Green and still above its
+    # floor (delta_dollars > AT_TARGET_TOL = $500). Previously we gated
+    # on signal_today, which dropped a trim out of ActionRow once its
+    # firing weekly bar passed — a position sitting in QUICK for a week
+    # with the trim un-acted-on would disappear from "Action needed"
+    # until GD finally fired. signal_today stays on the payload for any
+    # downstream caller that wants the "fired today" hint, but the
+    # action surface is now the tier+floor truth: Quick/QS/GD over floor
+    # = act; Green or at-floor = hold.
+    tier_up = str(r.get("current_tier") or "GREEN").upper()
+    is_green_tier = tier_up in ("GREEN", "GREEN(SUB-ENTRY)")
     is_action = bool(r.get("terminated")) or (
-        bool(r.get("signal_today"))
+        (not is_green_tier)
         and float(r.get("delta_dollars") or 0) > 500.0  # AT_TARGET_TOL in monitor.py
     )
     # Early-warning: held position within 2 points BELOW its tier target.
