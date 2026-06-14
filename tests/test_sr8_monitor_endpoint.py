@@ -23,8 +23,12 @@ Coverage:
   7. Empty position list returns an empty payload (not a crash).
   8. Portfolio query param threads to _sr8_load_db_positions and lands in
      meta.portfolio.
-  9. _sr8_load_db_positions filters to b1_max_return_pct >= 50, excludes
-     options, and synthesizes b1_date from the first BUY in trades_details.
+  9. _sr8_load_db_positions classifies SR8 via max(live B1 return,
+     stored b1_max_return_pct) >= 50 (mirrors the frontend
+     positions.ts + sell-rule.ts classifier), excludes options, and
+     synthesizes b1_date from the first BUY in trades_details. A stale
+     stored peak below 50 is rescued by a live B1 return >= 50; a
+     live-price fetch failure falls back to the stored peak alone.
 """
 from __future__ import annotations
 
@@ -342,34 +346,41 @@ def test_portfolio_param_threads_to_loader_and_meta(stubbed):
 
 
 def test_load_db_positions_filters_and_synthesizes(monkeypatch):
-    """_sr8_load_db_positions: filters by status=OPEN, b1_max_return_pct>=50,
-    drops options, drops rows missing b1_price, and synthesizes b1_date
-    from the first BUY in trades_details."""
+    """_sr8_load_db_positions: classifies SR8 via max(live B1 return,
+    stored b1_max_return_pct) >= 50, drops options, drops rows missing
+    b1_price, and synthesizes b1_date from the first BUY in
+    trades_details. This is the campaign-classifier parity test —
+    positions.ts:154-170 + sell-rule.ts:8-13."""
     import pandas as pd
     import api.main as main
 
     summary_rows = [
-        # SR8 stock — included
+        # SR8 stock — included via stored peak (live not needed)
         {"Trade_ID": "T1", "Ticker": "MU",  "Status": "OPEN", "Shares": 135,
          "Avg_Entry": 80.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 119.14,
          "Instrument_Type": "STOCK"},
-        # b1_max_return_pct exactly 50 — included (>=)
+        # Stored peak below 50 but LIVE B1 return >= 50 — included
+        # (this is the audit case: DELL/ARM/PENG/FPS with stale stored
+        # peaks. Live price of 105.6 vs B1 60.0 = +76% → SR8.)
         {"Trade_ID": "T2", "Ticker": "DELL", "Status": "OPEN", "Shares": 318,
-         "Avg_Entry": 70.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 50.0,
+         "Avg_Entry": 70.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 47.81,
          "Instrument_Type": "STOCK"},
-        # Below 50 — excluded
+        # Stored peak below 50 AND live B1 also below — excluded
+        # (live 100 vs B1 95 = +5.3%, stored 12%, effective_max = 12%).
         {"Trade_ID": "T3", "Ticker": "SNOW", "Status": "OPEN", "Shares": 30,
          "Avg_Entry": 100.0, "B1_Entry_Price": 95.0, "B1_Max_Return_Pct": 12.0,
          "Instrument_Type": "STOCK"},
-        # Closed — excluded
+        # Closed — excluded by status filter regardless of peak
         {"Trade_ID": "T4", "Ticker": "PLTR", "Status": "CLOSED", "Shares": 0,
          "Avg_Entry": 0, "B1_Entry_Price": 20.0, "B1_Max_Return_Pct": 200.0,
          "Instrument_Type": "STOCK"},
-        # SR8-tier but option — excluded
+        # SR8-tier but option — excluded (engine is stock-only)
         {"Trade_ID": "T5", "Ticker": "NVDA250620C500", "Status": "OPEN", "Shares": 10,
          "Avg_Entry": 5.0, "B1_Entry_Price": 4.0, "B1_Max_Return_Pct": 80.0,
          "Instrument_Type": "OPTION"},
-        # SR8 but b1_max is NaN — excluded (peak never persisted)
+        # Stored peak NaN but live B1 return >= 50 — included via live
+        # alone (a brand-new SR8 promotion whose peak hasn't been
+        # heal-written yet).
         {"Trade_ID": "T6", "Ticker": "NEW", "Status": "OPEN", "Shares": 100,
          "Avg_Entry": 50.0, "B1_Entry_Price": 50.0, "B1_Max_Return_Pct": None,
          "Instrument_Type": "STOCK"},
@@ -380,8 +391,10 @@ def test_load_db_positions_filters_and_synthesizes(monkeypatch):
         {"Trade_ID": "T1", "Ticker": "MU", "Action": "BUY", "Date": "2026-02-15", "Amount": 65.0},
         # DELL: single BUY
         {"Trade_ID": "T2", "Ticker": "DELL", "Action": "BUY", "Date": "2026-02-06", "Amount": 60.0},
-        # SNOW (will be filtered out anyway)
+        # SNOW
         {"Trade_ID": "T3", "Ticker": "SNOW", "Action": "BUY", "Date": "2026-04-01", "Amount": 95.0},
+        # NEW
+        {"Trade_ID": "T6", "Ticker": "NEW", "Action": "BUY", "Date": "2026-05-01", "Amount": 50.0},
     ]
 
     def fake_load_summary(portfolio: str) -> pd.DataFrame:
@@ -395,16 +408,79 @@ def test_load_db_positions_filters_and_synthesizes(monkeypatch):
     monkeypatch.setattr(main.db, "load_summary", fake_load_summary)
     monkeypatch.setattr(main.db, "load_details", fake_load_details)
 
+    # Live-price overlay — mirrors the prod path the campaign uses.
+    live_prices = {
+        "MU":   200.0,   # live B1 = +233%, stored 119% → effective 233 ✓
+        "DELL": 105.6,   # live B1 = +76%,  stored 47.81 → effective 76 ✓ (stale-peak rescue)
+        "SNOW": 100.0,   # live B1 = +5.3%, stored 12   → effective 12  ✗
+        "NEW":  80.0,    # live B1 = +60%,  stored None → effective 60 ✓ (stored-NaN rescue)
+    }
+    captured: dict[str, Any] = {}
+
+    def fake_live_overlay(ticker_list, portfolio):
+        captured["tickers"] = list(ticker_list)
+        captured["portfolio"] = portfolio
+        return {t: live_prices[t] for t in ticker_list if t in live_prices}
+
+    monkeypatch.setattr(main, "_fetch_live_prices_with_manual_overlay", fake_live_overlay)
+
     positions = main._sr8_load_db_positions("CanSlim")
     by_ticker = {p["ticker"]: p for p in positions}
 
-    assert set(by_ticker.keys()) == {"MU", "DELL"}, positions
+    # The DELL + NEW rescues are the load-bearing assertions for this fix.
+    assert set(by_ticker.keys()) == {"MU", "DELL", "NEW"}, positions
     assert by_ticker["MU"]["b1_date"] == "2026-02-08"  # first BUY, not the add-on
     assert by_ticker["MU"]["b1_price"] == 60.0
     assert by_ticker["MU"]["shares_held"] == 135
     assert by_ticker["MU"]["avg_price"] == 80.0
     assert by_ticker["DELL"]["b1_date"] == "2026-02-06"
     assert by_ticker["DELL"]["b1_price"] == 60.0
+    assert by_ticker["NEW"]["b1_date"] == "2026-05-01"
+    assert by_ticker["NEW"]["b1_price"] == 50.0
+
+    # Selection plumbing: the overlay was called with the same portfolio
+    # the caller passed (so manual_price overlays land), and the upper-
+    # cased candidate ticker set.
+    assert captured["portfolio"] == "CanSlim"
+    assert set(captured["tickers"]) == {"MU", "DELL", "SNOW", "NEW"}
+
+
+def test_load_db_positions_live_fetch_failure_falls_back_to_stored(monkeypatch):
+    """When the live-price overlay raises, selection must still resolve
+    via the stored peak alone — no worse than the pre-rescue behavior.
+    A stored peak >= 50 still includes the row; rows that relied on a
+    live rescue drop out cleanly."""
+    import pandas as pd
+    import api.main as main
+
+    summary_rows = [
+        # Stored peak >= 50 — included via stored
+        {"Trade_ID": "T1", "Ticker": "MU",  "Status": "OPEN", "Shares": 135,
+         "Avg_Entry": 80.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 119.14,
+         "Instrument_Type": "STOCK"},
+        # Stored peak below 50 — would need live to rescue; live fails → drops
+        {"Trade_ID": "T2", "Ticker": "DELL", "Status": "OPEN", "Shares": 318,
+         "Avg_Entry": 70.0, "B1_Entry_Price": 60.0, "B1_Max_Return_Pct": 47.81,
+         "Instrument_Type": "STOCK"},
+    ]
+    details_rows = [
+        {"Trade_ID": "T1", "Ticker": "MU", "Action": "BUY", "Date": "2026-02-08", "Amount": 60.0},
+        {"Trade_ID": "T2", "Ticker": "DELL", "Action": "BUY", "Date": "2026-02-06", "Amount": 60.0},
+    ]
+
+    monkeypatch.setattr(main.db, "load_summary",
+                        lambda p: pd.DataFrame(summary_rows))
+    monkeypatch.setattr(main.db, "load_details",
+                        lambda p: pd.DataFrame(details_rows))
+
+    def explode(ticker_list, portfolio):
+        raise RuntimeError("yfinance 429")
+
+    monkeypatch.setattr(main, "_fetch_live_prices_with_manual_overlay", explode)
+
+    positions = main._sr8_load_db_positions("CanSlim")
+    by_ticker = {p["ticker"]: p for p in positions}
+    assert set(by_ticker.keys()) == {"MU"}, positions
 
 
 def test_load_db_positions_returns_empty_on_db_error(monkeypatch):
