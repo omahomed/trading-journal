@@ -3692,7 +3692,7 @@ def _sr8_fetch_failed_row(pos: dict[str, Any], err_msg: str) -> dict[str, Any]:
         "current_price": None,
         "current_dollars": 0.0,
         "current_pct_nlv": 0.0,
-        "cascade_core": 15,
+        "current_tier": "GREEN",  # safe default for failed-fetch rows
         "tier_pct_nlv": 0.0,
         "target_dollars": 0.0,
         "delta_dollars": 0.0,
@@ -3744,7 +3744,11 @@ def _sr8_enrich(pos: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
         "current_price": float(r.get("current_price") or 0),
         "current_dollars": float(r.get("current_dollars") or 0),
         "current_pct_nlv": float(r.get("current_pct_nlv") or 0),
-        "cascade_core": int(r.get("cascade_core") or 15),
+        # current_tier is the live cascade tier from the ratchet —
+        # distinct from last_signal (which is the latest emission in the
+        # log, can be ENTRY for newly-entered positions). The frontend
+        # binds the Signal badge to this so SNDK reads GREEN, not ENTRY.
+        "current_tier": str(r.get("current_tier") or "GREEN"),
         "tier_pct_nlv": tier,
         "target_dollars": float(r.get("target_dollars") or 0),
         "delta_dollars": float(r.get("delta_dollars") or 0),
@@ -3784,8 +3788,19 @@ def _sr8_run_monitor(nlv: float, portfolio: str = "CanSlim", refresh: bool = Fal
 
     actionable = [r for r in rows if r["is_action"] and not r["fetch_failed"]]
     priced = [r for r in rows if not r["fetch_failed"]]
-    cas20 = sum(1 for r in priced if r["cascade_core"] == 20)
-    cas15 = sum(1 for r in priced if r["cascade_core"] == 15)
+    # Tier distribution replaces the obsolete 20-cas / 15-cas breakdown.
+    # Counts positions per live cascade tier (the ratchet's current state).
+    # GREEN(sub-entry) folds into "green" for display parity.
+    def _tier_key(t: str) -> str:
+        u = (t or "").upper()
+        if u in ("GREEN", "GREEN(SUB-ENTRY)"): return "green"
+        if u == "QUICK": return "quick"
+        if u in ("QUICKSAND", "QS"): return "quicksand"
+        if u in ("GD", "TERMINATED"): return "gd"
+        return "green"  # defensive default
+    tier_counts = {"green": 0, "quick": 0, "quicksand": 0, "gd": 0}
+    for r in priced:
+        tier_counts[_tier_key(r["current_tier"])] += 1
     at_risk_pct = sum(r["current_pct_nlv"] for r in actionable)
     to_trim_dollars = sum(r["delta_dollars"] for r in actionable)
 
@@ -3795,10 +3810,7 @@ def _sr8_run_monitor(nlv: float, portfolio: str = "CanSlim", refresh: bool = Fal
             "flagged_count": len(actionable),
             "at_risk_pct": round(at_risk_pct, 2),
             "to_trim_dollars": round(to_trim_dollars, 2),
-            "cascade_breakdown": {
-                "cascade_20": cas20,
-                "cascade_15": cas15,
-            },
+            "tier_breakdown": tier_counts,
         },
         "positions": rows,
         "meta": {

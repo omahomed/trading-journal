@@ -27,10 +27,20 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mors_backtest import run
 
-# % NLV target by (cascade core, unit fraction)
-CASCADE_NLV_TARGETS = {
-    20: {1.00: 20.00, 0.75: 15.00, 0.50: 10.00, 0.00: 0.00},
-    15: {1.00: 15.00, 0.75: 11.25, 0.50: 7.50,  0.00: 0.00},
+# Single % NLV floor schedule, keyed by live cascade tier label. The 20-cas /
+# 15-cas variant selection (audit: monitor.py:31-34 / 80-87) is gone — SR8
+# positions get one schedule. Quick / QS / GD are TRIM floors (sell down to
+# this %); GREEN's 15% is a REBUILD target, not a trim floor — Green never
+# sells (a Green position above 15% is held by design; SR7 owns the excess).
+TIER_NLV_FLOORS = {
+    "GREEN":      15.00,
+    "QUICK":      10.00,
+    "QUICKSAND":   5.00,
+    "GD":          0.00,
+    # Aliases the engine may emit. Sub-entry / TERMINATED both terminal-ish;
+    # mapping them keeps lookups defensive.
+    "GREEN(sub-entry)": 15.00,
+    "TERMINATED":  0.00,
 }
 
 CASCADE_SIGNALS = {"ENTRY", "GREEN", "QUICK", "QUICKSAND", "GD",
@@ -47,11 +57,6 @@ DATA_DIR = os.path.join(_HERE, "data")
 AT_TARGET_TOL = 500.0  # $ tolerance for "at target"
 
 
-def select_cascade(current_pct_nlv):
-    """Pick the cascade core size based on the position's current % NLV."""
-    return 20 if current_pct_nlv >= 20.0 else 15
-
-
 def load_positions(path):
     with open(path) as f:
         return json.load(f)
@@ -60,18 +65,21 @@ def load_positions(path):
 def analyze(pos, nlv, refresh=False):
     ticker = pos["ticker"]
     tkr_path = f"{DATA_DIR}/{ticker}_price_data.csv"
+    # SR8 positions always run the weekly 8/13/21 cascade (force_weekly=True)
+    # — Phase 1 daily cascade is skipped entirely. The SR8 tag is the
+    # activation gate; we don't re-derive a +50% cushion phase.
     res = run(SPY_PATH, tkr_path, ticker,
               start=str(pos["b1_date"]), end=None,
               nav=500_000.0, out_dir=None, mode="terminate",
               refresh=refresh, quiet=True,
-              entry_px_override=pos["b1_price"])
+              entry_px_override=pos["b1_price"],
+              force_weekly=True)
     log = res["log"]
 
     cas = log[log["Signal"].isin(CASCADE_SIGNALS)]
     last = cas.iloc[-1]
     last_signal = last["Signal"]
     last_signal_date = last["Date"]
-    current_unit_pct = round(float(last["Unit%"]) / 100.0, 2)
     current_price = float(res["exit_px"])
     last_bar_date = res["exit_date"]
 
@@ -80,17 +88,30 @@ def analyze(pos, nlv, refresh=False):
     current_dollars = shares_held * current_price
     current_pct_nlv = current_dollars / nlv * 100.0 if nlv > 0 else 0.0
 
-    cascade_core = select_cascade(current_pct_nlv)
-    tier_pct_nlv = CASCADE_NLV_TARGETS[cascade_core].get(current_unit_pct, 0.0)
+    # Live tier from the cascade ratchet (NOT the last emission in the log).
+    # Falls back to GREEN for the corner case where the weekly cascade hasn't
+    # seeded yet (no weekend bar between B1 and today — vanishingly rare for
+    # SR8 positions since they require peak ≥ 50%).
+    current_tier = str(res.get("current_tier_label") or "GREEN")
+    tier_pct_nlv = TIER_NLV_FLOORS.get(current_tier, 0.0)
     target_dollars = nlv * tier_pct_nlv / 100.0
-    delta_dollars = current_dollars - target_dollars
-    delta_shares = int(round(delta_dollars / current_price)) if current_price > 0 else 0
+
+    # GREEN never sells. The 15% NAV figure is a REBUILD target, not a trim
+    # floor — a Green position currently above 15% is held (SR7 owns the
+    # excess). Rebuild (Green BUY back up to 15%) is intentionally NOT
+    # computed here — deferred to a later commit.
+    if current_tier in ("GREEN", "GREEN(sub-entry)"):
+        delta_dollars = 0.0
+        delta_shares = 0
+    else:
+        delta_dollars = max(0.0, current_dollars - target_dollars)
+        delta_shares = int(round(delta_dollars / current_price)) if current_price > 0 else 0
 
     unreal_dollars = (current_price - avg_price) * shares_held
     unreal_pct = (current_price / avg_price - 1.0) * 100.0 if avg_price > 0 else 0.0
 
     signal_today = (last_signal_date == last_bar_date) and (last_signal != "ENTRY")
-    terminated = (last_signal == "TERMINATED")
+    terminated = (last_signal == "TERMINATED") or current_tier == "GD"
 
     # Phase 1 vs 2 (pre-cushion vs latched-after-1.5×B1). Read off the
     # last bar of the full log so callers don't have to re-derive from
@@ -108,7 +129,7 @@ def analyze(pos, nlv, refresh=False):
         "current_price": current_price,
         "current_dollars": current_dollars,
         "current_pct_nlv": current_pct_nlv,
-        "cascade_core": cascade_core,
+        "current_tier": current_tier,
         "tier_pct_nlv": tier_pct_nlv,
         "target_dollars": target_dollars,
         "delta_dollars": delta_dollars,
@@ -145,9 +166,9 @@ def fmt_hold_row(r):
     pl_sign = "+" if r["unreal_dollars"] >= 0 else ""
     return (
         f"  {r['ticker']:<5} "
-        f"{r['last_signal']:<8} "
+        f"{r['current_tier']:<10} "
         f"{r['current_pct_nlv']:>5.1f}% NLV  "
-        f"(target {r['tier_pct_nlv']:>5.2f}% / {r['cascade_core']}-cas)  | "
+        f"(floor {r['tier_pct_nlv']:>5.2f}%)  | "
         f"{r['shares_held']:>6,} sh  "
         f"avg ${r['avg_price']:>8,.2f}  "
         f"now ${r['current_price']:>8,.2f}  | "
