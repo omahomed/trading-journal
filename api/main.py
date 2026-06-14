@@ -3567,10 +3567,11 @@ def _empty_add_effectiveness_response(
 #     on a fresh Railway container is slow (~1s per ticker); subsequent
 #     hits use the on-disk cache for the container lifetime.
 #   - Positions source: trades_summary rows in the active portfolio
-#     where shares > 0 and b1_max_return_pct >= 50. Mirrors the
-#     frontend's classifySellRuleTier() — see frontend/src/lib/sell-rule.ts.
-#     A small lag exists for fresh SR8 promotions (b1_max_return_pct
-#     is auto-promoted on Active Campaign load via /api/trades/{id}/update-b1-max).
+#     with shares > 0, classified SR8 via the same effective-max as the
+#     frontend: max(live B1 return, stored b1_max_return_pct) >= 50.
+#     Live prices come from _fetch_live_prices_with_manual_overlay so
+#     the selection matches the campaign table exactly (incl. manual-
+#     price overlays). See positions.ts:154-170 + sell-rule.ts:8-13.
 # ─────────────────────────────────────────────────────────────────────
 
 _MORS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mors")
@@ -3585,11 +3586,19 @@ def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
     """Open positions in `portfolio` that are SR8-tier — synthesizes the
     MORS analyze() input shape from trades_summary + trades_details.
 
-    Filter mirrors the frontend sell-rule classifier: a position is SR8
-    iff its persistent-peak b1_max_return_pct >= 50. Options are excluded
-    (cascade engine is stock-only). Positions missing a first BUY (rare
-    History-import rows) or a valid B1 price are skipped, since MORS
-    needs both to replay the cascade.
+    Selection mirrors the frontend classifier 1:1:
+      positions.ts:154-170 — effectiveMax = max(live B1 return, stored
+        b1_max_return_pct), null-tolerant on either side.
+      sell-rule.ts:8-13 — SR8 iff effectiveMax >= 50.
+    Live prices come from _fetch_live_prices_with_manual_overlay so the
+    selection matches the campaign exactly (manual-price overlay
+    included). Using only the stored peak misses fresh SR8 promotions
+    whose b1_max hasn't been heal-written yet (the
+    active-campaign.tsx:246-263 auto-promote effect can lag here).
+
+    Options are excluded (cascade engine is stock-only). Positions
+    missing a first BUY (rare History-import rows) or a valid B1 price
+    are skipped — MORS needs both to replay the cascade.
 
     Returns [] on any DB error so the endpoint surfaces an empty page
     rather than a 500.
@@ -3613,13 +3622,71 @@ def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
     open_df["_b1_entry_num"] = pd.to_numeric(open_df.get("b1_entry_price"), errors="coerce")
     open_df["_avg_entry_num"] = pd.to_numeric(open_df.get("avg_entry"), errors="coerce").fillna(0)
 
-    sr8_df = open_df[
+    # Pre-filter to viable candidates: held shares, valid B1 entry, not
+    # an option. We need the live-price overlay BEFORE filtering on the
+    # 50% threshold — otherwise stale stored peaks would silently drop
+    # SR8 names whose b1_max hasn't been heal-written yet.
+    candidate = open_df[
         (open_df["_shares_num"] > 0)
-        & (open_df["_b1_max_num"].notna())
-        & (open_df["_b1_max_num"] >= _SR8_TIER_THRESHOLD)
+        & (open_df["_b1_entry_num"].notna())
+        & (open_df["_b1_entry_num"] > 0)
+    ].copy()
+    if "instrument_type" in candidate.columns:
+        candidate = candidate[candidate["instrument_type"].astype(str).str.upper() != "OPTION"]
+    if candidate.empty:
+        return []
+
+    # Same price source the frontend uses (batch_prices / campaign rows)
+    # so SR8 selection matches the campaign table exactly. If the live
+    # fetch fails (yfinance hiccup, no network), we fall back to the
+    # stored peak alone — no worse than the prior behavior.
+    ticker_list = [
+        str(t).upper().strip()
+        for t in candidate["ticker"].tolist()
+        if isinstance(t, str) and t.strip()
     ]
-    if "instrument_type" in sr8_df.columns:
-        sr8_df = sr8_df[sr8_df["instrument_type"].astype(str).str.upper() != "OPTION"]
+    try:
+        live_prices = _fetch_live_prices_with_manual_overlay(ticker_list, portfolio)
+    except Exception as e:
+        print(f"[sr8_monitor] live price fetch failed (falling back to stored peak): {e}")
+        live_prices = {}
+    # Normalize the live-price map to upper-case ticker keys so we
+    # always look it up the same way regardless of provider casing.
+    live_by_upper: dict[str, float] = {}
+    for k, v in (live_prices or {}).items():
+        try:
+            kv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(kv) or kv <= 0:
+            continue
+        live_by_upper[str(k).upper().strip()] = kv
+
+    def _effective_max(row) -> float:
+        """Mirror of positions.ts:154-170 + sell-rule.ts:8-13.
+        Returns NaN when neither side resolves so .notna() drops the row.
+        """
+        stored = row["_b1_max_num"]
+        stored_val = float(stored) if pd.notna(stored) else None
+        b1 = float(row["_b1_entry_num"])
+        tkr_up = str(row.get("ticker") or "").upper().strip()
+        live = live_by_upper.get(tkr_up)
+        live_val: float | None = None
+        if live is not None and b1 > 0:
+            live_val = (live - b1) / b1 * 100.0
+        if live_val is not None and stored_val is not None:
+            return max(live_val, stored_val)
+        if live_val is not None:
+            return live_val
+        if stored_val is not None:
+            return stored_val
+        return float("nan")
+
+    candidate["_effective_max"] = candidate.apply(_effective_max, axis=1)
+    sr8_df = candidate[
+        candidate["_effective_max"].notna()
+        & (candidate["_effective_max"] >= _SR8_TIER_THRESHOLD)
+    ]
     if sr8_df.empty:
         return []
 
@@ -3827,7 +3894,8 @@ def sr8_monitor(request: Request, nlv: float = Query(..., gt=0), portfolio: str 
     """Daily SR8 cascade monitor — per-position hold/trim/exit decisions.
 
     Wraps mors.monitor.analyze() across every open position in `portfolio`
-    that classifies as SR8 (persistent peak b1_max_return_pct >= 50).
+    that classifies as SR8 — max(live B1 return, stored b1_max) >= 50,
+    matching the campaign classifier (see _sr8_load_db_positions).
     Reads weekly-cached prices from mors/data/ (auto-fetched from yfinance
     if missing). Returns a single payload the SR8 Monitor frontend page
     renders directly.

@@ -113,6 +113,72 @@ describe("Sr8Monitor — page scaffold (Commit 2)", () => {
     expect(screen.getByTestId("sr8-chip-tiers").textContent).toContain("6G · 2Q · 1QS · 0GD");
   });
 
+  test("Tiers KPI counts render per-tier colors matching the campaign palette", async () => {
+    // Each tier count carries its own color from the MO RS 2.0 palette
+    // (emerald/amber/orange/rose) so a glance at the chip reads the
+    // same way the per-row signal badges do.
+    mJournal.mockResolvedValue({ end_nlv: 448382 } as any);
+    mMonitor.mockResolvedValue(makeResponse());
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    // Wait on the inner colored span — the outer chip exists in the
+    // loading state too, but the inner spans only render once summary
+    // resolves from the endpoint.
+    await waitFor(() => expect(screen.getByTestId("sr8-chip-tier-green")).toBeInTheDocument());
+
+    const green = screen.getByTestId("sr8-chip-tier-green");
+    const quick = screen.getByTestId("sr8-chip-tier-quick");
+    const qs    = screen.getByTestId("sr8-chip-tier-quicksand");
+    const gd    = screen.getByTestId("sr8-chip-tier-gd");
+
+    expect(green.textContent).toBe("6G");
+    expect(quick.textContent).toBe("2Q");
+    expect(qs.textContent).toBe("1QS");
+    expect(gd.textContent).toBe("0GD");
+
+    // Each count is wrapped in a span with its own inline color from
+    // the shared signal-tier tokens. The exact CSS var value matters
+    // less than the four counts each having distinct colors, but
+    // pinning the var names guards against accidental palette drift.
+    expect(green.style.color).toContain("--up");
+    expect(quick.style.color).toContain("--sig-quick-text");
+    expect(qs.style.color).toContain("--sig-qs-text");
+    expect(gd.style.color).toContain("--down");
+  });
+
+  test("NLV input renders the seeded value with thousands separators", async () => {
+    // The user types raw digits or pastes "$792,792"; we always display
+    // the formatted form so the chrome reads as currency.
+    mJournal.mockResolvedValue({ end_nlv: 792792 } as any);
+    mMonitor.mockResolvedValue(makeResponse());
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-summary")).toBeInTheDocument());
+
+    const input = screen.getByTestId("sr8-nlv-input") as HTMLInputElement;
+    expect(input.value).toBe("792,792");
+  });
+
+  test("NLV input strips commas/$ on parse and re-formats on blur", async () => {
+    mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
+    mMonitor.mockResolvedValue(makeResponse());
+
+    render(<Sr8Monitor navColor="#e5484d" />);
+    await waitFor(() => expect(screen.getByTestId("sr8-summary")).toBeInTheDocument());
+
+    const input = screen.getByTestId("sr8-nlv-input") as HTMLInputElement;
+    // Paste a fully-formatted currency string — the parser must strip
+    // commas and the dollar sign without choking, and the post-blur
+    // display must be re-formatted (not the raw paste).
+    fireEvent.change(input, { target: { value: "$1,234,567" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(input.value).toBe("1,234,567"));
+    // And the underlying fetch fired with the parsed numeric value.
+    const lastCall = mMonitor.mock.calls[mMonitor.mock.calls.length - 1];
+    expect(lastCall[0]).toBeCloseTo(1234567, 0);
+  });
+
   test("NLV input edit on blur re-fetches with the new value", async () => {
     mJournal.mockResolvedValue({ end_nlv: 500000 } as any);
     mMonitor.mockResolvedValue(makeResponse());

@@ -11,7 +11,7 @@
 // The cascade math lives in mors/monitor.py (Python). The
 // /api/sr8/monitor endpoint wraps it; this page renders the response.
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { api, getActivePortfolio, type SR8MonitorResponse, type SR8AnalyzedPosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -56,6 +56,12 @@ function shortMonthDay(iso: string): string {
 // tier classes (GREEN/QUICK/QS/GD) each map to a (bg, text) color pair
 // from the existing theme tokens. ENTRY remains tolerated as a legacy
 // fallback (defensive — current_tier always returns a real tier name).
+//
+// Palette is the MO RS 2.0 indicator + Active Campaign convention:
+//   GREEN  → emerald (--up)
+//   QUICK  → amber   (--sig-quick-*)
+//   QS     → orange  (--sig-qs-*)
+//   GD     → rose    (--down)
 function signalDisplay(signal: string): { label: string; bg: string; text: string; severity: number } {
   const s = (signal || "").toUpperCase();
   if (s === "GREEN" || s === "GREEN(SUB-ENTRY)") return { label: "GREEN", bg: "var(--up-soft)", text: "var(--up)", severity: 1 };
@@ -64,6 +70,25 @@ function signalDisplay(signal: string): { label: string; bg: string; text: strin
   if (s === "GD" || s === "TERMINATED") return { label: "GD", bg: "var(--down-soft)", text: "var(--down)", severity: 4 };
   if (s === "ENTRY") return { label: "ENTRY", bg: "var(--g-deep-soft)", text: "var(--g-deep)", severity: 0 };
   return { label: s || "—", bg: "var(--surface-2)", text: "var(--ink-3)", severity: -1 };
+}
+
+// Per-tier text color for the Tiers KPI counts. Same four tokens as
+// signalDisplay() so a "Q" in the chip reads as amber and the QUICK
+// badges on the rows below also read as amber — single palette across
+// the page.
+const TIER_KPI_COLOR = {
+  green: "var(--up)",
+  quick: "var(--sig-quick-text)",
+  quicksand: "var(--sig-qs-text)",
+  gd: "var(--down)",
+} as const;
+
+// NLV currency formatter — display "792,792" in the input while keeping
+// the underlying numeric value clean for the API. en-US locale matches
+// the rest of the app's $ rendering (formatCurrency / formatMoney).
+function formatNlvDisplay(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return Math.round(n).toLocaleString("en-US");
 }
 
 // localStorage key for the per-snapshot Mark-done list. We namespace by
@@ -113,7 +138,10 @@ type HoldSortKey =
 
 export function Sr8Monitor({ navColor }: { navColor: string }) {
   const [nlv, setNlv] = useState<number>(DEFAULT_NLV);
-  const [nlvDraft, setNlvDraft] = useState<string>(String(DEFAULT_NLV));
+  // Draft holds the formatted display string (e.g. "792,792"). The
+  // applied value lives in `nlv`. Commas are stripped on parse so the
+  // user can type them or not.
+  const [nlvDraft, setNlvDraft] = useState<string>(formatNlvDisplay(DEFAULT_NLV));
   const [data, setData] = useState<SR8MonitorResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -150,7 +178,7 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
         const v = parseFloat(String((j as { end_nlv?: number | string })?.end_nlv ?? 0));
         if (v > 0) {
           setNlv(v);
-          setNlvDraft(String(Math.round(v)));
+          setNlvDraft(formatNlvDisplay(v));
         }
       })
       .catch(err => log.debug.devOnly("sr8-monitor", "journalLatest seed failed (expected on first run)", err))
@@ -190,12 +218,13 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
   // every keystroke. Edits invalid numbers fall back to the last good
   // value silently.
   const applyNlv = useCallback(() => {
+    // Strip commas/$ before parsing so the user can paste "$792,792".
     const parsed = parseFloat(nlvDraft.replace(/[^0-9.]/g, ""));
     if (Number.isFinite(parsed) && parsed > 0) {
       setNlv(parsed);
-      setNlvDraft(String(Math.round(parsed)));
+      setNlvDraft(formatNlvDisplay(parsed));
     } else {
-      setNlvDraft(String(Math.round(nlv)));
+      setNlvDraft(formatNlvDisplay(nlv));
     }
   }, [nlvDraft, nlv]);
 
@@ -425,9 +454,29 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
           />
           <SummaryChip
             label="Tiers"
-            value={summary
-              ? `${summary.tier_breakdown.green}G · ${summary.tier_breakdown.quick}Q · ${summary.tier_breakdown.quicksand}QS · ${summary.tier_breakdown.gd}GD`
-              : "—"}
+            value={summary ? (
+              <span data-testid="sr8-chip-tiers-counts">
+                <span style={{ color: TIER_KPI_COLOR.green }}
+                      data-testid="sr8-chip-tier-green">
+                  {summary.tier_breakdown.green}G
+                </span>
+                <span style={{ color: "var(--ink-5)" }}> · </span>
+                <span style={{ color: TIER_KPI_COLOR.quick }}
+                      data-testid="sr8-chip-tier-quick">
+                  {summary.tier_breakdown.quick}Q
+                </span>
+                <span style={{ color: "var(--ink-5)" }}> · </span>
+                <span style={{ color: TIER_KPI_COLOR.quicksand }}
+                      data-testid="sr8-chip-tier-quicksand">
+                  {summary.tier_breakdown.quicksand}QS
+                </span>
+                <span style={{ color: "var(--ink-5)" }}> · </span>
+                <span style={{ color: TIER_KPI_COLOR.gd }}
+                      data-testid="sr8-chip-tier-gd">
+                  {summary.tier_breakdown.gd}GD
+                </span>
+              </span>
+            ) : "—"}
             sub=""
             testId="sr8-chip-tiers"
             divider
@@ -862,7 +911,7 @@ function HoldRow({ p, retrying, onRetry }: {
 
 function SummaryChip({ label, value, sub, valueColor, testId, divider, small }: {
   label: string;
-  value: string;
+  value: ReactNode;
   sub: string;
   valueColor?: string;
   testId?: string;
