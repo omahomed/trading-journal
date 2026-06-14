@@ -204,7 +204,11 @@ export interface SR8AnalyzedPosition {
   current_price: number | null;       // null when fetch_failed
   current_dollars: number;
   current_pct_nlv: number;
-  cascade_core: number;                // 20 or 15
+  // Live cascade tier from the ratchet — distinct from `last_signal`
+  // (the latest emission in the log, which can be "ENTRY" for newly-
+  // entered positions). The Signal badge binds to this so SNDK reads
+  // GREEN instead of ENTRY. One of: GREEN / QUICK / QUICKSAND / GD.
+  current_tier: string;
   tier_pct_nlv: number;
   target_dollars: number;
   delta_dollars: number;
@@ -216,7 +220,7 @@ export interface SR8AnalyzedPosition {
   last_bar_date: string;
   signal_today: boolean;
   terminated: boolean;
-  phase: number;                       // 1 = pre-cushion, 2 = latched (≥1.5×B1)
+  phase: number;                       // 2 — SR8 always runs weekly (force_weekly=True)
   is_action: boolean;
   early_warn: boolean;
   fetch_failed: boolean;
@@ -229,9 +233,13 @@ export interface SR8MonitorResponse {
     flagged_count: number;
     at_risk_pct: number;
     to_trim_dollars: number;
-    cascade_breakdown: {
-      cascade_20: number;
-      cascade_15: number;
+    // Tier distribution replaces the obsolete 20-cas / 15-cas
+    // breakdown (the engine has one floor schedule now: 15/10/5/0).
+    tier_breakdown: {
+      green: number;
+      quick: number;
+      quicksand: number;
+      gd: number;
     };
   };
   positions: SR8AnalyzedPosition[];
