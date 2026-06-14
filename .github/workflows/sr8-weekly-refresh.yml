@@ -19,6 +19,11 @@ name: SR8 weekly refresh
 # (api/main.py:128). We mint a short-TTL HS256 token here using the
 # Railway-shared AUTH_SECRET, with `sub` = founder UUID so the
 # downstream DB connection uses the founder tenant.
+#
+# Token mint: pure bash + openssl + base64 (preinstalled on ubuntu-
+# latest). No actions/setup-python, no pip, no third-party deps —
+# kills the Node-20 deprecation noise the Python pyjwt path emitted
+# and keeps the secret + minted token confined to one step's env.
 
 on:
   schedule:
@@ -30,43 +35,31 @@ jobs:
     name: POST /api/sr8/refresh
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install PyJWT
-        run: pip install --quiet "PyJWT>=2.8,<3"
-
-      - name: Mint short-TTL bearer token
+      - name: Mint HS256 token and POST refresh
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
         run: |
-          python <<'PY' >> "$GITHUB_ENV"
-          import os, time, jwt
-          secret = os.environ["AUTH_SECRET"]
+          set -euo pipefail
           # Inline founder UUID — auth rests on AUTH_SECRET, not the id.
-          # 5-min expiry: covers the curl + yfinance latency with margin
-          # but doesn't leave a stale token usable if logs leak.
-          token = jwt.encode(
-              {"sub": "d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a",
-               "iat": int(time.time()),
-               "exp": int(time.time()) + 300},
-              secret, algorithm="HS256",
-          )
-          print(f"BEARER={token}")
-          PY
-
-      - name: POST refresh
-        run: |
-          set -eo pipefail
+          SUB="d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a"
+          # base64url: standard base64, no line wrap, +/ → -_, drop padding.
+          b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
+          now=$(date +%s); exp=$((now + 300))  # 5-min TTL
+          # `printf '%s'` (no trailing newline) is the critical bit —
+          # a stray newline in the signing input invalidates the sig.
+          h=$(printf '%s' '{"alg":"HS256","typ":"JWT"}' | b64url)
+          p=$(printf '%s' "{\"sub\":\"$SUB\",\"iat\":$now,\"exp\":$exp}" | b64url)
+          si="$h.$p"
+          sig=$(printf '%s' "$si" | openssl dgst -sha256 -hmac "$AUTH_SECRET" -binary | b64url)
+          token="$si.$sig"
           # --fail-with-body: non-2xx → curl exits non-zero AND prints
           # the response body so the Actions log shows the error.
           # -sS: silent except errors. yfinance pulls one CSV per
           # position so the call can take 30-90s for an 8-name basket
           # — bump --max-time to 5 min for headroom.
-          curl --fail-with-body -sS --max-time 300 \
-            -X POST "https://web-production-ad135.up.railway.app/api/sr8/refresh" \
-            -H "Authorization: Bearer ${BEARER}" \
+          curl --fail-with-body -sS --max-time 300 -X POST \
+            https://web-production-ad135.up.railway.app/api/sr8/refresh \
+            -H "Authorization: Bearer $token" \
             -H "Content-Type: application/json" \
             -d '{"nlv": 1, "portfolio": "CanSlim"}'
           echo  # trailing newline so the log reads cleanly
