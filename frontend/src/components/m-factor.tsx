@@ -50,7 +50,13 @@ export function MFactor({ navColor }: { navColor: string }) {
   const mono = "var(--font-jetbrains), monospace";
 
   const subtitles: Record<string, string> = {
-    POWERTREND: "8 EMA > 21 EMA > 50 SMA > 200 SMA — all systems go",
+    // Regime-stating copy — the previous "8>21>50>200 — all systems go"
+    // string was a hardcoded claim about the live MA stack that the new
+    // sum model exposes as wrong: Power-Trend can be latched while the
+    // 8/21 or 50/200 stack is inverted (e.g. PT on but 8 < 21, or PT on
+    // but 50 < 200 right after STEP_8). The actual stack-comparison
+    // chips below the headline already show the live truth.
+    POWERTREND: `Power-Trend active — Day ${dayNum}`,
     UPTREND: "Market structure intact — confirmed uptrend",
     "RALLY MODE": `Day ${dayNum} of rally attempt`,
     CORRECTION: `NASDAQ down ${Math.abs(data.drawdown_pct || 0).toFixed(1)}% from high`,
@@ -209,20 +215,42 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="p-4 flex flex-col gap-1.5">
             {ladder.map((item: any) => {
               const achieved = item.achieved;
-              const isNext = !achieved && (item.step === 0 || (ladder[item.step - 1]?.achieved));
+              // Three-way visual under the sum-of-valid-steps model:
+              //   ✅ achieved  — contributes to exposure right now
+              //   🔒 latched event not yet earned this cycle (steps 0/1/8)
+              //   ○  live condition currently false (steps 2-7) — can flip
+              //      true on the next bar without any "previous step" gate
+              // We drop the old isNext ordinal chain because steps validate
+              // out of order under the live model — e.g. step 6 (21>50>200)
+              // can be true while step 4 (low>21 3 bars) is false, and the
+              // chain would mis-render step 5 as 🔒 locked when it's just
+              // a streak-day from validating.
+              const isEvent = item.step === 0 || item.step === 1 || item.step === 8;
+              const icon = achieved ? "✅" : isEvent ? "🔒" : "○";
+              // Contribution under the sum model: every step contributes 20,
+              // step 8 (Power-Trend) contributes 40. Total ceiling = 200 when
+              // all nine validate. Pinned in the frontend rather than read
+              // from item.exposure (which is _LEGACY_STEP_EXPOSURES, the OLD
+              // running-scalar caps 20/40/60/.../200 — those numbers are the
+              // ceilings the running scalar would have reached on each step's
+              // firing, not the per-step contribution).
+              const contribution = item.step === 8 ? 40 : 20;
               return (
                 <div key={item.step} className="flex items-center justify-between px-3 py-2.5 rounded-[8px]"
                      style={{
-                       background: achieved ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : isNext ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "var(--bg)",
-                       border: `1px solid ${achieved ? "color-mix(in oklab, #08a86b 30%, var(--border))" : isNext ? "color-mix(in oklab, #f59f00 30%, var(--border))" : "var(--border)"}`,
-                       color: !achieved && !isNext ? "var(--ink-4)" : "var(--ink)",
+                       background: achieved ? "color-mix(in oklab, #08a86b 10%, var(--surface))" : "var(--bg)",
+                       border: `1px solid ${achieved ? "color-mix(in oklab, #08a86b 30%, var(--border))" : "var(--border)"}`,
+                       color: achieved ? "var(--ink)" : "var(--ink-4)",
                      }}>
                   <div className="flex items-center gap-2">
-                    <span className="text-[13px]">{achieved ? "✅" : isNext ? "⏳" : "🔒"}</span>
+                    <span className="text-[13px]">{icon}</span>
                     <span className="text-[12px] font-semibold">Step {item.step}:</span>
                     <span className="text-[12px]">{item.label}</span>
                   </div>
-                  <span className="text-[13px] font-bold" style={{ fontFamily: mono }}>{item.exposure}%</span>
+                  <span className="text-[13px] font-bold"
+                        style={{ fontFamily: mono, color: achieved ? "var(--ink)" : "var(--ink-4)" }}>
+                    +{contribution}
+                  </span>
                 </div>
               );
             })}
@@ -306,10 +334,10 @@ export function MFactor({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
                 <tbody>
                   {[
-                    ["CORRECTION", "NASDAQ down 7%+ — Day 0, waiting for rally"],
+                    ["CORRECTION", "NASDAQ −10%+ with a confirmed 50-SMA close break — cycle reset, awaiting rally"],
                     ["RALLY MODE", "Steps 0-3: rally day → low above 21 EMA"],
                     ["UPTREND", "Steps 4-6: holds 21 EMA 3 days → MA crossovers"],
-                    ["POWERTREND", "Step 7: 8E > 21E > 50S > 200S (200%)"],
+                    ["POWERTREND", "Step 8: Power-Trend ON (+40) — reaches 200 only when every step validates"],
                   ].map(([s, d]) => (
                     <tr key={s} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td className="py-1.5 font-semibold" style={{ color: "var(--ink)" }}>{s}</td>
