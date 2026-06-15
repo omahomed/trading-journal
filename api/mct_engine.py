@@ -9,7 +9,8 @@ Per-bar processing order (must not be reordered without verifying canonical
 signals — see Phase 2 spec for rationale):
   1. Ratchet reference high (only when both correction flags are False)
   2. Correction nullification (close > reference_high while correction_active)
-  3. Correction declaration (close ≤ 7% threshold while correction_active=False)
+  3. Correction declaration (close ≤ 10% threshold AND close < 50 SMA on
+     two consecutive bars, while correction_active=False)
   4. Anchored Violation detection (21 EMA, then 50 SMA) — fires regardless
      of in_correction; cap_at_100 set if correction_active=True; exposure cut
      deferred to V10 cascade resolution in phase 9.
@@ -17,7 +18,12 @@ signals — see Phase 2 spec for rationale):
      clears on close back above MA)
   6. Character Break / Confirmed Break / Trending Regime Break detection
      (gated on outside-in_correction; CB is single-bar, others on streak length)
-  7. Rally hunt (Steps 0–4) when in_correction = True
+  7. Rally hunt (Steps 0–4) when in_correction = True. SIGNAL emissions for
+     STEP_0/1/2/3/4 (and rally-invalidation / post-FTD-soft-fail) are
+     individually gated on `correction_active` — the entry ladder stays
+     silent absent a real declared correction, but the underlying state
+     machinery still runs so V10_SOFT_RESET's `in_correction=True` can
+     converge naturally via STEP_4.
   8. Post-Step-4 logic (V10 cascade-and-reset, Recovery, Steps 5/6/7, PT-OFF,
      Step 8 / PT-ON) when in_correction = False
   9. Derive state, build bar snapshot
@@ -44,7 +50,13 @@ import pandas as pd
 # Constants
 # ============================================================================
 
-CORRECTION_DRAWDOWN = 0.07          # 7% close-below-reference triggers declaration
+CORRECTION_DRAWDOWN = 0.10          # 10% close-below-reference, AND a confirmed
+                                    # 50 SMA close break (close < SMA50 on TWO
+                                    # consecutive bars), must BOTH hold for
+                                    # CORRECTION_DECLARED to fire — depth alone
+                                    # used to be the gate (7%), but a sub-10%
+                                    # pullback that holds the 50 SMA shouldn't
+                                    # reset the cycle. See _phase_declaration.
 UNDERCUT = 0.01                     # ≥1% undercut of anchor low fires Violation
 FTD_PCT_THRESHOLD = 0.01            # close % gain threshold to confirm an FTD
 FTD_WINDOW_START = 4                # earliest rally_count where FTD eligible
@@ -182,6 +194,12 @@ class MCTEngine:
 
             "in_correction": False,
             "correction_active": False,
+            # Two-bar confirmation flag for CORRECTION_DECLARED. Set on the
+            # first bar where BOTH depth (≤ -CORRECTION_DRAWDOWN off the
+            # reference high) AND structure (close < 50 SMA) hold; cleared on
+            # any bar where either gate fails; declaration fires on the second
+            # consecutive bar where both still hold. See _phase_declaration.
+            "correction_pending": False,
 
             # Rally / FTD tracking
             "rally_active": False,
@@ -282,7 +300,17 @@ class MCTEngine:
         # at streak length thresholds. All only fire when not in_correction.
         self._phase_exits(current, prev, state, bar_signals)
 
-        # Phase 7: rally hunt (Steps 0–4) when in_correction is True
+        # Phase 7: rally hunt (Steps 0–4) when in_correction is True. Phase 7
+        # itself ALWAYS runs the state machinery (running min, rally_count,
+        # step flags) when in_correction is True — V10_SOFT_RESET needs that
+        # machinery to converge so the engine's ratchet + phase 8 can recover.
+        # SIGNAL EMISSIONS for STEP_0/1/2/3/4 are individually gated on
+        # `correction_active` inside the phase: the entry ladder must stay
+        # silent when there's no declared correction for an FTD to confirm.
+        # `correction_ever_declared` is the long-lived "ever" gate (seeded
+        # True for full-history replays) and is the wrong per-cycle flag;
+        # `correction_active` is True only between CORRECTION_DECLARED and
+        # CORRECTION_NULLIFIED.
         if state["in_correction"]:
             self._phase_rally_hunt(i, current, prev, history, state, bar_signals,
                                    start_flags)
@@ -375,16 +403,45 @@ class MCTEngine:
         if state["correction_active"]:
             return
         if state["reference_high"] is None:
-            return
-        threshold = state["reference_high"] * (1.0 - CORRECTION_DRAWDOWN)
-        close = float(current["close"])
-        if close > threshold:
+            state["correction_pending"] = False
             return
 
+        # Two-gate declaration: BOTH depth and structure must hold.
+        #   depth     — close ≤ reference_high × (1 − CORRECTION_DRAWDOWN)
+        #               (i.e. ≥ 10% off the running all-time high)
+        #   structure — confirmed 50 SMA close break: close < SMA50 on two
+        #               consecutive bars. We track this with a single-bar
+        #               `correction_pending` flag rather than a multi-bar
+        #               streak counter; both depth and structure are required
+        #               on the prior bar AND on the current bar, which is
+        #               exactly what the pending pattern enforces.
+        # SMA50 is read off `current["sma_50"]` — same accessor the
+        # VIOLATION_21EMA / Streak / POWERTREND-OFF paths use; no separate
+        # recompute.
+        threshold = state["reference_high"] * (1.0 - CORRECTION_DRAWDOWN)
+        close = float(current["close"])
+        sma_50 = float(current["sma_50"]) if pd.notna(current["sma_50"]) else None
+        depth_gate = close <= threshold
+        structure_gate = (sma_50 is not None) and (close < sma_50)
+
+        if not (depth_gate and structure_gate):
+            # Either gate failed on this bar — drop the pending flag so the
+            # next confirmation has to start over from scratch.
+            state["correction_pending"] = False
+            return
+
+        if not state["correction_pending"]:
+            # First bar with both gates passing — arm pending and wait one
+            # more bar before declaring. No signal emitted here.
+            state["correction_pending"] = True
+            return
+
+        # Second consecutive bar with both gates passing → declare.
         before = state["exposure"]
         state["in_correction"] = True
         state["correction_active"] = True
         state["correction_ever_declared"] = True
+        state["correction_pending"] = False  # consumed
 
         # Reset rally-hunt ladder
         state["rally_active"] = False
@@ -406,10 +463,14 @@ class MCTEngine:
 
         bar_signals.append(self._signal(
             current, state, "CORRECTION_DECLARED",
-            f"Close {close:.2f} ≤ {threshold:.2f} (7% from {state['reference_high']:.2f})",
+            f"Close {close:.2f} ≤ {threshold:.2f} "
+            f"({int(CORRECTION_DRAWDOWN * 100)}% from "
+            f"{state['reference_high']:.2f}) + close < 50 SMA "
+            f"{sma_50:.2f} confirmed (2 consecutive bars)",
             exposure_before=before, exposure_after=state["exposure"],
             meta={"reference_high": state["reference_high"], "threshold": threshold,
-                  "close": close},
+                  "close": close, "sma_50": sma_50,
+                  "confirmation": "two_consecutive_bars_depth_and_structure"},
         ))
 
     # ------------------------------------------------------------------------
@@ -593,6 +654,13 @@ class MCTEngine:
         prev_close = float(prev["close"]) if prev is not None else close
         ema_21 = float(current["ema_21"]) if pd.notna(current["ema_21"]) else None
 
+        # Snapshot once at the top — every signal emission and the
+        # cycle_start_idx re-anchoring below gate on this. State machinery
+        # (step flags, rally_count, running min) still runs unconditionally
+        # so V10_SOFT_RESET's `in_correction=True` can converge to
+        # `step4_done` → `in_correction=False` and unwedge the ratchet.
+        arm_emit = state["correction_active"]
+
         # Track running min low while in rally hunt; this becomes rally_day_idx
         # when STEP_0 fires. Reset on entering in_correction (handled in
         # phase_declaration which clears running_min_*).
@@ -600,8 +668,12 @@ class MCTEngine:
             state["running_min_low"] = low
             state["running_min_idx"] = i
 
-        # Rally invalidation: low < rally_day_low (only meaningful if rally active)
-        if state["rally_active"] and state["rally_day_low"] is not None:
+        # Rally invalidation: low < rally_day_low (only meaningful if rally
+        # active). Gated on arm_emit because _fire_rally_invalidation clears
+        # cycle_start_idx (its purpose is to end the rally cycle) — and the
+        # user-facing Day N counter must NOT reset absent a declared
+        # correction.
+        if arm_emit and state["rally_active"] and state["rally_day_low"] is not None:
             if low < state["rally_day_low"]:
                 self._fire_rally_invalidation(i, current, state, bar_signals,
                                               reason=f"low {low:.2f} < rally_day_low {state['rally_day_low']:.2f}")
@@ -633,22 +705,27 @@ class MCTEngine:
             state["rally_count"] = i - state["rally_day_idx"] + 1
             # cycle_start_idx anchors the user-facing "Day N" display to the
             # bar where STEP_0 fired. Survives V10 soft resets so the day
-            # counter doesn't reset mid-cycle.
-            state["cycle_start_idx"] = i
+            # counter doesn't reset mid-cycle. ONLY re-anchored when a real
+            # correction is active — outside that, the existing anchor (set
+            # by the prior cycle's declared correction) must persist so Day N
+            # doesn't reset on a V10-induced phantom STEP_0.
+            if arm_emit:
+                state["cycle_start_idx"] = i
 
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[0])
-            bar_signals.append(self._signal(
-                current, state, "STEP_0_RALLY_DAY",
-                f"rally day; rally_day_low={state['rally_day_low']:.2f}, "
-                f"rally_count={state['rally_count']}",
-                exposure_before=before, exposure_after=state["exposure"],
-                meta={"rally_day_low": state["rally_day_low"],
-                      "rally_day_idx": int(state["rally_day_idx"]),
-                      "rally_count": state["rally_count"],
-                      "trigger": "up_day" if up_day else "pink_rally_day",
-                      "position_in_range": position_in_range},
-            ))
+            if arm_emit:
+                bar_signals.append(self._signal(
+                    current, state, "STEP_0_RALLY_DAY",
+                    f"rally day; rally_day_low={state['rally_day_low']:.2f}, "
+                    f"rally_count={state['rally_count']}",
+                    exposure_before=before, exposure_after=state["exposure"],
+                    meta={"rally_day_low": state["rally_day_low"],
+                          "rally_day_idx": int(state["rally_day_idx"]),
+                          "rally_count": state["rally_count"],
+                          "trigger": "up_day" if up_day else "pink_rally_day",
+                          "position_in_range": position_in_range},
+                ))
 
         # Increment rally_count for bars after STEP_0 already fired
         elif state["rally_active"] and state["rally_day_idx"] is not None:
@@ -666,14 +743,15 @@ class MCTEngine:
                 state["ftd_low"] = low
                 before = state["exposure"]
                 state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[1])
-                bar_signals.append(self._signal(
-                    current, state, "STEP_1_FTD",
-                    f"FTD on Day {state['rally_count']}, close +{pct_gain*100:.2f}%",
-                    exposure_before=before, exposure_after=state["exposure"],
-                    meta={"rally_count": state["rally_count"],
-                          "pct_gain": pct_gain,
-                          "ftd_close": close, "ftd_low": low},
-                ))
+                if arm_emit:
+                    bar_signals.append(self._signal(
+                        current, state, "STEP_1_FTD",
+                        f"FTD on Day {state['rally_count']}, close +{pct_gain*100:.2f}%",
+                        exposure_before=before, exposure_after=state["exposure"],
+                        meta={"rally_count": state["rally_count"],
+                              "pct_gain": pct_gain,
+                              "ftd_close": close, "ftd_low": low},
+                    ))
 
         # ----- Step 2: close > 21 EMA (can fire same bar as Step 1) -----
         if (state["step1_done"] and not state["step2_done"]
@@ -681,12 +759,13 @@ class MCTEngine:
             state["step2_done"] = True
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[2])
-            bar_signals.append(self._signal(
-                current, state, "STEP_2_CLOSE_ABOVE_21EMA",
-                f"close {close:.2f} > 21 EMA {ema_21:.2f}",
-                exposure_before=before, exposure_after=state["exposure"],
-                meta={"close": close, "ema_21": ema_21},
-            ))
+            if arm_emit:
+                bar_signals.append(self._signal(
+                    current, state, "STEP_2_CLOSE_ABOVE_21EMA",
+                    f"close {close:.2f} > 21 EMA {ema_21:.2f}",
+                    exposure_before=before, exposure_after=state["exposure"],
+                    meta={"close": close, "ema_21": ema_21},
+                ))
 
         # ----- Step 3: low > 21 EMA -----
         # Gates on live state["step1_done"] (FTD), NOT on step2_done. Step 3's
@@ -703,12 +782,13 @@ class MCTEngine:
             state["step3_done"] = True
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[3])
-            bar_signals.append(self._signal(
-                current, state, "STEP_3_LOW_ABOVE_21EMA",
-                f"low {low:.2f} > 21 EMA {ema_21:.2f}",
-                exposure_before=before, exposure_after=state["exposure"],
-                meta={"low": low, "ema_21": ema_21},
-            ))
+            if arm_emit:
+                bar_signals.append(self._signal(
+                    current, state, "STEP_3_LOW_ABOVE_21EMA",
+                    f"low {low:.2f} > 21 EMA {ema_21:.2f}",
+                    exposure_before=before, exposure_after=state["exposure"],
+                    meta={"low": low, "ema_21": ema_21},
+                ))
 
         # ----- Step 4: 3 consecutive bars low > 21 EMA -----
         if (start_flags["step3_done"] and not state["step4_done"]
@@ -716,14 +796,19 @@ class MCTEngine:
             state["step4_done"] = True
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[4])
-            bar_signals.append(self._signal(
-                current, state, "STEP_4_LOW_ABOVE_21EMA_3BARS",
-                f"low > 21 EMA for {state['consec_low_above_21']} consecutive bars",
-                exposure_before=before, exposure_after=state["exposure"],
-                meta={"consec_low_above_21": state["consec_low_above_21"]},
-            ))
+            if arm_emit:
+                bar_signals.append(self._signal(
+                    current, state, "STEP_4_LOW_ABOVE_21EMA_3BARS",
+                    f"low > 21 EMA for {state['consec_low_above_21']} consecutive bars",
+                    exposure_before=before, exposure_after=state["exposure"],
+                    meta={"consec_low_above_21": state["consec_low_above_21"]},
+                ))
             # Exit rally-hunt phase. Anchor management resumes / exits become live
             # NEXT bar (in_correction flag flips at end of this bar's rally hunt).
+            # The flip is unconditional — it must happen even when arm_emit is
+            # False so the engine recovers from V10's in_correction=True
+            # (otherwise the ratchet stays frozen indefinitely after V10 fires
+            # outside a declared correction).
             state["in_correction"] = False
 
         # ----- Post-FTD soft fail: close < ftd_low -----
@@ -732,7 +817,14 @@ class MCTEngine:
         #     (rally is fragile, not yet confirmed)
         #   FTD soft-fail: requires CLOSE < ftd_low (FTD is confirmed; needs
         #     closing damage, not just intraday undercut)
-        if (state["step1_done"] and state["ftd_low"] is not None
+        # Same arm_emit gate — POST_FTD_SOFT_FAIL only emits a meaningful
+        # audit log entry when there's a real FTD context (i.e. correction
+        # active). The state cleanup it does (clearing step1-4 flags) only
+        # matters when STEP_1 was internally set on a phantom FTD bar, which
+        # by definition only happens outside a declared correction; in that
+        # case STEP_4 already flipped in_correction off and the cleanup is
+        # redundant. Gating here avoids a stray POST_FTD_SOFT_FAIL signal.
+        if (arm_emit and state["step1_done"] and state["ftd_low"] is not None
                 and close < state["ftd_low"]):
             self._fire_post_ftd_soft_fail(current, state, bar_signals)
 
