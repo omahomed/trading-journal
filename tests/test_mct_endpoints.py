@@ -124,68 +124,78 @@ def test_entry_ladder_has_9_steps_with_legacy_exposures():
     assert ladder[8]["exposure"] == 200
 
 
-def test_entry_ladder_reads_from_signal_log_for_steps_0_to_7():
-    """When signals + cycle_start_date are passed, achievement comes from the
-    signal log filtered by current cycle — not from live step_done flags.
+def test_entry_ladder_latched_vs_live_contract():
+    """Under the sum-of-valid-steps exposure model, the entry ladder's
+    per-step achievement comes from a mixed contract:
 
-    Reproduces the post-nullification scenario where the engine has reset
-    step5/6/7_done to False but the signal log shows they fired earlier in
-    the cycle. The ladder must show them as achieved.
+      Step 0      — latched: state["step0_done"]
+      Step 1      — latched: state["step1_done"]
+      Steps 2-7   — LIVE: state["live_step_valid"][s], recomputed against
+                    the current bar's close/low and MA stack every bar
+                    by _phase_exposure_recompute. Old "STEP_N fired
+                    in this cycle" signal-log semantics no longer apply.
+      Step 8      — latched: state["power_trend"]
+
+    Failure mode this guards: an earlier design read achievement from
+    the signal log, which kept STEP_5/6/7 "achieved" forever after a
+    single firing in the cycle. Under the live contract, a stack
+    inversion immediately drops the corresponding step's checkmark.
     """
-    from datetime import date as _date
-    from api.mct_engine import SignalEvent
     from api.mct_endpoint_adapter import _entry_ladder
 
-    # Synthetic state: post-nullification, only step1-4 still set as done
-    # (engine reset 5/6/7 on CORRECTION_NULLIFIED), power_trend True after
-    # STEP_8 fired. This is the exact 2026-04-22+ canonical state.
+    # Mid-cycle synthetic state: step0/step1 latched True, PT off, and a
+    # representative live_step_valid mix — 2/3/6 live True; 4/5/7 live
+    # False. The ladder must mirror this exactly: 0/1/2/3/6 achieved;
+    # 4/5/7/8 not achieved (irrespective of any step{N}_done value).
     state = {
-        "step0_done": False, "step1_done": True, "step2_done": True,
-        "step3_done": True, "step4_done": True,
-        "step5_done": False, "step6_done": False, "step7_done": False,
-        "power_trend": True,
+        "step0_done": True,  "step1_done": True,
+        # Latched step{N}_done for 2-7 intentionally set to the OPPOSITE
+        # of the live flag to prove the adapter reads live, not latched.
+        "step2_done": False, "step3_done": False, "step4_done": True,
+        "step5_done": True,  "step6_done": False, "step7_done": True,
+        "power_trend": False,
+        "live_step_valid": {2: True, 3: True, 4: False,
+                            5: False, 6: True, 7: False},
     }
 
-    cycle_start = _date(2026, 3, 31)
-    signals = [
-        SignalEvent(_date(2026, 3, 31), "STEP_0_RALLY_DAY", "rally", 0, 20, "CORRECTION", "RALLY MODE"),
-        SignalEvent(_date(2026, 4, 8),  "STEP_1_FTD",                  "FTD",   20,  40, "RALLY MODE", "RALLY MODE"),
-        SignalEvent(_date(2026, 4, 8),  "STEP_2_CLOSE_ABOVE_21EMA",    "c>21",  40,  60, "RALLY MODE", "RALLY MODE"),
-        SignalEvent(_date(2026, 4, 8),  "STEP_3_LOW_ABOVE_21EMA",      "l>21",  60,  80, "RALLY MODE", "RALLY MODE"),
-        SignalEvent(_date(2026, 4, 10), "STEP_4_LOW_ABOVE_21EMA_3BARS","l>21x3",80, 100, "RALLY MODE", "UPTREND"),
-        SignalEvent(_date(2026, 4, 13), "STEP_5_LOW_ABOVE_50SMA_3BARS","l>50x3",100,120, "UPTREND",   "UPTREND"),
-        SignalEvent(_date(2026, 4, 15), "STEP_6_MA_STACK_SLOW",        "stack3",120,140, "UPTREND",   "UPTREND"),
-        SignalEvent(_date(2026, 4, 15), "STEP_7_MA_STACK_FULL",        "stack4",140,160, "UPTREND",   "UPTREND"),
-        SignalEvent(_date(2026, 4, 22), "STEP_8_POWERTREND_ON",        "PT-ON", 160,200, "UPTREND",   "POWERTREND"),
-    ]
-
-    ladder = _entry_ladder(state, signals, cycle_start)
-    # Every step that fired in the cycle should be achieved, even if the
-    # live step_done flag was reset by the engine.
-    for i in range(8):
-        assert ladder[i]["achieved"] is True, f"Step {i} should be achieved per signal log"
-    # Step 8 reads live power_trend flag (which is True here)
-    assert ladder[8]["achieved"] is True
+    ladder = _entry_ladder(state)
+    achieved = [ladder[i]["achieved"] for i in range(9)]
+    assert achieved == [True, True, True, True, False,
+                        False, True, False, False], achieved
 
 
-def test_entry_ladder_excludes_signals_before_cycle_start():
-    """A STEP_N firing in a PRIOR cycle must not count toward the current
-    cycle's ladder."""
-    from datetime import date as _date
-    from api.mct_engine import SignalEvent
+def test_entry_ladder_cycle_active_gate_via_step0_done():
+    """The user-facing "cycle active?" gate is now step0_done — not a
+    signal-log cycle_start_date lookup. When step0_done is False, the
+    rally cycle hasn't started (or has been formally invalidated /
+    declared into a correction) and the engine's exposure recompute
+    short-circuits to 0. The ladder reflects that gate directly:
+    Step 0 reads False, and step1_done / live conditions / power_trend
+    keep reading whatever the engine currently has — they're not
+    masked by the gate at the ladder layer.
+    """
     from api.mct_endpoint_adapter import _entry_ladder
 
-    state = {"step0_done": False, "power_trend": False}
-    cycle_start = _date(2026, 3, 31)
-    signals = [
-        # Prior cycle's STEP_5 — must be excluded
-        SignalEvent(_date(2025, 5, 5), "STEP_5_LOW_ABOVE_50SMA_3BARS", "old", 100, 120, "UPTREND", "UPTREND"),
-        # Current cycle's STEP_0
-        SignalEvent(_date(2026, 3, 31), "STEP_0_RALLY_DAY", "new", 0, 20, "CORRECTION", "RALLY MODE"),
-    ]
-    ladder = _entry_ladder(state, signals, cycle_start)
-    assert ladder[0]["achieved"] is True   # current cycle STEP_0
-    assert ladder[5]["achieved"] is False  # old STEP_5 excluded
+    # No active cycle: step0_done False. Engine would zero exposure;
+    # the ladder should show Step 0 unchecked. Other flags pass through.
+    state = {
+        "step0_done": False, "step1_done": False,
+        "step2_done": False, "step3_done": False, "step4_done": False,
+        "step5_done": False, "step6_done": False, "step7_done": False,
+        "power_trend": False,
+        "live_step_valid": {2: False, 3: False, 4: False,
+                            5: False, 6: False, 7: False},
+    }
+    ladder = _entry_ladder(state)
+    assert all(not ladder[i]["achieved"] for i in range(9))
+
+    # An active cycle (step0_done=True) but no other progress yet: only
+    # Step 0 lights up. Same shape the engine produces on the bar that
+    # STEP_0_RALLY_DAY fires (e.g. 2026-03-31).
+    state["step0_done"] = True
+    ladder = _entry_ladder(state)
+    assert ladder[0]["achieved"] is True
+    assert all(not ladder[i]["achieved"] for i in range(1, 9))
 
 
 def test_market_state_for_journal_excludes_market_window():

@@ -106,32 +106,40 @@ def _step_done_flags(
     signals: Optional[list[SignalEvent]] = None,
     cycle_start_date: Optional[date] = None,
 ) -> list[bool]:
-    """Per-step achievement for the entry ladder ladder.
+    """Per-step validity for the Entry Ladder, under the sum-of-valid-
+    steps exposure model.
 
-    Steps 0-7: did STEP_N_* fire on or after the current cycle's start?
-    Reads the canonical signal log (the source of truth for "what happened
-    in this cycle") rather than the engine's live step_done flags, which
-    are intermediate bookkeeping the engine recycles across cycles.
+    Step 0  (Rally Day)        — latched: state["step0_done"]
+    Step 1  (FTD)              — latched: state["step1_done"]
+    Steps 2-7                  — LIVE: state["live_step_valid"][s] —
+                                 re-evaluated against the current bar's
+                                 close/low and MA stack by the engine's
+                                 _phase_exposure_recompute. The checkmarks
+                                 render "true right now", not "fired at
+                                 some point in this cycle".
+    Step 8  (Power-Trend ON)   — latched: state["power_trend"]
 
-    Step 8 (Power-Trend ON): live state["power_trend"] flag. PT can flip
-    ON/OFF independently of cycle bookkeeping, so the live flag IS
-    authoritative here.
+    The `signals` / `cycle_start_date` parameters are preserved for
+    backward-compat with callers but are no longer consulted — the engine
+    now exposes per-bar live validity directly on state.
 
-    Fallback: if cycle_start_date is None (no rally cycle anchored — deep
-    correction, or signals not provided), return the live step_done flags
-    so the ladder still renders something. Old callers that pass only
-    state get the legacy state-based behavior.
+    Defensive fallback: if `live_step_valid` is missing (e.g. a stale
+    EngineResult from a build before this field was added), fall back to
+    the latched step_done flag for that step. Doesn't happen in normal
+    operation — the engine populates the dict every bar.
     """
-    if cycle_start_date is None or signals is None:
-        return [
-            bool(state.get(f"step{i}_done", False)) for i in range(8)
-        ] + [bool(state.get("power_trend", False))]
-
-    fired_in_cycle = {
-        sig.signal_type for sig in signals if sig.trade_date >= cycle_start_date
-    }
-    flags = [_STEP_SIGNAL_TYPE[i] in fired_in_cycle for i in range(8)]
-    flags.append(bool(state.get("power_trend", False)))
+    live = state.get("live_step_valid") or {}
+    flags = [
+        bool(state.get("step0_done", False)),    # Step 0 — latched
+        bool(state.get("step1_done", False)),    # Step 1 — latched
+        bool(live.get(2, state.get("step2_done", False))),  # Step 2 — live
+        bool(live.get(3, state.get("step3_done", False))),  # Step 3 — live
+        bool(live.get(4, state.get("step4_done", False))),  # Step 4 — live
+        bool(live.get(5, state.get("step5_done", False))),  # Step 5 — live
+        bool(live.get(6, state.get("step6_done", False))),  # Step 6 — live
+        bool(live.get(7, state.get("step7_done", False))),  # Step 7 — live
+        bool(state.get("power_trend", False)),   # Step 8 — latched
+    ]
     return flags
 
 
