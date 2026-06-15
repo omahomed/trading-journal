@@ -75,8 +75,22 @@ RUNNING_MIN_LOOKBACK = 30           # while in_correction, track running min wit
 # (close in upper half of bar's intraday range) qualifies as a rally day.
 PINK_RALLY_DAY_POS_IN_RANGE = 0.5
 
-# Step ladder exposure targets (for Steps 0–4 in rally-hunt phase)
+# Step ladder exposure targets (for Steps 0–4 in rally-hunt phase).
+# Legacy: each step's running scalar max under the old ratchet-and-cut model.
+# Each in-cycle exposure mutation site (Steps 0-7, Step 8, V10 paths, exit
+# floors) still writes the scalar so the engine's intra-bar invariants
+# (cap_at_100, V10 cascade resolution, in_correction transitions) stay
+# intact, but the final value of state["exposure"] is overwritten at the
+# end of every bar by _phase_exposure_recompute() using STEP_CONTRIBUTION
+# below. These ladder values are kept around because some intermediate
+# logic still reads them; a follow-up pass will excise the dead writes.
 STEP_LADDER_EXPOSURE = {0: 20, 1: 40, 2: 60, 3: 80, 4: 100}
+
+# Per-step contribution under the SUM-OF-VALID-STEPS model. Steps 0-7 each
+# contribute 20; Step 8 contributes 40. Sum = 200 (matches the legacy
+# all-steps-firing ceiling). See _phase_exposure_recompute for the validity
+# rules (Steps 0/1/8 latched, Steps 2-7 live-evaluated each bar).
+STEP_CONTRIBUTION = {0: 20, 1: 20, 2: 20, 3: 20, 4: 20, 5: 20, 6: 20, 7: 20, 8: 40}
 
 # Exposure floor / ceilings for individual signals when V10 cascade doesn't apply
 EXPOSURE_ON_CORRECTION_DECLARED = 0
@@ -255,6 +269,16 @@ class MCTEngine:
             "character_break_fired": False,
             "confirmed_break_fired": False,
             "regime_break_fired": False,
+
+            # LIVE per-bar validity for Steps 2-7 — populated by
+            # _phase_exposure_recompute at the end of every bar. Keys are
+            # step indices; values are booleans recomputed from the CURRENT
+            # bar's close/low and the live MA stack (no latching). Surfaced
+            # via _bar_record + final_state so the adapter can render the
+            # Entry Ladder checkmarks against live conditions. Steps 0/1/8
+            # remain latched (state["step0_done"] / step1_done / power_trend).
+            "live_step_valid": {2: False, 3: False, 4: False,
+                                5: False, 6: False, 7: False},
         }
 
     # ------------------------------------------------------------------------
@@ -329,6 +353,15 @@ class MCTEngine:
         # hunt phase (canonical 2/5/2026 fires PT-OFF the day after a V10 soft
         # reset, when 21 EMA dips below 50 SMA on a down close).
         self._phase_pt_off(current, prev, state, bar_signals)
+
+        # Phase 10: end-of-bar exposure recompute. Overwrites state["exposure"]
+        # with the sum-of-valid-steps model. All prior per-bar writes to
+        # state["exposure"] (entry ratchet, exit cuts, V10 sets) are
+        # intentionally clobbered — they're preserved only so the engine's
+        # mid-bar invariants (cap_at_100 set inside violation phases, V10
+        # cascade reads exposure_before for its signal meta, etc.) still
+        # converge. A follow-up pass will excise those dead writes.
+        self._phase_exposure_recompute(current, state)
 
         return bar_signals
 
@@ -454,11 +487,22 @@ class MCTEngine:
         state["ftd_low"] = None
         for s in range(8):
             state[f"step{s}_done"] = False
+        # Sum-of-valid-steps model: also clear power_trend so Step 8 stops
+        # contributing 40. Without this, a lagging 21>50 cross would leave
+        # power_trend=True and the end-of-bar recompute would read 40 right
+        # after a declared correction (instead of 0). PT-OFF would clear it
+        # eventually, but the macro correction declaration is the cleaner
+        # reset boundary.
+        state["power_trend"] = False
         # cap_at_100 is NOT auto-cleared on declaration (preserved across cycles
         # only via explicit reset rules — declaration of a new correction simply
         # opens a new correction_active window where Violations can re-set cap)
 
-        # Exposure drops to 0% on macro correction declaration
+        # Exposure drops to 0% on macro correction declaration. This write
+        # is now redundant — _phase_exposure_recompute will land on 0 anyway
+        # because step0_done was just cleared above — but kept here so the
+        # CORRECTION_DECLARED signal's exposure_before/after meta records
+        # the correct transition for the audit log.
         state["exposure"] = EXPOSURE_ON_CORRECTION_DECLARED
 
         bar_signals.append(self._signal(
@@ -831,9 +875,15 @@ class MCTEngine:
     def _fire_rally_invalidation(self, i, current, state, bar_signals, *, reason: str):
         before = state["exposure"]
         had_cap = state["cap_at_100"]
-        # Full reset: exposure 0, ladder cleared, rally cleared, cap cleared
+        # Full reset: exposure 0, ladder cleared, rally cleared, cap cleared.
+        # The step0/step1 event latches are gated on correction_active: outside
+        # an active correction-recovery search the event base must stay sticky,
+        # so a phantom V10 cascade can't nuke the latch and re-zero the base
+        # exposure mid-cycle. CORRECTION_DECLARED is the only authorized clear
+        # outside this gate (handled in _phase_declaration).
         state["exposure"] = 0
-        for s in range(8):
+        clear_start = 0 if state["correction_active"] else 2
+        for s in range(clear_start, 8):
             state[f"step{s}_done"] = False
         state["rally_active"] = False
         state["rally_day_idx"] = None
@@ -869,7 +919,10 @@ class MCTEngine:
         before = state["exposure"]
         # Reset Step 1 (and steps above it) so we can hunt for a fresh FTD
         # on the same rally cycle. rally_count keeps incrementing.
-        state["step1_done"] = False
+        # step1_done clear is gated on correction_active — outside an
+        # active correction-recovery, the FTD event latch must stay sticky.
+        if state["correction_active"]:
+            state["step1_done"] = False
         state["step2_done"] = False
         state["step3_done"] = False
         state["step4_done"] = False
@@ -1076,6 +1129,79 @@ class MCTEngine:
             ))
 
     # ------------------------------------------------------------------------
+    # Phase 10 — end-of-bar exposure recompute (sum-of-valid-steps model)
+    # ------------------------------------------------------------------------
+
+    def _phase_exposure_recompute(self, current, state) -> None:
+        """Overwrite state["exposure"] with the sum-of-valid-steps total.
+
+        Contributions (see STEP_CONTRIBUTION):
+          Steps 0-7 each = 20  ·  Step 8 = 40  ·  total ceiling = 200
+
+        Validity rules:
+          Step 0 (Rally Day)         — latched (state["step0_done"])
+          Step 1 (FTD)               — latched (state["step1_done"])
+          Steps 2-7                  — LIVE: re-evaluated against the
+                                       CURRENT bar's close/low and the live
+                                       MA stack every bar. Each is
+                                       independent — no chaining gate on
+                                       the prior step.
+          Step 8 (Power-Trend ON)    — latched (state["power_trend"])
+
+        Gate: if Step 0 is not latched, there is no active rally cycle and
+        the sum collapses to 0 regardless of any live conditions or PT
+        flag. Without this short-circuit, a lingering power_trend or a
+        fresh MA-stack alignment could leave exposure > 0 in CORRECTION
+        state — the CORRECTION_DECLARED reset already clears step0_done +
+        power_trend so the recompute lands cleanly on 0.
+
+        Runs last in the per-bar pipeline (after PT-OFF) so it overwrites
+        every prior mutation to state["exposure"] on this bar. The
+        mid-bar writes are preserved for now because intermediate state
+        (cap_at_100, V10 cascade resolution, in_correction transitions)
+        still reads or signals against them — see Phase 10 comment in
+        _process_bar.
+        """
+        close = float(current["close"])
+        low = float(current["low"])
+        ema_8 = float(current["ema_8"]) if pd.notna(current["ema_8"]) else None
+        ema_21 = float(current["ema_21"]) if pd.notna(current["ema_21"]) else None
+        sma_50 = float(current["sma_50"]) if pd.notna(current["sma_50"]) else None
+        sma_200 = float(current["sma_200"]) if pd.notna(current["sma_200"]) else None
+
+        # Live evaluators — independent booleans, no chaining gate.
+        # Conditions mirror the engine's existing one-shot checks at
+        # mct_engine.py:759 (step 2), :782 (step 3), :796 (step 4),
+        # :954 (step 5), :974 (step 6), :1001 (step 7).
+        live = {
+            2: ema_21 is not None and close > ema_21,
+            3: ema_21 is not None and low > ema_21,
+            4: state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21,
+            5: state["consec_low_above_50"] >= 3,
+            6: (ema_21 is not None and sma_50 is not None and sma_200 is not None
+                and ema_21 > sma_50 > sma_200),
+            7: (ema_8 is not None and ema_21 is not None and sma_50 is not None
+                and sma_200 is not None
+                and ema_8 > ema_21 > sma_50 > sma_200),
+        }
+        state["live_step_valid"] = live
+
+        if not state["step0_done"]:
+            # No active rally cycle → no exposure. Hard gate.
+            state["exposure"] = 0
+            return
+
+        e = STEP_CONTRIBUTION[0]  # step0 latched True at this point
+        if state["step1_done"]:
+            e += STEP_CONTRIBUTION[1]
+        if state["power_trend"]:
+            e += STEP_CONTRIBUTION[8]
+        for s in (2, 3, 4, 5, 6, 7):
+            if live[s]:
+                e += STEP_CONTRIBUTION[s]
+        state["exposure"] = e
+
+    # ------------------------------------------------------------------------
     # V10 cascade-and-reset
     # ------------------------------------------------------------------------
 
@@ -1087,9 +1213,14 @@ class MCTEngine:
         # user-facing "Day N" display keeps ticking from the original STEP_0.
         state["in_correction"] = True
         state["exposure"] = EXPOSURE_V10_SOFT_RESET
-        # Ladder reset to Step 0 done; 1-7 cleared
+        # Ladder reset to Step 0 done; 1-7 cleared.
+        # step0_done is SET True here (not cleared), so no gating needed.
+        # step1_done CLEAR is gated on correction_active — outside an active
+        # correction-recovery search a phantom V10 must not nuke the sticky
+        # FTD event latch (this is the gate that fixed the 2026-06-08 case).
         state["step0_done"] = True
-        state["step1_done"] = False
+        if state["correction_active"]:
+            state["step1_done"] = False
         state["step2_done"] = False
         state["step3_done"] = False
         state["step4_done"] = False
@@ -1123,7 +1254,12 @@ class MCTEngine:
         had_cap = state["cap_at_100"]
         state["in_correction"] = True
         state["exposure"] = EXPOSURE_V10_FULL_INVALIDATION
-        for s in range(8):
+        # step0/step1 event-latch clears gated on correction_active. A V10
+        # FULL fired outside an active correction is just as much a phantom
+        # as a soft reset would be — the entry base must stay sticky until
+        # CORRECTION_DECLARED authorizes the reset.
+        clear_start = 0 if state["correction_active"] else 2
+        for s in range(clear_start, 8):
             state[f"step{s}_done"] = False
         state["rally_active"] = False
         state["rally_day_idx"] = None
@@ -1207,8 +1343,14 @@ class MCTEngine:
             "rally_day_idx": state["rally_day_idx"],
             "cycle_start_idx": state["cycle_start_idx"],
             "pt_on_idx": state["pt_on_idx"],
+            "step0_done": state["step0_done"],
             "step1_done": state["step1_done"],
             "step4_done": state["step4_done"],
+            # Live per-bar validity for Steps 2-7 under the sum-of-valid-
+            # steps exposure model. Populated by _phase_exposure_recompute
+            # before the bar record is built. Copied (not aliased) so a
+            # later bar's recompute can't mutate this row's snapshot.
+            "live_step_valid": dict(state.get("live_step_valid") or {}),
             "reference_high": state["reference_high"],
             "signals_summary": " | ".join(s.signal_type for s in bar_signals),
         }
