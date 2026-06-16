@@ -156,35 +156,7 @@ def _upsert_rows(symbol: str, df: pd.DataFrame, conn) -> int:
 
 
 def _last_business_day(today: Optional[date] = None) -> date:
-    """Most recent business day with a SETTLED close (not just a calendar
-    weekday that hasn't traded yet).
-
-    Pre-fix: returned calendar today regardless of market hours. The
-    M Factor self-ingest path (api/main.py:rally_prefix → update_if_needed)
-    then refused to short-circuit overnight, kicked off the full yfinance +
-    engine-replay path on every page load, and timed out at Railway's
-    proxy with a 500. The window was tight — only between UTC midnight
-    and the next market close — but it covered the typical Daily Routine
-    hour and broke the page nightly.
-
-    Fix: a US weekday only counts as "the last business day" once the
-    cash session has actually closed. NYSE/NASDAQ close at 20:00 UTC
-    during DST (April-Oct), 21:00 UTC during EST (Nov-Mar). Use 21:00 UTC
-    as the conservative threshold — yfinance has no new bar in the
-    extra DST hour anyway, so being one hour late doesn't lose freshness.
-
-    Callers pass an explicit `today` arg in test paths; that path is
-    unchanged and bypasses the market-hours check.
-    """
-    if today is not None:
-        d = today
-    else:
-        now = datetime.utcnow()
-        d = now.date()
-        # On a weekday before the conservative close threshold, fall back
-        # to the prior day. The weekend skip below handles Sat/Sun → Fri.
-        if d.weekday() < 5 and now.hour < 21:
-            d -= timedelta(days=1)
+    d = today or date.today()
     while d.weekday() >= 5:  # Sat=5, Sun=6
         d -= timedelta(days=1)
     return d

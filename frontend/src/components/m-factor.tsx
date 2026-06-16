@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from "react";
 import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
-import { CycleTrackerMethodology } from "@/components/cycle-tracker-methodology";
 
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
@@ -319,65 +318,6 @@ export function MFactor({ navColor }: { navColor: string }) {
               </div>
             </div>
           </div>
-
-          {/* Volatility Regime — informational, NOT consumed by the engine yet.
-              The Webster heuristic compares the average up-day % gain over the
-              last 200 bars to a 1.0 boundary:
-                ≥ 1.0% → HIGH regime → FTD threshold would step to 1.25%
-                < 1.0% → LOW  regime → FTD threshold stays at 1.0% (current)
-              ATR(14) shown alongside as a broader (range + gap + bear bars)
-              volatility check — the side-by-side helps eyeball whether the
-              regime call is robust before any threshold change goes live.
-              Engine still hard-codes FTD_PCT_THRESHOLD = 0.01. */}
-          {(data.avg_up_day_pct != null || data.atr_pct != null) && (() => {
-            const avgUp = data.avg_up_day_pct;
-            const atr = data.atr_pct;
-            const isHigh = avgUp != null && avgUp >= 1.0;
-            const regimeColor = isHigh ? "#d97706" : "#16a34a";
-            const regimeLabel = isHigh ? "HIGH" : "LOW";
-            const ftdThreshold = isHigh ? "1.25%" : "1.00%";
-            return (
-              <div className="rounded-[14px] overflow-hidden"
-                   style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-                <div className="px-5 py-3 text-[13px] font-semibold flex items-center justify-between"
-                     style={{ borderBottom: "1px solid var(--border)" }}>
-                  <span>Volatility Regime</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
-                        style={{ background: "color-mix(in oklab, " + regimeColor + " 12%, var(--surface))", color: regimeColor }}>
-                    {regimeLabel}
-                  </span>
-                </div>
-                <div className="p-4 grid grid-cols-2 gap-3">
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
-                      Avg up-day · 200d
-                    </div>
-                    <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: mono, color: regimeColor }}>
-                      {avgUp != null ? avgUp.toFixed(2) + "%" : "—"}
-                    </div>
-                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
-                      Webster · vs 1.0% boundary
-                    </div>
-                  </div>
-                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
-                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
-                      ATR(21) · % of low SMA
-                    </div>
-                    <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: mono, color: "var(--ink)" }}>
-                      {atr != null ? atr.toFixed(2) + "%" : "—"}
-                    </div>
-                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
-                      Range + gap, both directions
-                    </div>
-                  </div>
-                </div>
-                <div className="px-4 pb-4 text-[10px]" style={{ color: "var(--ink-4)" }}>
-                  Informational only. Engine still uses fixed FTD threshold of 1.0%.
-                  Webster rule (when wired): {ftdThreshold} given current regime.
-                </div>
-              </div>
-          );
-          })()}
         </div>
       </div>
 
@@ -387,7 +327,37 @@ export function MFactor({ navColor }: { navColor: string }) {
       {/* ═══ Methodology ═══ */}
       <details className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <summary className="px-5 py-3 cursor-pointer text-[13px] font-semibold">Cycle Tracker Methodology</summary>
-        <CycleTrackerMethodology />
+        <div className="p-5 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <h4 className="text-[13px] font-semibold mb-2" style={{ color: "var(--ink)" }}>Market States</h4>
+              <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+                <tbody>
+                  {[
+                    ["CORRECTION", "NASDAQ −10%+ with a confirmed 50-SMA close break — cycle reset, awaiting rally"],
+                    ["RALLY MODE", "Steps 0-3: rally day → low above 21 EMA"],
+                    ["UPTREND", "Steps 4-6: holds 21 EMA 3 days → MA crossovers"],
+                    ["POWERTREND", "Step 8: Power-Trend ON (+40) — reaches 200 only when every step validates"],
+                  ].map(([s, d]) => (
+                    <tr key={s} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td className="py-1.5 font-semibold" style={{ color: "var(--ink)" }}>{s}</td>
+                      <td className="py-1.5 pl-3">{d}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div>
+              <h4 className="text-[13px] font-semibold mb-2" style={{ color: "var(--ink)" }}>Key Rules</h4>
+              <div className="flex flex-col gap-1.5">
+                <div>Entry ladder = suggestions — actual exposure follows trade performance</div>
+                <div>Exit ladder = rules — must act when triggered</div>
+                <div>All signals are NASDAQ only</div>
+                <div>This page sits on top of M Factor, not a replacement</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </details>
     </div>
   );
