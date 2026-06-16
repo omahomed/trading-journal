@@ -318,6 +318,65 @@ export function MFactor({ navColor }: { navColor: string }) {
               </div>
             </div>
           </div>
+
+          {/* Volatility Regime — informational, NOT consumed by the engine yet.
+              The Webster heuristic compares the average up-day % gain over the
+              last 200 bars to a 1.0 boundary:
+                ≥ 1.0% → HIGH regime → FTD threshold would step to 1.25%
+                < 1.0% → LOW  regime → FTD threshold stays at 1.0% (current)
+              ATR(14) shown alongside as a broader (range + gap + bear bars)
+              volatility check — the side-by-side helps eyeball whether the
+              regime call is robust before any threshold change goes live.
+              Engine still hard-codes FTD_PCT_THRESHOLD = 0.01. */}
+          {(data.avg_up_day_pct != null || data.atr_pct != null) && (() => {
+            const avgUp = data.avg_up_day_pct;
+            const atr = data.atr_pct;
+            const isHigh = avgUp != null && avgUp >= 1.0;
+            const regimeColor = isHigh ? "#d97706" : "#16a34a";
+            const regimeLabel = isHigh ? "HIGH" : "LOW";
+            const ftdThreshold = isHigh ? "1.25%" : "1.00%";
+            return (
+              <div className="rounded-[14px] overflow-hidden"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+                <div className="px-5 py-3 text-[13px] font-semibold flex items-center justify-between"
+                     style={{ borderBottom: "1px solid var(--border)" }}>
+                  <span>Volatility Regime</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
+                        style={{ background: "color-mix(in oklab, " + regimeColor + " 12%, var(--surface))", color: regimeColor }}>
+                    {regimeLabel}
+                  </span>
+                </div>
+                <div className="p-4 grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                      Avg up-day · 200d
+                    </div>
+                    <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: mono, color: regimeColor }}>
+                      {avgUp != null ? avgUp.toFixed(2) + "%" : "—"}
+                    </div>
+                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
+                      Webster · vs 1.0% boundary
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
+                    <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                      ATR(14) · % of close
+                    </div>
+                    <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: mono, color: "var(--ink)" }}>
+                      {atr != null ? atr.toFixed(2) + "%" : "—"}
+                    </div>
+                    <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
+                      Range + gap, both directions
+                    </div>
+                  </div>
+                </div>
+                <div className="px-4 pb-4 text-[10px]" style={{ color: "var(--ink-4)" }}>
+                  Informational only. Engine still uses fixed FTD threshold of 1.0%.
+                  Webster rule (when wired): {ftdThreshold} given current regime.
+                </div>
+              </div>
+          );
+          })()}
         </div>
       </div>
 
