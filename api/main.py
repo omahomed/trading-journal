@@ -2567,6 +2567,18 @@ def rally_prefix(as_of_date: str = ""):
             except ValueError:
                 as_of = None
 
+        # Best-effort self-ingest: pull today's ^IXIC bar from yfinance before
+        # the engine reads market_data. The same pattern the journal-stamping
+        # path uses (api/main.py:725) — without it, opening M Factor after
+        # market close shows yesterday's bar until something else triggers
+        # the ingest. update_if_needed is idempotent + short-circuits when
+        # the latest bar is already today, so repeat loads no-op cheaply.
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
+
         result = run_engine("^IXIC", as_of=as_of)
         response = to_rally_prefix_response(result)
         return _project_rally_prefix_for_data_lag(response, as_of)
