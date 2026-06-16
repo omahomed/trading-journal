@@ -116,6 +116,28 @@ def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 def _upsert_rows(symbol: str, df: pd.DataFrame, conn) -> int:
     if df.empty:
         return 0
+
+    # Drop partial / in-progress bars. yfinance returns a row for today's
+    # session before close (open/high/low/volume populated, close = NaN)
+    # while the market is still trading. Writing NaN to market_data.close
+    # poisons every downstream consumer: the engine ratchet reads it, the
+    # rally-prefix response embeds it in `price`, FastAPI's JSON encoder
+    # throws on NaN, and every M Factor request 500s — until the row is
+    # manually deleted. Skip these rows here; the next call after close
+    # will pick up the settled bar. Indicator columns (ema/sma) are
+    # allowed to be NaN — they tail-pad legitimately in early windows.
+    ohlc_cols = ["open", "high", "low", "close"]
+    nan_mask = df[ohlc_cols].isna().any(axis=1)
+    if nan_mask.any():
+        log.warning(
+            "[%s] dropping %d partial bar(s) with NaN in OHLC: %s",
+            symbol, int(nan_mask.sum()),
+            df.loc[nan_mask, "trade_date"].tolist(),
+        )
+        df = df[~nan_mask]
+        if df.empty:
+            return 0
+
     rows = [
         (
             symbol,
