@@ -220,11 +220,13 @@ def _latest_ftd_date(signals: list[SignalEvent]) -> Optional[str]:
 
 
 # Lookback windows for the volatility-regime metrics. 200 bars matches the
-# Webster heuristic the FTD threshold rule references. 14 is the canonical
-# Wilder ATR period; expressed as % of the latest close to give an
-# apples-to-apples comparison with avg_up_day_pct.
+# Webster heuristic the FTD threshold rule references. 21 is the period the
+# rest of the app uses for ATR% (see _compute_ticker_atr_pct in api/main.py:587
+# — same TR definition, same SMA averaging, same `SMA(TR) / SMA(Low)` ratio).
+# Sharing the formula keeps the M Factor chip and the daily journal's per-
+# ticker ATR figures consistent.
 _VOL_REGIME_LOOKBACK = 200
-_ATR_PERIOD = 14
+_ATR_PERIOD = 21
 
 
 def _avg_up_day_pct(bars: pd.DataFrame) -> Optional[float]:
@@ -254,35 +256,37 @@ def _avg_up_day_pct(bars: pd.DataFrame) -> Optional[float]:
 
 
 def _atr_pct(bars: pd.DataFrame) -> Optional[float]:
-    """ATR(14) expressed as a % of the latest close. Provided alongside
-    avg_up_day_pct for the empirical side-by-side comparison the user
-    asked for — ATR mixes intraday range + gap moves + bearish bars, so
-    it's a broader volatility measure than the up-day-only average.
+    """ATR%(21) computed the same way the daily journal's ticker snapshot
+    computes it: ATR% = SMA(TR, 21) / SMA(Low, 21) * 100. See
+    _compute_ticker_atr_pct in api/main.py:587 — identical TR definition,
+    identical 21-bar SMA averaging, identical SMA-of-Low denominator (NOT
+    latest close). Sharing the formula keeps this card and the daily
+    journal's per-ticker ATR figures apples-to-apples for the user's
+    indicator workflow.
+
+    Provided alongside avg_up_day_pct for the empirical side-by-side —
+    ATR mixes intraday range + gap moves + bearish bars, so it's a
+    broader volatility measure than the up-day-only average.
     Informational only.
     """
     if bars.empty or not {"high", "low", "close"}.issubset(bars.columns):
         return None
-    window = bars.tail(_ATR_PERIOD + 1)  # need prev_close for one TR
+    window = bars.tail(_ATR_PERIOD + 1)  # one extra bar for prev_close on the first TR
     if len(window) < _ATR_PERIOD + 1:
         return None
-    h = window["high"].astype(float).values
-    l = window["low"].astype(float).values
-    c = window["close"].astype(float).values
-    prev_c = c[:-1]
-    h_now = h[1:]
-    l_now = l[1:]
-    c_now = c[1:]
-    tr = pd.Series([
-        max(h_now[i] - l_now[i],
-            abs(h_now[i] - prev_c[i]),
-            abs(prev_c[i] - l_now[i]))
-        for i in range(len(c_now))
-    ])
-    atr = float(tr.mean())
-    last_close = float(c[-1])
-    if last_close <= 0:
+    high = window["high"].astype(float)
+    low = window["low"].astype(float)
+    close = window["close"].astype(float)
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    sma_tr = float(tr.tail(_ATR_PERIOD).mean())
+    sma_low = float(low.tail(_ATR_PERIOD).mean())
+    if sma_low <= 0:
         return None
-    return atr / last_close * 100.0
+    return (sma_tr / sma_low) * 100.0
 
 
 def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
