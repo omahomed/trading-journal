@@ -360,7 +360,7 @@ export function MFactor({ navColor }: { navColor: string }) {
                   </div>
                   <div className="p-3 rounded-[10px]" style={{ border: "1px solid var(--border)" }}>
                     <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>
-                      ATR(14) · % of close
+                      ATR(21) · % of low SMA
                     </div>
                     <div className="text-[22px] font-semibold mt-0.5" style={{ fontFamily: mono, color: "var(--ink)" }}>
                       {atr != null ? atr.toFixed(2) + "%" : "—"}
