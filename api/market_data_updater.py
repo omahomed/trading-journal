@@ -93,7 +93,7 @@ def _fetch_window(symbol: str, days: int) -> pd.DataFrame:
         return pd.DataFrame()
     df = raw.reset_index()
     df["trade_date"] = pd.to_datetime(df["Date"]).dt.date
-    return df[["trade_date", "Open", "High", "Low", "Close", "Volume"]].rename(
+    df = df[["trade_date", "Open", "High", "Low", "Close", "Volume"]].rename(
         columns={
             "Open": "open",
             "High": "high",
@@ -102,6 +102,69 @@ def _fetch_window(symbol: str, days: int) -> pd.DataFrame:
             "Volume": "volume",
         }
     )
+    return _patch_lagged_close_from_info(symbol, df)
+
+
+def _patch_lagged_close_from_info(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Fill a settled NaN close from yf.Ticker.info when yf.history lags.
+
+    yfinance has two endpoints with different update cadences. The
+    .history() endpoint that _fetch_window uses is sometimes hours-to-
+    a-day behind on the latest settled close — observed on 2026-06-16
+    when .history returned the 06-15 row with OHLCV populated but
+    Close = NaN, while .info.regularMarketPrice already had the correct
+    settled price (26683.94). The lag is invisible to the user but
+    silently strands the M Factor page on stale data because the
+    NaN-OHLC guard in _upsert_rows correctly refuses to write the
+    partial row.
+
+    Fallback rule: when the LATEST NaN-close bar is for a date STRICTLY
+    in the past (the session has definitely closed), patch its close
+    from info.regularMarketPrice. We do NOT patch in-progress bars
+    (date == today) — those are genuinely intraday partials and must
+    stay dropped, otherwise we'd write a live quote as if it were a
+    settled close. Older historical NaN closes are real data corruption
+    and also stay dropped.
+
+    Idempotent: if .history already had a settled close, .info isn't
+    consulted; if .info fails or returns a non-finite value, the row
+    stays NaN and gets dropped downstream.
+    """
+    if df.empty or "close" not in df.columns:
+        return df
+    nan_mask = df["close"].isna()
+    if not nan_mask.any():
+        return df
+
+    today = datetime.utcnow().date()
+    candidates = df.index[nan_mask & (df["trade_date"] < today)]
+    if len(candidates) == 0:
+        return df  # only today's session NaN — let the guard drop it
+    # Patch the most recent NaN-close that's settled; older NaNs are
+    # corruption and shouldn't be papered over with a single .info value.
+    idx = candidates.max()
+
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception as e:
+        log.warning("[%s] .info fetch failed for NaN-close fallback: %s", symbol, e)
+        return df
+    fallback = info.get("regularMarketPrice")
+    if fallback is None or not pd.notna(fallback) or float(fallback) <= 0:
+        log.warning(
+            "[%s] no usable .info.regularMarketPrice for %s (got %r); "
+            "leaving close NaN for guard to drop",
+            symbol, df.loc[idx, "trade_date"], fallback,
+        )
+        return df
+
+    df.loc[idx, "close"] = float(fallback)
+    log.info(
+        "[%s] patched %s close from .info.regularMarketPrice = %.4f "
+        "(yf.history lagged the settled close)",
+        symbol, df.loc[idx, "trade_date"], float(fallback),
+    )
+    return df
 
 
 def _compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
