@@ -2567,18 +2567,15 @@ def rally_prefix(as_of_date: str = ""):
             except ValueError:
                 as_of = None
 
-        # Best-effort self-ingest: pull today's ^IXIC bar from yfinance before
-        # the engine reads market_data. The same pattern the journal-stamping
-        # path uses (api/main.py:725) — without it, opening M Factor after
-        # market close shows yesterday's bar until something else triggers
-        # the ingest. update_if_needed is idempotent + short-circuits when
-        # the latest bar is already today, so repeat loads no-op cheaply.
-        try:
-            from api.market_data_updater import update_if_needed
-            update_if_needed("^IXIC")
-        except Exception:
-            pass
-
+        # NOTE: self-ingest removed (was triggering Railway-proxy 500s in
+        # certain time-of-day windows even when update_if_needed should have
+        # short-circuited — the calling-thread blocking + engine-replay-on-
+        # every-load combination was too brittle for the request path).
+        # M Factor reads whatever's in market_data; today's bar lands via
+        # the Daily Routine journal-save flow (api/main.py:725) which uses
+        # the same updater asynchronously enough that it doesn't bottleneck.
+        # Follow-up: lift the ingest into a FastAPI BackgroundTask or a
+        # scheduled cron so /api/market/rally-prefix stays read-only.
         result = run_engine("^IXIC", as_of=as_of)
         response = to_rally_prefix_response(result)
         return _project_rally_prefix_for_data_lag(response, as_of)
