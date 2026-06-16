@@ -219,6 +219,72 @@ def _latest_ftd_date(signals: list[SignalEvent]) -> Optional[str]:
     return None
 
 
+# Lookback windows for the volatility-regime metrics. 200 bars matches the
+# Webster heuristic the FTD threshold rule references. 14 is the canonical
+# Wilder ATR period; expressed as % of the latest close to give an
+# apples-to-apples comparison with avg_up_day_pct.
+_VOL_REGIME_LOOKBACK = 200
+_ATR_PERIOD = 14
+
+
+def _avg_up_day_pct(bars: pd.DataFrame) -> Optional[float]:
+    """Average close-over-close % gain across UP DAYS ONLY over the last
+    _VOL_REGIME_LOOKBACK bars. Down/flat days are excluded.
+
+    Returns the mean expressed as a percent (e.g. 0.92 means 0.92%) or
+    None if fewer than 20 up-day samples are in the window (avoids a
+    noisy reading on thin data).
+
+    Aligns with the Webster volatility-regime call: avg ≥ 1.0 = HIGH
+    volatility (FTD threshold would step to 1.25%); avg < 1.0 = LOW
+    (FTD threshold stays at the current 1.0%). Informational only — the
+    engine still hard-codes FTD_PCT_THRESHOLD = 0.01.
+    """
+    if bars.empty or "close" not in bars.columns:
+        return None
+    window = bars.tail(_VOL_REGIME_LOOKBACK + 1)  # need one extra for prev_close
+    closes = window["close"].astype(float).values
+    if len(closes) < 21:  # 20 up-day samples needed, so at least 21 closes
+        return None
+    rets = (closes[1:] - closes[:-1]) / closes[:-1]
+    up_rets = rets[rets > 0]
+    if len(up_rets) < 20:
+        return None
+    return float(up_rets.mean() * 100.0)
+
+
+def _atr_pct(bars: pd.DataFrame) -> Optional[float]:
+    """ATR(14) expressed as a % of the latest close. Provided alongside
+    avg_up_day_pct for the empirical side-by-side comparison the user
+    asked for — ATR mixes intraday range + gap moves + bearish bars, so
+    it's a broader volatility measure than the up-day-only average.
+    Informational only.
+    """
+    if bars.empty or not {"high", "low", "close"}.issubset(bars.columns):
+        return None
+    window = bars.tail(_ATR_PERIOD + 1)  # need prev_close for one TR
+    if len(window) < _ATR_PERIOD + 1:
+        return None
+    h = window["high"].astype(float).values
+    l = window["low"].astype(float).values
+    c = window["close"].astype(float).values
+    prev_c = c[:-1]
+    h_now = h[1:]
+    l_now = l[1:]
+    c_now = c[1:]
+    tr = pd.Series([
+        max(h_now[i] - l_now[i],
+            abs(h_now[i] - prev_c[i]),
+            abs(prev_c[i] - l_now[i]))
+        for i in range(len(c_now))
+    ])
+    atr = float(tr.mean())
+    last_close = float(c[-1])
+    if last_close <= 0:
+        return None
+    return atr / last_close * 100.0
+
+
 def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
     """Legacy active_exits — derived only from consec_below_21 + close vs sma_50.
     The richer V11 violation vocabulary is intentionally not exposed here;
@@ -303,6 +369,9 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     ref_high = float(state.get("reference_high") or 0.0)
     drawdown = ((close - ref_high) / ref_high * 100) if ref_high > 0 else 0.0
 
+    avg_up = _avg_up_day_pct(bars)
+    atr_p = _atr_pct(bars)
+
     return {
         "prefix": prefix,
         "day_num": cycle_day,
@@ -335,6 +404,15 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         # None when no rally is active. Used by the MCT page header to show
         # "Cycle started: YYYY-MM-DD (Day N)".
         "cycle_start_date": cycle_start_date,
+        # Volatility-regime metrics (informational; engine does NOT consume
+        # them — FTD_PCT_THRESHOLD is still the hard-coded 0.01 / 1.0%).
+        # avg_up_day_pct: Webster heuristic — mean % gain on up days only
+        # over the last 200 bars. ≥1.0 = HIGH volatility regime (would step
+        # FTD threshold to 1.25%); <1.0 = LOW (stays at 1.0%).
+        # atr_pct: ATR(14) as % of latest close, side-by-side for the
+        # empirical comparison. ATR is broader than up-only avg.
+        "avg_up_day_pct": None if avg_up is None else round(avg_up, 3),
+        "atr_pct": None if atr_p is None else round(atr_p, 3),
     }
 
 
