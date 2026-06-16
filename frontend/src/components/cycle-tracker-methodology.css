@@ -1,0 +1,145 @@
+/* ──────────────────────────────────────────────────────────────────────
+   Cycle Tracker Methodology — scoped editorial styles.
+   Every rule lives under .ctm-root. The palette is defined locally on
+   .ctm-root, so it overrides app tokens ONLY inside this wrapper (no leak)
+   and renders identically in light or dark app themes.
+   Fonts come from the app's next/font CSS vars (wired in m-factor page.tsx).
+   ────────────────────────────────────────────────────────────────────── */
+
+.ctm-root{
+  --paper:#FBFAF7;  --panel:#F3F0EA;  --panel-2:#EDE9E1;
+  --ink:#1A1D21;    --ink-soft:#454C54; --slate:#6B7079;
+  --rule:#E4DFD5;
+  --go:#0A8F5E;     --go-soft:#E4F1EA;
+  --caution:#BB7A0E; --caution-soft:#F6EDD6;
+  --stop:#B23A2B;   --stop-soft:#F4E1DD;
+  --sky:#3D6E91;
+  --maxw:780px;
+
+  --ctm-serif: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  --ctm-sans:  var(--font-plex-sans), system-ui, -apple-system, sans-serif;
+  --ctm-mono:  var(--font-plex-mono), ui-monospace, Menlo, monospace;
+
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--ctm-sans);
+  font-size:17px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.ctm-root *{box-sizing:border-box}
+
+.ctm-root .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.ctm-root .wide{max-width:920px;margin:0 auto;padding:0 24px}
+
+/* ---------- type ---------- */
+.ctm-root h1,.ctm-root h2,.ctm-root h3{font-family:var(--ctm-serif);font-weight:500;letter-spacing:-0.01em;line-height:1.12;color:var(--ink);margin:0}
+.ctm-root h1{font-size:clamp(2.2rem,5vw,3.3rem);font-weight:600;margin:0 0 .35em}
+.ctm-root h2{font-size:clamp(1.6rem,3.6vw,2.2rem);margin:0 0 .5em}
+.ctm-root h3{font-size:1.2rem;font-weight:600;margin:2.2em 0 .4em}
+.ctm-root p{margin:0 0 1.1em}
+.ctm-root a{color:var(--sky)}
+.ctm-root strong{font-weight:600}
+.ctm-root em{font-style:italic}
+.ctm-root .lead{font-size:1.26rem;line-height:1.5;color:var(--ink-soft)}
+.ctm-root .mono{font-family:var(--ctm-mono)}
+.ctm-root .eyebrow{font-family:var(--ctm-mono);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;color:var(--slate);font-weight:500}
+
+/* ---------- hero ---------- */
+.ctm-root .hero{padding:56px 0 30px;border-bottom:1px solid var(--rule)}
+.ctm-root .hero .eyebrow{margin-bottom:20px;display:block}
+.ctm-root .hero .lead{margin-top:.6em;max-width:62ch}
+
+.ctm-root .gauge-card{
+  margin:38px auto 8px;background:#fff;border:1px solid var(--rule);
+  border-radius:14px;padding:26px 28px 22px;
+  box-shadow:0 1px 0 rgba(0,0,0,.02),0 12px 30px -22px rgba(26,29,33,.4);
+}
+.ctm-root .gauge-top{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px}
+.ctm-root .gauge-top .lbl{font-family:var(--ctm-mono);font-size:.74rem;letter-spacing:.18em;text-transform:uppercase;color:var(--slate)}
+.ctm-root .gauge-num{font-family:var(--ctm-mono);font-weight:600;font-size:2.5rem;line-height:1;color:var(--go)}
+.ctm-root .gauge-num span{font-size:1rem;color:var(--slate);font-weight:400;margin-left:2px}
+.ctm-root .seglane{display:flex;gap:5px;margin:18px 0 10px}
+.ctm-root .seg{flex:1;height:26px;border-radius:5px;background:var(--panel-2)}
+.ctm-root .seg.on{background:var(--go)}
+.ctm-root .scalerow{display:flex;justify-content:space-between;font-family:var(--ctm-mono);font-size:.7rem;color:var(--slate)}
+.ctm-root .gauge-foot{margin-top:16px;font-size:.96rem;color:var(--ink-soft);border-top:1px solid var(--rule);padding-top:14px}
+.ctm-root .gauge-foot b{color:var(--ink);font-weight:600}
+
+/* ---------- sections ---------- */
+.ctm-root .sec{padding:48px 0}
+.ctm-root .sec + .sec{border-top:1px solid var(--rule)}
+.ctm-root .secnum{font-family:var(--ctm-mono);font-size:.78rem;letter-spacing:.16em;color:var(--go);font-weight:600;display:block;margin-bottom:10px}
+
+/* ---------- callouts ---------- */
+.ctm-root .note{
+  background:var(--panel);border-left:3px solid var(--slate);
+  border-radius:0 8px 8px 0;padding:16px 20px;margin:24px 0;font-size:.98rem;color:var(--ink-soft)
+}
+.ctm-root .note.go{background:var(--go-soft);border-left-color:var(--go)}
+.ctm-root .note.caution{background:var(--caution-soft);border-left-color:var(--caution)}
+.ctm-root .note.stop{background:var(--stop-soft);border-left-color:var(--stop)}
+.ctm-root .note b{color:var(--ink)}
+.ctm-root .note .tag{font-family:var(--ctm-mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;font-weight:600;display:block;margin-bottom:5px}
+.ctm-root .note.go .tag{color:var(--go)}
+.ctm-root .note.caution .tag{color:var(--caution)}
+.ctm-root .note.stop .tag{color:var(--stop)}
+
+/* ---------- figures ---------- */
+.ctm-root figure{margin:30px 0;background:#fff;border:1px solid var(--rule);border-radius:12px;padding:24px 22px 14px;overflow:hidden}
+.ctm-root figure svg{display:block;width:100%;height:auto}
+.ctm-root figure svg text{font-family:var(--ctm-mono)}
+.ctm-root figure svg text.s{font-family:var(--ctm-sans)}
+.ctm-root figcaption{font-size:.86rem;color:var(--slate);margin-top:12px;padding-top:12px;border-top:1px solid var(--rule);line-height:1.5}
+.ctm-root figcaption b{color:var(--ink-soft);font-weight:600}
+
+/* ---------- ladder table ---------- */
+.ctm-root .ladder{width:100%;border-collapse:collapse;margin:26px 0 8px;font-size:.95rem}
+.ctm-root .ladder th{text-align:left;font-family:var(--ctm-mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--slate);font-weight:500;padding:0 12px 10px;border-bottom:1px solid var(--rule)}
+.ctm-root .ladder td{padding:13px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+.ctm-root .ladder tr:last-child td{border-bottom:none}
+.ctm-root .ladder .st{font-family:var(--ctm-mono);font-weight:600;color:var(--ink);width:34px}
+.ctm-root .ladder .nm{font-weight:600}
+.ctm-root .ladder .nm small{display:block;font-weight:400;color:var(--ink-soft);font-size:.86rem;margin-top:2px;font-family:var(--ctm-sans)}
+.ctm-root .pts{font-family:var(--ctm-mono);font-weight:600;color:var(--go);white-space:nowrap;text-align:right}
+.ctm-root .kind{font-family:var(--ctm-mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;padding:2px 7px;border-radius:20px;white-space:nowrap;font-weight:500}
+.ctm-root .kind.evt{background:var(--caution-soft);color:var(--caution)}
+.ctm-root .kind.live{background:var(--go-soft);color:var(--go)}
+.ctm-root .ladder tr.ev td{background:rgba(187,122,14,.045)}
+
+/* ---------- inline icons ---------- */
+.ctm-root .ico{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;font-size:.78rem;vertical-align:-4px}
+.ctm-root .ico.ok{background:var(--go);color:#fff}
+.ctm-root .ico.open{background:#fff;border:1.5px solid var(--slate);color:transparent}
+.ctm-root .ico.lock{background:var(--panel-2);color:var(--slate)}
+
+/* ---------- reading list ---------- */
+.ctm-root .reading{list-style:none;padding:0;margin:24px 0}
+.ctm-root .reading li{padding:14px 0;border-bottom:1px solid var(--rule);display:flex;gap:14px;align-items:flex-start}
+.ctm-root .reading li:last-child{border-bottom:none}
+.ctm-root .reading .ri{flex:0 0 auto;margin-top:1px}
+.ctm-root .reading .rt{font-size:.97rem;color:var(--ink-soft)}
+.ctm-root .reading .rt b{color:var(--ink);font-weight:600}
+
+/* ---------- glossary ---------- */
+.ctm-root .gloss{margin:24px 0}
+.ctm-root .gloss dt{font-family:var(--ctm-mono);font-weight:600;color:var(--ink);font-size:.92rem;margin-top:18px}
+.ctm-root .gloss dd{margin:3px 0 0;color:var(--ink-soft);font-size:.97rem}
+
+/* ---------- principle lists ---------- */
+.ctm-root .principles{list-style:none;padding:0;margin:20px 0}
+.ctm-root .principles li{padding:13px 0 13px 26px;border-bottom:1px solid var(--rule);position:relative;color:var(--ink-soft)}
+.ctm-root .principles li:last-child{border-bottom:none}
+.ctm-root .principles li:before{content:"→";position:absolute;left:0;color:var(--go);font-family:var(--ctm-mono)}
+.ctm-root .principles li b{color:var(--ink);font-weight:600}
+
+/* ---------- footer ---------- */
+.ctm-root .ctm-footer{padding:40px 0 24px;border-top:1px solid var(--rule);color:var(--slate);font-size:.85rem}
+.ctm-root .ctm-footer .mono{color:var(--ink-soft)}
+
+@media (max-width:560px){
+  .ctm-root{font-size:16px}
+  .ctm-root .ladder .kind{display:none}
+  .ctm-root .gauge-num{font-size:2rem}
+  .ctm-root figure{padding:18px 14px 12px}
+}
