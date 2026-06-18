@@ -339,6 +339,12 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [brDrill, setBrDrill] = useState("");
   const [brNoteText, setBrNoteText] = useState("");
   const [brNoteStatus, setBrNoteStatus] = useState("— no status —");
+  // "closed" = byte-for-byte the historical behavior (closed-in-2026 only).
+  // "open"   = opened-in-2026 open positions, marked to latest price.
+  // "all"    = both, summed on the unified ternary the All Campaigns table
+  //            uses (overall_pl for open, realized_pl for closed). Same R
+  //            denominator (risk_budget) — see [L1683-1686] in this file.
+  const [ruleStatus, setRuleStatus] = useState<"all" | "closed" | "open">("closed");
 
   // Sell rules sort
   const [srSort, setSrSort] = useState("Total P&L");
@@ -398,25 +404,41 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
     [enrichedOpen]
   );
 
-  // Rule stats — always 2026 for buy/sell rules (matching Streamlit)
+  // Rule stats — always 2026 for buy/sell rules (matching Streamlit).
+  // Sell-rules path is closed-only (open positions have no sell_rule yet).
+  // Buy-rules path supports All / Closed / Open via ruleStatus:
+  //   closed: closed-in-2026 closed trades, P&L = realized_pl (historical).
+  //   open:   opened-in-2026 open trades, P&L = enrichedById[id].overall_pl
+  //           (marked to latest price; folds in any already-realized partials).
+  //   all:    union of both, summed on the same unified ternary the All
+  //           Campaigns table uses at [L1683-1686]. Denominator (risk_budget)
+  //           is unchanged across statuses.
   const ruleStats = useMemo(() => {
     const isSell = tab === "sellrules";
     const col = isSell ? "sell_rule" : "buy_rule";
-    // Always scope to 2026 closed for rules tabs
-    const source = allTrades.filter(t => String(t.closed_date || "").startsWith("2026"));
-    const map: Record<string, { rule: string; count: number; wins: number; totalPl: number; rValues: number[]; trades: TradePosition[] }> = {};
-    for (const t of source) {
+    const includeClosed = isSell ? true : (ruleStatus !== "open");
+    const includeOpen = isSell ? false : (ruleStatus !== "closed");
+    const closedSource = includeClosed
+      ? allTrades.filter(t => String(t.closed_date || "").startsWith("2026"))
+      : [];
+    const openSource = includeOpen
+      ? openTrades.filter(t => String(t.open_date || "").startsWith("2026"))
+      : [];
+    type Bucket = { rule: string; count: number; wins: number; totalPl: number; rValues: number[]; trades: TradePosition[] };
+    const map: Record<string, Bucket> = {};
+    const tally = (t: TradePosition, pl: number) => {
       const rule = String((t as any)[col] || (t as any).rule || "").trim();
-      if (!rule || rule === "nan" || rule === "undefined") continue;
+      if (!rule || rule === "nan" || rule === "undefined") return;
       if (!map[rule]) map[rule] = { rule, count: 0, wins: 0, totalPl: 0, rValues: [], trades: [] };
-      const pl = parseFloat(String(t.realized_pl || 0));
       const rb = parseFloat(String(t.risk_budget || 0));
       map[rule].count++;
       if (pl > 0) map[rule].wins++;
       map[rule].totalPl += pl;
       if (rb > 0) map[rule].rValues.push(pl / rb);
       map[rule].trades.push(t);
-    }
+    };
+    for (const t of closedSource) tally(t, parseFloat(String(t.realized_pl || 0)));
+    for (const t of openSource) tally(t, enrichedById[t.trade_id]?.overall_pl ?? 0);
     const arr = Object.values(map).map(r => ({
       ...r,
       avgPl: r.count > 0 ? r.totalPl / r.count : 0,
@@ -426,7 +448,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
     // Sort
     const key = brSort === "Win Rate %" ? "winRate" : brSort === "Avg P&L" ? "avgPl" : brSort === "Trades" ? "count" : "totalPl";
     return arr.sort((a, b) => (b as any)[key] - (a as any)[key]);
-  }, [allTrades, tab, brSort]);
+  }, [allTrades, openTrades, enrichedById, tab, brSort, ruleStatus]);
 
   // Sell rule stats — separate because it includes Hold days
   const sellRuleStats = useMemo(() => {
@@ -729,8 +751,22 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       {/* ═══ BUY RULES ═══ */}
       {tab === "buyrules" && (
         <>
-          <div className="text-[14px] font-semibold mb-1">🟢 Buy Rules — What{"'"}s Working in 2026</div>
-          <div className="text-[12px] mb-4" style={{ color: "var(--ink-4)" }}>Study your entry rules. Sort by the metric you care about, click any rule to drill into individual trades.</div>
+          <div className="flex items-start justify-between mb-1 gap-3">
+            <div>
+              <div className="text-[14px] font-semibold">🟢 Buy Rules — What{"'"}s Working in 2026</div>
+              <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>Study your entry rules. Sort by the metric you care about, click any rule to drill into individual trades.</div>
+            </div>
+            <div className="flex p-0.5 rounded-[8px] gap-0.5 shrink-0" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+              {(["all", "closed", "open"] as const).map(st => (
+                <button key={st} onClick={() => setRuleStatus(st)}
+                        className="px-3 py-1 rounded-md text-[11px] font-medium transition-all capitalize"
+                        style={{ background: ruleStatus === st ? "var(--surface)" : "transparent", color: ruleStatus === st ? "var(--ink)" : "var(--ink-4)" }}>
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4" />
 
           {ruleStats.length > 0 ? (
             <>
@@ -805,18 +841,34 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                   })()}
                 </div>
               </div>
+              {ruleStatus !== "closed" && (
+                <div className="text-[11px] mb-4 -mt-3 px-1" style={{ color: "var(--ink-4)" }}>
+                  Open positions marked to latest price — figures are live and unrealized.
+                </div>
+              )}
 
-              {/* Drill-down — two columns: stats left, trades right */}
+              {/* Drill-down — two columns: stats left, trades right.
+                  effectivePl(t) keeps the panel honest under the All / Open
+                  toggle: open rows use overall_pl (marked to latest price),
+                  closed rows use realized_pl. Same denominator (risk_budget)
+                  for R, matching the unified ternary in the All Campaigns
+                  table at [L1683-1686] and in ruleStats above. */}
               {brDrill && (() => {
                 const rs = ruleStats.find(r => r.rule === brDrill);
                 const rt = rs?.trades || [];
-                const wins = rt.filter(t => parseFloat(String(t.realized_pl || 0)) > 0);
-                const losses = rt.filter(t => parseFloat(String(t.realized_pl || 0)) < 0);
-                const totalPl = rt.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
+                const effectivePl = (t: TradePosition) => {
+                  const isOpen = (t.status || "").toUpperCase() === "OPEN";
+                  return isOpen
+                    ? (enrichedById[t.trade_id]?.overall_pl ?? 0)
+                    : parseFloat(String(t.realized_pl || 0));
+                };
+                const wins = rt.filter(t => effectivePl(t) > 0);
+                const losses = rt.filter(t => effectivePl(t) < 0);
+                const totalPl = rt.reduce((a, t) => a + effectivePl(t), 0);
                 const avgPl = rt.length > 0 ? totalPl / rt.length : 0;
                 const winRate = rt.length > 0 ? (wins.length / rt.length) * 100 : 0;
-                const grossW = wins.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0);
-                const grossL = Math.abs(losses.reduce((a, t) => a + parseFloat(String(t.realized_pl || 0)), 0));
+                const grossW = wins.reduce((a, t) => a + effectivePl(t), 0);
+                const grossL = Math.abs(losses.reduce((a, t) => a + effectivePl(t), 0));
                 const pf = grossL > 0 ? grossW / grossL : 0;
                 const avgR = rs?.avgR;
 
@@ -883,15 +935,17 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
                                   style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                             ))}
                           </tr></thead>
-                          <tbody>{[...rt].sort((a, b) => parseFloat(String(b.realized_pl || 0)) - parseFloat(String(a.realized_pl || 0))).map((t, i) => {
-                            const pl = parseFloat(String(t.realized_pl || 0));
+                          <tbody>{[...rt].sort((a, b) => effectivePl(b) - effectivePl(a)).map((t, i) => {
+                            const isOpen = (t.status || "").toUpperCase() === "OPEN";
+                            const pl = effectivePl(t);
                             const rb = parseFloat(String(t.risk_budget || 0));
                             const rMult = rb > 0 ? pl / rb : null;
+                            const closedCell = isOpen || !t.closed_date ? "—" : String(t.closed_date).slice(5, 10);
                             return (
                               <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                                 <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
                                 <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.open_date || "").slice(5, 10)}</td>
-                                <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(t.closed_date || "").slice(5, 10)}</td>
+                                <td className="px-3 py-2" style={{ fontSize: 10, color: "var(--ink-4)" }}>{closedCell}</td>
                                 <td className="px-3 py-2 font-bold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>{formatCurrency(pl, { decimals: 0 })}</td>
                                 <td className="px-3 py-2" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</td>
                               </tr>
@@ -916,7 +970,8 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       {tab === "sellrules" && (
         <>
           <div className="text-[14px] font-semibold mb-1">🔴 Sell Rules — Exit Quality in 2026</div>
-          <div className="text-[12px] mb-4" style={{ color: "var(--ink-4)" }}>Which are protecting capital, which are capturing profits, which are hurting you.</div>
+          <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>Which are protecting capital, which are capturing profits, which are hurting you.</div>
+          <div className="text-[11px] mb-4 mt-1" style={{ color: "var(--ink-4)" }}>Closed only — open positions haven{"'"}t sold yet.</div>
 
           {sellRuleStats.length > 0 ? (
             <>
