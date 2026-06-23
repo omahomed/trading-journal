@@ -249,6 +249,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [pendingAtrDefault, setPendingAtrDefault] = useState(false);
   const [atrResolved, setAtrResolved] = useState(false);
 
+  // When the importer (or Sizer) prefills a price, the ticker-watching
+  // auto-fetch effect below would otherwise overwrite it with the live
+  // price 600ms later — losing the IBKR execution price the user just
+  // clicked through to log. This ref tells that effect to skip the
+  // setPrice on the next priceLookup cycle (ATR still updates).
+  // Cleared on consumption, so a subsequent ticker edit re-enables the
+  // normal auto-price behavior.
+  const skipNextPriceFetch = useRef(false);
+
   // Prefill from Position Sizer (via localStorage). Payload may carry an
   // explicit stopMode (Sizer's ATR scenarios) or just a resolved `stop`
   // dollar price (Sizer's tech-stop scenario + importer). Importer prefill
@@ -262,7 +271,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
       localStorage.removeItem("ps_prefill");
       if (data.ticker) setTicker(data.ticker);
       if (data.shares) setShares(String(data.shares));
-      if (data.price) setPrice(String(data.price));
+      if (data.price) { setPrice(String(data.price)); skipNextPriceFetch.current = true; }
       if (data.date) setDate(String(data.date));
       if (data.time) setTime(String(data.time));
       // Mode + value reception. Symmetric branches:
@@ -350,7 +359,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
       setFetchingPrice(true);
       api.priceLookup(ticker).then(data => {
         if (data && !("error" in data)) {
-          setPrice(String(data.price));
+          // Prefill (importer / Sizer) wins for one cycle — keep the
+          // IBKR execution price the user just clicked through. ATR
+          // always refreshes since the right-rail sizer needs it.
+          if (skipNextPriceFetch.current) {
+            skipNextPriceFetch.current = false;
+          } else {
+            setPrice(String(data.price));
+          }
           setAtrPct(data.atr_pct);
         }
       }).catch((err) => {
