@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { SearchSelect } from "./search-select";
 
 type SizerTab = "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
@@ -702,30 +703,38 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </Field>
         )}
 
-        {/* Holding picker (scalein, pyramid, trim) */}
+        {/* Holding picker (scalein, pyramid, trim).
+            Searchable so the user can type the ticker (e.g. "GEV") to
+            jump straight to the campaign — meaningful once openTrades
+            grows past ~10 positions. The selection side-effects
+            (price + ATR auto-fill) live in a named handler so the
+            SearchSelect onChange stays trivially typed. Empty value
+            ("") is the "no selection" sentinel and is prepended as
+            an explicit option so the label renders cleanly. */}
         {needsHolding && (
           <Field label="Select Position">
-            <select value={selectedHolding} onChange={e => {
-              setSelectedHolding(e.target.value);
-              resetCalc();
-              // Auto-fill price for holding
-              const h = openTrades.find(t => t.trade_id === e.target.value);
-              if (h) {
-                setFetching(true);
-                api.priceLookup(h.ticker).then(data => {
-                  if (data && !("error" in data)) {
-                    setEntryPrice(String(data.price));
-                    setAtrPct(String(data.atr_pct));
-                  }
-                }).catch(() => {}).finally(() => setFetching(false));
-              }
-            }}
-                    className={inputCls} style={{ ...inputStyle, appearance: "none" as const }}>
-              <option value="">Select...</option>
-              {openTrades.map(t => (
-                <option key={t.trade_id} value={t.trade_id}>{t.ticker} ({t.shares} shs) | {t.trade_id}</option>
-              ))}
-            </select>
+            <SearchSelect
+              value={selectedHolding}
+              onChange={(v) => {
+                setSelectedHolding(v);
+                resetCalc();
+                const h = openTrades.find(t => t.trade_id === v);
+                if (h) {
+                  setFetching(true);
+                  api.priceLookup(h.ticker).then(data => {
+                    if (data && !("error" in data)) {
+                      setEntryPrice(String(data.price));
+                      setAtrPct(String(data.atr_pct));
+                    }
+                  }).catch(() => {}).finally(() => setFetching(false));
+                }
+              }}
+              options={[
+                { value: "", label: "Select..." },
+                ...openTrades.map(t => ({ value: t.trade_id, label: `${t.ticker} (${t.shares} shs) | ${t.trade_id}` })),
+              ]}
+              placeholder="Select..."
+            />
             {holdingData && (
               <div className="mt-2 text-[12px] px-3 py-2 rounded-[8px]" style={{ background: "var(--bg)", color: "var(--ink-3)" }}>
                 {holdingData.shares} shs @ {formatCurrency(parseFloat(String(holdingData.avg_entry || 0)))}
