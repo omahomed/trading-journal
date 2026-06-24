@@ -12,12 +12,13 @@
  */
 
 export const LESSON_CATEGORIES = [
-  "Entry timing", "Stop placement", "Undersized", "Oversized",
+  "Followed Rules", "Entry timing", "Stop placement", "Undersized", "Oversized",
   "Scaled in too fast", "Exit too early", "Exit too late",
   "Market conditions", "Rule deviation", "Other",
 ] as const;
 
 export const CAT_COLORS: Record<string, { bg: string; fg: string }> = {
+  "Followed Rules": { bg: "color-mix(in oklab, #08a86b 14%, var(--surface))", fg: "#047857" },
   "Entry timing": { bg: "color-mix(in oklab, #f59f00 12%, var(--surface))", fg: "#b45309" },
   "Stop placement": { bg: "#fed7aa", fg: "#c2410c" },
   "Undersized": { bg: "#dbeafe", fg: "#3b82f6" },
