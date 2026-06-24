@@ -4,13 +4,14 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
 import { matchesAnyTradeQuery } from "@/lib/trade-search";
-import { CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
+import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { lotClosuresToLifoRows, type LifoRow } from "@/lib/lifo-closures";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
+import { SearchSelect } from "./search-select";
 import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 
@@ -426,6 +427,19 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // mixed-status view click into 10/30/all explicitly, which lazy-fetches
   // closed cohort on demand.
   const [recentActivity, setRecentActivity] = useState<RecentActivity>("off");
+  // Secondary filter row — collapsed by default to keep the primary
+  // bar clean. The "More filters" toggle expands a second row of
+  // controls that mirror the All Campaigns tab's filter set, plus
+  // lesson-aware filters (Has/Missing + Category) unique to the
+  // journal. These all narrow `filtered` further; their defaults
+  // ("all" / "" / "any" / []) mean "no filter applied".
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [resultFilter, setResultFilter] = useState<"all" | "winners" | "losers">("all");
+  const [buyRuleFilter, setBuyRuleFilter] = useState("");
+  const [sellRuleFilter, setSellRuleFilter] = useState("");
+  const [gradeFilter, setGradeFilter] = useState<"all" | "unrated" | "1" | "2" | "3" | "4" | "5">("all");
+  const [lessonFilter, setLessonFilter] = useState<"any" | "has" | "missing">("any");
+  const [lessonCategoryFilter, setLessonCategoryFilter] = useState("");
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [scaleOutOpen, setScaleOutOpen] = useState<string | null>(null);
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
@@ -770,6 +784,64 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       result = result.filter(t => String(t.open_date || "").slice(0, 10) >= cutoffStr);
     }
 
+    // Secondary filters (More-filters disclosure). Each is a no-op when
+    // left at its default. Order doesn't matter for correctness — they
+    // all chain on the realized P&L / rule / grade / lesson columns.
+
+    // Winners / Losers. Reads `realized_pl` — open positions whose
+    // realized bank is 0 fall out of BOTH winners and losers, which is
+    // the right intuition: an open trade with no realized partials
+    // isn't yet on either side of the win/loss ledger.
+    if (resultFilter === "winners") {
+      result = result.filter(t => parseFloat(String(t.realized_pl || 0)) > 0);
+    } else if (resultFilter === "losers") {
+      result = result.filter(t => parseFloat(String(t.realized_pl || 0)) < 0);
+    }
+
+    // Buy rule — matches the same `buy_rule || rule` fallback the rest
+    // of the codebase uses (the API never returns `buy_rule`, so this
+    // always reads `rule`, but the fallback is kept for symmetry).
+    if (buyRuleFilter) {
+      result = result.filter(t => (String((t as any).buy_rule || t.rule || "").trim() === buyRuleFilter));
+    }
+
+    // Sell rule — only set on closed campaigns.
+    if (sellRuleFilter) {
+      result = result.filter(t => (String((t as any).sell_rule || "").trim() === sellRuleFilter));
+    }
+
+    // Grade — "unrated" matches null/undefined/non-numeric; numeric
+    // values match exactly.
+    if (gradeFilter !== "all") {
+      result = result.filter(t => {
+        const g = (t as any).grade;
+        if (gradeFilter === "unrated") return typeof g !== "number";
+        return typeof g === "number" && g === parseInt(gradeFilter, 10);
+      });
+    }
+
+    // Has / Missing lesson — "has" requires either a non-empty note or
+    // at least one category. An empty trade_lessons row (note="",
+    // category="") is treated as missing so the filter surfaces trades
+    // that still need real content, not just any row in the table.
+    if (lessonFilter !== "any") {
+      result = result.filter(t => {
+        const l = lessons[t.trade_id];
+        const hasContent = !!l && ((l.note && l.note.trim().length > 0) || (l.category && l.category.trim().length > 0));
+        return lessonFilter === "has" ? hasContent : !hasContent;
+      });
+    }
+
+    // Lesson category — categories are pipe-joined in `trade_lessons
+    // .category`. Single-select filter; matches if the chosen category
+    // is one of the pipe-separated values on the trade's lesson row.
+    if (lessonCategoryFilter) {
+      result = result.filter(t => {
+        const cats = (lessons[t.trade_id]?.category || "").split("|").filter(Boolean);
+        return cats.includes(lessonCategoryFilter);
+      });
+    }
+
     // Sort
     switch (sort) {
       case "newest": result.sort((a, b) => String(b.open_date || "").localeCompare(String(a.open_date || "")) || String(b.trade_id || "").localeCompare(String(a.trade_id || ""))); break;
@@ -780,7 +852,30 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     }
 
     return result;
-  }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity]);
+  }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity, resultFilter, buyRuleFilter, sellRuleFilter, gradeFilter, lessonFilter, lessonCategoryFilter, lessons]);
+
+  // Derived option lists for the secondary filter row. Same pattern as
+  // analytics.tsx: rules surfaced from data (not the master BUY_RULES
+  // catalog) so the dropdown only ever shows rules actually used.
+  const buyRuleOptions = useMemo(
+    () => [...new Set(allTrades.map(t => String((t as any).buy_rule || t.rule || "").trim()).filter(Boolean))].sort(),
+    [allTrades],
+  );
+  const sellRuleOptions = useMemo(
+    () => [...new Set(allTrades.map(t => String((t as any).sell_rule || "").trim()).filter(Boolean))].sort(),
+    [allTrades],
+  );
+
+  // Active-secondary-filters count drives the "More filters ▾" badge
+  // so the user knows hidden filters are still in effect after they
+  // collapse the disclosure.
+  const activeSecondaryCount =
+    (resultFilter !== "all" ? 1 : 0) +
+    (buyRuleFilter ? 1 : 0) +
+    (sellRuleFilter ? 1 : 0) +
+    (gradeFilter !== "all" ? 1 : 0) +
+    (lessonFilter !== "any" ? 1 : 0) +
+    (lessonCategoryFilter ? 1 : 0);
 
   const openCount = allTrades.filter(t => (t.status || "").toUpperCase() === "OPEN").length;
   const closedCount = allTrades.filter(t => (t.status || "").toUpperCase() === "CLOSED").length;
@@ -807,23 +902,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       </div>
 
       {/* Filter bar */}
-      <div className="flex items-center gap-3 mb-5 flex-wrap">
-        {/* Status tabs */}
-        <div className="flex p-0.5 rounded-[10px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-          {(["all", "open", "closed"] as StatusFilter[]).map(s => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-                    className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all capitalize"
-                    style={{
-                      background: statusFilter === s ? "var(--surface)" : "transparent",
-                      color: statusFilter === s ? "var(--ink)" : "var(--ink-4)",
-                      boxShadow: statusFilter === s ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
-                    }}>
-              {s} {s === "all" ? `(${allTrades.length})` : s === "open" ? `(${openCount})` : `(${closedCount})`}
-            </button>
-          ))}
-        </div>
-
-        {/* Ticker multi-select: type + click to add */}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        {/* Ticker multi-select: type + click to add. Placed first per
+            user preference — search is the most-used way into the
+            journal, so it leads the row. */}
         <div className="flex items-center gap-1.5 flex-wrap">
           {selectedTickers.map(t => (
             <span key={t} className="flex items-center gap-1 h-[28px] px-2.5 rounded-[8px] text-[11px] font-semibold"
@@ -888,6 +970,21 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           </div>
         </div>
 
+        {/* Status tabs */}
+        <div className="flex p-0.5 rounded-[10px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {(["all", "open", "closed"] as StatusFilter[]).map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+                    className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all capitalize"
+                    style={{
+                      background: statusFilter === s ? "var(--surface)" : "transparent",
+                      color: statusFilter === s ? "var(--ink)" : "var(--ink-4)",
+                      boxShadow: statusFilter === s ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                    }}>
+              {s} {s === "all" ? `(${allTrades.length})` : s === "open" ? `(${openCount})` : `(${closedCount})`}
+            </button>
+          ))}
+        </div>
+
         {/* Sort */}
         <select value={sort} onChange={e => setSort(e.target.value as SortKey)}
                 className="h-[34px] px-3 rounded-[10px] text-[12px]"
@@ -928,10 +1025,118 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           <option value="50">Last 50 Activity</option>
         </select>
 
+        {/* More filters disclosure — secondary row sits below. Badge
+            shows the count of secondary filters currently narrowing
+            the result so the user knows hidden filters are still
+            active after collapsing. */}
+        <button onClick={() => setShowMoreFilters(o => !o)}
+                className="h-[34px] px-3 rounded-[10px] text-[12px] flex items-center gap-1.5"
+                style={{
+                  background: activeSecondaryCount > 0 ? `color-mix(in oklab, ${navColor} 10%, var(--surface))` : "var(--surface)",
+                  border: `1px solid ${activeSecondaryCount > 0 ? `color-mix(in oklab, ${navColor} 40%, var(--border))` : "var(--border)"}`,
+                  color: activeSecondaryCount > 0 ? navColor : "var(--ink)",
+                  fontWeight: activeSecondaryCount > 0 ? 600 : 400,
+                }}>
+          More filters
+          {activeSecondaryCount > 0 && (
+            <span className="text-[10px] font-bold rounded-full px-1.5 py-0.5" style={{ background: navColor, color: "white", minWidth: 16, textAlign: "center" }}>
+              {activeSecondaryCount}
+            </span>
+          )}
+          <span style={{ opacity: 0.6 }}>{showMoreFilters ? "▴" : "▾"}</span>
+        </button>
+
         {hasLoadedAnyData && (
           <span className="text-[12px] ml-auto" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
         )}
       </div>
+
+      {/* Secondary filter row — collapsed by default. All controls
+          here are no-ops at their default values, so toggling visibility
+          alone never changes the result set. */}
+      {showMoreFilters && (
+        <div className="flex items-center gap-3 mb-5 flex-wrap px-3 py-3 rounded-[12px]"
+             style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {/* Winners / Losers / All */}
+          <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+            {(["all", "winners", "losers"] as const).map(r => (
+              <button key={r} onClick={() => setResultFilter(r)}
+                      className="px-3 py-1 rounded-md text-[11px] font-medium transition-all capitalize"
+                      style={{
+                        background: resultFilter === r ? "var(--bg)" : "transparent",
+                        color: resultFilter === r ? "var(--ink)" : "var(--ink-4)",
+                      }}>
+                {r}
+              </button>
+            ))}
+          </div>
+
+          {/* Buy Rule — searchable, options derived from data */}
+          <div className="w-[180px]">
+            <SearchSelect
+              value={buyRuleFilter}
+              onChange={setBuyRuleFilter}
+              options={[{ value: "", label: "All Buy Rules" }, ...buyRuleOptions.map(o => ({ value: o, label: o }))]}
+              placeholder="All Buy Rules"
+            />
+          </div>
+
+          {/* Sell Rule — only populated by closed trades */}
+          <div className="w-[180px]">
+            <SearchSelect
+              value={sellRuleFilter}
+              onChange={setSellRuleFilter}
+              options={[{ value: "", label: "All Sell Rules" }, ...sellRuleOptions.map(o => ({ value: o, label: o }))]}
+              placeholder="All Sell Rules"
+            />
+          </div>
+
+          {/* Grade (1-5 stars, plus unrated) */}
+          <select value={gradeFilter} onChange={e => setGradeFilter(e.target.value as typeof gradeFilter)}
+                  className="h-[34px] px-3 rounded-[10px] text-[12px]"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+            <option value="all">All grades</option>
+            <option value="unrated">Unrated</option>
+            <option value="5">★★★★★ (5)</option>
+            <option value="4">★★★★ (4)</option>
+            <option value="3">★★★ (3)</option>
+            <option value="2">★★ (2)</option>
+            <option value="1">★ (1)</option>
+          </select>
+
+          {/* Has Lesson / Missing Lesson / Any */}
+          <select value={lessonFilter} onChange={e => setLessonFilter(e.target.value as typeof lessonFilter)}
+                  className="h-[34px] px-3 rounded-[10px] text-[12px]"
+                  style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
+            <option value="any">Any lesson state</option>
+            <option value="has">Has lesson</option>
+            <option value="missing">Missing lesson</option>
+          </select>
+
+          {/* Lesson Category — single-select; matches if the chosen
+              category appears in the trade's pipe-joined category
+              string. */}
+          <div className="w-[200px]">
+            <SearchSelect
+              value={lessonCategoryFilter}
+              onChange={setLessonCategoryFilter}
+              options={[{ value: "", label: "All categories" }, ...LESSON_CATEGORIES.map(c => ({ value: c, label: c }))]}
+              placeholder="Lesson category"
+            />
+          </div>
+
+          {activeSecondaryCount > 0 && (
+            <button onClick={() => {
+                      setResultFilter("all"); setBuyRuleFilter(""); setSellRuleFilter("");
+                      setGradeFilter("all"); setLessonFilter("any"); setLessonCategoryFilter("");
+                    }}
+                    className="ml-auto h-[28px] px-3 rounded-[8px] text-[11px] font-medium"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Ticker-search banner: makes the active narrow obvious and gives a
           one-click way back to the empty state. */}
