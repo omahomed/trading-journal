@@ -427,6 +427,13 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // mixed-status view click into 10/30/all explicitly, which lazy-fetches
   // closed cohort on demand.
   const [recentActivity, setRecentActivity] = useState<RecentActivity>("off");
+  // Stocks-only default. Behavior change: a fresh page load shows
+  // only equity rows. User flips to "options" or "all" if they want
+  // option campaigns surfaced. Reads `instrument_type` from the trade
+  // row (Migration 016) with a ticker-shape fallback for legacy rows
+  // that pre-date the backfill — same isOption predicate positions.ts
+  // and log-sell.tsx use, so the three call sites stay in lockstep.
+  const [instrumentFilter, setInstrumentFilter] = useState<"stocks" | "options" | "all">("stocks");
   // Secondary filter row — collapsed by default to keep the primary
   // bar clean. The "More filters" toggle expands a second row of
   // controls that mirror the All Campaigns tab's filter set, plus
@@ -644,6 +651,21 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       .catch(() => {});
   }, []);
 
+  // Ticker-add → default to Open. When the user first adds a ticker
+  // (selectedTickers goes from empty → non-empty) AND they haven't
+  // already picked a status tab (statusFilter still at the initial
+  // "none" sentinel), bump to "open". "I'm looking up X" almost
+  // always means "show me my open X position", not all 30 closed
+  // dust trades. If the user explicitly clicked all/closed/open
+  // before adding a ticker, we respect that choice. Removing the
+  // ticker doesn't revert — "open" is a fine end state, one click on
+  // the All tab gets the wider view back if they want it.
+  useEffect(() => {
+    if (selectedTickers.length > 0 && statusFilter === "none") {
+      setStatusFilter("open");
+    }
+  }, [selectedTickers, statusFilter]);
+
   // Close the right-click context menu on outside click / Escape.
   useEffect(() => {
     if (!tjCtxMenu) return;
@@ -842,6 +864,20 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       });
     }
 
+    // Stock / Option filter. Mirrors the isOption predicate in
+    // positions.ts and log-sell.tsx: prefer the explicit
+    // instrument_type column (Migration 016), fall back to the
+    // canonical option ticker shape ("DOCN 260515 $105C") for pre-
+    // backfill rows. Default ("stocks") narrows to equities only;
+    // user flips to "options" or "all" via the segmented control.
+    if (instrumentFilter !== "all") {
+      result = result.filter(t => {
+        const isOpt = String((t as any).instrument_type || "").toUpperCase() === "OPTION"
+          || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(t.ticker || ""));
+        return instrumentFilter === "options" ? isOpt : !isOpt;
+      });
+    }
+
     // Sort
     switch (sort) {
       case "newest": result.sort((a, b) => String(b.open_date || "").localeCompare(String(a.open_date || "")) || String(b.trade_id || "").localeCompare(String(a.trade_id || ""))); break;
@@ -852,7 +888,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     }
 
     return result;
-  }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity, resultFilter, buyRuleFilter, sellRuleFilter, gradeFilter, lessonFilter, lessonCategoryFilter, lessons]);
+  }, [allTrades, statusFilter, sort, selectedTickers, dateRange, recentActivity, resultFilter, buyRuleFilter, sellRuleFilter, gradeFilter, lessonFilter, lessonCategoryFilter, lessons, instrumentFilter]);
 
   // Derived option lists for the secondary filter row. Same pattern as
   // analytics.tsx: rules surfaced from data (not the master BUY_RULES
@@ -981,6 +1017,24 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                       boxShadow: statusFilter === s ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
                     }}>
               {s} {s === "all" ? `(${allTrades.length})` : s === "open" ? `(${openCount})` : `(${closedCount})`}
+            </button>
+          ))}
+        </div>
+
+        {/* Stocks / Options / All — default 'stocks' because the
+            equity book is the day-to-day surface and option campaigns
+            otherwise mix into the same list (often with confusing
+            OCC-symbol tickers). Placed before Sort per user spec. */}
+        <div className="flex p-0.5 rounded-[10px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {(["stocks", "options", "all"] as const).map(i => (
+            <button key={i} onClick={() => setInstrumentFilter(i)}
+                    className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium transition-all capitalize"
+                    style={{
+                      background: instrumentFilter === i ? "var(--surface)" : "transparent",
+                      color: instrumentFilter === i ? "var(--ink)" : "var(--ink-4)",
+                      boxShadow: instrumentFilter === i ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                    }}>
+              {i}
             </button>
           ))}
         </div>
