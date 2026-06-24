@@ -9,6 +9,7 @@ import { SellRuleGlossary } from "./sell-rule-glossary";
 import { SearchSelect } from "./search-select";
 import { uploadWithTimeout } from "@/lib/upload-with-timeout";
 import { UploadTracker, type UploadEntry, type UploadKind } from "./upload-tracker";
+import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -108,6 +109,15 @@ export function LogSell({ navColor }: { navColor: string }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  // Trade lesson — same shape Trade Review writes (`trade_lessons.category`
+  // is pipe-joined). Shown only when the current sell will fully close
+  // the position; saved fire-and-forget after the sell submit so a
+  // lesson-save hiccup never blocks the trade record. Pre-filled from
+  // any existing lesson on campaign selection so the user can refine
+  // (rather than overwrite blindly) when they revisit at exit time.
+  const [lessonCats, setLessonCats] = useState<string[]>([]);
+  const [lessonNote, setLessonNote] = useState("");
+  const [lessonExisted, setLessonExisted] = useState(false);
 
   // Background upload tracker — populated when a submit succeeds, then
   // updated as each upload resolves or fails. Submit button re-enables
@@ -170,6 +180,29 @@ export function LogSell({ navColor }: { navColor: string }) {
     const g = (selected as any).grade;
     setGrade(typeof g === "number" && g >= 1 && g <= 5 ? g : null);
   }, [selectedTrade]); // intentionally not `selected` to avoid thrash
+
+  // Pre-fill any existing trade lesson (Trade Review may have written
+  // one earlier). Pipe-joined category string is split into chips. If
+  // no lesson exists yet, state stays empty — first save on full exit
+  // creates the row. The endpoint is per-portfolio + bulk, so the
+  // payload is tiny.
+  useEffect(() => {
+    if (!selectedTrade) { setLessonCats([]); setLessonNote(""); setLessonExisted(false); return; }
+    api.getTradeLessons(getActivePortfolio()).then(r => {
+      const existing = r.lessons?.[selectedTrade];
+      if (existing) {
+        setLessonCats(String(existing.category || "").split("|").filter(Boolean));
+        setLessonNote(String(existing.note || ""));
+        setLessonExisted(true);
+      } else {
+        setLessonCats([]); setLessonNote(""); setLessonExisted(false);
+      }
+    }).catch((err) => {
+      log.debug.devOnly("log-sell", "getTradeLessons prefill skipped", err);
+      setLessonCats([]); setLessonNote(""); setLessonExisted(false);
+    });
+  }, [selectedTrade]);
+
   const sharesNum = parseFloat(shares) || 0;
   const priceNum = parseFloat(price) || 0;
   // Detect option from the selected campaign's metadata first (preferred — set
@@ -237,8 +270,27 @@ export function LogSell({ navColor }: { navColor: string }) {
         const closedStr = result.is_closed ? " (CLOSED)" : ` (${result.remaining_shares} remaining)`;
         setSubmitResult({ ok: true, msg: `Sold ${result.trx_id || "S1"}: ${shares} shs of ${selected.ticker} @ $${price}${plStr}${closedStr}` });
 
+        // Lesson save (fire-and-forget). Only on the close-out sell, and
+        // only when the user actually picked categories or wrote a note —
+        // an empty lesson is treated as "nothing to record", same intent
+        // as the Trade Review path. Failure is non-fatal: the sell
+        // already went through; the user can still fill the lesson from
+        // Trade Review later.
+        const lessonHasContent = lessonCats.length > 0 || lessonNote.trim().length > 0;
+        if (result.is_closed && lessonHasContent) {
+          api.saveTradeLessons({
+            portfolio,
+            trade_id: selectedTrade,
+            note: lessonNote,
+            category: lessonCats.join("|"),
+          }).catch((err) => {
+            log.error("log-sell", "lesson save failed (non-fatal — sell already recorded)", err);
+          });
+        }
+
         // Reset form — File refs are already captured in uploadEntries.
         setShares(""); setPrice(""); setNotes(""); setGrade(null); setPositionCharts([]);
+        setLessonCats([]); setLessonNote(""); setLessonExisted(false);
 
         // Refresh open trades
         const trades = await api.tradesOpen(getActivePortfolio()).catch(() => []);
@@ -412,6 +464,48 @@ export function LogSell({ navColor }: { navColor: string }) {
             <DropZone label="Position Changes (Partial Sells / Full Exits)" icon="🔄"
                       files={positionCharts} onFiles={setPositionCharts}
                       multiple accept="image/png,image/jpeg,application/pdf" />
+
+            {/* Lesson — only shown when this sell will close the position
+                fully (sharesNum >= selected.shares). Saves alongside the
+                sell submit; surfaces verbatim in the Trade Review tab and
+                Trade Journal trade cards via the existing trade_lessons
+                table. See [[lesson-categories]]. */}
+            {selected && sharesNum > 0 && sharesNum >= (selected.shares || 0) && (
+              <div className="rounded-[12px] p-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-[13px] font-semibold">🎓 Exit Lesson</div>
+                  {lessonExisted && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--bg)", color: "var(--ink-4)", border: "1px solid var(--border)" }}>
+                      pre-filled from Trade Review
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] mb-3" style={{ color: "var(--ink-4)" }}>
+                  Capture the takeaway now — shows up automatically in Trade Review &amp; the Trade Journal card.
+                </div>
+                <div className="text-[10px] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Category (pick one or more)</div>
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {LESSON_CATEGORIES.map(cat => {
+                    const active = lessonCats.includes(cat);
+                    const cc = CAT_COLORS[cat] || CAT_FALLBACK;
+                    return (
+                      <button key={cat} type="button"
+                              onClick={() => setLessonCats(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat])}
+                              className="text-[10px] font-bold px-2.5 py-1 rounded-full transition-all"
+                              style={{ background: active ? cc.bg : "var(--bg)", color: active ? cc.fg : "var(--ink-4)", border: `1px solid ${active ? cc.fg + "40" : "var(--border)"}` }}>
+                        {active ? "✓ " : ""}{cat}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-[10px] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>What did you learn from this trade?</div>
+                <textarea rows={3} value={lessonNote}
+                          onChange={e => setLessonNote(e.target.value)}
+                          placeholder="e.g. Scaled in too fast on the third add..."
+                          className="w-full px-3 py-2 rounded-[8px] text-[11px] outline-none resize-none"
+                          style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+              </div>
+            )}
 
             <button onClick={handleSubmit} disabled={submitting || !selectedTrade}
                     className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
