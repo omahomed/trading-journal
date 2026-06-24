@@ -150,11 +150,14 @@ export function MFactor({ navColor }: { navColor: string }) {
         ) : (
           <div className="mx-5 mb-4 flex flex-col gap-3">
             {data.active_exits.map((alert: any, i: number) => {
-              // Watch cards carry a `confirms_on` line and are
-              // informational only — no exposure target, no
-              // imperative footer. Violation cards lack confirms_on
-              // and prescribe a target + "act now" verbiage.
-              const isWatch = !!alert.confirms_on;
+              // Watch cards carry a `confirms_paths` array (one entry
+              // per escalation path the engine recognizes from the
+              // current state) and are informational only — no
+              // exposure target, no imperative footer. Violation
+              // cards lack confirms_paths and prescribe a target +
+              // "act now" verbiage.
+              const paths: Array<{ trigger: string; target: string }> = Array.isArray(alert.confirms_paths) ? alert.confirms_paths : [];
+              const isWatch = paths.length > 0;
               const sevStyle = alert.severity === "CRITICAL" ? { bg: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "#dc2626" }
                 : alert.severity === "SERIOUS" ? { bg: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "#e5484d" }
                 : { bg: "color-mix(in oklab, #f59f00 10%, var(--surface))", border: "#f59f00" };
@@ -163,8 +166,10 @@ export function MFactor({ navColor }: { navColor: string }) {
                   <div className="text-[18px] font-bold">{alert.signal}</div>
                   <div className="text-[13px] mt-1">{alert.detail}</div>
                   {isWatch ? (
-                    <div className="text-[12px] mt-2 opacity-80" style={{ fontStyle: "italic" }}>
-                      {alert.confirms_on}
+                    <div className="mt-2 flex flex-col gap-1 text-[12px] opacity-85" style={{ fontStyle: "italic" }}>
+                      {paths.map((p, j) => (
+                        <div key={j}>• {p.trigger} → target {p.target}</div>
+                      ))}
                     </div>
                   ) : (
                     <>

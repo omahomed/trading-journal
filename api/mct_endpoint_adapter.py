@@ -294,21 +294,29 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
     The richer V11 violation vocabulary is intentionally not exposed here;
     Phase 4 will replace this with V11-native exit signals.
 
-    Two card shapes, distinguished by the presence of `confirms_on`:
+    Two card shapes, distinguished by the presence of `confirms_paths`:
 
-      * Watch cards (have `confirms_on`): informational only. The UI
-        hides TARGET EXPOSURE and the "act immediately" footer, and
-        renders the `confirms_on` line instead — "if X happens, the
-        violation fires and you should be at Y%."
-      * Violation cards (no `confirms_on`): action-required. UI shows
-        TARGET EXPOSURE + imperative footer as before.
+      * Watch cards (have `confirms_paths`): informational only. The
+        UI hides TARGET EXPOSURE + the "act immediately" footer and
+        renders each path as a bullet — "if X happens, target Y."
+      * Violation cards (no `confirms_paths`): action-required. UI
+        shows TARGET EXPOSURE + imperative footer as before.
 
-    Without this split, a single close below the 50 SMA showed up
-    labeled "50 SMA Violation" with TARGET EXPOSURE: 0% — pushing the
-    user to dump the book before the engine's actual two-bar
-    violation rule (close below + next-day undercut >1%) had a chance
-    to fire. Same shape now mirrors 21 EMA: Watch first, then real
-    Violation when V11 wires it in Phase 4.
+    Why a LIST of paths: from "1 close below 21 EMA" the engine
+    recognizes TWO valid escalations — a next-day intraday undercut
+    >1% fires the 21 EMA Violation (50%, lighter response to a
+    one-bar shock), and a next-day CLOSE below fires the Confirmed
+    Break (30%, deeper response to sustained weakness). The earlier
+    single-string `confirms_on` could only describe one of those,
+    leaving the other invisible. 50 SMA Watch has a single path; the
+    UI renders one bullet, no special case.
+
+    Without this Watch/Violation split, a single close below the 50
+    SMA showed up labeled "50 SMA Violation" with TARGET EXPOSURE:
+    0% — pushing the user to dump the book before the engine's
+    actual two-bar violation rule (close below + next-day undercut
+    >1%) had a chance to fire. Same shape now mirrors 21 EMA: Watch
+    first, then real Violation when V11 wires it in Phase 4.
     """
     exits = []
     consec = int(state.get("consec_below_21") or 0)
@@ -323,7 +331,10 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
         exits.append({
             "signal": "21 EMA Watch",
             "detail": "1 close below 21 EMA",
-            "confirms_on": "Next-day close below 21 EMA confirms the break → target 30%",
+            "confirms_paths": [
+                {"trigger": "Next-day intraday undercut >1%", "target": "50%"},
+                {"trigger": "Next-day close below 21 EMA", "target": "30%"},
+            ],
             "severity": "WARNING",
         })
 
@@ -335,7 +346,9 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
             exits.append({
                 "signal": "50 SMA Watch",
                 "detail": "Price below 50 SMA",
-                "confirms_on": "Next-day intraday undercut >1% confirms the violation → target 0%",
+                "confirms_paths": [
+                    {"trigger": "Next-day intraday undercut >1%", "target": "0%"},
+                ],
                 "severity": "WARNING",
             })
     return exits
