@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { SearchSelect } from "./search-select";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -137,13 +138,19 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
       {/* 1. Select Ticker */}
       <div className="mb-5">
         <Field label="Select Ticker into Earnings">
-          <select value={selectedTicker} onChange={e => handleTickerChange(e.target.value)}
-                  className={inputCls} style={{ ...inputStyle, appearance: "none" as any }}>
-            <option value="">Select position...</option>
-            {openTrades.map(t => (
-              <option key={t.trade_id} value={t.ticker}>{t.ticker} — {t.shares} shs @ {formatCurrency(parseFloat(String(t.avg_entry || 0)))}</option>
-            ))}
-          </select>
+          {/* Searchable to make finding the right campaign trivial when
+              openTrades grows past ~10. Note: option `value` is the
+              ticker (not trade_id) — pre-existing behavior, kept as-is
+              because the planner downstream resolves by ticker. */}
+          <SearchSelect
+            value={selectedTicker}
+            onChange={handleTickerChange}
+            options={[
+              { value: "", label: "Select position..." },
+              ...openTrades.map(t => ({ value: t.ticker, label: `${t.ticker} — ${t.shares} shs @ ${formatCurrency(parseFloat(String(t.avg_entry || 0)))}` })),
+            ]}
+            placeholder="Select position..."
+          />
         </Field>
       </div>
 
