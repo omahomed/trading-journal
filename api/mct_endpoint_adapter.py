@@ -292,7 +292,24 @@ def _atr_pct(bars: pd.DataFrame) -> Optional[float]:
 def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
     """Legacy active_exits — derived only from consec_below_21 + close vs sma_50.
     The richer V11 violation vocabulary is intentionally not exposed here;
-    Phase 4 will replace this with V11-native exit signals."""
+    Phase 4 will replace this with V11-native exit signals.
+
+    Two card shapes, distinguished by the presence of `confirms_on`:
+
+      * Watch cards (have `confirms_on`): informational only. The UI
+        hides TARGET EXPOSURE and the "act immediately" footer, and
+        renders the `confirms_on` line instead — "if X happens, the
+        violation fires and you should be at Y%."
+      * Violation cards (no `confirms_on`): action-required. UI shows
+        TARGET EXPOSURE + imperative footer as before.
+
+    Without this split, a single close below the 50 SMA showed up
+    labeled "50 SMA Violation" with TARGET EXPOSURE: 0% — pushing the
+    user to dump the book before the engine's actual two-bar
+    violation rule (close below + next-day undercut >1%) had a chance
+    to fire. Same shape now mirrors 21 EMA: Watch first, then real
+    Violation when V11 wires it in Phase 4.
+    """
     exits = []
     consec = int(state.get("consec_below_21") or 0)
     if consec >= 2:
@@ -305,8 +322,8 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
     elif consec == 1:
         exits.append({
             "signal": "21 EMA Watch",
-            "detail": "1 close below 21 EMA — watching for confirmation",
-            "target": "50%",
+            "detail": "1 close below 21 EMA",
+            "confirms_on": "Next-day close below 21 EMA confirms the break → target 30%",
             "severity": "WARNING",
         })
 
@@ -316,10 +333,10 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
         close = last.get("close")
         if pd.notna(sma_50) and pd.notna(close) and float(close) < float(sma_50):
             exits.append({
-                "signal": "50 SMA Violation",
+                "signal": "50 SMA Watch",
                 "detail": "Price below 50 SMA",
-                "target": "0%",
-                "severity": "CRITICAL",
+                "confirms_on": "Next-day intraday undercut >1% confirms the violation → target 0%",
+                "severity": "WARNING",
             })
     return exits
 

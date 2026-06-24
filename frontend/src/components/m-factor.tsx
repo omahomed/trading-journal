@@ -150,6 +150,11 @@ export function MFactor({ navColor }: { navColor: string }) {
         ) : (
           <div className="mx-5 mb-4 flex flex-col gap-3">
             {data.active_exits.map((alert: any, i: number) => {
+              // Watch cards carry a `confirms_on` line and are
+              // informational only — no exposure target, no
+              // imperative footer. Violation cards lack confirms_on
+              // and prescribe a target + "act now" verbiage.
+              const isWatch = !!alert.confirms_on;
               const sevStyle = alert.severity === "CRITICAL" ? { bg: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "#dc2626" }
                 : alert.severity === "SERIOUS" ? { bg: "color-mix(in oklab, #e5484d 10%, var(--surface))", border: "#e5484d" }
                 : { bg: "color-mix(in oklab, #f59f00 10%, var(--surface))", border: "#f59f00" };
@@ -157,8 +162,16 @@ export function MFactor({ navColor }: { navColor: string }) {
                 <div key={i} className="p-4 rounded-[10px]" style={{ background: sevStyle.bg, borderLeft: `5px solid ${sevStyle.border}` }}>
                   <div className="text-[18px] font-bold">{alert.signal}</div>
                   <div className="text-[13px] mt-1">{alert.detail}</div>
-                  <div className="text-[16px] font-bold mt-2">TARGET EXPOSURE: {alert.target}</div>
-                  <div className="text-[11px] mt-1 opacity-70">Take profits on extended positions. Tighten all stops immediately.</div>
+                  {isWatch ? (
+                    <div className="text-[12px] mt-2 opacity-80" style={{ fontStyle: "italic" }}>
+                      {alert.confirms_on}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="text-[16px] font-bold mt-2">TARGET EXPOSURE: {alert.target}</div>
+                      <div className="text-[11px] mt-1 opacity-70">Take profits on extended positions. Tighten all stops immediately.</div>
+                    </>
+                  )}
                 </div>
               );
             })}
@@ -181,9 +194,9 @@ export function MFactor({ navColor }: { navColor: string }) {
               </thead>
               <tbody>
                 {[
-                  ["21 EMA Violation", "Close below 21 EMA + next day undercuts >0.2%", "50%", "WARNING"],
+                  ["21 EMA Violation", "Close below 21 EMA + next day undercuts >1%", "50%", "WARNING"],
                   ["21 EMA Confirmed Break", "Two consecutive closes below 21 EMA", "30%", "SERIOUS"],
-                  ["50 SMA Violation", "Close below 50 SMA + next day undercuts >0.2%", "0%", "CRITICAL"],
+                  ["50 SMA Violation", "Close below 50 SMA + next day undercuts >1%", "0%", "CRITICAL"],
                 ].map(([s, c, t, sv], i) => (
                   <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td className="px-3 py-2 font-semibold">{s}</td>
