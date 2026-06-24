@@ -9,6 +9,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
+import { SearchSelect } from "./search-select";
 import {
   computeWinRate,
   computeProfitFactor,
@@ -1950,26 +1951,33 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 
               {/* Buy Rule filter — option list derived from data, not
                   the master BUY_RULES list, so the dropdown only shows
-                  rules actually used by the user's trades. */}
-              <select value={campBuyRule} onChange={e => setCampBuyRule(e.target.value)}
-                      data-testid="campaigns-buy-rule-filter"
-                      className="h-[32px] px-2.5 rounded-[8px] text-[11px] max-w-[180px]"
-                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
-                <option value="">All Buy Rules</option>
-                {buyRuleOptions.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
+                  rules actually used by the user's trades. Searchable
+                  via SearchSelect because the rule catalog is long
+                  enough to make a native scroll painful. Empty value
+                  ("") is the "show everything" sentinel, surfaced as
+                  the first option so the SearchSelect label resolves
+                  cleanly when nothing is filtered. */}
+              <div className="w-[180px]" data-testid="campaigns-buy-rule-filter">
+                <SearchSelect
+                  value={campBuyRule}
+                  onChange={setCampBuyRule}
+                  options={[{ value: "", label: "All Buy Rules" }, ...buyRuleOptions.map(o => ({ value: o, label: o }))]}
+                  placeholder="All Buy Rules"
+                />
+              </div>
 
               {/* Sell Rule filter — only populated by closed trades
                   (sell_rule is set when the campaign closes). On a
                   fresh portfolio with only open trades, this dropdown
                   shows just "All Sell Rules". */}
-              <select value={campSellRule} onChange={e => setCampSellRule(e.target.value)}
-                      data-testid="campaigns-sell-rule-filter"
-                      className="h-[32px] px-2.5 rounded-[8px] text-[11px] max-w-[180px]"
-                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as any }}>
-                <option value="">All Sell Rules</option>
-                {sellRuleOptions.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
+              <div className="w-[180px]" data-testid="campaigns-sell-rule-filter">
+                <SearchSelect
+                  value={campSellRule}
+                  onChange={setCampSellRule}
+                  options={[{ value: "", label: "All Sell Rules" }, ...sellRuleOptions.map(o => ({ value: o, label: o }))]}
+                  placeholder="All Sell Rules"
+                />
+              </div>
 
               <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>{filtered.length} results</span>
             </div>
