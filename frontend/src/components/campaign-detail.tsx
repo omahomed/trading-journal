@@ -43,7 +43,7 @@ const BUY_RULES = [
   "br12.1 Option Play",
 ];
 
-const TILE_GRADIENTS = {
+export const TILE_GRADIENTS = {
   indigo: "linear-gradient(135deg, #6366f1, #818cf8)",
   blue:   "linear-gradient(135deg, #2563eb, #60a5fa)",
   green:  "linear-gradient(135deg, #10b981, #34d399)",
@@ -52,7 +52,7 @@ const TILE_GRADIENTS = {
   red:    "linear-gradient(135deg, #e5484d, #f87171)",
 };
 
-function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
+export function KPITile({ label, value, sub, gradient }: { label: string; value: string; sub: string; gradient: string }) {
   return (
     <div className="relative overflow-hidden rounded-[14px] p-[18px] text-white flex flex-col justify-between min-h-[108px] transition-transform duration-150 hover:scale-[1.01]"
          style={{ background: gradient, boxShadow: "0 4px 14px rgba(0,0,0,0.08)" }}>
@@ -1215,7 +1215,7 @@ function EditModal({ editingTxn, editForm, editError, editLoading, confirmingDel
   );
 }
 
-function SegmentedControl<T extends string>({ label, value, onChange, options, testId }: {
+export function SegmentedControl<T extends string>({ label, value, onChange, options, testId }: {
   label: string;
   value: T;
   onChange: (v: T) => void;
