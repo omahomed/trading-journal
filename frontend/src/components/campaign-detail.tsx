@@ -13,7 +13,7 @@
 // tickers) are filtered out at the campaign-scope step. Live prices only
 // (no manual_price overlay), so batchPrices is called without portfolio.
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type TradeDetailsBundle } from "@/lib/api";
 import { walkLedger, type LedgerRowInfo } from "@/lib/campaign-detail-walk";
 import { formatCurrency } from "@/lib/format";
@@ -164,11 +164,18 @@ function csvCell(v: string | number | null): string {
   return s;
 }
 
+type StatusKey = "Open" | "Partial" | "Closed";
+const STATUS_KEYS: readonly StatusKey[] = ["Open", "Partial", "Closed"] as const;
+
 interface Filters {
   q: string;
   series: "all" | "B" | "A";
   action: "all" | "BUY" | "SELL";
-  status: "all" | "Open" | "Partial" | "Closed";
+  // Multi-select. Empty array = no filter ("all status"). Order
+  // doesn't matter — filter predicate uses `includes`. Switched from
+  // a single-value enum so the user can toggle Open + Partial
+  // simultaneously (the common "show me what's still live" cut).
+  status: StatusKey[];
   ticker: string;        // ticker or "all"
   rule: string;          // rule or "all"
   pl: "all" | "realized" | "unrealized";
@@ -176,7 +183,7 @@ interface Filters {
   to: string;            // YYYY-MM-DD
 }
 const EMPTY_FILTERS: Filters = {
-  q: "", series: "all", action: "all", status: "all",
+  q: "", series: "all", action: "all", status: [],
   ticker: "all", rule: "all", pl: "all", from: "", to: "",
 };
 
@@ -583,7 +590,7 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
       }
       if (filters.series !== "all" && r.trx_id.charAt(0).toUpperCase() !== filters.series) return false;
       if (filters.action !== "all" && r.action !== filters.action) return false;
-      if (filters.status !== "all" && r.status !== filters.status) return false;
+      if (filters.status.length > 0 && !filters.status.includes(r.status)) return false;
       if (filters.ticker !== "all" && r.ticker !== filters.ticker) return false;
       if (filters.rule !== "all" && r.rule !== filters.rule) return false;
       if (filters.pl === "realized" && r.action !== "SELL") return false;
@@ -637,7 +644,7 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
   // Reset disabled when no filter is active.
   const filtersDirty = useMemo(() => (
     !!filters.q || filters.series !== "all" || filters.action !== "all"
-    || filters.status !== "all" || filters.ticker !== "all" || filters.rule !== "all"
+    || filters.status.length > 0 || filters.ticker !== "all" || filters.rule !== "all"
     || filters.pl !== "all" || !!filters.from || !!filters.to
   ), [filters]);
   const resetFilters = () => setFilters(EMPTY_FILTERS);
@@ -798,18 +805,11 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
             testId="filter-pl"
           />
 
-          {/* Status */}
-          <FilterSelect
-            label="Status"
+          {/* Status — multi-select (Open + Partial is the common cut
+              for "still live"). Empty selection = no filter. */}
+          <StatusMultiSelect
             value={filters.status}
-            onChange={v => setFilters(f => ({ ...f, status: v as Filters["status"] }))}
-            options={[
-              { v: "all", l: "All status" },
-              { v: "Open", l: "Open" },
-              { v: "Partial", l: "Partial" },
-              { v: "Closed", l: "Closed" },
-            ]}
-            testId="filter-status"
+            onChange={next => setFilters(f => ({ ...f, status: next }))}
           />
 
           {/* Ticker */}
@@ -1261,6 +1261,91 @@ function FilterSelect({ label, value, onChange, options, testId }: {
               style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", appearance: "none" as never }}>
         {options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
+    </div>
+  );
+}
+
+// Multi-select for Status. The other filters stay single-select via
+// FilterSelect — only Status has the "Open + Partial" combo workflow
+// the user asked for. Closing on outside-click is handled by the
+// wrapper ref + a window mousedown listener, matching the Strategy
+// flyout pattern used elsewhere in the app.
+function StatusMultiSelect({ value, onChange }: {
+  value: StatusKey[];
+  onChange: (next: StatusKey[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const toggle = (k: StatusKey) => {
+    onChange(value.includes(k) ? value.filter(v => v !== k) : [...value, k]);
+  };
+
+  const summary = value.length === 0
+    ? "All status"
+    : value.length <= 2
+      ? value.join(", ")
+      : `${value.length} selected`;
+
+  return (
+    <div className="flex flex-col gap-1" ref={ref}>
+      <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Status</span>
+      <div className="relative">
+        <button type="button"
+                onClick={() => setOpen(o => !o)}
+                data-testid="filter-status"
+                className="h-[34px] px-2.5 rounded-[10px] text-[12px] min-w-[120px] flex items-center justify-between gap-2"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: value.length > 0 ? "var(--ink)" : "var(--ink-3)" }}>
+          <span className="truncate">{summary}</span>
+          <span style={{ opacity: 0.6 }}>▾</span>
+        </button>
+        {open && (
+          <div className="absolute top-full mt-1 left-0 z-40 rounded-[10px] py-1.5 overflow-hidden"
+               style={{
+                 minWidth: 160,
+                 background: "var(--surface)",
+                 border: "1px solid var(--border)",
+                 boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+               }}>
+            {STATUS_KEYS.map(k => {
+              const checked = value.includes(k);
+              return (
+                <button key={k} type="button"
+                        onClick={() => toggle(k)}
+                        className="w-full text-left px-3 py-2 text-[12px] flex items-center gap-2 transition-colors hover:brightness-95"
+                        style={{ background: checked ? "var(--surface-2)" : "transparent", color: "var(--ink)" }}>
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-[4px]"
+                        style={{
+                          background: checked ? "var(--ink)" : "transparent",
+                          border: `1px solid ${checked ? "var(--ink)" : "var(--border)"}`,
+                          color: "var(--surface)",
+                          fontSize: 10, fontWeight: 700, lineHeight: 1,
+                        }}>
+                    {checked ? "✓" : ""}
+                  </span>
+                  {k}
+                </button>
+              );
+            })}
+            {value.length > 0 && (
+              <button type="button"
+                      onClick={() => onChange([])}
+                      className="w-full text-left px-3 py-1.5 text-[11px] font-medium"
+                      style={{ borderTop: "1px solid var(--border)", color: "var(--ink-3)" }}>
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
