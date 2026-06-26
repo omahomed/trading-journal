@@ -40,8 +40,13 @@ import { KPITile, TILE_GRADIENTS, SegmentedControl } from "./campaign-detail";
 
 const mono = "var(--font-jetbrains), monospace";
 
-type SeriesStatus = "Open" | "Partial" | "Closed";
-const STATUS_KEYS: readonly SeriesStatus[] = ["Open", "Partial", "Closed"] as const;
+// Campaign-level status — two states only. "Partial" was meaningful
+// on the per-fill Campaign Detail page (some lots open, some closed
+// within one trade), but at the campaign-summary level it just
+// means "still has open exposure", which is what "Open" already
+// covers. Collapsing keeps the filter intuitive.
+type SeriesStatus = "Open" | "Closed";
+const STATUS_KEYS: readonly SeriesStatus[] = ["Open", "Closed"] as const;
 
 interface TradeRow {
   trade_id: string;
@@ -65,6 +70,11 @@ interface TradeRow {
   b_return_pct: number | null;
   a_return_pct: number | null;
   total_pnl: number;
+  // Blended ROI on all capital deployed across both series. Null when
+  // the trade has no buys (data corruption). Lives alongside the per-
+  // series Return % so the user can read combined performance at a
+  // glance without summing two columns mentally.
+  total_return_pct: number | null;
   rule: string;
   multiplier: number;
 }
@@ -73,37 +83,50 @@ type ColKey =
   | "trade_id" | "ticker" | "status" | "open_date" | "closed_date"
   | "b_shares" | "b_pnl" | "b_return_pct"
   | "a_shares" | "a_pnl" | "a_return_pct"
-  | "total_pnl" | "rule";
+  | "total_pnl" | "total_return_pct" | "rule";
 
 interface Filters {
   q: string;
   status: SeriesStatus[];  // empty = no filter
-  ticker: string;          // ticker or "all"
+  tickers: string[];       // empty = no filter; multi-chip
   rule: string;            // rule or "all"
   pl: "all" | "realized" | "unrealized";
+  // Numeric Return-% thresholds. Empty string = no filter. Set to "0"
+  // to slice "positive only", or any number for ">= X%". Trades with
+  // a null series Return % (e.g. no A lots) fall out of the A-min
+  // filter when it's active — the row literally has no A series to
+  // compare against.
+  b_min_pct: string;
+  a_min_pct: string;
   from: string;            // YYYY-MM-DD
   to: string;              // YYYY-MM-DD
 }
 const EMPTY_FILTERS: Filters = {
-  q: "", status: [], ticker: "all", rule: "all", pl: "all", from: "", to: "",
+  q: "", status: [], tickers: [], rule: "all", pl: "all",
+  b_min_pct: "", a_min_pct: "", from: "", to: "",
 };
 
 const NUMERIC_KEYS = new Set<ColKey>([
   "b_shares", "b_pnl", "b_return_pct",
   "a_shares", "a_pnl", "a_return_pct",
-  "total_pnl",
+  "total_pnl", "total_return_pct",
 ]);
 
-// Multiplier: prefer explicit instrument_type metadata (Migration 016),
-// fall back to ticker-shape detection for legacy rows. Matches the
-// predicate positions.ts + log-sell.tsx use.
-function getMultiplier(trade: TradePosition): number {
+// Prefer explicit instrument_type metadata (Migration 016) with a
+// ticker-shape fallback for legacy rows. Shared helpers — getMultiplier
+// scales cost basis / unrealized into dollar terms for options;
+// isOption gates the page-level exclusion. Both predicates match
+// positions.ts + log-sell.tsx so the three call sites stay in lockstep.
+function isOption(trade: TradePosition): boolean {
   const type = String((trade as { instrument_type?: string }).instrument_type || "").toUpperCase();
-  const isOption = type === "OPTION"
-    || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
+  if (type === "OPTION") return true;
+  if (type === "STOCK") return false;
+  return /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
+}
+function getMultiplier(trade: TradePosition): number {
   const raw = parseFloat(String((trade as { multiplier?: number | string }).multiplier || 0));
   if (raw > 0) return raw;
-  return isOption ? 100 : 1;
+  return isOption(trade) ? 100 : 1;
 }
 
 function seriesPrefix(trxId: string): "B" | "A" | "" {
@@ -205,15 +228,16 @@ function computeTradeRows(
     const a_pnl = a_realized + a_unrealized;
     const b_return_pct = b_initial_cost > 0 ? (b_pnl / b_initial_cost) * 100 : null;
     const a_return_pct = a_initial_cost > 0 ? (a_pnl / a_initial_cost) * 100 : null;
+    const total_cost = b_initial_cost + a_initial_cost;
+    const total_pnl = b_pnl + a_pnl;
+    const total_return_pct = total_cost > 0 ? (total_pnl / total_cost) * 100 : null;
 
-    // Campaign-level status: derived from the lot walk so "Partial"
-    // (some sells, some remaining) is distinguished from "Open"
-    // (no sells yet) and "Closed" (all sold). The trade row's
-    // status column alone says only OPEN/CLOSED — not enough.
-    let status: SeriesStatus;
-    if (remaining_total <= 0.00001) status = "Closed";
-    else if (remaining_total < total_shares - 0.00001) status = "Partial";
-    else status = "Open";
+    // Campaign-level status: any remaining shares = Open, zero =
+    // Closed. The intermediate "Partial" tier (some sells fired but
+    // not all shares are out) collapses into Open here — the user
+    // still has skin in the game, which is what they care about at
+    // the summary level.
+    const status: SeriesStatus = remaining_total > 0.00001 ? "Open" : "Closed";
 
     return {
       trade_id: trade.trade_id,
@@ -227,7 +251,8 @@ function computeTradeRows(
       b_unrealized, a_unrealized,
       b_pnl, a_pnl,
       b_return_pct, a_return_pct,
-      total_pnl: b_pnl + a_pnl,
+      total_pnl,
+      total_return_pct,
       rule: String((trade as { rule?: string; buy_rule?: string }).rule || (trade as { buy_rule?: string }).buy_rule || ""),
       multiplier,
     };
@@ -308,7 +333,79 @@ function StatusMultiSelect({ value, onChange }: {
   );
 }
 
-// Single-select dropdown for Ticker + Rule. Mirrors Campaign Detail's
+// Multi-ticker chip + autocomplete. Mirrors the trade-journal.tsx
+// pattern: chips for picked tickers, an input that filters the
+// dropdown to matching tickers from the available set, Enter/Backspace
+// keyboard handling. Used in place of the single-select Ticker
+// dropdown so the user can pull "MU + AAPL + NBIS" in one go.
+function TickerMultiSelect({ value, onChange, tickers, navColor }: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  tickers: string[];
+  navColor: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const available = useMemo(
+    () => tickers.filter(t => !value.includes(t))
+                 .filter(t => !query || t.toUpperCase().includes(query.trim().toUpperCase())),
+    [tickers, value, query],
+  );
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Tickers</span>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {value.map(t => (
+          <span key={t} className="flex items-center gap-1 h-[28px] px-2.5 rounded-[8px] text-[11px] font-semibold"
+                style={{ background: `color-mix(in oklab, ${navColor} 10%, transparent)`, color: navColor, border: `1px solid ${navColor}30` }}>
+            {t}
+            <button onClick={() => onChange(value.filter(x => x !== t))}
+                    className="ml-0.5 opacity-60 hover:opacity-100" style={{ lineHeight: 1 }}>×</button>
+          </span>
+        ))}
+        <div className="relative">
+          <input type="text" value={query}
+                 placeholder={value.length > 0 ? "Add ticker…" : "Search tickers…"}
+                 onChange={e => { setQuery(e.target.value.toUpperCase()); setOpen(true); }}
+                 onKeyDown={e => {
+                   if (e.key === "Enter" && query) {
+                     const match = tickers.find(t => t.toUpperCase() === query.trim().toUpperCase());
+                     const next = match ?? query.trim().toUpperCase();
+                     if (next && !value.includes(next)) onChange([...value, next]);
+                     setQuery("");
+                     setOpen(false);
+                   } else if (e.key === "Backspace" && !query && value.length > 0) {
+                     onChange(value.slice(0, -1));
+                   }
+                 }}
+                 onFocus={() => setOpen(true)}
+                 onBlur={() => setTimeout(() => setOpen(false), 150)}
+                 className="h-[34px] px-3 rounded-[10px] text-[12px] w-[140px]"
+                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+          {open && available.length > 0 && (
+            <div className="absolute z-50 mt-1 w-[180px] rounded-[10px] overflow-hidden shadow-lg"
+                 style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: 200 }}>
+              <div className="overflow-y-auto" style={{ maxHeight: 200 }}>
+                {available.map(t => (
+                  <button key={t} type="button"
+                          onMouseDown={e => { e.preventDefault(); onChange([...value, t]); setQuery(""); setOpen(false); }}
+                          className="w-full text-left px-3 py-1.5 text-[12px] transition-colors"
+                          style={{ fontFamily: mono }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Single-select dropdown for Rule. Mirrors Campaign Detail's
 // FilterSelect shape so the two pages feel like siblings.
 function FilterSelect({ label, value, onChange, options }: {
   label: string;
@@ -382,7 +479,14 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
 
   useEffect(() => { loadAll(false); }, [loadAll]);
 
-  const allTrades = useMemo(() => [...openTrades, ...closedTrades], [openTrades, closedTrades]);
+  // Options have no meaningful B-vs-A story in this workflow — they
+  // rarely receive scale-ins, and when they do the multiplier mixes
+  // weirdly with the per-series ROI math. Hard-exclude them so the
+  // page stays focused on stock-campaign attribution.
+  const allTrades = useMemo(
+    () => [...openTrades, ...closedTrades].filter(t => !isOption(t)),
+    [openTrades, closedTrades],
+  );
   const rows = useMemo(
     () => computeTradeRows(allTrades, details, closures, livePrices),
     [allTrades, details, closures, livePrices],
@@ -405,7 +509,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
         if (!haystack.some(s => s.includes(q))) return false;
       }
       if (filters.status.length > 0 && !filters.status.includes(r.status)) return false;
-      if (filters.ticker !== "all" && r.ticker !== filters.ticker) return false;
+      if (filters.tickers.length > 0 && !filters.tickers.includes(r.ticker)) return false;
       if (filters.rule !== "all" && r.rule !== filters.rule) return false;
       // P&L scope. realized = has any closed shares; unrealized = has
       // any remaining lot. A purely open trade with no closures shows
@@ -413,6 +517,18 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
       // realized only.
       if (filters.pl === "realized" && (r.b_realized === 0 && r.a_realized === 0)) return false;
       if (filters.pl === "unrealized" && (r.b_unrealized === 0 && r.a_unrealized === 0)) return false;
+      // Per-series Return % thresholds. Strings parsed lazily so the
+      // user can clear them by emptying the input. A row with a null
+      // Return % (no lots in that series) fails the filter when it's
+      // active — there's no series to evaluate against.
+      const bMin = parseFloat(filters.b_min_pct);
+      if (!isNaN(bMin)) {
+        if (r.b_return_pct == null || r.b_return_pct < bMin) return false;
+      }
+      const aMin = parseFloat(filters.a_min_pct);
+      if (!isNaN(aMin)) {
+        if (r.a_return_pct == null || r.a_return_pct < aMin) return false;
+      }
       const d = r.open_date.slice(0, 10);
       if (filters.from && d < filters.from) return false;
       if (filters.to && d > filters.to) return false;
@@ -443,14 +559,13 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
   // see what they're looking at at a glance.
   const kpis = useMemo(() => {
     const openCount = sorted.filter(r => r.status === "Open").length;
-    const partialCount = sorted.filter(r => r.status === "Partial").length;
     const closedCount = sorted.filter(r => r.status === "Closed").length;
     const bRealized = sorted.reduce((t, r) => t + r.b_realized, 0);
     const aRealized = sorted.reduce((t, r) => t + r.a_realized, 0);
     const unrealized = sorted.reduce((t, r) => t + r.b_unrealized + r.a_unrealized, 0);
     return {
       trades: sorted.length,
-      openCount, partialCount, closedCount,
+      openCount, closedCount,
       bRealized, aRealized, unrealized,
     };
   }, [sorted]);
@@ -462,9 +577,10 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
   };
 
   const filtersDirty = useMemo(() => (
-    !!filters.q || filters.status.length > 0
-    || filters.ticker !== "all" || filters.rule !== "all"
-    || filters.pl !== "all" || !!filters.from || !!filters.to
+    !!filters.q || filters.status.length > 0 || filters.tickers.length > 0
+    || filters.rule !== "all" || filters.pl !== "all"
+    || !!filters.b_min_pct || !!filters.a_min_pct
+    || !!filters.from || !!filters.to
   ), [filters]);
   const resetFilters = () => setFilters(EMPTY_FILTERS);
 
@@ -473,7 +589,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
       "Trade ID", "Ticker", "Status", "Open", "Close",
       "B Shares", "B Cost", "B Realized", "B Unrealized", "B P&L", "B Return %",
       "A Shares", "A Cost", "A Realized", "A Unrealized", "A P&L", "A Return %",
-      "Total P&L", "Rule",
+      "Total P&L", "Total Return %", "Rule",
     ].join(",");
     const escape = (v: unknown) => {
       const s = v == null ? "" : String(v);
@@ -487,7 +603,8 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
       r.a_shares, r.a_initial_cost.toFixed(2),
       r.a_realized.toFixed(2), r.a_unrealized.toFixed(2),
       r.a_pnl.toFixed(2), r.a_return_pct?.toFixed(2) ?? "",
-      r.total_pnl.toFixed(2), r.rule,
+      r.total_pnl.toFixed(2), r.total_return_pct?.toFixed(2) ?? "",
+      r.rule,
     ].map(escape).join(","));
     const csv = [header, ...lines].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -503,7 +620,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
     ? `${lastUpdatedAt.toISOString().slice(0, 10)} ${String(lastUpdatedAt.getHours()).padStart(2, "0")}:${String(lastUpdatedAt.getMinutes()).padStart(2, "0")}`
     : "";
 
-  const statusSplitLabel = `${kpis.openCount} O · ${kpis.partialCount} P · ${kpis.closedCount} C`;
+  const statusSplitLabel = `${kpis.openCount} O · ${kpis.closedCount} C`;
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="entry-vs-add-root">
@@ -516,7 +633,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
             Entry vs <em className="italic" style={{ color: navColor }}>Add</em>
           </h1>
           <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-            Per-trade performance split by series — original entry (B) vs add-ons (A)
+            Per-stock-trade performance split by series — original entry (B) vs add-ons (A) · options excluded
             {lastUpdatedLabel ? ` · as of ${lastUpdatedLabel}` : ""}
           </div>
         </div>
@@ -552,7 +669,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
       ) : (
         <div className="grid grid-cols-5 gap-[14px]">
           <KPITile label="Trades" value={String(kpis.trades)} sub={`${rows.length} total`} gradient={TILE_GRADIENTS.indigo} />
-          <KPITile label="Status Mix" value={statusSplitLabel} sub="Open · Partial · Closed" gradient={TILE_GRADIENTS.blue} />
+          <KPITile label="Status Mix" value={statusSplitLabel} sub="Open · Closed" gradient={TILE_GRADIENTS.blue} />
           <KPITile label="B Realized" value={formatCurrency(kpis.bRealized, { decimals: 0 })}
                    sub="entry-lot closures" gradient={kpis.bRealized >= 0 ? TILE_GRADIENTS.green : TILE_GRADIENTS.red} />
           <KPITile label="A Realized" value={formatCurrency(kpis.aRealized, { decimals: 0 })}
@@ -606,10 +723,11 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
             onChange={next => setFilters(f => ({ ...f, status: next }))}
           />
 
-          <FilterSelect label="Ticker"
-            value={filters.ticker}
-            onChange={v => setFilters(f => ({ ...f, ticker: v }))}
-            options={[{ v: "all", l: "All tickers" }, ...tickerOptions.map(t => ({ v: t, l: t }))]}
+          <TickerMultiSelect
+            value={filters.tickers}
+            onChange={next => setFilters(f => ({ ...f, tickers: next }))}
+            tickers={tickerOptions}
+            navColor={navColor}
           />
 
           <FilterSelect label="Rule"
@@ -617,6 +735,29 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
             onChange={v => setFilters(f => ({ ...f, rule: v }))}
             options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
           />
+
+          {/* Per-series Return % min thresholds. Empty input = no
+              filter. Type "0" to slice positives only; type "50"
+              for ">= 50%". Negative numbers work too (e.g. "-20"
+              to surface trades with B% <= -20%? Actually no — this
+              is a MIN, so "-20" means ">= -20%"). For a max bound,
+              add later if asked. */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>B % Min</span>
+            <input type="number" inputMode="decimal" step="1" value={filters.b_min_pct}
+                   onChange={e => setFilters(f => ({ ...f, b_min_pct: e.target.value }))}
+                   placeholder="≥ %"
+                   className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>A % Min</span>
+            <input type="number" inputMode="decimal" step="1" value={filters.a_min_pct}
+                   onChange={e => setFilters(f => ({ ...f, a_min_pct: e.target.value }))}
+                   placeholder="≥ %"
+                   className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+          </div>
 
           <div className="flex flex-col gap-1">
             <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Date Range</span>
@@ -663,6 +804,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
                   { k: "a_pnl", l: "A P&L", align: "right" },
                   { k: "a_return_pct", l: "A Return %", align: "right" },
                   { k: "total_pnl", l: "Total P&L", align: "right" },
+                  { k: "total_return_pct", l: "Total %", align: "right" },
                   { k: "rule", l: "Rule", align: "left" },
                 ] as { k: ColKey; l: string; align: "left" | "right" }[]).map(c => (
                   <th key={c.k} onClick={() => onSort(c.k)}
@@ -681,7 +823,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-3 py-8 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  <td colSpan={14} className="px-3 py-8 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
                     {loading ? "Loading…" : "No trades match the current filters."}
                   </td>
                 </tr>
@@ -715,6 +857,18 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
                       style={{ fontFamily: mono, color: sorted.reduce((t, r) => t + r.total_pnl, 0) >= 0 ? "#08a86b" : "#e5484d" }}>
                     {formatCurrency(sorted.reduce((t, r) => t + r.total_pnl, 0), { decimals: 0 })}
                   </td>
+                  <td className="px-3 py-2 text-right font-bold" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                    {(() => {
+                      // Blended Total % across the filtered set: Σ pnl ÷ Σ cost.
+                      // Not a simple mean of per-row %s — capital-weighted is
+                      // what you want for a portfolio-level read.
+                      const sumPnl = sorted.reduce((t, r) => t + r.total_pnl, 0);
+                      const sumCost = sorted.reduce((t, r) => t + r.b_initial_cost + r.a_initial_cost, 0);
+                      if (sumCost <= 0) return "—";
+                      const pct = (sumPnl / sumCost) * 100;
+                      return <span style={{ color: pct >= 0 ? "#08a86b" : "#e5484d" }}>{pct.toFixed(1)}%</span>;
+                    })()}
+                  </td>
                   <td className="px-3 py-2" />
                 </tr>
               </tfoot>
@@ -727,14 +881,10 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
 }
 
 function EntryVsAddRow({ row: r }: { row: TradeRow }) {
-  const statusBg =
-    r.status === "Open" ? "color-mix(in oklab, #08a86b 14%, var(--surface))" :
-    r.status === "Partial" ? "color-mix(in oklab, #f59f00 18%, var(--surface))" :
-    "color-mix(in oklab, #64748b 14%, var(--surface))";
-  const statusColor =
-    r.status === "Open" ? "#08a86b" :
-    r.status === "Partial" ? "#a87108" :
-    "var(--ink-3)";
+  const statusBg = r.status === "Open"
+    ? "color-mix(in oklab, #08a86b 14%, var(--surface))"
+    : "color-mix(in oklab, #64748b 14%, var(--surface))";
+  const statusColor = r.status === "Open" ? "#08a86b" : "var(--ink-3)";
 
   const fmtPnl = (v: number) => (
     <span style={{ color: v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)" }}>
@@ -774,6 +924,7 @@ function EntryVsAddRow({ row: r }: { row: TradeRow }) {
       </td>
       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{fmtPct(r.a_return_pct)}</td>
       <td className="px-3 py-2 text-right font-bold" style={{ fontFamily: mono }}>{fmtPnl(r.total_pnl)}</td>
+      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{fmtPct(r.total_return_pct)}</td>
       <td className="px-3 py-2 text-[11px]" style={{ color: "var(--ink-3)" }}>{r.rule}</td>
     </tr>
   );
