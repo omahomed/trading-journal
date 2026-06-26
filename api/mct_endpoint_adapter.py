@@ -290,9 +290,12 @@ def _atr_pct(bars: pd.DataFrame) -> Optional[float]:
 
 
 def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
-    """Legacy active_exits — derived only from consec_below_21 + close vs sma_50.
-    The richer V11 violation vocabulary is intentionally not exposed here;
-    Phase 4 will replace this with V11-native exit signals.
+    """V11-state-aware active_exits.
+
+    Now reads the engine's actual violation flags (violation_21_fired
+    + violation_50_fired) instead of just the close-streak counts.
+    The earlier "Phase 4 deferred" comment had it labeling a fired
+    50 SMA Violation as merely a Watch — masking the real signal.
 
     Two card shapes, distinguished by the presence of `confirms_paths`:
 
@@ -302,32 +305,41 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
       * Violation cards (no `confirms_paths`): action-required. UI
         shows TARGET EXPOSURE + imperative footer as before.
 
-    Why a LIST of paths: from "1 close below 21 EMA" the engine
-    recognizes TWO valid escalations — a next-day intraday undercut
-    >1% fires the 21 EMA Violation (50%, lighter response to a
-    one-bar shock), and a next-day CLOSE below fires the Confirmed
-    Break (30%, deeper response to sustained weakness). The earlier
-    single-string `confirms_on` could only describe one of those,
-    leaving the other invisible. 50 SMA Watch has a single path; the
-    UI renders one bullet, no special case.
+    Per-MA tier picking ("most severe wins"). When multiple states
+    apply simultaneously to the same MA, render only the one with
+    the deepest action target so the user isn't asked to pick
+    between competing targets:
 
-    Without this Watch/Violation split, a single close below the 50
-    SMA showed up labeled "50 SMA Violation" with TARGET EXPOSURE:
-    0% — pushing the user to dump the book before the engine's
-    actual two-bar violation rule (close below + next-day undercut
-    >1%) had a chance to fire. Same shape now mirrors 21 EMA: Watch
-    first, then real Violation when V11 wires it in Phase 4.
+      21 EMA:
+        consec >= 2          → Confirmed Break (30%, SERIOUS)
+        violation_21_fired   → Violation       (50%, WARNING)
+        consec == 1          → Watch           (no target, confirms_paths)
+      50 SMA:
+        violation_50_fired   → Violation       (0%, CRITICAL)
+        consec_below_50 >= 1 → Watch           (no target, confirms_paths)
+
+    Confirmed Break supersedes Violation on the 21 EMA path because
+    30% is a deeper cut than 50% — sustained weakness deserves more.
     """
-    exits = []
-    consec = int(state.get("consec_below_21") or 0)
-    if consec >= 2:
+    exits: list[dict] = []
+
+    consec_21 = int(state.get("consec_below_21") or 0)
+    violation_21 = bool(state.get("violation_21_fired"))
+    if consec_21 >= 2:
         exits.append({
             "signal": "21 EMA Confirmed Break",
-            "detail": f"{consec} consecutive closes below 21 EMA",
+            "detail": f"{consec_21} consecutive closes below 21 EMA",
             "target": "30%",
             "severity": "SERIOUS",
         })
-    elif consec == 1:
+    elif violation_21:
+        exits.append({
+            "signal": "21 EMA Violation",
+            "detail": "Close below 21 EMA + intraday undercut >1% confirmed",
+            "target": "50%",
+            "severity": "WARNING",
+        })
+    elif consec_21 == 1:
         exits.append({
             "signal": "21 EMA Watch",
             "detail": "1 close below 21 EMA",
@@ -338,19 +350,25 @@ def _build_active_exits(state: dict, bars: pd.DataFrame) -> list[dict]:
             "severity": "WARNING",
         })
 
-    if not bars.empty:
-        last = bars.iloc[-1]
-        sma_50 = last.get("sma_50")
-        close = last.get("close")
-        if pd.notna(sma_50) and pd.notna(close) and float(close) < float(sma_50):
-            exits.append({
-                "signal": "50 SMA Watch",
-                "detail": "Price below 50 SMA",
-                "confirms_paths": [
-                    {"trigger": "Next-day intraday undercut >1%", "target": "0%"},
-                ],
-                "severity": "WARNING",
-            })
+    consec_50 = int(state.get("consec_below_50") or 0)
+    violation_50 = bool(state.get("violation_50_fired"))
+    if violation_50:
+        exits.append({
+            "signal": "50 SMA Violation",
+            "detail": "Close below 50 SMA + intraday undercut >1% confirmed",
+            "target": "0%",
+            "severity": "CRITICAL",
+        })
+    elif consec_50 >= 1:
+        exits.append({
+            "signal": "50 SMA Watch",
+            "detail": f"{consec_50} close{'s' if consec_50 != 1 else ''} below 50 SMA",
+            "confirms_paths": [
+                {"trigger": "Next-day intraday undercut >1%", "target": "0%"},
+            ],
+            "severity": "WARNING",
+        })
+
     return exits
 
 
