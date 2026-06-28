@@ -58,19 +58,93 @@ export function mctStateToSizingMode(state: string | null | undefined): 0 | 1 | 
   }
 }
 
+/** Minimal shape we need from the rally-prefix active_exits array.
+ *  Matches the adapter's emitted dicts; extra fields are ignored. */
+export interface ExitAlert {
+  signal: string;
+  severity?: string;
+}
+
+/** Exit-ladder ceiling on sizing mode. Logic mirrors the M Factor
+ *  Exit Alerts taxonomy: a fired structural break should constrain
+ *  NEW-trade sizing even when the engine state itself hasn't flipped
+ *  to CORRECTION yet. Floor only — never lifts the mode above what
+ *  the M Factor state would pick on its own. Watch states (no actual
+ *  break confirmed) do NOT downshift; they're informational.
+ *
+ *    50 SMA Violation             → Defense (0)
+ *    21 EMA Confirmed Break       → Normal  (1)
+ *    21 EMA Violation             → Normal  (1)
+ *    (anything else, incl Watch)  → no floor (returns 2)
+ *
+ *  Most-severe wins when multiple alerts are active: a 50 SMA
+ *  Violation alongside a 21 EMA Confirmed Break floors at Defense,
+ *  not Normal. */
+export function exitLadderFloor(activeExits: readonly ExitAlert[] | null | undefined): {
+  idx: 0 | 1 | 2;
+  reason: string | null;
+} {
+  if (!activeExits || activeExits.length === 0) return { idx: 2, reason: null };
+  for (const a of activeExits) {
+    if (a?.signal === "50 SMA Violation") return { idx: 0, reason: "50 SMA Violation" };
+  }
+  for (const a of activeExits) {
+    if (a?.signal === "21 EMA Confirmed Break" || a?.signal === "21 EMA Violation") {
+      return { idx: 1, reason: a.signal };
+    }
+  }
+  return { idx: 2, reason: null };
+}
+
+/** Combined auto-mode derivation: take the MORE conservative of
+ *  (M Factor state → mode, exit-ladder floor). Returns the chosen
+ *  index plus a breakdown the UI can use to explain the pick to the
+ *  user ("Auto: Normal — from M Factor POWERTREND, downshifted by
+ *  21 EMA Confirmed Break"). */
+export function deriveAutoSizingMode(
+  state: string | null | undefined,
+  activeExits: readonly ExitAlert[] | null | undefined,
+): {
+  idx: 0 | 1 | 2;
+  source: { stateIdx: 0 | 1 | 2; floor: { idx: 0 | 1 | 2; reason: string | null } };
+} {
+  const stateIdx = mctStateToSizingMode(state);
+  const floor = exitLadderFloor(activeExits);
+  const idx = Math.min(stateIdx, floor.idx) as 0 | 1 | 2;
+  return { idx, source: { stateIdx, floor } };
+}
+
 /** Human-readable label for the source of a sizing-mode pick. Used by
  *  Position Sizer's "Auto: Offense (from M Factor POWERTREND)" /
  *  "Manual: Defense" indicator. The function NAME stays as
  *  describeMctSource — the engine internals are still called MCT —
- *  but the user-visible string says "M Factor". */
-export function describeMctSource(state: string | null | undefined): string {
-  switch (state) {
-    case "POWERTREND":
-    case "UPTREND":
-    case "RALLY MODE":
-    case "CORRECTION":
-      return `from M Factor ${state}`;
-    default:
-      return "M Factor state unknown";
+ *  but the user-visible string says "M Factor".
+ *
+ *  Optional `floor` arg: when the exit-ladder downshifted the mode
+ *  below what the state alone would have picked, the label says so
+ *  ("from M Factor POWERTREND, downshifted by 21 EMA Confirmed Break")
+ *  so the user understands WHY the auto-mode isn't what the state
+ *  pill suggests. */
+export function describeMctSource(
+  state: string | null | undefined,
+  floor?: { idx: 0 | 1 | 2; reason: string | null } | null,
+): string {
+  const base = (() => {
+    switch (state) {
+      case "POWERTREND":
+      case "UPTREND":
+      case "RALLY MODE":
+      case "CORRECTION":
+        return `from M Factor ${state}`;
+      default:
+        return "M Factor state unknown";
+    }
+  })();
+  if (floor?.reason) {
+    const stateIdx = mctStateToSizingMode(state);
+    if (floor.idx < stateIdx) {
+      return `${base}, downshifted by ${floor.reason}`;
+    }
   }
+  return base;
 }

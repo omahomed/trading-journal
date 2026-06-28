@@ -32,7 +32,10 @@ const BUY_RULES = [
 import {
   SIZING_MODES,
   mctStateToSizingMode,
+  deriveAutoSizingMode,
+  exitLadderFloor,
   describeMctSource,
+  type ExitAlert,
 } from "@/lib/sizing-mode";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -135,6 +138,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // the V10 mFactorSuggestion / radio buttons. No manual override on
   // Log Buy by design — Position Sizer is the override surface.
   const [mctState, setMctState] = useState<string | null>(null);
+  // Active exit-ladder alerts. Feed the sizing-mode floor (see lib/
+  // sizing-mode#exitLadderFloor) so Log Buy's auto-mode matches what
+  // Position Sizer would derive for the same market state.
+  const [activeExits, setActiveExits] = useState<readonly { signal: string; severity?: string }[]>([]);
 
   const [allDetails, setAllDetails] = useState<TradeDetail[]>([]);
   const [campPrice, setCampPrice] = useState(0);
@@ -220,8 +227,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
       setOpenTrades(open as TradePosition[]);
       setAllDetails(det.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
+      const exits = ((rally as { active_exits?: ExitAlert[] } | null)?.active_exits ?? []) as ExitAlert[];
       setMctState(stateStr);
-      setSizingMode(mctStateToSizingMode(stateStr));
+      setActiveExits(exits);
+      // Match the Position Sizer's derivation so the two pages agree:
+      // exit-ladder floor downshifts auto-mode (e.g. 50 SMA Violation
+      // forces Defense even on POWERTREND).
+      setSizingMode(deriveAutoSizingMode(stateStr, exits).idx);
       setStrategies(strats);
     });
   }, []);
@@ -1164,14 +1176,17 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       ({SIZING_MODES[sizingMode].pct.toFixed(2)}% risk)
                     </span>
                     <span style={{ color: "var(--ink-4)" }}>
-                      {" "}{sizingModeManual ? "— manual override" : describeMctSource(mctState)}
+                      {" "}{sizingModeManual ? "— manual override" : describeMctSource(mctState, exitLadderFloor(activeExits))}
                     </span>
                   </div>
                   {sizingModeManual && (
                     <button type="button"
                             data-testid="logbuy-reset-to-mct"
                             onClick={() => {
-                              setSizingMode(mctStateToSizingMode(mctState));
+                              // Re-apply the combined auto rule so the
+                              // exit-ladder floor still binds after a
+                              // reset (matches Position Sizer behavior).
+                              setSizingMode(deriveAutoSizingMode(mctState, activeExits).idx);
                               setSizingModeManual(false);
                             }}
                             className="text-[11px] px-2 py-0.5 rounded-[6px] underline"
