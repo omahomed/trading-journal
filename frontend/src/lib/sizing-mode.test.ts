@@ -2,6 +2,8 @@ import { describe, test, expect } from "vitest";
 import {
   SIZING_MODES,
   mctStateToSizingMode,
+  exitLadderFloor,
+  deriveAutoSizingMode,
   describeMctSource,
 } from "./sizing-mode";
 
@@ -77,6 +79,119 @@ describe("sizing-mode lib", () => {
       expect(describeMctSource(undefined)).toBe("M Factor state unknown");
       expect(describeMctSource("")).toBe("M Factor state unknown");
       expect(describeMctSource("POWERTREND ON")).toBe("M Factor state unknown");
+    });
+
+    test("appends downshift reason when exit-ladder floor is below state mode", () => {
+      // POWERTREND alone → Offense (2). 50 SMA Violation floors to 0
+      // (Defense), so the floor is BELOW the state mode → label
+      // surfaces the reason.
+      expect(describeMctSource("POWERTREND", { idx: 0, reason: "50 SMA Violation" }))
+        .toBe("from M Factor POWERTREND, downshifted by 50 SMA Violation");
+    });
+
+    test("no downshift suffix when floor doesn't actually constrain", () => {
+      // CORRECTION alone → Defense (0). A 21 EMA Confirmed Break
+      // floor of 1 (Normal) doesn't bind because state is already
+      // more conservative. Don't append a misleading "downshifted
+      // by" suffix.
+      expect(describeMctSource("CORRECTION", { idx: 1, reason: "21 EMA Confirmed Break" }))
+        .toBe("from M Factor CORRECTION");
+    });
+
+    test("no downshift suffix when floor reason is null", () => {
+      expect(describeMctSource("POWERTREND", { idx: 2, reason: null }))
+        .toBe("from M Factor POWERTREND");
+    });
+  });
+
+  describe("exitLadderFloor", () => {
+    test("empty / nullish input → no floor (2)", () => {
+      expect(exitLadderFloor([])).toEqual({ idx: 2, reason: null });
+      expect(exitLadderFloor(null)).toEqual({ idx: 2, reason: null });
+      expect(exitLadderFloor(undefined)).toEqual({ idx: 2, reason: null });
+    });
+
+    test("Watch states do not downshift", () => {
+      // Watches are informational only — no actual break confirmed.
+      // Per user spec, only fired Violations / Confirmed Break
+      // downshift the mode.
+      expect(exitLadderFloor([{ signal: "21 EMA Watch" }])).toEqual({ idx: 2, reason: null });
+      expect(exitLadderFloor([{ signal: "50 SMA Watch" }])).toEqual({ idx: 2, reason: null });
+    });
+
+    test("21 EMA Violation → Normal (1)", () => {
+      expect(exitLadderFloor([{ signal: "21 EMA Violation" }]))
+        .toEqual({ idx: 1, reason: "21 EMA Violation" });
+    });
+
+    test("21 EMA Confirmed Break → Normal (1)", () => {
+      expect(exitLadderFloor([{ signal: "21 EMA Confirmed Break" }]))
+        .toEqual({ idx: 1, reason: "21 EMA Confirmed Break" });
+    });
+
+    test("50 SMA Violation → Defense (0)", () => {
+      expect(exitLadderFloor([{ signal: "50 SMA Violation" }]))
+        .toEqual({ idx: 0, reason: "50 SMA Violation" });
+    });
+
+    test("most severe wins when multiple alerts fire", () => {
+      // Today's IXIC state: 3 consecutive closes below 21 EMA (=
+      // Confirmed Break) AND price below 50 SMA with >1% intraday
+      // undercut confirmed (= 50 SMA Violation). Floor should be
+      // Defense (0), not Normal (1).
+      expect(exitLadderFloor([
+        { signal: "21 EMA Confirmed Break" },
+        { signal: "50 SMA Violation" },
+      ])).toEqual({ idx: 0, reason: "50 SMA Violation" });
+    });
+
+    test("unknown signal strings ignored (defensive)", () => {
+      // Future signal types we don't know about won't accidentally
+      // floor the mode. They'll just be invisible until added here.
+      expect(exitLadderFloor([{ signal: "FUTURE_SIGNAL_X" }]))
+        .toEqual({ idx: 2, reason: null });
+    });
+  });
+
+  describe("deriveAutoSizingMode (combined: state + exit ladder)", () => {
+    test("POWERTREND with no alerts → Offense (state wins)", () => {
+      expect(deriveAutoSizingMode("POWERTREND", []).idx).toBe(2);
+    });
+
+    test("POWERTREND + 50 SMA Violation → Defense (floor wins)", () => {
+      // The user's motivating example. State says Offense; floor
+      // says Defense; minimum wins. New trades sized at 0.50% risk
+      // even though the regime hasn't flipped to CORRECTION.
+      const result = deriveAutoSizingMode("POWERTREND", [{ signal: "50 SMA Violation" }]);
+      expect(result.idx).toBe(0);
+      expect(result.source.stateIdx).toBe(2);
+      expect(result.source.floor).toEqual({ idx: 0, reason: "50 SMA Violation" });
+    });
+
+    test("POWERTREND + 21 EMA Confirmed Break → Normal (floor wins)", () => {
+      expect(deriveAutoSizingMode("POWERTREND", [{ signal: "21 EMA Confirmed Break" }]).idx).toBe(1);
+    });
+
+    test("POWERTREND + 21 EMA Violation → Normal (floor wins, user spec)", () => {
+      // User confirmed: single-close + intraday undercut >1% also
+      // downshifts to Normal. Same as Confirmed Break — any fired
+      // 21 EMA Violation-tier signal floors at Normal.
+      expect(deriveAutoSizingMode("POWERTREND", [{ signal: "21 EMA Violation" }]).idx).toBe(1);
+    });
+
+    test("CORRECTION + 50 SMA Violation → Defense (no-op floor; both agree)", () => {
+      expect(deriveAutoSizingMode("CORRECTION", [{ signal: "50 SMA Violation" }]).idx).toBe(0);
+    });
+
+    test("RALLY MODE + 50 SMA Violation → Defense (floor wins)", () => {
+      expect(deriveAutoSizingMode("RALLY MODE", [{ signal: "50 SMA Violation" }]).idx).toBe(0);
+    });
+
+    test("POWERTREND + Watch only → Offense (no floor binds)", () => {
+      expect(deriveAutoSizingMode("POWERTREND", [
+        { signal: "21 EMA Watch" },
+        { signal: "50 SMA Watch" },
+      ]).idx).toBe(2);
     });
   });
 });

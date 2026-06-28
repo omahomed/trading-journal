@@ -22,7 +22,10 @@ const TABS: { key: SizerTab; label: string; icon: string }[] = [
 import {
   SIZING_MODES as SIZING_MODES_BASE,
   mctStateToSizingMode,
+  deriveAutoSizingMode,
+  exitLadderFloor,
   describeMctSource,
+  type ExitAlert,
 } from "@/lib/sizing-mode";
 import { computeVolatilitySizing, type SizingScenario, type VolSizerResults } from "@/lib/vol-sizer";
 
@@ -197,6 +200,12 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // - sizingModeManual=true  → user clicked a Radio (override). Reset by
   //   the "Reset to auto" button, which re-applies the MCT mapping.
   const [mctState, setMctState] = useState<string | null>(null);
+  // Active exit-ladder alerts. Drive the sizing-mode floor — a fired
+  // 21 EMA Violation / Confirmed Break downshifts to Normal; a fired
+  // 50 SMA Violation downshifts to Defense, regardless of what the
+  // M Factor state alone would have picked. See lib/sizing-mode#
+  // exitLadderFloor for the full rule.
+  const [activeExits, setActiveExits] = useState<readonly { signal: string; severity?: string }[]>([]);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [entryPrice, setEntryPrice] = useState("");
   const [maLevel, setMaLevel] = useState("");
@@ -275,12 +284,17 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       setOpenTrades(open as TradePosition[]);
       setAllDetails(details.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
+      const exits = ((rally as { active_exits?: ExitAlert[] } | null)?.active_exits ?? []) as ExitAlert[];
       setMctState(stateStr);
+      setActiveExits(exits);
       // Only auto-apply when the user hasn't manually overridden — but on
       // mount the user can't have, so this is effectively unconditional.
       // The guard becomes meaningful when this effect re-runs (it doesn't
       // today, but defending against a future deps change).
-      setSizingMode(mctStateToSizingMode(stateStr));
+      // Auto-mode now takes the more conservative of (M Factor state,
+      // exit-ladder floor). E.g. POWERTREND + 50 SMA Violation → Defense,
+      // not Offense — even if the regime hasn't flipped to CORRECTION yet.
+      setSizingMode(deriveAutoSizingMode(stateStr, exits).idx);
       setSizingModeManual(false);
       if (pyrCfg && (pyrCfg as any).value) {
         setPyramidRules((pyrCfg as any).value);
@@ -814,7 +828,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 <strong>{SIZING_MODES[sizingMode].label}</strong>
                 {!sizingModeManual && (
                   <span style={{ color: "var(--ink-4)" }}>
-                    {" "}({describeMctSource(mctState)})
+                    {" "}({describeMctSource(mctState, exitLadderFloor(activeExits))})
                   </span>
                 )}
               </div>
@@ -822,7 +836,12 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 <button type="button"
                         data-testid="sizer-reset-to-auto"
                         onClick={() => {
-                          setSizingMode(mctStateToSizingMode(mctState));
+                          // "Reset to auto" replays the same derivation
+                          // the load effect used so exit-ladder floor
+                          // applies here too — clicking Reset right
+                          // after a 50 SMA Violation lands you on
+                          // Defense, not raw-state Offense.
+                          setSizingMode(deriveAutoSizingMode(mctState, activeExits).idx);
                           setSizingModeManual(false);
                           resetCalc();
                         }}

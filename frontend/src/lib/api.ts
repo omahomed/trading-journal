@@ -977,6 +977,15 @@ export const api = {
     cycle_start_date?: string | null;
     day_num_projected?: boolean;
     day_num_projection_offset?: number;
+    // Exit-ladder alerts feed both the M Factor page UI and the
+    // sizing-mode floor logic (see lib/sizing-mode#exitLadderFloor).
+    active_exits?: Array<{
+      signal: string;
+      detail?: string;
+      target?: string;
+      severity?: string;
+      confirms_paths?: Array<{ trigger: string; target: string }>;
+    }>;
   }>(`/api/market/rally-prefix${as_of_date ? `?as_of_date=${encodeURIComponent(as_of_date)}` : ""}`),
 
   marketSignals: (days = 30, signal_type?: string) => {
