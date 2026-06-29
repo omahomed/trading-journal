@@ -31,6 +31,7 @@ const BUY_RULES = [
 // untouched.
 import {
   SIZING_MODES,
+  SIZING_MODES_DISPLAY,
   mctStateToSizingMode,
   deriveAutoSizingMode,
   exitLadderFloor,
@@ -173,7 +174,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // either way, so the override flows naturally into the saved buy.
   // Override is form-local: refresh / navigate-away / submit all reset
   // it (the component remounts and the auto pick takes over again).
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  // Index 3 (Pilot, 0.25%) is reachable ONLY via manual radio click;
+  // the auto-derivation path returns 0|1|2 only.
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2 | 3>(1);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
@@ -1201,12 +1204,17 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     offense=2). Clicking any radio flips sizingModeManual
                     so the indicator copy + Reset button surface above. */}
                 <Field label="Override Sizing Mode">
+                  {/* Display order: Pilot · Defense · Normal · Offense
+                      (SIZING_MODES_DISPLAY) — most conservative at top,
+                      most aggressive at bottom, matching Position Sizer.
+                      Canonical SIZING_MODES indices stay stable for
+                      lookups elsewhere in the file. */}
                   <div className="flex flex-col gap-1.5 mt-1">
-                    {SIZING_MODES.map((m, i) => (
+                    {SIZING_MODES_DISPLAY.map(m => (
                       <Radio key={m.key}
-                             checked={sizingMode === i}
+                             checked={sizingMode === m.index}
                              onClick={() => {
-                               setSizingMode(i as 0 | 1 | 2);
+                               setSizingMode(m.index);
                                setSizingModeManual(true);
                              }}
                              label={`${m.icon} ${m.label}`} />

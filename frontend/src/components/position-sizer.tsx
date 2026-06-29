@@ -21,6 +21,7 @@ const TABS: { key: SizerTab; label: string; icon: string }[] = [
 // drifting to a different risk percentage than the other.
 import {
   SIZING_MODES as SIZING_MODES_BASE,
+  SIZING_MODES_DISPLAY,
   mctStateToSizingMode,
   deriveAutoSizingMode,
   exitLadderFloor,
@@ -193,8 +194,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // Shared inputs
   // sizingMode default is Normal (1) — overwritten on mount by the MCT
   // state read in the load-effect below. Stays Normal if the read fails
-  // (mctStateToSizingMode falls back to safe middle ground).
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  // (mctStateToSizingMode falls back to safe middle ground). Index 3
+  // (Pilot, 0.25%) is reachable ONLY via manual radio click; the auto
+  // path returns 0|1|2 only.
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2 | 3>(1);
   // mctState + sizingModeManual track WHY the current mode is what it is.
   // - sizingModeManual=false → set by MCT state read (auto)
   // - sizingModeManual=true  → user clicked a Radio (override). Reset by
@@ -852,15 +855,19 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               )}
             </div>
             <Field label="Sizing Mode">
+              {/* Iterates SIZING_MODES_DISPLAY (Pilot · Defense · Normal
+                  · Offense) so the radio row reads left-to-right as a
+                  conservatism spectrum. The canonical SIZING_MODES
+                  lookup (index 0/1/2/3) stays intact for indexing. */}
               <div className="flex gap-4 mt-1">
-                {SIZING_MODES.map((m, i) => (
-                  <Radio key={m.key} checked={sizingMode === i}
+                {SIZING_MODES_DISPLAY.map(m => (
+                  <Radio key={m.key} checked={sizingMode === m.index}
                          onClick={() => {
-                           setSizingMode(i as 0 | 1 | 2);
+                           setSizingMode(m.index);
                            setSizingModeManual(true);
                            resetCalc();
                          }}
-                         label={m.label} />
+                         label={`${m.icon} ${m.label}`} />
                 ))}
               </div>
             </Field>

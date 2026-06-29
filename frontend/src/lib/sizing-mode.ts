@@ -16,7 +16,7 @@
 
 export type MctState = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
 
-export type SizingModeKey = "defense" | "normal" | "offense";
+export type SizingModeKey = "defense" | "normal" | "offense" | "pilot";
 
 export interface SizingMode {
   key: SizingModeKey;
@@ -24,15 +24,39 @@ export interface SizingMode {
   /** Risk per trade as a percentage of equity. */
   pct: number;
   icon: string;
-  /** Fixed display index — the position-sizer + log-buy state machines
-      key off this number; reordering would silently shift behavior. */
-  index: 0 | 1 | 2;
+  /** Fixed lookup index — the position-sizer + log-buy state machines
+      key off this number; reordering would silently shift behavior.
+      Note: array index is NOT aggression order. Pilot (3) is the most
+      conservative tier but lives at the end of the array so the original
+      0/1/2 indices stay pinned to defense/normal/offense — keeps the
+      "auto modes are 0|1|2" invariant intact. Use SIZING_MODES_DISPLAY
+      below for left-to-right UI rendering by aggression. */
+  index: 0 | 1 | 2 | 3;
 }
 
 export const SIZING_MODES: readonly SizingMode[] = [
-  { key: "defense", label: "Defense (0.50%)", pct: 0.5, icon: "🛡️", index: 0 },
+  { key: "defense", label: "Defense (0.50%)", pct: 0.5,  icon: "🛡️", index: 0 },
   { key: "normal",  label: "Normal (0.75%)",  pct: 0.75, icon: "⚖️", index: 1 },
   { key: "offense", label: "Offense (1.00%)", pct: 1.0,  icon: "⚔️", index: 2 },
+  // Manual-only tier. M Factor state mapping + exit-ladder floor will
+  // never return index 3, so the auto path can't land you on Pilot —
+  // it's strictly opt-in for "I want to be extra careful for reasons
+  // the engine doesn't see" (earnings cluster, vacation, personal
+  // cash needs). "Reset to auto" from Pilot drops to whatever rules
+  // pick, never back to Pilot.
+  { key: "pilot",   label: "Pilot (0.25%)",   pct: 0.25, icon: "✈️", index: 3 },
+] as const;
+
+/** UI-display order (left → right, most conservative → most aggressive):
+ *  Pilot · Defense · Normal · Offense. Position Sizer + Log Buy both
+ *  render radios in this order so the visual flow matches the
+ *  aggression spectrum, while SIZING_MODES (canonical lookup) keeps
+ *  the original 0/1/2 indices stable for backward compatibility. */
+export const SIZING_MODES_DISPLAY: readonly SizingMode[] = [
+  SIZING_MODES[3], // Pilot
+  SIZING_MODES[0], // Defense
+  SIZING_MODES[1], // Normal
+  SIZING_MODES[2], // Offense
 ] as const;
 
 /** Default fallback when MCT state is unknown / endpoint failed.

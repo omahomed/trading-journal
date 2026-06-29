@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import {
   SIZING_MODES,
+  SIZING_MODES_DISPLAY,
   mctStateToSizingMode,
   exitLadderFloor,
   deriveAutoSizingMode,
@@ -20,11 +21,39 @@ describe("sizing-mode lib", () => {
     });
 
     test("risk percentages match the confirmed values", () => {
-      // 0.5 / 0.75 / 1.0 are the user-confirmed risk-per-trade values.
-      // Touching these requires explicit greenlight (not in a refactor).
+      // 0.5 / 0.75 / 1.0 are the user-confirmed risk-per-trade values
+      // for the auto-pickable tiers. Touching these requires explicit
+      // greenlight (not in a refactor).
       expect(SIZING_MODES[0].pct).toBe(0.5);
       expect(SIZING_MODES[1].pct).toBe(0.75);
       expect(SIZING_MODES[2].pct).toBe(1.0);
+    });
+
+    test("Pilot (0.25%, manual-only) lives at index 3", () => {
+      // Pilot is appended at index 3 — most conservative tier, but
+      // array position is end of array so the auto-pickable indices
+      // (0/1/2 → defense/normal/offense) stay pinned. Display order
+      // is handled separately by SIZING_MODES_DISPLAY below.
+      expect(SIZING_MODES).toHaveLength(4);
+      expect(SIZING_MODES[3].key).toBe("pilot");
+      expect(SIZING_MODES[3].pct).toBe(0.25);
+      expect(SIZING_MODES[3].icon).toBe("✈️");
+    });
+  });
+
+  describe("SIZING_MODES_DISPLAY", () => {
+    test("renders in conservatism order: Pilot · Defense · Normal · Offense", () => {
+      // UI radios iterate this array. The order is intentionally NOT
+      // the canonical SIZING_MODES order — Pilot leads (left/top),
+      // Offense trails (right/bottom), reading left-to-right as a
+      // tightening-to-loosening spectrum.
+      expect(SIZING_MODES_DISPLAY.map(m => m.key)).toEqual(["pilot", "defense", "normal", "offense"]);
+    });
+
+    test("each entry carries its canonical SIZING_MODES.index so click handlers can lookup back", () => {
+      // setSizingMode(m.index) in both pages relies on this — display
+      // position has nothing to do with state value.
+      expect(SIZING_MODES_DISPLAY.map(m => m.index)).toEqual([3, 0, 1, 2]);
     });
   });
 
@@ -192,6 +221,30 @@ describe("sizing-mode lib", () => {
         { signal: "21 EMA Watch" },
         { signal: "50 SMA Watch" },
       ]).idx).toBe(2);
+    });
+
+    test("auto path never returns Pilot (index 3) regardless of state + alerts", () => {
+      // Pilot is manual-only by design. Doesn't matter what M Factor
+      // state + exit ladder combination is — the auto-derivation can
+      // never land at idx 3. Exhaustive smoke test across the state
+      // matrix to pin this invariant.
+      const states = ["POWERTREND", "UPTREND", "RALLY MODE", "CORRECTION", null, "UNKNOWN"];
+      const alertSets = [
+        [],
+        [{ signal: "21 EMA Watch" }],
+        [{ signal: "21 EMA Violation" }],
+        [{ signal: "21 EMA Confirmed Break" }],
+        [{ signal: "50 SMA Watch" }],
+        [{ signal: "50 SMA Violation" }],
+        [{ signal: "50 SMA Violation" }, { signal: "21 EMA Confirmed Break" }],
+      ];
+      for (const s of states) {
+        for (const a of alertSets) {
+          const r = deriveAutoSizingMode(s, a);
+          expect(r.idx).not.toBe(3);
+          expect([0, 1, 2]).toContain(r.idx);
+        }
+      }
     });
   });
 });
