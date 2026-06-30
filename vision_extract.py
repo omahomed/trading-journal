@@ -89,7 +89,7 @@ def extract_fundamentals(image_bytes: bytes, file_name: str = "image.png") -> Op
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=2000,
             messages=[
                 {
