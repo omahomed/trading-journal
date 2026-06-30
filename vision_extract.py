@@ -5,8 +5,10 @@ Extracts fundamental data from MarketSurge stock analysis screenshots.
 
 import anthropic
 import os
+import sys
 import base64
 import json
+import traceback
 from typing import Optional, Dict
 
 
@@ -125,14 +127,17 @@ def extract_fundamentals(image_bytes: bytes, file_name: str = "image.png") -> Op
         return data
 
     except json.JSONDecodeError as e:
-        print(f"[Vision] Failed to parse JSON response: {e}")
-        print(f"[Vision] Raw response: {raw_text[:500]}")
+        # stderr so Railway surfaces it — JSON parse failures usually mean
+        # the model returned prose instead of JSON (prompt drift / model
+        # change) and are silently fatal without visibility.
+        print(f"[Vision] Failed to parse JSON response: {e}", file=sys.stderr)
+        print(f"[Vision] Raw response: {raw_text[:500]}", file=sys.stderr)
         return None
     except anthropic.APIError as e:
-        print(f"[Vision] Anthropic API error: {e}")
+        print(f"[Vision] Anthropic API error: {e}", file=sys.stderr)
         return None
     except Exception as e:
-        print(f"[Vision] Extraction failed: {e}")
+        print(f"[Vision] Extraction failed: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return None
 
 

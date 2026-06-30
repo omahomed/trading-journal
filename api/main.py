@@ -6367,9 +6367,16 @@ def _run_marketsurge_vision_extract(
             db.save_trade_fundamentals(portfolio, trade_id, ticker, extracted, image_id)
             print(f"[Vision] Extracted fundamentals for {ticker} ({trade_id})")
         else:
-            print(f"[Vision] No data extracted for {ticker}")
+            # Route to stderr so Railway flags this prominently — silent
+            # stdout prints are how the stale-model bug went unnoticed.
+            print(f"[Vision] No data extracted for {ticker} ({trade_id})", file=sys.stderr)
     except Exception as ve:
-        print(f"[Vision] Extraction failed for {ticker} ({trade_id}): {ve}")
+        import traceback
+        print(
+            f"[Vision] Extraction failed for {ticker} ({trade_id}): {ve}\n"
+            f"{traceback.format_exc()}",
+            file=sys.stderr,
+        )
 
 
 @app.post("/api/images/upload")
