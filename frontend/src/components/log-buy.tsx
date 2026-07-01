@@ -197,6 +197,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  // Per-trade opt-in to bypass the 25% position-size cap. Structural
+  // errors (missing ticker, price ≤ 0, stop ≥ entry) stay blocking even
+  // when this is on — only the sizing guardrail is overridable. Resets
+  // after a successful submit so each trade requires a fresh opt-in.
+  const [overrideSizeCap, setOverrideSizeCap] = useState(false);
   const [entryCharts, setEntryCharts] = useState<File[]>([]);
   const [positionCharts, setPositionCharts] = useState<File[]>([]);
   const [msScreenshot, setMsScreenshot] = useState<File | null>(null);
@@ -593,7 +598,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
     // doesn't translate to premium-based stops.
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
-    if (posSizePct > 25) e.push(`Position size ${posSizePct.toFixed(1)}% exceeds 25% max`);
+    if (posSizePct > 25) {
+      const msg = `Position size ${posSizePct.toFixed(1)}% exceeds 25% max`;
+      if (overrideSizeCap) w.push(`${msg} — override active`);
+      else e.push(msg);
+    }
     if (riskViolation) w.push(`Trade Risk ${formatCurrency(riskDollars, { decimals: 0 })} exceeds Risk Budget ${formatCurrency(riskBudget, { decimals: 0 })}. Move stop to ${formatCurrency(rbmStop)} to stay within Risk Budget.`);
     setErrors(e); setWarnings(w);
     return e.length === 0;
@@ -692,6 +701,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
+        setOverrideSizeCap(false);
 
         // Refresh server-derived state so a same-page second submit reads
         // fresh data. Without this, openTrades + allDetails stay at the
@@ -968,6 +978,18 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 ))}
               </div>
             )}
+            {/* Sizing-cap override: shown only when the trade actually
+                exceeds the 25% cap. Checking moves the error to warnings
+                so submit re-enables; auto-resets after a successful
+                submit (in the reset block above). */}
+            {posSizePct > 25 && (
+              <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none px-1"
+                     style={{ color: "var(--ink-3)" }}>
+                <input type="checkbox" checked={overrideSizeCap}
+                       onChange={ev => setOverrideSizeCap(ev.target.checked)} />
+                Override 25% position-size cap for this trade
+              </label>
+            )}
 
             {/* Submit */}
             {submitResult && (
@@ -984,7 +1006,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
             <button onClick={handleSubmit} disabled={submitting}
                     className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 cursor-pointer disabled:opacity-50"
                     style={{ background: "#08a86b" }}>
-              {submitting ? "Saving..." : "LOG BUY ORDER"}
+              {submitting
+                ? "Saving..."
+                : overrideSizeCap && posSizePct > 25
+                  ? "LOG BUY ORDER (Override)"
+                  : "LOG BUY ORDER"}
             </button>
           </div>
         </div>
