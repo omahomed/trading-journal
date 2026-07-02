@@ -15,7 +15,7 @@ export const LESSON_CATEGORIES = [
   "Followed Rules", "Entry timing", "FOMO", "Chased Entry",
   "Stop placement", "Undersized", "Oversized",
   "Scaled in too fast", "Exit too early", "Exit too late",
-  "Market conditions", "Rule deviation", "Other",
+  "Market conditions", "Portfolio Management", "Rule deviation", "Other",
 ] as const;
 
 export const CAT_COLORS: Record<string, { bg: string; fg: string }> = {
@@ -30,6 +30,7 @@ export const CAT_COLORS: Record<string, { bg: string; fg: string }> = {
   "Exit too early": { bg: "#ccfbf1", fg: "#0f766e" },
   "Exit too late": { bg: "#e0e7ff", fg: "#4338ca" },
   "Market conditions": { bg: "var(--border)", fg: "var(--ink-2)" },
+  "Portfolio Management": { bg: "#e0f2fe", fg: "#0369a1" },
   "Rule deviation": { bg: "#ffe4e6", fg: "#be123c" },
   "Other": { bg: "var(--bg-2)", fg: "var(--ink-3)" },
 };
