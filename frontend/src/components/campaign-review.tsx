@@ -277,21 +277,56 @@ export function CampaignReview() {
   }, [rows, filters]);
 
   // Summary stats over the filtered set (calculated before sort — order
-  // doesn't affect aggregates)
+  // doesn't affect aggregates).
+  //
+  // Definitions used:
+  //   winner   = realized_pl > 0
+  //   loser    = realized_pl < 0
+  //   scratches (== 0) are counted in n but excluded from both W and L
+  //   win rate = winCount / (winCount + lossCount)
+  //   expectancy = avgWin × winRate − avgLoss × lossRate
+  //     (avgLoss is absolute value; sign is applied in the formula so a
+  //     positive expectancy means +EV per trade)
+  //   top R    = avg R for grades 4-5 (four or five stars)
+  //   bot R    = avg R for grades 1-2 (one or two stars)
+  //     grade 3 is middle/undecided, excluded from the comparison so the
+  //     top/bot signal isn't diluted
   const stats = useMemo(() => {
     const n = filtered.length;
     let totalPl = 0, sumR = 0, rCount = 0, sumGrade = 0, gradeCount = 0;
+    let winCount = 0, lossCount = 0, sumWin = 0, sumLoss = 0;
+    let topRSum = 0, topRCount = 0, botRSum = 0, botRCount = 0;
     for (const r of filtered) {
-      totalPl += r.realized_pl || 0;
-      if (r.r_multiple != null) { sumR += r.r_multiple; rCount += 1; }
+      const pl = r.realized_pl || 0;
+      totalPl += pl;
+      if (pl > 0) { winCount += 1; sumWin += pl; }
+      else if (pl < 0) { lossCount += 1; sumLoss += Math.abs(pl); }
+      if (r.r_multiple != null) {
+        sumR += r.r_multiple;
+        rCount += 1;
+        if (r.grade != null) {
+          if (r.grade >= 4) { topRSum += r.r_multiple; topRCount += 1; }
+          else if (r.grade <= 2) { botRSum += r.r_multiple; botRCount += 1; }
+        }
+      }
       if (r.grade != null) { sumGrade += r.grade; gradeCount += 1; }
     }
+    const decidedTrades = winCount + lossCount;
+    const winRate = decidedTrades > 0 ? winCount / decidedTrades : null;
+    const avgWin = winCount > 0 ? sumWin / winCount : 0;
+    const avgLoss = lossCount > 0 ? sumLoss / lossCount : 0;
+    const expectancy = winRate != null
+      ? avgWin * winRate - avgLoss * (1 - winRate)
+      : null;
     return {
       n,
       totalPl,
       avgR: rCount > 0 ? sumR / rCount : null,
       avgGrade: gradeCount > 0 ? sumGrade / gradeCount : null,
       unratedCount: filtered.filter(r => r.grade == null).length,
+      winCount, lossCount, winRate, expectancy,
+      topR: topRCount > 0 ? topRSum / topRCount : null,
+      botR: botRCount > 0 ? botRSum / botRCount : null,
     };
   }, [filtered]);
 
@@ -563,8 +598,36 @@ export function CampaignReview() {
         <div className="px-[18px] py-[10px] flex flex-wrap items-center gap-[16px] text-[12px]"
              style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", color: "var(--ink-3)" }}>
           <span><b style={{ color: "var(--ink)" }}>{stats.n}</b> campaign{stats.n === 1 ? "" : "s"}</span>
+          <span>
+            Win rate{" "}
+            <b style={{ color: "var(--ink)", fontFamily: mono }}>
+              {stats.winCount}W / {stats.lossCount}L
+            </b>
+            {stats.winRate != null && (
+              <> · <b style={{ color: stats.winRate >= 0.5 ? "#08a86b" : "#d97706", fontFamily: mono }}>
+                {(stats.winRate * 100).toFixed(0)}%
+              </b></>
+            )}
+          </span>
           <span>P&L <b style={{ color: stats.totalPl >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>{formatCurrency(stats.totalPl, { decimals: 0 })}</b></span>
+          <span title="avg win × win rate − avg loss × loss rate">
+            Expectancy{" "}
+            <b style={{ color: stats.expectancy == null ? "var(--ink-3)" : stats.expectancy >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>
+              {stats.expectancy == null ? "—" : `${formatCurrency(stats.expectancy, { decimals: 0 })}/trade`}
+            </b>
+          </span>
           <span>Avg R <b style={{ color: "var(--ink)", fontFamily: mono }}>{stats.avgR == null ? "—" : `${stats.avgR.toFixed(2)}R`}</b></span>
+          <span title="Average R multiple for trades graded 4-5★ vs 1-2★ (grade 3 excluded so the discriminator isn't diluted)">
+            R by grade{" "}
+            <b style={{ color: "var(--ink)", fontFamily: mono }}>
+              {stats.topR == null ? "—" : `${stats.topR >= 0 ? "+" : ""}${stats.topR.toFixed(2)}R`}
+            </b>
+            <span style={{ color: "var(--ink-4)" }}> @4-5★ · </span>
+            <b style={{ color: "var(--ink)", fontFamily: mono }}>
+              {stats.botR == null ? "—" : `${stats.botR >= 0 ? "+" : ""}${stats.botR.toFixed(2)}R`}
+            </b>
+            <span style={{ color: "var(--ink-4)" }}> @1-2★</span>
+          </span>
           <span>Avg Grade <b style={{ color: "var(--ink)", fontFamily: mono }}>{stats.avgGrade == null ? "—" : stats.avgGrade.toFixed(2)}</b></span>
           <span>Unrated <b style={{ color: stats.unratedCount > 0 ? "#d97706" : "var(--ink-3)" }}>{stats.unratedCount}</b></span>
         </div>
