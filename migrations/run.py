@@ -10,9 +10,17 @@ partial failure cannot leave the database half-migrated.
 Usage:
     python migrations/run.py
 
-Connection:
-    1. DATABASE_URL environment variable (preferred)
-    2. `.streamlit/secrets.toml` → [database] url (local fallback)
+Connection (checked in order):
+    1. MIGRATIONS_DATABASE_URL — dedicated role with CREATE on the public
+       schema (e.g. neondb_owner). Preferred on Railway so the runtime
+       DATABASE_URL can stay locked to a USAGE-only role like app_runtime.
+    2. DATABASE_URL — falls back here when no separate migration URL is
+       set. Fine locally where the same role does both.
+    3. `.streamlit/secrets.toml` → [database] url (local dev fallback).
+
+If MIGRATIONS_DATABASE_URL is set but connects as a role without CREATE
+privilege on the public schema, ensure_tracking_table() will fail on the
+first deploy — see [migrations/README.md] for role/grant setup.
 """
 
 from __future__ import annotations
@@ -29,16 +37,23 @@ REPO_ROOT = MIGRATIONS_DIR.parent
 SECRETS_PATH = REPO_ROOT / ".streamlit" / "secrets.toml"
 
 
-def get_database_url() -> str:
+def get_database_url() -> tuple[str, str]:
+    """Return (url, source_label). Source label surfaces which env var
+    supplied the URL so the deploy log makes it obvious when we're on
+    the split-role setup vs. the shared-role fallback."""
+    url = os.environ.get("MIGRATIONS_DATABASE_URL")
+    if url:
+        return url, "MIGRATIONS_DATABASE_URL"
     url = os.environ.get("DATABASE_URL")
     if url:
-        return url
+        return url, "DATABASE_URL"
     if SECRETS_PATH.exists():
         with open(SECRETS_PATH, "rb") as f:
-            return tomllib.load(f)["database"]["url"]
+            return tomllib.load(f)["database"]["url"], "secrets.toml"
     raise RuntimeError(
-        "DATABASE_URL not set and .streamlit/secrets.toml not found. "
-        "Export DATABASE_URL or populate the secrets file before running."
+        "MIGRATIONS_DATABASE_URL / DATABASE_URL not set and "
+        ".streamlit/secrets.toml not found. Export one of the URLs "
+        "or populate the secrets file before running."
     )
 
 
@@ -101,8 +116,8 @@ def apply_one(conn, path: Path) -> None:
 
 
 def main() -> int:
-    db_url = get_database_url()
-    print(f"Connecting to {mask_url(db_url)} ...")
+    db_url, source = get_database_url()
+    print(f"Connecting to {mask_url(db_url)} (from {source}) ...")
 
     conn = psycopg2.connect(db_url)
     try:
