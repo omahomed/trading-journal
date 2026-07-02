@@ -311,6 +311,27 @@ export interface WeeklyRetro {
 // CDN URL pre-composed by the server (so the frontend never has to know
 // R2_PUBLIC_URL). caption / sort_order are pre-provisioned for Phase
 // 4-followup features (captions, drag-reorder); v1 always sends defaults.
+export interface CampaignReviewRow {
+  trade_id: string;
+  ticker: string;
+  open_date: string;
+  closed_date: string;
+  realized_pl: number;
+  return_pct: number;
+  initial_risk_dollars: number;
+  r_multiple: number | null;
+  grade: number | null;
+  lesson_note: string;
+  lesson_category: string;
+  instrument_type: string;
+  has_add_ons: boolean;
+  rule: string;
+  sell_rule: string;
+  shares: number;
+  avg_entry: number;
+  avg_exit: number;
+}
+
 export interface SnapshotRow {
   id: number;
   weekly_retro_id: number;
@@ -545,6 +566,9 @@ export const api = {
 
   tradesClosed: (portfolio = getActivePortfolio(), limit = 50) =>
     fetchJSON<TradePosition[]>(`/api/trades/closed?portfolio=${portfolio}&limit=${limit}`),
+
+  campaignsReview: (portfolio = getActivePortfolio(), since = "2026-01-01") =>
+    fetchJSON<CampaignReviewRow[]>(`/api/campaigns/review?portfolio=${portfolio}&since=${since}`),
 
   tradeDetails: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<TradeDetail[]>(`/api/trades/details/${tradeId}?portfolio=${portfolio}`),

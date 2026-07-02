@@ -1975,6 +1975,138 @@ def trades_closed(portfolio: str = "CanSlim", limit: int = 50):
     return _df_to_records(closed.head(limit))
 
 
+@app.get("/api/campaigns/review")
+def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
+    """Closed campaigns for the Campaign Review page. One row per campaign
+    (no B1/A1/S1 detail expansion) enriched with:
+      - initial_risk_dollars (from B1 detail: (price - stop) * shares * mult)
+      - r_multiple (realized_pl / initial_risk_dollars)
+      - grade (from trades_summary.grade)
+      - lesson_note + lesson_category (from trade_lessons)
+      - has_add_ons (any Trx_ID starting with 'A' among the trade's details)
+
+    Filtered to campaigns with closed_date >= since (default 2026-01-01),
+    which naturally covers "2025 opens that closed in 2026". The frontend
+    handles further filtering (ticker/rule/instrument/lesson/date/grade)
+    client-side."""
+    try:
+        df_s = db.load_summary(portfolio)
+        if df_s.empty:
+            return []
+        df_s = _normalize_trades(df_s)
+
+        status_col = "status" if "status" in df_s.columns else "Status"
+        closed = df_s[df_s[status_col].str.upper() == "CLOSED"].copy()
+        if closed.empty:
+            return []
+
+        if "closed_date" in closed.columns:
+            closed["closed_date"] = pd.to_datetime(closed["closed_date"], errors="coerce")
+            since_ts = pd.to_datetime(since, errors="coerce")
+            if pd.notna(since_ts):
+                closed = closed[closed["closed_date"] >= since_ts]
+        if closed.empty:
+            return []
+
+        in_scope_ids = set(closed["trade_id"].astype(str))
+        details_by_trade: dict = {}
+        df_d = db.load_details(portfolio)
+        if not df_d.empty:
+            df_d = _normalize_trades(df_d)
+            df_d = df_d[df_d["trade_id"].astype(str).isin(in_scope_ids)]
+            if "date" in df_d.columns:
+                df_d["date"] = pd.to_datetime(df_d["date"], errors="coerce")
+            for tid, group in df_d.groupby("trade_id"):
+                details_by_trade[str(tid)] = group.sort_values("date")
+
+        lessons = db.get_trade_lessons(portfolio) or {}
+
+        rows = []
+        for _, r in closed.iterrows():
+            tid = str(r.get("trade_id", ""))
+            g = details_by_trade.get(tid)
+
+            initial_risk = 0.0
+            r_multiple = None
+            has_add_ons = False
+
+            if g is not None and not g.empty:
+                buys = g[g["action"].astype(str).str.upper() == "BUY"] if "action" in g.columns else g.iloc[0:0]
+                b1 = None
+                if not buys.empty:
+                    trx_series = buys["trx_id"].astype(str).str.upper() if "trx_id" in buys.columns else None
+                    if trx_series is not None:
+                        b1_rows = buys[trx_series == "B1"]
+                        b1 = b1_rows.iloc[0] if not b1_rows.empty else buys.iloc[0]
+                    else:
+                        b1 = buys.iloc[0]
+
+                if b1 is not None:
+                    try:
+                        b1_price = float(b1.get("amount") or 0)
+                        b1_stop = float(b1.get("stop_loss") or 0)
+                        b1_shares = float(b1.get("shares") or 0)
+                        b1_mult = float(b1.get("multiplier") or 1) or 1.0
+                        if b1_price > 0 and b1_stop > 0 and b1_shares > 0 and b1_stop < b1_price:
+                            initial_risk = (b1_price - b1_stop) * b1_shares * b1_mult
+                    except (TypeError, ValueError):
+                        pass
+
+                if "trx_id" in g.columns:
+                    trx_ids = g["trx_id"].astype(str).str.upper()
+                    has_add_ons = bool((trx_ids.str.startswith("A")).any())
+
+            realized_pl = float(r.get("realized_pl") or 0)
+            if initial_risk > 0:
+                r_multiple = realized_pl / initial_risk
+
+            note, category = lessons.get(tid, ("", ""))
+
+            grade_val = r.get("grade")
+            grade_out: int | None
+            if grade_val is None or (isinstance(grade_val, float) and pd.isna(grade_val)):
+                grade_out = None
+            else:
+                try:
+                    grade_out = int(grade_val)
+                except (TypeError, ValueError):
+                    grade_out = None
+
+            closed_dt = r.get("closed_date")
+            open_dt = r.get("open_date")
+
+            rows.append({
+                "trade_id": tid,
+                "ticker": str(r.get("ticker", "")),
+                "open_date": open_dt.isoformat() if hasattr(open_dt, "isoformat") else str(open_dt or ""),
+                "closed_date": closed_dt.isoformat() if hasattr(closed_dt, "isoformat") else str(closed_dt or ""),
+                "realized_pl": realized_pl,
+                "return_pct": float(r.get("return_pct") or 0),
+                "initial_risk_dollars": initial_risk,
+                "r_multiple": r_multiple,
+                "grade": grade_out,
+                "lesson_note": note,
+                "lesson_category": category,
+                "instrument_type": str(r.get("instrument_type", "STOCK") or "STOCK"),
+                "has_add_ons": has_add_ons,
+                "rule": str(r.get("rule", "") or ""),
+                "sell_rule": str(r.get("sell_rule", "") or ""),
+                "shares": float(r.get("shares") or 0),
+                "avg_entry": float(r.get("avg_entry") or 0),
+                "avg_exit": float(r.get("avg_exit") or 0),
+            })
+
+        rows.sort(key=lambda x: x.get("closed_date") or "", reverse=True)
+        return rows
+    except Exception as e:
+        import traceback
+        print(
+            f"[campaigns_review] handler failed: {e}\n{traceback.format_exc()}",
+            file=sys.stderr,
+        )
+        return {"error": str(e)}
+
+
 @app.get("/api/trades/details/{trade_id}")
 def trade_details(trade_id: str, portfolio: str = "CanSlim"):
     """Get all transactions for a trade campaign."""
