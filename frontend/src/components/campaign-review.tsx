@@ -24,10 +24,15 @@ type InstrumentKey = "all" | "stocks" | "options";
 type DateRangeKey = "ytd" | "month" | "week" | "custom";
 type GradeKey = "all" | "unrated" | "1" | "2" | "3" | "4" | "5";
 
+// Sortable table columns. "lesson" and the expand caret intentionally
+// left out — sorting by chip content isn't meaningful.
+type SortKey = "ticker" | "open_date" | "closed_date" | "realized_pl" | "return_pct" | "r_multiple" | "grade";
+type SortDir = "asc" | "desc";
+
 interface Filters {
   q: string;
   series: SeriesKey;
-  ticker: string;
+  tickers: string[];  // multi-select; empty = no ticker filter
   rule: string;
   instrument: InstrumentKey;
   lesson: string;  // "all" | "none" | category name
@@ -40,7 +45,7 @@ interface Filters {
 const DEFAULT_FILTERS: Filters = {
   q: "",
   series: "all",
-  ticker: "all",
+  tickers: [],
   rule: "all",
   instrument: "all",
   lesson: "all",
@@ -159,6 +164,32 @@ function FilterSelect({ label, value, onChange, options }: {
   );
 }
 
+// Sortable table header. Click to toggle asc/desc; clicking a different
+// column switches to that column with a sensible default direction
+// (numeric/date desc first, text asc first — handled by toggleSort).
+function SortHeader({ label, sortKey, activeKey, dir, onToggle, align }: {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onToggle: (k: SortKey) => void;
+  align: "left" | "right";
+}) {
+  const isActive = activeKey === sortKey;
+  const arrow = isActive ? (dir === "asc" ? "▲" : "▼") : "";
+  return (
+    <th className="px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px] cursor-pointer select-none"
+        style={{ textAlign: align }}
+        onClick={() => onToggle(sortKey)}>
+      <span className="inline-flex items-center gap-1"
+            style={{ color: isActive ? "var(--ink)" : "var(--ink-4)" }}>
+        {label}
+        <span className="text-[8px] opacity-70" style={{ width: 8, display: "inline-block" }}>{arrow}</span>
+      </span>
+    </th>
+  );
+}
+
 export function CampaignReview() {
   const pathname = usePathname();
   const navColor = getGroupForHref(pathname)?.color || "#0d6efd";
@@ -169,6 +200,12 @@ export function CampaignReview() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  // Sort state — default matches the server return order (closed_date desc).
+  const [sortKey, setSortKey] = useState<SortKey>("closed_date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // Ticker multi-select typeahead state
+  const [tickerQuery, setTickerQuery] = useState("");
+  const [tickerDropdownOpen, setTickerDropdownOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -209,8 +246,8 @@ export function CampaignReview() {
       // Series (original = no add-ons; add_on = had add-ons)
       if (filters.series === "original" && r.has_add_ons) return false;
       if (filters.series === "add_on" && !r.has_add_ons) return false;
-      // Ticker
-      if (filters.ticker !== "all" && r.ticker !== filters.ticker) return false;
+      // Ticker (multi-select; empty array = no filter)
+      if (filters.tickers.length > 0 && !filters.tickers.includes(r.ticker)) return false;
       // Rule
       if (filters.rule !== "all" && r.rule !== filters.rule) return false;
       // Instrument
@@ -239,7 +276,8 @@ export function CampaignReview() {
     });
   }, [rows, filters]);
 
-  // Summary stats over the filtered set
+  // Summary stats over the filtered set (calculated before sort — order
+  // doesn't affect aggregates)
   const stats = useMemo(() => {
     const n = filtered.length;
     let totalPl = 0, sumR = 0, rCount = 0, sumGrade = 0, gradeCount = 0;
@@ -256,6 +294,38 @@ export function CampaignReview() {
       unratedCount: filtered.filter(r => r.grade == null).length,
     };
   }, [filtered]);
+
+  // Sort the filtered rows. Nulls sort to the bottom regardless of dir
+  // so an unrated row doesn't jump to the top when sorting by grade asc.
+  const sorted = useMemo(() => {
+    const out = [...filtered];
+    const key = sortKey;
+    const mult = sortDir === "asc" ? 1 : -1;
+    out.sort((a, b) => {
+      const av = (a as any)[key];
+      const bv = (b as any)[key];
+      const aNull = av == null || av === "";
+      const bNull = bv == null || bv === "";
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;   // nulls always last
+      if (bNull) return -1;
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * mult;
+      // Dates are ISO strings — string compare matches chronological order
+      return String(av).localeCompare(String(bv)) * mult;
+    });
+    return out;
+  }, [filtered, sortKey, sortDir]);
+
+  const toggleSort = useCallback((key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      // Default direction per column type: dates/numbers desc first
+      // (latest/largest usually more interesting), ticker asc first.
+      setSortDir(key === "ticker" ? "asc" : "desc");
+    }
+  }, [sortKey]);
 
   // Optimistic grade update
   const setGrade = useCallback(async (trade_id: string, grade: number | null) => {
@@ -362,12 +432,71 @@ export function CampaignReview() {
             options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
           />
 
-          <FilterSelect
-            label="Ticker"
-            value={filters.ticker}
-            onChange={v => setFilters(f => ({ ...f, ticker: v }))}
-            options={[{ v: "all", l: "All tickers" }, ...tickerOptions.map(t => ({ v: t, l: t }))]}
-          />
+          {/* Ticker multi-select. Same chip + typeahead pattern as Trade
+              Journal — chips for what's picked, typeahead for adding
+              more, backspace on empty removes the last chip. */}
+          <div className="flex flex-col gap-1" style={{ minWidth: 200 }}>
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Ticker</span>
+            <div className="flex items-center gap-1.5 flex-wrap min-h-[34px]">
+              {filters.tickers.map(t => (
+                <span key={t} className="inline-flex items-center gap-1 h-[26px] px-2 rounded-[8px] text-[11px] font-semibold"
+                      style={{ background: `color-mix(in oklab, ${navColor} 10%, transparent)`, color: navColor, border: `1px solid color-mix(in oklab, ${navColor} 30%, var(--border))` }}>
+                  {t}
+                  <button type="button"
+                          onClick={() => setFilters(f => ({ ...f, tickers: f.tickers.filter(x => x !== t) }))}
+                          className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer" style={{ lineHeight: 1 }}>×</button>
+                </span>
+              ))}
+              <div className="relative">
+                <input type="text" value={tickerQuery}
+                       placeholder={filters.tickers.length > 0 ? "Add ticker…" : "Search tickers…"}
+                       onChange={e => { setTickerQuery(e.target.value.toUpperCase()); setTickerDropdownOpen(true); }}
+                       onKeyDown={e => {
+                         if (e.key === "Enter" && tickerQuery) {
+                           const match = tickerOptions.find(t => t.toUpperCase() === tickerQuery.trim());
+                           const ticker = match ?? tickerQuery.trim().toUpperCase();
+                           if (ticker && !filters.tickers.includes(ticker)) {
+                             setFilters(f => ({ ...f, tickers: [...f.tickers, ticker] }));
+                           }
+                           setTickerQuery(""); setTickerDropdownOpen(false);
+                         }
+                         if (e.key === "Backspace" && !tickerQuery && filters.tickers.length > 0) {
+                           setFilters(f => ({ ...f, tickers: f.tickers.slice(0, -1) }));
+                         }
+                       }}
+                       onFocus={() => setTickerDropdownOpen(true)}
+                       onBlur={() => setTimeout(() => setTickerDropdownOpen(false), 150)}
+                       className="h-[34px] px-3 rounded-[10px] text-[12px] w-[140px]"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+                {tickerDropdownOpen && (() => {
+                  const available = tickerOptions
+                    .filter(t => !filters.tickers.includes(t))
+                    .filter(t => !tickerQuery || t.toUpperCase().includes(tickerQuery.trim()));
+                  return available.length > 0 ? (
+                    <div className="absolute z-50 mt-1 w-[180px] rounded-[10px] overflow-hidden shadow-lg"
+                         style={{ background: "var(--surface)", border: "1px solid var(--border)", maxHeight: 200 }}>
+                      <div className="overflow-y-auto" style={{ maxHeight: 200 }}>
+                        {available.slice(0, 50).map(t => (
+                          <button key={t} type="button"
+                                  onMouseDown={e => {
+                                    e.preventDefault();
+                                    setFilters(f => ({ ...f, tickers: [...f.tickers, t] }));
+                                    setTickerQuery(""); setTickerDropdownOpen(false);
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 text-[12px] transition-colors"
+                                  style={{ fontFamily: mono }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            </div>
+          </div>
 
           <FilterSelect
             label="Rule"
@@ -454,18 +583,19 @@ export function CampaignReview() {
             <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
-                  <th className="text-left px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">Ticker</th>
-                  <th className="text-left px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">Open → Close</th>
-                  <th className="text-right px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">P&L</th>
-                  <th className="text-right px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">Return</th>
-                  <th className="text-right px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">R</th>
-                  <th className="text-left px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">Grade</th>
+                  <SortHeader label="Ticker"  sortKey="ticker"       activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
+                  <SortHeader label="Open"    sortKey="open_date"    activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
+                  <SortHeader label="Close"   sortKey="closed_date"  activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
+                  <SortHeader label="P&L"     sortKey="realized_pl"  activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="Return"  sortKey="return_pct"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="R"       sortKey="r_multiple"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="Grade"   sortKey="grade"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
                   <th className="text-left px-3 py-2.5 font-semibold uppercase tracking-[0.05em] text-[10px]">Lesson</th>
                   <th className="px-3 py-2.5" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => {
+                {sorted.map(r => {
                   const cats = (r.lesson_category || "").split("|").map(s => s.trim()).filter(Boolean);
                   const isOpen = expandedId === r.trade_id;
                   const isOpt = String(r.instrument_type).toUpperCase() === "OPTION"
@@ -501,7 +631,10 @@ export function CampaignReview() {
                           <div className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>{r.trade_id}</div>
                         </td>
                         <td className="px-3 py-2.5" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
-                          {shortOpen} → {shortClose}
+                          {shortOpen}
+                        </td>
+                        <td className="px-3 py-2.5" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                          {shortClose}
                         </td>
                         <td className="px-3 py-2.5 text-right font-semibold"
                             style={{ fontFamily: mono, color: r.realized_pl >= 0 ? "#08a86b" : "#e5484d" }}>
@@ -542,7 +675,7 @@ export function CampaignReview() {
                       </tr>
                       {isOpen && (
                         <tr style={{ background: "var(--bg-2)" }}>
-                          <td colSpan={8} className="px-4 py-4">
+                          <td colSpan={9} className="px-4 py-4">
                             <LessonEditor
                               row={r}
                               savingId={saving}
