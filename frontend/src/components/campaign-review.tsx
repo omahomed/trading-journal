@@ -23,6 +23,12 @@ type SeriesKey = "all" | "original" | "add_on";
 type InstrumentKey = "all" | "stocks" | "options";
 type DateRangeKey = "ytd" | "month" | "week" | "custom";
 type GradeKey = "all" | "unrated" | "1" | "2" | "3" | "4" | "5";
+// P&L filter. Direction (winners/losers) + percentile buckets in a
+// single dropdown. Percentile options ("top_10" etc.) are relative to
+// the currently-otherwise-filtered set, not the global population —
+// so combining Ticker=NVDA + P&L=Top 10% gives you the top 10% of your
+// NVDA trades, which is what you'd intuitively expect.
+type PLKey = "all" | "winners" | "losers" | "top_10" | "top_25" | "bottom_10" | "bottom_25";
 
 // Sortable table columns. "lesson" and the expand caret intentionally
 // left out — sorting by chip content isn't meaningful.
@@ -40,6 +46,7 @@ interface Filters {
   from: string;
   to: string;
   grade: GradeKey;
+  pl: PLKey;
 }
 
 const DEFAULT_FILTERS: Filters = {
@@ -53,6 +60,7 @@ const DEFAULT_FILTERS: Filters = {
   from: "",
   to: "",
   grade: "all",
+  pl: "all",
 };
 
 // Filter → date-range predicate. YTD = "everything since 2026-01-01"
@@ -236,7 +244,11 @@ export function CampaignReview() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    return rows.filter(r => {
+    // Pass 1: apply all non-P&L filters. P&L direction (winners/losers)
+    // could be baked in here, but percentile buckets need the
+    // otherwise-filtered set as their reference population, so we do
+    // both P&L variants in a second pass for consistency.
+    const pass1 = rows.filter(r => {
       // Search
       if (filters.q) {
         const q = filters.q.toLowerCase();
@@ -274,6 +286,25 @@ export function CampaignReview() {
       if (!dateFilterPasses(r, filters)) return false;
       return true;
     });
+
+    // Pass 2: P&L direction + percentile. Percentile is relative to
+    // pass1 — so "Top 10%" with Ticker=NVDA means top 10% of NVDA
+    // trades, not top 10% of the global population.
+    if (filters.pl === "all") return pass1;
+    if (filters.pl === "winners") return pass1.filter(r => (r.realized_pl || 0) > 0);
+    if (filters.pl === "losers") return pass1.filter(r => (r.realized_pl || 0) < 0);
+    // Percentile buckets. Ceil so "Top 10%" of 7 trades still returns
+    // the single best trade rather than 0 rows.
+    const pct = filters.pl === "top_10" || filters.pl === "bottom_10" ? 0.10 : 0.25;
+    const isTop = filters.pl === "top_10" || filters.pl === "top_25";
+    const n = pass1.length;
+    if (n === 0) return pass1;
+    const takeCount = Math.max(1, Math.ceil(n * pct));
+    const sorted = [...pass1].sort((a, b) =>
+      isTop ? (b.realized_pl || 0) - (a.realized_pl || 0) : (a.realized_pl || 0) - (b.realized_pl || 0),
+    );
+    const keep = new Set(sorted.slice(0, takeCount).map(r => r.trade_id));
+    return pass1.filter(r => keep.has(r.trade_id));
   }, [rows, filters]);
 
   // Summary stats over the filtered set (calculated before sort — order
@@ -563,6 +594,21 @@ export function CampaignReview() {
               { v: "3", l: "★★★" },
               { v: "4", l: "★★★★" },
               { v: "5", l: "★★★★★" },
+            ]}
+          />
+
+          <FilterSelect
+            label="P&L"
+            value={filters.pl}
+            onChange={v => setFilters(f => ({ ...f, pl: v as PLKey }))}
+            options={[
+              { v: "all", l: "All P&L" },
+              { v: "winners", l: "Winners only" },
+              { v: "losers", l: "Losers only" },
+              { v: "top_10", l: "Top 10% by P&L" },
+              { v: "top_25", l: "Top 25% by P&L" },
+              { v: "bottom_10", l: "Bottom 10% by P&L" },
+              { v: "bottom_25", l: "Bottom 25% by P&L" },
             ]}
           />
 
