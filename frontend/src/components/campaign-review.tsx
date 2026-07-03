@@ -23,6 +23,12 @@ type SeriesKey = "all" | "original" | "add_on";
 type InstrumentKey = "all" | "stocks" | "options";
 type DateRangeKey = "ytd" | "month" | "week" | "custom";
 type GradeKey = "all" | "unrated" | "1" | "2" | "3" | "4" | "5";
+// Which date column gates all the date-range filters. "close" is the
+// original / default behavior — "trades I closed this month". "open"
+// flips the semantics to "trades I opened this month". A trade that
+// runs 3 months lands in different weeks depending on which basis you
+// pick, so the toggle is genuinely load-bearing for periodic reviews.
+type DateBasisKey = "open" | "close";
 // P&L filter. Direction (winners/losers) + percentile buckets in a
 // single dropdown. Percentile options ("top_10" etc.) are relative to
 // the currently-otherwise-filtered set, not the global population —
@@ -43,6 +49,7 @@ interface Filters {
   instrument: InstrumentKey;
   lesson: string;  // "all" | "none" | category name
   dateRange: DateRangeKey;
+  dateBasis: DateBasisKey;  // which date column drives the range
   from: string;
   to: string;
   grade: GradeKey;
@@ -57,6 +64,7 @@ const DEFAULT_FILTERS: Filters = {
   instrument: "all",
   lesson: "all",
   dateRange: "ytd",
+  dateBasis: "close",
   from: "",
   to: "",
   grade: "all",
@@ -74,6 +82,7 @@ function hasActiveFilters(f: Filters): boolean {
     || f.instrument !== "all"
     || f.lesson !== "all"
     || f.dateRange !== "ytd"
+    || f.dateBasis !== "close"
     || f.from !== ""
     || f.to !== ""
     || f.grade !== "all"
@@ -81,13 +90,26 @@ function hasActiveFilters(f: Filters): boolean {
 }
 
 // Filter → date-range predicate. YTD = "everything since 2026-01-01"
-// (the same population the server returns). Month = current calendar month.
-// Week = Monday of current week. Custom uses the from/to inputs.
+// (server-side base cut for the "closed" case; for the "open" basis,
+// YTD narrows client-side to trades opened in 2026 which strips out
+// the 2025 opens that closed in 2026 — different intent, different
+// result). Month = current calendar month. Week = Monday of current
+// week. Custom uses the from/to inputs.
 function dateFilterPasses(row: CampaignReviewRow, f: Filters): boolean {
-  const d = row.closed_date ? new Date(row.closed_date) : null;
+  const raw = f.dateBasis === "open" ? row.open_date : row.closed_date;
+  const d = raw ? new Date(raw) : null;
   if (!d || isNaN(d.getTime())) return f.dateRange === "ytd" || f.dateRange === "custom";
   const now = new Date();
-  if (f.dateRange === "ytd") return true;
+  if (f.dateRange === "ytd") {
+    if (f.dateBasis === "open") {
+      // 2026 cut is baked in at the server for closed-basis. For open-
+      // basis, we need to enforce the same year gate client-side so
+      // "YTD by open date" doesn't spuriously include a 2025 open that
+      // happened to close in 2026.
+      return d.getFullYear() >= 2026;
+    }
+    return true;
+  }
   if (f.dateRange === "month") {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
   }
@@ -638,6 +660,20 @@ export function CampaignReview() {
               { v: "month", l: "Month" },
               { v: "ytd", l: "YTD" },
               { v: "custom", l: "Custom" },
+            ]}
+          />
+
+          {/* Which date column gates the range above. Applies to all
+              presets (Week / Month / YTD / Custom) — an asymmetric
+              behavior where only Custom respected the basis would be
+              confusing when flipping between presets. */}
+          <SegmentedControl<DateBasisKey>
+            label="Basis"
+            value={filters.dateBasis}
+            onChange={v => setFilters(f => ({ ...f, dateBasis: v }))}
+            options={[
+              { v: "close", l: "Close" },
+              { v: "open", l: "Open" },
             ]}
           />
 
