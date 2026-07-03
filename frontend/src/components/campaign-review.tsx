@@ -63,6 +63,23 @@ const DEFAULT_FILTERS: Filters = {
   pl: "all",
 };
 
+// True when any filter diverges from the defaults. Used to enable /
+// dim the Reset button. Sort state is intentionally excluded — sort
+// is a viewing preference, not a filter, and reset shouldn't touch it.
+function hasActiveFilters(f: Filters): boolean {
+  return f.q !== ""
+    || f.series !== "all"
+    || f.tickers.length > 0
+    || f.rule !== "all"
+    || f.instrument !== "all"
+    || f.lesson !== "all"
+    || f.dateRange !== "ytd"
+    || f.from !== ""
+    || f.to !== ""
+    || f.grade !== "all"
+    || f.pl !== "all";
+}
+
 // Filter → date-range predicate. YTD = "everything since 2026-01-01"
 // (the same population the server returns). Month = current calendar month.
 // Week = Monday of current week. Custom uses the from/to inputs.
@@ -638,6 +655,32 @@ export function CampaignReview() {
               </div>
             </div>
           )}
+
+          {/* Reset filters. Sort is preserved — that's a viewing
+              preference, not a filter, and re-picking a sort after every
+              reset would be annoying. Button dims to a subtle "hint"
+              state when no filters diverge from defaults, so it's
+              visible for discoverability without shouting. */}
+          {(() => {
+            const active = hasActiveFilters(filters);
+            return (
+              <div className="flex flex-col gap-1 ml-auto">
+                <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "transparent" }}>Reset</span>
+                <button type="button"
+                        onClick={() => { setFilters(DEFAULT_FILTERS); setTickerQuery(""); setTickerDropdownOpen(false); }}
+                        disabled={!active}
+                        className="h-[34px] px-3 rounded-[10px] text-[11px] font-semibold transition-all cursor-pointer disabled:cursor-not-allowed"
+                        style={{
+                          background: active ? "color-mix(in oklab, #e5484d 8%, var(--surface))" : "var(--bg-2)",
+                          color: active ? "#dc2626" : "var(--ink-4)",
+                          border: `1px solid ${active ? "color-mix(in oklab, #e5484d 25%, var(--border))" : "var(--border)"}`,
+                          opacity: active ? 1 : 0.6,
+                        }}>
+                  ↺ Reset filters
+                </button>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Summary strip */}
