@@ -284,24 +284,34 @@ class MCTEngine:
             # each replay, NEVER persisted to DB. See the Phase 11 block
             # at the end of _process_bar.
             #   trend_sign =  0  → pre-first-Step-4 in the replay (blank)
-            #                +1  → in a positive 21e leg (Step 4 armed)
-            #                -1  → in a negative 21e leg (Tier-1 confirmed
-            #                      break fired while in a positive leg)
+            #                +1  → in a positive 21e leg (Step-4 armed
+            #                      with the "3rd day up" gate)
+            #                -1  → in a negative 21e leg (engine's
+            #                      VIOLATION_21EMA fired while positive)
             #   trend_anchor_idx = bar index of the last edge (start of
             #     the current leg). Signed count = (latest_idx -
             #     trend_anchor_idx + 1) * trend_sign, computed in the
             #     adapter — the engine only tracks the anchor + sign.
-            #   tier1_watch = True when a close below the 21e has armed
-            #     the Tier-1 pending-break watch. The positive leg stays
-            #     positive during the watch — only a subsequent intraday
-            #     undercut of the PRIOR bar's low by >1% CONFIRMS the
-            #     break and flips negative. A close back above the 21e
-            #     while the watch is armed clears it — no flip.
             # NOT gated on correction state — the 21e leg is independent
             # of the rally-cycle machinery.
+            #
+            # Arm rule (Phase 11): the FIRST bar where all four hold:
+            #   - trend_sign != 1 (not already in a positive leg)
+            #   - consec_low_above_21 >= 3 (Step-4 streak reached)
+            #   - close > prev_close ("3rd day up" gate from Branch 1)
+            #   - prev is not None (guard for i==0)
+            # Note this deliberately does NOT read state["step4_done"] —
+            # the engine's step4_done latches on the streak-3 bar
+            # regardless of up/down, so tracking its F→T edge misses
+            # the case where the 3rd bar is down and the 4th is up.
+            #
+            # Fire rule (Phase 11): F→T edge of state["violation_21_fired"]
+            # while in a positive leg. The engine's own anchored-violation
+            # (VIOLATION_21EMA) already computes this correctly:
+            # anchor_21_low = low of the day close first went below 21 EMA;
+            # fires when any subsequent bar's low undercuts anchor by ≥1%.
             "trend_anchor_idx": None,
             "trend_sign": 0,
-            "tier1_watch": False,
         }
 
     # ------------------------------------------------------------------------
@@ -322,16 +332,12 @@ class MCTEngine:
             "step6_done": state["step6_done"],
         }
 
-        # Pre-bar snapshots for signed Trend Count edge detection (see
-        # Phase 11 at the end of this method).
-        # - pre_trend_step4: prior step4_done so the F→T arm edge can
-        #   be detected once step-machinery has run this bar.
-        # - pre_tier1_watch: prior watch state so the Tier-1 FIRE test
-        #   requires an arm that landed on a PRIOR bar — a close-below
-        #   that arms the watch on the same bar as an intraday undercut
-        #   does not confirm on the arming bar.
-        pre_trend_step4 = state["step4_done"]
-        pre_tier1_watch = state["tier1_watch"]
+        # Pre-bar snapshot for the Tier-1 fire edge in Phase 11. The engine's
+        # VIOLATION_21EMA latch flips F→T inside _phase_violations; we need
+        # the pre-bar value to detect the transition edge (violation_21_fired
+        # stays True for the rest of the below-21e streak, so reading the
+        # post-value alone would fire every subsequent bar of the streak).
+        pre_violation_21 = state["violation_21_fired"]
 
         # Phase 1: ratchet reference high
         self._phase_ratchet(current, state)
@@ -397,62 +403,47 @@ class MCTEngine:
         # converge. A follow-up pass will excise those dead writes.
         self._phase_exposure_recompute(current, state)
 
-        # Phase 11 — signed Trend Count anchor + Tier-1 pending-break
-        # watch. Runs AFTER all step machinery has settled. Two
-        # mutually-exclusive edges plus a per-bar watch update:
+        # Phase 11 — signed Trend Count edges. Runs AFTER all step
+        # machinery has settled so we see the post-bar values of
+        # consec_low_above_21 (updated in phase 5) and
+        # violation_21_fired (updated in phase 4). Two mutually-
+        # exclusive edges:
         #
-        #   Step-4 arm (step4_done: False → True) AND we're NOT already
-        #     in a positive leg (trend_sign != 1): flip to +1 at this
-        #     bar. The "not already positive" guard implements the
-        #     rule: "Step-4 cannot re-arm without a violation first."
-        #     Phantom re-arms inside an already-positive leg — caused
-        #     by V10_SOFT_RESET (or RALLY_INVALIDATED) clearing
-        #     step4_done, followed by Step-4 arming again on the next
-        #     3-day low>21e streak, without a Tier-1 CONFIRM in
-        #     between — are internal engine bookkeeping and do NOT
-        #     restart the leg count. The leg is broken ONLY by a
-        #     Tier-1 CONFIRM below.
-        #     Fires from:  sign 0  (first-ever arm since 2010 origin)
-        #                  sign -1 (fresh arm after a Tier-1 break)
-        #     Skipped on:  sign +1 (positive leg already running;
-        #                  phantom re-arm; count keeps growing from
-        #                  the original anchor)
-        #     Resets tier1_watch on fire so a stale True from a prior
-        #     leg cannot fire on the next bar of the fresh positive leg.
+        #   ARM (leg goes positive). Fires only when NOT already in
+        #     a positive leg. Conditions on THIS bar:
+        #       - consec_low_above_21 >= 3        (Step-4 streak reached)
+        #       - close > prev close              ("3rd day up" gate)
+        #     Deliberately does NOT read state["step4_done"] — the
+        #     engine's step4_done latches on the streak-3 bar
+        #     regardless of up/down, so a down-day arm would then
+        #     block the up-day-arm detection on subsequent bars via
+        #     the F→T edge. Reading streak + close-up directly
+        #     lets the arm land on the first up day where the streak
+        #     is ≥3, even if that bar is the 4th of the streak.
         #
-        #   Tier-1 CONFIRM (positive leg + prior-bar watch armed +
-        #     this bar's low undercuts the PRIOR bar's low by >1%):
-        #     flip to -1 at THIS bar. Reset tier1_watch. Using the
-        #     prior-BAR snapshot is what makes it a "subsequent
-        #     bar" fire — the arming close cannot also fire on the
-        #     same bar.
-        #
-        #   Watch arm / clear (only when neither edge fired this bar):
-        #     close <  ema_21  → tier1_watch = True   (arm)
-        #     close >= ema_21  → tier1_watch = False  (clear; if the
-        #       watch was armed, this is the reclaim path — leg
-        #       continues positive, no flip ever happened)
+        #   FIRE (leg goes negative). F→T edge of the engine's own
+        #     VIOLATION_21EMA latch (state["violation_21_fired"]).
+        #     The engine already computes the anchor-based test:
+        #     anchor_21_low = low of the day close first went below
+        #     21 EMA; violation fires when any subsequent bar's low
+        #     undercuts anchor by ≥1%. Using its edge directly
+        #     matches the exit-ladder taxonomy the user surfaces on
+        #     the M Factor page. Only fires while trend_sign == 1
+        #     (leg is broken only from a positive state).
         #
         # NOT gated on correction state — the 21e leg is orthogonal
         # to the rally-cycle machinery.
-        if (not pre_trend_step4 and state["step4_done"]
-                and state["trend_sign"] != 1):
+        if (state["trend_sign"] != 1
+                and state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21
+                and prev is not None
+                and float(current["close"]) > float(prev["close"])):
             state["trend_anchor_idx"] = i
             state["trend_sign"] = 1
-            state["tier1_watch"] = False
         elif (state["trend_sign"] == 1
-                and pre_tier1_watch
-                and prev is not None
-                and float(current["low"]) < float(prev["low"]) * 0.99):
+                and not pre_violation_21
+                and state["violation_21_fired"]):
             state["trend_anchor_idx"] = i
             state["trend_sign"] = -1
-            state["tier1_watch"] = False
-        else:
-            # No edge this bar — just maintain the watch state from
-            # this bar's close vs the 21e.
-            ema_21 = float(current["ema_21"]) if pd.notna(current["ema_21"]) else None
-            if ema_21 is not None:
-                state["tier1_watch"] = float(current["close"]) < ema_21
 
         return bar_signals
 
@@ -1438,9 +1429,9 @@ class MCTEngine:
             "step1_done": state["step1_done"],
             "step4_done": state["step4_done"],
             "consec_low_above_21": state["consec_low_above_21"],
+            "violation_21_fired": state["violation_21_fired"],
             "trend_anchor_idx": state["trend_anchor_idx"],
             "trend_sign": state["trend_sign"],
-            "tier1_watch": state["tier1_watch"],
             # Live per-bar validity for Steps 2-7 under the sum-of-valid-
             # steps exposure model. Populated by _phase_exposure_recompute
             # before the bar record is built. Copied (not aliased) so a
