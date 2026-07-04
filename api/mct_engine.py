@@ -401,12 +401,24 @@ class MCTEngine:
         # watch. Runs AFTER all step machinery has settled. Two
         # mutually-exclusive edges plus a per-bar watch update:
         #
-        #   Step-4 arm (step4_done: False → True): always flip to +1
-        #     at this bar, whether the leg was 0 (first-ever), +1
-        #     (re-arm inside a positive leg — no-op net), or -1
-        #     (re-arm after a violation). Reset tier1_watch so a
-        #     stale True from a prior leg cannot fire on the next
-        #     bar of the fresh positive leg.
+        #   Step-4 arm (step4_done: False → True) AND we're NOT already
+        #     in a positive leg (trend_sign != 1): flip to +1 at this
+        #     bar. The "not already positive" guard implements the
+        #     rule: "Step-4 cannot re-arm without a violation first."
+        #     Phantom re-arms inside an already-positive leg — caused
+        #     by V10_SOFT_RESET (or RALLY_INVALIDATED) clearing
+        #     step4_done, followed by Step-4 arming again on the next
+        #     3-day low>21e streak, without a Tier-1 CONFIRM in
+        #     between — are internal engine bookkeeping and do NOT
+        #     restart the leg count. The leg is broken ONLY by a
+        #     Tier-1 CONFIRM below.
+        #     Fires from:  sign 0  (first-ever arm since 2010 origin)
+        #                  sign -1 (fresh arm after a Tier-1 break)
+        #     Skipped on:  sign +1 (positive leg already running;
+        #                  phantom re-arm; count keeps growing from
+        #                  the original anchor)
+        #     Resets tier1_watch on fire so a stale True from a prior
+        #     leg cannot fire on the next bar of the fresh positive leg.
         #
         #   Tier-1 CONFIRM (positive leg + prior-bar watch armed +
         #     this bar's low undercuts the PRIOR bar's low by >1%):
@@ -423,7 +435,8 @@ class MCTEngine:
         #
         # NOT gated on correction state — the 21e leg is orthogonal
         # to the rally-cycle machinery.
-        if not pre_trend_step4 and state["step4_done"]:
+        if (not pre_trend_step4 and state["step4_done"]
+                and state["trend_sign"] != 1):
             state["trend_anchor_idx"] = i
             state["trend_sign"] = 1
             state["tier1_watch"] = False
