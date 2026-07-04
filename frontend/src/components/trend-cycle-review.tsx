@@ -365,13 +365,20 @@ export function TrendCycleReview() {
                         className="transition-colors hover:brightness-95"
                         style={{ borderBottom: "1px solid var(--border)" }}>
                       <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                                style={{ background: "var(--bg-2)", color: "var(--ink-4)", fontFamily: mono }}>
+                            #{l.cycle_number}
+                          </span>
                           <span className="text-[16px] leading-none" style={{ color: signColor }}>
                             {l.sign === 1 ? "▲" : "▼"}
                           </span>
-                          <span className="text-[11px]" style={{ color: "var(--ink-3)", fontFamily: mono }}>
-                            {l.start_date} → {l.end_date}
+                          <span className="text-[13px] font-semibold" style={{ color: signColor, fontFamily: mono }}>
+                            {l.sign === 1 ? `+${l.duration_days}` : `-${l.duration_days}`}
                           </span>
+                        </div>
+                        <div className="text-[10px] mt-1" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+                          {l.start_date} → {l.end_date}
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink)" }}>

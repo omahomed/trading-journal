@@ -14,6 +14,9 @@
 import type { JournalHistoryPoint } from "@/lib/api";
 
 export interface TrendCycleLeg {
+  /** Chronological number of this leg, starting at 1 for the OLDEST
+   *  leg in the journal history. Stable across filters and sorts. */
+  cycle_number: number;
   sign: 1 | -1;
   /** ISO date of the first row in this leg (inclusive). */
   start_date: string;
@@ -151,7 +154,9 @@ export function computeTrendCycles(rows: JournalHistoryPoint[]): {
     // Anchor row = day BEFORE the leg starts. Used for return anchors.
     // Falls back to null if this is the very first row in history.
     const anchor = cursor > 0 ? sorted[cursor - 1] : null;
-    legs.push(buildLeg(sign, legRows, anchor));
+    // Chronological numbering — first leg detected is #1 (oldest,
+    // since we walked sorted-ascending). Stable across filters/sorts.
+    legs.push(buildLeg(sign, legRows, anchor, legs.length + 1));
     cursor = j;
   }
 
@@ -162,16 +167,42 @@ function buildLeg(
   sign: 1 | -1,
   legRows: JournalHistoryPoint[],
   anchor: JournalHistoryPoint | null,
+  cycle_number: number,
 ): TrendCycleLeg {
   const first = legRows[0];
   const last = legRows[legRows.length - 1];
 
-  const start_nlv = anchor ? Number(anchor.end_nlv) || null : null;
+  // Anchor NLV = end_nlv of the day BEFORE the leg started. Falls
+  // back to beg_nlv of the first leg day if no anchor (first leg in
+  // history). Used only for the P&L $ dollar-difference formula —
+  // return_pct is TWR-chained separately below.
+  const start_nlv = anchor
+    ? Number((anchor as any).end_nlv) || null
+    : Number((first as any).beg_nlv) || null;
   const end_nlv = Number(last.end_nlv) || 0;
-  const return_dollars = start_nlv != null ? end_nlv - start_nlv : 0;
-  const return_pct = start_nlv != null && start_nlv !== 0
-    ? (end_nlv - start_nlv) / start_nlv * 100
-    : null;
+
+  // Sum cash flows across the leg so the P&L $ and P&L % ignore
+  // contributions/withdrawals (a $10k deposit shouldn't count as leg
+  // "profit"). daily_return values in the API payload are already
+  // computed by the backend using the TWR formula
+  //   daily_return = (end_nlv - beg_nlv - cash_change) / (beg_nlv + cash_change)
+  // so chaining ∏(1 + daily_return) - 1 gives the clean TWR for the leg.
+  let twr_multiplier = 1;
+  let sum_cash = 0;
+  let has_return_data = false;
+  for (const r of legRows) {
+    const dr = Number((r as any).daily_return);
+    if (isFinite(dr)) {
+      twr_multiplier *= (1 + dr);
+      has_return_data = true;
+    }
+    const cf = Number((r as any).cash_change);
+    if (isFinite(cf)) sum_cash += cf;
+  }
+  const return_pct = has_return_data ? (twr_multiplier - 1) * 100 : null;
+  const return_dollars = start_nlv != null && start_nlv > 0
+    ? end_nlv - start_nlv - sum_cash
+    : 0;
 
   const ndx_start = anchor && (anchor as any).nasdaq
     ? Number((anchor as any).nasdaq) || null
@@ -216,6 +247,7 @@ function buildLeg(
   const heatSum = legRows.reduce((s, r) => s + (Number(r.portfolio_heat) || 0), 0);
 
   return {
+    cycle_number,
     sign,
     start_date: String(first.day).slice(0, 10),
     end_date: String(last.day).slice(0, 10),
