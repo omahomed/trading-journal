@@ -283,6 +283,12 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
     # CORRECTION rows, or legacy rows pre-dating migration 015).
     if "mct_display_day_num" in df.columns:
         df["mct_display_day_num"] = pd.to_numeric(df["mct_display_day_num"], errors="coerce")
+    # trend_count is nullable SMALLINT (Migration 043) — same NaN-vs-0
+    # discipline as mct_display_day_num above. 0 is a valid Step-4 arm
+    # bar; NaN means pre-first-Step-4 or market-closed day journaled for
+    # NLV only. Frontend renders — for NaN, +N/−N for signed values.
+    if "trend_count" in df.columns:
+        df["trend_count"] = pd.to_numeric(df["trend_count"], errors="coerce")
 
     # Filter to requested days
     if days > 0:
@@ -312,6 +318,7 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
             "spy_ltd", "ndx_ltd", "spy_daily_pct", "ndx_daily_pct",
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
             "market_window", "market_cycle", "mct_display_day_num",
+            "trend_count",
             "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
             "highlights", "lowlights", "mistakes", "top_lesson",
