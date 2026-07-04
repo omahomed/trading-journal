@@ -78,6 +78,7 @@ export default function MoreClient() {
         <NavRow href="/analytics" label="Analytics" />
         <NavRow href="/performance-heatmap" label="Performance Heat Map" />
         <NavRow href="/campaign-review" label="Campaign Review" />
+        <NavRow href="/trend-cycle-review" label="Trend Cycle Review" />
         <NavRow href="/period-review" label="Period Review" />
       </Section>
       <Section title="AI">
