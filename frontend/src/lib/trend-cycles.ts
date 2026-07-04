@@ -225,17 +225,28 @@ function buildLeg(
     ? return_pct - spy_return_pct
     : null;
 
-  // Intra-leg drawdown: rolling peak, biggest dip from any peak.
-  let peak = start_nlv ?? Number(first.end_nlv) ?? 0;
+  // Intra-leg drawdown, computed on a CASH-FLOW-ADJUSTED synthetic
+  // equity curve. Same TWR trick as return_pct above: each bar's
+  // synth_nlv = prior_synth × (1 + daily_return), which isolates
+  // trading gains/losses from contributions and withdrawals. A
+  // deposit mid-leg no longer resets the peak upward, a withdrawal
+  // no longer registers as a fake drawdown. Starts from the leg's
+  // anchor NLV (day before it began) — falls back to beg_nlv of the
+  // first day if no anchor exists (first leg in history).
+  let synth_nlv = start_nlv ?? Number((first as any).beg_nlv) ?? 0;
+  let peak_synth = synth_nlv;
   let maxDdPct = 0;
   let maxDdDollars = 0;
   for (const row of legRows) {
-    const v = Number(row.end_nlv) || 0;
-    if (v > peak) peak = v;
-    if (peak > 0) {
-      const dd = (v - peak) / peak * 100;
-      if (dd < maxDdPct) maxDdPct = dd;
-      const ddDollars = v - peak;
+    const dr = Number((row as any).daily_return);
+    if (isFinite(dr)) {
+      synth_nlv = synth_nlv * (1 + dr);
+    }
+    if (synth_nlv > peak_synth) peak_synth = synth_nlv;
+    if (peak_synth > 0) {
+      const ddPct = (synth_nlv - peak_synth) / peak_synth * 100;
+      if (ddPct < maxDdPct) maxDdPct = ddPct;
+      const ddDollars = synth_nlv - peak_synth;
       if (ddDollars < maxDdDollars) maxDdDollars = ddDollars;
     }
   }
