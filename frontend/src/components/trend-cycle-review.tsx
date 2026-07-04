@@ -19,8 +19,8 @@ const mono = "var(--font-jetbrains), monospace";
 type SignKey = "all" | "positive" | "negative";
 type DateRangeKey = "all" | "ytd" | "month" | "week" | "custom";
 type SortKey = "end_date" | "duration_days" | "return_pct" | "return_dollars"
-  | "alpha_pct" | "ndx_return_pct" | "max_drawdown_pct" | "avg_pct_invested"
-  | "avg_score";
+  | "alpha_pct" | "ndx_return_pct" | "spy_return_pct"
+  | "max_drawdown_pct" | "avg_pct_invested";
 type SortDir = "asc" | "desc";
 
 interface Filters {
@@ -305,20 +305,20 @@ export function TrendCycleReview() {
               {filteredAggregates.expectancy_pct == null ? "—" : `${filteredAggregates.expectancy_pct >= 0 ? "+" : ""}${filteredAggregates.expectancy_pct.toFixed(2)}%/leg`}
             </b>
           </span>
-          <span title="Sum of per-leg alpha (portfolio return − NDX return)">
-            Cum α vs NDX{" "}
+          <span title="Sum of per-leg alpha (portfolio return − SPY return)">
+            Cum α vs SPY{" "}
             <b style={{ color: (filteredAggregates.cumulative_alpha_pct ?? 0) >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>
               {filteredAggregates.cumulative_alpha_pct == null ? "—" : `${filteredAggregates.cumulative_alpha_pct >= 0 ? "+" : ""}${filteredAggregates.cumulative_alpha_pct.toFixed(2)}%`}
             </b>
           </span>
-          <span title="Avg % invested during positive vs negative legs — proxy for exposure discipline">
+          <span title="Avg % invested during positive vs negative legs — proxy for exposure discipline. Values are stored as percentages already (e.g. 106% = using margin), not fractions.">
             % Inv{" "}
             <b style={{ color: "#08a86b", fontFamily: mono }}>
-              {filteredAggregates.avg_pct_invested_positive == null ? "—" : `${(filteredAggregates.avg_pct_invested_positive * 100).toFixed(0)}%`}
+              {filteredAggregates.avg_pct_invested_positive == null ? "—" : `${filteredAggregates.avg_pct_invested_positive.toFixed(0)}%`}
             </b>
             <span style={{ color: "var(--ink-4)" }}> ▲ · </span>
             <b style={{ color: "#e5484d", fontFamily: mono }}>
-              {filteredAggregates.avg_pct_invested_negative == null ? "—" : `${(filteredAggregates.avg_pct_invested_negative * 100).toFixed(0)}%`}
+              {filteredAggregates.avg_pct_invested_negative == null ? "—" : `${filteredAggregates.avg_pct_invested_negative.toFixed(0)}%`}
             </b>
             <span style={{ color: "var(--ink-4)" }}> ▼</span>
           </span>
@@ -338,15 +338,15 @@ export function TrendCycleReview() {
             <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
-                  <SortHeader label="Cycle"     sortKey="end_date"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
-                  <SortHeader label="Duration"  sortKey="duration_days"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="P&L $"     sortKey="return_dollars"  activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="P&L %"     sortKey="return_pct"      activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="NDX %"     sortKey="ndx_return_pct"  activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="Alpha"     sortKey="alpha_pct"       activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="Max DD"    sortKey="max_drawdown_pct" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="Avg % Inv" sortKey="avg_pct_invested" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
-                  <SortHeader label="Avg Grade" sortKey="avg_score"       activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="Cycle"      sortKey="end_date"         activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="left" />
+                  <SortHeader label="Duration"   sortKey="duration_days"    activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="P&L $"      sortKey="return_dollars"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="P&L %"      sortKey="return_pct"       activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="NDX %"      sortKey="ndx_return_pct"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="SPY %"      sortKey="spy_return_pct"   activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="α vs SPY"   sortKey="alpha_pct"        activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="Max DD"     sortKey="max_drawdown_pct" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
+                  <SortHeader label="Avg % Inv"  sortKey="avg_pct_invested" activeKey={sortKey} dir={sortDir} onToggle={toggleSort} align="right" />
                 </tr>
               </thead>
               <tbody>
@@ -366,18 +366,15 @@ export function TrendCycleReview() {
                         style={{ borderBottom: "1px solid var(--border)" }}>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-semibold" style={{ color: signColor }}>
+                          <span className="text-[16px] leading-none" style={{ color: signColor }}>
                             {l.sign === 1 ? "▲" : "▼"}
                           </span>
-                          <span className="font-semibold" style={{ color: "var(--ink)", fontFamily: mono }}>
-                            {l.sign === 1 ? `+${l.count_at_end}` : l.count_at_end}
+                          <span className="text-[11px]" style={{ color: "var(--ink-3)", fontFamily: mono }}>
+                            {l.start_date} → {l.end_date}
                           </span>
                         </div>
-                        <div className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
-                          {l.start_date} → {l.end_date}
-                        </div>
                       </td>
-                      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink)" }}>
                         {l.duration_days}d
                       </td>
                       <td className="px-3 py-2.5 text-right font-semibold"
@@ -394,6 +391,10 @@ export function TrendCycleReview() {
                           style={{ fontFamily: mono, color: (l.ndx_return_pct ?? 0) >= 0 ? "#08a86b" : "#e5484d" }}>
                         {l.ndx_return_pct == null ? "—" : `${l.ndx_return_pct >= 0 ? "+" : ""}${l.ndx_return_pct.toFixed(2)}%`}
                       </td>
+                      <td className="px-3 py-2.5 text-right"
+                          style={{ fontFamily: mono, color: (l.spy_return_pct ?? 0) >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {l.spy_return_pct == null ? "—" : `${l.spy_return_pct >= 0 ? "+" : ""}${l.spy_return_pct.toFixed(2)}%`}
+                      </td>
                       <td className="px-3 py-2.5 text-right font-semibold"
                           style={{ fontFamily: mono, color: alphaColor }}>
                         {l.alpha_pct == null ? "—" : `${l.alpha_pct >= 0 ? "+" : ""}${l.alpha_pct.toFixed(2)}%`}
@@ -403,10 +404,7 @@ export function TrendCycleReview() {
                         {l.max_drawdown_pct === 0 ? "—" : `${l.max_drawdown_pct.toFixed(2)}%`}
                       </td>
                       <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
-                        {`${(l.avg_pct_invested * 100).toFixed(0)}%`}
-                      </td>
-                      <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
-                        {l.avg_score == null ? "—" : l.avg_score.toFixed(2)}
+                        {`${l.avg_pct_invested.toFixed(0)}%`}
                       </td>
                     </tr>
                   );

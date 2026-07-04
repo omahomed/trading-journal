@@ -35,11 +35,19 @@ export interface TrendCycleLeg {
   return_pct: number | null;
 
   /** NASDAQ (^IXIC) close on the day before the leg's first day, and
-   *  the last day of the leg. Used to compute the benchmark comparison. */
+   *  the last day of the leg. Kept for reference / potential future use. */
   ndx_start: number | null;
   ndx_end: number;
   ndx_return_pct: number | null;
-  /** portfolio return − NDX return, in percentage-point delta. */
+
+  /** SPY close on the day before the leg's first day, and the last day
+   *  of the leg. SPY is the alpha benchmark (broader-market comparison
+   *  than NDX, which is tech-heavy and would flatter a CANSLIM
+   *  portfolio's alpha in tech-up tapes). */
+  spy_start: number | null;
+  spy_end: number;
+  spy_return_pct: number | null;
+  /** portfolio return − SPY return, in percentage-point delta. */
   alpha_pct: number | null;
 
   /** Intra-leg max drawdown: biggest peak-to-trough dip of end_nlv
@@ -49,12 +57,12 @@ export interface TrendCycleLeg {
   /** Same as above but in dollars. */
   max_drawdown_dollars: number;
 
-  /** Behavior averages over the leg's days. */
+  /** Behavior averages over the leg's days. pct_invested values in the
+   *  DB are stored as percentages already (e.g. 106.5 = 106.5% invested
+   *  when using margin), so avg_pct_invested is the raw average without
+   *  a fraction→percentage conversion. */
   avg_pct_invested: number;
   avg_portfolio_heat: number;
-  avg_score: number | null;
-  a_grade_days: number;   // score >= 4
-  d_grade_days: number;   // score <= 2 (D or F)
 }
 
 export interface TrendCycleAggregates {
@@ -78,13 +86,15 @@ export interface TrendCycleAggregates {
   expectancy_pct: number | null;
   expectancy_dollars: number | null;
 
-  /** Cumulative alpha: sum of alpha_pct across all legs where alpha
-   *  could be computed. Rough proxy for the total edge from leg-based
-   *  sizing behavior. Null if no legs. */
+  /** Cumulative alpha vs SPY: sum of alpha_pct across all legs where
+   *  alpha could be computed. Rough proxy for the total edge from
+   *  leg-based sizing behavior vs. broad-market buy-and-hold.
+   *  Null if no legs. */
   cumulative_alpha_pct: number | null;
 
   /** Avg % invested — split by leg sign so the "did I actually cut
-   *  exposure in negative legs" question is visible at a glance. */
+   *  exposure in negative legs" question is visible at a glance.
+   *  Values are raw percentages (e.g. 85 = 85% invested), not fractions. */
   avg_pct_invested_positive: number | null;
   avg_pct_invested_negative: number | null;
 
@@ -105,9 +115,20 @@ export function computeTrendCycles(rows: JournalHistoryPoint[]): {
   const legs: TrendCycleLeg[] = [];
   let cursor = 0;
 
+  // Coerce trend_count defensively — the API can hand back numbers,
+  // stringified numbers, or NaN-ish placeholders depending on how the
+  // Pandas DataFrame serialized. Normalize once so the loop below sees
+  // real numbers.
+  const asTc = (row: JournalHistoryPoint): number | null => {
+    const raw = (row as any).trend_count;
+    if (raw == null) return null;
+    const n = Number(raw);
+    if (!isFinite(n)) return null;
+    return n;
+  };
+
   while (cursor < sorted.length) {
-    const r = sorted[cursor];
-    const tc = (r as any).trend_count;
+    const tc = asTc(sorted[cursor]);
     if (tc == null || tc === 0) {
       // Not part of any leg; advance.
       cursor += 1;
@@ -119,7 +140,7 @@ export function computeTrendCycles(rows: JournalHistoryPoint[]): {
     const legRows: JournalHistoryPoint[] = [];
     let j = cursor;
     while (j < sorted.length) {
-      const next_tc = (sorted[j] as any).trend_count;
+      const next_tc = asTc(sorted[j]);
       if (next_tc == null || next_tc === 0) break;
       const next_sign = next_tc > 0 ? 1 : -1;
       if (next_sign !== sign) break;
@@ -159,8 +180,18 @@ function buildLeg(
   const ndx_return_pct = ndx_start != null && ndx_start !== 0
     ? (ndx_end - ndx_start) / ndx_start * 100
     : null;
-  const alpha_pct = return_pct != null && ndx_return_pct != null
-    ? return_pct - ndx_return_pct
+
+  const spy_start = anchor && (anchor as any).spy
+    ? Number((anchor as any).spy) || null
+    : null;
+  const spy_end = Number((last as any).spy) || 0;
+  const spy_return_pct = spy_start != null && spy_start !== 0
+    ? (spy_end - spy_start) / spy_start * 100
+    : null;
+  // Alpha is measured against SPY (broad-market benchmark), not NDX
+  // (tech-heavy — would flatter tech-tilted portfolios).
+  const alpha_pct = return_pct != null && spy_return_pct != null
+    ? return_pct - spy_return_pct
     : null;
 
   // Intra-leg drawdown: rolling peak, biggest dip from any peak.
@@ -178,16 +209,11 @@ function buildLeg(
     }
   }
 
-  // Behavior averages
+  // Behavior averages. pct_invested values from the DB are already
+  // percentages (e.g. 106.5 = 106.5% invested using margin), so no
+  // fraction→percentage scaling here.
   const invSum = legRows.reduce((s, r) => s + (Number(r.pct_invested) || 0), 0);
   const heatSum = legRows.reduce((s, r) => s + (Number(r.portfolio_heat) || 0), 0);
-  const scoreRows = legRows.filter(r => (r as any).score != null && (r as any).score > 0);
-  const scoreSum = scoreRows.reduce((s, r) => s + (Number((r as any).score) || 0), 0);
-  const a_grade = legRows.filter(r => Number((r as any).score || 0) >= 4).length;
-  const d_grade = legRows.filter(r => {
-    const s = Number((r as any).score || 0);
-    return s > 0 && s <= 2;
-  }).length;
 
   return {
     sign,
@@ -203,14 +229,14 @@ function buildLeg(
     ndx_start,
     ndx_end,
     ndx_return_pct,
+    spy_start,
+    spy_end,
+    spy_return_pct,
     alpha_pct,
     max_drawdown_pct: maxDdPct,
     max_drawdown_dollars: maxDdDollars,
     avg_pct_invested: legRows.length > 0 ? invSum / legRows.length : 0,
     avg_portfolio_heat: legRows.length > 0 ? heatSum / legRows.length : 0,
-    avg_score: scoreRows.length > 0 ? scoreSum / scoreRows.length : null,
-    a_grade_days: a_grade,
-    d_grade_days: d_grade,
   };
 }
 
