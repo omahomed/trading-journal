@@ -154,7 +154,10 @@ export function TrendCycleReview() {
   useEffect(() => { load(); }, [load]);
 
   // Compute all legs from journal history (client-side, pure derivation).
-  const { legs, aggregates } = useMemo(() => computeTrendCycles(rows), [rows]);
+  // `baselineAggregates` reflects UNFILTERED history — used by the Cycle
+  // Anatomy card so its "typical shape" baselines don't move when you
+  // filter. The summary strip further down uses filteredAggregates.
+  const { legs, aggregates: baselineAggregates } = useMemo(() => computeTrendCycles(rows), [rows]);
 
   // Filter
   const filtered = useMemo(() => {
@@ -276,6 +279,42 @@ export function TrendCycleReview() {
             );
           })()}
         </div>
+
+        {/* Cycle Anatomy — historical baselines over ALL legs (never
+            filtered). Reference for "is this leg abnormal?" — the
+            summary strip below reflects the current filtered slice. */}
+        {legs.length > 0 && (
+          <div className="px-[18px] py-[10px] flex flex-col gap-[6px] text-[11px]"
+               style={{ background: "color-mix(in oklab, var(--surface-2) 60%, var(--surface))", borderBottom: "1px solid var(--border)" }}>
+            <div className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
+              Cycle anatomy · over {baselineAggregates.total_legs} legs of history
+            </div>
+            {/* Positive baselines */}
+            {baselineAggregates.positive_legs > 0 && (
+              <div className="flex flex-wrap items-center gap-x-[14px] gap-y-[2px]"
+                   style={{ color: "var(--ink-3)" }}>
+                <span className="font-bold" style={{ color: "#08a86b" }}>▲ POSITIVE</span>
+                <span>avg <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.avg_positive_duration == null ? "—" : `${baselineAggregates.avg_positive_duration.toFixed(1)}d`}</b></span>
+                <span>median <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.median_positive_duration == null ? "—" : `${baselineAggregates.median_positive_duration.toFixed(0)}d`}</b></span>
+                <span>range <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.shortest_positive_duration == null ? "—" : `${baselineAggregates.shortest_positive_duration}-${baselineAggregates.longest_positive_days}d`}</b></span>
+                <span>avg return <b style={{ color: (baselineAggregates.avg_positive_return_pct ?? 0) >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>{baselineAggregates.avg_positive_return_pct == null ? "—" : `${baselineAggregates.avg_positive_return_pct >= 0 ? "+" : ""}${baselineAggregates.avg_positive_return_pct.toFixed(2)}%`}</b></span>
+                <span>avg DD <b style={{ color: "#e5484d", fontFamily: mono }}>{baselineAggregates.avg_positive_dd_pct == null ? "—" : `${baselineAggregates.avg_positive_dd_pct.toFixed(2)}%`}</b></span>
+              </div>
+            )}
+            {/* Negative baselines */}
+            {baselineAggregates.negative_legs > 0 && (
+              <div className="flex flex-wrap items-center gap-x-[14px] gap-y-[2px]"
+                   style={{ color: "var(--ink-3)" }}>
+                <span className="font-bold" style={{ color: "#e5484d" }}>▼ NEGATIVE</span>
+                <span>avg <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.avg_negative_duration == null ? "—" : `${baselineAggregates.avg_negative_duration.toFixed(1)}d`}</b></span>
+                <span>median <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.median_negative_duration == null ? "—" : `${baselineAggregates.median_negative_duration.toFixed(0)}d`}</b></span>
+                <span>range <b style={{ color: "var(--ink)", fontFamily: mono }}>{baselineAggregates.shortest_negative_duration == null ? "—" : `${baselineAggregates.shortest_negative_duration}-${baselineAggregates.longest_negative_days}d`}</b></span>
+                <span>avg return <b style={{ color: (baselineAggregates.avg_negative_return_pct ?? 0) >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>{baselineAggregates.avg_negative_return_pct == null ? "—" : `${baselineAggregates.avg_negative_return_pct >= 0 ? "+" : ""}${baselineAggregates.avg_negative_return_pct.toFixed(2)}%`}</b></span>
+                <span>avg DD <b style={{ color: "#e5484d", fontFamily: mono }}>{baselineAggregates.avg_negative_dd_pct == null ? "—" : `${baselineAggregates.avg_negative_dd_pct.toFixed(2)}%`}</b></span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Summary strip */}
         <div className="px-[18px] py-[10px] flex flex-wrap items-center gap-[16px] text-[12px]"
@@ -455,6 +494,16 @@ function computeTrendCyclesFromLegs(legs: TrendCycleLeg[]): ReturnType<typeof co
   const cumulative_alpha_pct = legsWithAlpha.length > 0
     ? legsWithAlpha.reduce((s, l) => s + (l.alpha_pct as number), 0)
     : null;
+  const median = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+  };
+  const min = (arr: number[]): number | null =>
+    arr.length === 0 ? null : Math.min(...arr);
+  const posDurations = positive.map(l => l.duration_days);
+  const negDurations = negative.map(l => l.duration_days);
   return {
     total_legs: legs.length,
     positive_legs: positive.length,
@@ -469,5 +518,13 @@ function computeTrendCyclesFromLegs(legs: TrendCycleLeg[]): ReturnType<typeof co
     avg_pct_invested_negative: avg(negative.map(l => l.avg_pct_invested)),
     longest_positive_days: positive.reduce((m, l) => Math.max(m, l.duration_days), 0),
     longest_negative_days: negative.reduce((m, l) => Math.max(m, l.duration_days), 0),
+    avg_positive_duration: avg(posDurations),
+    median_positive_duration: median(posDurations),
+    shortest_positive_duration: min(posDurations),
+    avg_positive_dd_pct: avg(positive.map(l => l.max_drawdown_pct)),
+    avg_negative_duration: avg(negDurations),
+    median_negative_duration: median(negDurations),
+    shortest_negative_duration: min(negDurations),
+    avg_negative_dd_pct: avg(negative.map(l => l.max_drawdown_pct)),
   };
 }

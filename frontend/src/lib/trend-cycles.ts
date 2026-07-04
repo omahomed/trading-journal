@@ -104,6 +104,19 @@ export interface TrendCycleAggregates {
   /** Longest positive / negative leg in trading days. */
   longest_positive_days: number;
   longest_negative_days: number;
+
+  /** Cycle Anatomy — historical baselines for "is this leg abnormal?"
+   *  Split by sign, all durations in trading days, all returns/DDs
+   *  in percent. Nulls for a sign when no legs of that sign exist. */
+  avg_positive_duration: number | null;
+  median_positive_duration: number | null;
+  shortest_positive_duration: number | null;
+  avg_positive_dd_pct: number | null;
+
+  avg_negative_duration: number | null;
+  median_negative_duration: number | null;
+  shortest_negative_duration: number | null;
+  avg_negative_dd_pct: number | null;
 }
 
 /** Group + compute. Rows should be journal-history-shape — the JournalHistoryPoint
@@ -333,6 +346,18 @@ function buildAggregates(legs: TrendCycleLeg[]): TrendCycleAggregates {
     ? legsWithAlpha.reduce((s, l) => s + (l.alpha_pct as number), 0)
     : null;
 
+  const median = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+  };
+  const min = (arr: number[]): number | null =>
+    arr.length === 0 ? null : Math.min(...arr);
+
+  const posDurations = positive.map(l => l.duration_days);
+  const negDurations = negative.map(l => l.duration_days);
+
   return {
     total_legs: legs.length,
     positive_legs: positive.length,
@@ -347,5 +372,15 @@ function buildAggregates(legs: TrendCycleLeg[]): TrendCycleAggregates {
     avg_pct_invested_negative: avg(negative.map(l => l.avg_pct_invested)),
     longest_positive_days: positive.reduce((m, l) => Math.max(m, l.duration_days), 0),
     longest_negative_days: negative.reduce((m, l) => Math.max(m, l.duration_days), 0),
+
+    avg_positive_duration: avg(posDurations),
+    median_positive_duration: median(posDurations),
+    shortest_positive_duration: min(posDurations),
+    avg_positive_dd_pct: avg(positive.map(l => l.max_drawdown_pct)),
+
+    avg_negative_duration: avg(negDurations),
+    median_negative_duration: median(negDurations),
+    shortest_negative_duration: min(negDurations),
+    avg_negative_dd_pct: avg(negative.map(l => l.max_drawdown_pct)),
   };
 }
