@@ -44,6 +44,7 @@ export function MFactor({ navColor }: { navColor: string }) {
   const state = data.state || "CORRECTION";
   const sc = STATE_COLORS[state] || STATE_COLORS.CORRECTION;
   const dayNum = data.day_num || 0;
+  const trendCount = data.trend_count ?? null;
   const entryStep = data.entry_step ?? -1;
   const entryExp = data.entry_exposure || 0;
   const price = data.price || 0;
@@ -95,6 +96,9 @@ export function MFactor({ navColor }: { navColor: string }) {
           </div>
         )}
         <div className="text-[15px] mt-2 opacity-90">{subtitles[state] || ""}</div>
+        {trendCount !== null && (
+          <div className="text-[15px] font-semibold mt-2">Trend Count: {trendCount > 0 ? `+${trendCount}` : trendCount}</div>
+        )}
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
         {data.ftd_date && <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date}</div>}
         {state === "POWERTREND" && data.power_trend_on_since && (
@@ -102,6 +106,9 @@ export function MFactor({ navColor }: { navColor: string }) {
         )}
         {data.cycle_start_date && dayNum > 0 && (
           <div className="text-[12px] mt-1 opacity-70">Cycle started {data.cycle_start_date} (Day {dayNum})</div>
+        )}
+        {data.trend_cycle_start_date && (
+          <div className="text-[12px] mt-1 opacity-70">Trend Cycle started {data.trend_cycle_start_date}</div>
         )}
       </div>
 
