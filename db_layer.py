@@ -569,10 +569,21 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 except Exception:
                     has_mct_day_num = False
 
+                # Same gate for trend_count (migration 043).
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'trend_count'"
+                    )
+                    has_trend_count = cur.fetchone() is not None
+                except Exception:
+                    has_trend_count = False
+
                 cycle_select = 'j.market_cycle AS "Market Cycle",\n                        ' if has_market_cycle else ''
                 # Aliased as snake_case directly so normalize_journal_columns
                 # leaves it alone (the rename map only handles Pascal-case keys).
                 day_num_select = 'j.mct_display_day_num AS "mct_display_day_num",\n                        ' if has_mct_day_num else ''
+                trend_count_select = 'j.trend_count AS "trend_count",\n                        ' if has_trend_count else ''
                 # Phase 7 daily_thoughts column (migration 031). Detection-gated
                 # so a DB still on pre-031 doesn't 500 the journal_history call.
                 try:
@@ -594,7 +605,7 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        {cycle_select}{day_num_select}{daily_thoughts_select}j.above_21ema AS "> 21e",
+                        {cycle_select}{day_num_select}{trend_count_select}{daily_thoughts_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
@@ -2392,6 +2403,10 @@ def save_journal_entry(journal_entry):
             market_window = journal_entry.get('market_window', 'Open')
             market_cycle = journal_entry.get('market_cycle', '')
             mct_display_day_num = journal_entry.get('mct_display_day_num')
+            # Signed Trend Count (Migration 043). NULL is a first-class
+            # value here — 0 is a legit Step-4 arm bar, so we can't use
+            # `.get(..., 0)` as a default and later distinguish "not set."
+            trend_count = journal_entry.get('trend_count')
             above_21ema = journal_entry.get('above_21ema', 0.0)
             cash_change = journal_entry.get('cash_flow', 0.0)
             beg_nlv = journal_entry.get('beginning_nlv', 0.0)
@@ -2446,7 +2461,7 @@ def save_journal_entry(journal_entry):
                     update_query = """
                         UPDATE trading_journal
                         SET status = %s, market_window = %s, market_cycle = %s,
-                            mct_display_day_num = %s,
+                            mct_display_day_num = %s, trend_count = %s,
                             above_21ema = %s,
                             cash_change = %s, beg_nlv = %s, end_nlv = %s,
                             daily_dollar_change = %s, daily_pct_change = %s,
@@ -2463,7 +2478,7 @@ def save_journal_entry(journal_entry):
                     """
                     cur.execute(update_query, (
                         status, market_window, market_cycle,
-                        mct_display_day_num,
+                        mct_display_day_num, trend_count,
                         above_21ema,
                         cash_change, beg_nlv, end_nlv,
                         daily_dollar_change, daily_pct_change,
@@ -2540,7 +2555,7 @@ def save_journal_entry(journal_entry):
                     insert_query = """
                         INSERT INTO trading_journal (
                             portfolio_id, day, status, market_window, market_cycle,
-                            mct_display_day_num,
+                            mct_display_day_num, trend_count,
                             above_21ema,
                             cash_change, beg_nlv, end_nlv, daily_dollar_change,
                             daily_pct_change, pct_invested, spy, nasdaq,
@@ -2551,13 +2566,13 @@ def save_journal_entry(journal_entry):
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
                     cur.execute(insert_query, (
                         portfolio_id, day, status, market_window, market_cycle,
-                        mct_display_day_num,
+                        mct_display_day_num, trend_count,
                         above_21ema,
                         cash_change, beg_nlv, end_nlv, daily_dollar_change,
                         daily_pct_change, pct_invested, spy, nasdaq,
@@ -2647,6 +2662,34 @@ def update_journal_mct_state(portfolio_name: str, day: str, market_cycle: str | 
                 "   AND deleted_at IS NULL "
                 " RETURNING id",
                 (market_cycle, mct_display_day_num, portfolio_id, day),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            load_journal.clear()
+            return int(row[0]) if row else 0
+
+
+def update_journal_trend_state(portfolio_name: str, day: str, trend_count: int | None) -> int:
+    """Targeted UPDATE for just the trend_count field on a single journal row.
+
+    Same rationale as update_journal_mct_state — save_journal_entry rewrites
+    every column and would clobber unrelated fields when the lazy-heal path
+    only cares about trend_count. Returns the row id or 0 if no matching row.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                return 0
+            portfolio_id = result[0]
+            cur.execute(
+                "UPDATE trading_journal "
+                "   SET trend_count = %s, updated_at = NOW() "
+                " WHERE portfolio_id = %s AND day = %s "
+                "   AND deleted_at IS NULL "
+                " RETURNING id",
+                (trend_count, portfolio_id, day),
             )
             row = cur.fetchone()
             conn.commit()

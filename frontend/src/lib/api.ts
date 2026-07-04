@@ -408,6 +408,11 @@ export interface JournalHistoryPoint {
   // post-migration rows. Marked optional for the migration-window case
   // where the column might be absent from the SELECT (pre-031 DBs).
   daily_thoughts?: string;
+  // Signed Trend Count (migration 043). Null before the first-ever Step-4
+  // arm in the 2010→present replay and on market-closed days journaled
+  // for NLV only. Marked optional so pre-043 DBs (whose SELECT drops the
+  // column via the information_schema gate) don't break the TS narrowing.
+  trend_count?: number | null;
   [key: string]: any;
 }
 

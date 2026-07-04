@@ -272,7 +272,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Day", "MCT State", "Cash Flow", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
+                    {["Day", "MCT State", "Trend", "Cash Flow", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
                       <th key={h} className="text-left text-[9px] uppercase tracking-[0.06em] font-semibold px-2.5 py-2 whitespace-nowrap sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
                         {h}
@@ -322,6 +322,14 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                               </button>
                             </span>
                           )}
+                        </td>
+                        <td className="px-2.5 py-2 whitespace-nowrap text-right" style={{ fontFamily: mono }}>
+                          {(() => {
+                            const tc = (h as any).trend_count;
+                            if (tc == null) return <span style={{ color: "var(--ink-5)" }}>—</span>;
+                            const color = tc > 0 ? "#08a86b" : tc < 0 ? "#e5484d" : "var(--ink)";
+                            return <span style={{ color }}>{tc > 0 ? `+${tc}` : tc}</span>;
+                          })()}
                         </td>
                         <td className="px-2.5 py-2 privacy-mask whitespace-nowrap" style={{ fontFamily: mono }}>
                           {(() => {
