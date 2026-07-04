@@ -407,6 +407,24 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     else:
         cycle_day = 0
 
+    # Signed Trend Count. Anchor + sign live in engine state; the signed
+    # span from anchor to latest bar is a pure index computation done
+    # here (mirrors the cycle_day math above). Blank (None) whenever
+    # trend_sign == 0 — pre-first-Step-4 in the replay — so the banner
+    # renders nothing before the historic origin.
+    trend_anchor_idx = state.get("trend_anchor_idx")
+    trend_sign = int(state.get("trend_sign") or 0)
+    trend_count: Optional[int] = None
+    trend_cycle_start_date: Optional[str] = None
+    if trend_sign != 0 and trend_anchor_idx is not None:
+        latest_idx = len(bars) - 1
+        span = latest_idx - int(trend_anchor_idx) + 1
+        trend_count = span * trend_sign
+        t_idx = int(trend_anchor_idx)
+        if 0 <= t_idx < len(bars):
+            raw_td = bars["trade_date"].iloc[t_idx]
+            trend_cycle_start_date = pd.Timestamp(raw_td).date().isoformat()
+
     if rally_active and cycle_day > 0:
         prefix = f"Day {cycle_day}: "
     else:
@@ -456,6 +474,17 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         # None when no rally is active. Used by the MCT page header to show
         # "Cycle started: YYYY-MM-DD (Day N)".
         "cycle_start_date": cycle_start_date,
+        # Signed length of the current 21e leg. Positive = sessions since
+        # the last Step-4 arm (leg holding); negative = sessions since a
+        # low pierced the 21e in a positive leg. None before the first-
+        # ever Step-4 arm in the replay so the banner stays blank pre-
+        # origin. Rendered as "Trend Count: +12" / "-3" on the M Factor
+        # page above Suggested Exposure.
+        "trend_count": trend_count,
+        # ISO date of the last edge (Step-4 arm or low-pierce). Rendered
+        # as "Trend Cycle started YYYY-MM-DD" below the existing "Cycle
+        # started …" line.
+        "trend_cycle_start_date": trend_cycle_start_date,
         # Volatility-regime metrics (informational; engine does NOT consume
         # them — FTD_PCT_THRESHOLD is still the hard-coded 0.01 / 1.0%).
         # avg_up_day_pct: Webster heuristic — mean % gain on up days only

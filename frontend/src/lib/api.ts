@@ -1001,6 +1001,14 @@ export const api = {
     cycle_start_date?: string | null;
     day_num_projected?: boolean;
     day_num_projection_offset?: number;
+    // Signed 21e leg length. Positive when the leg is holding (sessions
+    // since the last Step-4 arm); negative when the low has pierced the
+    // 21e (sessions since the pierce). Null before the first-ever
+    // Step-4 arm in the 2010→present replay — banner stays blank.
+    trend_count?: number | null;
+    // ISO date of the current leg's origin edge (Step-4 arm or pierce).
+    // Rendered under the existing "Cycle started …" line.
+    trend_cycle_start_date?: string | null;
     // Exit-ladder alerts feed both the M Factor page UI and the
     // sizing-mode floor logic (see lib/sizing-mode#exitLadderFloor).
     active_exits?: Array<{
