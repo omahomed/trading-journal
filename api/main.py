@@ -769,6 +769,60 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
         return ("", None)
 
 
+def _compute_trend_count(as_of_date: str = "") -> int | None:
+    """Compute signed Trend Count for a given date, snapshot-style.
+
+    Wraps run_engine → to_rally_prefix_response so the save-time stamper reads
+    the SAME value the M Factor banner shows — no reimplementation of the
+    Tier-1 leg math here. If the adapter's payload has trend_count = None
+    (pre-first-Step-4 in the replay, or no bar for as_of), we return None
+    and the caller persists NULL.
+
+    Mirrors the strict-bar-match discipline of _compute_mct_state_with_day_num:
+    same yfinance top-up + same "empty on failure" contract, so a save run
+    before market_data ingests today's bar stamps NULL rather than yesterday's
+    value.
+    """
+    try:
+        from datetime import datetime as _dt
+        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
+
+        as_of = None
+        if as_of_date:
+            try:
+                as_of = _dt.strptime(as_of_date.strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, AttributeError):
+                as_of = None
+
+        # Same market_data top-up as the MCT stamper — a Daily Routine save
+        # right after close but before the ingest cron would otherwise land
+        # in the "no bar for as_of" branch and stamp NULL forever.
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
+
+        result = run_engine("^IXIC", as_of=as_of)
+        if result.bars.empty:
+            return None
+
+        # Strict bar match — if the engine has nothing for as_of, do not
+        # fall through to the prior trading day. Same rationale as the MCT
+        # stamper above: NULL beats "yesterday's number stamped on today."
+        if as_of is not None:
+            trade_dates = pd.to_datetime(result.bars["trade_date"]).dt.date
+            if not (trade_dates == as_of).any():
+                return None
+
+        payload = to_rally_prefix_response(result)
+        raw = payload.get("trend_count")
+        return int(raw) if raw is not None else None
+    except Exception as e:
+        print(f"[trend_count] compute failed: {e}")
+        return None
+
+
 def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
     """Backfill NULL mct_display_day_num / market_cycle on recent journal rows.
 
@@ -945,6 +999,11 @@ def journal_edit(entry: dict):
                 if entry.get("mct_display_day_num") not in (None, "")
                 else existing.get("mct_display_day_num")
             ),
+            "trend_count": (
+                int(entry["trend_count"])
+                if entry.get("trend_count") not in (None, "")
+                else existing.get("trend_count")
+            ),
             "market_notes": _s("market_notes", "market_notes"),
             "market_action": _s("market_action", "market_action"),
             "portfolio_heat": _f("portfolio_heat", "portfolio_heat"),
@@ -1004,6 +1063,13 @@ def journal_edit(entry: dict):
                     journal_entry["market_cycle"] = mct_state
                 if journal_entry["mct_display_day_num"] is None:
                     journal_entry["mct_display_day_num"] = mct_day_num
+            # Trend Count — separate engine payload read, same snapshot
+            # discipline as the MCT stamp above. Explicit `is None` check
+            # so that 0 (a Step-4 arm bar's legit signed count) is not
+            # mistakenly re-stamped. Fresh insert only; edits preserve
+            # whatever's already in the row (backfill handled offline).
+            if journal_entry.get("trend_count") is None:
+                journal_entry["trend_count"] = _compute_trend_count(day_str)
             if not journal_entry["spy_atr"]:
                 journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
             if not journal_entry["nasdaq_atr"]:
@@ -1041,7 +1107,7 @@ def journal_edit(entry: dict):
 _BATCH_EDIT_INSERT_SQL = """
     INSERT INTO trading_journal (
         user_id, portfolio_id, day, status, market_window, market_cycle,
-        mct_display_day_num, above_21ema,
+        mct_display_day_num, trend_count, above_21ema,
         cash_change, beg_nlv, end_nlv, daily_dollar_change,
         daily_pct_change, pct_invested, spy, nasdaq,
         market_notes, market_action, portfolio_heat,
@@ -1051,7 +1117,7 @@ _BATCH_EDIT_INSERT_SQL = """
     ) VALUES (
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     )
     RETURNING id
 """
@@ -1059,7 +1125,7 @@ _BATCH_EDIT_INSERT_SQL = """
 _BATCH_EDIT_UPDATE_SQL = """
     UPDATE trading_journal
        SET status = %s, market_window = %s, market_cycle = %s,
-           mct_display_day_num = %s, above_21ema = %s,
+           mct_display_day_num = %s, trend_count = %s, above_21ema = %s,
            cash_change = %s, beg_nlv = %s, end_nlv = %s,
            daily_dollar_change = %s, daily_pct_change = %s,
            pct_invested = %s, spy = %s, nasdaq = %s,
@@ -1232,7 +1298,7 @@ def journal_batch_edit(body: dict = Body(...)):
                     # don't get recomputed against today's data.
                     cur.execute(
                         "SELECT id, portfolio_heat, spy_atr, nasdaq_atr, "
-                        "       market_cycle, mct_display_day_num "
+                        "       market_cycle, mct_display_day_num, trend_count "
                         "  FROM trading_journal "
                         " WHERE portfolio_id = %s AND day = %s "
                         "   AND deleted_at IS NULL",
@@ -1257,10 +1323,15 @@ def journal_batch_edit(body: dict = Body(...)):
                         nasdaq_atr = float(existing_row[3] or 0)
                         market_cycle = existing_row[4] or ""
                         mct_display_day_num = existing_row[5]
+                        trend_count = existing_row[6]
                     else:
                         market_cycle, mct_display_day_num = (
                             _compute_mct_state_with_day_num(day_str))
                         market_cycle = market_cycle or ""
+                        # trend_count uses its own engine payload read (single
+                        # int) — mirrors the MCT snapshot discipline right
+                        # above it. NULL on failure / no-bar (matches backfill).
+                        trend_count = _compute_trend_count(day_str)
                         spy_atr = _compute_ticker_atr_pct("SPY", day_str)
                         nasdaq_atr = _compute_ticker_atr_pct(
                             "^IXIC", day_str)
@@ -1281,7 +1352,7 @@ def journal_batch_edit(body: dict = Body(...)):
                     if existing_row_present:
                         cur.execute(_BATCH_EDIT_UPDATE_SQL, (
                             status_val, market_window, market_cycle,
-                            mct_display_day_num, above_21ema,
+                            mct_display_day_num, trend_count, above_21ema,
                             cash_change, beg_nlv, end_nlv,
                             daily_dollar_change, daily_pct_change,
                             pct_invested, shared_spy, shared_ndx,
@@ -1295,7 +1366,8 @@ def journal_batch_edit(body: dict = Body(...)):
                     else:
                         cur.execute(_BATCH_EDIT_INSERT_SQL, (
                             uid, pid, day_str, status_val, market_window,
-                            market_cycle, mct_display_day_num, above_21ema,
+                            market_cycle, mct_display_day_num, trend_count,
+                            above_21ema,
                             cash_change, beg_nlv, end_nlv,
                             daily_dollar_change, daily_pct_change,
                             pct_invested, shared_spy, shared_ndx,
