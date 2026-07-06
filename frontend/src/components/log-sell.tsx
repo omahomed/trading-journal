@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
@@ -91,9 +91,17 @@ const inputStyle: React.CSSProperties = {
 
 export function LogSell({ navColor }: { navColor: string }) {
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
+  // Details for open trades — needed to read B1's stop_ladder for the
+  // Scale-Out auto-detect / manual-override on the sell price. Fetched
+  // once on mount alongside the summaries.
+  const [openDetails, setOpenDetails] = useState<TradeDetail[]>([]);
   const [selectedTrade, setSelectedTrade] = useState("");
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
+  // "auto" defers to price-based leg matching; explicit "leg1|leg2|leg3"
+  // forces attribution to that leg (fills the shares input from that
+  // leg on click); "none" opts out of the pre-fill flow entirely.
+  const [ladderAttribution, setLadderAttribution] = useState<"auto" | "leg1" | "leg2" | "leg3" | "none">("auto");
   const [rule, setRule] = useState(SELL_RULES[0]);
   const [notes, setNotes] = useState("");
   const [grade, setGrade] = useState<number | null>(null);
@@ -153,6 +161,12 @@ export function LogSell({ navColor }: { navColor: string }) {
     api.tradesOpen(getActivePortfolio()).then(trades => {
       setOpenTrades(trades);
       setLoading(false);
+      // Piggyback on the same page load to grab open-trade details for
+      // ladder auto-detect. Failure is non-fatal — the sell flow works
+      // without the ladder hint.
+      api.tradesOpenDetails(getActivePortfolio())
+        .then(bundle => setOpenDetails(bundle.details || []))
+        .catch(err => log.debug.devOnly("log-sell", "tradesOpenDetails skipped", err));
 
       // Prefill from Position Sizer Trim (via localStorage)
       try {
@@ -205,6 +219,55 @@ export function LogSell({ navColor }: { navColor: string }) {
 
   const sharesNum = parseFloat(shares) || 0;
   const priceNum = parseFloat(price) || 0;
+
+  // Selected trade's B1 ladder (Phase 3 sub-scope B). Prices track
+  // current avg entry — same convention as Trade Journal display.
+  const selectedB1 = openDetails.find(d => d.trade_id === selectedTrade && String(d.action).toUpperCase() === "BUY");
+  const selectedB1Ladder = (() => {
+    const raw = selectedB1 ? (selectedB1 as any).stop_ladder : null;
+    if (!raw || typeof raw !== "object") return null;
+    const legs = (raw as { legs?: unknown }).legs;
+    if (!Array.isArray(legs) || legs.length !== 3) return null;
+    const parsed = legs.map(l => {
+      const leg = l as { pct?: unknown; shares?: unknown };
+      return { pct: Number(leg.pct), shares: Number(leg.shares) };
+    });
+    if (parsed.some(l => !Number.isFinite(l.pct) || !Number.isFinite(l.shares))) return null;
+    return { legs: parsed };
+  })();
+  const selectedAvgEntry = selected?.avg_entry || 0;
+  const ladderLegPrices = selectedB1Ladder && selectedAvgEntry > 0
+    ? selectedB1Ladder.legs.map(l => ({ pct: l.pct, shares: l.shares, price: selectedAvgEntry * (1 - l.pct / 100) }))
+    : null;
+
+  // Auto-detect: sell price within 1% of a leg's stop price. First
+  // match wins (legs are ordered -3, -5, -7 so tighter stops win ties).
+  const autoLegMatch = (() => {
+    if (!ladderLegPrices || priceNum <= 0) return null;
+    for (let i = 0; i < ladderLegPrices.length; i++) {
+      const leg = ladderLegPrices[i];
+      if (leg.price > 0 && Math.abs(priceNum - leg.price) / leg.price < 0.01) {
+        return { index: i, leg };
+      }
+    }
+    return null;
+  })();
+
+  // Resolved leg the UI is pointing at — obeys manual override, else
+  // falls back to autoLegMatch. "none" and no auto-match both resolve
+  // to null (no hint shown, no pre-fill button).
+  const resolvedLeg = (() => {
+    if (!ladderLegPrices) return null;
+    if (ladderAttribution === "none") return null;
+    if (ladderAttribution === "auto") return autoLegMatch;
+    const idx = ladderAttribution === "leg1" ? 0 : ladderAttribution === "leg2" ? 1 : 2;
+    return { index: idx, leg: ladderLegPrices[idx] };
+  })();
+
+  // Reset attribution to auto whenever the selected trade changes so a
+  // stale manual pick doesn't carry over to a different position.
+  useEffect(() => { setLadderAttribution("auto"); }, [selectedTrade]);
+
   // Detect option from the selected campaign's metadata first (preferred — set
   // by Migration 016), with a ticker-shape fallback for any legacy row that
   // hasn't been recomputed yet. Multiplier scales proceeds + realized P&L
@@ -417,6 +480,53 @@ export function LogSell({ navColor }: { navColor: string }) {
                        placeholder="0.00" className="w-full h-[38px] px-3 rounded-[10px] text-[13px]" style={inputStyle} />
               </FormField>
             </div>
+
+            {/* Scale-Out Stops — auto-detect that this sell price is close
+                to a ladder leg's stop. Only renders when the selected
+                trade has a persisted ladder. Manual override dropdown lets
+                the user force attribution (Leg 1/2/3) or opt out (None).
+                No leg attribution is persisted on the sell row — this is
+                pre-fill convenience only. */}
+            {ladderLegPrices && (
+              <div className="rounded-[10px] px-3 py-2.5 flex items-center justify-between gap-3 text-[12px] flex-wrap"
+                   style={{ background: "color-mix(in oklab, #0ea5a4 5%, var(--surface))", border: "1px solid color-mix(in oklab, #0ea5a4 25%, var(--border))", color: "#0ea5a4" }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span>🪜</span>
+                  {resolvedLeg ? (
+                    <span>
+                      <strong>Matches Leg {resolvedLeg.index + 1}</strong>
+                      <span style={{ color: "var(--ink-3)" }}>
+                        {" · "}−{resolvedLeg.leg.pct}% · {resolvedLeg.leg.shares} shs @ {formatCurrency(resolvedLeg.leg.price)}
+                      </span>
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--ink-3)" }}>
+                      Scale-Out plan active. Enter a price near a leg to auto-attribute, or pick one manually.
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {resolvedLeg && ladderAttribution !== "none" && (
+                    <button type="button"
+                            onClick={() => setShares(String(resolvedLeg.leg.shares))}
+                            className="h-[26px] px-2.5 rounded-[6px] text-[11px] font-semibold text-white cursor-pointer transition-all hover:brightness-110"
+                            style={{ background: "#0ea5a4" }}>
+                      Fill {resolvedLeg.leg.shares} shs
+                    </button>
+                  )}
+                  <select value={ladderAttribution}
+                          onChange={e => setLadderAttribution(e.target.value as typeof ladderAttribution)}
+                          className="h-[26px] px-2 rounded-[6px] text-[11px] appearance-none cursor-pointer"
+                          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+                    <option value="auto">Auto</option>
+                    <option value="leg1">Leg 1 (−3%)</option>
+                    <option value="leg2">Leg 2 (−5%)</option>
+                    <option value="leg3">Leg 3 (−7%)</option>
+                    <option value="none">None</option>
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <FormField label="Date">

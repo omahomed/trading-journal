@@ -34,6 +34,8 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/lib/api", () => ({
   api: {
     tradesOpen: vi.fn(),
+    tradesOpenDetails: vi.fn(),
+    getTradeLessons: vi.fn(),
     logSell: vi.fn(),
     uploadImage: vi.fn(),
   },
@@ -80,6 +82,8 @@ const OPEN_TRADES = [STOCK_AAPL, STOCK_MSFT, STOCK_NVDA, OPTION_FIVN, STOCK_DELL
 
 function setupDefaults() {
   vi.mocked(api.tradesOpen).mockResolvedValue(OPEN_TRADES);
+  vi.mocked(api.tradesOpenDetails).mockResolvedValue({ details: [], lot_closures: [] } as any);
+  vi.mocked(api.getTradeLessons).mockResolvedValue({ lessons: {} } as any);
   vi.mocked(api.logSell).mockResolvedValue({ trx_id: "S1" } as any);
   vi.mocked(api.uploadImage).mockResolvedValue({ url: "" } as any);
 }
