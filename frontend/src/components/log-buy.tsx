@@ -398,6 +398,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
     setLadderShares([base, base, total - 2 * base]);
   }, [stopMode, shares]);  // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Ladder is B1-only. If the user flips Action Type to scale-in while
+  // in ladder mode, drop back to percentage — otherwise the hidden
+  // ladder state would still submit and the backend would 422.
+  useEffect(() => {
+    if (actionType === "scalein" && stopMode === "ladder") setStopMode("pct");
+  }, [actionType, stopMode]);
+
   // Auto-fetch price + ATR when ticker changes (debounced). Same
   // /api/prices/lookup call the Position Sizer uses. atr_pct === 0 is
   // the backend's "insufficient history" sentinel — ATR pills disable
@@ -930,7 +937,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       {!isOption && (
                         <Radio checked={stopMode === "atr"} onClick={() => setStopMode("atr")} label="ATR (×)" />
                       )}
-                      {!isOption && (
+                      {/* Ladder is a B1-only plan: scale-ins inherit the
+                          parent campaign's exit strategy. Hide the radio
+                          on scale-in to match backend restriction. */}
+                      {!isOption && actionType === "new" && (
                         <Radio checked={stopMode === "ladder"} onClick={() => setStopMode("ladder")} label="Ladder (3-leg)" />
                       )}
                     </div>

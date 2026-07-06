@@ -5096,9 +5096,16 @@ def log_buy(request: Request, body: dict):
         # present, stop_loss is set to leg 1's price (the first-firing
         # stop) so Trade Journal / Risk Manager / Portfolio Heat keep
         # showing a coherent primary stop until Phase 2 makes them
-        # ladder-aware.
+        # ladder-aware. Restricted to new-campaign buys (B1): scale-ins
+        # inherit the parent's plan; a ladder on an add-on has no
+        # meaning in the user's workflow.
         raw_ladder = body.get("stop_ladder")
         stop_ladder = None
+        if raw_ladder is not None and action_type != "new":
+            raise HTTPException(
+                status_code=422,
+                detail="stop_ladder is only allowed on new-campaign buys (B1). Omit on scale-in.",
+            )
         if raw_ladder is not None:
             legs = raw_ladder.get("legs") if isinstance(raw_ladder, dict) else None
             if not isinstance(legs, list) or len(legs) != 3:
