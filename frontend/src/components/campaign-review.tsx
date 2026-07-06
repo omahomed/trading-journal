@@ -89,6 +89,17 @@ function hasActiveFilters(f: Filters): boolean {
     || f.pl !== "all";
 }
 
+// Collapse an OCC option ticker ("ALAB 260717 $195C") to its underlying
+// ("ALAB"). Equity tickers pass through unchanged. Used to dedupe the
+// Ticker filter list and to match option rows when the user picks the
+// underlying symbol.
+function underlyingSymbol(ticker: string): string {
+  const t = (ticker || "").trim();
+  if (!t) return t;
+  if (/^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(t)) return t.split(/\s+/)[0];
+  return t;
+}
+
 // Filter → date-range predicate. YTD = "everything since 2026-01-01"
 // (server-side base cut for the "closed" case; for the "open" basis,
 // YTD narrows client-side to trades opened in 2026 which strips out
@@ -269,10 +280,13 @@ export function CampaignReview() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Derived filter option lists
+  // Derived filter option lists. Options tickers arrive as OCC strings
+  // ("ALAB 260717 $195C") — collapse them to the underlying so the
+  // dropdown shows "ALAB" once and picking it matches both the equity
+  // rows and every option row on that underlying.
   const tickerOptions = useMemo(() => {
     const s = new Set<string>();
-    rows.forEach(r => { if (r.ticker) s.add(r.ticker); });
+    rows.forEach(r => { if (r.ticker) s.add(underlyingSymbol(r.ticker)); });
     return Array.from(s).sort();
   }, [rows]);
 
@@ -297,8 +311,10 @@ export function CampaignReview() {
       // Series (original = no add-ons; add_on = had add-ons)
       if (filters.series === "original" && r.has_add_ons) return false;
       if (filters.series === "add_on" && !r.has_add_ons) return false;
-      // Ticker (multi-select; empty array = no filter)
-      if (filters.tickers.length > 0 && !filters.tickers.includes(r.ticker)) return false;
+      // Ticker (multi-select; empty array = no filter). Match on the
+      // underlying so picking "ALAB" catches both the equity row and
+      // any "ALAB 260717 $195C" option rows.
+      if (filters.tickers.length > 0 && !filters.tickers.includes(underlyingSymbol(r.ticker))) return false;
       // Rule
       if (filters.rule !== "all" && r.rule !== filters.rule) return false;
       // Instrument
@@ -505,41 +521,10 @@ export function CampaignReview() {
       <div className="rounded-[14px] overflow-hidden mb-4" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <div className="px-[18px] py-[14px] flex flex-wrap items-end gap-[12px_14px]"
              style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
-          {/* Search */}
-          <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
-            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
-            <div className="relative">
-              <input type="text" value={filters.q}
-                     onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
-                     placeholder="Ticker, trade ID, rule or note…"
-                     className="w-full h-[34px] pl-9 pr-8 rounded-[10px] text-[12px]"
-                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: "var(--ink-4)" }}>⌕</span>
-              {filters.q && (
-                <button type="button" onClick={() => setFilters(f => ({ ...f, q: "" }))}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-[12px] cursor-pointer"
-                        style={{ color: "var(--ink-4)" }}>✕</button>
-              )}
-            </div>
-          </div>
-
-          <SegmentedControl<SeriesKey>
-            label="Series"
-            value={filters.series}
-            onChange={v => setFilters(f => ({ ...f, series: v }))}
-            options={[{ v: "all", l: "All" }, { v: "original", l: "B · Original" }, { v: "add_on", l: "A · Add-on" }]}
-          />
-
-          <SegmentedControl<InstrumentKey>
-            label="Instrument"
-            value={filters.instrument}
-            onChange={v => setFilters(f => ({ ...f, instrument: v }))}
-            options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
-          />
-
           {/* Ticker multi-select. Same chip + typeahead pattern as Trade
               Journal — chips for what's picked, typeahead for adding
-              more, backspace on empty removes the last chip. */}
+              more, backspace on empty removes the last chip. Placed
+              first because ticker is the most common way into the page. */}
           <div className="flex flex-col gap-1" style={{ minWidth: 200 }}>
             <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Ticker</span>
             <div className="flex items-center gap-1.5 flex-wrap min-h-[34px]">
@@ -602,6 +587,38 @@ export function CampaignReview() {
               </div>
             </div>
           </div>
+
+          {/* Search */}
+          <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
+            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
+            <div className="relative">
+              <input type="text" value={filters.q}
+                     onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
+                     placeholder="Ticker, trade ID, rule or note…"
+                     className="w-full h-[34px] pl-9 pr-8 rounded-[10px] text-[12px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: "var(--ink-4)" }}>⌕</span>
+              {filters.q && (
+                <button type="button" onClick={() => setFilters(f => ({ ...f, q: "" }))}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-[12px] cursor-pointer"
+                        style={{ color: "var(--ink-4)" }}>✕</button>
+              )}
+            </div>
+          </div>
+
+          <SegmentedControl<SeriesKey>
+            label="Series"
+            value={filters.series}
+            onChange={v => setFilters(f => ({ ...f, series: v }))}
+            options={[{ v: "all", l: "All" }, { v: "original", l: "B · Original" }, { v: "add_on", l: "A · Add-on" }]}
+          />
+
+          <SegmentedControl<InstrumentKey>
+            label="Instrument"
+            value={filters.instrument}
+            onChange={v => setFilters(f => ({ ...f, instrument: v }))}
+            options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
+          />
 
           <FilterSelect
             label="Rule"
