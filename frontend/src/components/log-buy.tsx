@@ -180,9 +180,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
-  const [stopMode, setStopMode] = useState<"price" | "pct" | "atr">("pct");
+  const [stopMode, setStopMode] = useState<"price" | "pct" | "atr" | "ladder">("pct");
   const [stopValue, setStopValue] = useState("");
   const [slPct, setSlPct] = useState("5.0");
+  // Scale-Out Stops ladder — three integer share counts, one per locked
+  // leg at [-3%, -5%, -7%]. Auto-filled floor/floor/remainder off the
+  // Shares field when entering ladder mode or on Position Sizer prefill;
+  // user can edit any leg independently and the sum must match Shares
+  // before Log Buy submits.
+  const [ladderShares, setLadderShares] = useState<[number, number, number]>([0, 0, 0]);
   // ATR stop loss mode: multiplier × atrPct% below entry. atrPct is captured
   // from /api/prices/lookup at the same time we fetch price; backend returns
   // 0.0 for tickers with <21 bars (the "ATR unavailable" sentinel). The pills
@@ -303,7 +309,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
       //     manually. Fixed here as the ride-along.
       //   no stop hints at all → mark pendingAtrDefault for the
       //     atrPct-watcher effect below.
-      if (data.stopMode === "atr" && (data.atrMultiplier === 1 || data.atrMultiplier === 1.5 || data.atrMultiplier === 2)) {
+      if (data.stopMode === "ladder" && Array.isArray(data.ladderShares) && data.ladderShares.length === 3) {
+        // Position Sizer Scale-Out card ships { stopMode: "ladder",
+        // ladderShares: [n1, n2, n3] } alongside shares + price. Seed the
+        // ladder state directly — the auto-split effect above will noop
+        // because currentSum already matches total.
+        setStopMode("ladder");
+        setLadderShares([Number(data.ladderShares[0]) || 0, Number(data.ladderShares[1]) || 0, Number(data.ladderShares[2]) || 0]);
+      } else if (data.stopMode === "atr" && (data.atrMultiplier === 1 || data.atrMultiplier === 1.5 || data.atrMultiplier === 2)) {
         setStopMode("atr");
         setAtrMultiplier(data.atrMultiplier);
       } else if (data.stopMode === "price" && typeof data.stop === "number") {
@@ -369,6 +382,22 @@ export function LogBuy({ navColor }: { navColor: string }) {
     setShowStopLoss(!isOptionTicker);
   }, [ticker]);
 
+  // Re-split the ladder floor/floor/remainder whenever total shares
+  // change while in ladder mode AND the current split does not sum to
+  // total. This keeps the ladder auto-following the Shares field but
+  // stops clobbering the user once they've manually adjusted a leg to
+  // match the total. When the user first enters ladder mode from a
+  // non-ladder mode this also seeds the initial split.
+  useEffect(() => {
+    if (stopMode !== "ladder") return;
+    const total = Math.floor(parseFloat(shares) || 0);
+    if (total < 0) return;
+    const currentSum = ladderShares[0] + ladderShares[1] + ladderShares[2];
+    if (currentSum === total) return;
+    const base = Math.floor(total / 3);
+    setLadderShares([base, base, total - 2 * base]);
+  }, [stopMode, shares]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-fetch price + ATR when ticker changes (debounced). Same
   // /api/prices/lookup call the Position Sizer uses. atr_pct === 0 is
   // the backend's "insufficient history" sentinel — ATR pills disable
@@ -422,6 +451,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
     // duplication with the submit-body branch is intentional (the spec
     // explicitly rules out extracting a shared helper from vol-sizer).
     stopPrice = priceNum > 0 && atrPct > 0 ? priceNum * (1 - (atrMultiplier * atrPct) / 100) : 0;
+  } else if (stopMode === "ladder") {
+    // Ladder mode: the "primary" stop used by legacy risk sizing is the
+    // first-firing leg (-3%). Matches what the backend stores in
+    // stop_loss so on-page numbers align with what Trade Journal / Risk
+    // Manager will display until Phase 2 makes them ladder-aware.
+    stopPrice = priceNum > 0 ? priceNum * (1 - 3 / 100) : 0;
   } else {
     // Default stop = 50% of premium for options (per the user's playbook),
     // 5% for stocks. The user can still override slPct manually.
@@ -429,6 +464,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
     const pct = parseFloat(slPct) || defaultPct;
     stopPrice = priceNum > 0 ? priceNum * (1 - pct / 100) : 0;
   }
+
+  // Ladder totals for the summary line + submit-blocking validation.
+  const ladderTotal = ladderShares[0] + ladderShares[1] + ladderShares[2];
+  const ladderMismatch = stopMode === "ladder" && Math.floor(sharesNum) !== ladderTotal;
+  const ladderRisk = stopMode === "ladder" && priceNum > 0
+    ? ladderShares[0] * priceNum * 0.03
+      + ladderShares[1] * priceNum * 0.05
+      + ladderShares[2] * priceNum * 0.07
+    : 0;
   const stopDist = priceNum > 0 && stopPrice > 0 ? priceNum - stopPrice : 0;
   const stopPct = priceNum > 0 && stopPrice > 0 ? ((priceNum - stopPrice) / priceNum) * 100 : 0;
   const riskDollars = stopDist * sharesNum * multiplier;
@@ -598,6 +642,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
     // doesn't translate to premium-based stops.
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
+    // Ladder mode: sum(leg shares) must equal total shares. Backend
+    // will 422 otherwise; we block at the UI layer so the user sees an
+    // inline error instead of a submit round-trip.
+    if (showStopLoss && stopMode === "ladder" && ladderMismatch) {
+      e.push(`Ladder legs sum to ${ladderTotal} but total shares is ${Math.floor(sharesNum)}. Adjust a leg.`);
+    }
     if (posSizePct > 25) {
       const msg = `Position size ${posSizePct.toFixed(1)}% exceeds 25% max`;
       if (overrideSizeCap) w.push(`${msg} — override active`);
@@ -647,7 +697,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     setSubmitResult(null);
 
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         portfolio: getActivePortfolio(),
         action_type: actionType,
         ticker: actionType === "scalein" ? (selectedCamp?.ticker || "") : ticker,
@@ -659,7 +709,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
               ? parseFloat(stopValue)
               : stopMode === "atr"
                 ? parseFloat(price) * (1 - (atrMultiplier * atrPct) / 100)
-                : parseFloat(price) * (1 - parseFloat(slPct) / 100))
+                : stopMode === "ladder"
+                  ? parseFloat(price) * (1 - 3 / 100)  // primary = leg 1
+                  : parseFloat(price) * (1 - parseFloat(slPct) / 100))
           : null,
         rule,
         strategy,
@@ -667,6 +719,17 @@ export function LogBuy({ navColor }: { navColor: string }) {
         date: date,
         time: time,
       };
+      // Attach the ladder when in ladder mode. Backend validates the
+      // shape (pcts locked at [3, 5, 7], sum(leg shares) == shares).
+      if (stopMode === "ladder" && showStopLoss) {
+        body.stop_ladder = {
+          legs: [
+            { pct: 3, shares: ladderShares[0] },
+            { pct: 5, shares: ladderShares[1] },
+            { pct: 7, shares: ladderShares[2] },
+          ],
+        };
+      }
 
       const result = await api.logBuy(body);
 
@@ -861,17 +924,48 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     <div className="flex gap-4 mt-1 flex-wrap">
                       <Radio checked={stopMode === "price"} onClick={() => setStopMode("price")} label="Price Level ($)" />
                       <Radio checked={stopMode === "pct"} onClick={() => setStopMode("pct")} label="Percentage (%)" />
-                      {/* ATR radio hidden on option tickers — options don't
-                          have meaningful underlying-share ATR for sizing. */}
+                      {/* ATR + Ladder radios hidden on option tickers.
+                          ATR doesn't translate to premium stops, and the
+                          -3/-5/-7 ladder is a stock-price convention. */}
                       {!isOption && (
                         <Radio checked={stopMode === "atr"} onClick={() => setStopMode("atr")} label="ATR (×)" />
                       )}
+                      {!isOption && (
+                        <Radio checked={stopMode === "ladder"} onClick={() => setStopMode("ladder")} label="Ladder (3-leg)" />
+                      )}
                     </div>
                   </Field>
-                  <Field label={stopMode === "price" ? "Stop Price ($)" : stopMode === "atr" ? "ATR Multiplier" : "Stop Loss %"}>
+                  <Field label={stopMode === "price" ? "Stop Price ($)" : stopMode === "atr" ? "ATR Multiplier" : stopMode === "ladder" ? "Ladder legs (locked at −3 / −5 / −7 %)" : "Stop Loss %"}>
                     {stopMode === "price" ? (
                       <input type="number" value={stopValue} onChange={e => setStopValue(e.target.value)}
                              step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
+                    ) : stopMode === "ladder" ? (
+                      <div className="flex flex-col gap-1.5 mt-1" data-testid="logbuy-ladder">
+                        {([3, 5, 7] as const).map((pct, i) => {
+                          const legStop = priceNum > 0 ? priceNum * (1 - pct / 100) : 0;
+                          const legLoss = ladderShares[i] * priceNum * (pct / 100);
+                          return (
+                            <div key={pct} className="grid grid-cols-[36px_84px_1fr_1fr] items-center gap-2 text-[12px]"
+                                 style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                              <span className="font-semibold" style={{ color: "#0ea5a4" }}>−{pct}%</span>
+                              <span style={{ color: "var(--ink-3)" }}>{priceNum > 0 ? formatCurrency(legStop) : "—"}</span>
+                              <input type="number" min="0" step="1" value={ladderShares[i]}
+                                     onChange={e => {
+                                       const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                       setLadderShares(prev => {
+                                         const next: [number, number, number] = [...prev] as [number, number, number];
+                                         next[i] = v;
+                                         return next;
+                                       });
+                                     }}
+                                     className={inputCls} style={{ ...inputStyle, height: "30px" }} />
+                              <span className="text-right" style={{ color: "var(--ink-4)" }}>
+                                {priceNum > 0 ? `−${formatCurrency(legLoss, { decimals: 0 })}` : ""}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     ) : stopMode === "atr" ? (
                       <div className="flex gap-2 mt-1" data-testid="logbuy-atr-pills">
                         {([1, 1.5, 2] as const).map(m => {
@@ -917,6 +1011,18 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       ATR unavailable for this ticker (insufficient history). Use Price or Percentage mode.
                     </div>
                   )
+                )}
+                {stopMode === "ladder" && (
+                  <div className="text-[12px] mt-0.5"
+                       style={{ color: ladderMismatch ? "#d97706" : "#0ea5a4", fontFamily: "var(--font-jetbrains), monospace" }}
+                       data-testid="logbuy-ladder-summary">
+                    → Legs total {ladderTotal} shs
+                    {ladderMismatch
+                      ? ` (must equal ${Math.floor(sharesNum)})`
+                      : priceNum > 0
+                        ? ` · Risk if fully stopped ${formatCurrency(ladderRisk, { decimals: 0 })}`
+                        : ""}
+                  </div>
                 )}
               </div>
             ) : (

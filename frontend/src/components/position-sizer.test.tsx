@@ -385,7 +385,9 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
     });
 
     // Click "Send to Log Buy"
-    const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy/ });
+    // Match the primary Verdict button; the Scale-Out card also has a
+// "Send to Log Buy with ladder" button that would otherwise match.
+const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy —/ });
     await act(async () => { fireEvent.click(sendBtn); });
 
     const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
@@ -424,7 +426,9 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
       fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
     });
 
-    const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy/ });
+    // Match the primary Verdict button; the Scale-Out card also has a
+// "Send to Log Buy with ladder" button that would otherwise match.
+const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy —/ });
     await act(async () => { fireEvent.click(sendBtn); });
 
     const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");

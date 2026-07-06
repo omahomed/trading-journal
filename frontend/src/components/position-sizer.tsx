@@ -177,8 +177,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     shares: number;
     price: number;
     stop?: number;
-    stopMode?: "price" | "atr";
+    stopMode?: "price" | "atr" | "ladder";
     atrMultiplier?: 1 | 1.5 | 2;
+    ladderShares?: [number, number, number];
     trade_id?: string;
     action?: string;
   }) => {
@@ -1292,8 +1293,9 @@ function VolatilityResults({
     shares: number;
     price: number;
     stop?: number;
-    stopMode?: "price" | "atr";
+    stopMode?: "price" | "atr" | "ladder";
     atrMultiplier?: 1 | 1.5 | 2;
+    ladderShares?: [number, number, number];
     action: string;
   }) => void;
 }) {
@@ -1342,6 +1344,16 @@ function VolatilityResults({
           recLadder={results.scaleOutRecommended}
           recLabel={rec.label}
           accent="#0ea5a4"
+          onSendLadder={(ladder) => {
+            onSendToLogBuy({
+              ticker,
+              shares: ladder.totalShares,
+              price: ladder.entry,
+              stopMode: "ladder",
+              ladderShares: [ladder.legs[0].shares, ladder.legs[1].shares, ladder.legs[2].shares],
+              action: "new",
+            });
+          }}
         />
       </div>
 
@@ -1463,12 +1475,13 @@ function ScenarioCard({
 // scenario is different, offers a segmented toggle to switch. Never
 // wears the Recommended pill — it's a plan, not a sizing option.
 function ScaleOutStopsCard({
-  techLadder, recLadder, recLabel, accent,
+  techLadder, recLadder, recLabel, accent, onSendLadder,
 }: {
   techLadder: ScaleOutStops;
   recLadder: ScaleOutStops | null;
   recLabel: ScenarioLabel;
   accent: string;
+  onSendLadder: (ladder: ScaleOutStops) => void;
 }) {
   const [view, setView] = useState<"tech" | "rec">("tech");
   const showToggle = recLadder !== null;
@@ -1532,6 +1545,19 @@ function ScaleOutStopsCard({
         <span>Risk if fully stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(active.totalLoss, { decimals: 0 })}</strong> ({active.totalLossPctNlv.toFixed(2)}% NLV)</span>
         <span style={{ color: "var(--ink-4)" }}>avg exit {active.avgExitPct.toFixed(2)}%</span>
       </div>
+
+      <button type="button"
+              onClick={() => onSendLadder(active)}
+              disabled={active.totalShares <= 0}
+              className="mt-3 w-full h-[34px] rounded-[10px] text-[12px] font-semibold transition-all hover:brightness-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="send-ladder-to-logbuy"
+              style={{
+                background: `color-mix(in oklab, ${accent} 12%, var(--surface))`,
+                color: accent,
+                border: `1px solid color-mix(in oklab, ${accent} 40%, var(--border))`,
+              }}>
+        📝 Send to Log Buy with ladder ({active.totalShares} shs)
+      </button>
     </div>
   );
 }
