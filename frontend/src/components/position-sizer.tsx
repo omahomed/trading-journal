@@ -28,7 +28,7 @@ import {
   describeMctSource,
   type ExitAlert,
 } from "@/lib/sizing-mode";
-import { computeVolatilitySizing, type SizingScenario, type VolSizerResults } from "@/lib/vol-sizer";
+import { computeVolatilitySizing, type SizingScenario, type VolSizerResults, type ScaleOutStops, type ScenarioLabel } from "@/lib/vol-sizer";
 
 // Local view shape — keeps the component-internal usage of
 // `SIZING_MODES[i].label` untouched. The labels here include the leading
@@ -1331,10 +1331,18 @@ function VolatilityResults({
                     accent="#3b82f6" />
       </div>
 
-      {/* Tech Stop row */}
-      <div className="mb-3">
+      {/* Tech Stop + Scale-Out row. Two-column so the ladder sits next
+          to the primary entry-side tile. Scale-Out is advisory (teal),
+          never wears the Recommended pill. */}
+      <div className="grid grid-cols-2 gap-3 mb-3">
         <ScenarioCard scenario={results.techStop} entry={entry} equity={equity} targetSize={targetSize}
                       accent="#3b82f6" tone="tech" isRecommended={recIsTechStop} />
+        <ScaleOutStopsCard
+          techLadder={results.scaleOutTech}
+          recLadder={results.scaleOutRecommended}
+          recLabel={rec.label}
+          accent="#0ea5a4"
+        />
       </div>
 
       {/* ATR Cushion grid */}
@@ -1445,6 +1453,84 @@ function ScenarioCard({
         {scenario.capBinds && (
           <span data-testid="cap-binds" style={{ color: "#d97706" }}>capped @ {targetSize}% NLV</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Advisory tile — three-leg scale-out at -3% / -5% / -7% from entry.
+// Sized off the Tech Stop share count by default; if the Recommended
+// scenario is different, offers a segmented toggle to switch. Never
+// wears the Recommended pill — it's a plan, not a sizing option.
+function ScaleOutStopsCard({
+  techLadder, recLadder, recLabel, accent,
+}: {
+  techLadder: ScaleOutStops;
+  recLadder: ScaleOutStops | null;
+  recLabel: ScenarioLabel;
+  accent: string;
+}) {
+  const [view, setView] = useState<"tech" | "rec">("tech");
+  const showToggle = recLadder !== null;
+  const active = view === "rec" && recLadder ? recLadder : techLadder;
+  const sourceLabel = view === "rec" ? recLabel : "Tech Stop";
+
+  return (
+    <div className="p-4 rounded-[12px] relative overflow-hidden"
+         data-testid="scale-out-stops"
+         style={{
+           border: "1px solid var(--border)",
+           borderLeft: `4px solid ${accent}`,
+           background: `color-mix(in oklab, ${accent} 4%, var(--surface))`,
+         }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+          Scale-Out Stops
+        </div>
+        {showToggle ? (
+          <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+            {(["tech", "rec"] as const).map(v => (
+              <button key={v} type="button" onClick={() => setView(v)}
+                      className="px-2 py-0.5 rounded-[6px] text-[10px] font-medium capitalize transition-all"
+                      style={{
+                        background: view === v ? "var(--surface)" : "transparent",
+                        color: view === v ? "var(--ink)" : "var(--ink-4)",
+                        boxShadow: view === v ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                      }}>
+                {v === "tech" ? "Tech" : "Recommended"}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                style={{ background: `color-mix(in oklab, ${accent} 15%, transparent)`, color: accent }}>
+            3-Leg Ladder
+          </span>
+        )}
+      </div>
+
+      <div className="text-[11px] mb-2" style={{ color: "var(--ink-4)" }}>
+        Sized off: <strong style={{ color: "var(--ink)" }}>{sourceLabel}</strong> · {active.totalShares} shs @ {formatCurrency(active.entry)}
+      </div>
+
+      <div className="flex flex-col gap-1">
+        {active.legs.map((leg) => (
+          <div key={leg.pctBelow} className="grid grid-cols-[36px_1fr_60px_1fr] items-baseline gap-2 text-[11px]"
+               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+            <span className="font-semibold" style={{ color: accent }}>−{leg.pctBelow}%</span>
+            <span style={{ color: "var(--ink)" }}>{formatCurrency(leg.stopPrice)}</span>
+            <span style={{ color: "var(--ink-3)" }}>{leg.shares} shs</span>
+            <span className="text-right" style={{ color: "var(--ink-3)" }}>
+              −{formatCurrency(leg.loss, { decimals: 0 })} <span style={{ color: "var(--ink-4)" }}>({leg.lossPctNlv.toFixed(2)}%)</span>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-2 pt-2 flex items-baseline justify-between text-[11px]"
+           style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
+        <span>Risk if fully stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(active.totalLoss, { decimals: 0 })}</strong> ({active.totalLossPctNlv.toFixed(2)}% NLV)</span>
+        <span style={{ color: "var(--ink-4)" }}>avg exit {active.avgExitPct.toFixed(2)}%</span>
       </div>
     </div>
   );

@@ -53,6 +53,28 @@ export type RecommendationReason =
   | "tech_stop_safe"
   | "tech_stop_inside_noise";
 
+// Staged scale-out at -3% / -5% / -7% from entry. Equal thirds with the
+// remainder on the last leg — always locked at those percentages, per
+// standing user preference (Phase 0 spec).
+export const SCALE_OUT_PCTS = [3, 5, 7] as const;
+
+export interface ScaleOutLeg {
+  pctBelow: number;   // 3, 5, or 7
+  stopPrice: number;
+  shares: number;
+  loss: number;       // dollars if this leg fires
+  lossPctNlv: number;
+}
+
+export interface ScaleOutStops {
+  entry: number;
+  totalShares: number;
+  legs: [ScaleOutLeg, ScaleOutLeg, ScaleOutLeg];
+  totalLoss: number;
+  totalLossPctNlv: number;
+  avgExitPct: number; // -5.00 for equal thirds at 3/5/7
+}
+
 export interface VolSizerResults {
   riskBudget: number;
   atrPerShare: number;
@@ -64,6 +86,12 @@ export interface VolSizerResults {
 
   recommended: SizingScenario;
   recommendationReason: RecommendationReason;
+
+  // Scale-out ladder pinned to the Tech Stop share count. Always present.
+  scaleOutTech: ScaleOutStops;
+  // Second ladder pinned to the Recommended share count. Null when the
+  // recommendation IS the tech stop (nothing to show twice).
+  scaleOutRecommended: ScaleOutStops | null;
 
   warning: { show: boolean; text: string };
 }
@@ -137,6 +165,35 @@ function buildScenario(args: {
   };
 }
 
+// Split totalShares into three equal-ish legs (floor, floor, remainder)
+// and price each leg at entry × (1 − pct/100). Locked percentages; the
+// only variable is share count. If totalShares is 0 or negative, all
+// legs come back with 0 shares / 0 loss so the tile renders empty.
+export function computeScaleOutStops(entry: number, totalShares: number, equity: number): ScaleOutStops {
+  const shares = Math.max(0, Math.floor(totalShares));
+  const base = Math.floor(shares / 3);
+  const legShares: [number, number, number] = [base, base, shares - 2 * base];
+
+  const legs = SCALE_OUT_PCTS.map((pct, i) => {
+    const stopPrice = entry * (1 - pct / 100);
+    const shs = legShares[i];
+    const lossPerShare = entry - stopPrice;
+    const loss = shs * lossPerShare;
+    const lossPctNlv = equity > 0 ? (loss / equity) * 100 : 0;
+    return { pctBelow: pct, stopPrice, shares: shs, loss, lossPctNlv };
+  }) as [ScaleOutLeg, ScaleOutLeg, ScaleOutLeg];
+
+  const totalLoss = legs[0].loss + legs[1].loss + legs[2].loss;
+  const totalLossPctNlv = equity > 0 ? (totalLoss / equity) * 100 : 0;
+  // For equal thirds at 3/5/7 this is exactly -5.00. Compute anyway so
+  // it stays correct if the remainder lands unevenly (small share counts).
+  const avgExitPct = shares > 0
+    ? -((legs[0].shares * 3 + legs[1].shares * 5 + legs[2].shares * 7) / shares)
+    : 0;
+
+  return { entry, totalShares: shares, legs, totalLoss, totalLossPctNlv, avgExitPct };
+}
+
 export function computeVolatilitySizing(input: VolSizerInputs): VolSizerResults {
   const { equity, entry, ma, bufferPct, atrPct, tolPct, targetSizePct } = input;
 
@@ -199,6 +256,11 @@ export function computeVolatilitySizing(input: VolSizerInputs): VolSizerResults 
     }
   }
 
+  const scaleOutTech = computeScaleOutStops(entry, techStop.finalShares, equity);
+  const scaleOutRecommended = recommended === techStop
+    ? null
+    : computeScaleOutStops(entry, recommended.finalShares, equity);
+
   return {
     riskBudget,
     atrPerShare,
@@ -208,6 +270,8 @@ export function computeVolatilitySizing(input: VolSizerInputs): VolSizerResults 
     atrScenarios,
     recommended,
     recommendationReason,
+    scaleOutTech,
+    scaleOutRecommended,
     warning: { show: warningShow, text: warningText },
   };
 }
