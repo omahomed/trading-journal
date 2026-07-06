@@ -73,16 +73,17 @@ function TrendCountChip({ trendCount }: { trendCount?: number | null }) {
   const up = trendCount > 0;
   const color = up ? "#08a86b" : "#e5484d";
   const arrow = up ? "▲" : "▼";
-  const label = up ? "Up" : "Down";
+  const direction = up ? "Up" : "Down";
   const value = up ? `+${trendCount}` : `${trendCount}`;
   return (
     <span
-      className="inline-flex items-center gap-0.5 pl-1.5 ml-0.5 text-[11px] font-semibold"
-      style={{ color, borderLeft: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}
-      title="Trend Count (signed): sessions since last 21e arm (positive) or last confirmed break (negative)"
+      className="inline-flex items-center gap-1 pl-1.5 ml-0.5 text-[11px] font-semibold"
+      style={{ borderLeft: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}
+      title="Trend Cycle (signed): sessions since last 21e arm (positive) or last confirmed break (negative)"
     >
-      <span aria-hidden="true">{arrow}</span>
-      <span>{label} {value}</span>
+      <span style={{ color: "var(--ink-2)" }}>Trend Cycle</span>
+      <span aria-hidden="true" style={{ color }}>{arrow}</span>
+      <span style={{ color }}>{direction} {value}</span>
     </span>
   );
 }

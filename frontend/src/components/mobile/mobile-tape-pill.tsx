@@ -44,11 +44,11 @@ export function MobileTapePill() {
         </>
       )}
       {typeof data.trend_count === "number" && data.trend_count !== 0 && (
-        <span
-          className="ml-1 text-[11px] font-semibold"
-          style={{ color: data.trend_count > 0 ? "#08a86b" : "#e5484d" }}
-        >
-          {data.trend_count > 0 ? `▲ Up +${data.trend_count}` : `▼ Down ${data.trend_count}`}
+        <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold">
+          <span className="text-m-text-muted">Trend Cycle</span>
+          <span style={{ color: data.trend_count > 0 ? "#08a86b" : "#e5484d" }}>
+            {data.trend_count > 0 ? `▲ Up +${data.trend_count}` : `▼ Down ${data.trend_count}`}
+          </span>
         </span>
       )}
       {data.cap_at_100 && (
