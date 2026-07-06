@@ -598,6 +598,21 @@ export const api = {
       current_price?: number;
     }>,
 
+  updateTradeLadder: (body: {
+    portfolio?: string;
+    trade_id: string;
+    stop_ladder: { legs: { pct: number; shares: number }[] };
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/update-ladder`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{
+      status?: string;
+      error?: string;
+      trade_id?: string;
+    }>,
+
   flagBeRule: (body: { portfolio?: string; trade_id: string; flagged: boolean }) =>
     fetchWithAuth(`${API_BASE}/api/trades/flag-be`, {
       method: "POST",

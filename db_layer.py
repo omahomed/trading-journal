@@ -2067,10 +2067,17 @@ def update_trade_stops(portfolio_name, trade_id, new_stop,
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            # Update all detail rows for open lots of this trade
+            # Update all detail rows for open lots of this trade. Also
+            # clear stop_ladder on every BUY row (Phase 3): when the user
+            # sets a manual single stop, they're promoting the ladder
+            # plan to a global stop — the ladder is over. Clearing on all
+            # BUY rows is defensive (Phase 1 only writes ladder to B1)
+            # and idempotent for non-laddered trades (SET to NULL is a
+            # no-op when already NULL).
             cur.execute("""
                 UPDATE trades_details
-                SET stop_loss = %s
+                SET stop_loss = %s,
+                    stop_ladder = NULL
                 WHERE portfolio_id = %s AND trade_id = %s
                   AND action = 'BUY' AND deleted_at IS NULL
             """, (new_stop, portfolio_id, trade_id))
@@ -2103,6 +2110,40 @@ def update_trade_stops(portfolio_name, trade_id, new_stop,
 
             conn.commit()
             load_summary.clear()
+            load_details.clear()
+            return updated
+
+
+def update_trade_ladder(portfolio_name: str, trade_id: str, ladder: dict) -> int:
+    """Replace the stop_ladder JSONB on the B1 (earliest BUY) row of a
+    trade. Used by the Trade Manager → Stop Loss Adjustment "Edit ladder"
+    flow. The caller validates ladder shape (locked pcts [3,5,7], leg
+    shares sum to B1 shares) before invoking. Returns 1 if B1 was found
+    and updated, 0 otherwise.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            # B1 = earliest BUY by (date ASC, id ASC). Ladder is B1-only
+            # by convention; scale-in rows never carry one.
+            cur.execute("""
+                UPDATE trades_details
+                SET stop_ladder = %s
+                WHERE id = (
+                    SELECT id FROM trades_details
+                    WHERE portfolio_id = %s AND trade_id = %s
+                      AND action = 'BUY' AND deleted_at IS NULL
+                    ORDER BY date ASC, id ASC
+                    LIMIT 1
+                )
+            """, (json.dumps(ladder), portfolio_id, trade_id))
+            updated = cur.rowcount
+            conn.commit()
             load_details.clear()
             return updated
 

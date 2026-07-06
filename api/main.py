@@ -6537,6 +6537,80 @@ def update_trade_stops(body: dict):
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
+@app.put("/api/trades/update-ladder")
+def update_trade_ladder(body: dict):
+    """Replace the Scale-Out Stops ladder on the B1 row of a trade.
+
+    Validates the same shape as log_buy — 3 legs, pcts locked at
+    [3, 5, 7], sum(leg_shares) must equal B1's original share count so
+    the ladder still accounts for every share on the first buy. Doesn't
+    touch stop_loss (leg 1 price is derived from B1 amount × 0.97 which
+    is immutable); doesn't touch scale-in rows.
+    """
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = body.get("trade_id", "")
+        raw_ladder = body.get("stop_ladder")
+        if not trade_id or not isinstance(raw_ladder, dict):
+            return {"error": "trade_id and stop_ladder are required"}
+
+        legs = raw_ladder.get("legs")
+        if not isinstance(legs, list) or len(legs) != 3:
+            raise HTTPException(status_code=422, detail="stop_ladder.legs must be a list of exactly 3 entries")
+        expected_pcts = [3, 5, 7]
+        cleaned_legs = []
+        leg_shares_sum = 0
+        for i, leg in enumerate(legs):
+            if not isinstance(leg, dict):
+                raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}] must be an object")
+            pct = leg.get("pct")
+            leg_shares = leg.get("shares")
+            if pct != expected_pcts[i]:
+                raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].pct must be {expected_pcts[i]}")
+            try:
+                leg_shares_int = int(leg_shares)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].shares must be an integer")
+            if leg_shares_int < 0:
+                raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].shares must be >= 0")
+            cleaned_legs.append({"pct": pct, "shares": leg_shares_int})
+            leg_shares_sum += leg_shares_int
+
+        # Cross-check against B1's share count on this trade.
+        df_d = db.load_details(portfolio)
+        if df_d is None or df_d.empty:
+            return {"error": f"No details found for trade {trade_id}"}
+        df_d = _normalize_trades(df_d)
+        buys = df_d[(df_d["trade_id"] == trade_id) & (df_d["action"].str.upper() == "BUY")].copy()
+        if buys.empty:
+            return {"error": f"No BUY rows found for trade {trade_id}"}
+        buys["date"] = pd.to_datetime(buys["date"], errors="coerce")
+        buys = buys.sort_values("date")
+        b1_shares = int(float(buys.iloc[0].get("shares") or 0))
+        if leg_shares_sum != b1_shares:
+            raise HTTPException(
+                status_code=422,
+                detail=f"stop_ladder leg shares sum ({leg_shares_sum}) must equal B1 shares ({b1_shares})",
+            )
+
+        updated = db.update_trade_ladder(portfolio, trade_id, {"legs": cleaned_legs})
+        if updated == 0:
+            return {"error": f"B1 row not found for trade {trade_id}"}
+        try:
+            db.log_audit(portfolio, "LADDER_UPDATE", trade_id, str(buys.iloc[0].get("ticker") or ""),
+                         f"Ladder → {cleaned_legs[0]['shares']}/{cleaned_legs[1]['shares']}/{cleaned_legs[2]['shares']}",
+                         username="web")
+        except Exception:
+            pass
+        return {"status": "ok", "trade_id": trade_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[update_trade_ladder] handler failed: {e}")
+        return {"error": str(e), "trace": traceback.format_exc()}
+
+
 # ============================================================
 # FUNDAMENTALS ENDPOINT
 # ============================================================

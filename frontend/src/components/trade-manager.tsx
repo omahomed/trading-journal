@@ -112,6 +112,10 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   const [newStop, setNewStop] = useState("");
   const [stopSaving, setStopSaving] = useState(false);
   const [stopResult, setStopResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  // Ladder edit — per-leg share counts on the selected trade's B1
+  // ladder. Seeded from the persisted ladder when a trade is selected;
+  // reset when selection changes. Saving PUTs to /update-ladder.
+  const [ladderEdit, setLadderEdit] = useState<[number, number, number] | null>(null);
 
   // Edit tab
   const [editTicker, setEditTicker] = useState("");
@@ -163,6 +167,19 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
     });
   }, []);
 
+  // Seed the ladder-edit state from the selected trade's B1 ladder
+  // whenever selection (or the underlying details) changes. Null when
+  // B1 has no ladder — the Edit Ladder block hides entirely.
+  useEffect(() => {
+    const b1 = details.find(d => d.trade_id === selectedStop && String(d.action).toUpperCase() === "BUY");
+    const raw = b1 ? (b1 as any).stop_ladder : null;
+    if (!raw || typeof raw !== "object") { setLadderEdit(null); return; }
+    const legs = (raw as { legs?: unknown }).legs;
+    if (!Array.isArray(legs) || legs.length !== 3) { setLadderEdit(null); return; }
+    const shares = legs.map(l => Math.max(0, Math.floor(Number((l as any).shares) || 0))) as [number, number, number];
+    setLadderEdit(shares);
+  }, [selectedStop, details]);
+
   if (loading) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
   }
@@ -170,6 +187,23 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   // Stop loss tab: details for selected position
   const stopTrade = openTrades.find(t => t.trade_id === selectedStop);
   const stopDetails = details.filter(d => d.trade_id === selectedStop && String(d.action).toUpperCase() === "BUY");
+  // B1 = earliest BUY. Ladder is B1-only by convention. Parse defensively
+  // — backend returns "" for NULL ladders after fillna in _df_to_records.
+  const stopB1 = stopDetails.length > 0 ? stopDetails[0] : null;
+  const stopB1Ladder = (() => {
+    const raw = stopB1 ? (stopB1 as any).stop_ladder : null;
+    if (!raw || typeof raw !== "object") return null;
+    const legs = (raw as { legs?: unknown }).legs;
+    if (!Array.isArray(legs) || legs.length !== 3) return null;
+    const parsed = legs.map(l => {
+      const leg = l as { pct?: unknown; shares?: unknown };
+      return { pct: Number(leg.pct), shares: Number(leg.shares) };
+    });
+    if (parsed.some(l => !Number.isFinite(l.pct) || !Number.isFinite(l.shares))) return null;
+    return { legs: parsed };
+  })();
+  const stopB1Price = stopB1 ? parseFloat(String(stopB1.amount || 0)) : 0;
+  const stopB1Shares = stopB1 ? parseFloat(String(stopB1.shares || 0)) : 0;
 
   // Edit tab: filtered trades by ticker
   const editTrades = editTicker
@@ -257,9 +291,92 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                 </table>
               </div>
 
+              {/* Edit Ladder block — visible only when B1 has a persisted
+                  stop_ladder. Percentages are locked (Phase 1 convention);
+                  the user edits per-leg share counts. Sum must equal B1
+                  shares. Below, the "Promote to Global Stop" flow (existing
+                  New Stop Price + Update All Lots button) still works —
+                  entering a single stop clears the ladder on save. */}
+              {stopB1Ladder && ladderEdit && stopB1Price > 0 && (() => {
+                const legSum = ladderEdit[0] + ladderEdit[1] + ladderEdit[2];
+                const mismatch = legSum !== Math.floor(stopB1Shares);
+                return (
+                  <div className="rounded-[10px] overflow-hidden"
+                       style={{ border: "1px solid color-mix(in oklab, #d97706 30%, var(--border))", background: "color-mix(in oklab, #d97706 4%, var(--surface))" }}>
+                    <div className="px-4 py-2.5 text-[12px] font-semibold flex items-center justify-between"
+                         style={{ background: "color-mix(in oklab, #d97706 8%, var(--surface))", borderBottom: "1px solid color-mix(in oklab, #d97706 20%, var(--border))", color: "#d97706" }}>
+                      <span>🪜 Edit Scale-Out Ladder (B1 · locked at −3 / −5 / −7 %)</span>
+                      <span className="text-[10px] font-normal" style={{ color: "var(--ink-4)" }}>
+                        Prices track B1 entry {formatCurrency(stopB1Price)}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 flex flex-col gap-2">
+                      {([3, 5, 7] as const).map((pct, i) => (
+                        <div key={pct} className="grid grid-cols-[40px_100px_1fr_1fr] items-center gap-3 text-[12px]"
+                             style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                          <span className="font-semibold" style={{ color: "#d97706" }}>−{pct}%</span>
+                          <span style={{ color: "var(--ink-3)" }}>{formatCurrency(stopB1Price * (1 - pct / 100))}</span>
+                          <input type="number" min="0" step="1" value={ladderEdit[i]}
+                                 onChange={e => {
+                                   const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                   setLadderEdit(prev => {
+                                     if (!prev) return prev;
+                                     const next: [number, number, number] = [...prev] as [number, number, number];
+                                     next[i] = v;
+                                     return next;
+                                   });
+                                 }}
+                                 className={inputCls} style={{ ...inputStyle, height: "32px" }} />
+                          <span className="text-right text-[11px]" style={{ color: "var(--ink-4)" }}>
+                            loss if hit: −{formatCurrency(ladderEdit[i] * stopB1Price * (pct / 100), { decimals: 0 })}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex items-center justify-between pt-1 text-[11px]"
+                           style={{ borderTop: "1px dashed var(--border)", color: mismatch ? "#d97706" : "var(--ink-4)" }}>
+                        <span>
+                          Legs total <strong style={{ color: mismatch ? "#d97706" : "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }}>{legSum}</strong> shs
+                          {mismatch ? ` (must equal ${Math.floor(stopB1Shares)})` : ""}
+                        </span>
+                        <button type="button"
+                                disabled={stopSaving || mismatch}
+                                onClick={async () => {
+                                  setStopSaving(true);
+                                  setStopResult(null);
+                                  const r = await api.updateTradeLadder({
+                                    portfolio: getActivePortfolio(),
+                                    trade_id: selectedStop,
+                                    stop_ladder: {
+                                      legs: [
+                                        { pct: 3, shares: ladderEdit[0] },
+                                        { pct: 5, shares: ladderEdit[1] },
+                                        { pct: 7, shares: ladderEdit[2] },
+                                      ],
+                                    },
+                                  });
+                                  setStopSaving(false);
+                                  if (r.error) {
+                                    setStopResult({ ok: false, msg: r.error });
+                                  } else {
+                                    setStopResult({ ok: true, msg: `Ladder updated on ${stopTrade?.ticker || selectedStop}` });
+                                    // Reload so the edited ladder shows on subsequent renders.
+                                    const det = await api.tradesRecent(getActivePortfolio(), 500);
+                                    setDetails(det.details);
+                                  }
+                                }}
+                                className="h-[30px] px-4 rounded-[8px] text-[11px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                                style={{ background: "#d97706" }}>
+                          {stopSaving ? "Saving…" : "Save ladder"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* New stop input */}
               <div className="grid grid-cols-2 gap-4">
-                <Field label="New Stop Price ($)">
+                <Field label={stopB1Ladder ? "Promote to Global Stop ($)" : "New Stop Price ($)"}>
                   <input type="number" value={newStop} onChange={e => setNewStop(e.target.value)}
                          step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
                 </Field>
@@ -295,7 +412,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                     }}
                     className="h-[42px] px-6 rounded-[10px] text-[13px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ background: navColor }}>
-                    {stopSaving ? "Saving…" : "Update All Lots"}
+                    {stopSaving ? "Saving…" : stopB1Ladder ? "Promote to Global Stop" : "Update All Lots"}
                   </button>
                 </div>
               </div>
@@ -310,6 +427,11 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                   <div className="px-4 py-2.5 rounded-[10px] text-[12px] font-medium"
                        style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
                     Will update stop to <strong>{formatCurrency(parseFloat(newStop))}</strong> for all {stopDetails.length} lot(s) of {stopTrade.ticker}
+                    {stopB1Ladder && (
+                      <div className="mt-1 text-[11px]" style={{ color: "#d97706" }}>
+                        🪜 This clears the Scale-Out ladder — the plan will be over and every lot moves to the single stop above.
+                      </div>
+                    )}
                     {nearBe && (
                       <div className="mt-1 text-[11px]" style={{ color: "#8b5cf6" }}>
                         🎯 Near breakeven ({formatCurrency(avgEntry)}) — if stock is up ≥10% from entry, this will flag the <strong>+10% BE rule</strong>.
