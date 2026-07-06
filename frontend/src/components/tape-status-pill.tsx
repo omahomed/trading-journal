@@ -58,8 +58,32 @@ export function TapeStatusPill() {
         {style.label}
         {detail ? ` · ${detail}` : ""}
       </span>
+      <TrendCountChip trendCount={data.trend_count} />
       {data.cap_at_100 && <LockIcon />}
     </Link>
+  );
+}
+
+// Signed Trend Count chip. Positive → green "▲ Up +N"; negative → red
+// "▼ Down -N"; null or 0 → hide (0 is a valid arm bar but has no leg
+// direction to render). Colors follow the same green/red palette used
+// across the app for up/down deltas.
+function TrendCountChip({ trendCount }: { trendCount?: number | null }) {
+  if (trendCount == null || trendCount === 0) return null;
+  const up = trendCount > 0;
+  const color = up ? "#08a86b" : "#e5484d";
+  const arrow = up ? "▲" : "▼";
+  const label = up ? "Up" : "Down";
+  const value = up ? `+${trendCount}` : `${trendCount}`;
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 pl-1.5 ml-0.5 text-[11px] font-semibold"
+      style={{ color, borderLeft: "1px solid var(--border)", fontFamily: "var(--font-jetbrains), monospace" }}
+      title="Trend Count (signed): sessions since last 21e arm (positive) or last confirmed break (negative)"
+    >
+      <span aria-hidden="true">{arrow}</span>
+      <span>{label} {value}</span>
+    </span>
   );
 }
 

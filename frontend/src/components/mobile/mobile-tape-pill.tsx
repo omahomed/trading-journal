@@ -43,6 +43,14 @@ export function MobileTapePill() {
           <span className="text-m-text-muted">{detail}</span>
         </>
       )}
+      {typeof data.trend_count === "number" && data.trend_count !== 0 && (
+        <span
+          className="ml-1 text-[11px] font-semibold"
+          style={{ color: data.trend_count > 0 ? "#08a86b" : "#e5484d" }}
+        >
+          {data.trend_count > 0 ? `▲ Up +${data.trend_count}` : `▼ Down ${data.trend_count}`}
+        </span>
+      )}
       {data.cap_at_100 && (
         <span className="ml-auto text-[11px] text-m-text-muted">Cap 100%</span>
       )}

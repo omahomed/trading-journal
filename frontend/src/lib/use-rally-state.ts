@@ -12,6 +12,11 @@ export type RallyState = {
   drawdown_pct?: number;
   power_trend_on_since?: string | null;
   ftd_date?: string | null;
+  // Signed Trend Count from the 21e engine (Migration 043). Positive =
+  // up leg (sessions since last arm), negative = down leg (sessions
+  // since last confirmed break). Null on pre-first-arm dates or when
+  // the ^IXIC bar for today hasn't been ingested yet.
+  trend_count?: number | null;
 };
 
 const V11_STATES = ["POWERTREND", "UPTREND", "RALLY MODE", "CORRECTION"] as const;
@@ -49,6 +54,7 @@ export function useRallyState(): RallyState | null {
             drawdown_pct: r.drawdown_pct,
             power_trend_on_since: r.power_trend_on_since,
             ftd_date: r.ftd_date,
+            trend_count: r.trend_count,
           });
         }
       })
