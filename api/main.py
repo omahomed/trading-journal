@@ -5087,6 +5087,49 @@ def log_buy(request: Request, body: dict):
         # (same defense-in-depth pattern as instrument_type below).
         strategy = (body.get("strategy") or "CanSlim").strip() or "CanSlim"
 
+        # Migration 044 — optional Scale-Out Stops ladder. Shape:
+        #   { "legs": [ {"pct": 3, "shares": N1}, {"pct": 5, "shares": N2},
+        #               {"pct": 7, "shares": N3} ] }
+        # Locked at [3, 5, 7]. sum(leg_shares) must equal `shares` on the
+        # request. When absent (single-stop mode) column stays NULL and
+        # every legacy read path uses stop_loss as it always has. When
+        # present, stop_loss is set to leg 1's price (the first-firing
+        # stop) so Trade Journal / Risk Manager / Portfolio Heat keep
+        # showing a coherent primary stop until Phase 2 makes them
+        # ladder-aware.
+        raw_ladder = body.get("stop_ladder")
+        stop_ladder = None
+        if raw_ladder is not None:
+            legs = raw_ladder.get("legs") if isinstance(raw_ladder, dict) else None
+            if not isinstance(legs, list) or len(legs) != 3:
+                raise HTTPException(status_code=422, detail="stop_ladder.legs must be a list of exactly 3 entries")
+            expected_pcts = [3, 5, 7]
+            cleaned_legs = []
+            leg_shares_sum = 0
+            for i, leg in enumerate(legs):
+                if not isinstance(leg, dict):
+                    raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}] must be an object")
+                pct = leg.get("pct")
+                leg_shares = leg.get("shares")
+                if pct != expected_pcts[i]:
+                    raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].pct must be {expected_pcts[i]}")
+                try:
+                    leg_shares_int = int(leg_shares)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].shares must be an integer")
+                if leg_shares_int < 0:
+                    raise HTTPException(status_code=422, detail=f"stop_ladder.legs[{i}].shares must be >= 0")
+                cleaned_legs.append({"pct": pct, "shares": leg_shares_int})
+                leg_shares_sum += leg_shares_int
+            if leg_shares_sum != int(shares):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"stop_ladder leg shares sum ({leg_shares_sum}) must equal shares ({int(shares)})",
+                )
+            stop_ladder = {"legs": cleaned_legs}
+            # Primary stop = first-firing leg (−3% by convention).
+            stop_loss = round(price * (1 - cleaned_legs[0]["pct"] / 100), 4)
+
         if not ticker or not trade_id or shares <= 0 or price <= 0:
             return {"error": "Missing required fields: ticker, trade_id, shares, price"}
 
@@ -5234,6 +5277,11 @@ def log_buy(request: Request, body: dict):
             "Stop_Loss": stop_loss, "Trx_ID": "",
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
+        # Migration 044: attach ladder only when caller supplied one so
+        # legacy paths keep hitting the "column absent → NULL" branch in
+        # _save_detail_row_in_txn.
+        if stop_ladder is not None:
+            detail_row["Stop_Ladder"] = stop_ladder
         detail_id, trx_id = _save_detail_with_unique_trx_id(
             portfolio, trade_id, trx_prefix, detail_row, given_trx_id=client_trx_id,
         )

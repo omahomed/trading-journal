@@ -1,5 +1,6 @@
 # db_layer.py - PostgreSQL abstraction layer for trading journal
 
+import json
 import math
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
@@ -487,7 +488,8 @@ def load_details(portfolio_name, trade_id=None):
                     d.retro_notes AS "Retro_Notes",
                     d.instrument_type AS "Instrument_Type",
                     d.multiplier AS "Multiplier",
-                    d.match_method AS "Match_Method"
+                    d.match_method AS "Match_Method",
+                    d.stop_ladder AS "Stop_Ladder"
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
                 WHERE p.name = %s
@@ -1225,6 +1227,13 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
     if 'Match_Method' in row_dict:
         insert_cols += ["match_method"]
         insert_vals += [row_dict.get('Match_Method')]
+    # Migration 044: Position Sizer scale-out ladder. Optional 3-leg
+    # staged exit. Only BUY rows carry a ladder; scale-in/sell/legacy
+    # callers omit the key and the column stays NULL.
+    if 'Stop_Ladder' in row_dict:
+        ladder = row_dict.get('Stop_Ladder')
+        insert_cols += ["stop_ladder"]
+        insert_vals += [json.dumps(ladder) if ladder is not None else None]
     placeholders = ", ".join(["%s"] * len(insert_vals))
     insert_query = (
         f"INSERT INTO trades_details ({', '.join(insert_cols)}) "
