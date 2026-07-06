@@ -93,6 +93,34 @@ function CardMetric({ label, value, color, sub }: { label: string; value: string
   );
 }
 
+// Scale-Out Stops ladder shape mirrored from the backend JSONB payload.
+// The API returns "" for NULL ladders (fillna on the DataFrame), so
+// callers must guard on shape before treating it as a ladder.
+interface LadderLeg { pct: number; shares: number }
+interface LadderShape { legs: LadderLeg[] }
+
+function parseLadder(raw: unknown): LadderShape | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as { legs?: unknown };
+  if (!Array.isArray(obj.legs) || obj.legs.length !== 3) return null;
+  const legs = obj.legs.map(l => {
+    const leg = l as { pct?: unknown; shares?: unknown };
+    return { pct: Number(leg.pct), shares: Number(leg.shares) };
+  });
+  if (legs.some(l => !Number.isFinite(l.pct) || !Number.isFinite(l.shares))) return null;
+  return { legs };
+}
+
+// Weighted-average stop pct across the ladder legs, weighted by leg
+// shares. For equal thirds at 3/5/7 this is exactly 5.00; for uneven
+// splits it drifts toward the heaviest leg's pct. Used to render a
+// single primary stop in the Trade Journal Stop Loss column.
+function ladderAvgStopPct(ladder: LadderShape): number {
+  const totalShares = ladder.legs.reduce((a, l) => a + l.shares, 0);
+  if (totalShares <= 0) return 0;
+  return ladder.legs.reduce((a, l) => a + l.pct * l.shares, 0) / totalShares;
+}
+
 const IMAGE_TYPE_MAP: Record<string, string> = {
   entry: "Entry Charts", weekly: "Entry Charts", daily: "Entry Charts",
   marketsurge: "Entry Charts",
@@ -1300,6 +1328,14 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           const b1Price = b1 ? parseFloat(String(b1.amount || 0)) : 0;
           const bandLow = b1Price > 0 ? b1Price * 0.975 : 0;
           const bandHigh = b1Price > 0 ? b1Price * 1.025 : 0;
+          // Scale-Out ladder is B1-only by user convention (Phase 2).
+          // When present, drives the Scale-Out Plan panel below and the
+          // "3-leg" chip on the B1 row's Stop Loss cell.
+          const b1LadderRaw = b1 ? (b1 as any).stop_ladder : null;
+          const b1Ladder = parseLadder(b1LadderRaw);
+          const b1LadderAvgPct = b1Ladder ? ladderAvgStopPct(b1Ladder) : 0;
+          const b1LadderAvgStop = b1Ladder && avgEntry > 0 ? avgEntry * (1 - b1LadderAvgPct / 100) : 0;
+          const b1TrxId = b1 ? String((b1 as any).trx_id || "") : "";
 
           // Core vs Add-on P&L
           const hasAddons = buys.length > 1;
@@ -1385,8 +1421,14 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   </div>
                 )}
 
-                {/* Scale-out plan (open trades only, collapsible) */}
-                {isOpen && avgEntry > 0 && (
+                {/* Scale-Out Plan (open trades only, collapsible). Wired to
+                    the persisted B1 ladder — hidden when no ladder was
+                    logged on B1. Shares come from the persisted ladder;
+                    prices track current avg entry so the plan follows
+                    scale-ins. Add-ons intentionally do NOT get their own
+                    ladder — this is B1's exit strategy for the whole
+                    position. */}
+                {isOpen && avgEntry > 0 && b1Ladder && (
                   <div className="mt-3">
                     <button onClick={() => setScaleOutOpen(scaleOutOpen === trade.trade_id ? null : trade.trade_id)}
                             className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-[8px] transition-colors"
@@ -1400,24 +1442,14 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                     {scaleOutOpen === trade.trade_id && (
                       <div className="mt-2 p-3 rounded-[10px]" style={{ background: "rgba(245,159,0,0.06)", border: "1px solid rgba(245,159,0,0.15)", animation: "slide-up 0.12s ease-out" }}>
                         <div className="grid grid-cols-3 gap-3 text-[11px]">
-                          <div>
-                            <span className="font-semibold">T1 (-3%)</span>
-                            <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {Math.ceil(shares * 0.25)} shs @ {formatCurrency(avgEntry * 0.97)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="font-semibold">T2 (-5%)</span>
-                            <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {Math.ceil(shares * 0.25)} shs @ {formatCurrency(avgEntry * 0.95)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="font-semibold">T3 (-7%)</span>
-                            <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-                              {shares - Math.ceil(shares * 0.25) * 2} shs @ {formatCurrency(avgEntry * 0.93)}
-                            </span>
-                          </div>
+                          {b1Ladder.legs.map((leg, li) => (
+                            <div key={leg.pct}>
+                              <span className="font-semibold">T{li + 1} (-{leg.pct}%)</span>
+                              <span className="ml-1.5" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                                {leg.shares} shs @ {formatCurrency(avgEntry * (1 - leg.pct / 100))}
+                              </span>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -1580,7 +1612,37 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{!row.isSell ? (row.remaining > 0 ? row.remaining : 0) : ""}</td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(parseFloat(String(tx.amount || 0)))}</td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{!row.isSell && row.exitPrice > 0 ? formatCurrency(row.exitPrice) : "—"}</td>
-                                  <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{txStop > 0 ? formatCurrency(txStop) : "—"}</td>
+                                  <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-4)" }}>
+                                    {(() => {
+                                      // B1 with a persisted ladder: show weighted-average
+                                      // stop and a chip that toggles the Scale-Out Plan
+                                      // panel above. The row's raw stop_loss column holds
+                                      // leg 1's price (Phase 1 backend convention) which
+                                      // would understate the plan — surface the average
+                                      // instead so the number in the column reflects the
+                                      // whole exit strategy.
+                                      const rowTrxId = String((tx as any).trx_id || "");
+                                      const isLadderedB1 = b1Ladder !== null && rowTrxId !== "" && rowTrxId === b1TrxId;
+                                      if (isLadderedB1 && b1LadderAvgStop > 0) {
+                                        return (
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <span className="privacy-mask">{formatCurrency(b1LadderAvgStop)}</span>
+                                            <button type="button"
+                                                    onClick={() => setScaleOutOpen(scaleOutOpen === trade.trade_id ? null : trade.trade_id)}
+                                                    className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-[5px] transition-colors cursor-pointer"
+                                                    style={{ color: "#d97706", background: "rgba(245,159,0,0.10)", border: "1px solid rgba(245,159,0,0.25)", fontFamily: "var(--font-inter), sans-serif" }}
+                                                    title={`3-leg ladder: ${b1Ladder!.legs.map(l => `${l.shares}@-${l.pct}%`).join(" · ")}`}>
+                                              3-leg
+                                              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                                <path d="M9 18l6-6-6-6"/>
+                                              </svg>
+                                            </button>
+                                          </span>
+                                        );
+                                      }
+                                      return txStop > 0 ? formatCurrency(txStop) : "—";
+                                    })()}
+                                  </td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: row.value < 0 ? "#e5484d" : "var(--ink)" }}>{formatCurrency(Math.abs(row.value))}</td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.realizedPl) }}>{!row.isSell && row.realizedPl !== 0 ? formatCurrency(row.realizedPl) : !row.isSell ? "$0.00" : ""}</td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: PLColor(row.unrealizedPl || 0) }}>{!row.isSell && row.unrealizedPl !== 0 ? formatCurrency(row.unrealizedPl) : !row.isSell ? "$0.00" : ""}</td>

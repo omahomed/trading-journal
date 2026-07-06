@@ -2018,6 +2018,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Trx_ID": "trx_id", "_DB_ID": "detail_id",
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
         "Match_Method": "match_method",
+        "Stop_Ladder": "stop_ladder",
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
         "B1_Max_Return_Pct": "b1_max_return_pct",
