@@ -831,32 +831,35 @@ def _compute_trend_count(as_of_date: str = "") -> int | None:
 
 
 def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
-    """Backfill NULL mct_display_day_num / market_cycle on recent journal rows.
+    """Backfill NULL mct_display_day_num / market_cycle / trend_count on
+    recent journal rows.
 
-    The save-time stamper in _compute_mct_state_with_day_num intentionally
-    persists NULL when the engine has no bar for the requested date — the
-    common cause is "user logged today's journal before market_data ingested
-    today's bar." When the bar lands later, those rows would stay NULL
-    forever without an explicit re-save. This helper runs once per
-    /api/journal/history call: it locates NULL rows in the last
-    `lookback_days`, replays the engine once to get every cached bar's
-    state, and stamps any row whose date now has a bar. In-memory df is
-    patched so the response reflects the fresh values without a second
-    DB read.
+    The save-time stampers (_compute_mct_state_with_day_num and
+    _compute_trend_count) intentionally persist NULL when the engine has
+    no bar for the requested date — the common cause is "user logged
+    today's journal before market_data ingested today's bar." When the
+    bar lands later, those rows would stay NULL forever without an
+    explicit re-save. This helper runs once per /api/journal/history
+    call: it locates NULL rows in the last `lookback_days`, replays the
+    engine once to get every cached bar's state, and stamps any row
+    whose date now has a bar. In-memory df is patched so the response
+    reflects the fresh values without a second DB read.
 
     Bounded lookback (default 14 days) keeps this cheap on every page
-    load — older NULLs go through scripts/backfill_mct_state.py for a
-    full historical sweep.
+    load — older NULLs go through scripts/backfill_mct_state.py and
+    scripts/backfill_trend_count.py for a full historical sweep.
     """
     if df.empty or "mct_display_day_num" not in df.columns:
         return
 
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
+    trend_col = df.get("trend_count", pd.Series(dtype=object))
     needs_heal = df[
         (df["day"] >= cutoff)
         & (
             df["mct_display_day_num"].isna()
             | (df.get("market_cycle", pd.Series(dtype=object)).fillna("").astype(str) == "")
+            | trend_col.isna()
         )
     ]
     if needs_heal.empty:
@@ -892,21 +895,36 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
         if as_of not in bar_index.index:
             continue  # engine still doesn't have this bar — skip
         day_str = as_of.strftime("%Y-%m-%d")
-        state, day_num = _compute_mct_state_with_day_num(day_str)
-        if not state:
-            continue
 
-        # Persist via the targeted helper — save_journal_entry rewrites
-        # every column and would clobber NLV/notes when called with a
-        # partial dict.
-        try:
-            db.update_journal_mct_state(portfolio, day_str, state, day_num)
-        except Exception as e:
-            print(f"[mct_heal] update_journal_mct_state failed for {day_str}: {e}")
-            continue
+        # MCT state heal — same behavior as before. Skips the update if
+        # this row already has a state (only trend_count needs healing).
+        mct_null = (
+            pd.isna(row.get("mct_display_day_num"))
+            or not str(row.get("market_cycle") or "").strip()
+        )
+        if mct_null:
+            state, day_num = _compute_mct_state_with_day_num(day_str)
+            if state:
+                try:
+                    db.update_journal_mct_state(portfolio, day_str, state, day_num)
+                    df.loc[df["day"] == day_value, "market_cycle"] = state
+                    df.loc[df["day"] == day_value, "mct_display_day_num"] = day_num
+                except Exception as e:
+                    print(f"[mct_heal] update_journal_mct_state failed for {day_str}: {e}")
 
-        df.loc[df["day"] == day_value, "market_cycle"] = state
-        df.loc[df["day"] == day_value, "mct_display_day_num"] = day_num
+        # Trend Count heal — mirror of the MCT stamp path. Same engine
+        # replay was already done above so the bar exists; recompute the
+        # signed count and persist via the targeted helper so unrelated
+        # columns (NLV, notes) aren't touched.
+        trend_null = pd.isna(row.get("trend_count"))
+        if trend_null:
+            trend_count = _compute_trend_count(day_str)
+            if trend_count is not None:
+                try:
+                    db.update_journal_trend_state(portfolio, day_str, trend_count)
+                    df.loc[df["day"] == day_value, "trend_count"] = trend_count
+                except Exception as e:
+                    print(f"[trend_heal] update_journal_trend_state failed for {day_str}: {e}")
 
 
 @app.post("/api/journal/edit")
