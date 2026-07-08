@@ -567,7 +567,7 @@ def journal_mct_state_by_date_range(start_date: str, end_date: str):
             display_day_num: int | None
             if state_name == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
                 display_day_num = int(orig_idx) - int(pt_on_idx) + 1
-            elif state_name in ("UPTREND", "RALLY MODE") and cycle_day > 0:
+            elif state_name in ("UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE") and cycle_day > 0:
                 display_day_num = cycle_day
             else:
                 display_day_num = None
@@ -765,7 +765,7 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
 
         if state_name == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
             display_day_num: int | None = orig_idx - int(pt_on_idx) + 1
-        elif state_name in ("UPTREND", "RALLY MODE") and cycle_day > 0:
+        elif state_name in ("UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE") and cycle_day > 0:
             display_day_num = cycle_day
         else:
             display_day_num = None
@@ -2726,7 +2726,7 @@ def _project_rally_prefix_for_data_lag(response: dict, requested_as_of) -> dict:
     """
     if requested_as_of is None:
         return response
-    if response.get("state") not in ("UPTREND", "POWERTREND", "RALLY MODE"):
+    if response.get("state") not in ("UPTREND", "UPTREND UNDER PRESSURE", "POWERTREND", "RALLY MODE"):
         return response
     if (response.get("day_num") or 0) <= 0:
         return response

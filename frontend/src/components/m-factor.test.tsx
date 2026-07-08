@@ -70,6 +70,29 @@ describe("MFactor — V11 augmented surface", () => {
     expect(screen.getByText(/Suggested Exposure: 200%/)).toBeInTheDocument();
   });
 
+  test("UPTREND UNDER PRESSURE renders full text banner + day-count subtitle", async () => {
+    // 5th-state banner. Renders the FULL machine string at 52px on
+    // desktop (mobile applies an alias; desktop shows the full text
+    // and has room for it). Subtitle uses the day-count phrasing per
+    // spec: "Day ${dayNum} · post-Step-4 · 21e violated". Dormant
+    // this commit — no backend emits UUP yet.
+    mockedRallyPrefix.mockResolvedValue({
+      ...baseRallyPayload,
+      state: "UPTREND UNDER PRESSURE",
+      day_num: 42,
+    });
+    render(<MFactor navColor="#8b5cf6" />);
+    // Banner text — full 22-char machine string. `findAllByText`
+    // (rather than `findByText`) because the state may appear in
+    // multiple methodology tables too.
+    const matches = await screen.findAllByText("UPTREND UNDER PRESSURE");
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+    // Subtitle — day-count phrasing.
+    expect(
+      await screen.findByText(/Day 42 · post-Step-4 · 21e violated/),
+    ).toBeInTheDocument();
+  });
+
   test("renders cap_at_100 indicator when active", async () => {
     mockedRallyPrefix.mockResolvedValue({ ...baseRallyPayload, cap_at_100: true });
     render(<MFactor navColor="#8b5cf6" />);

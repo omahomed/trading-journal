@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
-export type RallyV11State = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+export type RallyV11State = "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
 
 export type RallyState = {
   state: RallyV11State;
@@ -19,7 +19,7 @@ export type RallyState = {
   trend_count?: number | null;
 };
 
-const V11_STATES = ["POWERTREND", "UPTREND", "RALLY MODE", "CORRECTION"] as const;
+const V11_STATES = ["POWERTREND", "UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE", "CORRECTION"] as const;
 
 /**
  * Subscribes to the V11 rally-prefix endpoint. Returns `null` until the

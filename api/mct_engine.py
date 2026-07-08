@@ -104,7 +104,7 @@ EXPOSURE_V10_SOFT_RESET = 20
 EXPOSURE_V10_FULL_INVALIDATION = 0
 EXPOSURE_STEP_8 = 200
 
-STATES = ("CORRECTION", "RALLY MODE", "UPTREND", "POWERTREND")
+STATES = ("CORRECTION", "RALLY MODE", "UPTREND UNDER PRESSURE", "UPTREND", "POWERTREND")
 
 CASCADE_SIGNAL_TYPES = frozenset({
     "VIOLATION_21EMA",
@@ -246,6 +246,15 @@ class MCTEngine:
             "step2_done": False,
             "step3_done": False,
             "step4_done": False,
+            # Latches True at the STEP_4 arm site; cleared only at
+            # RALLY_INVALIDATED, V10_FULL_INVALIDATION, and
+            # CORRECTION_DECLARED. Preserved through V10_SOFT_RESET and
+            # POST_FTD_SOFT_FAIL — same rule as cycle_start_idx. Drives
+            # the UPTREND UNDER PRESSURE branch in _state_name /
+            # _derive_state (gated on `not correction_active`, not
+            # `not in_correction`, so V10-induced phantom in_correction
+            # doesn't block the UUP label — see the 2026-07-07 audit).
+            "step4_ever_fired": False,
             "step5_done": False,
             "step6_done": False,
             "step7_done": False,
@@ -569,6 +578,7 @@ class MCTEngine:
         state["ftd_low"] = None
         for s in range(8):
             state[f"step{s}_done"] = False
+        state["step4_ever_fired"] = False  # cycle ended → UUP latch clears
         # Sum-of-valid-steps model: also clear power_trend so Step 8 stops
         # contributing 40. Without this, a lagging 21>50 cross would leave
         # power_trend=True and the end-of-bar recompute would read 40 right
@@ -920,6 +930,7 @@ class MCTEngine:
         if (start_flags["step3_done"] and not state["step4_done"]
                 and state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21):
             state["step4_done"] = True
+            state["step4_ever_fired"] = True  # UUP latch — outlives step4_done
             before = state["exposure"]
             state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[4])
             if arm_emit:
@@ -978,6 +989,7 @@ class MCTEngine:
         state["ftd_close"] = None
         state["ftd_low"] = None
         state["cycle_start_idx"] = None  # rally cycle ended; next STEP_0 anchors a new one
+        state["step4_ever_fired"] = False  # cycle ended → UUP latch clears
         state["cap_at_100"] = False  # rally invalidation clears cap
         # Make sure we're back in rally-hunt mode
         state["in_correction"] = True
@@ -1352,6 +1364,7 @@ class MCTEngine:
         state["ftd_close"] = None
         state["ftd_low"] = None
         state["cycle_start_idx"] = None  # full invalidation ends the rally cycle
+        state["step4_ever_fired"] = False  # cycle ended → UUP latch clears
         state["cap_at_100"] = False  # full invalidation clears cap
 
         bar_signals.append(self._signal(
@@ -1391,6 +1404,12 @@ class MCTEngine:
             return "POWERTREND"
         if state["step4_done"] and not state["in_correction"]:
             return "UPTREND"
+        # UUP: post-Step-4 with no declared correction. Gates on
+        # `not correction_active` (not `not in_correction`) so a
+        # V10-induced phantom in_correction doesn't block the label
+        # when the market is not actually in a declared correction.
+        if state["step4_ever_fired"] and not state["correction_active"]:
+            return "UPTREND UNDER PRESSURE"
         if state["rally_active"] and (
             state["step0_done"] or state["step1_done"]
             or state["step2_done"] or state["step3_done"]
@@ -1428,6 +1447,10 @@ class MCTEngine:
             "step0_done": state["step0_done"],
             "step1_done": state["step1_done"],
             "step4_done": state["step4_done"],
+            # UUP latch — exported so downstream consumers of the bars
+            # DataFrame (backfill scripts, journal_mct_state_by_date_range,
+            # regression tests) can see per-bar latch state.
+            "step4_ever_fired": state["step4_ever_fired"],
             "consec_low_above_21": state["consec_low_above_21"],
             "violation_21_fired": state["violation_21_fired"],
             "trend_anchor_idx": state["trend_anchor_idx"],

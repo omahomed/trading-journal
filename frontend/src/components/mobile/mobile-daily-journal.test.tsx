@@ -237,6 +237,30 @@ describe("MobileDailyJournal — MCT badge", () => {
     expect(within(card).getByText(/POWERTREND D3/)).toBeInTheDocument();
   });
 
+  test("UPTREND UNDER PRESSURE: badge renders display alias 'Uptrend · Pressure D{N}'", async () => {
+    // 5th-state badge, mobile. Width is tight — the shortened alias
+    // renders in place of the full 22-char machine string. Machine
+    // string stays in the badge's `title` attribute so tooltip and
+    // downstream tooling get the byte-identical value. Dormant this
+    // commit — no backend emits UUP yet — but the render surface is
+    // ready.
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      entryFixture({
+        day: todayStr(),
+        market_cycle: "UPTREND UNDER PRESSURE",
+        mct_display_day_num: 42,
+      }),
+    ]);
+    render(<MobileDailyJournal />);
+    const card = await screen.findByTestId(`day-card-${todayStr()}`);
+    // Visible badge text: alias + day count.
+    expect(within(card).getByText(/Uptrend · Pressure D42/)).toBeInTheDocument();
+    // Machine string does NOT appear as visible text.
+    expect(within(card).queryByText(/UPTREND UNDER PRESSURE D42/)).not.toBeInTheDocument();
+    // Machine string DOES appear in the `title` attribute (tooltip).
+    expect(within(card).getByTitle("UPTREND UNDER PRESSURE")).toBeInTheDocument();
+  });
+
   test("hides D{N} suffix when mct_display_day_num is null", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       entryFixture({

@@ -71,7 +71,7 @@ def build_lookup() -> dict:
 
         if state_name == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
             display_day_num = int(orig_idx) - int(pt_on_idx) + 1
-        elif state_name in ("UPTREND", "RALLY MODE") and cycle_day > 0:
+        elif state_name in ("UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE") and cycle_day > 0:
             display_day_num = cycle_day
         else:
             display_day_num = None

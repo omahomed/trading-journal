@@ -32,6 +32,33 @@ describe("TapeStatusPill — V11 state rendering", () => {
     expect(await screen.findByText(new RegExp(label))).toBeInTheDocument();
   });
 
+  test("UPTREND UNDER PRESSURE renders label 'Under Pressure'", async () => {
+    // 5th-state pill label. Dormant this commit — no backend emits
+    // yet — but the render surface is ready so activation is a
+    // one-line backend flip.
+    mockedRallyPrefix.mockResolvedValue({
+      prefix: "",
+      state: "UPTREND UNDER PRESSURE",
+      day_num: 42,
+      ftd_date: "2026-04-08",
+      cap_at_100: false,
+    });
+    render(<TapeStatusPill />);
+    expect(await screen.findByText(/Under Pressure/)).toBeInTheDocument();
+  });
+
+  test("UPTREND UNDER PRESSURE uses 'since {ftd_date}' (mirrors UPTREND)", async () => {
+    mockedRallyPrefix.mockResolvedValue({
+      prefix: "",
+      state: "UPTREND UNDER PRESSURE",
+      day_num: 42,
+      ftd_date: "2026-04-08",
+      cap_at_100: false,
+    });
+    render(<TapeStatusPill />);
+    expect(await screen.findByText(/since Apr 8/)).toBeInTheDocument();
+  });
+
   test("POWERTREND uses 'since {power_trend_on_since}' formatted as Mon DD", async () => {
     mockedRallyPrefix.mockResolvedValue({
       prefix: "",

@@ -872,7 +872,11 @@ function ReportHeader({
   onEditMarketNotes: () => void;
   onBack: () => void;
 }) {
-  const meta = [portfolio, dayNum ? `D${dayNum}` : null, marketCycle || null]
+  // Width-constrained mobile header — swap the full UPTREND UNDER
+  // PRESSURE machine string for the shortened display alias so the
+  // meta line doesn't wrap. All other states pass through unchanged.
+  const cycleLabel = marketCycle === "UPTREND UNDER PRESSURE" ? "Uptrend · Pressure" : marketCycle;
+  const meta = [portfolio, dayNum ? `D${dayNum}` : null, cycleLabel || null]
     .filter(Boolean)
     .join(" · ");
   const hasMarketNotes = marketNotes.trim().length > 0;

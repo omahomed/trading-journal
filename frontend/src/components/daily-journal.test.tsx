@@ -102,6 +102,59 @@ describe("DailyJournal — MCT State column (snapshotted on row)", () => {
     expect(await screen.findByText("RALLY MODE D1")).toBeInTheDocument();
   });
 
+  test("UPTREND UNDER PRESSURE renders 'UPTREND UNDER PRESSURE D{N}' with amber bg", async () => {
+    // 5th-state badge, desktop. Full machine string in the visible
+    // label (mobile applies the alias; desktop shows the full text).
+    // #d97706 amber background — distinct from CORRECTION (#e5484d)
+    // and RALLY MODE (#f59f00). Dormant this commit — no backend
+    // emits UUP yet — but the render surface is ready.
+    const today = new Date().toISOString().slice(0, 10);
+    mockedHistory.mockResolvedValue([
+      {
+        day: today,
+        end_nlv: 91000,
+        daily_pct_change: 0.5,
+        portfolio_heat: 0,
+        score: 3,
+        market_cycle: "UPTREND UNDER PRESSURE",
+        mct_display_day_num: 42,
+      } as any,
+    ]);
+    render(<DailyJournal navColor="#f59f00" />);
+    const badge = await screen.findByText("UPTREND UNDER PRESSURE D42");
+    expect(badge).toBeInTheDocument();
+    // MctStateBadge structure: <span style={...}><span>{label}</span></span>
+    // findByText returns the INNER text span; the style lives on its
+    // parent. React normalizes inline hex to rgb() in jsdom, so check
+    // both forms so the test is portable across renderer versions.
+    const outer = badge.parentElement;
+    const style = outer?.getAttribute("style") ?? "";
+    expect(style).toMatch(/#d97706|rgb\(\s*217\s*,\s*119\s*,\s*6\s*\)/i);
+  });
+
+  test("UPTREND UNDER PRESSURE is NOT excluded by the row parser", async () => {
+    // Regression on daily-journal.tsx:168 — the hard exclusion filter
+    // must include "UPTREND UNDER PRESSURE" or the badge would render
+    // as the em-dash placeholder instead of the amber badge.
+    const today = new Date().toISOString().slice(0, 10);
+    mockedHistory.mockResolvedValue([
+      {
+        day: today,
+        end_nlv: 91000,
+        daily_pct_change: 0.5,
+        portfolio_heat: 0,
+        score: 3,
+        market_cycle: "UPTREND UNDER PRESSURE",
+        mct_display_day_num: 42,
+      } as any,
+    ]);
+    render(<DailyJournal navColor="#f59f00" />);
+    // The badge should be present. If the exclusion mistakenly caught
+    // UUP, mctFromRow returns undefined and the MctStateBadge renders
+    // an em-dash "—" instead.
+    expect(await screen.findByText(/UPTREND UNDER PRESSURE/)).toBeInTheDocument();
+  });
+
   test("CORRECTION with null day_num renders no suffix", async () => {
     const today = new Date().toISOString().slice(0, 10);
     mockedHistory.mockResolvedValue([

@@ -268,6 +268,31 @@ describe("MobileDailyReport — invalid date redirect", () => {
 
 // ── Header + back nav ──────────────────────────────────────────────
 
+describe("MobileDailyReport — header meta cycle label", () => {
+  test("UPTREND UNDER PRESSURE renders shortened alias 'Uptrend · Pressure' in header meta", async () => {
+    // 5th-state header. The ReportHeader meta line joins portfolio,
+    // day count, and marketCycle with " · " separators. UPTREND
+    // UNDER PRESSURE (22 chars) would overflow on width-constrained
+    // mobile screens, so it's swapped for the shortened alias in
+    // this render surface only. Machine string continues to be
+    // stored/emitted verbatim by the backend and other consumers.
+    // Dormant this commit — no backend emits UUP yet.
+    vi.mocked(api.journalHistory).mockResolvedValue([
+      journalFixture({
+        day: "2026-05-25",
+        id: 1,
+        market_cycle: "UPTREND UNDER PRESSURE",
+        mct_display_day_num: 42,
+      } as any),
+    ]);
+    render(<MobileDailyReport initialDate="2026-05-25" />);
+    await screen.findByTestId("drawdown-tile");
+    // Meta line contains the alias, NOT the full machine string.
+    expect(screen.getByText(/Uptrend · Pressure/)).toBeInTheDocument();
+    expect(screen.queryByText(/UPTREND UNDER PRESSURE/)).not.toBeInTheDocument();
+  });
+});
+
 describe("MobileDailyReport — header back nav", () => {
   test("back chevron routes to /daily-journal unconditionally", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([

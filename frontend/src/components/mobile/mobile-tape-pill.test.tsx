@@ -58,6 +58,35 @@ describe("MobileTapePill — Phase 2 'Since {MMM D}' format", () => {
     expect(screen.getByText(/8\.4% off high/)).toBeInTheDocument();
   });
 
+  test("UPTREND UNDER PRESSURE: renders display alias 'Uptrend · Pressure' + deep-amber dot", () => {
+    // 5th-state mobile pill. Visible label swaps to the shortened
+    // alias (mobile width is tight). Machine string stays in the
+    // aria-label so screen readers + downstream matchers get the
+    // byte-identical value. Dot backgroundColor overrides to the
+    // deep-amber warn token (--m-warn-deep = #d97706). Dormant this
+    // commit — no backend emits UUP yet.
+    vi.mocked(useRallyState).mockReturnValue({
+      state: "UPTREND UNDER PRESSURE",
+      day_num: 42,
+      ftd_date: "2026-04-08",
+      cap_at_100: false,
+    });
+    render(<MobileTapePill />);
+    // Visible label: shortened alias present, full machine string NOT
+    // rendered as visible text.
+    expect(screen.getByText("Uptrend · Pressure")).toBeInTheDocument();
+    expect(screen.queryByText("UPTREND UNDER PRESSURE")).not.toBeInTheDocument();
+    // aria-label carries the full machine string.
+    expect(
+      screen.getByLabelText(/Cycle: UPTREND UNDER PRESSURE/),
+    ).toBeInTheDocument();
+    // Dot color: inline style is set to var(--m-warn-deep) when
+    // state is UUP. Query the first <span> child of the link.
+    const link = screen.getByRole("link");
+    const dot = link.querySelector("span[aria-hidden='true']");
+    expect(dot?.getAttribute("style") || "").toContain("--m-warn-deep");
+  });
+
   test("placeholder shown when useRallyState returns null", () => {
     vi.mocked(useRallyState).mockReturnValue(null);
     render(<MobileTapePill />);

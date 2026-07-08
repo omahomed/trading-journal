@@ -9,6 +9,7 @@ import { CycleTrackerMethodology } from "@/components/cycle-tracker-methodology"
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
   UPTREND: { bg: "#08a86b", fg: "#fff" },
+  "UPTREND UNDER PRESSURE": { bg: "#d97706", fg: "#fff" },
   "RALLY MODE": { bg: "#f59f00", fg: "#000" },
   CORRECTION: { bg: "#e5484d", fg: "#fff" },
 };
@@ -60,6 +61,7 @@ export function MFactor({ navColor }: { navColor: string }) {
     // chips below the headline already show the live truth.
     POWERTREND: `Power-Trend active — Day ${dayNum}`,
     UPTREND: "Market structure intact — confirmed uptrend",
+    "UPTREND UNDER PRESSURE": `Day ${dayNum} · post-Step-4 · 21e violated`,
     "RALLY MODE": `Day ${dayNum} of rally attempt`,
     CORRECTION: `NASDAQ down ${Math.abs(data.drawdown_pct || 0).toFixed(1)}% from high`,
   };

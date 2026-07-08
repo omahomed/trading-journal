@@ -50,11 +50,15 @@ type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
-function cycleBadge(state: string) {
+// Exported for unit testing (daily-report-card.test.tsx). The rest of
+// the file continues to use this via the DailyReportCard component
+// below — the export is additive, no consumers outside the test.
+export function cycleBadge(state: string) {
   const s = (state || "").toUpperCase();
   const styles: Record<string, { bg: string; fg: string }> = {
     POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
     UPTREND: { bg: "#08a86b", fg: "#fff" },
+    "UPTREND UNDER PRESSURE": { bg: "#d97706", fg: "#fff" },
     "RALLY MODE": { bg: "#f59f00", fg: "#000" },
     CORRECTION: { bg: "#e5484d", fg: "#fff" },
   };

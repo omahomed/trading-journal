@@ -28,6 +28,15 @@ export function MobileTapePill() {
   }
 
   const detail = formatDetail(data);
+  // UUP-only visual override — keeps the mobile pill's purple design
+  // language for the four legacy states EXACTLY as-is. When state is
+  // "UPTREND UNDER PRESSURE" (backend-only for now; dormant this
+  // commit) the dot recolors to the deep-amber warn token and the
+  // visible label becomes the shortened display alias. Machine string
+  // stays full in aria-label so screen-reader + assertion callers get
+  // the byte-identical value.
+  const isUup = data.state === "UPTREND UNDER PRESSURE";
+  const displayLabel = isUup ? "Uptrend · Pressure" : data.state;
 
   return (
     <Link
@@ -35,8 +44,12 @@ export function MobileTapePill() {
       className="flex items-center gap-2 rounded-m-pill border-[0.5px] border-m-purple-border bg-m-purple-tint px-3.5 py-2 text-xs"
       aria-label={`Cycle: ${data.state}${detail ? `, ${detail}` : ""}`}
     >
-      <span className="h-1.5 w-1.5 rounded-full bg-m-purple" />
-      <span className="font-medium text-m-purple-text">{data.state}</span>
+      <span
+        className="h-1.5 w-1.5 rounded-full bg-m-purple"
+        aria-hidden="true"
+        style={isUup ? { backgroundColor: "var(--m-warn-deep)" } : undefined}
+      />
+      <span className="font-medium text-m-purple-text">{displayLabel}</span>
       {detail && (
         <>
           <span className="text-m-text-faint">·</span>

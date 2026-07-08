@@ -78,6 +78,12 @@ describe("sizing-mode lib", () => {
       expect(mctStateToSizingMode("POWERTREND")).toBe(2);
     });
 
+    test("UPTREND UNDER PRESSURE → Normal (1)", () => {
+      // 5th state (Phase 1 frontend, dormant). Post-Step-4 cycle
+      // stressed by a 21e break — sized at 0.75% per user spec.
+      expect(mctStateToSizingMode("UPTREND UNDER PRESSURE")).toBe(1);
+    });
+
     test("unknown state defaults to Normal (safe middle)", () => {
       // Three failure modes: null (rally-prefix returned no state),
       // empty string (rally-prefix returned {}), legacy V10 string
@@ -101,6 +107,12 @@ describe("sizing-mode lib", () => {
       expect(describeMctSource("UPTREND")).toBe("from M Factor UPTREND");
       expect(describeMctSource("RALLY MODE")).toBe("from M Factor RALLY MODE");
       expect(describeMctSource("CORRECTION")).toBe("from M Factor CORRECTION");
+    });
+
+    test("UPTREND UNDER PRESSURE formats as 'from M Factor UPTREND UNDER PRESSURE'", () => {
+      // 5th-state descriptor — machine string is echoed verbatim.
+      expect(describeMctSource("UPTREND UNDER PRESSURE"))
+        .toBe("from M Factor UPTREND UNDER PRESSURE");
     });
 
     test("unknown / null state surfaces 'M Factor state unknown' instead of guessing", () => {
@@ -214,6 +226,19 @@ describe("sizing-mode lib", () => {
 
     test("RALLY MODE + 50 SMA Violation → Defense (floor wins)", () => {
       expect(deriveAutoSizingMode("RALLY MODE", [{ signal: "50 SMA Violation" }]).idx).toBe(0);
+    });
+
+    test("UPTREND UNDER PRESSURE + 50 SMA Violation → Defense (floor still binds)", () => {
+      // UUP alone is Normal (1). A 50 SMA Violation floors to Defense
+      // (0). MIN(1, 0) = 0 — same math as the other states; UUP does
+      // not exempt the exit-ladder floor.
+      const result = deriveAutoSizingMode(
+        "UPTREND UNDER PRESSURE",
+        [{ signal: "50 SMA Violation" }],
+      );
+      expect(result.idx).toBe(0);
+      expect(result.source.stateIdx).toBe(1);
+      expect(result.source.floor).toEqual({ idx: 0, reason: "50 SMA Violation" });
     });
 
     test("POWERTREND + Watch only → Offense (no floor binds)", () => {

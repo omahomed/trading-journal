@@ -31,7 +31,7 @@ import { usePortfolio } from "@/lib/portfolio-context";
 
 type ViewFilter = "week" | "month" | "all";
 
-type MctStateName = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+type MctStateName = "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
 
 type MctState = { state: MctStateName; display_day_num: number | null };
 
@@ -41,10 +41,11 @@ type MctState = { state: MctStateName; display_day_num: number | null };
 // rest of the mobile chrome. Desktop component is at daily-journal
 // .tsx:23 with pure-RGB hex; mobile uses CSS vars.
 const MCT_TONES: Record<MctStateName, { bg: string; fg: string }> = {
-  POWERTREND:   { bg: "var(--m-purple)", fg: "var(--m-bg)" },
-  UPTREND:      { bg: "var(--m-accent)", fg: "var(--m-accent-text-on)" },
-  "RALLY MODE": { bg: "var(--m-warn)",   fg: "var(--m-bg)" },
-  CORRECTION:   { bg: "var(--m-down)",   fg: "var(--m-bg)" },
+  POWERTREND:               { bg: "var(--m-purple)",    fg: "var(--m-bg)" },
+  UPTREND:                  { bg: "var(--m-accent)",    fg: "var(--m-accent-text-on)" },
+  "UPTREND UNDER PRESSURE": { bg: "var(--m-warn-deep)", fg: "var(--m-bg)" },
+  "RALLY MODE":             { bg: "var(--m-warn)",      fg: "var(--m-bg)" },
+  CORRECTION:               { bg: "var(--m-down)",      fg: "var(--m-bg)" },
 };
 
 function MobileMctBadge({ s }: { s: MctState | undefined }) {
@@ -55,13 +56,18 @@ function MobileMctBadge({ s }: { s: MctState | undefined }) {
   }
   const tone = MCT_TONES[s.state];
   const showDay = typeof s.display_day_num === "number" && s.display_day_num > 0;
+  // Mobile row width is tight — apply the shortened display alias for
+  // UPTREND UNDER PRESSURE only. Machine string stays in the `title`
+  // attribute (tooltip) so hovering surfaces the full label. All four
+  // other states render byte-identically to before this change.
+  const displayLabel = s.state === "UPTREND UNDER PRESSURE" ? "Uptrend · Pressure" : s.state;
   return (
     <span
       className="inline-flex items-center gap-1 rounded-[4px] px-1.5 py-px text-[10px] font-semibold tracking-wider"
       style={{ background: tone.bg, color: tone.fg }}
       title={s.state}
     >
-      {s.state}
+      {displayLabel}
       {showDay ? ` D${s.display_day_num}` : ""}
     </span>
   );
@@ -74,6 +80,7 @@ function mctFromRow(h: JournalHistoryPoint): MctState | undefined {
   if (
     raw !== "POWERTREND" &&
     raw !== "UPTREND" &&
+    raw !== "UPTREND UNDER PRESSURE" &&
     raw !== "RALLY MODE" &&
     raw !== "CORRECTION"
   ) {

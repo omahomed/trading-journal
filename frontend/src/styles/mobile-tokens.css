@@ -39,6 +39,7 @@
   --m-accent-text-on: #052e16;    /* readable text on the green pill   */
   --m-down: #F87171;              /* losses / stop                     */
   --m-warn: #FBBF24;              /* at-risk / amber callouts          */
+  --m-warn-deep: #d97706;         /* UPTREND UNDER PRESSURE (M Factor) */
   --m-purple: #AFA9EC;            /* POWERTREND / M Factor inheritance */
   --m-purple-text: #C9C5F0;       /* readable purple on dark           */
 
@@ -82,6 +83,7 @@
   --color-m-accent-text-on: var(--m-accent-text-on);
   --color-m-down: var(--m-down);
   --color-m-warn: var(--m-warn);
+  --color-m-warn-deep: var(--m-warn-deep);
   --color-m-purple: var(--m-purple);
   --color-m-purple-text: var(--m-purple-text);
 

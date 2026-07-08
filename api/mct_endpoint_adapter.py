@@ -171,6 +171,12 @@ def _state_name(state: dict) -> str:
         return "POWERTREND"
     if state.get("step4_done") and not state.get("in_correction"):
         return "UPTREND"
+    # UUP: post-Step-4 with no declared correction. Gates on
+    # `not correction_active` (not `not in_correction`) so a
+    # V10-induced phantom in_correction doesn't block the label
+    # when the market is not actually in a declared correction.
+    if state.get("step4_ever_fired") and not state.get("correction_active"):
+        return "UPTREND UNDER PRESSURE"
     if state.get("rally_active") and any(
         state.get(f"step{i}_done") for i in range(4)
     ):

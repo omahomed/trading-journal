@@ -34,7 +34,7 @@ def test_rally_prefix_returns_v11_state(canonical_dependencies):
     from api.main import rally_prefix
     response = rally_prefix()
     assert "state" in response
-    assert response["state"] in ("CORRECTION", "RALLY MODE", "UPTREND", "POWERTREND")
+    assert response["state"] in ("CORRECTION", "RALLY MODE", "UPTREND", "UPTREND UNDER PRESSURE", "POWERTREND")
 
 
 @requires_db
@@ -72,7 +72,7 @@ def test_rally_prefix_historical_as_of_date(canonical_dependencies):
     so state should be CORRECTION/RALLY MODE depending on rally state."""
     from api.main import rally_prefix
     response = rally_prefix(as_of_date="2025-12-17")
-    assert response["state"] in ("CORRECTION", "RALLY MODE", "UPTREND", "POWERTREND")
+    assert response["state"] in ("CORRECTION", "RALLY MODE", "UPTREND", "UPTREND UNDER PRESSURE", "POWERTREND")
     # data_as_of should be on or before 2025-12-17
     assert response["data_as_of"] <= "2025-12-17"
 
@@ -111,6 +111,112 @@ def test_state_name_rally_mode_during_rally_hunt():
 def test_state_name_correction_default():
     from api.mct_endpoint_adapter import _state_name
     assert _state_name({"power_trend": False}) == "CORRECTION"
+
+
+def test_state_name_uup_when_step4_ever_fired_no_declared_correction():
+    """UUP: cycle passed Step 4 in the past (step4_ever_fired=True),
+    step4_done cleared by a mid-cycle break, and NO declared
+    correction is active (correction_active=False). in_correction is
+    also False in this minimal case — clean post-Step-4 stressed
+    variant. UUP branch fires as designed."""
+    from api.mct_endpoint_adapter import _state_name
+    s = {
+        "power_trend": False,
+        "step4_done": False,
+        "step4_ever_fired": True,
+        "correction_active": False,
+        "in_correction": False,
+    }
+    assert _state_name(s) == "UPTREND UNDER PRESSURE"
+
+
+def test_state_name_uup_v10_soft_reset_phantom_in_correction_regression_2026_07_07():
+    """Regression guard for the 2026-07-07 label bug.
+
+    Live production state on 2026-07-07 (verified via scratch replay
+    + read-only market_signals query):
+      in_correction=True    (set by V10_SOFT_RESET on 2026-06-08),
+      correction_active=False (last CORRECTION_DECLARED was 2026-03-27,
+                              CORRECTION_NULLIFIED was 2026-04-16,
+                              so correction_active has been False since April),
+      step4_done=False       (cleared by V10_SOFT_RESET on 2026-06-08),
+      step4_ever_fired=True  (Step 4 armed earlier in this cycle),
+      power_trend=False      (POWERTREND_OFF fired 2026-07-07),
+      rally_active=True, step0_done=True, step1_done=True.
+
+    Old spec (UUP gated on `not in_correction`) would return RALLY
+    MODE here because the V10-induced phantom in_correction=True
+    blocks the UUP branch. The market itself is not in a correction
+    — drawdown is ~5% off the reference high, well short of the 10%
+    depth gate — so the phantom in_correction is a workflow flag,
+    not a semantic state.
+
+    New spec (UUP gated on `not correction_active`) correctly returns
+    UPTREND UNDER PRESSURE because there is no declared correction.
+    This test locks the gate choice against accidental regression."""
+    from api.mct_endpoint_adapter import _state_name
+    s = {
+        "power_trend": False,
+        "step4_done": False,
+        "step4_ever_fired": True,
+        "in_correction": True,       # phantom set by V10_SOFT_RESET
+        "correction_active": False,  # no declared correction
+        "rally_active": True,
+        "step0_done": True,
+        "step1_done": True,
+    }
+    assert _state_name(s) == "UPTREND UNDER PRESSURE"
+
+
+def test_state_name_uup_blocked_by_declared_correction():
+    """UUP is BLOCKED when correction_active=True (a real declared
+    correction is in effect). Falls through to RALLY MODE (if
+    rally_active + banked steps) or CORRECTION."""
+    from api.mct_endpoint_adapter import _state_name
+    s = {
+        "power_trend": False,
+        "step4_done": False,
+        "step4_ever_fired": True,
+        "correction_active": True,   # declared correction blocks UUP
+        "in_correction": True,
+        "rally_active": True,
+        "step0_done": True,
+    }
+    assert _state_name(s) == "RALLY MODE"
+
+
+def test_state_name_uptrend_takes_precedence_over_uup():
+    """Precedence check: when step4_done is still True the label
+    stays UPTREND — UUP is not entered until step4_done drops.
+    UPTREND branch keeps its historic `not in_correction` gate;
+    UUP's `not correction_active` gate never gets a chance to fire."""
+    from api.mct_endpoint_adapter import _state_name
+    s = {
+        "power_trend": False,
+        "step4_done": True,
+        "step4_ever_fired": True,
+        "in_correction": False,
+        "correction_active": False,
+    }
+    assert _state_name(s) == "UPTREND"
+
+
+def test_state_name_no_uup_when_step4_never_fired_this_cycle():
+    """A fresh cycle after CORRECTION_DECLARED / RALLY_INVALIDATED /
+    V10_FULL_INVALIDATION cleared step4_ever_fired to False must
+    fall through to RALLY MODE or CORRECTION, not UUP. Locks the
+    'latched IN THIS CYCLE' semantics after cycle-boundary clears."""
+    from api.mct_endpoint_adapter import _state_name
+    s = {
+        "power_trend": False,
+        "step4_done": False,
+        "step4_ever_fired": False,   # cleared by cycle boundary
+        "correction_active": False,
+        "in_correction": False,
+        "rally_active": True,
+        "step0_done": True,
+    }
+    assert _state_name(s) == "RALLY MODE"
 
 
 def test_entry_ladder_has_9_steps_with_legacy_exposures():
