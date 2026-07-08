@@ -6,10 +6,11 @@ import { useRallyState, type RallyV11State, type RallyState as PillData } from "
 type V11State = RallyV11State;
 
 const STATE_STYLE: Record<V11State, { dot: string; ring: string; label: string }> = {
-  POWERTREND:   { dot: "#8A2BE2", ring: "#efe4fb", label: "Power-Trend" },
-  UPTREND:      { dot: "#08a86b", ring: "#e5f7ee", label: "Confirmed Uptrend" },
-  "RALLY MODE": { dot: "#f59f00", ring: "#fdf2d8", label: "Rally Mode" },
-  CORRECTION:   { dot: "#e5484d", ring: "#fde7e8", label: "Correction" },
+  POWERTREND:              { dot: "#8A2BE2", ring: "#efe4fb", label: "Power-Trend" },
+  UPTREND:                 { dot: "#08a86b", ring: "#e5f7ee", label: "Confirmed Uptrend" },
+  "UPTREND UNDER PRESSURE":{ dot: "#d97706", ring: "#fdebd0", label: "Under Pressure" },
+  "RALLY MODE":            { dot: "#f59f00", ring: "#fdf2d8", label: "Rally Mode" },
+  CORRECTION:              { dot: "#e5484d", ring: "#fde7e8", label: "Correction" },
 };
 
 function fmtSince(iso?: string | null): string {
@@ -94,6 +95,10 @@ function formatDetail(d: PillData): string {
     return since ? `since ${since}` : "";
   }
   if (d.state === "UPTREND") {
+    const since = fmtSince(d.ftd_date);
+    return since ? `since ${since}` : "";
+  }
+  if (d.state === "UPTREND UNDER PRESSURE") {
     const since = fmtSince(d.ftd_date);
     return since ? `since ${since}` : "";
   }

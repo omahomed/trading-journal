@@ -1011,7 +1011,7 @@ export const api = {
   rallyPrefix: (as_of_date?: string) => fetchJSON<{
     prefix: string;
     day_num?: number;
-    state?: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+    state?: "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
     cap_at_100?: boolean;
     drawdown_pct?: number;
     power_trend_on_since?: string | null;
@@ -1061,7 +1061,7 @@ export const api = {
     fetchJSON<{
       states: Array<{
         trade_date: string;
-        state: "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+        state: "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
         exposure_ceiling: number;
         cap_at_100: boolean;
         cycle_day: number;

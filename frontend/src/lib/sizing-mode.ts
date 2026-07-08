@@ -14,7 +14,7 @@
 // is enforced separately by V11's exposure cap logic; per-trade sizing
 // stays Offense even when the portfolio is capped.
 
-export type MctState = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+export type MctState = "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
 
 export type SizingModeKey = "defense" | "normal" | "offense" | "pilot";
 
@@ -73,6 +73,8 @@ export function mctStateToSizingMode(state: string | null | undefined): 0 | 1 | 
     case "POWERTREND":
     case "UPTREND":
       return 2;  // Offense
+    case "UPTREND UNDER PRESSURE":
+      return 1;  // Normal
     case "RALLY MODE":
       return 1;  // Normal
     case "CORRECTION":
@@ -157,6 +159,7 @@ export function describeMctSource(
     switch (state) {
       case "POWERTREND":
       case "UPTREND":
+      case "UPTREND UNDER PRESSURE":
       case "RALLY MODE":
       case "CORRECTION":
         return `from M Factor ${state}`;

@@ -8,7 +8,7 @@ import { formatCurrency } from "@/lib/format";
 type ViewFilter = "week" | "month" | "all";
 type Tab = "view" | "manage";
 
-type MctStateName = "POWERTREND" | "UPTREND" | "RALLY MODE" | "CORRECTION";
+type MctStateName = "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
 
 type MctState = {
   state: MctStateName;
@@ -21,10 +21,11 @@ type MctState = {
 };
 
 const MCT_STATE_STYLES: Record<MctStateName, { bg: string; fg: string }> = {
-  POWERTREND:   { bg: "#8A2BE2", fg: "#fff" },
-  UPTREND:      { bg: "#08a86b", fg: "#fff" },
-  "RALLY MODE": { bg: "#f59f00", fg: "#000" },
-  CORRECTION:   { bg: "#e5484d", fg: "#fff" },
+  POWERTREND:               { bg: "#8A2BE2", fg: "#fff" },
+  UPTREND:                  { bg: "#08a86b", fg: "#fff" },
+  "UPTREND UNDER PRESSURE": { bg: "#d97706", fg: "#fff" },
+  "RALLY MODE":             { bg: "#f59f00", fg: "#000" },
+  CORRECTION:               { bg: "#e5484d", fg: "#fff" },
 };
 
 function scoreColor(score: number) {
@@ -165,7 +166,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
   // change later.
   const mctFromRow = (h: JournalHistoryPoint): MctState | undefined => {
     const raw = String((h as any).market_cycle ?? "").toUpperCase().trim();
-    if (raw !== "POWERTREND" && raw !== "UPTREND" && raw !== "RALLY MODE" && raw !== "CORRECTION") {
+    if (raw !== "POWERTREND" && raw !== "UPTREND" && raw !== "UPTREND UNDER PRESSURE" && raw !== "RALLY MODE" && raw !== "CORRECTION") {
       return undefined;
     }
     const dayRaw = (h as any).mct_display_day_num;
