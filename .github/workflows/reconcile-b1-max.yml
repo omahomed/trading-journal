@@ -1,0 +1,54 @@
+name: Reconcile B1 max return (Sell Rule tier)
+
+# Self-healing backstop for the persistent Sell Rule tier (migration 036).
+#
+# The tier is max(current_b1_return, stored b1_max_return_pct). The stored
+# peak is normally promoted live by the frontend — but only while the app is
+# open. A leader that peaks above 50% while the app is closed keeps a stale
+# (or NULL) stored peak and mis-tiers as SR11 on the pullback, even though
+# its close-basis B1 return topped 50%. SR11 (BE stop-out) and SR8
+# (RS-defended core) prescribe OPPOSITE sell actions, so that mis-tier can
+# drive a wrong exit. This job recomputes the close-basis peak for every open
+# equity position daily and raises any stored value that has fallen behind.
+#
+# The write goes through db.update_b1_max_return_pct, whose SQL guard only
+# ever raises the stored peak — never lowers — so a core can be promoted to
+# SR8 but never demoted out of it. Idempotent; safe to re-run.
+#
+# Runs weekdays at 22:00 UTC (after the US close settles) so the day's
+# closing print is included. Also triggerable manually from the Actions tab
+# (use this to heal a position immediately, e.g. right after spotting a
+# mis-tier).
+#
+# Requires repo secret DATABASE_URL — a read/write Postgres connection string
+# (db_layer.get_db_connection reads $DATABASE_URL). The daily backup job uses
+# a separate BACKUP_DATABASE_URL; this job needs write access.
+
+on:
+  schedule:
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  reconcile:
+    name: Reconcile b1_max_return_pct
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Reconcile all open equity positions
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -eo pipefail
+          python scripts/backfill_b1_max_returns.py --reconcile
