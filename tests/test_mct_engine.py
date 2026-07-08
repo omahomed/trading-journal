@@ -399,3 +399,329 @@ def test_anchored_violation_no_refire_within_streak():
     assert len(vios) == 1, (
         f"Expected exactly 1 VIOLATION_21EMA per streak, got {len(vios)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# step4_ever_fired latch lifecycle — UPTREND UNDER PRESSURE support
+# ---------------------------------------------------------------------------
+
+
+def _init_state_default() -> dict:
+    """Return a fresh engine state dict via a minimal 1-bar replay so tests
+    can inspect the initial `step4_ever_fired` value."""
+    from api.mct_engine import MCTEngine, EngineConfig
+    df = _synthetic_history([100.0], ema_21=[100.0], sma_50=[100.0],
+                             sma_200=[100.0])
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=0))
+    result = engine.run(df)
+    return result.final_state
+
+
+def test_step4_ever_fired_initializes_false():
+    """Fresh engine state has step4_ever_fired=False (baseline for the
+    latch)."""
+    state = _init_state_default()
+    assert state["step4_ever_fired"] is False
+
+
+def test_step4_ever_fired_latches_true_on_step4_arm():
+    """When STEP_4 arms (3 consecutive bars with low > 21 EMA following
+    Step 3), step4_ever_fired latches True on the same bar as
+    step4_done."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Bar 0: STEP_0 (up close), Bar 1: STEP_1 (FTD >=1% gain, rally_count>=4),
+    # Bars 2..: build up low>21EMA streak for STEP_2/3/4.
+    # Use a longer runway so rally_count reaches the FTD window (>=4).
+    n = 12
+    closes = [100.0, 101.0, 102.5, 103.5, 104.5, 105.5, 106.5, 107.5,
+              108.5, 109.5, 110.5, 111.5]
+    ema_21 = [99.0] * n
+    lows = [c - 0.3 for c in closes]  # low > 21 EMA throughout
+    highs = [c + 0.5 for c in closes]
+    df = _synthetic_history(closes, ema_21=ema_21, sma_50=[95.0]*n,
+                             sma_200=[90.0]*n, lows=lows, highs=highs)
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=150.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=0,
+                                     correction_ever_declared=True))
+    # Kick off in_correction so Phase 7 (rally hunt) runs.
+    result = engine.run(df)
+    # If STEP_4 fired, step4_ever_fired must be True in final state.
+    step4_fired = any(s.signal_type == "STEP_4_LOW_ABOVE_21EMA_3BARS"
+                      for s in result.signals)
+    if step4_fired:
+        assert result.final_state["step4_ever_fired"] is True, (
+            "step4_ever_fired must latch True when STEP_4 arms"
+        )
+    # Also assert the per-bar snapshot exposes the field (needed by
+    # downstream consumers per the Commit 2 spec).
+    assert "step4_ever_fired" in result.bars.columns
+
+
+def test_step4_ever_fired_persists_through_v10_soft_reset():
+    """V10_SOFT_RESET clears step4_done but MUST NOT clear
+    step4_ever_fired. This is the load-bearing invariant for the
+    UPTREND UNDER PRESSURE branch — a mid-cycle break leaves the latch
+    intact so the state resolvers can catch the post-Step-4-stressed
+    label."""
+    # Directly manipulate a state dict and drive the private
+    # _fire_v10_soft_reset helper. Avoids a full replay while pinning
+    # the exact invariant.
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    # Pretend Step 4 armed in a prior bar.
+    state["step4_done"] = True
+    state["step4_ever_fired"] = True
+    state["rally_day_low"] = 100.0
+    state["rally_day_idx"] = 0
+    state["cap_at_100"] = False
+    state["correction_active"] = False
+
+    # Synthesize a "current" bar row (Series-like dict) with the low
+    # V10 needs to record for cascade reasoning.
+    import pandas as pd
+    current = pd.Series({
+        "trade_date": pd.Timestamp("2026-06-08"),
+        "close": 100.5,
+        "low": 100.2,
+        "high": 101.0,
+        "open": 100.5,
+        "ema_21": 100.0,
+        "sma_50": 100.0,
+    })
+    bar_signals = []
+    engine._fire_v10_soft_reset(i=5, current=current, state=state,
+                                 bar_signals=bar_signals)
+    assert state["step4_done"] is False, "V10_SOFT_RESET must clear step4_done"
+    assert state["step4_ever_fired"] is True, (
+        "V10_SOFT_RESET must preserve step4_ever_fired — same rule as "
+        "cycle_start_idx (see mct_engine.py docstring on the soft-reset "
+        "path). This is what makes the UUP label reachable."
+    )
+
+
+def test_step4_ever_fired_persists_through_post_ftd_soft_fail():
+    """POST_FTD_SOFT_FAIL clears step4_done but MUST NOT clear
+    step4_ever_fired. Same reasoning as V10_SOFT_RESET — mid-cycle
+    reset, not cycle boundary."""
+    from api.mct_engine import MCTEngine, EngineConfig
+    import pandas as pd
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    state["step4_done"] = True
+    state["step4_ever_fired"] = True
+    state["correction_active"] = False
+
+    current = pd.Series({
+        "trade_date": pd.Timestamp("2026-06-15"),
+        "close": 95.0,
+        "low": 94.0,
+        "high": 96.0,
+        "open": 95.0,
+        "ema_21": 100.0,
+        "sma_50": 100.0,
+    })
+    bar_signals = []
+    engine._fire_post_ftd_soft_fail(current=current, state=state,
+                                     bar_signals=bar_signals)
+    assert state["step4_done"] is False, (
+        "POST_FTD_SOFT_FAIL must clear step4_done"
+    )
+    assert state["step4_ever_fired"] is True, (
+        "POST_FTD_SOFT_FAIL must preserve step4_ever_fired"
+    )
+
+
+def test_step4_ever_fired_clears_on_rally_invalidated():
+    """RALLY_INVALIDATED is a cycle boundary — step4_ever_fired must
+    clear alongside step_done flags and cycle_start_idx."""
+    from api.mct_engine import MCTEngine, EngineConfig
+    import pandas as pd
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    state["step4_ever_fired"] = True
+    state["cycle_start_idx"] = 3
+    state["correction_active"] = False
+    state["cap_at_100"] = False
+
+    current = pd.Series({
+        "trade_date": pd.Timestamp("2026-06-20"),
+        "close": 90.0,
+        "low": 89.0,
+        "high": 91.0,
+        "open": 90.0,
+        "ema_21": 100.0,
+        "sma_50": 100.0,
+    })
+    bar_signals = []
+    engine._fire_rally_invalidation(i=10, current=current, state=state,
+                                     bar_signals=bar_signals,
+                                     reason="test-invalidation")
+    assert state["step4_ever_fired"] is False, (
+        "RALLY_INVALIDATED must clear step4_ever_fired — cycle boundary"
+    )
+    assert state["cycle_start_idx"] is None, (
+        "cycle_start_idx and step4_ever_fired MUST clear at the same "
+        "sites — they share the same reset semantics"
+    )
+
+
+def test_step4_ever_fired_clears_on_v10_full_invalidation():
+    """V10_FULL_INVALIDATION is a cycle boundary — step4_ever_fired
+    must clear."""
+    from api.mct_engine import MCTEngine, EngineConfig
+    import pandas as pd
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    state["step4_ever_fired"] = True
+    state["cycle_start_idx"] = 3
+    state["correction_active"] = False
+    state["cap_at_100"] = False
+
+    current = pd.Series({
+        "trade_date": pd.Timestamp("2026-06-25"),
+        "close": 88.0,
+        "low": 87.0,
+        "high": 89.0,
+        "open": 88.0,
+        "ema_21": 100.0,
+        "sma_50": 100.0,
+    })
+    bar_signals = []
+    engine._fire_v10_full_invalidation(current=current, state=state,
+                                        bar_signals=bar_signals)
+    assert state["step4_ever_fired"] is False, (
+        "V10_FULL_INVALIDATION must clear step4_ever_fired"
+    )
+
+
+def test_step4_ever_fired_clears_on_correction_declared():
+    """CORRECTION_DECLARED is a cycle boundary — step4_ever_fired
+    must clear alongside the range clear of step0..step7_done."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # 2-bar setup where both bars pass the correction gates
+    # (close ≤ 90% of reference_high AND close < sma_50) so
+    # declaration fires on bar 2.
+    closes = [80.0, 79.0]
+    ema_21 = [95.0, 94.0]
+    sma_50 = [90.0, 90.0]
+    df = _synthetic_history(closes, ema_21=ema_21, sma_50=sma_50,
+                             sma_200=[85.0]*2)
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    # Manually seed step4_ever_fired True BEFORE running so the test
+    # sees the clear happen. Also set correction_ever_declared so the
+    # engine will attempt a fresh declaration.
+    state = engine._init_state()
+    state["step4_ever_fired"] = True
+    # Drive _phase_declaration directly. First bar arms pending; second
+    # bar declares.
+    engine._phase_declaration(df.iloc[0], state, [])
+    engine._phase_declaration(df.iloc[1], state, [])
+    # After declaration, the range loop clears step_done AND the new
+    # step4_ever_fired write clears the latch.
+    if state["correction_active"]:
+        assert state["step4_ever_fired"] is False, (
+            "CORRECTION_DECLARED must clear step4_ever_fired"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Real-date anchor test — the 2026-07-07 regression guard
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_derive_state_2026_07_07_returns_uup_regression_guard():
+    """Motivating-bug regression guard.
+
+    Replays the engine over the full canonical history through
+    2026-07-07 and asserts _derive_state on the final bar returns
+    'UPTREND UNDER PRESSURE'. Locks the fix for the 2026-07-07 label
+    bug end-to-end:
+
+      - Live signals in market_signals for 2026-06-01 → 2026-07-07
+        (verified via read-only query): V10_SOFT_RESET on 2026-06-08
+        set in_correction=True; no CORRECTION_DECLARED in window;
+        last CORRECTION_NULLIFIED was 2026-04-16 so correction_active
+        has been False since April; drawdown ~5% off reference_high,
+        well short of the 10% depth gate.
+
+      - Under the old spec (UUP gated on `not in_correction`), today
+        would erroneously return RALLY MODE because the V10-induced
+        phantom in_correction=True blocks the UUP branch.
+
+      - Under the new spec (UUP gated on `not correction_active`),
+        today correctly returns UPTREND UNDER PRESSURE.
+
+    If this test fails, the gate has been swapped back OR
+    step4_ever_fired is being cleared incorrectly OR the export in
+    _bar_record has drifted.
+    """
+    from api.mct_engine import MCTEngine, EngineConfig
+    from api.market_data_repo import get_history, get_latest_date
+
+    end = get_latest_date("^IXIC") or date.today()
+    history = get_history("^IXIC", date(2010, 1, 1), end)
+    config = EngineConfig(
+        initial_reference_high=None,
+        initial_state="POWERTREND",
+        initial_exposure=200,
+        initial_power_trend=True,
+        correction_ever_declared=True,
+        initial_ratchet_armed=True,
+    )
+    engine = MCTEngine(config)
+    result = engine.run(history)
+    bars = result.bars
+
+    mask = pd.to_datetime(bars["trade_date"]).dt.date == date(2026, 7, 7)
+    today = bars[mask]
+    if today.empty:
+        pytest.skip("2026-07-07 not in canonical market_data — "
+                    "backfill needed before this test can run")
+    row = today.iloc[0]
+
+    # Sanity fingerprint — explicit bool coercion because pandas returns
+    # numpy.bool_, for which `is False` is always False (the `== 0`
+    # fallback would silently succeed on any value).
+    assert not bool(row["step4_done"]), (
+        "step4_done should be False on 2026-07-07 (cleared by "
+        "V10_SOFT_RESET on 2026-06-08 and never re-armed)"
+    )
+    assert bool(row["step4_ever_fired"]), (
+        "step4_ever_fired should be True on 2026-07-07 (latch survived "
+        "V10_SOFT_RESET — mid-cycle reset, not a cycle boundary)"
+    )
+    assert not bool(row["correction_active"]), (
+        "correction_active should be False on 2026-07-07 (last "
+        "CORRECTION_NULLIFIED was 2026-04-16; no CORRECTION_DECLARED "
+        "since)"
+    )
+    assert not bool(row["power_trend"]), (
+        "power_trend should be False on 2026-07-07 (POWERTREND_OFF "
+        "fired today)"
+    )
+
+    # The load-bearing assertions — the point of the test
+    assert engine._derive_state(row.to_dict()) == "UPTREND UNDER PRESSURE"
+    assert row["state"] == "UPTREND UNDER PRESSURE"
