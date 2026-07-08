@@ -78,6 +78,56 @@ app.add_middleware(
 )
 
 # ============================================================
+# BACKGROUND: daily Sell Rule tier reconcile (b1_max_return_pct)
+# ============================================================
+# The persistent Sell Rule tier is max(current_b1_return, stored peak). The
+# frontend promotes the stored peak live, but only while the app is open, so a
+# leader that peaks >50% while the app is closed can mis-tier as SR11 on the
+# pullback — and SR11 (BE stop-out) vs SR8 (RS-defended core) prescribe
+# OPPOSITE sell actions. This in-process task recomputes the close-basis peak
+# for every open equity position and raises any stale stored peak. The DB
+# guard (db.update_b1_max_return_pct) only ever RAISES, never lowers.
+#
+# Runs ~90s after boot (so every Railway deploy heals immediately) and every
+# 24h thereafter. Single uvicorn worker → exactly one scheduler. yfinance + DB
+# work runs in a thread so it never blocks the event loop. Disabled under
+# pytest and via DISABLE_B1_RECONCILE=1.
+import asyncio
+
+_B1_RECONCILE_INTERVAL_S = 24 * 60 * 60
+_B1_RECONCILE_STARTUP_DELAY_S = 90
+
+
+async def _b1_reconcile_loop():
+    from b1_reconcile import reconcile_open_positions
+
+    await asyncio.sleep(_B1_RECONCILE_STARTUP_DELAY_S)
+    while True:
+        try:
+            summary = await asyncio.to_thread(
+                reconcile_open_positions, None, True, False, 0.3
+            )
+            c = summary["counters"]
+            print(f"[b1_reconcile] {c['raised']} raised · {c['unchanged']} current · "
+                  f"{c['skipped_no_data']} no-data · {c['errors']} errors "
+                  f"(of {summary['total']} open)")
+        except Exception as exc:  # never let a bad run kill the loop
+            print(f"[b1_reconcile] run failed: {exc}")
+        await asyncio.sleep(_B1_RECONCILE_INTERVAL_S)
+
+
+@app.on_event("startup")
+async def _start_b1_reconcile():
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DISABLE_B1_RECONCILE"):
+        return
+    if not os.environ.get("DATABASE_URL"):
+        print("[b1_reconcile] DATABASE_URL not set — scheduler disabled.")
+        return
+    asyncio.create_task(_b1_reconcile_loop())
+    print("[b1_reconcile] daily Sell Rule tier reconcile scheduled.")
+
+
+# ============================================================
 # JWT AUTH MIDDLEWARE
 # ============================================================
 # next-auth on the frontend mints an HS256 JWT in the session callback using
