@@ -41,6 +41,7 @@ def _auth_headers() -> dict[str, str]:
 # "fired" is distinguishable from "preserved" in assertions.
 _AUTO_CYCLE = "POWERTREND"
 _AUTO_DAY_NUM = 42
+_AUTO_TREND_COUNT = 3
 _AUTO_HEAT = 7.5
 _AUTO_SPY_ATR = 1.234
 _AUTO_NDX_ATR = 1.567
@@ -66,9 +67,11 @@ class _FakeCursor:
             self._last_returned = (pm["id"], pm["user_id"]) if pm else None
             return
 
-        # trading_journal existence + snapshot fields read
+        # trading_journal existence + snapshot fields read. Mirrors the
+        # endpoint's SELECT, which reads trend_count (migration 043) as the
+        # 7th column (existing_row[6]) for snapshot preservation.
         if ("SELECT id, portfolio_heat, spy_atr, nasdaq_atr,"
-                " market_cycle, mct_display_day_num FROM trading_journal" in sql_norm):
+                " market_cycle, mct_display_day_num, trend_count FROM trading_journal" in sql_norm):
             pid, day = params
             for r in self.state["journal_rows"]:
                 if r["portfolio_id"] == pid and r["day"] == day:
@@ -79,6 +82,7 @@ class _FakeCursor:
                         r.get("nasdaq_atr", 0.0),
                         r.get("market_cycle", ""),
                         r.get("mct_display_day_num"),
+                        r.get("trend_count"),
                     )
                     return
             self._last_returned = None
@@ -109,6 +113,10 @@ class _FakeCursor:
         # INSERT
         if sql_norm.startswith("INSERT INTO trading_journal"):
             # First param is user_id, second is portfolio_id, third is day
+            # Column order mirrors _BATCH_EDIT_INSERT_SQL in api/main.py.
+            # trend_count (migration 043) sits at index 7, between
+            # mct_display_day_num and above_21ema — keep this in lockstep
+            # with the endpoint's INSERT column list.
             row = {
                 "id": self.state["_next_id"],
                 "user_id": params[0],
@@ -118,28 +126,29 @@ class _FakeCursor:
                 "market_window": params[4],
                 "market_cycle": params[5],
                 "mct_display_day_num": params[6],
-                "above_21ema": params[7],
-                "cash_change": params[8],
-                "beg_nlv": params[9],
-                "end_nlv": params[10],
-                "daily_dollar_change": params[11],
-                "daily_pct_change": params[12],
-                "pct_invested": params[13],
-                "spy": params[14],
-                "nasdaq": params[15],
-                "market_notes": params[16],
-                "market_action": params[17],
-                "portfolio_heat": params[18],
-                "spy_atr": params[19],
-                "nasdaq_atr": params[20],
-                "score": params[21],
-                "highlights": params[22],
-                "lowlights": params[23],
-                "mistakes": params[24],
-                "top_lesson": params[25],
-                "nlv_source": params[26],
-                "holdings_source": params[27],
-                "daily_thoughts": params[28],
+                "trend_count": params[7],
+                "above_21ema": params[8],
+                "cash_change": params[9],
+                "beg_nlv": params[10],
+                "end_nlv": params[11],
+                "daily_dollar_change": params[12],
+                "daily_pct_change": params[13],
+                "pct_invested": params[14],
+                "spy": params[15],
+                "nasdaq": params[16],
+                "market_notes": params[17],
+                "market_action": params[18],
+                "portfolio_heat": params[19],
+                "spy_atr": params[20],
+                "nasdaq_atr": params[21],
+                "score": params[22],
+                "highlights": params[23],
+                "lowlights": params[24],
+                "mistakes": params[25],
+                "top_lesson": params[26],
+                "nlv_source": params[27],
+                "holdings_source": params[28],
+                "daily_thoughts": params[29],
             }
             self.state["_next_id"] += 1
             # Atomicity: the test owns rollback; the endpoint commits.
@@ -194,18 +203,20 @@ class _FakeConn:
                 params = entry[2]
                 for r in self.state["journal_rows"]:
                     if r["id"] == row_id:
-                        # 26-param UPDATE; just copy the fields we care
-                        # about for assertions (per the SQL column order).
+                        # 27-column UPDATE SET; copy the fields we assert on
+                        # (per _BATCH_EDIT_UPDATE_SQL column order). trend_count
+                        # (migration 043) sits at index 4, between
+                        # mct_display_day_num and above_21ema.
                         r["status"], r["market_window"], r["market_cycle"] = params[0], params[1], params[2]
-                        r["mct_display_day_num"], r["above_21ema"] = params[3], params[4]
-                        r["cash_change"], r["beg_nlv"], r["end_nlv"] = params[5], params[6], params[7]
-                        r["daily_dollar_change"], r["daily_pct_change"] = params[8], params[9]
-                        r["pct_invested"], r["spy"], r["nasdaq"] = params[10], params[11], params[12]
-                        r["market_notes"], r["market_action"] = params[13], params[14]
-                        r["portfolio_heat"], r["spy_atr"], r["nasdaq_atr"] = params[15], params[16], params[17]
-                        r["score"], r["highlights"], r["lowlights"] = params[18], params[19], params[20]
-                        r["mistakes"], r["top_lesson"] = params[21], params[22]
-                        r["nlv_source"], r["holdings_source"], r["daily_thoughts"] = params[23], params[24], params[25]
+                        r["mct_display_day_num"], r["trend_count"], r["above_21ema"] = params[3], params[4], params[5]
+                        r["cash_change"], r["beg_nlv"], r["end_nlv"] = params[6], params[7], params[8]
+                        r["daily_dollar_change"], r["daily_pct_change"] = params[9], params[10]
+                        r["pct_invested"], r["spy"], r["nasdaq"] = params[11], params[12], params[13]
+                        r["market_notes"], r["market_action"] = params[14], params[15]
+                        r["portfolio_heat"], r["spy_atr"], r["nasdaq_atr"] = params[16], params[17], params[18]
+                        r["score"], r["highlights"], r["lowlights"] = params[19], params[20], params[21]
+                        r["mistakes"], r["top_lesson"] = params[22], params[23]
+                        r["nlv_source"], r["holdings_source"], r["daily_thoughts"] = params[24], params[25], params[26]
         self.state["pending_writes"] = []
 
     def rollback(self):
@@ -255,6 +266,8 @@ def batch_stubs(monkeypatch):
 
     monkeypatch.setattr(main, "_compute_mct_state_with_day_num",
                         lambda *a, **kw: (_AUTO_CYCLE, _AUTO_DAY_NUM))
+    monkeypatch.setattr(main, "_compute_trend_count",
+                        lambda *a, **kw: _AUTO_TREND_COUNT)
     monkeypatch.setattr(main, "_compute_portfolio_heat",
                         lambda *a, **kw: _AUTO_HEAT)
 

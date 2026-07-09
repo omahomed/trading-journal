@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
 // jsdom doesn't provide localStorage in some configurations; matches the
@@ -369,8 +369,12 @@ describe("Analytics — All Campaigns filters", () => {
     render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
     await screen.findByText("MSFT");
 
-    const select = screen.getByTestId("campaigns-buy-rule-filter") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "br1.1 Consolidation" } });
+    // Buy Rule filter is a SearchSelect (not a native <select>): click the
+    // trigger to open, then click the option. Scope the lookups to the
+    // filter so a rule that also appears in table rows isn't ambiguous.
+    const filter = screen.getByTestId("campaigns-buy-rule-filter");
+    fireEvent.click(filter.querySelector("button") as HTMLButtonElement);
+    fireEvent.click(await within(filter).findByRole("button", { name: "br1.1 Consolidation" }));
 
     await waitFor(() => {
       expect(screen.getByText("MSFT")).toBeInTheDocument();
@@ -390,8 +394,10 @@ describe("Analytics — All Campaigns filters", () => {
     render(<Analytics navColor="#08a86b" initialTab="campaigns" />);
     await screen.findByText("MSFT");
 
-    const select = screen.getByTestId("campaigns-sell-rule-filter") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "sr1 Capital Protection" } });
+    // Sell Rule filter is a SearchSelect (see Buy Rule note above).
+    const filter = screen.getByTestId("campaigns-sell-rule-filter");
+    fireEvent.click(filter.querySelector("button") as HTMLButtonElement);
+    fireEvent.click(await within(filter).findByRole("button", { name: "sr1 Capital Protection" }));
 
     await waitFor(() => {
       expect(screen.getByText("MSFT")).toBeInTheDocument();

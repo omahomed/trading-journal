@@ -257,7 +257,14 @@ describe("CampaignDetail — ledger table (Commit 3)", () => {
   test("ticker filter narrows to a single row", async () => {
     setupThreeRowFixture();
     render(<CampaignDetail navColor="#08a86b" />);
-    await waitFor(() => expect(screen.getByTestId("ledger-table")).toBeInTheDocument());
+    // Wait for all three fixture rows — and thus the ticker <option>s
+    // derived from them — to render before filtering. Waiting only for the
+    // table shell races the async row load: firing the <select> change
+    // before the "MSFT" option exists intermittently lands on the empty
+    // state ("No transactions match these filters").
+    await waitFor(() =>
+      expect(screen.getByTestId("ledger-table").querySelectorAll("tbody tr").length).toBe(3)
+    );
 
     const tickerSelect = screen.getByTestId("filter-ticker") as HTMLSelectElement;
     fireEvent.change(tickerSelect, { target: { value: "MSFT" } });
