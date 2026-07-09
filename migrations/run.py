@@ -62,15 +62,29 @@ def mask_url(url: str) -> str:
 
 
 def ensure_tracking_table(conn) -> None:
+    """Ensure schema_migrations exists, without needing CREATE on schema
+    public when it already does.
+
+    Postgres checks CREATE privilege on the target schema for
+    `CREATE TABLE IF NOT EXISTS` *before* it notices the table already
+    exists — so the bare IF NOT EXISTS raises "permission denied for schema
+    public" for a role that can run DML but lacks CREATE (e.g. the pooled
+    Railway connection). We probe with to_regclass first (needs only
+    USAGE + SELECT, which such a role has) and only issue CREATE when the
+    table is genuinely absent. Fresh databases still get the table; existing
+    ones (all migrations already applied) sail past without a privilege wall.
+    """
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                filename    VARCHAR(255) PRIMARY KEY,
-                applied_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+        cur.execute("SELECT to_regclass('public.schema_migrations')")
+        if cur.fetchone()[0] is None:
+            cur.execute(
+                """
+                CREATE TABLE schema_migrations (
+                    filename    VARCHAR(255) PRIMARY KEY,
+                    applied_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+                )
+                """
             )
-            """
-        )
     conn.commit()
 
 
