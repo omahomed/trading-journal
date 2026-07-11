@@ -148,7 +148,7 @@ const isTabKey = (s: string | null | undefined): s is TabKey =>
 
 // Locked to match desktop's SIZE_OPTIONS (position-sizer.tsx).
 const SIZE_OPTIONS = [
-  { label: "Starter", pct: 2.5 },
+  { label: "Shotgun", pct: 2.5 },
   { label: "Half", pct: 5 },
   { label: "Standard", pct: 7.5 },
   { label: "Full", pct: 10 },

@@ -41,7 +41,7 @@ const SIZING_MODES = SIZING_MODES_BASE.map(m => ({
 }));
 
 const SIZE_OPTIONS = [
-  { label: "Starter (2.5%)", pct: 2.5 }, { label: "Half (5%)", pct: 5 },
+  { label: "Shotgun (2.5%)", pct: 2.5 }, { label: "Half (5%)", pct: 5 },
   { label: "Standard (7.5%)", pct: 7.5 }, { label: "Full (10%)", pct: 10 },
   { label: "Overweight (12.5%)", pct: 12.5 }, { label: "Core (15%)", pct: 15 },
   { label: "Core+ (17.5%)", pct: 17.5 }, { label: "Max (20%)", pct: 20 },
@@ -682,22 +682,31 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             View Sizer Rules
           </summary>
           <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            <p className="mb-1"><strong>Sizing Mode (driven by M Factor state):</strong></p>
+            <p className="mb-1"><strong>Sizing Mode (auto-derived from M Factor state):</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Defense:</strong> 0.50% risk — equity curve flat/down</li>
-              <li><strong>Normal:</strong> 0.75% risk — equity curve recovering</li>
-              <li><strong>Offense:</strong> 1.00% risk — equity curve strong, confirmed uptrend</li>
+              <li><strong>Pilot:</strong> 0.25% risk — CORRECTION / RALLY MODE (probe size)</li>
+              <li><strong>Defense:</strong> 0.50% risk — sizing down after equity damage</li>
+              <li><strong>Normal:</strong> 0.75% risk — UPTREND / UPTREND UNDER PRESSURE</li>
+              <li><strong>Offense:</strong> 1.00% risk — POWERTREND (confirmed uptrend)</li>
             </ul>
-            <p className="mb-1"><strong>What this sizer shows:</strong></p>
+            <p className="mb-1"><strong>The two tile groups explained:</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Tech Stop:</strong> shares the risk budget can absorb to your MA-based stop</li>
-              <li><strong>1× / 1.5× / 2× ATR cushion:</strong> shares the risk budget can absorb if your stop is one of those ATR distances below entry</li>
-              <li>Every scenario is capped at your target tier ({"<= "}20% of NLV)</li>
+              <li><strong>Risk Budget</strong> = NLV × Sizing Mode risk % (the $ you allow to lose on this trade)</li>
+              <li><strong>Position Cap</strong> = NLV × Target Position Size % (Shotgun 2.5% → Max 20%)</li>
+              <li><strong>Tech Stop:</strong> shares the risk budget can absorb to (MA − buffer)</li>
+              <li><strong>1× / 1.5× / 2× ATR:</strong> shares the risk budget can absorb if the stop is that ATR distance below entry</li>
+              <li>Every scenario is floored by the Position Cap so no single trade breaks concentration</li>
             </ul>
-            <p className="mb-1"><strong>Recommendation logic:</strong></p>
+            <p className="mb-1"><strong>Recommendation logic (ATR is a quality filter, not just a stop generator):</strong></p>
+            <ul className="list-disc ml-4 mb-2">
+              <li>Tech stop ≥ 1 ATR away from entry → RECOMMENDED = Tech Stop</li>
+              <li>Tech stop {"<"} 1 ATR away → daily noise will chop you out; RECOMMENDED flips to 1.5× ATR + warning banner shows</li>
+            </ul>
+            <p className="mb-1"><strong>Scale-Out Stops (Tech Stop + Recommended tiles only, B1 lots):</strong></p>
             <ul className="list-disc ml-4">
-              <li>Tech stop ≥ 1 ATR away → size to the tech stop</li>
-              <li>Tech stop {"<"} 1 ATR away → daily noise will chop you out; size to 1.5× ATR instead</li>
+              <li>3-leg ladder at locked −3% / −5% / −7% from entry (average exit ≈ −5%)</li>
+              <li>Shares split floor / floor / remainder; sends into Log Buy as a laddered stop</li>
+              <li>ATR-scenario tiles do NOT get a scale-out ladder — they're what-if references, not entry candidates</li>
             </ul>
           </div>
         </details>

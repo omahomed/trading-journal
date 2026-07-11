@@ -446,12 +446,12 @@ describe("MobilePositionSizer — Size picker", () => {
     fireEvent.click(trigger);
 
     const dialog = await screen.findByRole("dialog", { name: /Target size/ });
-    for (const label of ["Starter", "Half", "Standard", "Full", "Overweight", "Core", "Core+", "Max"]) {
+    for (const label of ["Shotgun", "Half", "Standard", "Full", "Overweight", "Core", "Core+", "Max"]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
 
-    fireEvent.click(within(dialog).getByText("Starter"));
-    expect(await screen.findByRole("button", { name: /Size: Starter/ })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByText("Shotgun"));
+    expect(await screen.findByRole("button", { name: /Size: Shotgun/ })).toBeInTheDocument();
   });
 });
 
@@ -575,9 +575,9 @@ describe("MobilePositionSizer — Scale-In math", () => {
     fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
     fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "55" } });
 
-    // Switch to Starter (2.5%) — targetTotalShares = ceil(2500/60) = 42; targetAdd = -58
+    // Switch to Shotgun (2.5%) — targetTotalShares = ceil(2500/60) = 42; targetAdd = -58
     fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Starter"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Shotgun"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     expect(await screen.findByTestId("scale-error-banner")).toBeInTheDocument();
@@ -864,7 +864,7 @@ describe("MobilePositionSizer — Trim math", () => {
   });
 
   test("loss case: entry below avg cost → warning realizes-loss verdict", async () => {
-    // shares=100 @ avg=100, entry=50 → currWeight 5%. Target 2.5% (Starter).
+    // shares=100 @ avg=100, entry=50 → currWeight 5%. Target 2.5% (Shotgun).
     // valueToSell = 2500 → sharesToSell = 50.
     // LIFO walk: take 50 from {qty:100, price:100} → accumulatedCost = 5000.
     // cashGenerated = 50*50 = 2500; lifoPnl = -2500.
@@ -884,7 +884,7 @@ describe("MobilePositionSizer — Trim math", () => {
     fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "50" } });
 
     fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Starter"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Shotgun"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     const verdict = await screen.findByTestId("trim-verdict-loss");

@@ -234,7 +234,7 @@ async function fillVolTabInputs(opts: {
   // Target tier (optional override; default 10% selected on mount)
   if (opts.targetPct !== undefined && opts.targetPct !== 10) {
     const tierLabels: Record<number, string> = {
-      2.5: "Starter (2.5%)", 5: "Half (5%)", 7.5: "Standard (7.5%)",
+      2.5: "Shotgun (2.5%)", 5: "Half (5%)", 7.5: "Standard (7.5%)",
       10: "Full (10%)", 12.5: "Overweight (12.5%)", 15: "Core (15%)",
       17.5: "Core+ (17.5%)", 20: "Max (20%)",
     };
