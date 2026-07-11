@@ -306,6 +306,34 @@ def journal_latest(portfolio: str = "CanSlim", before: str = ""):
     return row
 
 
+@app.get("/api/portfolio/heat-preview")
+def portfolio_heat_preview(portfolio: str = "CanSlim"):
+    """Live Portfolio Heat snapshot for the Daily Routine tile.
+
+    Recomputes _compute_portfolio_heat against the latest saved end_nlv so
+    the Daily Routine card can preview "what my risk looks like right now"
+    before the user finalises today's save. If the user hasn't saved a
+    journal row yet, returns 0 with nlv_used=0. If yfinance is offline,
+    _compute_portfolio_heat returns 0 (same silent-fail contract as the
+    stamp path).
+    """
+    try:
+        df = db.load_journal(portfolio)
+        if df.empty:
+            return {"heat": 0.0, "nlv_used": 0.0, "portfolio": portfolio}
+        df = _normalize_journal(df)
+        df["day"] = pd.to_datetime(df["day"], errors="coerce")
+        df = df.sort_values("day", ascending=False)
+        equity = float(df.iloc[0].get("end_nlv", 0) or 0)
+        if equity <= 0:
+            return {"heat": 0.0, "nlv_used": 0.0, "portfolio": portfolio}
+        heat = _compute_portfolio_heat(portfolio, "", equity)
+        return {"heat": heat, "nlv_used": equity, "portfolio": portfolio}
+    except Exception as e:
+        print(f"[portfolio_heat_preview] handler failed: {e}")
+        return {"heat": 0.0, "nlv_used": 0.0, "portfolio": portfolio, "error": str(e)}
+
+
 @app.get("/api/journal/history")
 def journal_history(portfolio: str = "CanSlim", days: int = 365):
     """Get journal history for equity curve."""

@@ -159,6 +159,20 @@ function PortfolioCard({
 }) {
   const m = deriveCardMetrics(card);
 
+  // Live Portfolio Heat preview — fires once per card mount. The backend
+  // recomputes against the latest saved end_nlv, so this is
+  // "yesterday's-NLV heat with today's positions/prices." Good enough for
+  // a pre-save glance at risk exposure; the exact stamp still happens on
+  // save via _compute_portfolio_heat, which uses today's typed NLV.
+  const [previewHeat, setPreviewHeat] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.portfolioHeatPreview(card.name)
+      .then(r => { if (!cancelled) setPreviewHeat(r.heat); })
+      .catch(err => log.error("daily-routine", `heat preview fetch failed for ${card.name}`, err));
+    return () => { cancelled = true; };
+  }, [card.name]);
+
   return (
     <div
       className="rounded-[14px] overflow-hidden"
@@ -233,8 +247,20 @@ function PortfolioCard({
               { k: "Daily $", v: formatCurrency(m.daily_dollar_change, { showSign: true, decimals: 0 }), c: m.daily_dollar_change >= 0 ? "#08a86b" : "#e5484d" },
               { k: "Daily %", v: `${m.daily_pct_change >= 0 ? "+" : ""}${m.daily_pct_change.toFixed(2)}%`, c: m.daily_pct_change >= 0 ? "#08a86b" : "#e5484d" },
               { k: "% Invested", v: `${m.pct_invested.toFixed(1)}%` },
+              // Portfolio Heat preview. Amber >20% (target ceiling), red >30%
+              // as an unmistakable "too hot to save without a look" nudge.
+              // Uses the current daily % swing threshold from Portfolio Heat.
+              { k: "Heat (auto)", v: previewHeat === null ? "…" : `${previewHeat.toFixed(2)}%`,
+                c: previewHeat === null ? undefined
+                   : previewHeat > 30 ? "#e5484d"
+                   : previewHeat > 20 ? "#f59f00"
+                   : "#08a86b" },
             ].map((s) => (
-              <div key={s.k} className="p-2 rounded-[8px]" style={{ border: "1px solid var(--border)" }}>
+              <div
+                key={s.k}
+                className={`p-2 rounded-[8px] ${s.k === "Heat (auto)" ? "col-span-2" : ""}`}
+                style={{ border: "1px solid var(--border)" }}
+              >
                 <div className="text-[8px] uppercase tracking-[0.06em] font-semibold" style={{ color: "var(--ink-4)" }}>{s.k}</div>
                 <div
                   className="text-[13px] font-semibold mt-0.5 privacy-mask"

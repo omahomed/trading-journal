@@ -43,6 +43,7 @@ vi.mock("@/lib/api", () => ({
     ibkrNavForDate: vi.fn(),
     journalEdit: vi.fn(),
     journalBatchEdit: vi.fn(),
+    portfolioHeatPreview: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -55,6 +56,7 @@ const mockedBatchPrices = vi.mocked(api.batchPrices);
 const mockedRallyPrefix = vi.mocked(api.rallyPrefix);
 const mockedTradesRecent = vi.mocked(api.tradesRecent);
 const mockedJournalBatchEdit = vi.mocked(api.journalBatchEdit);
+const mockedPortfolioHeatPreview = vi.mocked(api.portfolioHeatPreview);
 
 
 function setupDefaultMocks() {
@@ -67,6 +69,9 @@ function setupDefaultMocks() {
     rows_written: 3,
     portfolios: ["CanSlim", "457B Plan", "Long-Term Growth"],
   });
+  mockedPortfolioHeatPreview.mockResolvedValue({
+    heat: 7.92, nlv_used: 100000, portfolio: "CanSlim",
+  } as any);
 }
 
 

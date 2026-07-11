@@ -565,6 +565,14 @@ export const api = {
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
 
+  // Live Portfolio Heat snapshot for the Daily Routine card. Uses latest
+  // saved end_nlv as denominator; returns 0 with nlv_used=0 for portfolios
+  // with no journal history yet.
+  portfolioHeatPreview: (portfolio = getActivePortfolio()) =>
+    fetchJSON<{ heat: number; nlv_used: number; portfolio: string; error?: string }>(
+      `/api/portfolio/heat-preview?portfolio=${encodeURIComponent(portfolio)}`
+    ),
+
   // Trades
   tradesOpen: (portfolio = getActivePortfolio()) =>
     fetchJSON<TradePosition[]>(`/api/trades/open?portfolio=${portfolio}`),
