@@ -427,6 +427,53 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
               </table>
             </div>
           </div>
+
+          {/* Reference glossary — persistent, so the meaning of each
+              column and the color thresholds are always one glance away. */}
+          <div className="mt-6 rounded-[14px]" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+            <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+              <span className="text-[13px] font-semibold">Glossary</span>
+              <span className="text-xs" style={{ color: "var(--ink-4)" }}>How to read this page</span>
+            </div>
+            <div className="px-[18px] py-4 text-[12px] leading-relaxed grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4" style={{ color: "var(--ink-2)" }}>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Weight %</div>
+                <div>Share of NLV each position represents. Uses <em>current market value</em> (shares × current price), so a big winner counts by what it's worth today, not what you paid.</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>ATR (21S) %</div>
+                <div>21-session Average True Range as a % of price. A rough "how much this ticker moves on a typical day" number. 3% is calm; 10%+ is spicy.</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Heat Contribution</div>
+                <div>
+                  <span style={{ fontFamily: "var(--font-jetbrains), monospace" }}>Weight × ATR ÷ 100</span> — what that one position can swing your NLV on a typical day. Example: MU at 10.7% × 9.42% ATR ≈ <strong>1.01%</strong> daily NLV swing from MU alone. Answers "which position is really driving my risk?" — two positions can share a weight but have very different heat.
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Total Portfolio Heat</div>
+                <div>Sum of every position's heat contribution — your "typical daily NLV swing %" from ATR-weighted exposure. Target &lt; {HEAT_THRESHOLD}%. When it climbs, either the book is oversized or you're carrying too many volatile names.</div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="text-[11px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Per-row bar color</div>
+                <div className="flex flex-wrap gap-4">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#22c55e" }} />
+                    <span>&lt; 1.5% — normal</span>
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#f97316" }} />
+                    <span>1.5 – 3% — this position is starting to dominate risk</span>
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#ef4444" }} />
+                    <span>&gt; 3% — one position could move the whole book more than typical</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </>
       )}
 
