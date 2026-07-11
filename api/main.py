@@ -681,11 +681,23 @@ def _compute_ticker_atr_pct(ticker: str, as_of_date: str = "") -> float:
 def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> float:
     """Portfolio heat = sum(weight% * atr%/100) for stock positions only.
 
+    Weight uses shares * last_close (market value) instead of total_cost
+    (cost basis) so the number matches the Portfolio Heat page and Active
+    Campaign's POS SIZE. Cost basis grossly understated heat on winners
+    (e.g., MU at +137% showed ~half its true weight). Falls back to cost
+    basis when yfinance returns nothing so a partial outage still stamps
+    a reasonable number.
+
     Option positions are excluded — yfinance has no ATR data for OCC option
     tickers, so they always contributed 0 heat anyway. Excluding them keeps
     the metric a clean "volatility check on equity exposure" rather than a
     diluted average across instruments with incommensurate risk profiles.
+
+    yfinance fetch is inlined (single history call per ticker yields both
+    atr_pct and last_close). Kept _compute_ticker_atr_pct untouched — its
+    other callers (SPY/^IXIC) only need ATR.
     """
+    import yfinance as yf
     try:
         summary_df = db.load_summary(portfolio)
         if summary_df.empty or equity <= 0:
@@ -709,11 +721,42 @@ def _compute_portfolio_heat(portfolio: str, as_of_date: str, equity: float) -> f
         heat = 0.0
         for _, row in open_df.iterrows():
             ticker = str(row.get("ticker", "")).strip()
+            shares = float(row.get("shares", 0) or 0)
             total_cost = float(row.get("total_cost", 0) or 0)
             if not ticker or total_cost <= 0:
                 continue
-            atr_pct = _compute_ticker_atr_pct(ticker, as_of_date)
-            weight_pct = (total_cost / equity) * 100
+
+            atr_pct = 0.0
+            last_close = 0.0
+            try:
+                if as_of_date:
+                    end_dt = pd.Timestamp(as_of_date) + pd.Timedelta(days=1)
+                    start_dt = pd.Timestamp(as_of_date) - pd.Timedelta(days=60)
+                    df = yf.Ticker(ticker).history(
+                        start=start_dt.strftime("%Y-%m-%d"),
+                        end=end_dt.strftime("%Y-%m-%d"),
+                    )
+                else:
+                    df = yf.Ticker(ticker).history(period="45d")
+                if not df.empty and len(df) >= 21:
+                    tr = pd.concat([
+                        df["High"] - df["Low"],
+                        (df["High"] - df["Close"].shift(1)).abs(),
+                        (df["Low"] - df["Close"].shift(1)).abs(),
+                    ], axis=1).max(axis=1)
+                    sma_tr = float(tr.tail(21).mean())
+                    sma_low = float(df["Low"].tail(21).mean())
+                    if sma_low > 0:
+                        atr_pct = round((sma_tr / sma_low) * 100, 4)
+                    last_close = float(df["Close"].iloc[-1])
+            except Exception as e:
+                print(f"[portfolio_heat] {ticker} yfinance fetch failed: "
+                      f"{type(e).__name__}: {e}")
+
+            # Market value with cost-basis fallback so a partial yfinance
+            # outage still stamps a reasonable weight.
+            market_value = shares * last_close if (shares > 0 and last_close > 0) else total_cost
+            weight_pct = (market_value / equity) * 100
             heat += weight_pct * (atr_pct / 100)
         return round(heat, 4)
     except Exception as e:
