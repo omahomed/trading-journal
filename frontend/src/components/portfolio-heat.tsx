@@ -64,6 +64,12 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   // null means no batch-level failure occurred (some/all per-row statuses
   // may still be non-ok).
   const [batchFailure, setBatchFailure] = useState<BatchFailure>(null);
+  // Cache current prices so Weight % matches Active Campaign's POS SIZE
+  // (both use shares × current_price / NLV). Falls back to total_cost when
+  // batch fails or a ticker returns null price. Shared between Automated
+  // and Manual modes so a mid-session mode switch doesn't drop back to
+  // cost-basis weights.
+  const [prices, setPrices] = useState<Map<string, number>>(new Map());
   const HEAT_THRESHOLD = 20; // default from app_config
 
   useEffect(() => {
@@ -100,12 +106,19 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
     const tickers = trades.map(t => t.ticker);
     let byTicker = new Map<string, { atr_pct: number | null; status: AtrStatus }>();
+    const priceMap = new Map<string, number>();
     try {
       const batch = await api.priceLookupBatch(tickers);
       byTicker = new Map(batch.results.map(r => [r.ticker, {
         atr_pct: r.atr_pct,
         status: r.status,
       }]));
+      for (const r of batch.results) {
+        if (typeof r.price === "number" && r.price > 0) {
+          priceMap.set(r.ticker, r.price);
+        }
+      }
+      setPrices(priceMap);
     } catch (e) {
       // Whole-batch failure — likely 429 (rate limit) or 503 (yfinance
       // global outage). Distinguish so the user gets actionable advice.
@@ -120,7 +133,15 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
     const results: HeatRow[] = trades.map(t => {
       const totalCost = parseFloat(String(t.total_cost || 0));
-      const weightPct = eq > 0 ? (totalCost / eq) * 100 : 0;
+      // Weight uses shares × current_price to match Active Campaign's
+      // POS SIZE. Falls back to cost basis when price is unavailable
+      // (batch failed or ticker returned null) so a partial outage
+      // still renders reasonable rows.
+      const price = priceMap.get(t.ticker);
+      const marketValue = price && t.shares
+        ? Number(t.shares) * price
+        : totalCost;
+      const weightPct = eq > 0 ? (marketValue / eq) * 100 : 0;
       // Default to status="error" so a batch-level failure (empty map)
       // still produces a row per position, with "error" badges.
       const r = byTicker.get(t.ticker) ?? { atr_pct: null, status: "error" as AtrStatus };
@@ -148,7 +169,11 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   const computeManualHeat = () => {
     const results: HeatRow[] = positions.map(t => {
       const totalCost = parseFloat(String(t.total_cost || 0));
-      const weightPct = equity > 0 ? (totalCost / equity) * 100 : 0;
+      const price = prices.get(t.ticker);
+      const marketValue = price && t.shares
+        ? Number(t.shares) * price
+        : totalCost;
+      const weightPct = equity > 0 ? (marketValue / equity) * 100 : 0;
       const atrPct = parseFloat(manualAtr[t.ticker] || "5") || 5;
       return {
         ticker: t.ticker,
@@ -317,10 +342,16 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
               <table className="w-full text-[12px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Ticker", "Weight (%)", "ATR (21S) %", "Heat Contribution", "Heat Bar"].map(h => (
-                      <th key={h} className="text-left text-[10px] uppercase tracking-[0.08em] font-semibold px-3 py-2.5 whitespace-nowrap"
+                    {[
+                      { label: "Ticker", align: "text-left" },
+                      { label: "Weight (%)", align: "text-right" },
+                      { label: "ATR (21S) %", align: "text-right" },
+                      { label: "Heat Contribution", align: "text-right" },
+                      { label: "Heat Bar", align: "text-left" },
+                    ].map(h => (
+                      <th key={h.label} className={`${h.align} text-[10px] uppercase tracking-[0.08em] font-semibold px-3 py-2.5 whitespace-nowrap`}
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
-                        {h}
+                        {h.label}
                       </th>
                     ))}
                   </tr>
