@@ -2900,21 +2900,46 @@ class WeeklyRetroLockedError(Exception):
 
 def _fetch_ticker_grades_for_retros(cur, retro_ids: list[int]) -> dict[int, dict]:
     """Bulk-fetch children for a list of retro ids. Returns
-    {retro_id: {ticker: {grade, behavior, notes}}}. Empty dict for retros
-    with no children."""
+    {retro_id: {ticker: {grade, behaviors, behavior, notes}}}. Empty dict
+    for retros with no children.
+
+    Migration 045 introduced `behaviors` (JSONB array) as the canonical
+    multi-value store; `behavior` (VARCHAR) is retained for one release
+    window as a rollback path and set to behaviors[0] on save.
+    """
+    import json as _json
     out: dict[int, dict] = {rid: {} for rid in retro_ids}
     if not retro_ids:
         return out
     cur.execute(
-        "SELECT weekly_retro_id, ticker, grade, behavior, notes "
+        "SELECT weekly_retro_id, ticker, grade, behavior, behaviors, notes "
         "FROM weekly_retro_ticker_grades "
         "WHERE weekly_retro_id = ANY(%s)",
         (retro_ids,),
     )
     for row in cur.fetchall():
+        behaviors_raw = row.get("behaviors")
+        # psycopg2 may return JSONB as parsed list or as string depending
+        # on the connection's json handlers; coerce both to a Python list.
+        if isinstance(behaviors_raw, list):
+            behaviors = [str(b) for b in behaviors_raw if b]
+        elif isinstance(behaviors_raw, str) and behaviors_raw:
+            try:
+                parsed = _json.loads(behaviors_raw)
+                behaviors = [str(b) for b in parsed if b] if isinstance(parsed, list) else []
+            except (ValueError, TypeError):
+                behaviors = []
+        else:
+            behaviors = []
+        # Fallback: if the multi array is empty but the legacy scalar
+        # holds a value, project it as a one-element array so the
+        # frontend sees consistent shape even before the backfill runs.
+        if not behaviors and row.get("behavior"):
+            behaviors = [str(row["behavior"])]
         out.setdefault(row["weekly_retro_id"], {})[row["ticker"]] = {
             "grade": row.get("grade") or "",
-            "behavior": row.get("behavior") or "",
+            "behaviors": behaviors,
+            "behavior": row.get("behavior") or "",  # kept for legacy readers
             "notes": row.get("notes") or "",
         }
     return out
@@ -2928,9 +2953,15 @@ def _replace_weekly_retro_ticker_grades(
     row for the parent and re-inserts the current set, so callers don't
     have to diff additions vs removals.
 
-    Skips entries that are fully empty (no grade, no behavior, no notes) so
+    Skips entries that are fully empty (no grade, no behaviors, no notes) so
     a ticker with all three blanks doesn't persist a useless row.
+
+    Migration 045 dual-write:
+      • `behaviors` (JSONB) = the full list, canonical going forward
+      • `behavior` (VARCHAR) = behaviors[0] or '', kept populated for one
+        release window as a rollback path
     """
+    import json as _json
     cur.execute(
         "DELETE FROM weekly_retro_ticker_grades WHERE weekly_retro_id = %s",
         (weekly_retro_id,),
@@ -2945,16 +2976,42 @@ def _replace_weekly_retro_ticker_grades(
         if not isinstance(g, dict):
             continue
         grade = (g.get("grade") or "").strip()[:20] or None
-        behavior = (g.get("behavior") or "").strip()[:40] or None
+
+        # Prefer the array shape; fall back to the legacy scalar so a
+        # client that hasn't upgraded yet still saves without loss.
+        raw_behaviors = g.get("behaviors")
+        if isinstance(raw_behaviors, list):
+            behaviors = [str(b).strip()[:40] for b in raw_behaviors if str(b).strip()]
+        else:
+            legacy = (g.get("behavior") or "").strip()[:40]
+            behaviors = [legacy] if legacy else []
+        # De-dup while preserving order (a chip that's clicked twice
+        # should still land as one tag).
+        seen: set = set()
+        deduped: list = []
+        for b in behaviors:
+            if b not in seen:
+                seen.add(b)
+                deduped.append(b)
+        behaviors = deduped
+
+        # Legacy scalar mirrors the first tag so rollback / older readers
+        # see a coherent value.
+        legacy_behavior = behaviors[0] if behaviors else None
+        behaviors_json = _json.dumps(behaviors)
+
         notes = g.get("notes") or ""
-        if not grade and not behavior and not notes:
+        if not grade and not behaviors and not notes:
             continue
-        rows.append((weekly_retro_id, ticker_clean, grade, behavior, notes))
+        rows.append((
+            weekly_retro_id, ticker_clean, grade,
+            legacy_behavior, behaviors_json, notes,
+        ))
     if rows:
         execute_values(
             cur,
             "INSERT INTO weekly_retro_ticker_grades "
-            "(weekly_retro_id, ticker, grade, behavior, notes) VALUES %s",
+            "(weekly_retro_id, ticker, grade, behavior, behaviors, notes) VALUES %s",
             rows,
         )
 

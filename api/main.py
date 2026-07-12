@@ -1745,7 +1745,7 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
 
       { portfolio, week_start, week_grade?, best_decision?,
         worst_decision?, rule_change?, rule_change_text?,
-        ticker_grades?: { ticker: { grade, behavior, notes } },
+        ticker_grades?: { ticker: { grade, behaviors[], behavior, notes } },
         execution_grade?, process_grade?, pnl_grade?,
         overall_override?, reviewed_at? }
 

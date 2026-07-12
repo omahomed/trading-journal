@@ -23,9 +23,28 @@ const TICKETS_EXPANDED_KEY = "mo-weekly-retro-tickets-expanded";
 const SNAPSHOT_EXPANDED_KEY = "mo-weekly-retro-snapshot-expanded";
 
 const EXEC_GRADES = ["A (Perfect)", "B (Good)", "C (Sloppy)", "D (Bad)", "F (Impulse)"];
+
+// Trader Mindset Phase 1 — 11-tag emotional-and-tactical vocabulary.
+// Ordered so "Followed Plan" (the only positive) is first for one-click
+// tagging on clean trades, then the 9 core emotional mistakes from the
+// user's list in the order they appear on the physical card, with
+// "Caught Knife" tacked on as the one tactical extra (buying a falling
+// ticker — usually FOMO-driven but a distinct pattern worth its own
+// tag). "Late Stop" was intentionally dropped in favor of tagging the
+// underlying emotion (Fear of Failure / Hating to Lose / Lacking
+// Confidence) that caused the frozen exit.
 const BEHAVIOR_TAGS = [
-  "Followed Plan", "FOMO Entry", "Caught Knife", "Late Stop",
-  "Hesitated", "Boredom Trade", "Sized Too Big", "Revenge Trade", "Panic Sell",
+  "Followed Plan",
+  "FOMO Entry",
+  "Fear of Failure",
+  "Hating to Lose",
+  "Mistake Tilt",
+  "Injustice Tilt",
+  "Lacking Confidence",
+  "Overconfidence",
+  "Boredom Trade",
+  "Lost Focus",
+  "Caught Knife",
 ];
 
 type TickerGradeMap = Record<string, WeeklyRetroTickerGrade>;
@@ -270,11 +289,41 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
   const isOveractive = totalTx > 15;
   const gradedTickers = Object.values(ticker_grades).filter(g => g.grade).length;
 
-  const getGrade = (ticker: string): WeeklyRetroTickerGrade =>
-    ticker_grades[ticker] || { grade: "", behavior: "", notes: "" };
+  const getGrade = (ticker: string): WeeklyRetroTickerGrade => {
+    const existing = ticker_grades[ticker];
+    if (!existing) return { grade: "", behaviors: [], behavior: "", notes: "" };
+    // Legacy row projection: pre-Migration-045 saves land here with
+    // `behaviors` undefined; coerce to a one-element array from the
+    // legacy scalar so the chip group renders the historical tag
+    // instead of a blank state.
+    if (!existing.behaviors) {
+      return {
+        ...existing,
+        behaviors: existing.behavior ? [existing.behavior] : [],
+      };
+    }
+    return existing;
+  };
   const setGradeField = (ticker: string, field: keyof WeeklyRetroTickerGrade, value: string) => {
     dirtyRef.current = true;
     setTickerGrades(prev => ({ ...prev, [ticker]: { ...getGrade(ticker), [field]: value } }));
+  };
+  // Toggle a behavior chip on/off. Keeps behaviors[0] mirrored into the
+  // legacy `behavior` scalar so any code still reading the singular form
+  // sees the primary tag rather than a stale value.
+  const toggleBehavior = (ticker: string, tag: string) => {
+    dirtyRef.current = true;
+    setTickerGrades(prev => {
+      const cur = prev[ticker] || { grade: "", behaviors: [], behavior: "", notes: "" };
+      const behaviors = cur.behaviors || (cur.behavior ? [cur.behavior] : []);
+      const next = behaviors.includes(tag)
+        ? behaviors.filter(b => b !== tag)
+        : [...behaviors, tag];
+      return {
+        ...prev,
+        [ticker]: { ...cur, behaviors: next, behavior: next[0] || "" },
+      };
+    });
   };
 
   // Optimistic save: state already reflects user input; PUT writes through
@@ -607,9 +656,13 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
                           })}
                         </div>
 
-                        {/* Ticker-level grading */}
-                        <div className="px-5 py-4">
-                          <div className="grid grid-cols-3 gap-3">
+                        {/* Ticker-level grading. Grade + Analysis stay
+                            side-by-side; Behavior is a full-width chip
+                            group underneath so the 11 tags have room to
+                            breathe and the multi-select is one-click
+                            per tag. */}
+                        <div className="px-5 py-4 flex flex-col gap-4">
+                          <div className="grid grid-cols-2 gap-3">
                             <div>
                               <label className="block text-[9px] uppercase tracking-[0.06em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Grade</label>
                               <select value={g.grade} onChange={e => setGradeField(ticker, "grade", e.target.value)}
@@ -620,20 +673,49 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
                               </select>
                             </div>
                             <div>
-                              <label className="block text-[9px] uppercase tracking-[0.06em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Behavior</label>
-                              <select value={g.behavior} onChange={e => setGradeField(ticker, "behavior", e.target.value)}
-                                      className="w-full h-[36px] px-2.5 rounded-[8px] text-[12px] outline-none"
-                                      style={{ ...inputStyle, appearance: "none" as any }}>
-                                <option value="">Select...</option>
-                                {BEHAVIOR_TAGS.map(bt => <option key={bt} value={bt}>{bt}</option>)}
-                              </select>
-                            </div>
-                            <div>
                               <label className="block text-[9px] uppercase tracking-[0.06em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Analysis / Lesson</label>
                               <input type="text" value={g.notes} onChange={e => setGradeField(ticker, "notes", e.target.value)}
                                      placeholder="What did you learn?"
                                      className="w-full h-[36px] px-2.5 rounded-[8px] text-[12px] outline-none"
                                      style={{ ...inputStyle, fontFamily: "inherit" }} />
+                            </div>
+                          </div>
+                          <div data-testid={`behavior-chips-${ticker}`}>
+                            <label className="block text-[9px] uppercase tracking-[0.06em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
+                              Behavior {g.behaviors.length > 0 && (
+                                <span className="normal-case tracking-normal" style={{ color: "var(--ink-3)" }}>
+                                  · {g.behaviors.length} selected
+                                </span>
+                              )}
+                            </label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {BEHAVIOR_TAGS.map(bt => {
+                                const active = g.behaviors.includes(bt);
+                                // "Followed Plan" is the only positive; give
+                                // it a distinct green tone so the eye reads
+                                // "clean trade" without hunting through the
+                                // mistake vocabulary.
+                                const positive = bt === "Followed Plan";
+                                const activeBg = positive ? "#08a86b" : "#e5484d";
+                                return (
+                                  <button
+                                    key={bt}
+                                    type="button"
+                                    onClick={() => toggleBehavior(ticker, bt)}
+                                    aria-pressed={active}
+                                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer"
+                                    style={{
+                                      background: active
+                                        ? `color-mix(in oklab, ${activeBg} 14%, var(--surface))`
+                                        : "var(--surface)",
+                                      color: active ? activeBg : "var(--ink-3)",
+                                      border: `1px solid color-mix(in oklab, ${active ? activeBg : "var(--ink-4)"} ${active ? 40 : 20}%, var(--border))`,
+                                    }}
+                                  >
+                                    {bt}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         </div>

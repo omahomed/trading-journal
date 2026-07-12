@@ -64,6 +64,11 @@ export interface JournalEntry {
 // shape mirror the DB columns one-for-one.
 export interface WeeklyRetroTickerGrade {
   grade: string;
+  // Migration 045 — multi-value behaviors. The Per-Ticker chip group
+  // writes here; the singular `behavior` field is a legacy scalar
+  // populated as behaviors[0] server-side for one release window as a
+  // rollback path. New client code should read/write `behaviors`.
+  behaviors: string[];
   behavior: string;
   notes: string;
 }
