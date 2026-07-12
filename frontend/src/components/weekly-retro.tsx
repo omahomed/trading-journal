@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import Link from "next/link";
 import { api, getActivePortfolio, type NotesRailItem, type NotesRailYtdStats, type TradeDetail, type WeeklyMetrics, type WeeklyRetro, type WeeklyRetroTickerGrade } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { gradeColor } from "@/lib/grade-helpers";
@@ -615,10 +616,18 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
                 return (
                   <div key={ticker} className="rounded-[14px] overflow-hidden"
                        style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-                    {/* Ticker header */}
-                    <button onClick={() => setExpandedTicker(isExpanded ? null : ticker)}
-                            className="w-full flex items-center justify-between px-5 py-3 text-left transition-colors hover:brightness-[0.98]">
-                      <div className="flex items-center gap-3">
+                    {/* Ticker header. Split into two <button>s + a
+                        <Link> so the "→ Journal" affordance is its own
+                        interactive element (invalid to nest an <a>
+                        inside a <button>). Both buttons toggle the
+                        expander; the Link stops propagation so a click
+                        on it navigates without accidentally collapsing
+                        the card. */}
+                    <div className="w-full flex items-center px-5 py-3 gap-3 transition-colors hover:brightness-[0.98]">
+                      <button onClick={() => setExpandedTicker(isExpanded ? null : ticker)}
+                              aria-expanded={isExpanded}
+                              className="flex items-center gap-3 flex-1 text-left cursor-pointer"
+                              style={{ background: "transparent", border: "none", padding: 0 }}>
                         <span className="text-[16px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{ticker}</span>
                         <span className="text-[10px] px-2 py-0.5 rounded-full font-medium" style={{ background: "color-mix(in oklab, #08a86b 12%, var(--surface))", color: "#16a34a" }}>
                           {txBuys.length}B
@@ -634,12 +643,31 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
                             {g.grade}
                           </span>
                         )}
-                      </div>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2"
-                           style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
-                        <path d="M6 9l6 6 6-6"/>
-                      </svg>
-                    </button>
+                      </button>
+                      <Link
+                        href={`/trade-journal?ticker=${encodeURIComponent(ticker)}`}
+                        onClick={e => e.stopPropagation()}
+                        title={`Open ${ticker} in Trade Journal`}
+                        className="text-[10px] px-2 py-0.5 rounded-full font-semibold hover:underline"
+                        style={{
+                          background: `color-mix(in oklab, ${navColor} 10%, var(--surface))`,
+                          color: navColor,
+                          border: `1px solid color-mix(in oklab, ${navColor} 30%, var(--border))`,
+                          textDecoration: "none",
+                        }}
+                      >
+                        → Journal
+                      </Link>
+                      <button onClick={() => setExpandedTicker(isExpanded ? null : ticker)}
+                              aria-label={`Toggle ${ticker}`}
+                              className="cursor-pointer"
+                              style={{ background: "transparent", border: "none", padding: 0 }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ink-4)" strokeWidth="2"
+                             style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+                          <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                      </button>
+                    </div>
 
                     {isExpanded && (
                       <div style={{ borderTop: "1px solid var(--border)", animation: "slide-up 0.12s ease-out" }}>

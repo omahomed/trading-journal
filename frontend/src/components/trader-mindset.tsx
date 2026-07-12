@@ -29,6 +29,30 @@ type WeekWindow = typeof WEEK_OPTIONS[number];
 
 const POSITIVE_TAG = "Followed Plan";
 
+// Injecting Logic — the counter-mantras for each mistake tag. Sits at
+// the bottom of the page as a permanent reference so a user studying
+// their pattern can read the correction thought right after seeing the
+// tag fire in the heat map. Keys must match BEHAVIOR_TAGS labels in
+// weekly-retro.tsx exactly — the block skips "Followed Plan" (positive,
+// no correction needed) and renders the other 10 in list order.
+//
+// The first 9 lift verbatim from the user's physical card. "Caught
+// Knife" (the tactical extra we added on top of the user's 9) gets an
+// author-added counter that keeps the same tone — action-oriented,
+// present-tense reminder rather than diagnosis.
+const INJECTING_LOGIC: Array<{ tag: string; mantra: string }> = [
+  { tag: "FOMO Entry", mantra: "The market is a constant stream of opportunities — I will not capture all of them." },
+  { tag: "Fear of Failure", mantra: "I'm not going to fail. Today is not going my way but there will be tomorrow. I don't need to be right. Just listen to the market feedback." },
+  { tag: "Hating to Lose", mantra: "I'll win some and I'll lose some — losses are inevitable — but as long as I control my emotions when the losses occur and continue trading within my strategy, I will profit over the long term." },
+  { tag: "Mistake Tilt", mantra: "Hating mistakes is like hating to learn; if I actually learn from it, the money lost is an investment in developing a bigger edge." },
+  { tag: "Injustice Tilt", mantra: "I get good luck too. Look for it and stick to my strategy. That's how I make money long term." },
+  { tag: "Lacking Confidence", mantra: "I spent a thousand hours on this plan. Am I really going to let one trade change it?" },
+  { tag: "Overconfidence", mantra: "My head is in the clouds. Fantasizing about what I want to make from the trade doesn't mean that's what I'm going to make. Do your job." },
+  { tag: "Boredom Trade", mantra: "If I go looking for action for the sake of action, that makes me a gambler, not a trader." },
+  { tag: "Lost Focus", mantra: "Trading is a job. Run it like a serious business that demands my best. When the session is over, I can focus on other things. Not now." },
+  { tag: "Caught Knife", mantra: "If it's falling, wait for the reversal setup — I don't need to catch the bottom to make money on the recovery." },
+];
+
 // Short "May 11" style label for heat map column headers.
 function shortDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(n => parseInt(n, 10));
@@ -255,6 +279,13 @@ export function TraderMindset() {
           )}
         </div>
       </div>
+
+      {/* Injecting Logic — always visible reference, regardless of
+          whether traps have been tagged yet. Sits at the bottom so the
+          heat map + drill-through stay above the fold, and the correction
+          thoughts are the last thing on the page — the intended read
+          order for the retro. */}
+      <InjectingLogicBlock navColor={navColor} />
     </div>
   );
 }
@@ -397,7 +428,16 @@ function DrilldownList({
                     {shortDate(t.week_start)}
                   </Link>
                 </td>
-                <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
+                <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>
+                  <Link
+                    href={`/trade-journal?ticker=${encodeURIComponent(t.ticker)}`}
+                    className="hover:underline"
+                    style={{ color: "var(--ink)" }}
+                    title={`Open ${t.ticker} in Trade Journal`}
+                  >
+                    {t.ticker}
+                  </Link>
+                </td>
                 <td className="px-3 py-2">{t.grade || "—"}</td>
                 <td className="px-3 py-2" style={{ color: "var(--ink-3)" }}>{t.notes || "—"}</td>
               </tr>
@@ -405,6 +445,54 @@ function DrilldownList({
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+function InjectingLogicBlock({ navColor }: { navColor: string }) {
+  // Semantic red — matches the mistake chips on Per-Ticker Details and
+  // the heat map cell shading, so the visual language across surfaces
+  // stays consistent (positive = green, mistake = red).
+  const mistakeAccent = "#e5484d";
+  return (
+    <div
+      data-testid="injecting-logic"
+      className="mt-6 rounded-[14px]"
+      style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}
+    >
+      <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+        <span className="text-[13px] font-semibold">Injecting Logic</span>
+        <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+          Counter-thoughts for each recurring trap
+        </span>
+      </div>
+      <div className="px-[18px] py-4 flex flex-col gap-3">
+        {INJECTING_LOGIC.map(({ tag, mantra }) => (
+          <div
+            key={tag}
+            className="flex items-start gap-3 p-3 rounded-[10px]"
+            style={{
+              background: `color-mix(in oklab, ${mistakeAccent} 6%, var(--surface))`,
+              border: `1px solid color-mix(in oklab, ${mistakeAccent} 20%, var(--border))`,
+            }}
+          >
+            <span
+              className="mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
+              style={{
+                background: mistakeAccent,
+                color: "#fff",
+                fontFamily: "var(--font-jetbrains), monospace",
+              }}
+            >
+              {tag}
+            </span>
+            <span className="text-[12px] leading-relaxed" style={{ color: "var(--ink-2)" }}>
+              {mantra}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
