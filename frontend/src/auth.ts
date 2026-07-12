@@ -27,6 +27,57 @@ async function ensureStagingTester() {
   );
 }
 
+// Per-user test accounts — enables real multi-tenant testing where each
+// account has its OWN UUID (not a shared shell like STAGING_TESTER). The
+// audit confirmed RLS+FORCE+NOBYPASSRLS enforce isolation, so a second
+// user's rows are hidden from the founder and vice versa.
+//
+// Env var shape: JSON array
+//   TEST_ACCOUNTS=[
+//     {"email":"brother@test.local","password":"...","uuid":"<v4>","name":"Brother"}
+//   ]
+//
+// Passwords sit in plaintext on Vercel — fine at hobby scale where the
+// operator owns both sides. Migrate to users.password_hash when the app
+// grows past a handful of testers.
+interface TestAccount {
+  email: string;
+  password: string;
+  uuid: string;
+  name?: string;
+}
+
+function parseTestAccounts(): TestAccount[] {
+  const raw = process.env.TEST_ACCOUNTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((a): a is TestAccount =>
+        typeof a === "object" && a !== null
+        && typeof a.email === "string" && a.email.trim() !== ""
+        && typeof a.password === "string" && a.password !== ""
+        && typeof a.uuid === "string" && a.uuid.trim() !== ""
+      )
+      .map(a => ({ ...a, email: a.email.trim().toLowerCase() }));
+  } catch (e) {
+    console.error("[auth] TEST_ACCOUNTS JSON parse failed — provider disabled:", e);
+    return [];
+  }
+}
+
+const TEST_ACCOUNTS = parseTestAccounts();
+
+async function ensureTestAccountUser(a: TestAccount) {
+  await pool.query(
+    `INSERT INTO users (id, email, name)
+     VALUES ($1::uuid, $2, $3)
+     ON CONFLICT (id) DO NOTHING`,
+    [a.uuid, a.email, a.name ?? a.email.split("@")[0]]
+  );
+}
+
 async function mintApiToken(userId: string, email: string | null | undefined) {
   return new SignJWT({ sub: userId, email: email ?? undefined })
     .setProtectedHeader({ alg: "HS256" })
@@ -49,6 +100,9 @@ const envList = process.env.AUTH_ALLOWED_EMAILS
 const ALLOWED_EMAILS = new Set(envList && envList.length > 0 ? envList : OWNER_FALLBACK);
 // Staging tester signs in via Credentials; admit them through the allowlist too.
 if (STAGING_PASSWORD) ALLOWED_EMAILS.add(STAGING_TESTER_EMAIL);
+// Every configured test account is automatically allowlisted — the operator
+// already opted them in by putting them in TEST_ACCOUNTS.
+for (const a of TEST_ACCOUNTS) ALLOWED_EMAILS.add(a.email);
 
 // Shared-account aliasing — these emails sign in with their own Google account
 // (the adapter still creates their `users` row) but operate ON the founder's
@@ -82,6 +136,33 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (!input || input !== STAGING_PASSWORD) return null;
         await ensureStagingTester();
         return { id: STAGING_TESTER_UUID, email: STAGING_TESTER_EMAIL, name: "Staging Tester" };
+      },
+    })] : []),
+    ...(TEST_ACCOUNTS.length > 0 ? [Credentials({
+      id: "test-account",
+      name: "Email + Password",
+      credentials: {
+        email:    { label: "Email",    type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(credentials) {
+        const email = typeof credentials?.email === "string"
+          ? credentials.email.trim().toLowerCase()
+          : "";
+        const password = typeof credentials?.password === "string"
+          ? credentials.password
+          : "";
+        if (!email || !password) return null;
+        const match = TEST_ACCOUNTS.find(
+          a => a.email === email && a.password === password
+        );
+        if (!match) return null;
+        await ensureTestAccountUser(match);
+        return {
+          id: match.uuid,
+          email: match.email,
+          name: match.name ?? match.email,
+        };
       },
     })] : []),
   ],

@@ -4,6 +4,10 @@ import { signIn } from "next-auth/react";
 import { useState } from "react";
 
 const STAGING_AUTH_ENABLED = process.env.NEXT_PUBLIC_STAGING_AUTH_ENABLED === "true";
+// TEST_ACCOUNTS provider surface — flip via env when you've configured
+// per-user credentials in the backend TEST_ACCOUNTS env var. Off in prod
+// keeps the extra form out of every visitor's face.
+const TEST_ACCOUNTS_ENABLED = process.env.NEXT_PUBLIC_TEST_ACCOUNTS_ENABLED === "true";
 
 export default function LoginForm() {
   const [email, setEmail] = useState("");
@@ -14,6 +18,13 @@ export default function LoginForm() {
   // On staging, the friend-facing view shows only the password. Owner can
   // reveal Google/email via the toggle at the bottom.
   const [showOwnerSignin, setShowOwnerSignin] = useState(false);
+  // Per-user email + password (TEST_ACCOUNTS). Separate state from the
+  // magic-link email so a mistyped magic-link doesn't clobber a valid
+  // test-account email.
+  const [taEmail, setTaEmail] = useState("");
+  const [taPassword, setTaPassword] = useState("");
+  const [taSubmitting, setTaSubmitting] = useState(false);
+  const [taError, setTaError] = useState("");
 
   async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
@@ -36,6 +47,26 @@ export default function LoginForm() {
     } else {
       setBetaError("Sign-in failed");
       setBetaSubmitting(false);
+    }
+  }
+
+  async function handleTestAccount(e: React.FormEvent) {
+    e.preventDefault();
+    if (!taEmail || !taPassword || taSubmitting) return;
+    setTaSubmitting(true);
+    setTaError("");
+    const res = await signIn("test-account", {
+      email: taEmail, password: taPassword,
+      redirect: false, callbackUrl: "/",
+    });
+    if (res?.error) {
+      setTaError("Invalid credentials");
+      setTaSubmitting(false);
+    } else if (res?.ok) {
+      window.location.href = res.url || "/";
+    } else {
+      setTaError("Sign-in failed");
+      setTaSubmitting(false);
     }
   }
 
@@ -133,6 +164,50 @@ export default function LoginForm() {
                 {sending ? "Sending link…" : "Email me a sign-in link"}
               </button>
             </form>
+
+            {TEST_ACCOUNTS_ENABLED && (
+              <>
+                <div className="flex items-center gap-3 my-5">
+                  <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+                  <div className="text-[11px] uppercase tracking-wider" style={{ color: "var(--ink-5)" }}>or</div>
+                  <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+                </div>
+
+                <details className="text-left" style={{ background: "var(--bg)", borderRadius: 12, padding: "8px 12px" }}>
+                  <summary className="cursor-pointer text-[12px] font-semibold text-center list-none" style={{ color: "var(--ink-3)" }}>
+                    Sign in with email + password
+                  </summary>
+                  <form onSubmit={handleTestAccount} className="space-y-2 mt-3">
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={taEmail}
+                      onChange={(e) => { setTaEmail(e.target.value); setTaError(""); }}
+                      disabled={taSubmitting}
+                      className="w-full h-[40px] px-3 rounded-[10px] text-[13px] outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                    />
+                    <input
+                      type="password"
+                      placeholder="Password"
+                      value={taPassword}
+                      onChange={(e) => { setTaPassword(e.target.value); setTaError(""); }}
+                      disabled={taSubmitting}
+                      className="w-full h-[40px] px-3 rounded-[10px] text-[13px] outline-none"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                    />
+                    <button
+                      type="submit"
+                      disabled={taSubmitting || !taEmail || !taPassword}
+                      className="w-full h-[40px] rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      style={{ background: "#6366f1", color: "white" }}>
+                      {taSubmitting ? "Signing in…" : "Sign in"}
+                    </button>
+                    {taError && <div className="text-[12px] text-center" style={{ color: "#e5484d" }}>{taError}</div>}
+                  </form>
+                </details>
+              </>
+            )}
 
             {STAGING_AUTH_ENABLED && (
               <button
