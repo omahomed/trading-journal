@@ -93,6 +93,7 @@ export const NAV: NavGroup[] = [
       { id: "heatmap", label: "Performance Heat Map", href: "/performance-heatmap" },
       { id: "campaign-review", label: "Campaign Review", href: "/campaign-review" },
       { id: "trend-cycle-review", label: "Trend Cycle Review", href: "/trend-cycle-review" },
+      { id: "trader-mindset", label: "Trader Mindset", href: "/trader-mindset" },
       { id: "period", label: "Period Review", href: "/period-review" },
       { id: "period:weekly", label: "Weekly Review", parentPage: "period", tab: "weekly" },
       { id: "period:monthly", label: "Monthly Review", parentPage: "period", tab: "monthly" },

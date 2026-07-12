@@ -13,6 +13,7 @@
 // the Trader Mindset page for drill-through.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import type { MindsetTrap } from "@/lib/api";
 import { log } from "@/lib/log";
@@ -76,6 +77,13 @@ export function RecurringTrapsStrip({
         <span className="text-xs" style={{ color: "var(--ink-4)" }}>
           Last {weeks} weeks · {totalOverAll} tag{totalOverAll === 1 ? "" : "s"} fired
         </span>
+        <Link
+          href="/trader-mindset"
+          className="ml-auto text-[11px] font-semibold hover:underline"
+          style={{ color: navColor }}
+        >
+          Deep view →
+        </Link>
       </div>
       <div className="px-[18px] py-3">
         {loading ? (
@@ -92,12 +100,15 @@ export function RecurringTrapsStrip({
             {topThree.map(t => {
               const accent = trapAccent(t.tag);
               return (
-                <div
+                <Link
                   key={t.tag}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full"
+                  href={`/trader-mindset?tag=${encodeURIComponent(t.tag)}`}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full cursor-pointer hover:brightness-95"
+                  title={`Drill into "${t.tag}" on Trader Mindset`}
                   style={{
                     background: `color-mix(in oklab, ${accent} 14%, var(--surface))`,
                     border: `1px solid color-mix(in oklab, ${accent} 40%, var(--border))`,
+                    textDecoration: "none",
                   }}
                 >
                   <span
@@ -116,7 +127,7 @@ export function RecurringTrapsStrip({
                   >
                     {t.total_count}
                   </span>
-                </div>
+                </Link>
               );
             })}
             {hasMore && (
