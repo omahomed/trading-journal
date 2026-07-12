@@ -40,17 +40,22 @@ const POSITIVE_TAG = "Followed Plan";
 // Knife" (the tactical extra we added on top of the user's 9) gets an
 // author-added counter that keeps the same tone — action-oriented,
 // present-tense reminder rather than diagnosis.
-const INJECTING_LOGIC: Array<{ tag: string; mantra: string }> = [
-  { tag: "FOMO Entry", mantra: "The market is a constant stream of opportunities — I will not capture all of them." },
-  { tag: "Fear of Failure", mantra: "I'm not going to fail. Today is not going my way but there will be tomorrow. I don't need to be right. Just listen to the market feedback." },
-  { tag: "Hating to Lose", mantra: "I'll win some and I'll lose some — losses are inevitable — but as long as I control my emotions when the losses occur and continue trading within my strategy, I will profit over the long term." },
-  { tag: "Mistake Tilt", mantra: "Hating mistakes is like hating to learn; if I actually learn from it, the money lost is an investment in developing a bigger edge." },
-  { tag: "Injustice Tilt", mantra: "I get good luck too. Look for it and stick to my strategy. That's how I make money long term." },
-  { tag: "Lacking Confidence", mantra: "I spent a thousand hours on this plan. Am I really going to let one trade change it?" },
-  { tag: "Overconfidence", mantra: "My head is in the clouds. Fantasizing about what I want to make from the trade doesn't mean that's what I'm going to make. Do your job." },
-  { tag: "Boredom Trade", mantra: "If I go looking for action for the sake of action, that makes me a gambler, not a trader." },
-  { tag: "Lost Focus", mantra: "Trading is a job. Run it like a serious business that demands my best. When the session is over, I can focus on other things. Not now." },
-  { tag: "Caught Knife", mantra: "If it's falling, wait for the reversal setup — I don't need to catch the bottom to make money on the recovery." },
+//
+// Each mantra gets a distinct accent color so the block scans as a
+// palette of correction thoughts rather than a wall of red — one hue
+// per trap makes the reference visually parseable at a glance and
+// mirrors the pastel banding on the user's physical card.
+const INJECTING_LOGIC: Array<{ tag: string; mantra: string; accent: string }> = [
+  { tag: "FOMO Entry",         accent: "#ec4899", mantra: "The market is a constant stream of opportunities — I will not capture all of them." },
+  { tag: "Fear of Failure",    accent: "#10b981", mantra: "I'm not going to fail. Today is not going my way but there will be tomorrow. I don't need to be right. Just listen to the market feedback." },
+  { tag: "Hating to Lose",     accent: "#0ea5e9", mantra: "I'll win some and I'll lose some — losses are inevitable — but as long as I control my emotions when the losses occur and continue trading within my strategy, I will profit over the long term." },
+  { tag: "Mistake Tilt",       accent: "#8b5cf6", mantra: "Hating mistakes is like hating to learn; if I actually learn from it, the money lost is an investment in developing a bigger edge." },
+  { tag: "Injustice Tilt",     accent: "#f97316", mantra: "I get good luck too. Look for it and stick to my strategy. That's how I make money long term." },
+  { tag: "Lacking Confidence", accent: "#64748b", mantra: "I spent a thousand hours on this plan. Am I really going to let one trade change it?" },
+  { tag: "Overconfidence",     accent: "#d946ef", mantra: "My head is in the clouds. Fantasizing about what I want to make from the trade doesn't mean that's what I'm going to make. Do your job." },
+  { tag: "Boredom Trade",      accent: "#f59e0b", mantra: "If I go looking for action for the sake of action, that makes me a gambler, not a trader." },
+  { tag: "Lost Focus",         accent: "#6366f1", mantra: "Trading is a job. Run it like a serious business that demands my best. When the session is over, I can focus on other things. Not now." },
+  { tag: "Caught Knife",       accent: "#14b8a6", mantra: "If it's falling, wait for the reversal setup — I don't need to catch the bottom to make money on the recovery." },
 ];
 
 // Short "May 11" style label for heat map column headers.
@@ -450,37 +455,51 @@ function DrilldownList({
 }
 
 function InjectingLogicBlock({ navColor }: { navColor: string }) {
-  // Semantic red — matches the mistake chips on Per-Ticker Details and
-  // the heat map cell shading, so the visual language across surfaces
-  // stays consistent (positive = green, mistake = red).
-  const mistakeAccent = "#e5484d";
+  // Collapsed by default — the block is a reference the user opens when
+  // they want to read a counter-mantra, not something they need to see
+  // every visit. Uses <details> (native, minimal, no localStorage) to
+  // match the "View Sizer Rules" pattern from Position Sizer.
+  //
+  // Each mantra row wears its own accent color so the palette reads as
+  // ten distinct correction thoughts instead of one uniform block of
+  // red — mirrors the pastel banding on the user's physical card.
   return (
-    <div
+    <details
       data-testid="injecting-logic"
-      className="mt-6 rounded-[14px]"
+      className="mt-6 rounded-[14px] overflow-hidden group"
       style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}
     >
-      <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+      <summary
+        className="flex items-center gap-2 px-[18px] py-3 cursor-pointer list-none"
+        style={{ borderBottom: "1px solid transparent" }}
+      >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
         <span className="text-[13px] font-semibold">Injecting Logic</span>
         <span className="text-xs" style={{ color: "var(--ink-4)" }}>
-          Counter-thoughts for each recurring trap
+          Counter-thoughts for each recurring trap · click to expand
         </span>
-      </div>
-      <div className="px-[18px] py-4 flex flex-col gap-3">
-        {INJECTING_LOGIC.map(({ tag, mantra }) => (
+        <svg
+          className="ml-auto transition-transform group-open:rotate-180"
+          width="14" height="14" viewBox="0 0 24 24"
+          fill="none" stroke="var(--ink-4)" strokeWidth="2"
+        >
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </summary>
+      <div className="px-[18px] py-4 flex flex-col gap-3" style={{ borderTop: "1px solid var(--border)" }}>
+        {INJECTING_LOGIC.map(({ tag, mantra, accent }) => (
           <div
             key={tag}
             className="flex items-start gap-3 p-3 rounded-[10px]"
             style={{
-              background: `color-mix(in oklab, ${mistakeAccent} 6%, var(--surface))`,
-              border: `1px solid color-mix(in oklab, ${mistakeAccent} 20%, var(--border))`,
+              background: `color-mix(in oklab, ${accent} 8%, var(--surface))`,
+              border: `1px solid color-mix(in oklab, ${accent} 30%, var(--border))`,
             }}
           >
             <span
               className="mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
               style={{
-                background: mistakeAccent,
+                background: accent,
                 color: "#fff",
                 fontFamily: "var(--font-jetbrains), monospace",
               }}
@@ -493,6 +512,6 @@ function InjectingLogicBlock({ navColor }: { navColor: string }) {
           </div>
         ))}
       </div>
-    </div>
+    </details>
   );
 }
