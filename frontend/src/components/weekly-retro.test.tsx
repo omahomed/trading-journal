@@ -49,6 +49,10 @@ vi.mock("@/lib/api", () => ({
     // is the mutation the integration test fires; success branch wires
     // back to NotesRail.refresh() via onTagsChanged.
     createTagAssignment: vi.fn(),
+    // Trader Mindset Phase 3: RecurringTrapsStrip fetches this on mount.
+    // Default to empty traps so the strip renders its "no data yet"
+    // empty state and doesn't fight the existing tests.
+    mindsetTraps: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -65,6 +69,7 @@ const mPinsToggle      = vi.mocked(api.pinsToggle);
 const mListTags        = vi.mocked(api.listTags);
 const mListAssignments = vi.mocked(api.listTagAssignments);
 const mCreateAssign    = vi.mocked(api.createTagAssignment);
+const mMindsetTraps    = vi.mocked(api.mindsetTraps);
 
 function setupDefaults() {
   mTradesRecent.mockResolvedValue({ details: [], lot_closures: [] } as any);
@@ -98,6 +103,11 @@ function setupDefaults() {
     id: 1, tag_id: 1, tag_name: "x", tag_color: "rose",
     entity_type: "weekly_retro", entity_id: 1,
     created_at: "2026-05-13T00:00:00",
+  } as any);
+  mMindsetTraps.mockResolvedValue({
+    portfolio: "CanSlim", weeks: 8,
+    weeks_included: [],
+    traps: [],
   } as any);
 }
 

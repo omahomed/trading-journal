@@ -14,6 +14,7 @@ import { FlightDeck } from "./flight-deck";
 import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import { CloseTheWeek, type CloseTheWeekState } from "./close-the-week";
 import { Icons } from "./icons";
+import { RecurringTrapsStrip } from "./recurring-traps-strip";
 
 // Phase 2: Per-Ticker Details expander persistence. Per-USER UI preference
 // (not portfolio- or week-scoped). Owned by <SectionExpander>; the key is
@@ -540,6 +541,13 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
               loading={metricsLoading && !metrics}
             />
           </div>
+
+          {/* Trader Mindset Phase 3 — Recurring Traps strip. Top 3
+              behavior tags over the last 8 weeks. Sits above Per-Ticker
+              Details so the user sees the pattern they're reinforcing
+              or breaking BEFORE they grade this week's trades. Reads
+              once per portfolio via api.mindsetTraps. */}
+          <RecurringTrapsStrip portfolio={portfolio} navColor={navColor} />
 
           {/* Per-Ticker Details — collapsible. Migrated to the shared
               <SectionExpander> in the SectionExpander extraction commit;
