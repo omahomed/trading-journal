@@ -306,6 +306,136 @@ def journal_latest(portfolio: str = "CanSlim", before: str = ""):
     return row
 
 
+@app.get("/api/mindset/traps")
+def mindset_traps(request: Request, portfolio: str = "CanSlim", weeks: int = 8):
+    """Aggregate behavior tags over the last N weeks.
+
+    Powers two views from a single call:
+      1. Recurring Traps strip on Weekly Retro — the top 3 tags by
+         total_count over the window.
+      2. Trader Mindset page — heat map (tag x week), per-tag trend
+         lines, and per-tag drill-through to the specific trades that
+         triggered each fire.
+
+    Response shape:
+      {
+        "portfolio": "CanSlim",
+        "weeks": 8,
+        "weeks_included": [{"week_start": "2026-05-11"}, ...],  // oldest→newest
+        "traps": [
+          {
+            "tag": "FOMO Entry",
+            "total_count": 6,
+            "series": [{"week_start": "2026-05-11", "count": 2}, ...],
+            "trades": [
+              {"ticker": "NVDA", "week_start": "2026-05-11",
+               "retro_id": 42, "grade": "C (Sloppy)",
+               "notes": "chased after breakout"},
+              ...
+            ]
+          },
+          ...
+        ]
+      }
+
+    Sort: traps by total_count desc, then tag asc for stable tie-break.
+    Each trap's series contains exactly `weeks` entries — weeks with no
+    fires get {count: 0} so the heat map has a consistent column count.
+    """
+    try:
+        w = max(1, min(int(weeks or 8), 52))
+    except (TypeError, ValueError):
+        w = 8
+
+    from datetime import date, timedelta
+    today = date.today()
+    # Anchor at this week's Monday, then walk back w-1 Mondays.
+    days_since_mon = (today.weekday())  # Mon=0
+    this_monday = today - timedelta(days=days_since_mon)
+    week_starts = [this_monday - timedelta(weeks=i) for i in range(w - 1, -1, -1)]
+    earliest_monday = week_starts[0]
+
+    try:
+        with db.get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.id AS retro_id, r.week_start,
+                       ptg.ticker, ptg.grade, ptg.notes,
+                       jsonb_array_elements_text(ptg.behaviors) AS tag
+                  FROM weekly_retros r
+                  JOIN portfolios p ON p.id = r.portfolio_id
+                  JOIN weekly_retro_ticker_grades ptg ON ptg.weekly_retro_id = r.id
+                 WHERE p.name = %s
+                   AND r.deleted_at IS NULL
+                   AND r.week_start >= %s
+                """,
+                (portfolio, earliest_monday),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        print(f"[mindset_traps] query failed: {e}")
+        return {"error": str(e), "portfolio": portfolio, "weeks": w,
+                "weeks_included": [], "traps": []}
+
+    # Aggregate per tag. Trip counts + per-week counts + drill-through
+    # trades list. Weeks with no fires get count=0 via the pre-seeded
+    # dict so the heat map has consistent columns.
+    per_tag: dict = {}
+    for row in rows:
+        # dict-style row via RealDictCursor OR positional — support both.
+        if isinstance(row, dict):
+            retro_id = row["retro_id"]
+            wk = row["week_start"]
+            ticker = row["ticker"]
+            grade = row.get("grade") or ""
+            notes = row.get("notes") or ""
+            tag = row["tag"]
+        else:
+            retro_id, wk, ticker, grade, notes, tag = row
+            grade = grade or ""
+            notes = notes or ""
+        tag_s = str(tag).strip()
+        if not tag_s:
+            continue
+        entry = per_tag.setdefault(tag_s, {
+            "tag": tag_s,
+            "total_count": 0,
+            "series_map": {ws.isoformat(): 0 for ws in week_starts},
+            "trades": [],
+        })
+        entry["total_count"] += 1
+        wk_iso = wk.isoformat() if hasattr(wk, "isoformat") else str(wk)[:10]
+        if wk_iso in entry["series_map"]:
+            entry["series_map"][wk_iso] += 1
+        entry["trades"].append({
+            "ticker": ticker,
+            "week_start": wk_iso,
+            "retro_id": retro_id,
+            "grade": grade,
+            "notes": notes,
+        })
+
+    traps = []
+    for tag, e in per_tag.items():
+        traps.append({
+            "tag": tag,
+            "total_count": e["total_count"],
+            "series": [
+                {"week_start": ws.isoformat(), "count": e["series_map"][ws.isoformat()]}
+                for ws in week_starts
+            ],
+            "trades": sorted(e["trades"], key=lambda t: (t["week_start"], t["ticker"])),
+        })
+    traps.sort(key=lambda x: (-x["total_count"], x["tag"]))
+
+    return {
+        "portfolio": portfolio,
+        "weeks": w,
+        "weeks_included": [{"week_start": ws.isoformat()} for ws in week_starts],
+        "traps": traps,
+    }
+
+
 @app.get("/api/portfolio/heat-preview")
 def portfolio_heat_preview(portfolio: str = "CanSlim"):
     """Live Portfolio Heat snapshot for the Daily Routine tile.

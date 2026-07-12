@@ -62,6 +62,34 @@ export interface JournalEntry {
 // Weekly retro (Migration 025 — Phase 0). Persisted server-side via
 // /api/weekly-retros. Both top-level fields and the nested ticker_grades
 // shape mirror the DB columns one-for-one.
+// Trader Mindset aggregation response. See GET /api/mindset/traps.
+// series[] length equals weeks (top-level); each entry's week_start
+// aligns with weeks_included so the frontend can render heat map cells
+// by array index without a date-match lookup.
+export interface MindsetTrapTrade {
+  ticker: string;
+  week_start: string;   // YYYY-MM-DD
+  retro_id: number;
+  grade: string;        // e.g. "C (Sloppy)"; "" if the trade has no letter grade
+  notes: string;        // Analysis/Lesson field; "" if blank
+}
+
+export interface MindsetTrap {
+  tag: string;
+  total_count: number;
+  series: Array<{ week_start: string; count: number }>;
+  trades: MindsetTrapTrade[];
+}
+
+export interface MindsetTrapsResponse {
+  portfolio: string;
+  weeks: number;
+  weeks_included: Array<{ week_start: string }>;
+  traps: MindsetTrap[];
+  error?: string;
+}
+
+
 export interface WeeklyRetroTickerGrade {
   grade: string;
   // Migration 045 — multi-value behaviors. The Per-Ticker chip group
@@ -576,6 +604,16 @@ export const api = {
   portfolioHeatPreview: (portfolio = getActivePortfolio()) =>
     fetchJSON<{ heat: number; nlv_used: number; portfolio: string; error?: string }>(
       `/api/portfolio/heat-preview?portfolio=${encodeURIComponent(portfolio)}`
+    ),
+
+  // Trader Mindset — behavior-tag aggregation over the last N weeks.
+  // Powers the Recurring Traps strip on Weekly Retro (top 3 tags) and
+  // the Trader Mindset page (heat map + trend lines + drill-through).
+  // Each trap's `series` has exactly `weeks` entries so the heat map
+  // has consistent columns; weeks with no fires come back with count=0.
+  mindsetTraps: (portfolio = getActivePortfolio(), weeks = 8) =>
+    fetchJSON<MindsetTrapsResponse>(
+      `/api/mindset/traps?portfolio=${encodeURIComponent(portfolio)}&weeks=${weeks}`
     ),
 
   // Trades
