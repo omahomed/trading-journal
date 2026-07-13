@@ -418,6 +418,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             daily_pct_change: String(h.daily_pct_change || 0),
             pct_invested: String(h.pct_invested || 0),
             score: String(h.score || 0),
+            cash_change: String((h as any).cash_change ?? (h as any).cash_flow ?? 0),
             market_notes: (h as any).market_notes || "",
             market_action: (h as any).market_action || "",
             portfolio_heat: String(h.portfolio_heat || 0),
@@ -441,6 +442,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
             daily_pct_change: editFields.daily_pct_change,
             pct_invested: editFields.pct_invested,
             score: editFields.score,
+            cash_change: editFields.cash_change,
             market_notes: editFields.market_notes,
             market_action: editFields.market_action,
             portfolio_heat: editFields.portfolio_heat,
@@ -534,7 +536,9 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Portfolio Heat</label>
                         <input type="number" value={editFields.portfolio_heat} onChange={e => setEditFields({ ...editFields, portfolio_heat: e.target.value })} step="0.1" className={inputCls} style={inputSt} /></div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Cash +/-</label>
+                        <input type="number" value={editFields.cash_change} onChange={e => setEditFields({ ...editFields, cash_change: e.target.value })} step="0.01" className={inputCls} style={inputSt} /></div>
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>SPY ATR</label>
                         <input type="number" value={editFields.spy_atr} onChange={e => setEditFields({ ...editFields, spy_atr: e.target.value })} step="0.01" className={inputCls} style={inputSt} /></div>
                       <div><label className="block text-[10px] uppercase tracking-[0.08em] font-semibold mb-1" style={{ color: "var(--ink-4)" }}>Nasdaq ATR</label>
