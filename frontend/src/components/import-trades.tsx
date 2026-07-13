@@ -5,6 +5,7 @@ import { api, getActivePortfolio, type TradePosition, type TradeDetail } from "@
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
+import { RobinhoodImport } from "./robinhood-import";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -66,7 +67,14 @@ function optionTicker(t: Trade) {
 
 const EXEC_CACHE_KEY = "importTrades.executions.v1";
 
+// Broker source picker. IBKR uses server-side Flex Query (the historical
+// primary path); Robinhood uses a client-uploaded CSV parsed via
+// scripts/import_robinhood_csv.py behind two thin API endpoints. Two
+// separate flows on one page so the sidebar stays a single entry.
+type BrokerSource = "ibkr" | "robinhood";
+
 export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNavigate?: (page: string) => void }) {
+  const [broker, setBroker] = useState<BrokerSource>("ibkr");
   const [pulling, setPulling] = useState(false);
   const [executions, setExecutions] = useState<Trade[]>(() => {
     if (typeof window === "undefined") return [];
@@ -300,10 +308,40 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
           Import <em className="italic" style={{ color: navColor }}>Trades</em>
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          Pull executions from IBKR Flex Web Service
+          {broker === "ibkr"
+            ? "Pull executions from IBKR Flex Web Service"
+            : "Upload the Robinhood transaction-history CSV from your web account"}
         </div>
       </div>
 
+      {/* Broker source tabs */}
+      <div className="flex gap-2 mb-5">
+        {(["ibkr", "robinhood"] as const).map(b => {
+          const active = broker === b;
+          const label = b === "ibkr" ? "Interactive Brokers" : "Robinhood";
+          return (
+            <button
+              key={b}
+              type="button"
+              onClick={() => setBroker(b)}
+              className="h-[36px] px-4 rounded-[10px] text-[12px] font-semibold cursor-pointer transition-all"
+              style={{
+                background: active
+                  ? `color-mix(in oklab, ${navColor} 12%, transparent)`
+                  : "var(--surface)",
+                color: active ? navColor : "var(--ink-3)",
+                border: `1px solid ${active ? navColor : "var(--border)"}`,
+              }}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {broker === "robinhood" && <RobinhoodImport navColor={navColor} />}
+
+      {broker === "ibkr" && (
+      <>
       {/* Connection status */}
       <div className="flex items-center gap-3 mb-6 p-4 rounded-[14px]" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <div className="w-10 h-10 rounded-[12px] flex items-center justify-center text-lg"
@@ -651,6 +689,8 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
             </table>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

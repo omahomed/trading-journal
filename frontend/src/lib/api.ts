@@ -62,6 +62,52 @@ export interface JournalEntry {
 // Weekly retro (Migration 025 — Phase 0). Persisted server-side via
 // /api/weekly-retros. Both top-level fields and the nested ticker_grades
 // shape mirror the DB columns one-for-one.
+// Robinhood importer — preview + commit response shapes. See
+// scripts/import_robinhood_csv.py and api/main.py:_serialize_rh_campaign
+// for authoritative field docs.
+export interface RobinhoodCampaign {
+  ticker: string;
+  instrument_type: "STOCK" | "OPTION";
+  multiplier: number;
+  open_date: string;
+  shares_remaining: number;
+  status: "OPEN" | "CLOSED";
+  txn_count: number;
+  buys: number;
+  sells: number;
+  option_meta: {
+    underlying: string;
+    expiration: string;
+    option_type: "Call" | "Put";
+    strike: number;
+  } | null;
+}
+export interface RobinhoodCashRow {
+  date: string;
+  amount: number;
+  source: string;
+  note: string;
+}
+export interface RobinhoodImportPreview {
+  portfolio: string;
+  since: string;
+  counts: Record<string, number>;   // by category
+  pre_cutoff: number;
+  existing_trades: number;
+  warnings: string[];
+  equity_campaigns: RobinhoodCampaign[];
+  option_campaigns: RobinhoodCampaign[];
+  cash_rows: RobinhoodCashRow[];
+}
+export interface RobinhoodImportCommit {
+  portfolio: string;
+  since: string;
+  reset_count: number | null;
+  written: { summary: number; details: number; cash: number };
+  warnings: string[];
+}
+
+
 // Trader Mindset aggregation response. See GET /api/mindset/traps.
 // series[] length equals weeks (top-level); each entry's week_start
 // aligns with weeks_included so the frontend can render heat map cells
@@ -1002,6 +1048,24 @@ export const api = {
     fetchWithAuth(`${API_BASE}/api/tags/assignments/${id}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string; id: number } | { error: string }>,
+
+  // Robinhood CSV importer — dry-run preview + real commit endpoints wrap
+  // scripts/import_robinhood_csv.py. See the CLI docstring for cash-source
+  // mapping and category rules.
+  robinhoodImportPreview: (csv_text: string, since: string, portfolio: string) =>
+    fetchWithAuth(`${API_BASE}/api/imports/robinhood/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv_text, since, portfolio }),
+    }).then(r => r.json()) as Promise<RobinhoodImportPreview | { detail: string }>,
+
+  robinhoodImportCommit: (body: {
+    csv_text: string; since: string; portfolio: string;
+    strategy?: string; reset_cash_ledger?: boolean;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/imports/robinhood/commit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<RobinhoodImportCommit | { detail: string }>,
 
   // IBKR — broker NAV pull for Daily Routine auto-fill. The endpoint always
   // returns 200 OK; success/error is read from the body, never the HTTP code.

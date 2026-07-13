@@ -306,6 +306,167 @@ def journal_latest(portfolio: str = "CanSlim", before: str = ""):
     return row
 
 
+def _load_robinhood_module():
+    """Lazy import of the Robinhood importer script.
+
+    Kept lazy (module-scoped after first call) so the FastAPI process
+    doesn't pay the parse cost unless the endpoints are actually hit.
+    scripts/ isn't on the normal PYTHONPATH; we push it once and reuse.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    scripts_dir = _Path(__file__).resolve().parent.parent / "scripts"
+    if str(scripts_dir) not in _sys.path:
+        _sys.path.insert(0, str(scripts_dir))
+    import import_robinhood_csv as _rh  # noqa: E402  (deferred by design)
+    return _rh
+
+
+def _serialize_rh_campaign(c) -> dict:
+    """Campaign → JSON. Matches the fields the frontend Preview table
+    binds to; keeps the raw txn objects out (each carries the full raw
+    CSV row and would balloon the payload)."""
+    return {
+        "ticker": c.ticker,
+        "instrument_type": c.instrument_type,
+        "multiplier": c.multiplier,
+        "open_date": c.open_date.isoformat(),
+        "shares_remaining": round(c.shares_remaining, 6),
+        "status": c.status,
+        "txn_count": len(c.txns),
+        # Same-day partial fills aggregated per (date, action) tuple —
+        # what the user actually sees on their Trade Journal after import.
+        "buys": sum(1 for t in c.txns if t.action == "BUY"),
+        "sells": sum(1 for t in c.txns if t.action == "SELL"),
+        "option_meta": c.option_meta,
+    }
+
+
+def _serialize_rh_cash(c) -> dict:
+    return {
+        "date": c.date.isoformat(),
+        "amount": c.amount,
+        "source": c.source,
+        "note": c.note,
+    }
+
+
+def _parse_rh_body(body: dict) -> tuple[str, "date", str]:
+    """Shared body-validation for the two Robinhood endpoints."""
+    from datetime import datetime as _dt
+    csv_text = body.get("csv_text") or ""
+    since_str = body.get("since") or "2026-01-01"
+    portfolio = (body.get("portfolio") or "").strip()
+    if not csv_text or not portfolio:
+        raise HTTPException(status_code=400, detail="csv_text and portfolio are required")
+    try:
+        since_d = _dt.strptime(since_str.strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"bad since date: {since_str}")
+    return csv_text, since_d, portfolio
+
+
+@app.post("/api/imports/robinhood/preview")
+def robinhood_import_preview(request: Request, body: dict = Body(...)):
+    """Dry-run parse of a Robinhood CSV. Returns the same report the CLI
+    prints, structured for the /import-trades preview panel.
+
+    Body: { csv_text: str, since: 'YYYY-MM-DD', portfolio: str }
+    Returns: {
+      portfolio, since, counts, pre_cutoff, existing_trades,
+      warnings, equity_campaigns[], option_campaigns[], cash_rows[]
+    }
+
+    No DB writes. Duplicate detection queries trades_summary for the
+    target portfolio + cutoff so the frontend can warn the user before
+    they hit Commit.
+    """
+    csv_text, since_d, portfolio = _parse_rh_body(body)
+    rh = _load_robinhood_module()
+
+    raw_rows = rh.read_csv_from_text(csv_text)
+    kept_rows, pre_cutoff = rh.filter_by_date(raw_rows, since_d)
+    counts = rh.classify_counts(kept_rows)
+    warnings: list[str] = []
+    equity_campaigns = rh.reconstruct_equity_campaigns(kept_rows, warnings)
+    option_campaigns = rh.reconstruct_option_campaigns(kept_rows, warnings)
+    cash_rows = rh.extract_cash_rows(kept_rows, warnings)
+    warnings.extend(rh.collect_short_option_warnings(kept_rows))
+
+    # Duplicate detection — count existing trades in the target portfolio
+    # since the cutoff. Non-fatal on failure (portfolio might not exist yet).
+    existing_trades = 0
+    try:
+        with db.get_db_connection() as conn, conn.cursor() as cur:
+            portfolio_id, _uid = rh._resolve_portfolio(cur, portfolio)
+            existing_trades = rh.check_existing_trades(cur, portfolio_id, since_d)
+    except Exception as e:
+        print(f"[robinhood_preview] existing_trades check skipped: {e}")
+
+    return {
+        "portfolio": portfolio,
+        "since": since_d.isoformat(),
+        "counts": counts,
+        "pre_cutoff": pre_cutoff,
+        "existing_trades": existing_trades,
+        "warnings": warnings,
+        "equity_campaigns": [_serialize_rh_campaign(c) for c in equity_campaigns],
+        "option_campaigns": [_serialize_rh_campaign(c) for c in option_campaigns],
+        "cash_rows": [_serialize_rh_cash(c) for c in cash_rows],
+    }
+
+
+@app.post("/api/imports/robinhood/commit")
+def robinhood_import_commit(request: Request, body: dict = Body(...)):
+    """Actually write the campaigns + cash rows parsed from a Robinhood CSV.
+
+    Same parsing pipeline as /preview, then runs the script's write path
+    inside a single transaction. Rolls back on any exception mid-write.
+
+    Body: { csv_text, since, portfolio, strategy?, reset_cash_ledger? }
+    Returns: { written: {summary, details, cash}, reset_count?, warnings[] }
+    """
+    csv_text, since_d, portfolio = _parse_rh_body(body)
+    strategy = str(body.get("strategy") or "LongTerm")
+    reset_cash_ledger = bool(body.get("reset_cash_ledger", False))
+    rh = _load_robinhood_module()
+
+    raw_rows = rh.read_csv_from_text(csv_text)
+    kept_rows, _pre_cutoff = rh.filter_by_date(raw_rows, since_d)
+    warnings: list[str] = []
+    equity_campaigns = rh.reconstruct_equity_campaigns(kept_rows, warnings)
+    option_campaigns = rh.reconstruct_option_campaigns(kept_rows, warnings)
+    cash_rows = rh.extract_cash_rows(kept_rows, warnings)
+    warnings.extend(rh.collect_short_option_warnings(kept_rows))
+
+    try:
+        with db.get_db_connection() as conn, conn.cursor() as cur:
+            portfolio_id, user_id = rh._resolve_portfolio(cur, portfolio)
+
+            reset_count = None
+            if reset_cash_ledger:
+                reset_count = rh.reset_cash_ledger(cur, portfolio_id, user_id)
+
+            s_count, d_count = rh.write_campaigns(
+                cur, portfolio_id, user_id, portfolio,
+                equity_campaigns + option_campaigns,
+                strategy,
+            )
+            c_count = rh.write_cash_rows(cur, portfolio_id, user_id, cash_rows)
+
+            conn.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Import commit failed: {e}")
+
+    return {
+        "portfolio": portfolio,
+        "since": since_d.isoformat(),
+        "reset_count": reset_count,
+        "written": {"summary": s_count, "details": d_count, "cash": c_count},
+        "warnings": warnings,
+    }
+
+
 @app.get("/api/mindset/traps")
 def mindset_traps(request: Request, portfolio: str = "CanSlim", weeks: int = 8):
     """Aggregate behavior tags over the last N weeks.

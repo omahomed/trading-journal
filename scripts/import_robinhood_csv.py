@@ -248,16 +248,29 @@ def classify(row: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def read_csv(path: Path) -> list[dict]:
-    """Read a Robinhood activity CSV. Python's csv.DictReader handles
-    quoted-newline fields (CUSIPs sometimes wrap a description line)."""
+def _read_csv_reader(reader: csv.DictReader) -> list[dict]:
+    """Shared row-normalization pass used by both file and text readers."""
     rows: list[dict] = []
-    with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            # Strip surrounding whitespace on all keys/values for resilience.
-            rows.append({(k or "").strip(): (v or "").strip() for k, v in r.items()})
+    for r in reader:
+        # Strip surrounding whitespace on all keys/values for resilience.
+        rows.append({(k or "").strip(): (v or "").strip() for k, v in r.items()})
     return rows
+
+
+def read_csv(path: Path) -> list[dict]:
+    """Read a Robinhood activity CSV from a file path. Python's
+    csv.DictReader handles quoted-newline fields (CUSIPs sometimes wrap a
+    description line)."""
+    with open(path, newline="") as f:
+        return _read_csv_reader(csv.DictReader(f))
+
+
+def read_csv_from_text(text: str) -> list[dict]:
+    """Read a Robinhood activity CSV from a string. Used by the web
+    upload endpoint — the browser sends CSV as text, not a file path.
+    Identical semantics to read_csv() otherwise."""
+    from io import StringIO
+    return _read_csv_reader(csv.DictReader(StringIO(text)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
