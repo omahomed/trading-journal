@@ -58,6 +58,7 @@ _ATR_PERIOD = 21
 def fetch_candidates(
     portfolio: str | None = None,
     include_closed: bool = False,
+    since: date | None = None,
 ) -> list[dict]:
     """Find equity campaigns whose MAE/MFE state needs updating.
 
@@ -128,6 +129,16 @@ def fetch_candidates(
     params: list = []
     if not include_closed:
         sql += " AND s.status = 'OPEN'"
+    # `since` is inclusive-lower on the trade's LIFE OVERLAP with the
+    # window. It's here to sidestep the pre-2026 legacy import garbage
+    # (corporate actions, wrong entry prices, delisted symbols) that
+    # can't be reliably backfilled from yfinance. The filter keeps a
+    # trade in-scope if it was open on or after `since` — i.e. still
+    # open now, or closed at/after `since`. This is what the operator
+    # wants when they ask for a per-year backfill.
+    if since:
+        sql += " AND (s.status = 'OPEN' OR s.closed_date >= %s)"
+        params.append(since)
     if portfolio:
         sql += " AND p.name = %s"
         params.append(portfolio)
@@ -400,6 +411,7 @@ def reconcile_open_positions(
     include_closed: bool = False,
     dry_run: bool = False,
     sleep: float = 0.3,
+    since: date | None = None,
 ) -> dict:
     """Sweep candidate positions, recompute MAE/MFE, persist.
 
@@ -416,7 +428,7 @@ def reconcile_open_positions(
     rows so a single bad symbol can't abort the batch (matches the
     b1_reconcile always-on caller invariant).
     """
-    candidates = fetch_candidates(portfolio, include_closed=include_closed)
+    candidates = fetch_candidates(portfolio, include_closed=include_closed, since=since)
     counters = {
         "updated": 0,
         "skipped_no_data": 0,

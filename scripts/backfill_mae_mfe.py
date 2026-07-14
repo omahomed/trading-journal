@@ -59,9 +59,24 @@ def main() -> int:
     parser.add_argument("--include-closed", action="store_true",
                         help="Also process CLOSED equity campaigns (Phase 2 scope). "
                              "Default: OPEN only.")
+    parser.add_argument("--since", default=None,
+                        help="Include only trades still open or closed on/after "
+                             "this date (YYYY-MM-DD). Use to sidestep pre-2026 "
+                             "legacy imports whose yfinance history is unreliable.")
     args = parser.parse_args()
 
+    since_date = None
+    if args.since:
+        from datetime import datetime as _dt
+        try:
+            since_date = _dt.strptime(args.since.strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            log.error("bad --since date: %s", args.since)
+            return 2
+
     scope = "OPEN + CLOSED equity" if args.include_closed else "OPEN equity"
+    if since_date:
+        scope += f" (still open on / closed on-or-after {since_date.isoformat()})"
     log.info("Reconciling %s positions ...", scope)
 
     summary = reconcile_open_positions(
@@ -69,6 +84,7 @@ def main() -> int:
         include_closed=args.include_closed,
         dry_run=args.dry_run,
         sleep=args.sleep,
+        since=since_date,
     )
 
     rows = summary["rows"]
