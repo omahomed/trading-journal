@@ -840,11 +840,18 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
                   { k: "a_return_pct", l: "A Return %", align: "right" },
                   { k: "total_pnl", l: "Total P&L", align: "right" },
                   { k: "total_return_pct", l: "Total %", align: "right" },
-                  { k: "mae_pct", l: "MAE %", align: "right" },
-                  { k: "mfe_pct", l: "MFE %", align: "right" },
+                  {
+                    k: "mae_pct", l: "MAE %", align: "right",
+                    tip: "Maximum Adverse Excursion. The worst % below your B1 entry price the trade ever printed on any daily bar after entry. Bar 0 (entry day) is skipped unless there was a same-day sell — the reversal-candle low often prints BEFORE your entry and doesn't reflect anything you actually held through. Sub-line shows the ratio to ATR21 at entry (how many typical daily ranges the drawdown covered).",
+                  },
+                  {
+                    k: "mfe_pct", l: "MFE %", align: "right",
+                    tip: "Maximum Favorable Excursion. The best % above your B1 entry price the trade ever printed on any daily bar after entry. Bar 0 (entry day) is skipped unless there was a same-day sell above entry. Sub-line shows the ratio to ATR21 at entry.",
+                  },
                   { k: "rule", l: "Rule", align: "left" },
-                ] as { k: ColKey; l: string; align: "left" | "right" }[]).map(c => (
+                ] as { k: ColKey; l: string; align: "left" | "right"; tip?: string }[]).map(c => (
                   <th key={c.k} onClick={() => onSort(c.k)}
+                      title={c.tip}
                       className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.04em] cursor-pointer select-none"
                       style={{
                         color: "var(--ink-4)",

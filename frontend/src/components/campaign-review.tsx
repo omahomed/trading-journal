@@ -1006,6 +1006,7 @@ function ExcursionPanel({ row }: { row: CampaignReviewRow }) {
     days: number | null,
     testId: string,
     tone: "adverse" | "favorable" | "neutral",
+    tooltip?: string,
   ) => {
     const mult = atrMult(pct);
     const color = pct == null || pct === 0
@@ -1014,9 +1015,11 @@ function ExcursionPanel({ row }: { row: CampaignReviewRow }) {
       : tone === "favorable" ? "#08a86b"
       : "var(--ink)";
     return (
-      <div className="flex flex-col gap-0.5" data-testid={testId}>
+      <div className="flex flex-col gap-0.5" data-testid={testId} title={tooltip}>
         <span className="text-[9px] uppercase tracking-[0.08em] font-semibold"
-              style={{ color: "var(--ink-4)" }}>{label}</span>
+              style={{ color: "var(--ink-4)", cursor: tooltip ? "help" : undefined }}>
+          {label}
+        </span>
         <span className="text-[15px] font-semibold" style={{ color, fontFamily: mono }}>
           {pct == null ? "—" : `${pct.toFixed(2)}%`}
         </span>
@@ -1036,12 +1039,22 @@ function ExcursionPanel({ row }: { row: CampaignReviewRow }) {
         Excursion
       </div>
       <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        {cell("MAE",         mae,     dMae, "campaign-review-mae",     "adverse")}
-        {cell("MFE",         mfe,     dMfe, "campaign-review-mfe",     "favorable")}
-        {cell("Max retrace", retrace, null, "campaign-review-retrace", "adverse")}
-        <div className="flex flex-col gap-0.5" data-testid="campaign-review-capture">
+        {cell(
+          "MAE", mae, dMae, "campaign-review-mae", "adverse",
+          "Maximum Adverse Excursion. Worst % below B1 entry price the trade printed on any daily bar after entry. Bar 0 skipped unless there was a same-day sell. Sub-line: ratio to ATR21 at entry · trading day the low was hit."
+        )}
+        {cell(
+          "MFE", mfe, dMfe, "campaign-review-mfe", "favorable",
+          "Maximum Favorable Excursion. Best % above B1 entry price the trade printed on any daily bar after entry. Bar 0 skipped unless there was a same-day sell above entry. Sub-line: ratio to ATR21 · trading day the high was hit."
+        )}
+        {cell(
+          "Max retrace", retrace, null, "campaign-review-retrace", "adverse",
+          "Largest peak-to-trough decline while holding. After a new high, how far did price pull back to a subsequent low? Distinct from MAE (which is off entry). Signed ≤ 0."
+        )}
+        <div className="flex flex-col gap-0.5" data-testid="campaign-review-capture"
+             title="Capture ratio = actual exit price ÷ theoretical MFE price. 'How much of the run you kept.' Values close to 100% mean you were disciplined about not giving back gains. Cannot exceed 100% (you can't exit above the max high).">
           <span className="text-[9px] uppercase tracking-[0.08em] font-semibold"
-                style={{ color: "var(--ink-4)" }}>Capture ratio</span>
+                style={{ color: "var(--ink-4)", cursor: "help" }}>Capture ratio</span>
           <span className="text-[15px] font-semibold" style={{ color: "var(--ink)", fontFamily: mono }}>
             {captureRatio == null ? "—" : `${(captureRatio * 100).toFixed(0)}%`}
           </span>

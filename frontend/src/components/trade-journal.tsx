@@ -83,10 +83,15 @@ function GradeStars({ value, onChange }: { value: number | null | undefined; onC
   );
 }
 
-function CardMetric({ label, value, color, sub }: { label: string; value: string; color?: string; sub?: string }) {
+function CardMetric({ label, value, color, sub, tooltip }: { label: string; value: string; color?: string; sub?: string; tooltip?: string }) {
+  // tooltip renders as a native browser title on hover. Cursor flips to
+  // "help" when a tooltip is set so users notice it's hoverable.
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>{label}</div>
+    <div title={tooltip}>
+      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold"
+           style={{ color: "var(--ink-4)", cursor: tooltip ? "help" : undefined }}>
+        {label}
+      </div>
       <div className="text-[16px] font-semibold mt-0.5 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: color || "var(--ink)" }}>{value}</div>
       {sub && <div className="text-[11px] mt-0.5 privacy-mask" style={{ color: "var(--ink-4)" }}>{sub}</div>}
     </div>
@@ -129,18 +134,22 @@ function ExcursionMetricsRow({ trade }: { trade: any }) {
       <CardMetric label="MAE"
                   value={fmtPct(mae)}
                   color={mae != null && mae < 0 ? "#e5484d" : undefined}
-                  sub={daysSub(dMae, atrMult(mae))} />
+                  sub={daysSub(dMae, atrMult(mae))}
+                  tooltip="Maximum Adverse Excursion. The worst % below your B1 entry price the trade ever printed on any daily bar after entry. Bar 0 (entry day) is skipped unless there was a same-day sell — the reversal-candle low often prints BEFORE your entry. Sub-line: ratio to ATR21 at entry · trading day when the low was hit." />
       <CardMetric label="MFE"
                   value={fmtPct(mfe)}
                   color={mfe != null && mfe > 0 ? "#08a86b" : undefined}
-                  sub={daysSub(dMfe, atrMult(mfe))} />
+                  sub={daysSub(dMfe, atrMult(mfe))}
+                  tooltip="Maximum Favorable Excursion. The best % above your B1 entry price the trade ever printed on any daily bar after entry. Bar 0 (entry day) is skipped unless there was a same-day sell above entry. Sub-line: ratio to ATR21 at entry · trading day when the high was hit." />
       <CardMetric label="Max retrace"
                   value={fmtPct(retrace)}
                   color={retrace != null && retrace < 0 ? "#e5484d" : undefined}
-                  sub={atrMult(retrace)} />
+                  sub={atrMult(retrace)}
+                  tooltip="Largest peak-to-trough decline while holding. Measures mid-run give-back: after a new high, how far did price pull back to a subsequent low? Distinct from MAE (which is off entry). Signed ≤ 0. Sub-line: ratio to ATR21 at entry." />
       <CardMetric label="ATR21 entry"
                   value={atr21 == null ? "—" : `${atr21.toFixed(2)}%`}
-                  sub="Frozen snapshot" />
+                  sub="Frozen snapshot"
+                  tooltip="21-period ATR% computed on the ~30 daily bars ending the day BEFORE entry. Frozen at trade time — never recomputed as the position ages. This is what all the ×ATR multiples on this card divide by, so it stays stable even if implied volatility expands mid-trade." />
     </div>
   );
 }
