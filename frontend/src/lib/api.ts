@@ -409,6 +409,15 @@ export interface CampaignReviewRow {
   shares: number;
   avg_entry: number;
   avg_exit: number;
+  // Migration 046 excursion metrics. Nullable + optional — populated
+  // by the daily reconciler; older closed campaigns backfill to NULL
+  // until the Phase 2 closed-trade backfill runs.
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+  atr21_entry_pct?: number | null;
+  days_to_mae?: number | null;
+  days_to_mfe?: number | null;
+  max_retrace_pct?: number | null;
 }
 
 export interface SnapshotRow {
@@ -514,6 +523,18 @@ export interface TradePosition {
   // lookup table. Optional only because legacy un-migrated rows might lack
   // the column — post-019 every row has a value (defaults to 'CanSlim').
   strategy?: string;
+  // Migration 046: MAE / MFE / retracement excursion metrics on the B1
+  // entry price. All optional + nullable — populated by the daily
+  // reconciler; NULL before the first sweep and on options (which are
+  // excluded upstream). ×ATR multiples are derived from atr21_entry_pct
+  // at read time, not stored.
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+  atr21_entry_pct?: number | null;
+  days_to_mae?: number | null;
+  days_to_mfe?: number | null;
+  max_retrace_pct?: number | null;
+  mae_mfe_last_updated?: string | null;
   [key: string]: any;
 }
 

@@ -128,6 +128,53 @@ async def _start_b1_reconcile():
 
 
 # ============================================================
+# DAILY MAE/MFE RECONCILE
+# ============================================================
+# Same in-process asyncio pattern as _b1_reconcile_loop above. Sweeps
+# every open equity position once a day, updates the excursion columns
+# (mae_pct, mfe_pct, days_to_*, max_retrace_pct) via yfinance, and takes
+# a one-shot ATR21% snapshot the first time each trade is seen. Options
+# are skipped upstream in fetch_candidates().
+#
+# Staggered 180s after boot (b1_reconcile fires at 90s) so the two
+# don't hammer yfinance in the same event-loop tick. Disabled under
+# pytest and via DISABLE_MAE_MFE_RECONCILE=1.
+
+_MAE_MFE_RECONCILE_INTERVAL_S = 24 * 60 * 60
+_MAE_MFE_RECONCILE_STARTUP_DELAY_S = 180
+
+
+async def _mae_mfe_reconcile_loop():
+    from api.mae_mfe_reconcile import reconcile_open_positions
+
+    await asyncio.sleep(_MAE_MFE_RECONCILE_STARTUP_DELAY_S)
+    while True:
+        try:
+            summary = await asyncio.to_thread(
+                reconcile_open_positions, None, False, False, 0.3
+            )
+            c = summary["counters"]
+            print(f"[mae_mfe_reconcile] {c['updated']} updated · "
+                  f"{c['atr_snapshotted']} atr-snapshotted · "
+                  f"{c['skipped_no_data']} no-data · {c['errors']} errors "
+                  f"(of {summary['total']} open)")
+        except Exception as exc:
+            print(f"[mae_mfe_reconcile] run failed: {exc}")
+        await asyncio.sleep(_MAE_MFE_RECONCILE_INTERVAL_S)
+
+
+@app.on_event("startup")
+async def _start_mae_mfe_reconcile():
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DISABLE_MAE_MFE_RECONCILE"):
+        return
+    if not os.environ.get("DATABASE_URL"):
+        print("[mae_mfe_reconcile] DATABASE_URL not set — scheduler disabled.")
+        return
+    asyncio.create_task(_mae_mfe_reconcile_loop())
+    print("[mae_mfe_reconcile] daily excursion reconcile scheduled.")
+
+
+# ============================================================
 # JWT AUTH MIDDLEWARE
 # ============================================================
 # next-auth on the frontend mints an HS256 JWT in the session callback using
@@ -2452,6 +2499,13 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
         "B1_Max_Return_Pct": "b1_max_return_pct",
+        "Mae_Pct": "mae_pct",
+        "Mfe_Pct": "mfe_pct",
+        "Atr21_Entry_Pct": "atr21_entry_pct",
+        "Days_To_Mae": "days_to_mae",
+        "Days_To_Mfe": "days_to_mfe",
+        "Max_Retrace_Pct": "max_retrace_pct",
+        "Mae_Mfe_Last_Updated": "mae_mfe_last_updated",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
@@ -2585,6 +2639,24 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
             closed_dt = r.get("closed_date")
             open_dt = r.get("open_date")
 
+            # Migration 046 excursion metrics — pass through as null when
+            # the daily reconciler hasn't stamped them yet (typical for
+            # newly imported closed campaigns pending the Phase 2 backfill).
+            def _num_or_none(v):
+                try:
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return None
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            def _int_or_none(v):
+                try:
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return None
+                    return int(v)
+                except (TypeError, ValueError):
+                    return None
+
             rows.append({
                 "trade_id": tid,
                 "ticker": str(r.get("ticker", "")),
@@ -2604,6 +2676,12 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
                 "shares": float(r.get("shares") or 0),
                 "avg_entry": float(r.get("avg_entry") or 0),
                 "avg_exit": float(r.get("avg_exit") or 0),
+                "mae_pct":          _num_or_none(r.get("mae_pct")),
+                "mfe_pct":          _num_or_none(r.get("mfe_pct")),
+                "atr21_entry_pct":  _num_or_none(r.get("atr21_entry_pct")),
+                "days_to_mae":      _int_or_none(r.get("days_to_mae")),
+                "days_to_mfe":      _int_or_none(r.get("days_to_mfe")),
+                "max_retrace_pct":  _num_or_none(r.get("max_retrace_pct")),
             })
 
         rows.sort(key=lambda x: x.get("closed_date") or "", reverse=True)

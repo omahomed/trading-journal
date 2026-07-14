@@ -336,6 +336,36 @@ def load_summary(portfolio_name, status=None):
                 if has_b1_max else
                 'NULL::numeric AS "B1_Max_Return_Pct",'
             )
+            # Migration-tolerance for migration 046 — MAE/MFE columns.
+            # Same pattern as b1_max above: absent → NULL fallback so the
+            # SELECT keeps working during the code-before-migration
+            # deploy window.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'mae_pct'"
+                )
+                has_mae_mfe = cur.fetchone() is not None
+            except Exception:
+                has_mae_mfe = False
+            mae_mfe_select = (
+                's.mae_pct AS "Mae_Pct",\n                    '
+                's.mfe_pct AS "Mfe_Pct",\n                    '
+                's.atr21_entry_pct AS "Atr21_Entry_Pct",\n                    '
+                's.days_to_mae AS "Days_To_Mae",\n                    '
+                's.days_to_mfe AS "Days_To_Mfe",\n                    '
+                's.max_retrace_pct AS "Max_Retrace_Pct",\n                    '
+                's.mae_mfe_last_updated AS "Mae_Mfe_Last_Updated",\n                    '
+                if has_mae_mfe else
+                'NULL::numeric AS "Mae_Pct",\n                    '
+                'NULL::numeric AS "Mfe_Pct",\n                    '
+                'NULL::numeric AS "Atr21_Entry_Pct",\n                    '
+                'NULL::integer AS "Days_To_Mae",\n                    '
+                'NULL::integer AS "Days_To_Mfe",\n                    '
+                'NULL::numeric AS "Max_Retrace_Pct",\n                    '
+                'NULL::date    AS "Mae_Mfe_Last_Updated",\n                    '
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -364,7 +394,7 @@ def load_summary(portfolio_name, status=None):
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
                     {b1_max_select}
-                    {manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {mae_mfe_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule

@@ -93,6 +93,58 @@ function CardMetric({ label, value, color, sub }: { label: string; value: string
   );
 }
 
+// Excursion metrics row on the trade card (migration 046). MAE / MFE /
+// max retrace with ×ATR multiples; days-to-each shown as a subtitle
+// when available. Silently collapses to nothing when no field is
+// populated — pre-backfill trades + options don't render a row of
+// em-dashes (options are filtered upstream by the reconciler).
+function ExcursionMetricsRow({ trade }: { trade: any }) {
+  const _num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+  const mae = _num(trade.mae_pct);
+  const mfe = _num(trade.mfe_pct);
+  const retrace = _num(trade.max_retrace_pct);
+  const atr21 = _num(trade.atr21_entry_pct);
+  const dMae = _num(trade.days_to_mae);
+  const dMfe = _num(trade.days_to_mfe);
+
+  if (mae == null && mfe == null && retrace == null) return null;
+
+  const atrMult = (pct: number | null): string =>
+    pct != null && atr21 != null && atr21 > 0
+      ? `${(Math.abs(pct) / atr21).toFixed(2)}× ATR`
+      : "—";
+  const fmtPct = (pct: number | null): string =>
+    pct == null ? "—" : `${pct.toFixed(2)}%`;
+  const daysSub = (d: number | null, mult: string): string =>
+    d != null ? `${mult} · day ${d}` : mult;
+
+  return (
+    <div className="grid grid-cols-4 gap-4 py-3"
+         data-testid="trade-card-excursion-row"
+         style={{ borderBottom: "1px solid var(--border)" }}>
+      <CardMetric label="MAE"
+                  value={fmtPct(mae)}
+                  color={mae != null && mae < 0 ? "#e5484d" : undefined}
+                  sub={daysSub(dMae, atrMult(mae))} />
+      <CardMetric label="MFE"
+                  value={fmtPct(mfe)}
+                  color={mfe != null && mfe > 0 ? "#08a86b" : undefined}
+                  sub={daysSub(dMfe, atrMult(mfe))} />
+      <CardMetric label="Max retrace"
+                  value={fmtPct(retrace)}
+                  color={retrace != null && retrace < 0 ? "#e5484d" : undefined}
+                  sub={atrMult(retrace)} />
+      <CardMetric label="ATR21 entry"
+                  value={atr21 == null ? "—" : `${atr21.toFixed(2)}%`}
+                  sub="Frozen snapshot" />
+    </div>
+  );
+}
+
 // Scale-Out Stops ladder shape mirrored from the backend JSONB payload.
 // The API returns "" for NULL ladders (fillna on the DataFrame), so
 // callers must guard on shape before treating it as a ladder.
@@ -1410,6 +1462,12 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   <CardMetric label={unitLabel} value={String(shares)} />
                   <CardMetric label="Days Held" value={String(daysHeld)} />
                 </div>
+
+                {/* Excursion metrics row (migration 046). Only renders when
+                    the daily reconciler has stamped at least one value on
+                    the row — pre-backfill open trades and options both stay
+                    empty rather than showing four em-dashes. */}
+                <ExcursionMetricsRow trade={trade} />
 
                 {/* Core/Add-on P&L (if multi-tranche) */}
                 {hasAddons && b1Price > 0 && !isOpen && (
