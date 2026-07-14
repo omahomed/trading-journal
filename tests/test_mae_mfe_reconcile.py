@@ -77,16 +77,39 @@ class TestExcursions:
         assert r["days_to_mae"] == 2
         assert r["days_to_mfe"] == 3
 
-    def test_same_day_entry_yields_single_bar_excursions(self):
-        # Same-day entry: only bar 0. mae from that day's low, mfe from
-        # its high. days_to_mae = days_to_mfe = 0 (0-based spec).
+    def test_same_day_entry_no_sell_yields_zero_excursions(self):
+        # Same-day entry with NO SELL activity: bar 0's OHLC extremes
+        # are deliberately excluded (reversal-candle rule). Without
+        # any post-entry price data, MAE and MFE are both 0. This
+        # replaces the previous test that used bar 0 low/high directly.
         df = _bars([(98.5, 101.5, 100)])
         r = compute_excursions_from_frame(df, entry_price=100.0)
         assert r is not None
-        assert r["mae_pct"] == pytest.approx(-1.5)
-        assert r["mfe_pct"] == pytest.approx(1.5)
+        assert r["mae_pct"] == pytest.approx(0.0)
+        assert r["mfe_pct"] == pytest.approx(0.0)
         assert r["days_to_mae"] == 0
         assert r["days_to_mfe"] == 0
+
+    def test_reversal_candle_entry_no_phantom_mae_from_bar0_low(self):
+        # The motivating case from the fix: an "Upside Reversal" candle
+        # prints a low of $73 during an intraday washout, then closes
+        # at $79 where the user buys. Under the OLD rule bar 0's low
+        # would attribute a phantom -7.6% MAE to the trader; under
+        # the NEW rule bar 0 is skipped and MAE tracks from bar 1.
+        # Later bars flat → MAE = 0, not -7.6%.
+        df = _bars([
+            (73.0, 80.0, 79.0),   # bar 0: reversal candle
+            (79.5, 82.0, 81.0),   # bar 1: continuation up
+            (80.0, 83.5, 82.5),
+        ])
+        r = compute_excursions_from_frame(df, entry_price=79.0)
+        assert r is not None
+        # No phantom -7.6% from bar 0's $73 low.
+        assert r["mae_pct"] == pytest.approx(0.0)
+        # MFE reflects the day-1/day-2 rally.
+        # High 83.5 vs entry 79 → +5.7%.
+        assert r["mfe_pct"] == pytest.approx(5.6962, abs=1e-3)
+        assert r["days_to_mfe"] == 2
 
     def test_max_retrace_distinct_from_mae_on_peak_then_pullback(self):
         # Trade opens flat, rips to 120, then bleeds to 108 before
@@ -157,6 +180,88 @@ class TestExcursions:
         df = _bars([(99, 101, 100)])
         assert compute_excursions_from_frame(df, 0.0) is None
         assert compute_excursions_from_frame(df, -5.0) is None
+
+    # ────────────────────────────────────────────────────────────────
+    # Same-day sell activity (post-entry-day-fix)
+    # ────────────────────────────────────────────────────────────────
+
+    def test_same_day_sell_below_entry_becomes_bar0_mae(self):
+        # Same-day stop-out: bought at $100, stopped out at $96 same
+        # day. Bar 0 low is $95 (below the stop), which we do NOT
+        # count — the trader exited at $96, not $95. days_to_mae = 0
+        # because the exit was on entry day.
+        df = _bars([(95.0, 101.0, 96.5)])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=96.0,
+        )
+        assert r is not None
+        assert r["mae_pct"] == pytest.approx(-4.0)  # (96-100)/100
+        assert r["mfe_pct"] == pytest.approx(0.0)
+        assert r["days_to_mae"] == 0
+        assert r["days_to_mfe"] == 0
+
+    def test_same_day_sell_above_entry_becomes_bar0_mfe(self):
+        # Same-day partial scalp winner: bought at $100, sold half at
+        # $103 same day. Bar 0 high is $104 which we do NOT count —
+        # the trader captured $103, not $104. Symmetric to the MAE case.
+        df = _bars([(99.5, 104.0, 102.5)])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_high_exit_price=103.0,
+        )
+        assert r is not None
+        assert r["mae_pct"] == pytest.approx(0.0)
+        assert r["mfe_pct"] == pytest.approx(3.0)   # (103-100)/100
+        assert r["days_to_mae"] == 0
+        assert r["days_to_mfe"] == 0
+
+    def test_later_bar_low_overrides_same_day_sell_price(self):
+        # Same-day partial sell at $97 (-3%), then user keeps holding
+        # and the position tanks further to $94 on day 2. Later bar's
+        # low IS a valid MAE candidate — the same-day sell only seeds
+        # bar 0; later bars can (and here do) print a lower low.
+        df = _bars([
+            (96.0, 101.0, 97.5),   # bar 0: same-day sell at 97
+            (95.0, 98.0,  96.0),   # bar 1
+            (93.5, 96.0,  94.5),   # bar 2: new low
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=97.0,
+        )
+        assert r is not None
+        # (93.5 - 100) / 100 = -6.5%. NOT -3% (same-day sell) — bar 2
+        # went lower and wins.
+        assert r["mae_pct"] == pytest.approx(-6.5)
+        assert r["days_to_mae"] == 2
+
+    def test_same_day_sell_ignored_when_price_is_zero_or_none(self):
+        # None and 0 both mean "no same-day activity". Bar 0 is skipped
+        # entirely; same-day sell inputs are treated as absent even
+        # when the caller passes them defensively.
+        df = _bars([
+            (95.0, 105.0, 96.0),  # bar 0 has wide range, both skipped
+            (94.0, 104.0, 100.0), # bar 1: real post-entry data
+        ])
+        r_none = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=None,
+            same_day_high_exit_price=None,
+        )
+        r_zero = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=0.0,
+            same_day_high_exit_price=0.0,
+        )
+        # Both cases: bar 0 skipped. Bar 1 sets MAE and MFE.
+        # (94-100)/100 = -6%; (104-100)/100 = +4%.
+        for r in (r_none, r_zero):
+            assert r is not None
+            assert r["mae_pct"] == pytest.approx(-6.0)
+            assert r["mfe_pct"] == pytest.approx(4.0)
+            assert r["days_to_mae"] == 1
+            assert r["days_to_mfe"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════
