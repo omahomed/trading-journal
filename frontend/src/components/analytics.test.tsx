@@ -40,6 +40,7 @@ vi.mock("@/lib/api", () => ({
     setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
     bulkSetStrategy: vi.fn().mockResolvedValue({ ok: true, updated: 0, failed: [] }),
     addEffectiveness: vi.fn(),
+    mctStateByDateRange: vi.fn().mockResolvedValue({ states: [] }),
   },
   getActivePortfolio: () => "CanSlim",
 }));
