@@ -4541,6 +4541,110 @@ def _sr8_run_monitor(nlv: float, portfolio: str = "CanSlim", refresh: bool = Fal
     }
 
 
+@app.get("/api/analytics/trailing-avg-loss")
+@limiter.limit("30/minute")
+def trailing_avg_loss(
+    request: Request,
+    portfolio: str = "CanSlim",
+    window_months: int = 12,
+):
+    """Trailing realized-loss aggregate for the New Entry sizing model.
+
+    New Entry sizes against the trader's *realized* average loss, not the
+    hard stop — because the trader exits whole positions fast and the hard
+    stop only prices the rare gap scenario. Formula on the client:
+
+        denominator_% = max(4.0%, |avg_loss_pct|)
+        position_size_% = risk_unit_% / denominator_%
+
+    The 4% floor is applied CLIENT-side so this endpoint returns the raw
+    aggregate. That lets callers distinguish "no data" (sample_size=0,
+    pcts=null) from "data present but tighter than floor".
+
+    Aggregation:
+        AVG(return_pct)  over CLOSED equity campaigns with return_pct < 0
+                         closed within the trailing `window_months`,
+                         portfolio-scoped, deleted rows excluded.
+        Median via PERCENTILE_CONT(0.5).
+
+    Equity-only (instrument_type = 'STOCK'): options are excluded because
+    a bought long call going to zero registers as a -100% return that
+    doesn't reflect the trader's actual exit behavior — the New Entry
+    model is sizing STOCK entries, and a -99% option loss would skew the
+    denominator and shrink stock sizing to zero.
+
+    RLS: the portfolio name → id lookup and the aggregation SELECT both
+    run under the caller's app.user_id (set on the connection by the
+    tenant middleware), so cross-tenant reads can't leak.
+
+    Response:
+        {
+            "portfolio": "CanSlim",
+            "window_months": 12,
+            "avg_loss_pct":    -4.58,   // negative; null if sample_size=0
+            "median_loss_pct": -3.70,   // negative; null if sample_size=0
+            "sample_size":     84,
+            "as_of":           "2026-07-13"
+        }
+    """
+    from datetime import date as _date
+    if window_months <= 0 or window_months > 120:
+        raise HTTPException(
+            status_code=400,
+            detail=f"window_months must be in (0, 120]; got {window_months}",
+        )
+    try:
+        df = db.load_summary(portfolio)
+    except Exception as e:
+        print(f"[trailing_avg_loss] load_summary failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    as_of = _date.today().isoformat()
+    empty_response = {
+        "portfolio": portfolio,
+        "window_months": window_months,
+        "avg_loss_pct": None,
+        "median_loss_pct": None,
+        "sample_size": 0,
+        "as_of": as_of,
+    }
+    if df is None or df.empty:
+        return empty_response
+
+    df = _normalize_trades(df)
+    status_col = "status" if "status" in df.columns else "Status"
+    inst_col = "instrument_type" if "instrument_type" in df.columns else None
+    closed_col = "closed_date" if "closed_date" in df.columns else None
+    return_col = "return_pct" if "return_pct" in df.columns else None
+    if not (closed_col and return_col and inst_col):
+        # Schema older than what the endpoint requires — treat as no data.
+        return empty_response
+
+    cutoff = pd.Timestamp(_date.today()) - pd.DateOffset(months=window_months)
+    mask = (
+        df[status_col].astype(str).str.upper().eq("CLOSED")
+        & df[inst_col].astype(str).str.upper().eq("STOCK")
+        & pd.to_numeric(df[return_col], errors="coerce").lt(0)
+        & pd.to_datetime(df[closed_col], errors="coerce").ge(cutoff)
+    )
+    losers = df[mask]
+    if losers.empty:
+        return empty_response
+
+    losses = pd.to_numeric(losers[return_col], errors="coerce").dropna()
+    if losses.empty:
+        return empty_response
+
+    return {
+        "portfolio": portfolio,
+        "window_months": window_months,
+        "avg_loss_pct": round(float(losses.mean()), 4),
+        "median_loss_pct": round(float(losses.median()), 4),
+        "sample_size": int(losses.size),
+        "as_of": as_of,
+    }
+
+
 @app.get("/api/sr8/monitor")
 @limiter.limit("30/minute")
 def sr8_monitor(request: Request, nlv: float = Query(..., gt=0), portfolio: str = "CanSlim"):
