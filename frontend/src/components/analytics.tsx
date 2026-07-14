@@ -15,10 +15,19 @@ import {
   computeProfitFactor,
   computeHoldRatio,
   computeOnePctCompliance,
+  getPriorDayNlv,
+  tradeWasOpenInYear,
+  availableTradeYears,
+  paretoDistribution,
+  holdTimeBuckets,
+  brandtNormalized,
+  stopCapScenario,
+  fixedSizeScenario,
+  regimeCrossTab,
 } from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
-type Tab = "overview" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns" | "add-effectiveness";
+type Tab = "overview" | "scenarios" | "buyrules" | "sellrules" | "drawdown" | "review" | "campaigns" | "add-effectiveness";
 
 function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
@@ -91,7 +100,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(initialTradeId ?? null);
 
   useEffect(() => {
-    if (initialTab && ["overview", "buyrules", "sellrules", "drawdown", "review", "campaigns", "add-effectiveness"].includes(initialTab)) {
+    if (initialTab && ["overview", "scenarios", "buyrules", "sellrules", "drawdown", "review", "campaigns", "add-effectiveness"].includes(initialTab)) {
       setTab(initialTab as Tab);
       onTabConsumed?.();
     }
@@ -117,7 +126,26 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [aeError, setAeError] = useState<string | null>(null);
   const [aeSortKey, setAeSortKey] = useState<keyof AddEffectivenessResponse["rules"][number]>("add_count");
   const [aeSortDir, setAeSortDir] = useState<"asc" | "desc">("desc");
-  const [scope, setScope] = useState<"ltd" | "2026">("ltd");
+  // Edge Report top-of-page controls (replaces the LTD/2026 scope pill):
+  //   * yearFilter — the year the trade must have been "open at any
+  //     point during." Defaults to the most recent year with data
+  //     (availableTradeYears takes care of the calendar-year rollover
+  //     edge case). Null means "not initialized yet" — set once trades
+  //     load, per the useEffect below.
+  //   * cohort — "closed" | "at-mark". "at-mark" unions open positions
+  //     (marked to live price via computeEnrichedPositions) into the
+  //     stats set with pnl = overall_pl and closed_date = today.
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  const [cohort, setCohort] = useState<"closed" | "at-mark">("closed");
+
+  // Open-position state hoisted above the year/cohort memos so
+  // availableTradeYears and the at-mark cohort layer can reference it.
+  // (Was previously declared alongside the All Campaigns state block
+  // further down; the mount fetch below still populates all of it in
+  // one shot.)
+  const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [pricesStale, setPricesStale] = useState(false);
   // drillRule kept for sell rules tab (TODO)
 
   useEffect(() => {
@@ -255,10 +283,61 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
     if (!("error" in r) || !r.error) await refreshCampaigns();
   };
 
+  // Available years for the year picker; derived from loaded data. The
+  // default year is set once (when data first arrives) so the user's
+  // subsequent selection isn't overwritten on re-render.
+  const yearData = useMemo(
+    () => availableTradeYears(allTrades, openTrades),
+    [allTrades, openTrades],
+  );
+  useEffect(() => {
+    if (yearFilter == null && (allTrades.length > 0 || openTrades.length > 0)) {
+      setYearFilter(yearData.defaultYear);
+    }
+  }, [yearData, yearFilter, allTrades.length, openTrades.length]);
+  const year = yearFilter ?? yearData.defaultYear;
+
+  // Closed cohort filtered by year — the "in-scope closed trades" for
+  // the selected year. Bare year filter, no at-mark logic (that layer
+  // is applied by the trades memo below).
+  const closedInYear = useMemo(
+    () => allTrades.filter(t => tradeWasOpenInYear(t, year)),
+    [allTrades, year],
+  );
+
+  // Enriched opens are the source of overall_pl for the at-mark cohort
+  // shim. Declared here (rather than alongside the All Campaigns state
+  // it originally served) so the trades memo below and every
+  // downstream stats memo see it.
+  const enrichedOpen = useMemo(
+    () => computeEnrichedPositions(openTrades, allDetails, 0, livePrices),
+    [openTrades, allDetails, livePrices]
+  );
+  const enrichedById = useMemo(
+    () => Object.fromEntries(enrichedOpen.map(p => [p.trade_id, p])) as Record<string, EnrichedPosition>,
+    [enrichedOpen]
+  );
+
+  // Cohort-aware final trade set. The "closed" cohort is byte-for-byte
+  // the pre-Edge-Report behavior; "at-mark" unions currently-open
+  // positions in scope for the year, valued at overall_pl (realized
+  // bank + unrealized at live price) and pretend-closed today.
   const trades = useMemo(() => {
-    if (scope === "2026") return allTrades.filter(t => String(t.closed_date || t.open_date || "").startsWith("2026"));
-    return allTrades;
-  }, [allTrades, scope]);
+    if (cohort === "closed") return closedInYear;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const openAsClosed: TradePosition[] = openTrades
+      .filter(t => tradeWasOpenInYear(t, year))
+      .map(t => {
+        const enriched = enrichedById[t.trade_id];
+        const overallPl = enriched ? enriched.overall_pl : 0;
+        return {
+          ...t,
+          realized_pl: overallPl as any,
+          closed_date: todayIso as any,
+        } as TradePosition;
+      });
+    return [...closedInYear, ...openAsClosed];
+  }, [closedInYear, openTrades, enrichedById, cohort, year]);
 
   const stats = useMemo(() => {
     const closed = trades;
@@ -366,9 +445,8 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [campResult, setCampResult] = useState<"all" | "winners" | "losers">("all");
   const [campGrade, setCampGrade] = useState<"all" | "unrated" | "1" | "2" | "3" | "4" | "5">("all");
   const [campSort, setCampSort] = useState<{ col: string; asc: boolean }>({ col: "open", asc: false });
-  const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [pricesStale, setPricesStale] = useState(false);
+  // (openTrades / livePrices / pricesStale hoisted to top of component
+  // so the Edge Report year picker + at-mark cohort can reference them.)
 
   // All Campaigns filter — derived option lists (Buy Rule, Sell Rule,
   // Instrument). Computed at component level via useMemo so React-hooks
@@ -396,14 +474,8 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       .catch(() => setPricesStale(true));
   }, [openTrades]);
 
-  const enrichedOpen = useMemo(
-    () => computeEnrichedPositions(openTrades, allDetails, 0, livePrices),
-    [openTrades, allDetails, livePrices]
-  );
-  const enrichedById = useMemo(
-    () => Object.fromEntries(enrichedOpen.map(p => [p.trade_id, p])) as Record<string, EnrichedPosition>,
-    [enrichedOpen]
-  );
+  // (enrichedOpen / enrichedById / trades hoisted up next to
+  // closedInYear so downstream stats can read them.)
 
   // Rule stats — always 2026 for buy/sell rules (matching Streamlit).
   // Sell-rules path is closed-only (open positions have no sell_rule yet).
@@ -494,15 +566,15 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          Analytics & <em className="italic" style={{ color: navColor }}>Audit</em>
+          Edge <em className="italic" style={{ color: navColor }}>Report</em>
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{openCount} open · {allTrades.length} closed · {openCount + allTrades.length} total</div>
       </div>
 
       {/* Tabs */}
       <div className="flex items-center justify-between mb-5">
-        <div className="flex gap-1 pb-0.5" style={{ borderBottom: "2px solid var(--border)" }}>
-          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" }, { key: "add-effectiveness" as Tab, label: "➕ Add effectiveness" } ]).map(t => (
+        <div className="flex gap-1 pb-0.5 flex-wrap" style={{ borderBottom: "2px solid var(--border)" }}>
+          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "scenarios" as Tab, label: "🧪 Scenarios" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" }, { key: "add-effectiveness" as Tab, label: "➕ Add effectiveness" } ]).map(t => (
             <button key={t.key} onClick={() => { setTab(t.key); setBrDrill(""); }}
                     className="px-4 py-2 text-[12px] font-medium transition-all"
                     style={{ color: tab === t.key ? navColor : "var(--ink-4)", borderBottom: tab === t.key ? `2px solid ${navColor}` : "2px solid transparent", marginBottom: -2 }}>
@@ -510,15 +582,28 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
             </button>
           ))}
         </div>
-        {tab === "overview" && (
-          <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-            {(["ltd", "2026"] as const).map(sc => (
-              <button key={sc} onClick={() => setScope(sc)}
-                      className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
-                      style={{ background: scope === sc ? "var(--surface)" : "transparent", color: scope === sc ? "var(--ink)" : "var(--ink-4)" }}>
-                {sc === "ltd" ? "LTD" : "2026"}
-              </button>
-            ))}
+        {(tab === "overview" || tab === "scenarios") && (
+          <div className="flex items-center gap-3">
+            {/* Year picker */}
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="edge-year" className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Year</label>
+              <select id="edge-year" value={year} onChange={e => setYearFilter(Number(e.target.value))}
+                      className="h-[28px] px-2 rounded-md text-[11px] font-medium"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+                {yearData.years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            {/* Cohort toggle */}
+            <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+              {(["closed", "at-mark"] as const).map(c => (
+                <button key={c} onClick={() => setCohort(c)}
+                        title={c === "closed" ? "Only actually-closed campaigns count toward the stats." : "Open positions ALSO count, valued at their live batch-fetched price (marked-to-market)."}
+                        className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
+                        style={{ background: cohort === c ? "var(--surface)" : "transparent", color: cohort === c ? "var(--ink)" : "var(--ink-4)", cursor: "help" }}>
+                  {c === "closed" ? "Closed only" : "Include open @ mark"}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -582,24 +667,22 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
             <QualityTile label="Avg R-Multiple" value={`${s.avgR.toFixed(2)}R`} status={`max ${s.maxR.toFixed(1)}R`} ok={s.avgR >= 1} />
           </div>
 
-          {/* Loss Discipline — 2026 only */}
+          {/* Loss Discipline — respects the selected year via the shared
+              tradeWasOpenInYear helper. Per-trade NLV lookup is now the
+              strict-<-priority getPriorDayNlv, which was `<=` inline
+              here previously — numbers may shift SLIGHTLY stricter on
+              same-day trades (using yesterday's end_nlv as the
+              denominator instead of today's, which included the loss
+              itself and understated impact %). */}
           {(() => {
-            // Compute Impact_Pct = Realized_PL / NLV at trade open date
-            const losses2026 = allTrades.filter(t => parseFloat(String(t.realized_pl || 0)) < 0 && String(t.closed_date || "").startsWith("2026"));
-
-            // Headline numbers via shared lib (Dashboard reuses the same fn).
-            const compliance = computeOnePctCompliance(losses2026, journalHistory as any);
+            const yearLosses = allTrades.filter(t =>
+              parseFloat(String(t.realized_pl || 0)) < 0
+              && tradeWasOpenInYear(t, year)
+            );
+            const compliance = computeOnePctCompliance(yearLosses, journalHistory as any);
             const { passRate, withinRule, breaches, totalLosses } = compliance;
-
-            // Bucket distribution + worst offenders need per-trade impact;
-            // recompute here (cheap — same loop the lib does internally).
-            const getNlvAtOpen = (openDate: string) => {
-              const d = String(openDate).slice(0, 10);
-              const sorted = journalHistory.filter(h => String(h.day).slice(0, 10) <= d).sort((a: any, b: any) => String(b.day).localeCompare(String(a.day)));
-              return sorted.length > 0 ? sorted[0].end_nlv : null;
-            };
-            const impactTrades = losses2026.map(t => {
-              const nlv = getNlvAtOpen(t.open_date);
+            const impactTrades = yearLosses.map(t => {
+              const nlv = getPriorDayNlv(journalHistory as any, t.open_date);
               const impact = nlv && nlv > 0 ? (parseFloat(String(t.realized_pl || 0)) / nlv) * 100 : null;
               return { ticker: t.ticker, trade_id: t.trade_id, closed_date: t.closed_date, realized_pl: t.realized_pl, open_date: t.open_date, nlvAtOpen: nlv, impactPct: impact };
             }).filter(t => t.impactPct !== null);
@@ -614,7 +697,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 
             return totalLosses > 0 ? (
               <div className="mb-4">
-                <div className="text-[15px] font-semibold mb-1">🛡️ Loss Discipline <span className="text-[13px] font-normal" style={{ color: "var(--ink-4)" }}>— 2026 only</span></div>
+                <div className="text-[15px] font-semibold mb-1">🛡️ Loss Discipline <span className="text-[13px] font-normal" style={{ color: "var(--ink-4)" }}>— {year} only</span></div>
 
                 {/* Score card */}
                 <div className="p-5 rounded-[14px] mb-3 flex items-center justify-between"
@@ -746,7 +829,15 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
               <p><strong>Monthly Performance</strong>: gives context on seasonality and consistency.</p>
             </div>
           </details>
+
+          {/* ═══ EDGE REPORT — new cards ═══ */}
+          <EdgeCards trades={trades} journal={journalHistory as any} year={year} cohort={cohort} />
         </>
+      )}
+
+      {/* ═══ SCENARIOS ═══ */}
+      {tab === "scenarios" && (
+        <ScenariosTab trades={trades} journal={journalHistory as any} year={year} cohort={cohort} navColor={navColor} />
       )}
 
       {/* ═══ BUY RULES ═══ */}
@@ -2336,5 +2427,337 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
         );
       })()}
     </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Edge Report — Overview additions
+//
+// Pareto card + Hold-time buckets + Brandt NAV normalization + Regime
+// cross-tab. All read from the cohort-aware `trades` set already
+// filtered by year + cohort by the parent.
+// ═══════════════════════════════════════════════════════════════════════
+
+function EdgeCards({ trades, journal, year, cohort }: {
+  trades: TradePosition[];
+  journal: any[];
+  year: number;
+  cohort: "closed" | "at-mark";
+}) {
+  const pareto = useMemo(() => paretoDistribution(trades), [trades]);
+  const holdBuckets = useMemo(() => holdTimeBuckets(trades), [trades]);
+  const brandt = useMemo(() => brandtNormalized(trades, journal), [trades, journal]);
+  const regime = useMemo(() => regimeCrossTab(trades, journal), [trades, journal]);
+
+  const yearBadge = (
+    <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
+      — {year} · {cohort === "closed" ? "closed only" : "including open @ mark"}
+    </span>
+  );
+
+  return (
+    <>
+      {/* ─────────── Pareto card ─────────── */}
+      <div className="mt-6 mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-3">
+          📊 Concentration of P&L (Pareto) {yearBadge}
+        </div>
+        {pareto.ranks.length === 0 ? (
+          <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>No trades in this cohort.</div>
+        ) : (
+          <ParetoBody pareto={pareto} />
+        )}
+      </div>
+
+      {/* ─────────── Hold-time buckets ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-3">
+          ⏱️ Hold-Time Buckets {yearBadge}
+        </div>
+        <div className="grid grid-cols-5 gap-3">
+          {holdBuckets.map(b => {
+            const color = b.n === 0 ? "var(--ink-4)" : b.netPl > 0 ? "#08a86b" : b.netPl < 0 ? "#e5484d" : "var(--ink-3)";
+            return (
+              <div key={b.label} className="p-3 rounded-[10px]"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{b.label}</div>
+                <div className="text-[22px] font-extrabold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{b.n}</div>
+                <div className="text-[11px] font-medium mt-0.5" style={{ color: "var(--ink-3)" }}>
+                  {b.n > 0 ? `${b.winRate.toFixed(0)}% win` : "no trades"}
+                </div>
+                <div className="text-[11px] font-semibold mt-1 privacy-mask" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+                  {formatCurrency(b.netPl, { showSign: true, decimals: 0 })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ─────────── Brandt NAV normalization ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-3">
+          🧮 Brandt Normalization (% of prior-day NAV) {yearBadge}
+        </div>
+        {brandt.nWithNlv === 0 ? (
+          <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
+            No trades have a prior-day journal row to normalize against.
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            <BrandtTile label="Avg trade (expectancy)" pct={brandt.avgTradePctNav} />
+            <BrandtTile label="Avg winner" pct={brandt.avgWinPctNav} />
+            <BrandtTile label="Avg loser" pct={brandt.avgLossPctNav} />
+          </div>
+        )}
+        {brandt.nWithNlv < brandt.n && (
+          <div className="text-[11px] mt-2" style={{ color: "var(--ink-4)" }}>
+            {brandt.n - brandt.nWithNlv} of {brandt.n} trades excluded — no prior-day journal row.
+          </div>
+        )}
+      </div>
+
+      {/* ─────────── Regime cross-tab (open month × market window) ─────────── */}
+      <div className="mb-4 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-3">
+          🌦️ Regime × Month {yearBadge}
+        </div>
+        {regime.length === 0 ? (
+          <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>No trades in this cohort.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Month</th>
+                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Regime</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>n</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Win %</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {regime.map(r => {
+                  const color = r.netPl > 0 ? "#08a86b" : r.netPl < 0 ? "#e5484d" : "var(--ink-3)";
+                  return (
+                    <tr key={`${r.month}|${r.window}`} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td className="px-3 py-2" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.month}</td>
+                      <td className="px-3 py-2" style={{ color: "var(--ink-2)" }}>{r.window}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.n}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.winRate.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(r.netPl, { showSign: true, decimals: 0 })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+
+function ParetoBody({ pareto }: { pareto: ReturnType<typeof paretoDistribution> }) {
+  const top5 = pareto.topN(5);
+  const top10 = pareto.topN(10);
+  const top20 = pareto.topN(20);
+  const total = pareto.ranks.length;
+  const pctOfCount = (n: number) => total > 0 ? (n / total) * 100 : 0;
+  return (
+    <>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <ParetoTile label="Top 5 trades" pct={pctOfCount(5)} value={top5.pctOfNet} />
+        <ParetoTile label="Top 10 trades" pct={pctOfCount(10)} value={top10.pctOfNet} />
+        <ParetoTile label="Top 20 trades" pct={pctOfCount(20)} value={top20.pctOfNet} />
+      </div>
+      {pareto.netPl > 0 && pareto.breakevenRank != null && (
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-3)" }}>
+          Break-even at trade rank <strong style={{ fontFamily: "var(--font-jetbrains), monospace" }}>#{pareto.breakevenRank}</strong> — everything ranked past that adds no net P&L to the year.
+        </div>
+      )}
+      {/* Cumulative curve — pure CSS. Show as a small horizontal bar per
+          trade with height proportional to cum% of net. Capped at 100
+          rendered bars to keep the row cheap. */}
+      <div className="mt-2 flex items-end gap-[1px]" style={{ height: 60, borderBottom: "1px solid var(--border)" }}>
+        {pareto.ranks.slice(0, 100).map((r, i) => {
+          // Clamp cumPctOfNet to [-100, 200] for visual — anything past
+          // net (>100%) reads as "adding P&L we later gave back."
+          const raw = r.cumPctOfNet;
+          const capped = Math.min(200, Math.max(-100, raw));
+          const height = Math.abs(capped) / 200 * 100;
+          const color = capped >= 100 ? "#08a86b" : capped >= 0 ? "#65a30d" : "#e5484d";
+          return (
+            <div key={i} className="flex-1"
+                 title={`#${i + 1} ${r.ticker} ${r.trade_id} · cum ${r.cumPctOfNet.toFixed(0)}% of net`}
+                 style={{ height: `${Math.max(2, height)}%`, background: color, opacity: 0.85 }} />
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+
+function ParetoTile({ label, pct, value }: { label: string; pct: number; value: number }) {
+  const color = value >= 100 ? "#08a86b" : value >= 50 ? "#d97706" : "var(--ink-2)";
+  return (
+    <div className="p-3 rounded-[10px]"
+         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
+        {label} <span style={{ opacity: 0.6 }}>({pct.toFixed(1)}%)</span>
+      </div>
+      <div className="text-[22px] font-extrabold mt-1" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+        {value.toFixed(0)}%
+      </div>
+      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>of net P&L</div>
+    </div>
+  );
+}
+
+
+function BrandtTile({ label, pct }: { label: string; pct: number | null }) {
+  const color = pct == null ? "var(--ink-4)" : pct > 0 ? "#08a86b" : pct < 0 ? "#e5484d" : "var(--ink-3)";
+  return (
+    <div className="p-3 rounded-[10px]"
+         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{label}</div>
+      <div className="text-[22px] font-extrabold mt-1" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+        {pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}
+      </div>
+      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>of prior-day NAV</div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Scenarios tab — stop-cap, fixed-size, and (conditional) excursion
+// ═══════════════════════════════════════════════════════════════════════
+
+function ScenariosTab({ trades, journal, year, cohort, navColor }: {
+  trades: TradePosition[];
+  journal: any[];
+  year: number;
+  cohort: "closed" | "at-mark";
+  navColor: string;
+}) {
+  const stopCapRows = useMemo(() => stopCapScenario(trades), [trades]);
+  const fixedSizeRows = useMemo(() => fixedSizeScenario(trades, journal), [trades, journal]);
+  const anyMae = useMemo(
+    () => trades.some(t => (t as any).mae_pct != null),
+    [trades],
+  );
+  const yearBadge = (
+    <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
+      — {year} · {cohort === "closed" ? "closed only" : "including open @ mark"}
+    </span>
+  );
+
+  return (
+    <>
+      <div className="text-[13px] mb-4" style={{ color: "var(--ink-3)" }}>
+        Counterfactual tables. Numbers are UPPER BOUNDS unless the excursion
+        section fires (below).
+      </div>
+
+      {/* ─────────── Stop-cap ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🚧 Stop-Cap Upper Bound {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          For cap X, sums the $ each loser went past −X% of cost. <strong>Upper bound</strong>: assumes no winner would have been prematurely stopped. Real backtest needs MAE data — see Excursion section below.
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--bg)" }}>
+                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Cap</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Losers breaching</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>$ saved (max)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stopCapRows.map(r => (
+                <tr key={r.capPct} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>−{r.capPct}%</td>
+                  <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.breachCount}</td>
+                  <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                      style={{ color: "#08a86b", fontFamily: "var(--font-jetbrains), monospace" }}>
+                    {formatCurrency(r.dollarsSaved, { showSign: false, decimals: 0 })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ─────────── Fixed-size ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🎯 Fixed-Size Scaling {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          What if every trade had been sized to T% of prior-day NAV? Scales linearly from actual b_size. <strong>Ignores margin, heat, and correlation</strong> — the caveats stack.
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--bg)" }}>
+                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Target size</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Scaled net P&L</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Coverage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fixedSizeRows.map(r => {
+                const color = r.scaledPnl >= 0 ? "#08a86b" : "#e5484d";
+                return (
+                  <tr key={r.targetPct} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.targetPct}%</td>
+                    <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                        style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+                      {formatCurrency(r.scaledPnl, { showSign: true, decimals: 0 })}
+                    </td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>
+                      {r.nWithSize} / {r.nWithSize + r.nDropped}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ─────────── Excursion section (conditional) ─────────── */}
+      <div className="mb-4 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          📉 Excursion (MAE/MFE-aware) {yearBadge}
+        </div>
+        {!anyMae ? (
+          <div className="text-[12px] italic mt-2" style={{ color: "var(--ink-4)" }}>
+            Awaiting excursion data — MAE/MFE feature runs the daily reconciler on open positions and requires a Phase-2 backfill for closed trades. This section will populate once mae_pct / mfe_pct fields are present on the trade rows in this cohort.
+          </div>
+        ) : (
+          <div className="text-[12px] mt-2" style={{ color: "var(--ink-3)" }}>
+            Excursion data detected — detailed stats will land in a follow-up commit (Phase 2 of item 8: winner-MAE distribution, MAE-aware stop-cap backtest, entry quality by setup, loser MFE study).
+          </div>
+        )}
+      </div>
+    </>
   );
 }

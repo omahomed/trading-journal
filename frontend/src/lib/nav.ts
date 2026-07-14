@@ -87,7 +87,10 @@ export const NAV: NavGroup[] = [
   {
     id: "deep", label: "Deep Dive", color: "#0d6efd", softColor: "#e7f0ff",
     items: [
-      { id: "analytics", label: "Analytics", href: "/analytics" },
+      // Renamed to "Edge Report" — route stays /analytics for backward
+      // compat (existing bookmarks + deep links keep working).
+      { id: "analytics", label: "Edge Report", href: "/analytics" },
+      { id: "analytics:scenarios", label: "Scenarios", parentPage: "analytics", tab: "scenarios" },
       { id: "analytics:buyrules", label: "Buy Rules Analysis", parentPage: "analytics", tab: "buyrules" },
       { id: "analytics:sellrules", label: "Sell Rules Analysis", parentPage: "analytics", tab: "sellrules" },
       { id: "analytics:drawdown", label: "Drawdown Analysis", parentPage: "analytics", tab: "drawdown" },

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, test } from "vitest";
 import {
   computeWinRate,
   computeProfitFactor,
@@ -7,6 +7,15 @@ import {
   computeLast10Stats,
   trailingClosedTrades,
   trailingClosedLosses,
+  getPriorDayNlv,
+  tradeWasOpenInYear,
+  availableTradeYears,
+  paretoDistribution,
+  holdTimeBuckets,
+  brandtNormalized,
+  stopCapScenario,
+  fixedSizeScenario,
+  regimeCrossTab,
 } from "./analytics-stats";
 import type { TradePosition, JournalHistoryPoint } from "./api";
 
@@ -285,5 +294,290 @@ describe("trailingClosedLosses", () => {
   it("returns [] when no losses exist", () => {
     const trades = [closed({ realized_pl: 1000 }), closed({ realized_pl: 500 })];
     expect(trailingClosedLosses(trades, 30)).toEqual([]);
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Edge Report helpers
+// ═══════════════════════════════════════════════════════════════════════
+
+function jrow(day: string, endNlv: number, marketWindow: string = ""): JournalHistoryPoint {
+  return {
+    day, end_nlv: endNlv, market_window: marketWindow,
+    daily_pct_change: 0, portfolio_ltd: 0, pct_invested: 0, portfolio_heat: 0, score: 0,
+  } as unknown as JournalHistoryPoint;
+}
+
+
+describe("getPriorDayNlv — strict '<'", () => {
+  test("returns the last end_nlv strictly BEFORE the open date", () => {
+    const j = [
+      jrow("2026-04-01", 100_000),
+      jrow("2026-04-02", 105_000),
+      jrow("2026-04-03", 108_000),
+    ];
+    expect(getPriorDayNlv(j, "2026-04-03")).toBe(105_000);
+    // Same-day open uses 04-02, NOT 04-03 (the strict-inequality fix).
+    expect(getPriorDayNlv(j, "2026-04-02")).toBe(100_000);
+  });
+
+  test("returns null when no journal row precedes the open date", () => {
+    expect(getPriorDayNlv([jrow("2026-04-05", 100_000)], "2026-04-03")).toBeNull();
+  });
+
+  test("empty / bad input → null", () => {
+    expect(getPriorDayNlv([], "2026-04-01")).toBeNull();
+    expect(getPriorDayNlv([jrow("2026-04-01", 100_000)], "")).toBeNull();
+  });
+
+  test("end_nlv = 0 treated as no data (defensive)", () => {
+    expect(getPriorDayNlv([jrow("2026-04-01", 0)], "2026-04-05")).toBeNull();
+  });
+});
+
+
+describe("tradeWasOpenInYear", () => {
+  test("closed IN Y is in scope", () => {
+    expect(tradeWasOpenInYear(
+      closed({ open_date: "2026-03-01", closed_date: "2026-04-01" }), 2026,
+    )).toBe(true);
+  });
+
+  test("opened Dec 2025 + closed Jan 2026 → in scope for 2026 (the Q2-answer bug fix)", () => {
+    expect(tradeWasOpenInYear(
+      closed({ open_date: "2025-12-15", closed_date: "2026-01-08" }), 2026,
+    )).toBe(true);
+  });
+
+  test("opened Dec 2025 + still open → in scope for 2026", () => {
+    expect(tradeWasOpenInYear(
+      closed({ open_date: "2025-12-15", closed_date: null, status: "OPEN" }), 2026,
+    )).toBe(true);
+  });
+
+  test("fully closed BEFORE year start → out of scope", () => {
+    expect(tradeWasOpenInYear(
+      closed({ open_date: "2025-06-01", closed_date: "2025-12-15" }), 2026,
+    )).toBe(false);
+  });
+
+  test("opened AFTER year end → out of scope", () => {
+    expect(tradeWasOpenInYear(
+      closed({ open_date: "2027-01-05", closed_date: "2027-01-08" }), 2026,
+    )).toBe(false);
+  });
+});
+
+
+describe("availableTradeYears", () => {
+  test("default = most recent year WITH DATA (not current calendar year)", () => {
+    const closedTrades = [
+      closed({ open_date: "2024-08-01", closed_date: "2025-02-01" }),
+      closed({ open_date: "2026-03-01", closed_date: "2026-04-01" }),
+    ];
+    const openTrades = [closed({ open_date: "2026-05-01", closed_date: null, status: "OPEN" })];
+    const { years, defaultYear } = availableTradeYears(closedTrades, openTrades);
+    expect(years[0]).toBe(2024);
+    expect(years).toContain(2026);
+    // Avoids the empty-year problem on Jan 1 before 2027 has any trade.
+    expect(defaultYear).toBe(2026);
+  });
+
+  test("empty data → current calendar year fallback", () => {
+    const { years, defaultYear } = availableTradeYears([], []);
+    const cy = new Date().getFullYear();
+    expect(years).toEqual([cy]);
+    expect(defaultYear).toBe(cy);
+  });
+});
+
+
+describe("paretoDistribution", () => {
+  test("ranks descending by P&L; cumulative + net computed correctly", () => {
+    const trades = [
+      closed({ trade_id: "A", realized_pl: 100 }),
+      closed({ trade_id: "B", realized_pl: 500 }),
+      closed({ trade_id: "C", realized_pl: -50 }),
+      closed({ trade_id: "D", realized_pl: 200 }),
+    ];
+    const p = paretoDistribution(trades);
+    expect(p.ranks.map(r => r.trade_id)).toEqual(["B", "D", "A", "C"]);
+    expect(p.ranks.map(r => r.cumulative)).toEqual([500, 700, 800, 750]);
+    expect(p.netPl).toBe(750);
+  });
+
+  test("break-even rank is the smallest N where cumulative ≥ net", () => {
+    const trades = [
+      closed({ trade_id: "A", realized_pl: 500 }),
+      closed({ trade_id: "B", realized_pl: 300 }),
+      closed({ trade_id: "C", realized_pl: -200 }),
+      closed({ trade_id: "D", realized_pl: -100 }),
+    ];
+    // Sorted: 500, 300, -100, -200. Cum: 500, 800, 700, 500. Net = 500.
+    expect(paretoDistribution(trades).breakevenRank).toBe(1);
+  });
+
+  test("topN summary", () => {
+    const trades = [
+      closed({ trade_id: "A", realized_pl: 100 }),
+      closed({ trade_id: "B", realized_pl: 900 }),
+    ];
+    const p = paretoDistribution(trades);
+    expect(p.topN(1)).toEqual({ net: 900, pctOfNet: 90, count: 1 });
+    expect(p.topN(2)).toEqual({ net: 1000, pctOfNet: 100, count: 2 });
+    expect(p.topN(10).count).toBe(2);
+  });
+
+  test("empty input → empty ranks + null breakeven", () => {
+    const p = paretoDistribution([]);
+    expect(p.ranks).toEqual([]);
+    expect(p.netPl).toBe(0);
+    expect(p.breakevenRank).toBeNull();
+  });
+});
+
+
+describe("holdTimeBuckets", () => {
+  test("5 buckets, classified by close_date − open_date", () => {
+    const trades = [
+      closed({ trade_id: "A", open_date: "2026-04-01", closed_date: "2026-04-01", realized_pl: -50 }), // 0d
+      closed({ trade_id: "B", open_date: "2026-04-01", closed_date: "2026-04-04", realized_pl: 100 }), // 3d
+      closed({ trade_id: "C", open_date: "2026-04-01", closed_date: "2026-04-11", realized_pl: 250 }), // 10d
+      closed({ trade_id: "D", open_date: "2026-04-01", closed_date: "2026-05-01", realized_pl: -100 }), // 30d
+      closed({ trade_id: "E", open_date: "2026-04-01", closed_date: "2026-05-31", realized_pl: 800 }),  // 60d
+    ];
+    const buckets = holdTimeBuckets(trades);
+    expect(buckets.map(b => b.n)).toEqual([1, 1, 1, 1, 1]);
+    expect(buckets[0].label).toBe("0–1 days");
+    expect(buckets[4].label).toBe("41+ days");
+    expect(buckets[4].hiInclusive).toBeNull();
+  });
+
+  test("win rate per bucket", () => {
+    const trades = [
+      closed({ open_date: "2026-04-01", closed_date: "2026-04-04", realized_pl: 100 }),
+      closed({ open_date: "2026-04-02", closed_date: "2026-04-05", realized_pl: -50 }),
+      closed({ open_date: "2026-04-03", closed_date: "2026-04-06", realized_pl: 200 }),
+    ];
+    const buckets = holdTimeBuckets(trades);
+    expect(buckets[1].n).toBe(3);
+    expect(buckets[1].winRate).toBeCloseTo(66.66, 1);
+  });
+
+  test("open trades (no closed_date) are skipped", () => {
+    const trades = [closed({ open_date: "2026-04-01", closed_date: null, realized_pl: 100 })];
+    const buckets = holdTimeBuckets(trades);
+    expect(buckets.reduce((a, b) => a + b.n, 0)).toBe(0);
+  });
+});
+
+
+describe("brandtNormalized", () => {
+  test("avg trade / winner / loser as % of prior-day NAV", () => {
+    const j = [jrow("2026-03-31", 100_000), jrow("2026-04-30", 100_000)];
+    const trades = [
+      closed({ open_date: "2026-04-01", realized_pl: 500 }),
+      closed({ open_date: "2026-04-02", realized_pl: 1500 }),
+      closed({ open_date: "2026-05-01", realized_pl: -300 }),
+    ];
+    const b = brandtNormalized(trades, j);
+    expect(b.avgTradePctNav).toBeCloseTo((0.5 + 1.5 + -0.3) / 3, 4);
+    expect(b.avgWinPctNav).toBeCloseTo((0.5 + 1.5) / 2, 4);
+    expect(b.avgLossPctNav).toBeCloseTo(-0.3, 4);
+    expect(b.nWithNlv).toBe(3);
+  });
+
+  test("trades without prior-day NLV excluded from pct math but counted in n", () => {
+    const j = [jrow("2026-04-05", 100_000)];
+    const trades = [
+      closed({ open_date: "2026-04-01", realized_pl: 500 }),  // no prior-day journal row
+      closed({ open_date: "2026-04-10", realized_pl: 100 }),
+    ];
+    const b = brandtNormalized(trades, j);
+    expect(b.n).toBe(2);
+    expect(b.nWithNlv).toBe(1);
+    expect(b.avgTradePctNav).toBeCloseTo(0.1, 4);
+  });
+});
+
+
+describe("stopCapScenario", () => {
+  test("counts breaches and sums dollars past the cap", () => {
+    const trades = [
+      // -8% return, $1000 cost. Cap 3%: (8-3)/100 * 1000 = $50 saved.
+      closed({ realized_pl: -80, total_cost: 1000, ...({ return_pct: -8 } as any) }),
+      closed({ realized_pl: -20, total_cost: 1000, ...({ return_pct: -2 } as any) }),
+      closed({ realized_pl: 500, total_cost: 1000, ...({ return_pct: 50 } as any) }),
+    ];
+    const rows = stopCapScenario(trades, [3, 5]);
+    expect(rows[0].breachCount).toBe(1);
+    expect(rows[0].dollarsSaved).toBeCloseTo(50, 3);
+    expect(rows[1].dollarsSaved).toBeCloseTo(30, 3);
+  });
+
+  test("clippedWinnerCount = 0 without maePctOf (upper-bound mode)", () => {
+    const trades = [closed({ realized_pl: 200, total_cost: 1000, ...({ return_pct: 20 } as any) })];
+    const rows = stopCapScenario(trades, [5]);
+    expect(rows[0].clippedWinnerCount).toBe(0);
+    expect(rows[0].clippedWinnerForegonePl).toBe(0);
+  });
+
+  test("clippedWinner accounting fires when maePctOf is provided", () => {
+    const trades = [
+      closed({ trade_id: "W", realized_pl: 200, total_cost: 1000,
+               ...({ return_pct: 20, mae_pct: -8 } as any) }),
+      closed({ trade_id: "L", realized_pl: -80, total_cost: 1000,
+               ...({ return_pct: -8, mae_pct: -8 } as any) }),
+    ];
+    const rows = stopCapScenario(trades, [5], {
+      maePctOf: t => Number((t as any).mae_pct ?? null),
+    });
+    expect(rows[0].clippedWinnerCount).toBe(1);
+    expect(rows[0].clippedWinnerForegonePl).toBeCloseTo(200, 3);
+  });
+});
+
+
+describe("fixedSizeScenario", () => {
+  test("scales P&L linearly by (target / actual b_size_pct)", () => {
+    const j = [jrow("2026-03-31", 100_000)];
+    const trades = [closed({ open_date: "2026-04-01", total_cost: 10_000, realized_pl: 1_000 })];
+    const rows = fixedSizeScenario(trades, j, [10, 15]);
+    expect(rows[0].scaledPnl).toBe(1_000);   // T === actual → unchanged
+    expect(rows[1].scaledPnl).toBe(1_500);   // 15/10 × 1000
+  });
+
+  test("trades missing NLV are dropped, counted in nDropped", () => {
+    const trades = [closed({ open_date: "2026-04-01", total_cost: 10_000, realized_pl: 100 })];
+    const rows = fixedSizeScenario(trades, [], [10]);
+    expect(rows[0].nWithSize).toBe(0);
+    expect(rows[0].nDropped).toBe(1);
+    expect(rows[0].scaledPnl).toBe(0);
+  });
+});
+
+
+describe("regimeCrossTab", () => {
+  test("groups by open_month × market_window on open_date", () => {
+    const j = [
+      jrow("2026-04-01", 100_000, "UPTREND"),
+      jrow("2026-05-01", 100_000, "POWERTREND"),
+    ];
+    const trades = [
+      closed({ open_date: "2026-04-05", realized_pl: 100 }),
+      closed({ open_date: "2026-04-10", realized_pl: 200 }),
+      closed({ open_date: "2026-05-05", realized_pl: -50 }),
+    ];
+    const cells = regimeCrossTab(trades, j);
+    expect(cells).toHaveLength(2);
+    expect(cells[0]).toMatchObject({ month: "2026-04", window: "UPTREND", n: 2, netPl: 300 });
+    expect(cells[0].winRate).toBe(100);
+    expect(cells[1]).toMatchObject({ month: "2026-05", window: "POWERTREND", n: 1, netPl: -50 });
+  });
+
+  test("trades without a journal row on/before open_date → window = 'Unknown'", () => {
+    const trades = [closed({ open_date: "2026-04-05", realized_pl: 100 })];
+    expect(regimeCrossTab(trades, [])[0].window).toBe("Unknown");
   });
 });
