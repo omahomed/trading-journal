@@ -86,7 +86,16 @@ def fetch_candidates(
             b1.b1_entry_date,
             b1.b1_entry_price,
             s.atr21_entry_pct,
-            s.mae_mfe_last_updated
+            s.mae_mfe_last_updated,
+            -- Same-day SELL activity on the entry_date. Under the "skip
+            -- bar 0 OHLC unless there was actual same-day exit
+            -- activity" rule, these become the bar 0 MAE / MFE
+            -- candidates (fill price = what the trader actually
+            -- experienced, not what the bar's range shows). NULL when
+            -- no sell landed on entry_date, in which case bar 0 is
+            -- skipped entirely for both MAE and MFE.
+            sd.same_day_low_exit_price,
+            sd.same_day_high_exit_price
         FROM trades_summary s
         JOIN portfolios p ON s.portfolio_id = p.id
         JOIN LATERAL (
@@ -99,6 +108,20 @@ def fetch_candidates(
              ORDER BY d.date ASC, d.id ASC
              LIMIT 1
         ) b1 ON TRUE
+        LEFT JOIN LATERAL (
+            -- Both extremes in a single scan of same-day sells. Sells
+            -- with amount = 0 or NULL don't count (data glitches /
+            -- non-executed placeholder rows).
+            SELECT
+                MIN(NULLIF(d.amount, 0)) AS same_day_low_exit_price,
+                MAX(NULLIF(d.amount, 0)) AS same_day_high_exit_price
+              FROM trades_details d
+             WHERE d.trade_id = s.trade_id
+               AND d.portfolio_id = s.portfolio_id
+               AND d.action = 'SELL'
+               AND d.deleted_at IS NULL
+               AND d.date = b1.b1_entry_date
+        ) sd ON TRUE
         WHERE s.deleted_at IS NULL
           AND COALESCE(s.instrument_type, 'STOCK') = 'STOCK'
     """
@@ -181,22 +204,40 @@ def compute_atr21_from_frame(df: pd.DataFrame) -> float | None:
 
 
 def compute_excursions_from_frame(
-    df: pd.DataFrame, entry_price: float
+    df: pd.DataFrame,
+    entry_price: float,
+    same_day_low_exit_price: float | None = None,
+    same_day_high_exit_price: float | None = None,
 ) -> dict | None:
     """Walk the OHLC frame in date order and derive:
         mae_pct, mfe_pct, days_to_mae, days_to_mfe, max_retrace_pct
 
-    * MAE / MFE reference the B1 entry price (spec §"Definitions") —
-      running min-low and max-high across all bars in the frame.
-    * days_to_mae / days_to_mfe are 0-based against the first bar in
-      the frame — same-day entry means both = 0.
-    * max_retrace_pct is the largest peak-to-trough drawdown (running
-      max of high, minus low on subsequent bars) between entry and the
-      last frame bar. Distinct from MAE: MAE is off entry, retrace is
-      off the running peak. Signed ≤ 0.
+    Entry-day (bar 0) treatment (post-fix):
+      * The entry-day bar's own OHLC extremes do NOT count toward MAE
+        or MFE — without intraday granularity, we can't attribute
+        bar 0's low/high to a moment AFTER the trader's entry. On a
+        reversal-candle entry (buy near close after an intraday
+        washout), bar 0's low happened BEFORE entry and doesn't
+        reflect anything the trader actually experienced.
+      * EXCEPTION: if the trader had SELL activity on entry_date, the
+        fill price is a known point they were at. Same-day sell prices
+        below entry seed the bar 0 MAE candidate; same-day sell prices
+        above entry seed the bar 0 MFE candidate. Same-day partial
+        sells + still holding are handled correctly — the sell price
+        is a proven touch of that level, and later bars can still
+        override with a lower low if it happens.
+      * When there's no same-day sell activity: bar 0 contributes 0 to
+        MAE and MFE. days_to_mae / days_to_mfe stay 0 while the
+        excursion is 0 (they'll flip to the correct positive integer
+        the moment a later bar prints a new extreme).
 
-    Returns None when the frame is empty. Callers guard entry_price>0
-    upstream so the divisions here are safe.
+    Retracement measurement is unchanged: peak-to-trough decline on
+    daily high/low from bar 1 onward (bar 0's intrabar range never was
+    a give-back — it's the origination of the position).
+
+    Returns None when the frame is empty or entry_price is not
+    positive. Callers guard the "any input missing" case upstream, so
+    the divisions here are safe.
     """
     if df.empty or entry_price <= 0:
         return None
@@ -205,21 +246,36 @@ def compute_excursions_from_frame(
     highs = df["High"].astype(float).to_numpy()
     n = len(lows)
 
-    mae_low = float(lows[0])
-    mfe_high = float(highs[0])
+    # Bar 0 seeds: entry_price (contributes 0) unless a same-day sell
+    # gives us a lower/higher known-touched price. Both "sell price"
+    # inputs are optional — most trades have none.
+    mae_low = float(entry_price)
+    mfe_high = float(entry_price)
     days_to_mae = 0
     days_to_mfe = 0
-    # Running peak seeded from bar 0's high. Retrace is measured on
-    # bars 1..N-1 only — bar 0's own intrabar range would show up as a
-    # "retrace" against bar 0's high, but that's the entry bar so it's
-    # not a give-back, it's the origination of the position.
+    if same_day_low_exit_price is not None and same_day_low_exit_price > 0:
+        p = float(same_day_low_exit_price)
+        if p < mae_low:
+            mae_low = p
+    if same_day_high_exit_price is not None and same_day_high_exit_price > 0:
+        p = float(same_day_high_exit_price)
+        if p > mfe_high:
+            mfe_high = p
+
+    # Running peak seeded from bar 0's HIGH (unchanged). Retrace is
+    # only measured on bars 1..N-1 anyway, so bar 0's high is the
+    # correct starting anchor for the peak — a lower low on bar 1
+    # against bar 0's high IS a mid-run give-back.
     running_peak = float(highs[0])
     max_retrace_pct = 0.0
 
-    for i in range(n):
+    # Start MAE / MFE tracking from bar 1. Bar 0's OHLC extremes are
+    # deliberately excluded — see the docstring "Entry-day treatment"
+    # block. Same-day activity has already been folded into mae_low /
+    # mfe_high above.
+    for i in range(1, n):
         low_i = float(lows[i])
         high_i = float(highs[i])
-        # Update MAE / MFE against the entry price.
         if low_i < mae_low:
             mae_low = low_i
             days_to_mae = i
@@ -228,10 +284,7 @@ def compute_excursions_from_frame(
             days_to_mfe = i
         # Peak-to-trough retrace: current-bar low against the peak of
         # PRIOR bars (before this bar's high enters the running peak).
-        # Order matters — if we updated running_peak first, bar N's
-        # low would count against bar N's own high, which is intrabar
-        # range, not a mid-run give-back.
-        if i > 0 and running_peak > 0:
+        if running_peak > 0:
             retrace = (low_i - running_peak) / running_peak * 100.0
             if retrace < max_retrace_pct:
                 max_retrace_pct = retrace
@@ -263,7 +316,11 @@ def compute_atr21_entry(ticker: str, entry_date: date) -> float | None:
 
 
 def compute_excursions(
-    ticker: str, entry_date: date, entry_price: float,
+    ticker: str,
+    entry_date: date,
+    entry_price: float,
+    same_day_low_exit_price: float | None = None,
+    same_day_high_exit_price: float | None = None,
 ) -> dict | None:
     """Fetch [entry_date, today] daily OHLC and derive MAE/MFE/retrace.
 
@@ -271,10 +328,19 @@ def compute_excursions(
     recent same-day entries before end-of-day tape settles). Callers
     treat None as a skip — the next reconcile run picks it up when
     data lands.
+
+    same_day_*_exit_price args are optional; when passed, they seed the
+    entry-day (bar 0) MAE / MFE candidates so a same-day stop-out or
+    same-day partial sell registers correctly. See the docstring on
+    compute_excursions_from_frame for the full entry-day rule.
     """
     end = date.today() + timedelta(days=1)  # yfinance end is exclusive
     df = _download_history(ticker, entry_date, end)
-    return compute_excursions_from_frame(df, entry_price)
+    return compute_excursions_from_frame(
+        df, entry_price,
+        same_day_low_exit_price=same_day_low_exit_price,
+        same_day_high_exit_price=same_day_high_exit_price,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -396,10 +462,28 @@ def reconcile_open_positions(
             })
             continue
 
+        # Same-day sell prices (if any) participate in bar 0 MAE / MFE
+        # per the entry-day rule — see compute_excursions_from_frame's
+        # docstring. Cast safely: psycopg2 sometimes returns Decimals
+        # for NUMERIC columns which don't compose with the pure-float
+        # math downstream.
+        same_day_low = row.get("same_day_low_exit_price")
+        same_day_high = row.get("same_day_high_exit_price")
+        try:
+            same_day_low_f = float(same_day_low) if same_day_low is not None else None
+            same_day_high_f = float(same_day_high) if same_day_high is not None else None
+        except (TypeError, ValueError):
+            same_day_low_f = None
+            same_day_high_f = None
+
         try:
             if sleep:
                 time.sleep(sleep)
-            excursions = compute_excursions(ticker, entry_date, entry_price)
+            excursions = compute_excursions(
+                ticker, entry_date, entry_price,
+                same_day_low_exit_price=same_day_low_f,
+                same_day_high_exit_price=same_day_high_f,
+            )
         except Exception as exc:
             counters["errors"] += 1
             log.error("MAE/MFE compute failed for %s (%s): %s",
