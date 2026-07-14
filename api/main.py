@@ -128,6 +128,53 @@ async def _start_b1_reconcile():
 
 
 # ============================================================
+# DAILY MAE/MFE RECONCILE
+# ============================================================
+# Same in-process asyncio pattern as _b1_reconcile_loop above. Sweeps
+# every open equity position once a day, updates the excursion columns
+# (mae_pct, mfe_pct, days_to_*, max_retrace_pct) via yfinance, and takes
+# a one-shot ATR21% snapshot the first time each trade is seen. Options
+# are skipped upstream in fetch_candidates().
+#
+# Staggered 180s after boot (b1_reconcile fires at 90s) so the two
+# don't hammer yfinance in the same event-loop tick. Disabled under
+# pytest and via DISABLE_MAE_MFE_RECONCILE=1.
+
+_MAE_MFE_RECONCILE_INTERVAL_S = 24 * 60 * 60
+_MAE_MFE_RECONCILE_STARTUP_DELAY_S = 180
+
+
+async def _mae_mfe_reconcile_loop():
+    from api.mae_mfe_reconcile import reconcile_open_positions
+
+    await asyncio.sleep(_MAE_MFE_RECONCILE_STARTUP_DELAY_S)
+    while True:
+        try:
+            summary = await asyncio.to_thread(
+                reconcile_open_positions, None, False, False, 0.3
+            )
+            c = summary["counters"]
+            print(f"[mae_mfe_reconcile] {c['updated']} updated · "
+                  f"{c['atr_snapshotted']} atr-snapshotted · "
+                  f"{c['skipped_no_data']} no-data · {c['errors']} errors "
+                  f"(of {summary['total']} open)")
+        except Exception as exc:
+            print(f"[mae_mfe_reconcile] run failed: {exc}")
+        await asyncio.sleep(_MAE_MFE_RECONCILE_INTERVAL_S)
+
+
+@app.on_event("startup")
+async def _start_mae_mfe_reconcile():
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DISABLE_MAE_MFE_RECONCILE"):
+        return
+    if not os.environ.get("DATABASE_URL"):
+        print("[mae_mfe_reconcile] DATABASE_URL not set — scheduler disabled.")
+        return
+    asyncio.create_task(_mae_mfe_reconcile_loop())
+    print("[mae_mfe_reconcile] daily excursion reconcile scheduled.")
+
+
+# ============================================================
 # JWT AUTH MIDDLEWARE
 # ============================================================
 # next-auth on the frontend mints an HS256 JWT in the session callback using
