@@ -851,6 +851,24 @@ export const api = {
       `/api/analytics/weekly-metrics?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
     ),
 
+  // Trailing avg-loss aggregate — feeds the New Entry sizing
+  // denominator. Backend excludes options + zero-return trades and
+  // returns null pcts when sample_size = 0 (client applies 4% floor
+  // and can distinguish "no data" from "tighter than floor").
+  trailingAvgLoss: (
+    portfolio: string,
+    windowMonths: number = 12,
+  ) => fetchJSON<{
+    portfolio: string;
+    window_months: number;
+    avg_loss_pct: number | null;
+    median_loss_pct: number | null;
+    sample_size: number;
+    as_of: string;
+  }>(
+    `/api/analytics/trailing-avg-loss?portfolio=${encodeURIComponent(portfolio)}&window_months=${windowMonths}`
+  ),
+
   // Add Effectiveness — rule-grouped aggregate over scale-in BUYs in
   // [start, end]. `strategy` empty or "all" disables the strategy
   // filter on the backend. Response shape is stable across empty / non-

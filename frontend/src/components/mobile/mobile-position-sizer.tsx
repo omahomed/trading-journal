@@ -244,7 +244,7 @@ export function MobilePositionSizer() {
   const [maLevel, setMaLevel] = useState("");
   const [buffer, setBuffer] = useState("1.00");
   // Index 3 (Pilot, 0.25%) is manual-only; auto path lands on 0/1/2.
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2 | 3>(1); // overwritten on mount
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1); // overwritten on mount
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [sizeIdx, setSizeIdx] = useState<number>(DEFAULT_SIZE_INDEX);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
@@ -1833,13 +1833,12 @@ function ModePickerTile({
   sizingMode,
   onChange,
 }: {
-  sizingMode: 0 | 1 | 2 | 3;
-  onChange: (i: 0 | 1 | 2 | 3) => void;
+  sizingMode: 0 | 1 | 2;
+  onChange: (i: 0 | 1 | 2) => void;
 }) {
   const m = SIZING_MODES[sizingMode];
   const displayLabel =
-    m.key === "defense" ? "Defense"
-    : m.key === "normal" ? "Normal"
+    m.key === "normal" ? "Normal"
     : m.key === "offense" ? "Offense"
     : "Pilot";
   return (
@@ -1856,8 +1855,7 @@ function ModePickerTile({
           {SIZING_MODES.map((opt) => {
             const isActive = opt.index === sizingMode;
             const label =
-              opt.key === "defense" ? "Defense"
-              : opt.key === "normal" ? "Normal"
+              opt.key === "normal" ? "Normal"
               : opt.key === "offense" ? "Offense"
               : "Pilot";
             return (
@@ -2153,7 +2151,7 @@ function OptionsResultBlock({
   targetSize,
 }: {
   result: OptionsResult | null;
-  sizingMode: 0 | 1 | 2 | 3;
+  sizingMode: 0 | 1 | 2;
   costPerContract: string;
   equity: number;
   ticker: string;

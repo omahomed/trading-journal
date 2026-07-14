@@ -167,16 +167,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [strategy, setStrategy] = useState("CanSlim");
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   // sizingMode default Normal (1) — overwritten on mount by the MCT
-  // state read. Stays Normal if the read fails (mctStateToSizingMode
-  // falls back to safe middle ground). sizingModeManual flips true the
-  // moment the user picks a different mode for this Log Buy submission;
-  // the risk-per-trade math (riskPctInput below) reads from sizingMode
-  // either way, so the override flows naturally into the saved buy.
-  // Override is form-local: refresh / navigate-away / submit all reset
-  // it (the component remounts and the auto pick takes over again).
-  // Index 3 (Pilot, 0.25%) is reachable ONLY via manual radio click;
-  // the auto-derivation path returns 0|1|2 only.
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2 | 3>(1);
+  // state read. Falls back to Pilot (0) if the read fails, per the
+  // retiered mctStateToSizingMode (unknown state → smallest tier).
+  // sizingModeManual flips true the moment the user picks a different
+  // mode for this Log Buy submission; the risk-per-trade math
+  // (riskPctInput below) reads from sizingMode either way, so the
+  // override flows naturally into the saved buy. Override is form-local:
+  // refresh / navigate-away / submit all reset it (the component
+  // remounts and the auto pick takes over again).
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
@@ -246,7 +245,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
       setActiveExits(exits);
       // Match the Position Sizer's derivation so the two pages agree:
       // exit-ladder floor downshifts auto-mode (e.g. 50 SMA Violation
-      // forces Defense even on POWERTREND).
+      // forces Pilot even on POWERTREND).
       setSizingMode(deriveAutoSizingMode(stateStr, exits).idx);
       setStrategies(strats);
     });
@@ -1342,11 +1341,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
                 </div>
 
                 {/* Sizing mode override radios. Same SIZING_MODES + index
-                    contract as Position Sizer (defense=0, normal=1,
+                    contract as Position Sizer (pilot=0, normal=1,
                     offense=2). Clicking any radio flips sizingModeManual
                     so the indicator copy + Reset button surface above. */}
                 <Field label="Override Sizing Mode">
-                  {/* Display order: Pilot · Defense · Normal · Offense
+                  {/* Display order: Pilot · Normal · Offense
                       (SIZING_MODES_DISPLAY) — most conservative at top,
                       most aggressive at bottom, matching Position Sizer.
                       Canonical SIZING_MODES indices stay stable for

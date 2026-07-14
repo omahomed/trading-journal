@@ -1,22 +1,36 @@
-// Sizing-mode mapping shared by Position Sizer + Log Buy.
+// Sizing-mode mapping shared by Position Sizer, Log Buy, and New Entry.
 //
-// Risk-per-trade is derived from the V11 MCT state (replaces the legacy
-// /api/market/mfactor MA-stack heuristic). The mapping below is fixed:
+// Risk-per-trade is derived from the V11 MCT state. The mapping below is
+// fixed (per the New Entry ATR risk-unit model, adopted globally):
 //
-//   MCT State       →  Sizing Mode    →  Risk Per Trade
-//   ────────────────────────────────────────────────────
-//   CORRECTION      →  Defense        →  0.5%
-//   RALLY MODE      →  Normal         →  0.75%
-//   UPTREND         →  Offense        →  1.0%
-//   POWERTREND      →  Offense        →  1.0%
+//   MCT State                →  Sizing Mode  →  Risk Per Trade
+//   ────────────────────────────────────────────────────────────
+//   POWERTREND               →  Offense      →  0.75%
+//   UPTREND                  →  Normal       →  0.50%
+//   UPTREND UNDER PRESSURE   →  Pilot        →  0.25%
+//   RALLY MODE               →  Pilot        →  0.25%
+//   CORRECTION               →  Pilot        →  0.25%
 //
-// cap_at_100 does NOT enter this mapping. The 100% total-exposure ceiling
-// is enforced separately by V11's exposure cap logic; per-trade sizing
-// stays Offense even when the portfolio is capped.
+// Rationale for the retier: the old ladder (Defense 0.50 / Normal 0.75 /
+// Offense 1.00, plus a manual-only Pilot 0.25) was calibrated to a
+// hard-stop denominator; the New Entry model sizes against the trader's
+// TRAILING REALIZED AVERAGE LOSS (~4.5% on the 2026 sample), which is a
+// tighter denominator and needed proportionally smaller risk units to
+// land the same shares recommendation. The Defense tier and the 1.0%
+// tier are retired; the three surviving tiers are Pilot / Normal /
+// Offense, indexed 0 / 1 / 2. Unknown-state fallback lands on Pilot
+// (safest) rather than a middle-tier auto-pick — the redesign is
+// intentionally conservative and the manual override is DOWNWARD-ONLY,
+// so a middle-tier default would contradict that philosophy on a
+// transient engine hiccup.
+//
+// cap_at_100 does NOT enter this mapping. The 100% total-exposure
+// ceiling is enforced separately by V11's exposure cap logic; per-trade
+// sizing stays wherever the state map lands.
 
 export type MctState = "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
 
-export type SizingModeKey = "defense" | "normal" | "offense" | "pilot";
+export type SizingModeKey = "pilot" | "normal" | "offense";
 
 export interface SizingMode {
   key: SizingModeKey;
@@ -24,63 +38,49 @@ export interface SizingMode {
   /** Risk per trade as a percentage of equity. */
   pct: number;
   icon: string;
-  /** Fixed lookup index — the position-sizer + log-buy state machines
-      key off this number; reordering would silently shift behavior.
-      Note: array index is NOT aggression order. Pilot (3) is the most
-      conservative tier but lives at the end of the array so the original
-      0/1/2 indices stay pinned to defense/normal/offense — keeps the
-      "auto modes are 0|1|2" invariant intact. Use SIZING_MODES_DISPLAY
-      below for left-to-right UI rendering by aggression. */
-  index: 0 | 1 | 2 | 3;
+  /** Canonical lookup index — the position-sizer / log-buy / new-entry
+      state machines key off this number. Array order equals aggression
+      order (Pilot=0 → Normal=1 → Offense=2), so SIZING_MODES itself is
+      also the UI-display order left-to-right. */
+  index: 0 | 1 | 2;
 }
 
 export const SIZING_MODES: readonly SizingMode[] = [
-  { key: "defense", label: "Defense (0.50%)", pct: 0.5,  icon: "🛡️", index: 0 },
-  { key: "normal",  label: "Normal (0.75%)",  pct: 0.75, icon: "⚖️", index: 1 },
-  { key: "offense", label: "Offense (1.00%)", pct: 1.0,  icon: "⚔️", index: 2 },
-  // Manual-only tier. M Factor state mapping + exit-ladder floor will
-  // never return index 3, so the auto path can't land you on Pilot —
-  // it's strictly opt-in for "I want to be extra careful for reasons
-  // the engine doesn't see" (earnings cluster, vacation, personal
-  // cash needs). "Reset to auto" from Pilot drops to whatever rules
-  // pick, never back to Pilot.
-  { key: "pilot",   label: "Pilot (0.25%)",   pct: 0.25, icon: "✈️", index: 3 },
+  { key: "pilot",   label: "Pilot (0.25%)",   pct: 0.25, icon: "✈️", index: 0 },
+  { key: "normal",  label: "Normal (0.50%)",  pct: 0.50, icon: "⚖️", index: 1 },
+  { key: "offense", label: "Offense (0.75%)", pct: 0.75, icon: "⚔️", index: 2 },
 ] as const;
 
 /** UI-display order (left → right, most conservative → most aggressive):
- *  Pilot · Defense · Normal · Offense. Position Sizer + Log Buy both
- *  render radios in this order so the visual flow matches the
- *  aggression spectrum, while SIZING_MODES (canonical lookup) keeps
- *  the original 0/1/2 indices stable for backward compatibility. */
-export const SIZING_MODES_DISPLAY: readonly SizingMode[] = [
-  SIZING_MODES[3], // Pilot
-  SIZING_MODES[0], // Defense
-  SIZING_MODES[1], // Normal
-  SIZING_MODES[2], // Offense
-] as const;
+ *  Pilot · Normal · Offense. Now identical to SIZING_MODES since the
+ *  array is already in aggression order — kept as a named export so
+ *  callsites that render radios from SIZING_MODES_DISPLAY don't have to
+ *  change. */
+export const SIZING_MODES_DISPLAY: readonly SizingMode[] = SIZING_MODES;
 
 /** Default fallback when MCT state is unknown / endpoint failed.
- *  Intentional: Normal (0.75%) is the safe middle ground — the user
- *  shouldn't be auto-promoted to Offense on a missing read, and Defense
- *  could over-restrict on a transient hiccup. */
-const DEFAULT_INDEX = 1;
+ *  Intentional: Pilot (0.25%). The redesign lands the auto path on
+ *  Pilot for RALLY MODE / UPTREND UNDER PRESSURE / CORRECTION anyway,
+ *  and the manual override is downward-only — so a middle-tier default
+ *  on an engine hiccup would violate the "when in doubt, be smaller"
+ *  invariant this model is built around. */
+const DEFAULT_INDEX = 0;
 
 /** Map an MCT state string to the corresponding sizing-mode index.
  *  Unknown states (including null/undefined/legacy strings) fall back
- *  to the safe-middle default rather than guessing. */
+ *  to Pilot rather than guessing a middle tier. */
 export function mctStateToSizingMode(state: string | null | undefined): 0 | 1 | 2 {
   switch (state) {
     case "POWERTREND":
+      return 2;  // Offense (0.75%)
     case "UPTREND":
-      return 2;  // Offense
+      return 1;  // Normal  (0.50%)
     case "UPTREND UNDER PRESSURE":
-      return 1;  // Normal
     case "RALLY MODE":
-      return 1;  // Normal
     case "CORRECTION":
-      return 0;  // Defense
+      return 0;  // Pilot   (0.25%)
     default:
-      return DEFAULT_INDEX;  // Unknown / null → Normal (safe middle)
+      return DEFAULT_INDEX;  // Unknown / null → Pilot (safe floor)
   }
 }
 
@@ -98,14 +98,16 @@ export interface ExitAlert {
  *  the M Factor state would pick on its own. Watch states (no actual
  *  break confirmed) do NOT downshift; they're informational.
  *
- *    50 SMA Violation             → Defense (0)
+ *    50 SMA Violation             → Pilot   (0)   — most conservative
  *    21 EMA Confirmed Break       → Normal  (1)
  *    21 EMA Violation             → Normal  (1)
  *    (anything else, incl Watch)  → no floor (returns 2)
  *
  *  Most-severe wins when multiple alerts are active: a 50 SMA
- *  Violation alongside a 21 EMA Confirmed Break floors at Defense,
- *  not Normal. */
+ *  Violation alongside a 21 EMA Confirmed Break floors at Pilot,
+ *  not Normal. (Old ladder called the strictest floor "Defense"; that
+ *  tier is retired — Pilot now occupies index 0 and takes the same
+ *  semantic role.) */
 export function exitLadderFloor(activeExits: readonly ExitAlert[] | null | undefined): {
   idx: 0 | 1 | 2;
   reason: string | null;
@@ -125,7 +127,7 @@ export function exitLadderFloor(activeExits: readonly ExitAlert[] | null | undef
 /** Combined auto-mode derivation: take the MORE conservative of
  *  (M Factor state → mode, exit-ladder floor). Returns the chosen
  *  index plus a breakdown the UI can use to explain the pick to the
- *  user ("Auto: Normal — from M Factor POWERTREND, downshifted by
+ *  user ("Auto: Normal — from M Factor UPTREND, downshifted by
  *  21 EMA Confirmed Break"). */
 export function deriveAutoSizingMode(
   state: string | null | undefined,
@@ -141,14 +143,14 @@ export function deriveAutoSizingMode(
 }
 
 /** Human-readable label for the source of a sizing-mode pick. Used by
- *  Position Sizer's "Auto: Offense (from M Factor POWERTREND)" /
- *  "Manual: Defense" indicator. The function NAME stays as
- *  describeMctSource — the engine internals are still called MCT —
- *  but the user-visible string says "M Factor".
+ *  Position Sizer / Log Buy / New Entry to render the "Auto: Offense
+ *  (from M Factor POWERTREND)" / "Manual: Pilot" indicator. Function
+ *  name stays as describeMctSource — the engine internals are still
+ *  called MCT — but the user-visible string says "M Factor".
  *
  *  Optional `floor` arg: when the exit-ladder downshifted the mode
  *  below what the state alone would have picked, the label says so
- *  ("from M Factor POWERTREND, downshifted by 21 EMA Confirmed Break")
+ *  ("from M Factor UPTREND, downshifted by 21 EMA Confirmed Break")
  *  so the user understands WHY the auto-mode isn't what the state
  *  pill suggests. */
 export function describeMctSource(
@@ -174,4 +176,23 @@ export function describeMctSource(
     }
   }
   return base;
+}
+
+/** Downward-only manual override guard (New Entry semantics).
+ *
+ *  The New Entry page allows manual mode override but ONLY downward —
+ *  the user may pick a tier smaller than the auto-selected one, never
+ *  larger. This function returns the effective index given the
+ *  auto-derived tier and a user-picked tier: whichever is more
+ *  conservative wins. "Reset to auto" (in the calling component) simply
+ *  discards the user pick and re-applies the auto value.
+ *
+ *  Position Sizer + Log Buy have their own longstanding upward-and-
+ *  downward manual override — this helper is not used there, only in
+ *  New Entry. */
+export function clampManualToDownwardOnly(
+  autoIdx: 0 | 1 | 2,
+  userIdx: 0 | 1 | 2,
+): 0 | 1 | 2 {
+  return Math.min(autoIdx, userIdx) as 0 | 1 | 2;
 }

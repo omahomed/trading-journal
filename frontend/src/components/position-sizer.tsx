@@ -198,7 +198,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // (mctStateToSizingMode falls back to safe middle ground). Index 3
   // (Pilot, 0.25%) is reachable ONLY via manual radio click; the auto
   // path returns 0|1|2 only.
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2 | 3>(1);
+  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
   // mctState + sizingModeManual track WHY the current mode is what it is.
   // - sizingModeManual=false → set by MCT state read (auto)
   // - sizingModeManual=true  → user clicked a Radio (override). Reset by
@@ -206,7 +206,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [mctState, setMctState] = useState<string | null>(null);
   // Active exit-ladder alerts. Drive the sizing-mode floor — a fired
   // 21 EMA Violation / Confirmed Break downshifts to Normal; a fired
-  // 50 SMA Violation downshifts to Defense, regardless of what the
+  // 50 SMA Violation downshifts to Pilot, regardless of what the
   // M Factor state alone would have picked. See lib/sizing-mode#
   // exitLadderFloor for the full rule.
   const [activeExits, setActiveExits] = useState<readonly { signal: string; severity?: string }[]>([]);
@@ -296,7 +296,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       // The guard becomes meaningful when this effect re-runs (it doesn't
       // today, but defending against a future deps change).
       // Auto-mode now takes the more conservative of (M Factor state,
-      // exit-ladder floor). E.g. POWERTREND + 50 SMA Violation → Defense,
+      // exit-ladder floor). E.g. POWERTREND + 50 SMA Violation → Pilot,
       // not Offense — even if the regime hasn't flipped to CORRECTION yet.
       setSizingMode(deriveAutoSizingMode(stateStr, exits).idx);
       setSizingModeManual(false);
@@ -591,7 +591,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         return { ...t, budget, contracts, totalCost, pctNlv };
       });
       // Recommended = selected sizing mode
-      const recIdx = sizingMode; // 0=defense, 1=normal, 2=offense
+      const recIdx = sizingMode; // 0=pilot, 1=normal, 2=offense
       const recBudget = riskBudget;
       const recContracts = Math.min(Math.floor(recBudget / cpc), Math.floor(hardCapBudget / cpc));
       const recTotal = recContracts * cpc;
@@ -684,11 +684,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
             <p className="mb-1"><strong>Sizing Mode (auto-derived from M Factor state):</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Pilot:</strong> 0.25% risk — CORRECTION / RALLY MODE (probe size)</li>
-              <li><strong>Defense:</strong> 0.50% risk — sizing down after equity damage</li>
-              <li><strong>Normal:</strong> 0.75% risk — UPTREND / UPTREND UNDER PRESSURE</li>
-              <li><strong>Offense:</strong> 1.00% risk — POWERTREND (confirmed uptrend)</li>
+              <li><strong>Pilot:</strong> 0.25% risk — CORRECTION / RALLY MODE / UPTREND UNDER PRESSURE (probe size)</li>
+              <li><strong>Normal:</strong> 0.50% risk — UPTREND</li>
+              <li><strong>Offense:</strong> 0.75% risk — POWERTREND (confirmed uptrend)</li>
             </ul>
+            <p className="mb-2 text-[11px]" style={{ color: "var(--ink-4)" }}>
+              Ladder retiered as part of the New Entry model rollout (Defense
+              and 1.0% tiers retired). Unknown-state fallback lands on Pilot.
+            </p>
             <p className="mb-1"><strong>The two tile groups explained:</strong></p>
             <ul className="list-disc ml-4 mb-2">
               <li><strong>Risk Budget</strong> = NLV × Sizing Mode risk % (the $ you allow to lose on this trade)</li>
@@ -853,7 +856,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                           // the load effect used so exit-ladder floor
                           // applies here too — clicking Reset right
                           // after a 50 SMA Violation lands you on
-                          // Defense, not raw-state Offense.
+                          // Pilot, not raw-state Offense.
                           setSizingMode(deriveAutoSizingMode(mctState, activeExits).idx);
                           setSizingModeManual(false);
                           resetCalc();
@@ -865,10 +868,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               )}
             </div>
             <Field label="Sizing Mode">
-              {/* Iterates SIZING_MODES_DISPLAY (Pilot · Defense · Normal
-                  · Offense) so the radio row reads left-to-right as a
+              {/* Iterates SIZING_MODES_DISPLAY (Pilot · Normal ·
+                  Offense) so the radio row reads left-to-right as a
                   conservatism spectrum. The canonical SIZING_MODES
-                  lookup (index 0/1/2/3) stays intact for indexing. */}
+                  lookup (index 0/1/2) stays intact for indexing. */}
               <div className="flex gap-4 mt-1">
                 {SIZING_MODES_DISPLAY.map(m => (
                   <Radio key={m.key} checked={sizingMode === m.index}
