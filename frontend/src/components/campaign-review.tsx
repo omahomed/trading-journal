@@ -881,6 +881,7 @@ export function CampaignReview() {
                       {isOpen && (
                         <tr style={{ background: "var(--bg-2)" }}>
                           <td colSpan={9} className="px-4 py-4">
+                            <ExcursionPanel row={r} />
                             <LessonEditor
                               row={r}
                               savingId={saving}
@@ -955,6 +956,106 @@ function LessonEditor({ row, savingId, onToggleCategory, onSaveNote }: {
                 rows={3}
                 className="w-full rounded-[10px] px-3 py-2 text-[12px] resize-vertical"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+    </div>
+  );
+}
+
+
+// Excursion metrics on the closed-campaign row expander (migration 046).
+// Renders MAE / MFE / max retrace as % + ×ATR + days-to-each, plus a
+// capture ratio (exit price ÷ MFE price) — how much of the run the trader
+// captured. Null-safe: any field missing → "—", the whole panel collapses
+// to a "not populated" note when nothing is present at all.
+function ExcursionPanel({ row }: { row: CampaignReviewRow }) {
+  const mae = row.mae_pct ?? null;
+  const mfe = row.mfe_pct ?? null;
+  const retrace = row.max_retrace_pct ?? null;
+  const atr21 = row.atr21_entry_pct ?? null;
+  const dMae = row.days_to_mae ?? null;
+  const dMfe = row.days_to_mfe ?? null;
+
+  const anyValue = mae != null || mfe != null || retrace != null;
+  if (!anyValue) {
+    return (
+      <div className="mb-3 text-[11px] italic"
+           style={{ color: "var(--ink-4)" }}
+           data-testid="campaign-review-excursion-empty">
+        Excursion metrics not yet populated for this campaign.
+      </div>
+    );
+  }
+
+  const atrMult = (pct: number | null) =>
+    pct != null && atr21 != null && atr21 > 0
+      ? Math.abs(pct) / atr21
+      : null;
+
+  // Capture ratio = actual exit price / theoretical MFE price. Requires
+  // avg_exit and MFE. Values > 1 don't happen (you can't exit above the
+  // max high); values close to 1 mean the trader captured most of the run.
+  const mfePrice = mfe != null && row.avg_entry > 0
+    ? row.avg_entry * (1 + mfe / 100)
+    : null;
+  const captureRatio = mfePrice != null && mfePrice > 0 && row.avg_exit > 0
+    ? row.avg_exit / mfePrice
+    : null;
+
+  const cell = (
+    label: string,
+    pct: number | null,
+    days: number | null,
+    testId: string,
+    tone: "adverse" | "favorable" | "neutral",
+  ) => {
+    const mult = atrMult(pct);
+    const color = pct == null || pct === 0
+      ? "var(--ink-3)"
+      : tone === "adverse" ? "#e5484d"
+      : tone === "favorable" ? "#08a86b"
+      : "var(--ink)";
+    return (
+      <div className="flex flex-col gap-0.5" data-testid={testId}>
+        <span className="text-[9px] uppercase tracking-[0.08em] font-semibold"
+              style={{ color: "var(--ink-4)" }}>{label}</span>
+        <span className="text-[15px] font-semibold" style={{ color, fontFamily: mono }}>
+          {pct == null ? "—" : `${pct.toFixed(2)}%`}
+        </span>
+        <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+          {mult != null ? `${mult.toFixed(2)}× ATR` : "—"}
+          {days != null ? ` · day ${days}` : ""}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="mb-4 pb-3" style={{ borderBottom: "1px dashed var(--border)" }}
+         data-testid="campaign-review-excursion-panel">
+      <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2"
+           style={{ color: "var(--ink-4)" }}>
+        Excursion
+      </div>
+      <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+        {cell("MAE",         mae,     dMae, "campaign-review-mae",     "adverse")}
+        {cell("MFE",         mfe,     dMfe, "campaign-review-mfe",     "favorable")}
+        {cell("Max retrace", retrace, null, "campaign-review-retrace", "adverse")}
+        <div className="flex flex-col gap-0.5" data-testid="campaign-review-capture">
+          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold"
+                style={{ color: "var(--ink-4)" }}>Capture ratio</span>
+          <span className="text-[15px] font-semibold" style={{ color: "var(--ink)", fontFamily: mono }}>
+            {captureRatio == null ? "—" : `${(captureRatio * 100).toFixed(0)}%`}
+          </span>
+          <span className="text-[10px]" style={{ color: "var(--ink-4)", fontFamily: mono }}>
+            {captureRatio == null ? "—" : "exit ÷ MFE price"}
+          </span>
+        </div>
+      </div>
+      {atr21 != null && (
+        <div className="text-[10px] mt-2" style={{ color: "var(--ink-4)" }}>
+          ATR21 at entry: <strong style={{ fontFamily: mono, color: "var(--ink-3)" }}>{atr21.toFixed(2)}%</strong>
+          {" (frozen snapshot; ×ATR multiples derived from this)"}
+        </div>
+      )}
     </div>
   );
 }

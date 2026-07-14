@@ -55,6 +55,13 @@ export interface EnrichedPosition {
   // computeEnrichedPositions. NULL pre-backfill; falls back to current.
   b1_max_return_pct: number | null;
   sell_rule_tier: SellRuleTier | null;
+  // Migration 046 — excursion metrics passed through from the summary
+  // row. Optional + nullable so pre-migration fixtures / legacy DBs
+  // don't have to spell them out.
+  mae_pct?: number | null;
+  mfe_pct?: number | null;
+  atr21_entry_pct?: number | null;
+  max_retrace_pct?: number | null;
 }
 
 export function computeEnrichedPositions(
@@ -215,6 +222,18 @@ export function computeEnrichedPositions(
       b1_return_pct: b1ReturnPct,
       b1_max_return_pct: b1MaxStored,
       sell_rule_tier: sellRuleTier,
+      mae_pct:          _passThroughNum((trade as any).mae_pct),
+      mfe_pct:          _passThroughNum((trade as any).mfe_pct),
+      atr21_entry_pct:  _passThroughNum((trade as any).atr21_entry_pct),
+      max_retrace_pct:  _passThroughNum((trade as any).max_retrace_pct),
     };
   });
+}
+
+// psycopg2 sometimes deserializes NUMERIC as strings; normalize once
+// here so the EnrichedPosition type stays strictly numeric | null.
+function _passThroughNum(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
 }

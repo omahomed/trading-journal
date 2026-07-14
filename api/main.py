@@ -2499,6 +2499,13 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
         "B1_Max_Return_Pct": "b1_max_return_pct",
+        "Mae_Pct": "mae_pct",
+        "Mfe_Pct": "mfe_pct",
+        "Atr21_Entry_Pct": "atr21_entry_pct",
+        "Days_To_Mae": "days_to_mae",
+        "Days_To_Mfe": "days_to_mfe",
+        "Max_Retrace_Pct": "max_retrace_pct",
+        "Mae_Mfe_Last_Updated": "mae_mfe_last_updated",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
@@ -2632,6 +2639,24 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
             closed_dt = r.get("closed_date")
             open_dt = r.get("open_date")
 
+            # Migration 046 excursion metrics — pass through as null when
+            # the daily reconciler hasn't stamped them yet (typical for
+            # newly imported closed campaigns pending the Phase 2 backfill).
+            def _num_or_none(v):
+                try:
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return None
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            def _int_or_none(v):
+                try:
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return None
+                    return int(v)
+                except (TypeError, ValueError):
+                    return None
+
             rows.append({
                 "trade_id": tid,
                 "ticker": str(r.get("ticker", "")),
@@ -2651,6 +2676,12 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
                 "shares": float(r.get("shares") or 0),
                 "avg_entry": float(r.get("avg_entry") or 0),
                 "avg_exit": float(r.get("avg_exit") or 0),
+                "mae_pct":          _num_or_none(r.get("mae_pct")),
+                "mfe_pct":          _num_or_none(r.get("mfe_pct")),
+                "atr21_entry_pct":  _num_or_none(r.get("atr21_entry_pct")),
+                "days_to_mae":      _int_or_none(r.get("days_to_mae")),
+                "days_to_mfe":      _int_or_none(r.get("days_to_mfe")),
+                "max_retrace_pct":  _num_or_none(r.get("max_retrace_pct")),
             })
 
         rows.sort(key=lambda x: x.get("closed_date") or "", reverse=True)

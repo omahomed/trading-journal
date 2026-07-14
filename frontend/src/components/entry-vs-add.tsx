@@ -77,13 +77,21 @@ interface TradeRow {
   total_return_pct: number | null;
   rule: string;
   multiplier: number;
+  // Migration 046 — excursion metrics passed through from the summary
+  // row. Nullable + optional; the daily reconciler stamps them on
+  // OPEN equity positions, closed rows keep the last-observed values.
+  // ×ATR multiples are derived at render time from atr21_entry_pct.
+  mae_pct: number | null;
+  mfe_pct: number | null;
+  atr21_entry_pct: number | null;
 }
 
 type ColKey =
   | "trade_id" | "ticker" | "status" | "open_date" | "closed_date"
   | "b_shares" | "b_pnl" | "b_return_pct"
   | "a_shares" | "a_pnl" | "a_return_pct"
-  | "total_pnl" | "total_return_pct" | "rule";
+  | "total_pnl" | "total_return_pct" | "rule"
+  | "mae_pct" | "mfe_pct";
 
 interface Filters {
   q: string;
@@ -110,6 +118,7 @@ const NUMERIC_KEYS = new Set<ColKey>([
   "b_shares", "b_pnl", "b_return_pct",
   "a_shares", "a_pnl", "a_return_pct",
   "total_pnl", "total_return_pct",
+  "mae_pct", "mfe_pct",
 ]);
 
 // Prefer explicit instrument_type metadata (Migration 016) with a
@@ -255,8 +264,20 @@ function computeTradeRows(
       total_return_pct,
       rule: String((trade as { rule?: string; buy_rule?: string }).rule || (trade as { buy_rule?: string }).buy_rule || ""),
       multiplier,
+      mae_pct:  toNumOrNull((trade as { mae_pct?: number | null }).mae_pct),
+      mfe_pct:  toNumOrNull((trade as { mfe_pct?: number | null }).mfe_pct),
+      atr21_entry_pct: toNumOrNull((trade as { atr21_entry_pct?: number | null }).atr21_entry_pct),
     };
   });
+}
+
+// Backend loaders can return NUMERIC columns as strings when they're
+// deserialized through psycopg2's default cursor. Coerce here so the
+// downstream number-only comparisons stay total.
+function toNumOrNull(v: number | string | null | undefined): number | null {
+  if (v == null || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
 }
 
 // Multi-select Status pill matches the Campaign Detail StatusMultiSelect.
@@ -590,22 +611,36 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
       "B Shares", "B Cost", "B Realized", "B Unrealized", "B P&L", "B Return %",
       "A Shares", "A Cost", "A Realized", "A Unrealized", "A P&L", "A Return %",
       "Total P&L", "Total Return %", "Rule",
+      "MAE %", "MFE %", "MAE ATR", "MFE ATR", "ATR21 Entry %",
     ].join(",");
     const escape = (v: unknown) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const lines = sorted.map(r => [
-      r.trade_id, r.ticker, r.status, r.open_date, r.closed_date ?? "",
-      r.b_shares, r.b_initial_cost.toFixed(2),
-      r.b_realized.toFixed(2), r.b_unrealized.toFixed(2),
-      r.b_pnl.toFixed(2), r.b_return_pct?.toFixed(2) ?? "",
-      r.a_shares, r.a_initial_cost.toFixed(2),
-      r.a_realized.toFixed(2), r.a_unrealized.toFixed(2),
-      r.a_pnl.toFixed(2), r.a_return_pct?.toFixed(2) ?? "",
-      r.total_pnl.toFixed(2), r.total_return_pct?.toFixed(2) ?? "",
-      r.rule,
-    ].map(escape).join(","));
+    const lines = sorted.map(r => {
+      // Derive ATR multiples at export time so the CSV and the on-screen
+      // secondary line stay in lockstep (single source: atr21_entry_pct).
+      const maeAtr = r.mae_pct != null && r.atr21_entry_pct != null && r.atr21_entry_pct > 0
+        ? Math.abs(r.mae_pct) / r.atr21_entry_pct : null;
+      const mfeAtr = r.mfe_pct != null && r.atr21_entry_pct != null && r.atr21_entry_pct > 0
+        ? r.mfe_pct / r.atr21_entry_pct : null;
+      return [
+        r.trade_id, r.ticker, r.status, r.open_date, r.closed_date ?? "",
+        r.b_shares, r.b_initial_cost.toFixed(2),
+        r.b_realized.toFixed(2), r.b_unrealized.toFixed(2),
+        r.b_pnl.toFixed(2), r.b_return_pct?.toFixed(2) ?? "",
+        r.a_shares, r.a_initial_cost.toFixed(2),
+        r.a_realized.toFixed(2), r.a_unrealized.toFixed(2),
+        r.a_pnl.toFixed(2), r.a_return_pct?.toFixed(2) ?? "",
+        r.total_pnl.toFixed(2), r.total_return_pct?.toFixed(2) ?? "",
+        r.rule,
+        r.mae_pct?.toFixed(2) ?? "",
+        r.mfe_pct?.toFixed(2) ?? "",
+        maeAtr?.toFixed(2) ?? "",
+        mfeAtr?.toFixed(2) ?? "",
+        r.atr21_entry_pct?.toFixed(2) ?? "",
+      ].map(escape).join(",");
+    });
     const csv = [header, ...lines].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -805,6 +840,8 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
                   { k: "a_return_pct", l: "A Return %", align: "right" },
                   { k: "total_pnl", l: "Total P&L", align: "right" },
                   { k: "total_return_pct", l: "Total %", align: "right" },
+                  { k: "mae_pct", l: "MAE %", align: "right" },
+                  { k: "mfe_pct", l: "MFE %", align: "right" },
                   { k: "rule", l: "Rule", align: "left" },
                 ] as { k: ColKey; l: string; align: "left" | "right" }[]).map(c => (
                   <th key={c.k} onClick={() => onSort(c.k)}
@@ -823,7 +860,7 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="px-3 py-8 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  <td colSpan={16} className="px-3 py-8 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
                     {loading ? "Loading…" : "No trades match the current filters."}
                   </td>
                 </tr>
@@ -869,6 +906,11 @@ export function EntryVsAdd({ navColor }: { navColor: string }) {
                       return <span style={{ color: pct >= 0 ? "#08a86b" : "#e5484d" }}>{pct.toFixed(1)}%</span>;
                     })()}
                   </td>
+                  {/* MAE / MFE / Rule columns don't aggregate meaningfully;
+                      leave empty in the totals row rather than displaying
+                      a misleading average across trades. */}
+                  <td className="px-3 py-2" />
+                  <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
                 </tr>
               </tfoot>
@@ -925,7 +967,41 @@ function EntryVsAddRow({ row: r }: { row: TradeRow }) {
       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{fmtPct(r.a_return_pct)}</td>
       <td className="px-3 py-2 text-right font-bold" style={{ fontFamily: mono }}>{fmtPnl(r.total_pnl)}</td>
       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{fmtPct(r.total_return_pct)}</td>
+      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>
+        {fmtExcursion(r.mae_pct, r.atr21_entry_pct, "adverse")}
+      </td>
+      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>
+        {fmtExcursion(r.mfe_pct, r.atr21_entry_pct, "favorable")}
+      </td>
       <td className="px-3 py-2 text-[11px]" style={{ color: "var(--ink-3)" }}>{r.rule}</td>
     </tr>
+  );
+}
+
+// Dual-value cell: primary line = signed excursion %; secondary line
+// = |excursion| ÷ atr21_entry_pct (×ATR multiple). Both null → em-dash.
+// Direction ("adverse"|"favorable") only affects the color rule so a
+// -0.0 MAE reads neutral, not red.
+function fmtExcursion(
+  pct: number | null,
+  atr21: number | null,
+  direction: "adverse" | "favorable",
+) {
+  if (pct == null) return <span style={{ color: "var(--ink-4)" }}>—</span>;
+  const atrMult = atr21 != null && atr21 > 0 ? Math.abs(pct) / atr21 : null;
+  // MAE is signed ≤ 0 (red when non-zero); MFE is signed ≥ 0 (green).
+  // A zero excursion is displayed neutral.
+  const color = pct === 0
+    ? "var(--ink-3)"
+    : direction === "adverse" ? "#e5484d" : "#08a86b";
+  return (
+    <span className="inline-flex flex-col items-end leading-tight">
+      <span style={{ color }}>{pct.toFixed(1)}%</span>
+      {atrMult != null && (
+        <span className="text-[10px]" style={{ color: "var(--ink-4)" }}>
+          {atrMult.toFixed(2)}× ATR
+        </span>
+      )}
+    </span>
   );
 }
