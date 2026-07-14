@@ -16,6 +16,11 @@ import {
   stopCapScenario,
   fixedSizeScenario,
   regimeCrossTab,
+  setupScorecard,
+  riskMetrics,
+  repeatOffenders,
+  makeMctStateResolver,
+  generateInsights,
 } from "./analytics-stats";
 import type { TradePosition, JournalHistoryPoint } from "./api";
 
@@ -579,5 +584,259 @@ describe("regimeCrossTab", () => {
   test("trades without a journal row on/before open_date → window = 'Unknown'", () => {
     const trades = [closed({ open_date: "2026-04-05", realized_pl: 100 })];
     expect(regimeCrossTab(trades, [])[0].window).toBe("Unknown");
+  });
+
+  test("regimeOf opt overrides the journal.market_window lookup", () => {
+    const trades = [
+      closed({ open_date: "2026-04-05", realized_pl: 100 }),
+      closed({ open_date: "2026-04-10", realized_pl: 200 }),
+    ];
+    const cells = regimeCrossTab(trades, [], undefined, {
+      regimeOf: () => "POWERTREND",
+    });
+    expect(cells).toHaveLength(1);
+    expect(cells[0]).toMatchObject({ window: "POWERTREND", n: 2, netPl: 300 });
+  });
+});
+
+
+describe("setupScorecard", () => {
+  test("groups by rule, computes PF + verdict, sorts by PF desc", () => {
+    // 5 trades on rule A: 4 winners (+100 each = +400), 1 loser (-50) → PF = 8
+    // 5 trades on rule B: 2 winners (+50 each = +100), 3 losers (-100 each = -300) → PF = 0.33
+    const trades = [
+      ...Array.from({ length: 4 }, (_, i) => closed({ trade_id: `A${i}`, rule: "A", realized_pl: 100 })),
+      closed({ trade_id: "A4", rule: "A", realized_pl: -50 }),
+      ...Array.from({ length: 2 }, (_, i) => closed({ trade_id: `B${i}`, rule: "B", realized_pl: 50 })),
+      ...Array.from({ length: 3 }, (_, i) => closed({ trade_id: `B${i + 2}`, rule: "B", realized_pl: -100 })),
+    ];
+    const rows = setupScorecard(trades);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].setup).toBe("A");
+    expect(rows[0].profitFactor).toBeCloseTo(8, 5);
+    expect(rows[0].verdict).toBe("core");
+    expect(rows[1].setup).toBe("B");
+    expect(rows[1].profitFactor).toBeCloseTo(1/3, 5);
+    expect(rows[1].verdict).toBe("kill");
+  });
+
+  test("small n (< minN) parked at end without verdict", () => {
+    const trades = [
+      ...Array.from({ length: 5 }, (_, i) => closed({ trade_id: `A${i}`, rule: "A", realized_pl: -100 })),
+      closed({ trade_id: "B0", rule: "B", realized_pl: 500 }), // n=1 winner
+      closed({ trade_id: "B1", rule: "B", realized_pl: 500 }),
+    ];
+    const rows = setupScorecard(trades);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].setup).toBe("A"); // qualifying first even though it's a kill
+    expect(rows[1].setup).toBe("B");
+    expect(rows[1].verdict).toBe("small-n");
+  });
+
+  test("PF = Infinity when only winners", () => {
+    const trades = Array.from({ length: 5 }, (_, i) => closed({ trade_id: `T${i}`, rule: "X", realized_pl: 100 }));
+    const rows = setupScorecard(trades);
+    expect(rows[0].profitFactor).toBe(Infinity);
+    expect(rows[0].verdict).toBe("core");
+  });
+
+  test("empty rule → '(unlabeled)' bucket", () => {
+    const trades = Array.from({ length: 5 }, (_, i) => closed({ trade_id: `T${i}`, rule: "", realized_pl: 10 }));
+    expect(setupScorecard(trades)[0].setup).toBe("(unlabeled)");
+  });
+
+  test("verdict thresholds — PF 2 boundary is inclusive → keep", () => {
+    // 5 trades: 2 winners at +200 (+400 total), 2 losers at -100 (-200 total)
+    // Add one more +100 winner → wins=+500, losses=-200 → PF=2.5. Aim for exactly 2:
+    // 4 winners at +100 (+400), 2 losers at -100 (-200) → PF=2 (need n≥5, so 6 total is fine)
+    const trades = [
+      ...Array.from({ length: 4 }, (_, i) => closed({ trade_id: `W${i}`, rule: "K", realized_pl: 100 })),
+      ...Array.from({ length: 2 }, (_, i) => closed({ trade_id: `L${i}`, rule: "K", realized_pl: -100 })),
+    ];
+    const row = setupScorecard(trades)[0];
+    expect(row.profitFactor).toBeCloseTo(2, 5);
+    expect(row.verdict).toBe("keep");
+  });
+});
+
+
+describe("riskMetrics", () => {
+  test("computes avg stop distance from entry, average loss, median position size", () => {
+    const j: JournalHistoryPoint[] = [
+      { day: "2026-03-31", end_nlv: 100_000 } as any,
+    ];
+    const trades = [
+      closed({ trade_id: "T1", ticker: "A", open_date: "2026-04-05",
+               avg_entry: 100, stop_loss: 92, total_cost: 10_000, realized_pl: -500, return_pct: -5 }),
+      closed({ trade_id: "T2", ticker: "B", open_date: "2026-04-05",
+               avg_entry: 100, stop_loss: 95, total_cost: 5_000, realized_pl: 1_000, return_pct: 20 }),
+    ];
+    const m = riskMetrics(trades, j);
+    // stop distances: (100-92)/100=8%, (100-95)/100=5% → avg 6.5%
+    expect(m.avgStopDistancePct).toBeCloseTo(6.5, 5);
+    expect(m.nWithStop).toBe(2);
+    // Only 1 loser at -5%
+    expect(m.avgRealizedLossPct).toBe(-5);
+    expect(m.nLosers).toBe(1);
+    // Positions: 10_000 / 100_000 = 10%, 5_000 / 100_000 = 5% → median = 7.5%
+    expect(m.medianPositionSizePct).toBe(7.5);
+    // Risk: avg pos 7.5% × avg stop 6.5% / 100 = 0.4875%
+    expect(m.avgRiskPerTradePct).toBeCloseTo(0.4875, 5);
+  });
+
+  test("stop_loss >= entry is discarded (invalid)", () => {
+    const trades = [
+      closed({ avg_entry: 100, stop_loss: 100, total_cost: 1_000, realized_pl: 0 }),
+      closed({ avg_entry: 100, stop_loss: 110, total_cost: 1_000, realized_pl: 0 }),
+      closed({ avg_entry: 100, stop_loss: 90,  total_cost: 1_000, realized_pl: 0 }),
+    ];
+    const m = riskMetrics(trades, []);
+    expect(m.nWithStop).toBe(1);
+    expect(m.avgStopDistancePct).toBe(10);
+  });
+
+  test("empty cohort → all nulls, zeros", () => {
+    const m = riskMetrics([], []);
+    expect(m.n).toBe(0);
+    expect(m.avgStopDistancePct).toBeNull();
+    expect(m.avgRealizedLossPct).toBeNull();
+    expect(m.medianPositionSizePct).toBeNull();
+    expect(m.avgRiskPerTradePct).toBeNull();
+  });
+});
+
+
+describe("repeatOffenders", () => {
+  test("groups by ticker; skips those below minAttempts", () => {
+    const trades = [
+      closed({ trade_id: "T1", ticker: "GEV", realized_pl: -1000 }),
+      closed({ trade_id: "T2", ticker: "GEV", realized_pl: -2000 }),
+      closed({ trade_id: "T3", ticker: "GEV", realized_pl: 500 }),
+      closed({ trade_id: "T4", ticker: "ALAB", realized_pl: 5000 }),
+      closed({ trade_id: "T5", ticker: "ALAB", realized_pl: -100 }),
+    ];
+    const out = repeatOffenders(trades);
+    expect(out).toHaveLength(1); // Only GEV has ≥ 3
+    expect(out[0].ticker).toBe("GEV");
+    expect(out[0].attempts).toBe(3);
+    expect(out[0].netPl).toBe(-2500);
+    expect(out[0].wins).toBe(1);
+    expect(out[0].losses).toBe(2);
+    expect(out[0].bestPl).toBe(500);
+    expect(out[0].worstPl).toBe(-2000);
+  });
+
+  test("sorted by netPl asc (biggest bleeders first)", () => {
+    const mk = (t: string, pl: number) => closed({ ticker: t, realized_pl: pl });
+    const trades = [
+      mk("A", 100), mk("A", 100), mk("A", 100),   // net +300
+      mk("B", -500), mk("B", -500), mk("B", -500), // net -1500
+      mk("C", -50), mk("C", -50), mk("C", -50),    // net -150
+    ];
+    const out = repeatOffenders(trades);
+    expect(out.map(o => o.ticker)).toEqual(["B", "C", "A"]);
+  });
+
+  test("options join to underlying via leading symbol", () => {
+    const trades = [
+      closed({ ticker: "HOOD 260918 $110C", realized_pl: -200, instrument_type: "OPTION" as any }),
+      closed({ ticker: "HOOD 260918 $110C", realized_pl: -100, instrument_type: "OPTION" as any }),
+      closed({ ticker: "HOOD", realized_pl: 1000 }),
+    ];
+    const out = repeatOffenders(trades, { minAttempts: 3 });
+    expect(out).toHaveLength(1);
+    expect(out[0].ticker).toBe("HOOD");
+    expect(out[0].attempts).toBe(3);
+    expect(out[0].netPl).toBe(700);
+  });
+});
+
+
+describe("makeMctStateResolver", () => {
+  test("returns state as of on-or-before date", () => {
+    const resolver = makeMctStateResolver([
+      { trade_date: "2026-04-01", state: "UPTREND" },
+      { trade_date: "2026-04-22", state: "POWERTREND" },
+      { trade_date: "2026-06-05", state: "CORRECTION" },
+    ]);
+    expect(resolver("2026-04-10")).toBe("UPTREND");
+    expect(resolver("2026-04-22")).toBe("POWERTREND");
+    expect(resolver("2026-05-15")).toBe("POWERTREND");
+    expect(resolver("2026-07-01")).toBe("CORRECTION");
+    expect(resolver("2026-03-01")).toBe("");
+  });
+
+  test("empty input → resolver returns ''", () => {
+    const resolver = makeMctStateResolver([]);
+    expect(resolver("2026-04-10")).toBe("");
+  });
+});
+
+
+describe("generateInsights", () => {
+  test("flags kill setups (n≥5, PF<1)", () => {
+    const trades = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        closed({ trade_id: `T${i}`, rule: "PB 21e", realized_pl: -1000 })),
+    ];
+    const ins = generateInsights(trades);
+    const kill = ins.find(i => i.id === "kill-setups");
+    expect(kill).toBeDefined();
+    expect(kill!.severity).toBe("critical");
+    expect(kill!.items).toHaveLength(1);
+    expect(kill!.impactDollars).toBe(-5000);
+  });
+
+  test("flags penalty-box tickers (≥ minAttempts with net loss)", () => {
+    const trades = [
+      closed({ ticker: "GEV", realized_pl: -1000 }),
+      closed({ ticker: "GEV", realized_pl: -1000 }),
+      closed({ ticker: "GEV", realized_pl: -1000 }),
+    ];
+    const ins = generateInsights(trades);
+    const penalty = ins.find(i => i.id === "penalty-box");
+    expect(penalty).toBeDefined();
+    expect(penalty!.items![0].label).toBe("GEV");
+  });
+
+  test("catastrophe stop counts losers past cap", () => {
+    const trades = [
+      closed({ ticker: "A", realized_pl: -1200, total_cost: 10_000, return_pct: -12 }),
+      closed({ ticker: "B", realized_pl: -500, total_cost: 10_000, return_pct: -5 }),
+    ];
+    const ins = generateInsights(trades, { catastropheStopPct: 8 });
+    const stop = ins.find(i => i.id === "catastrophe-stop");
+    expect(stop).toBeDefined();
+    expect(stop!.items).toHaveLength(1);
+    // Savings = (12 - 8)% × 10_000 = $400
+    expect(stop!.impactDollars).toBeCloseTo(400, 2);
+  });
+
+  test("correction-window bleed flags net loss during CORRECTION", () => {
+    const trades = [
+      closed({ open_date: "2026-06-15", realized_pl: -2000 }),
+      closed({ open_date: "2026-06-20", realized_pl: -1000 }),
+    ];
+    const ins = generateInsights(trades, {
+      mctStateResolver: () => "CORRECTION",
+    });
+    const bleed = ins.find(i => i.id === "correction-bleed");
+    expect(bleed).toBeDefined();
+    expect(bleed!.severity).toBe("critical");
+    expect(bleed!.impactDollars).toBe(-3000);
+  });
+
+  test("no insights when the cohort is empty", () => {
+    expect(generateInsights([])).toEqual([]);
+  });
+
+  test("overtrading flags weeks over the budget", () => {
+    // 10 trades in the same week (2026-01-05..2026-01-11)
+    const trades = Array.from({ length: 10 }, (_, i) =>
+      closed({ trade_id: `T${i}`, open_date: `2026-01-0${(i % 5) + 5}` }));
+    const ins = generateInsights(trades, { entryBudgetPerWeek: 5 });
+    const over = ins.find(i => i.id === "overtrading");
+    expect(over).toBeDefined();
+    expect(over!.items!.length).toBeGreaterThan(0);
   });
 });

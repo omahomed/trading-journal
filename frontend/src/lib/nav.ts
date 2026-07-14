@@ -90,7 +90,7 @@ export const NAV: NavGroup[] = [
       // Renamed to "Edge Report" — route stays /analytics for backward
       // compat (existing bookmarks + deep links keep working).
       { id: "analytics", label: "Edge Report", href: "/analytics" },
-      { id: "analytics:scenarios", label: "Scenarios", parentPage: "analytics", tab: "scenarios" },
+      { id: "analytics:scenarios", label: "Setup Scorecard", parentPage: "analytics", tab: "scenarios" },
       { id: "analytics:buyrules", label: "Buy Rules Analysis", parentPage: "analytics", tab: "buyrules" },
       { id: "analytics:sellrules", label: "Sell Rules Analysis", parentPage: "analytics", tab: "sellrules" },
       { id: "analytics:drawdown", label: "Drawdown Analysis", parentPage: "analytics", tab: "drawdown" },

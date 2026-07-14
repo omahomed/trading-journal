@@ -524,6 +524,243 @@ export function fixedSizeScenario(
 
 
 // ────────────────────────────────────────────────────────────────────
+// Risk metrics — aggregate stop distance, loss size, position size
+// ────────────────────────────────────────────────────────────────────
+
+export interface RiskMetrics {
+  n: number;
+  /** avg (entry - stop) / entry * 100, over trades with stop_loss > 0 */
+  avgStopDistancePct: number | null;
+  nWithStop: number;
+  /** avg return_pct across losing trades (signed, ≤ 0) */
+  avgRealizedLossPct: number | null;
+  nLosers: number;
+  /** median (total_cost / prior_day_nlv * 100) — actual position size */
+  medianPositionSizePct: number | null;
+  /** mean of the same */
+  avgPositionSizePct: number | null;
+  nWithPositionSize: number;
+  /** theoretical risk budget = avg position % × avg stop distance % / 100.
+   *  Uses the two averages above; null when either is null. */
+  avgRiskPerTradePct: number | null;
+}
+
+/** Aggregate risk-shape metrics for the cohort. Mirrors the New Entry
+ *  page's math (stop distance from entry, position size as % of prior-day
+ *  NAV) so the operator sees the actualized-vs-planned side of the risk
+ *  formula. Coverage counts included because stop_loss population is
+ *  ~55% in production data. */
+export function riskMetrics(
+  trades: TradePosition[],
+  journal: JournalHistoryPoint[],
+): RiskMetrics {
+  const stopDistances: number[] = [];
+  const positionSizes: number[] = [];
+  const losses: number[] = [];
+  for (const t of trades) {
+    const entry = Number((t as any).avg_entry ?? 0);
+    const stop = Number((t as any).stop_loss ?? 0);
+    if (entry > 0 && stop > 0 && stop < entry) {
+      stopDistances.push(((entry - stop) / entry) * 100);
+    }
+    const cost = Number(t.total_cost ?? 0);
+    const priorNlv = getPriorDayNlv(journal, String(t.open_date || ""));
+    if (cost > 0 && priorNlv && priorNlv > 0) {
+      positionSizes.push((cost / priorNlv) * 100);
+    }
+    const rp = Number((t as any).return_pct ?? NaN);
+    const pl = realized(t);
+    if (pl < 0 && Number.isFinite(rp)) losses.push(rp);
+  }
+  const mean = (arr: number[]): number | null =>
+    arr.length > 0 ? arr.reduce((a, v) => a + v, 0) / arr.length : null;
+  const median = (arr: number[]): number | null => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+  };
+  const avgStop = mean(stopDistances);
+  const avgPos = mean(positionSizes);
+  const avgRisk = (avgStop != null && avgPos != null)
+    ? (avgPos * avgStop) / 100
+    : null;
+  return {
+    n: trades.length,
+    avgStopDistancePct: avgStop,
+    nWithStop: stopDistances.length,
+    avgRealizedLossPct: mean(losses),
+    nLosers: losses.length,
+    medianPositionSizePct: median(positionSizes),
+    avgPositionSizePct: avgPos,
+    nWithPositionSize: positionSizes.length,
+    avgRiskPerTradePct: avgRisk,
+  };
+}
+
+
+// ────────────────────────────────────────────────────────────────────
+// Repeat-offender tickers
+// ────────────────────────────────────────────────────────────────────
+
+export interface RepeatOffender {
+  ticker: string;
+  attempts: number;
+  wins: number;
+  losses: number;
+  netPl: number;
+  avgPl: number;
+  bestPl: number;
+  worstPl: number;
+  trades: TradePosition[];
+}
+
+/** Group trades by ticker; return only those with ≥ minAttempts entries
+ *  in the cohort. Sorted by ascending netPl (biggest bleeders surface
+ *  first — matches the PDF Section 5 "GEV / LEU / LITE / SOXL" framing).
+ *  Options are joined into their underlying via the leading symbol. */
+export function repeatOffenders(
+  trades: TradePosition[],
+  opts: { minAttempts?: number; pnlOf?: (t: TradePosition) => number } = {},
+): RepeatOffender[] {
+  const minAttempts = opts.minAttempts ?? 3;
+  const pnlOf = opts.pnlOf ?? realized;
+  const underlyingOf = (t: TradePosition): string => {
+    const raw = String(t.ticker || "").trim();
+    if ((t as any).instrument_type === "OPTION") {
+      const first = raw.split(/\s+/)[0];
+      return first || raw;
+    }
+    return raw;
+  };
+  const byTicker = new Map<string, TradePosition[]>();
+  for (const t of trades) {
+    const key = underlyingOf(t);
+    if (!key) continue;
+    const list = byTicker.get(key);
+    if (list) list.push(t);
+    else byTicker.set(key, [t]);
+  }
+  const out: RepeatOffender[] = [];
+  for (const [ticker, arr] of byTicker.entries()) {
+    if (arr.length < minAttempts) continue;
+    const pnls = arr.map(pnlOf);
+    const netPl = pnls.reduce((a, v) => a + v, 0);
+    const wins = pnls.filter(p => p > 0).length;
+    const losses = pnls.filter(p => p < 0).length;
+    out.push({
+      ticker,
+      attempts: arr.length,
+      wins,
+      losses,
+      netPl,
+      avgPl: netPl / arr.length,
+      bestPl: Math.max(...pnls),
+      worstPl: Math.min(...pnls),
+      trades: arr,
+    });
+  }
+  out.sort((a, b) => a.netPl - b.netPl);
+  return out;
+}
+
+
+// ────────────────────────────────────────────────────────────────────
+// Setup scorecard (per-rule profit factor + auto-verdict)
+// ────────────────────────────────────────────────────────────────────
+
+export type SetupVerdict = "core" | "keep" | "watch" | "kill" | "small-n";
+
+export interface SetupScorecardRow {
+  setup: string;
+  n: number;
+  wins: number;
+  losses: number;
+  winPct: number;
+  grossWin: number;
+  grossLoss: number;      // absolute (positive)
+  netPl: number;
+  profitFactor: number;    // Infinity when grossLoss === 0 and grossWin > 0
+  expectancy: number;
+  avgHoldDays: number | null;
+  verdict: SetupVerdict;
+  /** Constituent trades — enables the drill-down modal. */
+  trades: TradePosition[];
+}
+
+/** Per-setup rollup mirroring the PDF's Section 3 "Setup Scorecard".
+ *
+ *  Verdict thresholds (n ≥ minN required to qualify):
+ *    PF ≥ 5  → Core
+ *    PF ≥ 2  → Keep
+ *    PF ≥ 1  → Watch
+ *    PF < 1  → Kill
+ *    n < minN → Small n (parked at end of table)
+ *
+ *  Sort order: qualifying rows first by PF desc, then small-n by n desc.
+ *  Rule field is trimmed; empty rules bucketed as "(unlabeled)". */
+export function setupScorecard(
+  trades: TradePosition[],
+  opts: { minN?: number; pnlOf?: (t: TradePosition) => number } = {},
+): SetupScorecardRow[] {
+  const minN = opts.minN ?? 5;
+  const pnlOf = opts.pnlOf ?? realized;
+  const holdDays = (t: TradePosition): number | null => {
+    const o = String(t.open_date || "").trim();
+    const c = String(t.closed_date || "").trim();
+    if (!o || !c) return null;
+    const od = new Date(o).getTime();
+    const cd = new Date(c).getTime();
+    if (isNaN(od) || isNaN(cd)) return null;
+    return Math.max(0, Math.floor((cd - od) / 86_400_000));
+  };
+  const byRule = new Map<string, TradePosition[]>();
+  for (const t of trades) {
+    const r = String(t.rule || "").trim() || "(unlabeled)";
+    const list = byRule.get(r);
+    if (list) list.push(t);
+    else byRule.set(r, [t]);
+  }
+  const rows: SetupScorecardRow[] = [];
+  for (const [setup, arr] of byRule.entries()) {
+    const wins = arr.filter(t => pnlOf(t) > 0);
+    const losses = arr.filter(t => pnlOf(t) < 0);
+    const grossWin = wins.reduce((a, t) => a + pnlOf(t), 0);
+    const grossLoss = Math.abs(losses.reduce((a, t) => a + pnlOf(t), 0));
+    const netPl = arr.reduce((a, t) => a + pnlOf(t), 0);
+    const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
+    const expectancy = arr.length > 0 ? netPl / arr.length : 0;
+    const holds = arr.map(holdDays).filter((d): d is number => d !== null);
+    const avgHoldDays = holds.length > 0 ? holds.reduce((a, b) => a + b, 0) / holds.length : null;
+    const winPct = arr.length > 0 ? (wins.length / arr.length) * 100 : 0;
+    let verdict: SetupVerdict;
+    if (arr.length < minN) verdict = "small-n";
+    else if (pf >= 5) verdict = "core";
+    else if (pf >= 2) verdict = "keep";
+    else if (pf >= 1) verdict = "watch";
+    else verdict = "kill";
+    rows.push({
+      setup, n: arr.length, wins: wins.length, losses: losses.length,
+      winPct, grossWin, grossLoss, netPl, profitFactor: pf,
+      expectancy, avgHoldDays, verdict, trades: arr,
+    });
+  }
+  rows.sort((a, b) => {
+    const aQual = a.verdict !== "small-n";
+    const bQual = b.verdict !== "small-n";
+    if (aQual !== bQual) return aQual ? -1 : 1;
+    if (aQual && bQual) {
+      const aPf = a.profitFactor === Infinity ? 999 : a.profitFactor;
+      const bPf = b.profitFactor === Infinity ? 999 : b.profitFactor;
+      return bPf - aPf;
+    }
+    return b.n - a.n;
+  });
+  return rows;
+}
+
+
+// ────────────────────────────────────────────────────────────────────
 // Regime cross-tab (open month × market window)
 // ────────────────────────────────────────────────────────────────────
 
@@ -535,16 +772,20 @@ export interface RegimeCell {
   netPl: number;
 }
 
-/** Groups closed (or at-mark) trades by (open_month × market_window on
- *  open_date), returning one cell per non-empty combination. Window is
- *  looked up from the daily journal via the same "on or before
- *  open_date" rule the Loss Discipline block uses today — this is
- *  regime lookup, not risk sizing, so `<=` is the right semantic here
- *  (we want the state as of open, not "yesterday's" market window). */
+/** Groups closed (or at-mark) trades by (open_month × regime on
+ *  open_date). Regime is resolved via the `regimeOf` opt — pass an MCT
+ *  state resolver (POWERTREND / UPTREND / CORRECTION / RALLY MODE) for
+ *  the M Factor bucket, or omit for the legacy journal.market_window
+ *  fallback.
+ *
+ *  Both resolvers use "state as of open_date" semantics (last-known
+ *  value at or before that day) — this is regime lookup, not risk
+ *  sizing. */
 export function regimeCrossTab(
   trades: TradePosition[],
   journal: JournalHistoryPoint[],
   pnlOf: (t: TradePosition) => number = t => realized(t),
+  opts: { regimeOf?: (openDate: string) => string } = {},
 ): RegimeCell[] {
   const windowOnOrBefore = (day: string): string => {
     const d = String(day).slice(0, 10);
@@ -554,12 +795,13 @@ export function regimeCrossTab(
       .sort((a, b) => String(b.day).localeCompare(String(a.day)));
     return sorted.length > 0 ? String((sorted[0] as any).market_window || "") : "";
   };
+  const resolve = opts.regimeOf ?? windowOnOrBefore;
   const byKey = new Map<string, { month: string; window: string; pnls: number[] }>();
   for (const t of trades) {
     const od = String(t.open_date || "").slice(0, 10);
     if (!od) continue;
     const month = od.slice(0, 7);
-    const win = windowOnOrBefore(od) || "Unknown";
+    const win = resolve(od) || "Unknown";
     const key = `${month}|${win}`;
     const cell = byKey.get(key) ?? { month, window: win, pnls: [] };
     cell.pnls.push(pnlOf(t));
@@ -577,8 +819,230 @@ export function regimeCrossTab(
       netPl,
     });
   }
-  // Sort month ASC then window alpha — makes the rendered grid read
-  // top-to-bottom chronological.
   cells.sort((a, b) => a.month.localeCompare(b.month) || a.window.localeCompare(b.window));
   return cells;
+}
+
+
+// ────────────────────────────────────────────────────────────────────
+// Insights — auto-generated Action List (PDF Section 10)
+// ────────────────────────────────────────────────────────────────────
+
+export type InsightSeverity = "critical" | "warning" | "info";
+
+export interface InsightItem {
+  label: string;
+  detail?: string;
+  netPl?: number;      // rendered as currency when present
+  pct?: number;        // rendered as % when present
+  count?: number;      // rendered as bare int when present
+}
+
+export interface Insight {
+  id: string;
+  severity: InsightSeverity;
+  icon: string;
+  title: string;
+  /** Prose explanation of the finding + recommendation. */
+  detail: string;
+  /** Optional per-item rows (setups, tickers, weeks). Limited by caller. */
+  items?: InsightItem[];
+  /** Optional dollar impact rollup shown next to the title. */
+  impactDollars?: number;
+}
+
+/** Generate the PDF Section 10 "Action List" automatically from the
+ *  cohort. Insights are ordered severity-first (critical → warning →
+ *  info), then by impactDollars desc within a severity. Empty when the
+ *  cohort has nothing worth flagging.
+ *
+ *  Rules encoded (all data-derived, no hard-coded picks):
+ *   - Kill setups: n ≥ 5, PF < 1
+ *   - Gate setups: n ≥ 5, 1 ≤ PF < 2
+ *   - Penalty-box tickers: ≥ minAttempts attempts with negative net P&L
+ *   - Correction-window bleed: net loss on trades opened during a
+ *     CORRECTION MCT state (down-cycle protocol violation)
+ *   - Catastrophe stop: losers breaching the configured stop cap
+ *   - Overtrading weeks: weeks with > entryBudgetPerWeek fresh entries
+ */
+export function generateInsights(
+  trades: TradePosition[],
+  opts: {
+    mctStateResolver?: (openDate: string) => string;
+    catastropheStopPct?: number;      // default 8
+    entryBudgetPerWeek?: number;      // default 5
+    correctionStates?: string[];       // default ['CORRECTION']
+    penaltyBoxMinAttempts?: number;    // default 3
+  } = {},
+): Insight[] {
+  const catStop = opts.catastropheStopPct ?? 8;
+  const entryBudget = opts.entryBudgetPerWeek ?? 5;
+  const correctionStates = new Set(opts.correctionStates ?? ["CORRECTION"]);
+  const penaltyMin = opts.penaltyBoxMinAttempts ?? 3;
+  const mctStateResolver = opts.mctStateResolver;
+
+  const insights: Insight[] = [];
+  const scorecard = setupScorecard(trades);
+
+  // 1) Kill setups
+  const killSetups = scorecard.filter(r => r.verdict === "kill");
+  if (killSetups.length > 0) {
+    const totalDrag = killSetups.reduce((a, r) => a + r.netPl, 0);
+    insights.push({
+      id: "kill-setups",
+      severity: "critical",
+      icon: "🚫",
+      title: `${killSetups.length} setup${killSetups.length === 1 ? "" : "s"} to consider retiring`,
+      detail: "Profit factor < 1 across ≥ 5 trades. These setups are net losers on statistically meaningful samples. Retire from the playbook or add a regime gate.",
+      impactDollars: totalDrag,
+      items: killSetups.map(r => ({
+        label: r.setup,
+        detail: `n=${r.n} · PF=${r.profitFactor.toFixed(2)} · Win% ${r.winPct.toFixed(0)}`,
+        netPl: r.netPl,
+      })),
+    });
+  }
+
+  // 2) Gate setups (PF 1..2)
+  const gateSetups = scorecard.filter(r => r.verdict === "watch");
+  if (gateSetups.length > 0) {
+    insights.push({
+      id: "gate-setups",
+      severity: "warning",
+      icon: "🚧",
+      title: `${gateSetups.length} setup${gateSetups.length === 1 ? "" : "s"} on the fence`,
+      detail: "PF between 1 and 2 — marginal. Consider gating to POWERTREND/UPTREND only, or tightening entry criteria before running them again.",
+      items: gateSetups.map(r => ({
+        label: r.setup,
+        detail: `n=${r.n} · PF=${r.profitFactor.toFixed(2)} · Win% ${r.winPct.toFixed(0)}`,
+        netPl: r.netPl,
+      })),
+    });
+  }
+
+  // 3) Penalty-box tickers
+  const offenders = repeatOffenders(trades, { minAttempts: penaltyMin });
+  const penaltyTickers = offenders.filter(o => o.netPl < 0);
+  if (penaltyTickers.length > 0) {
+    const totalDrag = penaltyTickers.reduce((a, o) => a + o.netPl, 0);
+    insights.push({
+      id: "penalty-box",
+      severity: "warning",
+      icon: "📛",
+      title: `${penaltyTickers.length} ticker${penaltyTickers.length === 1 ? "" : "s"} in the penalty box`,
+      detail: `≥ ${penaltyMin} attempts with negative net P&L. A name that stops you out repeatedly is telling you something about the name — or the read of it. Consider a "no re-entry this quarter" rule.`,
+      impactDollars: totalDrag,
+      items: penaltyTickers.slice(0, 10).map(o => ({
+        label: o.ticker,
+        detail: `${o.attempts} attempts · ${o.wins}W / ${o.losses}L`,
+        netPl: o.netPl,
+      })),
+    });
+  }
+
+  // 4) Correction-window bleed
+  if (mctStateResolver) {
+    const correctionTrades = trades.filter(t => {
+      const state = mctStateResolver(String(t.open_date || ""));
+      return correctionStates.has(state);
+    });
+    if (correctionTrades.length > 0) {
+      const correctionNet = correctionTrades.reduce((a, t) => a + realized(t), 0);
+      if (correctionNet < 0) {
+        const wins = correctionTrades.filter(t => realized(t) > 0).length;
+        const winPct = (wins / correctionTrades.length) * 100;
+        insights.push({
+          id: "correction-bleed",
+          severity: "critical",
+          icon: "🌩️",
+          title: `${correctionTrades.length} entries opened during CORRECTION`,
+          detail: `Down-Cycle Protocol says no fresh entries on a negative Trend Count. Win rate on these attempts: ${winPct.toFixed(0)}%. The rule isn't missing — the compliance is.`,
+          impactDollars: correctionNet,
+        });
+      }
+    }
+  }
+
+  // 5) Catastrophe stop
+  const bigLosers: Array<{ t: TradePosition; savings: number; rp: number }> = [];
+  for (const t of trades) {
+    const rp = Number((t as any).return_pct ?? NaN);
+    const cost = Number(t.total_cost ?? 0);
+    if (!Number.isFinite(rp) || cost <= 0) continue;
+    if (realized(t) < 0 && rp < -catStop) {
+      const savings = ((Math.abs(rp) - catStop) / 100) * cost;
+      bigLosers.push({ t, savings, rp });
+    }
+  }
+  if (bigLosers.length > 0) {
+    const totalSavings = bigLosers.reduce((a, x) => a + x.savings, 0);
+    insights.push({
+      id: "catastrophe-stop",
+      severity: "info",
+      icon: "🛡️",
+      title: `${bigLosers.length} loss${bigLosers.length === 1 ? "" : "es"} breached −${catStop}%`,
+      detail: `A hard −${catStop}% catastrophe stop would have saved ~${totalSavings >= 0 ? "" : "-"}$${Math.abs(totalSavings).toFixed(0)} (upper bound — assumes no winner clipped). Cheap insurance with near-zero risk of clipping a future monster.`,
+      impactDollars: totalSavings,
+      items: bigLosers.slice(0, 5).map(({ t, rp }) => ({
+        label: `${t.ticker} (${t.trade_id})`,
+        detail: `Return ${rp.toFixed(1)}%`,
+        netPl: realized(t),
+      })),
+    });
+  }
+
+  // 6) Overtrading weeks
+  const byWeek = new Map<string, number>();
+  for (const t of trades) {
+    const od = String(t.open_date || "").slice(0, 10);
+    if (!od) continue;
+    const d = new Date(od);
+    if (isNaN(d.getTime())) continue;
+    const year = d.getUTCFullYear();
+    const jan1 = new Date(Date.UTC(year, 0, 1));
+    const dayOfYear = Math.floor((d.getTime() - jan1.getTime()) / 86_400_000);
+    const week = Math.floor(dayOfYear / 7) + 1;
+    const key = `${year}-W${String(week).padStart(2, "0")}`;
+    byWeek.set(key, (byWeek.get(key) ?? 0) + 1);
+  }
+  const overWeeks = Array.from(byWeek.entries())
+    .filter(([, n]) => n > entryBudget)
+    .sort((a, b) => b[1] - a[1]);
+  if (overWeeks.length > 0) {
+    insights.push({
+      id: "overtrading",
+      severity: "info",
+      icon: "🔥",
+      title: `${overWeeks.length} week${overWeeks.length === 1 ? "" : "s"} exceeded the ${entryBudget}-entry budget`,
+      detail: "The year is made in a handful of concentrated trades. Weeks with > entry-budget fresh entries are the churn tax — they cluster in bad tape and drag the year.",
+      items: overWeeks.slice(0, 10).map(([k, n]) => ({
+        label: k,
+        count: n,
+      })),
+    });
+  }
+
+  return insights;
+}
+
+
+/** Build a "state as of date" resolver from the sparse mctStateByDateRange
+ *  response. Returns a function that, given an ISO date, returns the state
+ *  in effect on or before that date. Case-normalized to Title Case for
+ *  display in the Regime × Month table. */
+export function makeMctStateResolver(
+  states: Array<{ trade_date: string; state: string }>,
+): (openDate: string) => string {
+  // Sort DESC once so lookups can early-return on the first hit.
+  const sorted = [...states].sort((a, b) =>
+    String(b.trade_date).localeCompare(String(a.trade_date))
+  );
+  return (openDate: string): string => {
+    const d = String(openDate).slice(0, 10);
+    if (!d) return "";
+    for (const s of sorted) {
+      if (String(s.trade_date).slice(0, 10) <= d) return String(s.state || "");
+    }
+    return "";
+  };
 }

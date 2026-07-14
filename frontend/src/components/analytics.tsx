@@ -24,6 +24,15 @@ import {
   stopCapScenario,
   fixedSizeScenario,
   regimeCrossTab,
+  makeMctStateResolver,
+  setupScorecard,
+  type SetupScorecardRow,
+  type SetupVerdict,
+  riskMetrics,
+  repeatOffenders,
+  type RepeatOffender,
+  generateInsights,
+  type Insight,
 } from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
@@ -67,6 +76,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
   const [openCount, setOpenCount] = useState(0);
   const router = useRouter();
   const [journalHistory, setJournalHistory] = useState<any[]>([]);
+  const [mctStates, setMctStates] = useState<Array<{ trade_date: string; state: string }>>([]);
   const [loading, setLoading] = useState(true);
   // Phase 2 — All Campaigns retroactive tagging (right-click flyout
   // only; the bulk-select toolbar was removed in feat/all-campaigns-
@@ -178,6 +188,15 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
         log.error("analytics", "getTradeLessons fetch failed", err);
       });
       setLoading(false);
+    });
+    // MCT states — powers the Regime × Month cross-tab. Wide window
+    // covers every historical trade; endpoint returns one row per day
+    // so payload stays small.
+    const today = new Date().toISOString().slice(0, 10);
+    api.mctStateByDateRange("2025-01-01", today).then(r => {
+      setMctStates(r.states.map(s => ({ trade_date: s.trade_date, state: s.state })));
+    }).catch((err) => {
+      log.error("analytics", "mctStateByDateRange fetch failed", err);
     });
   }, []);
 
@@ -574,7 +593,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
       {/* Tabs */}
       <div className="flex items-center justify-between mb-5">
         <div className="flex gap-1 pb-0.5 flex-wrap" style={{ borderBottom: "2px solid var(--border)" }}>
-          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "scenarios" as Tab, label: "🧪 Scenarios" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" }, { key: "add-effectiveness" as Tab, label: "➕ Add effectiveness" } ]).map(t => (
+          {([ { key: "overview" as Tab, label: "🎯 Overview" }, { key: "scenarios" as Tab, label: "🏆 Setup Scorecard" }, { key: "buyrules" as Tab, label: "🟢 Buy Rules" }, { key: "sellrules" as Tab, label: "🔴 Sell Rules" }, { key: "drawdown" as Tab, label: "🛡️ Drawdown" }, { key: "review" as Tab, label: "🔬 Trade Review" }, { key: "campaigns" as Tab, label: "📋 All Campaigns" }, { key: "add-effectiveness" as Tab, label: "➕ Add effectiveness" } ]).map(t => (
             <button key={t.key} onClick={() => { setTab(t.key); setBrDrill(""); }}
                     className="px-4 py-2 text-[12px] font-medium transition-all"
                     style={{ color: tab === t.key ? navColor : "var(--ink-4)", borderBottom: tab === t.key ? `2px solid ${navColor}` : "2px solid transparent", marginBottom: -2 }}>
@@ -831,7 +850,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
           </details>
 
           {/* ═══ EDGE REPORT — new cards ═══ */}
-          <EdgeCards trades={trades} journal={journalHistory as any} year={year} cohort={cohort} />
+          <EdgeCards trades={trades} journal={journalHistory as any} mctStates={mctStates} year={year} cohort={cohort} />
         </>
       )}
 
@@ -2439,16 +2458,27 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 // filtered by year + cohort by the parent.
 // ═══════════════════════════════════════════════════════════════════════
 
-function EdgeCards({ trades, journal, year, cohort }: {
+function EdgeCards({ trades, journal, mctStates, year, cohort }: {
   trades: TradePosition[];
   journal: any[];
+  mctStates: Array<{ trade_date: string; state: string }>;
   year: number;
   cohort: "closed" | "at-mark";
 }) {
   const pareto = useMemo(() => paretoDistribution(trades), [trades]);
   const holdBuckets = useMemo(() => holdTimeBuckets(trades), [trades]);
   const brandt = useMemo(() => brandtNormalized(trades, journal), [trades, journal]);
-  const regime = useMemo(() => regimeCrossTab(trades, journal), [trades, journal]);
+  const mctResolver = useMemo(() => makeMctStateResolver(mctStates), [mctStates]);
+  const regime = useMemo(
+    () => regimeCrossTab(trades, journal, undefined, { regimeOf: mctResolver }),
+    [trades, journal, mctResolver],
+  );
+  const risk = useMemo(() => riskMetrics(trades, journal), [trades, journal]);
+  const offenders = useMemo(() => repeatOffenders(trades), [trades]);
+  const insights = useMemo(
+    () => generateInsights(trades, { mctStateResolver: mctResolver }),
+    [trades, mctResolver],
+  );
 
   const yearBadge = (
     <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
@@ -2458,8 +2488,58 @@ function EdgeCards({ trades, journal, year, cohort }: {
 
   return (
     <>
+      {/* ─────────── Insights (auto-generated Action List) ─────────── */}
+      {insights.length > 0 && (
+        <div className="mt-6 mb-5 p-5 rounded-[14px]"
+             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="text-[15px] font-semibold mb-1">
+            💡 Insights (Auto Action List) {yearBadge}
+          </div>
+          <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+            Rules automatically detected from this cohort. Each finding is data-derived — no hard-coded picks.
+          </div>
+          <div className="flex flex-col gap-3">
+            {insights.map(ins => <InsightCard key={ins.id} insight={ins} />)}
+          </div>
+        </div>
+      )}
+
+      {/* ─────────── Risk Metrics ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🛡️ Risk Metrics {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Actualized risk shape of the cohort — matches the New Entry page formula (position × stop = risk budget).
+        </div>
+        <div className="grid grid-cols-4 gap-3">
+          <RiskTile label="Avg Stop Distance"
+                    value={risk.avgStopDistancePct}
+                    suffix="%"
+                    tooltip="Average (entry − stop) / entry × 100 across trades with stop_loss set. Populated on ~55% of legacy trades; higher on new entries."
+                    coverage={`${risk.nWithStop} / ${risk.n}`} />
+          <RiskTile label="Avg Realized Loss"
+                    value={risk.avgRealizedLossPct}
+                    suffix="%"
+                    tooltip="Average return_pct across losing trades. Signed (negative)."
+                    coverage={`${risk.nLosers} losers`}
+                    negative />
+          <RiskTile label="Median Position Size"
+                    value={risk.medianPositionSizePct}
+                    suffix="%"
+                    tooltip="Median total_cost / prior-day NAV × 100. Excludes trades without a prior-day journal row."
+                    coverage={`${risk.nWithPositionSize} / ${risk.n}`} />
+          <RiskTile label="Avg Risk / Trade"
+                    value={risk.avgRiskPerTradePct}
+                    suffix="%"
+                    tooltip="Theoretical risk budget = avg position % × avg stop distance % / 100. Compares to the New Entry page's 0.5%-of-NAV target."
+                    coverage="of NAV" />
+        </div>
+      </div>
+
       {/* ─────────── Pareto card ─────────── */}
-      <div className="mt-6 mb-5 p-5 rounded-[14px]"
+      <div className="mb-5 p-5 rounded-[14px]"
            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <div className="text-[15px] font-semibold mb-3">
           📊 Concentration of P&L (Pareto) {yearBadge}
@@ -2467,7 +2547,7 @@ function EdgeCards({ trades, journal, year, cohort }: {
         {pareto.ranks.length === 0 ? (
           <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>No trades in this cohort.</div>
         ) : (
-          <ParetoBody pareto={pareto} />
+          <ParetoBody pareto={pareto} trades={trades} />
         )}
       </div>
 
@@ -2521,11 +2601,76 @@ function EdgeCards({ trades, journal, year, cohort }: {
         )}
       </div>
 
+      {/* ─────────── Repeat-Offenders ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🔁 Repeat-Offender Tickers {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Tickers attempted ≥ 3 times in this cohort, sorted by net P&L asc (biggest bleeders first).
+          A name that stops you out repeatedly is telling you something about the name — or the read of it. Penalty-box candidates surface here.
+        </div>
+        {offenders.length === 0 ? (
+          <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>
+            No tickers with ≥ 3 attempts in this cohort.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Ticker</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Attempts</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>W / L</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Avg / attempt</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Best</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Worst</th>
+                </tr>
+              </thead>
+              <tbody>
+                {offenders.map(o => {
+                  const netColor = o.netPl > 0 ? "#08a86b" : o.netPl < 0 ? "#e5484d" : "var(--ink-3)";
+                  const avgColor = o.avgPl > 0 ? "#08a86b" : o.avgPl < 0 ? "#e5484d" : "var(--ink-3)";
+                  return (
+                    <tr key={o.ticker} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{o.ticker}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{o.attempts}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>{o.wins}W / {o.losses}L</td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                          style={{ color: netColor, fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(o.netPl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ color: avgColor, fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(o.avgPl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ color: "#08a86b", fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(o.bestPl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ color: "#e5484d", fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(o.worstPl, { showSign: true, decimals: 0 })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* ─────────── Regime cross-tab (open month × market window) ─────────── */}
       <div className="mb-4 p-5 rounded-[14px]"
            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-        <div className="text-[15px] font-semibold mb-3">
-          🌦️ Regime × Month {yearBadge}
+        <div className="text-[15px] font-semibold mb-1">
+          🌦️ MCT × Month {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Trades bucketed by M Factor state at entry (POWERTREND / UPTREND / CORRECTION / RALLY MODE). The PDF's April +$342K window sits under POWERTREND / UPTREND; June–July's −$33K bleed sits under CORRECTION.
         </div>
         {regime.length === 0 ? (
           <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>No trades in this cohort.</div>
@@ -2535,7 +2680,7 @@ function EdgeCards({ trades, journal, year, cohort }: {
               <thead>
                 <tr style={{ background: "var(--bg)" }}>
                   <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Month</th>
-                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Regime</th>
+                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>MCT State</th>
                   <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>n</th>
                   <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Win %</th>
                   <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net P&L</th>
@@ -2566,22 +2711,106 @@ function EdgeCards({ trades, journal, year, cohort }: {
 }
 
 
-function ParetoBody({ pareto }: { pareto: ReturnType<typeof paretoDistribution> }) {
+type ParetoSlice = "top5" | "top10" | "top20" | "rest";
+
+function ParetoBody({ pareto, trades }: {
+  pareto: ReturnType<typeof paretoDistribution>;
+  trades: TradePosition[];
+}) {
+  const [selected, setSelected] = useState<ParetoSlice | null>(null);
   const top5 = pareto.topN(5);
   const top10 = pareto.topN(10);
   const top20 = pareto.topN(20);
   const total = pareto.ranks.length;
   const pctOfCount = (n: number) => total > 0 ? (n / total) * 100 : 0;
+  const rest = useMemo(() => {
+    if (total <= 10) return { net: 0, pctOfNet: 0, count: 0 };
+    const restRanks = pareto.ranks.slice(10);
+    const net = restRanks.reduce((a, r) => a + r.pnl, 0);
+    return {
+      net,
+      pctOfNet: pareto.netPl !== 0 ? (net / pareto.netPl) * 100 : 0,
+      count: restRanks.length,
+    };
+  }, [pareto, total]);
+
+  const slice = useMemo(() => {
+    if (!selected) return null;
+    if (selected === "rest") return pareto.ranks.slice(10);
+    const n = selected === "top5" ? 5 : selected === "top10" ? 10 : 20;
+    return pareto.ranks.slice(0, Math.min(n, pareto.ranks.length));
+  }, [selected, pareto.ranks]);
+
+  const tradeById = useMemo(() => {
+    const m = new Map<string, TradePosition>();
+    for (const t of trades) m.set(String(t.trade_id || ""), t);
+    return m;
+  }, [trades]);
+
   return (
     <>
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        <ParetoTile label="Top 5 trades" pct={pctOfCount(5)} value={top5.pctOfNet} />
-        <ParetoTile label="Top 10 trades" pct={pctOfCount(10)} value={top10.pctOfNet} />
-        <ParetoTile label="Top 20 trades" pct={pctOfCount(20)} value={top20.pctOfNet} />
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        <ParetoTile label="Top 5 trades" pct={pctOfCount(5)} value={top5.pctOfNet} netPl={top5.net}
+                   selected={selected === "top5"} onClick={() => setSelected(selected === "top5" ? null : "top5")} />
+        <ParetoTile label="Top 10 trades" pct={pctOfCount(10)} value={top10.pctOfNet} netPl={top10.net}
+                   selected={selected === "top10"} onClick={() => setSelected(selected === "top10" ? null : "top10")} />
+        <ParetoTile label="Top 20 trades" pct={pctOfCount(20)} value={top20.pctOfNet} netPl={top20.net}
+                   selected={selected === "top20"} onClick={() => setSelected(selected === "top20" ? null : "top20")} />
+        <ParetoTile label={`Trades 11+ (${rest.count})`} pct={total > 0 ? (rest.count / total) * 100 : 0} value={rest.pctOfNet} netPl={rest.net}
+                   selected={selected === "rest"} onClick={() => setSelected(selected === "rest" ? null : "rest")} />
       </div>
       {pareto.netPl > 0 && pareto.breakevenRank != null && (
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-3)" }}>
-          Break-even at trade rank <strong style={{ fontFamily: "var(--font-jetbrains), monospace" }}>#{pareto.breakevenRank}</strong> — everything ranked past that adds no net P&L to the year.
+          Break-even at trade rank <strong style={{ fontFamily: "var(--font-jetbrains), monospace" }}>#{pareto.breakevenRank}</strong> — everything ranked past that adds no net P&L to the year. <span style={{ opacity: 0.6 }}>Click any tile to see the constituent trades.</span>
+        </div>
+      )}
+      {/* Drill-down table — shows constituent trades for the selected tile. */}
+      {slice && (
+        <div className="mb-4 rounded-[10px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          <div className="px-3 py-2 text-[11px] uppercase font-bold" style={{ color: "var(--ink-4)", borderBottom: "1px solid var(--border)" }}>
+            {slice.length} trades · click Trade Journal to open a trade
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--surface)" }}>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Rank</th>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Ticker</th>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Trade ID</th>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Setup</th>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Open</th>
+                  <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Closed</th>
+                  <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>P&L</th>
+                  <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>% of Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {slice.map((r, i) => {
+                  const t = tradeById.get(r.trade_id);
+                  const rank = selected === "rest" ? 11 + i : i + 1;
+                  const pctOfNet = pareto.netPl !== 0 ? (r.pnl / pareto.netPl) * 100 : 0;
+                  return (
+                    <tr key={r.trade_id + "-" + i} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td className="px-2 py-1 text-left" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>#{rank}</td>
+                      <td className="px-2 py-1 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.ticker}</td>
+                      <td className="px-2 py-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>{r.trade_id}</td>
+                      <td className="px-2 py-1" style={{ color: "var(--ink-2)" }}>{t?.rule || "—"}</td>
+                      <td className="px-2 py-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>{String(t?.open_date || "").slice(0, 10)}</td>
+                      <td className="px-2 py-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>{String(t?.closed_date || "").slice(0, 10) || "—"}</td>
+                      <td className="px-2 py-1 text-right font-semibold privacy-mask"
+                          style={{ fontFamily: "var(--font-jetbrains), monospace", color: r.pnl >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {formatCurrency(r.pnl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-2 py-1 text-right"
+                          style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctOfNet >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {pctOfNet >= 0 ? "+" : ""}{pctOfNet.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       {/* Cumulative curve — pure CSS. Show as a small horizontal bar per
@@ -2607,18 +2836,132 @@ function ParetoBody({ pareto }: { pareto: ReturnType<typeof paretoDistribution> 
 }
 
 
-function ParetoTile({ label, pct, value }: { label: string; pct: number; value: number }) {
-  const color = value >= 100 ? "#08a86b" : value >= 50 ? "#d97706" : "var(--ink-2)";
+function ParetoTile({ label, pct, value, netPl, selected, onClick }: {
+  label: string;
+  pct: number;
+  value: number;
+  netPl: number;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const isNegative = value < 0;
+  const color = isNegative ? "#e5484d"
+              : value >= 100 ? "#08a86b"
+              : value >= 50 ? "#d97706"
+              : "var(--ink-2)";
   return (
-    <div className="p-3 rounded-[10px]"
-         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+    <button type="button"
+            onClick={onClick}
+            className="p-3 rounded-[10px] text-left transition-all"
+            style={{
+              background: selected ? "color-mix(in oklab, #0d6efd 10%, var(--bg))" : "var(--bg)",
+              border: `1px solid ${selected ? "#0d6efd" : "var(--border)"}`,
+              cursor: "pointer",
+              boxShadow: selected ? "0 0 0 2px color-mix(in oklab, #0d6efd 20%, transparent)" : "none",
+            }}>
       <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
         {label} <span style={{ opacity: 0.6 }}>({pct.toFixed(1)}%)</span>
       </div>
       <div className="text-[22px] font-extrabold mt-1" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
-        {value.toFixed(0)}%
+        {value >= 0 ? "+" : ""}{value.toFixed(0)}%
       </div>
-      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>of net P&L</div>
+      <div className="text-[11px] privacy-mask" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+        {formatCurrency(netPl, { showSign: true, decimals: 0 })}
+      </div>
+    </button>
+  );
+}
+
+
+const SEVERITY_STYLE: Record<Insight["severity"], { bg: string; border: string; badge: string; badgeFg: string; label: string }> = {
+  critical: { bg: "color-mix(in oklab, #e5484d 10%, var(--bg))", border: "#e5484d", badge: "#e5484d", badgeFg: "#fff", label: "CRITICAL" },
+  warning:  { bg: "color-mix(in oklab, #f59f00 10%, var(--bg))", border: "#f59f00", badge: "#f59f00", badgeFg: "#000", label: "WARNING" },
+  info:     { bg: "color-mix(in oklab, #0d6efd 8%, var(--bg))",  border: "#0d6efd", badge: "#0d6efd", badgeFg: "#fff", label: "INFO" },
+};
+
+function InsightCard({ insight }: { insight: Insight }) {
+  const [open, setOpen] = useState(false);
+  const style = SEVERITY_STYLE[insight.severity];
+  const mono = "var(--font-jetbrains), monospace";
+  const hasItems = insight.items && insight.items.length > 0;
+  return (
+    <div className="rounded-[10px] p-3"
+         style={{ background: style.bg, border: `1px solid ${style.border}` }}>
+      <div className="flex items-start gap-3">
+        <div className="text-[22px] leading-none pt-0.5">{insight.icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span style={{
+              display: "inline-block", padding: "2px 6px", borderRadius: 4,
+              background: style.badge, color: style.badgeFg,
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.05em",
+            }}>{style.label}</span>
+            <span className="text-[14px] font-bold">{insight.title}</span>
+            {insight.impactDollars != null && (
+              <span className="text-[13px] font-semibold privacy-mask"
+                    style={{ color: insight.impactDollars >= 0 ? "#08a86b" : "#e5484d", fontFamily: mono }}>
+                {formatCurrency(insight.impactDollars, { showSign: true, decimals: 0 })}
+              </span>
+            )}
+          </div>
+          <div className="text-[12px] mt-1" style={{ color: "var(--ink-2)" }}>{insight.detail}</div>
+          {hasItems && (
+            <>
+              <button type="button" onClick={() => setOpen(o => !o)}
+                      className="text-[11px] mt-2 underline"
+                      style={{ color: "var(--ink-3)", cursor: "pointer", background: "none", border: "none", padding: 0 }}>
+                {open ? "▾ Hide" : "▸ Show"} {insight.items!.length} item{insight.items!.length === 1 ? "" : "s"}
+              </button>
+              {open && (
+                <div className="mt-2 flex flex-col gap-1">
+                  {insight.items!.map((it, i) => (
+                    <div key={i} className="flex items-center justify-between text-[11px] px-2 py-1 rounded"
+                         style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                      <div>
+                        <span className="font-semibold" style={{ fontFamily: mono }}>{it.label}</span>
+                        {it.detail && <span className="ml-2" style={{ color: "var(--ink-4)" }}>{it.detail}</span>}
+                      </div>
+                      <div className="privacy-mask" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                        {it.netPl != null && (
+                          <span style={{ color: it.netPl >= 0 ? "#08a86b" : "#e5484d", fontWeight: 600 }}>
+                            {formatCurrency(it.netPl, { showSign: true, decimals: 0 })}
+                          </span>
+                        )}
+                        {it.pct != null && <span>{it.pct >= 0 ? "+" : ""}{it.pct.toFixed(1)}%</span>}
+                        {it.count != null && <span>{it.count}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function RiskTile({ label, value, suffix, tooltip, coverage, negative }: {
+  label: string;
+  value: number | null;
+  suffix: string;
+  tooltip: string;
+  coverage: string;
+  negative?: boolean;
+}) {
+  const color = value == null ? "var(--ink-4)"
+              : negative ? "#e5484d"
+              : "var(--ink)";
+  return (
+    <div className="p-3 rounded-[10px]" title={tooltip}
+         style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{label}</div>
+      <div className="text-[22px] font-extrabold mt-1" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+        {value == null ? "—" : `${negative && value > 0 ? "-" : ""}${value.toFixed(2)}${suffix}`}
+      </div>
+      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{coverage}</div>
     </div>
   );
 }
@@ -2640,106 +2983,150 @@ function BrandtTile({ label, pct }: { label: string; pct: number | null }) {
 
 
 // ═══════════════════════════════════════════════════════════════════════
-// Scenarios tab — stop-cap, fixed-size, and (conditional) excursion
+// Setup Scorecard tab — per-rule PF + auto-verdict + drilldown
+// (Old Stop-Cap and Fixed-Size scenarios retired 2026-07-14 — both were
+//  mathematically tautological; setup scorecard is the actionable view.)
 // ═══════════════════════════════════════════════════════════════════════
 
-function ScenariosTab({ trades, journal, year, cohort, navColor }: {
+const VERDICT_STYLE: Record<SetupVerdict, { bg: string; fg: string; label: string; title: string }> = {
+  "core":    { bg: "#08a86b", fg: "#fff",     label: "CORE",    title: "PF ≥ 5 with meaningful n — keep and lean into" },
+  "keep":    { bg: "#0d6efd", fg: "#fff",     label: "KEEP",    title: "PF ≥ 2 — solid contributor" },
+  "watch":   { bg: "#f59f00", fg: "#000",     label: "WATCH",   title: "PF between 1 and 2 — marginal, monitor" },
+  "kill":    { bg: "#e5484d", fg: "#fff",     label: "KILL",    title: "PF < 1 — losing money net; strong candidate for retirement or regime gate" },
+  "small-n": { bg: "#e0e0e0", fg: "#666",     label: "SMALL n", title: "Sample too small (n < 5) — no verdict rendered" },
+};
+
+function ScenariosTab({ trades, journal: _journal, year, cohort, navColor: _navColor }: {
   trades: TradePosition[];
   journal: any[];
   year: number;
   cohort: "closed" | "at-mark";
   navColor: string;
 }) {
-  const stopCapRows = useMemo(() => stopCapScenario(trades), [trades]);
-  const fixedSizeRows = useMemo(() => fixedSizeScenario(trades, journal), [trades, journal]);
-  const anyMae = useMemo(
-    () => trades.some(t => (t as any).mae_pct != null),
-    [trades],
-  );
+  const scorecard = useMemo(() => setupScorecard(trades), [trades]);
+  const anyMae = useMemo(() => trades.some(t => (t as any).mae_pct != null), [trades]);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const yearBadge = (
     <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
       — {year} · {cohort === "closed" ? "closed only" : "including open @ mark"}
     </span>
   );
+  const qualifying = scorecard.filter(r => r.verdict !== "small-n");
+  const smallN = scorecard.filter(r => r.verdict === "small-n");
+  const topFiveIds = new Set(qualifying.slice(0, 5).map(r => r.setup));
+  const bottomFiveIds = new Set(qualifying.slice(-5).map(r => r.setup));
+  const mono = "var(--font-jetbrains), monospace";
 
   return (
     <>
       <div className="text-[13px] mb-4" style={{ color: "var(--ink-3)" }}>
-        Counterfactual tables. Numbers are UPPER BOUNDS unless the excursion
-        section fires (below).
+        One row per setup ({`rule`} field). Sorted by profit factor. Verdict thresholds:
+        <strong> Core</strong> ≥ 5 · <strong>Keep</strong> ≥ 2 · <strong>Watch</strong> ≥ 1 · <strong>Kill</strong> &lt; 1. Setups with fewer than 5 trades are parked at the bottom without a verdict.
+        Click any row to see the constituent trades.
       </div>
 
-      {/* ─────────── Stop-cap ─────────── */}
+      {/* ─────────── Setup Scorecard ─────────── */}
       <div className="mb-5 p-5 rounded-[14px]"
            style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
         <div className="text-[15px] font-semibold mb-1">
-          🚧 Stop-Cap Upper Bound {yearBadge}
+          🏆 Setup Scorecard {yearBadge}
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
-          For cap X, sums the $ each loser went past −X% of cost. <strong>Upper bound</strong>: assumes no winner would have been prematurely stopped. Real backtest needs MAE data — see Excursion section below.
+          Top {Math.min(5, qualifying.length)} highlighted green, bottom {Math.min(5, qualifying.length)} highlighted red. PF = ∞ means all wins, no losses.
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "var(--bg)" }}>
-                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Cap</th>
-                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Losers breaching</th>
-                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>$ saved (max)</th>
+                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Setup</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>n</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Win %</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Gross Win</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Gross Loss</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>PF</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Expectancy</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Avg Hold</th>
+                <th className="px-3 py-2 text-center text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Verdict</th>
               </tr>
             </thead>
             <tbody>
-              {stopCapRows.map(r => (
-                <tr key={r.capPct} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>−{r.capPct}%</td>
-                  <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.breachCount}</td>
-                  <td className="px-3 py-2 text-right font-semibold privacy-mask"
-                      style={{ color: "#08a86b", fontFamily: "var(--font-jetbrains), monospace" }}>
-                    {formatCurrency(r.dollarsSaved, { showSign: false, decimals: 0 })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ─────────── Fixed-size ─────────── */}
-      <div className="mb-5 p-5 rounded-[14px]"
-           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-        <div className="text-[15px] font-semibold mb-1">
-          🎯 Fixed-Size Scaling {yearBadge}
-        </div>
-        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
-          What if every trade had been sized to T% of prior-day NAV? Scales linearly from actual b_size. <strong>Ignores margin, heat, and correlation</strong> — the caveats stack.
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "var(--bg)" }}>
-                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Target size</th>
-                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Scaled net P&L</th>
-                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Coverage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fixedSizeRows.map(r => {
-                const color = r.scaledPnl >= 0 ? "#08a86b" : "#e5484d";
+              {scorecard.map(r => {
+                const isTop = topFiveIds.has(r.setup);
+                const isBot = bottomFiveIds.has(r.setup);
+                const rowBg = isTop ? "color-mix(in oklab, #08a86b 8%, transparent)"
+                            : isBot ? "color-mix(in oklab, #e5484d 8%, transparent)"
+                            : "transparent";
+                const isOpen = expanded === r.setup;
+                const style = VERDICT_STYLE[r.verdict];
                 return (
-                  <tr key={r.targetPct} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td className="px-3 py-2 font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{r.targetPct}%</td>
-                    <td className="px-3 py-2 text-right font-semibold privacy-mask"
-                        style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
-                      {formatCurrency(r.scaledPnl, { showSign: true, decimals: 0 })}
-                    </td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>
-                      {r.nWithSize} / {r.nWithSize + r.nDropped}
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={r.setup}
+                        onClick={() => setExpanded(isOpen ? null : r.setup)}
+                        style={{ borderBottom: "1px solid var(--border)", background: rowBg, cursor: "pointer" }}>
+                      <td className="px-3 py-2 font-semibold" style={{ color: "var(--ink)" }}>
+                        <span style={{ display: "inline-block", width: 14, textAlign: "center", color: "var(--ink-4)" }}>{isOpen ? "▾" : "▸"}</span>
+                        {r.setup}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.winPct.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-right privacy-mask" style={{ fontFamily: mono, color: "#08a86b" }}>{formatCurrency(r.grossWin, { showSign: false, decimals: 0 })}</td>
+                      <td className="px-3 py-2 text-right privacy-mask" style={{ fontFamily: mono, color: "#e5484d" }}>{formatCurrency(-r.grossLoss, { showSign: false, decimals: 0 })}</td>
+                      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono }}>
+                        {r.profitFactor === Infinity ? "∞" : r.profitFactor.toFixed(2)}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                          style={{ fontFamily: mono, color: r.netPl >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {formatCurrency(r.netPl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: r.expectancy >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {formatCurrency(r.expectancy, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                        {r.avgHoldDays == null ? "—" : `${r.avgHoldDays.toFixed(0)}d`}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span title={style.title}
+                              style={{
+                                display: "inline-block",
+                                padding: "2px 8px",
+                                borderRadius: 6,
+                                background: style.bg,
+                                color: style.fg,
+                                fontSize: 10,
+                                fontWeight: 700,
+                                letterSpacing: "0.05em",
+                              }}>
+                          {style.label}
+                        </span>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr key={r.setup + "-open"}>
+                        <td colSpan={10} style={{ padding: 0, background: "var(--bg)" }}>
+                          <SetupDrilldown row={r} />
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 );
               })}
+              {scorecard.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="px-3 py-6 text-center text-[12px]" style={{ color: "var(--ink-4)" }}>
+                    No setups in this cohort.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+        {smallN.length > 0 && (
+          <div className="text-[11px] mt-3 italic" style={{ color: "var(--ink-4)" }}>
+            {smallN.length} setup{smallN.length === 1 ? "" : "s"} with n &lt; 5 shown at bottom without verdict.
+          </div>
+        )}
       </div>
 
       {/* ─────────── Excursion section (conditional) ─────────── */}
@@ -2759,5 +3146,68 @@ function ScenariosTab({ trades, journal, year, cohort, navColor }: {
         )}
       </div>
     </>
+  );
+}
+
+function SetupDrilldown({ row }: { row: SetupScorecardRow }) {
+  const mono = "var(--font-jetbrains), monospace";
+  const sorted = useMemo(() =>
+    [...row.trades].sort((a, b) => parseFloat(String(b.realized_pl || 0)) - parseFloat(String(a.realized_pl || 0))),
+    [row.trades],
+  );
+  const holdDays = (t: TradePosition): number | null => {
+    const o = String(t.open_date || "").trim();
+    const c = String(t.closed_date || "").trim();
+    if (!o || !c) return null;
+    const od = new Date(o).getTime();
+    const cd = new Date(c).getTime();
+    if (isNaN(od) || isNaN(cd)) return null;
+    return Math.max(0, Math.floor((cd - od) / 86_400_000));
+  };
+  return (
+    <div className="px-6 py-4">
+      <div className="text-[11px] uppercase font-bold mb-2" style={{ color: "var(--ink-4)" }}>
+        {row.n} trades tagged {row.setup} · click ticker to open Trade Journal
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "var(--surface)" }}>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Ticker</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Trade ID</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Open</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Closed</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Hold</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Return %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(t => {
+              const pl = parseFloat(String(t.realized_pl || 0));
+              const rp = Number((t as any).return_pct ?? 0);
+              const hd = holdDays(t);
+              return (
+                <tr key={t.trade_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td className="px-2 py-1 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{t.trade_id}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{String(t.open_date || "").slice(0, 10)}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{String(t.closed_date || "").slice(0, 10) || "—"}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{hd == null ? "—" : `${hd}d`}</td>
+                  <td className="px-2 py-1 text-right font-semibold privacy-mask"
+                      style={{ fontFamily: mono, color: pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {formatCurrency(pl, { showSign: true, decimals: 0 })}
+                  </td>
+                  <td className="px-2 py-1 text-right"
+                      style={{ fontFamily: mono, color: rp >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {rp >= 0 ? "+" : ""}{rp.toFixed(1)}%
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
