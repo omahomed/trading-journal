@@ -74,20 +74,24 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
-      expect(indicator.textContent).toMatch(/Offense \(1\.00%\)/);
+      // Post-retier: Offense is 0.75% (was 1.00%).
+      expect(indicator.textContent).toMatch(/Offense \(0\.75%\)/);
       expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
     // No reset button while in auto mode
     expect(screen.queryByTestId("sizer-reset-to-auto")).not.toBeInTheDocument();
   });
 
-  test("CORRECTION → Defense, RALLY MODE → Normal, UPTREND → Offense", async () => {
-    // Three remounts because each render calls rallyPrefix once on mount.
-    // Clean lifecycle covers all three states without state leakage.
+  test("state → mode mapping: POWERTREND → Offense, UPTREND → Normal, everything else → Pilot", async () => {
+    // Post-retier mapping. Remounts because each render calls
+    // rallyPrefix once on mount; clean lifecycle covers each state
+    // without state leakage.
     for (const [state, label] of [
-      ["CORRECTION", "Defense (0.50%)"],
-      ["RALLY MODE", "Normal (0.75%)"],
-      ["UPTREND", "Offense (1.00%)"],
+      ["POWERTREND", "Offense (0.75%)"],
+      ["UPTREND", "Normal (0.50%)"],
+      ["UPTREND UNDER PRESSURE", "Pilot (0.25%)"],
+      ["RALLY MODE", "Pilot (0.25%)"],
+      ["CORRECTION", "Pilot (0.25%)"],
     ] as const) {
       vi.clearAllMocks();
       setupDefaults();
@@ -112,18 +116,17 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => expect(indicator.textContent).toMatch(/Auto:/));
 
-    // Click the Defense radio. (Match by accessible label — Position
-    // Sizer renders SIZING_MODES with the emoji-prefixed label, so the
-    // "Defense" word is enough to disambiguate.)
-    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
+    // Override to Pilot (idx 0, most conservative — was Defense pre-retier).
+    // Match by the emoji-prefixed radio label.
+    const pilotRadio = await screen.findByText(/Pilot \(0\.25%\)/);
     await act(async () => {
-      fireEvent.click(defenseRadio);
+      fireEvent.click(pilotRadio);
     });
 
     // Indicator label flips
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Manual:/);
-      expect(indicator.textContent).toMatch(/Defense \(0\.50%\)/);
+      expect(indicator.textContent).toMatch(/Pilot \(0\.25%\)/);
       // No "from M Factor …" hint while in manual mode (the source is the user)
       expect(indicator.textContent).not.toMatch(/from M Factor/);
     });
@@ -136,26 +139,28 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
 
     render(<PositionSizer navColor="#6366f1" />);
 
-    // Override to Defense first
-    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
-    await act(async () => { fireEvent.click(defenseRadio); });
+    // Override to Pilot first (was Defense pre-retier)
+    const pilotRadio = await screen.findByText(/Pilot \(0\.25%\)/);
+    await act(async () => { fireEvent.click(pilotRadio); });
 
     const reset = await screen.findByTestId("sizer-reset-to-auto");
     await act(async () => { fireEvent.click(reset); });
 
-    // Back to Auto + Offense (POWERTREND)
+    // Back to Auto + Offense (POWERTREND) at the retiered 0.75%
     const indicator = screen.getByTestId("sizer-mode-indicator");
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
-      expect(indicator.textContent).toMatch(/Offense \(1\.00%\)/);
+      expect(indicator.textContent).toMatch(/Offense \(0\.75%\)/);
       expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
     expect(screen.queryByTestId("sizer-reset-to-auto")).not.toBeInTheDocument();
   });
 
-  test("rally-prefix returning no state defaults to Normal + 'M Factor state unknown'", async () => {
+  test("rally-prefix returning no state defaults to Pilot + 'M Factor state unknown'", async () => {
     // Failure mode: rallyPrefix's catch landed an empty {prefix: ""}
-    // (no `state` field). Spec: safe-middle Normal, no fake-source label.
+    // (no `state` field). Post-retier default is Pilot (most
+    // conservative) — the "safe middle" default was retired along
+    // with the Defense tier.
     mRally.mockResolvedValue({ prefix: "" } as any);
 
     render(<PositionSizer navColor="#6366f1" />);
@@ -163,7 +168,7 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Auto:/);
-      expect(indicator.textContent).toMatch(/Normal \(0\.75%\)/);
+      expect(indicator.textContent).toMatch(/Pilot \(0\.25%\)/);
       expect(indicator.textContent).toMatch(/M Factor state unknown/);
     });
   });
@@ -248,7 +253,9 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupDefaults();
-    // POWERTREND → Offense (1.0%) — matches the GOOGL canonical case in vol-sizer.test.ts
+    // POWERTREND → Offense (0.75%) post-retier. GOOGL canonical case is
+    // cap-bound (10% NLV = 183 shares) regardless of tolPct, so the
+    // recommended shares assertion below survives the retier.
     mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
     try { localStorage.removeItem("ps_prefill"); } catch { /* JSDOM polyfill quirk */ }
   });
@@ -270,9 +277,9 @@ describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
 
   test("GOOGL canonical case → recommended = 1.5x ATR, three ATR cards render, warning visible", async () => {
     render(<PositionSizer navColor="#6366f1" />);
-    // Wait for MCT auto-pick (POWERTREND → Offense) so tolPct = 1.0
+    // Wait for MCT auto-pick (POWERTREND → Offense) so tolPct = 0.75
     const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense \(1\.00%\)/));
+    await waitFor(() => expect(indicator.textContent).toMatch(/Offense \(0\.75%\)/));
 
     await fillVolTabInputs({
       ticker: "GOOGL",

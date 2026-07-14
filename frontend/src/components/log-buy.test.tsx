@@ -88,17 +88,18 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => {
       expect(indicator.textContent).toMatch(/Sizing:/);
+      // Post-retier: POWERTREND → Offense at 0.75% (was 1.00%).
       expect(indicator.textContent).toMatch(/Offense/);
-      expect(indicator.textContent).toMatch(/1\.00% risk/);
+      expect(indicator.textContent).toMatch(/0\.75% risk/);
       expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
     });
   });
 
   test("manual override radios are present (Override Sizing Mode field)", async () => {
-    // The user can toggle defense/normal/offense for THIS Log Buy
-    // submission. Override is form-local — refresh / submit / unmount
-    // resets back to the MCT-driven auto pick (verified separately by
-    // the post-remount-resets-to-MCT test below).
+    // The user can toggle pilot/normal/offense for THIS Log Buy
+    // submission (Defense tier retired). Override is form-local —
+    // refresh / submit / unmount resets back to the MCT-driven auto
+    // pick (verified separately by the post-remount test below).
     mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
@@ -108,8 +109,9 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
   });
 
   test("clicking a different mode flips indicator to '— manual override' and shows Reset", async () => {
-    // Auto: Offense (POWERTREND). User toggles to Defense → indicator
-    // copy switches; Reset button appears.
+    // Auto: Offense (POWERTREND). User toggles to Pilot → indicator
+    // copy switches; Reset button appears. (Defense was retired; Pilot
+    // is the manual downshift target now.)
     mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
@@ -118,15 +120,15 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
     expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
 
-    // Click the Defense radio. Mode label includes "Defense (0.50%)".
-    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
-    await act(async () => { fireEvent.click(defenseRadio); });
+    // Click the Pilot radio. Mode label includes "Pilot (0.25%)".
+    const pilotRadio = await screen.findByText(/Pilot \(0\.25%\)/);
+    await act(async () => { fireEvent.click(pilotRadio); });
 
     await waitFor(() => {
-      expect(indicator.textContent).toMatch(/Defense/);
-      expect(indicator.textContent).toMatch(/0\.50% risk/);
+      expect(indicator.textContent).toMatch(/Pilot/);
+      expect(indicator.textContent).toMatch(/0\.25% risk/);
       expect(indicator.textContent).toMatch(/manual override/);
-      // No "from M Factor …" label while in manual mode (the source is the user)
+      // No "from M Factor …" label while in manual mode (source is the user)
       expect(indicator.textContent).not.toMatch(/from M Factor/);
     });
     expect(screen.getByTestId("logbuy-reset-to-mct")).toBeInTheDocument();
@@ -137,17 +139,18 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
 
     render(<LogBuy navColor="#6366f1" />);
 
-    // Override to Defense first
-    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
-    await act(async () => { fireEvent.click(defenseRadio); });
+    // Override to Pilot first (was Defense pre-retier)
+    const pilotRadio = await screen.findByText(/Pilot \(0\.25%\)/);
+    await act(async () => { fireEvent.click(pilotRadio); });
 
     const reset = await screen.findByTestId("logbuy-reset-to-mct");
     await act(async () => { fireEvent.click(reset); });
 
     const indicator = screen.getByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => {
+      // Back to Auto + Offense (POWERTREND) at the retiered 0.75%.
       expect(indicator.textContent).toMatch(/Offense/);
-      expect(indicator.textContent).toMatch(/1\.00% risk/);
+      expect(indicator.textContent).toMatch(/0\.75% risk/);
       expect(indicator.textContent).toMatch(/from M Factor POWERTREND/);
       expect(indicator.textContent).not.toMatch(/manual override/);
     });
@@ -161,8 +164,8 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
 
     const { unmount } = render(<LogBuy navColor="#6366f1" />);
-    const defenseRadio = await screen.findByText(/Defense \(0\.50%\)/);
-    await act(async () => { fireEvent.click(defenseRadio); });
+    const pilotRadio = await screen.findByText(/Pilot \(0\.25%\)/);
+    await act(async () => { fireEvent.click(pilotRadio); });
     await screen.findByTestId("logbuy-reset-to-mct");
     unmount();
 
@@ -176,28 +179,32 @@ describe("LogBuy — read-only MCT-driven sizing mode", () => {
     expect(screen.queryByTestId("logbuy-reset-to-mct")).not.toBeInTheDocument();
   });
 
-  test("CORRECTION → Defense (0.50% risk)", async () => {
+  test("CORRECTION → Pilot (0.25% risk) — retiered from Defense", async () => {
     mRally.mockResolvedValue({ prefix: "", state: "CORRECTION" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
 
     const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => {
-      expect(indicator.textContent).toMatch(/Defense/);
-      expect(indicator.textContent).toMatch(/0\.50% risk/);
+      expect(indicator.textContent).toMatch(/Pilot/);
+      expect(indicator.textContent).toMatch(/0\.25% risk/);
       expect(indicator.textContent).toMatch(/from M Factor CORRECTION/);
     });
   });
 
-  test("rally-prefix returning no state defaults to Normal + 'M Factor state unknown'", async () => {
+  test("rally-prefix returning no state defaults to Pilot + 'M Factor state unknown'", async () => {
+    // Post-retier default is Pilot (safest floor) rather than a
+    // middle-tier auto-pick. Old default was Normal (safe middle) —
+    // that middle-tier default was retired along with Defense to
+    // preserve the "when in doubt, be smaller" invariant.
     mRally.mockResolvedValue({ prefix: "" } as any);
 
     render(<LogBuy navColor="#6366f1" />);
 
     const indicator = await screen.findByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => {
-      expect(indicator.textContent).toMatch(/Normal/);
-      expect(indicator.textContent).toMatch(/0\.75% risk/);
+      expect(indicator.textContent).toMatch(/Pilot/);
+      expect(indicator.textContent).toMatch(/0\.25% risk/);
       expect(indicator.textContent).toMatch(/M Factor state unknown/);
     });
   });

@@ -262,17 +262,21 @@ describe("MobilePositionSizer — mount fetch", () => {
     expect(modeTrigger).toBeInTheDocument();
   });
 
-  test("auto-selects Defense when MCT state is CORRECTION", async () => {
+  test("auto-selects Pilot when MCT state is CORRECTION (retiered from Defense)", async () => {
     setApiMocks({ endNlv: 100_000, state: "CORRECTION" });
     render(<MobilePositionSizer />);
-    const modeTrigger = await screen.findByRole("button", { name: /Mode: Defense/ });
+    const modeTrigger = await screen.findByRole("button", { name: /Mode: Pilot/ });
     expect(modeTrigger).toBeInTheDocument();
   });
 
-  test("falls back to Normal mode when rallyPrefix returns null", async () => {
+  test("falls back to Pilot mode when rallyPrefix returns null (retiered from Normal)", async () => {
+    // Post-retier default is Pilot (safest floor). Old default was
+    // Normal (safe middle) — that middle no longer exists in the
+    // three-tier lineup and a middle-tier default on engine hiccup
+    // would violate the "when in doubt, be smaller" invariant.
     setApiMocks({ endNlv: 100_000, state: null });
     render(<MobilePositionSizer />);
-    const modeTrigger = await screen.findByRole("button", { name: /Mode: Normal/ });
+    const modeTrigger = await screen.findByRole("button", { name: /Mode: Pilot/ });
     expect(modeTrigger).toBeInTheDocument();
   });
 });
@@ -425,11 +429,14 @@ describe("MobilePositionSizer — Mode picker manual override", () => {
     const dialog = await screen.findByRole("dialog", { name: /Sizing mode/ });
     expect(dialog).toBeInTheDocument();
 
-    const defenseOption = within(dialog).getByRole("option", { name: /Defense/ });
-    fireEvent.click(defenseOption);
+    // Post-retier: Defense retired. Manual pick target is Pilot (idx 0,
+    // most conservative), which is now the same position-in-the-sheet
+    // for "downshift to the safest tier" as Defense used to be.
+    const pilotOption = within(dialog).getByRole("option", { name: /Pilot/ });
+    fireEvent.click(pilotOption);
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(await screen.findByRole("button", { name: /Mode: Defense/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Mode: Pilot/ })).toBeInTheDocument();
   });
 });
 
@@ -522,8 +529,8 @@ describe("MobilePositionSizer — Scale-In math", () => {
 
     // targetTotalShares = ceil(100000*0.10/60) = 167; targetAdd = 67
     // newAddRiskPerShare = 60 - 54.45 = 5.55
-    // maxRiskDol = 1000 (Offense); affordableAdd = floor(1000/5.55) = 180
-    // recommendedAdd = min(67, 180) = 67 → success
+    // maxRiskDol = 750 (Offense post-retier 0.75%); affordableAdd = floor(750/5.55) = 135
+    // recommendedAdd = min(67, 135) = 67 → success (target still binds)
     expect(screen.getByText("+67")).toBeInTheDocument();
     expect(screen.getByTestId("scale-verdict-success")).toBeInTheDocument();
   });
@@ -532,7 +539,7 @@ describe("MobilePositionSizer — Scale-In math", () => {
     // Setup: avg_entry above stop → existing risk eats most of budget
     setApiMocks({
       endNlv: 100_000,
-      state: "POWERTREND", // Offense → maxRisk 1.0 → maxRiskDol 1000
+      state: "POWERTREND", // Offense → maxRisk 0.75 → maxRiskDol 750 (post-retier)
       holdings: [holdingFixture({ ticker: "BBB", shares: 100, avg_entry: 60 })],
     });
     render(<MobilePositionSizer />);
@@ -546,16 +553,16 @@ describe("MobilePositionSizer — Scale-In math", () => {
     fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
     fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "55" } });
     // existingRiskPerShare = max(0, 60-54.45) = 5.55; existingRisk = 555
-    // remainingBudget = 1000 - 555 = 445; affordable = floor(445/5.55) = 80
+    // remainingBudget = 750 - 555 = 195; affordable = floor(195/5.55) = 35
 
     // Bump target to Overweight (12.5%) → targetAdd = ceil(12500/60) - 100 = 109
-    // affordable 80 < targetAdd 109 → partial
+    // affordable 35 < targetAdd 109 → partial
     fireEvent.click(screen.getByRole("button", { name: /Size: Full/ }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByText("Overweight"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     expect(await screen.findByTestId("scale-verdict-partial")).toBeInTheDocument();
-    expect(screen.getByText("+80")).toBeInTheDocument();
+    expect(screen.getByText("+35")).toBeInTheDocument();
   });
 
   test("target-exceeded error when current value is already above target weight", async () => {
@@ -587,7 +594,7 @@ describe("MobilePositionSizer — Scale-In math", () => {
   test("no-budget error when existing risk exceeds the budget", async () => {
     setApiMocks({
       endNlv: 100_000,
-      state: "CORRECTION", // Defense → maxRisk 0.5 → maxRiskDol 500
+      state: "CORRECTION", // Pilot → maxRisk 0.25 → maxRiskDol 250 (post-retier)
       holdings: [holdingFixture({ ticker: "DDD", shares: 100, avg_entry: 60 })],
     });
     render(<MobilePositionSizer />);
@@ -600,7 +607,7 @@ describe("MobilePositionSizer — Scale-In math", () => {
 
     fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
     fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "55" } });
-    // existingRisk = 100 * (60-54.45) = 555 > maxRiskDol 500 → error path
+    // existingRisk = 100 * (60-54.45) = 555 > maxRiskDol 250 → error path
 
     expect(await screen.findByTestId("scale-error-banner")).toBeInTheDocument();
     expect(screen.getByTestId("scale-error-banner")).toHaveTextContent(/NO ADD/);
@@ -1064,8 +1071,10 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
     expect(screen.getByText(/Hard cap: 5% of NLV \(\$5,000\)/)).toBeInTheDocument();
   });
 
-  test("Recommended card reflects sizingMode: Offense (1.0%) → 10 contracts, Defense (0.5%) → 5 contracts", async () => {
-    setApiMocks({ endNlv: 100_000, state: "POWERTREND" }); // → Offense (1.0%)
+  test("Recommended card reflects sizingMode: Offense (0.75%) → 7 contracts, Pilot (0.25%) → 2 contracts", async () => {
+    // Post-retier: Offense dropped to 0.75%; Defense retired; Pilot is
+    // now the manual downshift target.
+    setApiMocks({ endNlv: 100_000, state: "POWERTREND" }); // → Offense (0.75%)
     render(<MobilePositionSizer />);
     fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
     await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
@@ -1075,22 +1084,23 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
       return (label.closest("div.rounded-m-md") as HTMLElement | null)?.textContent ?? "";
     };
 
-    // Offense (1.0%) → $1,000 budget → 10 contracts
-    await waitFor(() => expect(readRecCard()).toMatch(/10 contracts/));
+    // Offense (0.75%) → $750 budget → floor(750/100) = 7 contracts
+    await waitFor(() => expect(readRecCard()).toMatch(/7 contracts/));
     expect(readRecCard()).toMatch(/Risk Budget/);
 
-    // Switch to Defense via Mode picker → 0.5% → $500 budget → 5 contracts
+    // Switch to Pilot via Mode picker → 0.25% → $250 budget → 2 contracts
     fireEvent.click(screen.getByRole("button", { name: /Mode: Offense/ }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Defense"));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("Pilot"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    await waitFor(() => expect(readRecCard()).toMatch(/5 contracts/));
+    await waitFor(() => expect(readRecCard()).toMatch(/2 contracts/));
   });
 
   test("Single contract exceeds budget → warning banner with desktop wording", async () => {
-    // equity=100k, Defense 0.5% → $500 budget. cpc=$6 → $600/contract. 600 > 500.
-    // floor(500/600) = 0 contracts. Warning fires.
-    setApiMocks({ endNlv: 100_000, state: "CORRECTION" }); // → Defense
+    // Post-retier: CORRECTION → Pilot 0.25% → $250 budget.
+    // cpc=$6 → $600/contract. 600 > 250. floor(250/600) = 0 contracts.
+    // Warning fires with the new smaller budget.
+    setApiMocks({ endNlv: 100_000, state: "CORRECTION" }); // → Pilot (post-retier)
     render(<MobilePositionSizer />);
     fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
     await waitFor(() => expect(api.journalLatest).toHaveBeenCalled());
@@ -1099,7 +1109,7 @@ describe("MobilePositionSizer — Options Risk-mode math", () => {
 
     const banner = await screen.findByTestId("options-risk-warning");
     expect(banner).toHaveTextContent(/A single contract \(\$600\)/);
-    expect(banner).toHaveTextContent(/exceeds your risk budget \(\$500\)/);
+    expect(banner).toHaveTextContent(/exceeds your risk budget \(\$250\)/);
     expect(banner).toHaveTextContent(/Consider a cheaper strike or spread/);
   });
 });
