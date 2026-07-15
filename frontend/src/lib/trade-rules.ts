@@ -130,6 +130,46 @@ export const SELL_RULES: readonly SellRule[] = [
     ].join("\n"),
   },
   {
+    code: "sr8.1",
+    description: "SR8 Quick Trim",
+    oneLiner:
+      "First MO RS cascade fire. RS crosses below the 8-week MA — trim the position back to the QUICK cascade target (15% NLV on the 20-cascade, 11.25% on the 15-cascade). Reversible: if RS reclaims the 8w, rebuild.",
+    mechanics: [
+      "- **Trigger**: weekly RS (relative strength) breaks below its 8w MA (intraweek live cross, NOT Friday close)",
+      "- **Cascade selection (per position, based on current % NLV at trigger)**:",
+      "  - `≥ 20% NLV` → 20-cascade: trim to **15% NLV**",
+      "  - `< 20% NLV` → 15-cascade: trim to **11.25% NLV**",
+      "- **Reversible**: if RS reclaims the 8w MA, cascade disarms and position can be rebuilt back toward the core level",
+      "- **Purpose**: shave exposure on the FIRST sign of relative-strength weakness; leave the trade with a smaller but still-participating stake",
+    ].join("\n"),
+  },
+  {
+    code: "sr8.2",
+    description: "SR8 Quicksand Trim",
+    oneLiner:
+      "Second MO RS cascade fire. RS drifts further below the 8-week MA — trim to the QUICKSAND cascade target (10% NLV on the 20-cascade, 7.5% on the 15-cascade). Still reversible on RS reclaim.",
+    mechanics: [
+      "- **Trigger**: after SR8.1, RS continues to drift below its 8w MA — the 'quicksand' state on the MO RS engine",
+      "- **Cascade target**:",
+      "  - `20-cascade` → trim to **10% NLV**",
+      "  - `15-cascade` → trim to **7.5% NLV**",
+      "- **Reversible**: if RS reclaims the 8w MA, cascade disarms and position can be rebuilt",
+      "- **Purpose**: cut exposure further as weakness confirms — but leave a toehold in case RS turns back",
+    ].join("\n"),
+  },
+  {
+    code: "sr8.3",
+    description: "SR8 Dreadful Dead",
+    oneLiner:
+      "Final MO RS cascade fire. RS breaks below the 21-week MA — full exit, one-way. Terminates the campaign in `terminate` mode; awaits a fresh GREEN in `revert` mode.",
+    mechanics: [
+      "- **Trigger**: weekly RS breaks below its 21w MA (the deep-trend line)",
+      "- **Action**: **full exit** — cascade target is **0% NLV**",
+      "- **Not reversible**: this is the one-way signal. In `terminate` mode (default), the campaign is over. In `revert` mode, position closes and a fresh daily GREEN opens a new sub-entry.",
+      "- **Named separately from SR8.1 / SR8.2** so realized outcomes can be analyzed independently — DD exits typically capture the full downside; the analytical question is whether the earlier QUICK/QS trims added or subtracted value.",
+    ].join("\n"),
+  },
+  {
     code: "sr9",
     description: "Failed Breakout",
     oneLiner:

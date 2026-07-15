@@ -32,6 +32,7 @@ const BUY_RULES = [
   "br10.1 Hedging with leverage product",
   "br11.1 Shorting",
   "br12.1 Option Play",
+  "br13.1 MO RS Green — Initial Entry", "br13.2 MO RS Green — Reset Entry",
 ];
 
 type SortKey = "newest" | "oldest" | "best" | "worst" | "ticker";
