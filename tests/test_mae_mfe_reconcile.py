@@ -264,6 +264,148 @@ class TestExcursions:
             assert r["days_to_mfe"] == 1
 
 
+class TestExitDaySkip:
+    """Symmetric rule to entry-day: when a trade is CLOSED, the exit
+    bar's OHLC is ignored and the exit-day sell prices are the only
+    known-touched levels for that bar. Motivating case: stopped-out
+    trades where price kept falling after the exit — the trader is out
+    and that further move is not part of their position's excursion."""
+
+    def test_gev_style_stopped_out_before_day_low(self):
+        # Entry $1161 on bar 0. Bar 1 (exit day) prints a low of $1027
+        # but the trader stopped out at $1071 — the true intraday low
+        # happened after they were out. MAE should be (1071-1161)/1161
+        # = -7.75%, NOT the full -11.55% the day's low would show.
+        df = _bars([
+            (1150, 1170, 1161),   # bar 0: entry-day
+            (1027, 1085, 1050),   # bar 1: exit-day low irrelevant post-exit
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=1161.0,
+            exit_low_price=1071.0,
+            exit_high_price=1071.0,
+        )
+        assert r is not None
+        # (1071 - 1161) / 1161 = -7.7519%
+        assert r["mae_pct"] == pytest.approx(-7.7519, abs=1e-3)
+        assert r["days_to_mae"] == 1
+        # MFE stays at 0 — exit price 1071 < entry 1161, no MFE.
+        assert r["mfe_pct"] == pytest.approx(0.0)
+
+    def test_exit_day_high_seeds_mfe_but_low_after_ignored(self):
+        # Scale-out at $110 on bar 1 (a good print), bar 1 low went to
+        # $95 AFTER the trader was out. MFE = +10%; MAE unchanged by
+        # bar 1's low (still whatever bar 0 seeded).
+        df = _bars([
+            (99, 101, 100),        # bar 0: entry
+            (95, 112, 108),        # bar 1: exit-day — low IGNORED
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            exit_low_price=110.0,
+            exit_high_price=110.0,
+        )
+        assert r is not None
+        assert r["mfe_pct"] == pytest.approx(10.0)
+        assert r["days_to_mfe"] == 1
+        # MAE stays at 0 — bar 0 skipped, bar 1's $95 low not counted.
+        assert r["mae_pct"] == pytest.approx(0.0)
+
+    def test_middle_bar_low_still_counted(self):
+        # 3-bar trade: entry bar 0, middle bar 1 (walked normally),
+        # exit bar 2 (skipped). Middle-bar low is a real experienced
+        # excursion; only the exit bar's OHLC is skipped.
+        df = _bars([
+            (99, 101, 100),        # bar 0: entry
+            (85, 102, 88),         # bar 1: MIDDLE — low counts
+            (70, 90, 88),          # bar 2: exit — OHLC IGNORED
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            exit_low_price=88.0,
+            exit_high_price=88.0,
+        )
+        assert r is not None
+        # MAE from bar 1's $85 low → -15%.
+        # Exit at $88 (-12%) is BETTER, so mae_low stays at $85.
+        assert r["mae_pct"] == pytest.approx(-15.0)
+        assert r["days_to_mae"] == 1
+
+    def test_min_and_max_of_multiple_exit_day_sells(self):
+        # Scale-out: sells at $105 and $95 on exit day. Higher seeds MFE,
+        # lower seeds MAE. Bar 2's OHLC ignored either way.
+        df = _bars([
+            (99, 101, 100),
+            (98, 103, 102),        # middle bar — small chop
+            (80, 108, 100),        # exit bar — OHLC skipped
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            exit_low_price=95.0,
+            exit_high_price=105.0,
+        )
+        assert r is not None
+        # MAE = -5% from the $95 sell (bar 1's -2% doesn't beat it).
+        assert r["mae_pct"] == pytest.approx(-5.0)
+        assert r["days_to_mae"] == 2
+        # MFE = +5% from the $105 sell (bar 1's +3% doesn't beat it).
+        assert r["mfe_pct"] == pytest.approx(5.0)
+        assert r["days_to_mfe"] == 2
+
+    def test_open_trade_no_exit_skip(self):
+        # No exit_*_price provided → last bar walks normally with full
+        # OHLC. Ensures OPEN trades keep their current behavior.
+        df = _bars([
+            (99, 101, 100),
+            (85, 100, 90),
+        ])
+        r = compute_excursions_from_frame(df, entry_price=100.0)
+        assert r is not None
+        assert r["mae_pct"] == pytest.approx(-15.0)   # bar 1's low counts
+
+    def test_same_day_round_trip_falls_through_to_entry_day_rule(self):
+        # n == 1: bar 0 IS bar N-1. Exit-day args are IGNORED (bar 0
+        # would be already handled via same_day_*_exit_price). This
+        # test verifies exit_*_price on n==1 doesn't double-count.
+        df = _bars([(90, 105, 95)])   # single bar
+        # Same-day sell at $92 (below entry) — the entry-day rule
+        # should catch it via same_day_low_exit_price. Passing
+        # exit_low_price=92 as well should NOT change the answer.
+        r_entry_only = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=92.0,
+        )
+        r_with_exit = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            same_day_low_exit_price=92.0,
+            exit_low_price=92.0,
+            exit_high_price=92.0,
+        )
+        assert r_entry_only is not None
+        assert r_with_exit is not None
+        # Same MAE either way — no double-count.
+        assert r_entry_only["mae_pct"] == pytest.approx(-8.0)
+        assert r_with_exit["mae_pct"] == pytest.approx(-8.0)
+
+    def test_retrace_updated_when_exit_undercuts_running_peak(self):
+        # Trade rips to a $120 running peak on bar 1, then trader
+        # exits at $110 on bar 2. Retrace = (110-120)/120 = -8.33%.
+        # (Bar 2 low of $70 is skipped.)
+        df = _bars([
+            (100, 102, 101),
+            (105, 120, 118),
+            (70, 115, 110),        # exit bar — OHLC skipped
+        ])
+        r = compute_excursions_from_frame(
+            df, entry_price=100.0,
+            exit_low_price=110.0,
+            exit_high_price=110.0,
+        )
+        assert r is not None
+        # Peak = 120 (bar 1's high). Exit @ 110 → retrace -8.33%.
+        assert r["max_retrace_pct"] == pytest.approx(-8.3333, abs=1e-3)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # compute_atr21_from_frame
 # ═══════════════════════════════════════════════════════════════════════

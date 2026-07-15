@@ -84,6 +84,7 @@ def fetch_candidates(
             p.name AS portfolio_name,
             s.portfolio_id,
             s.status,
+            s.closed_date,
             b1.b1_entry_date,
             b1.b1_entry_price,
             s.atr21_entry_pct,
@@ -96,7 +97,17 @@ def fetch_candidates(
             -- no sell landed on entry_date, in which case bar 0 is
             -- skipped entirely for both MAE and MFE.
             sd.same_day_low_exit_price,
-            sd.same_day_high_exit_price
+            sd.same_day_high_exit_price,
+            -- Exit-day SELL activity on closed_date (CLOSED trades
+            -- only). Under the SYMMETRIC exit-day skip rule, these
+            -- become the last-bar MAE / MFE candidates and the last
+            -- bar's OHLC is ignored — the trader was out the moment
+            -- the final SELL filled, so any lower low / higher high
+            -- that printed AFTER the exit is not part of their
+            -- position's excursion. NULL for OPEN trades or when the
+            -- close_date has no sell rows (data glitch).
+            cd.close_day_low_exit_price,
+            cd.close_day_high_exit_price
         FROM trades_summary s
         JOIN portfolios p ON s.portfolio_id = p.id
         JOIN LATERAL (
@@ -113,6 +124,13 @@ def fetch_candidates(
             -- Both extremes in a single scan of same-day sells. Sells
             -- with amount = 0 or NULL don't count (data glitches /
             -- non-executed placeholder rows).
+            --
+            -- Cast BOTH sides to ::date because trades_details.date is
+            -- a TIMESTAMP with real times (e.g. 08:36:00 from importer
+            -- flows), while b1_entry_date is also a timestamp from the
+            -- same source — same-day sells with different intraday
+            -- times would silently miss without the cast. Pre-fix,
+            -- every row returned NULL and same_day-* was never used.
             SELECT
                 MIN(NULLIF(d.amount, 0)) AS same_day_low_exit_price,
                 MAX(NULLIF(d.amount, 0)) AS same_day_high_exit_price
@@ -121,8 +139,24 @@ def fetch_candidates(
                AND d.portfolio_id = s.portfolio_id
                AND d.action = 'SELL'
                AND d.deleted_at IS NULL
-               AND d.date = b1.b1_entry_date
+               AND d.date::date = b1.b1_entry_date::date
         ) sd ON TRUE
+        LEFT JOIN LATERAL (
+            -- Symmetric to sd, for sells on the CLOSE date. Only
+            -- returns rows for CLOSED trades — the join predicate
+            -- gates on s.status. Same ::date cast rationale as sd.
+            SELECT
+                MIN(NULLIF(d.amount, 0)) AS close_day_low_exit_price,
+                MAX(NULLIF(d.amount, 0)) AS close_day_high_exit_price
+              FROM trades_details d
+             WHERE d.trade_id = s.trade_id
+               AND d.portfolio_id = s.portfolio_id
+               AND d.action = 'SELL'
+               AND d.deleted_at IS NULL
+               AND s.status = 'CLOSED'
+               AND s.closed_date IS NOT NULL
+               AND d.date::date = s.closed_date::date
+        ) cd ON TRUE
         WHERE s.deleted_at IS NULL
           AND COALESCE(s.instrument_type, 'STOCK') = 'STOCK'
     """
@@ -219,11 +253,13 @@ def compute_excursions_from_frame(
     entry_price: float,
     same_day_low_exit_price: float | None = None,
     same_day_high_exit_price: float | None = None,
+    exit_low_price: float | None = None,
+    exit_high_price: float | None = None,
 ) -> dict | None:
     """Walk the OHLC frame in date order and derive:
         mae_pct, mfe_pct, days_to_mae, days_to_mfe, max_retrace_pct
 
-    Entry-day (bar 0) treatment (post-fix):
+    Entry-day (bar 0) treatment:
       * The entry-day bar's own OHLC extremes do NOT count toward MAE
         or MFE — without intraday granularity, we can't attribute
         bar 0's low/high to a moment AFTER the trader's entry. On a
@@ -233,18 +269,31 @@ def compute_excursions_from_frame(
       * EXCEPTION: if the trader had SELL activity on entry_date, the
         fill price is a known point they were at. Same-day sell prices
         below entry seed the bar 0 MAE candidate; same-day sell prices
-        above entry seed the bar 0 MFE candidate. Same-day partial
-        sells + still holding are handled correctly — the sell price
-        is a proven touch of that level, and later bars can still
-        override with a lower low if it happens.
+        above entry seed the bar 0 MFE candidate.
       * When there's no same-day sell activity: bar 0 contributes 0 to
-        MAE and MFE. days_to_mae / days_to_mfe stay 0 while the
-        excursion is 0 (they'll flip to the correct positive integer
-        the moment a later bar prints a new extreme).
+        MAE and MFE.
 
-    Retracement measurement is unchanged: peak-to-trough decline on
-    daily high/low from bar 1 onward (bar 0's intrabar range never was
-    a give-back — it's the origination of the position).
+    Exit-day (bar N-1) treatment — SYMMETRIC to entry day:
+      * When exit_low_price / exit_high_price are provided (the trade
+        is CLOSED and its close-date sells are known), the last bar's
+        OHLC extremes are IGNORED. The trader was OUT the moment the
+        last SELL filled — any lower low or higher high that printed
+        AFTER their exit price is not part of the position's excursion.
+      * The exit price(s) themselves ARE known-touched levels: they
+        can improve mae_low (if lower than any prior bar's low) or
+        mfe_high (if higher than any prior bar's high).
+      * When exit_*_price are None (OPEN trade, or CLOSED trade with
+        no sell rows on closed_date — rare data glitch), the last bar
+        walks normally with its full OHLC. Preserves back-compat.
+      * n == 1 (same-day round-trip: entry_date == closed_date): bar 0
+        IS bar N-1, so this treatment reduces to the entry-day rule.
+        The exit_*_price args are ignored (same_day_*_exit_price
+        already covers it). Caller doesn't need to special-case n == 1.
+
+    Retracement: peak-to-trough on bars 1..N-1 low against running
+    peak. On exit day (when substituted), exit_low_price acts as the
+    "low" for retrace measurement — a sell that undercut the running
+    peak IS a give-back the position experienced before closing.
 
     Returns None when the frame is empty or entry_price is not
     positive. Callers guard the "any input missing" case upstream, so
@@ -280,11 +329,22 @@ def compute_excursions_from_frame(
     running_peak = float(highs[0])
     max_retrace_pct = 0.0
 
-    # Start MAE / MFE tracking from bar 1. Bar 0's OHLC extremes are
-    # deliberately excluded — see the docstring "Entry-day treatment"
-    # block. Same-day activity has already been folded into mae_low /
-    # mfe_high above.
-    for i in range(1, n):
+    # Exit-day substitution: when the trade is CLOSED and we know its
+    # close-date sell prices, treat bar N-1 as a "known touch only"
+    # bar (symmetric to bar 0). Only apply when n > 1; otherwise bar 0
+    # already handles the same-day round-trip via same_day_*_exit_price.
+    has_exit_day_rule = (
+        n > 1
+        and (
+            (exit_low_price is not None and exit_low_price > 0)
+            or (exit_high_price is not None and exit_high_price > 0)
+        )
+    )
+    last_walk_i = n - 2 if has_exit_day_rule else n - 1
+
+    # Middle bars — full OHLC in play. On OPEN trades this is bars
+    # 1..N-1; on CLOSED trades with exit-day substitution it's 1..N-2.
+    for i in range(1, last_walk_i + 1):
         low_i = float(lows[i])
         high_i = float(highs[i])
         if low_i < mae_low:
@@ -301,6 +361,26 @@ def compute_excursions_from_frame(
                 max_retrace_pct = retrace
         if high_i > running_peak:
             running_peak = high_i
+
+    # Exit-day treatment — the exit price(s) are known-touched. Lower
+    # of the day's sells → potential MAE candidate; higher → MFE.
+    if has_exit_day_rule:
+        exit_day_idx = n - 1
+        if exit_low_price is not None and exit_low_price > 0:
+            p_low = float(exit_low_price)
+            if p_low < mae_low:
+                mae_low = p_low
+                days_to_mae = exit_day_idx
+            # A sell that undercut the running peak IS a give-back.
+            if running_peak > 0:
+                retrace = (p_low - running_peak) / running_peak * 100.0
+                if retrace < max_retrace_pct:
+                    max_retrace_pct = retrace
+        if exit_high_price is not None and exit_high_price > 0:
+            p_high = float(exit_high_price)
+            if p_high > mfe_high:
+                mfe_high = p_high
+                days_to_mfe = exit_day_idx
 
     return {
         "mae_pct":         round((mae_low  - entry_price) / entry_price * 100.0, 4),
@@ -332,25 +412,39 @@ def compute_excursions(
     entry_price: float,
     same_day_low_exit_price: float | None = None,
     same_day_high_exit_price: float | None = None,
+    closed_date: date | None = None,
+    exit_low_price: float | None = None,
+    exit_high_price: float | None = None,
 ) -> dict | None:
-    """Fetch [entry_date, today] daily OHLC and derive MAE/MFE/retrace.
+    """Fetch daily OHLC and derive MAE/MFE/retrace.
+
+    Window: [entry_date, closed_date] when the trade is CLOSED (both
+    inclusive), else [entry_date, today]. Closing the window at
+    closed_date is required for the exit-day skip rule — without it,
+    bar N-1 would be TODAY's bar (post-exit), not the exit day.
 
     Returns None when yfinance has no data for the window (e.g. very
     recent same-day entries before end-of-day tape settles). Callers
     treat None as a skip — the next reconcile run picks it up when
     data lands.
 
-    same_day_*_exit_price args are optional; when passed, they seed the
-    entry-day (bar 0) MAE / MFE candidates so a same-day stop-out or
-    same-day partial sell registers correctly. See the docstring on
-    compute_excursions_from_frame for the full entry-day rule.
+    same_day_*_exit_price args seed the entry-day (bar 0) MAE / MFE
+    candidates for same-day partial sells.
+
+    exit_*_price args + closed_date together trigger the exit-day skip
+    rule: the last bar's OHLC extremes are ignored, exit prices act as
+    known-touched levels. See compute_excursions_from_frame's docstring
+    for the full rule.
     """
-    end = date.today() + timedelta(days=1)  # yfinance end is exclusive
-    df = _download_history(ticker, entry_date, end)
+    end_anchor = (closed_date + timedelta(days=1)) if closed_date is not None \
+        else (date.today() + timedelta(days=1))  # yfinance end is exclusive
+    df = _download_history(ticker, entry_date, end_anchor)
     return compute_excursions_from_frame(
         df, entry_price,
         same_day_low_exit_price=same_day_low_exit_price,
         same_day_high_exit_price=same_day_high_exit_price,
+        exit_low_price=exit_low_price if closed_date is not None else None,
+        exit_high_price=exit_high_price if closed_date is not None else None,
     )
 
 
@@ -488,6 +582,26 @@ def reconcile_open_positions(
             same_day_low_f = None
             same_day_high_f = None
 
+        # Exit-day (close_date) sell prices — trigger the symmetric
+        # exit-day skip rule for CLOSED trades. NULL for OPEN trades or
+        # when close_date has no sell rows (defensive: rare data glitch).
+        closed_date_raw = row.get("closed_date")
+        exit_low = row.get("close_day_low_exit_price")
+        exit_high = row.get("close_day_high_exit_price")
+        closed_date_d: date | None = None
+        if closed_date_raw is not None:
+            closed_date_d = (
+                closed_date_raw.date() if isinstance(closed_date_raw, datetime)
+                else closed_date_raw if isinstance(closed_date_raw, date)
+                else pd.to_datetime(closed_date_raw).date()
+            )
+        try:
+            exit_low_f = float(exit_low) if exit_low is not None else None
+            exit_high_f = float(exit_high) if exit_high is not None else None
+        except (TypeError, ValueError):
+            exit_low_f = None
+            exit_high_f = None
+
         try:
             if sleep:
                 time.sleep(sleep)
@@ -495,6 +609,9 @@ def reconcile_open_positions(
                 ticker, entry_date, entry_price,
                 same_day_low_exit_price=same_day_low_f,
                 same_day_high_exit_price=same_day_high_f,
+                closed_date=closed_date_d,
+                exit_low_price=exit_low_f,
+                exit_high_price=exit_high_f,
             )
         except Exception as exc:
             counters["errors"] += 1
