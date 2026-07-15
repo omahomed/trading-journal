@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type LotClosure, type Strategy } from "@/lib/api";
 import { matchesAnyTradeQuery } from "@/lib/trade-search";
@@ -542,6 +542,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   const [txnFilter, setTxnFilter] = useState<"all" | "open" | "closed">("all");
   const [analysisOpen, setAnalysisOpen] = useState<string | null>(null);
   const [liveChartOpen, setLiveChartOpen] = useState<string | null>(null);
+  // Lot-closure drilldown state — one row expanded at a time across the
+  // whole page. Key is `${trade_id}|${trx_id}` so a per-trade toggle
+  // doesn't collide with the same trx_id in another trade.
+  const [expandedTxn, setExpandedTxn] = useState<string | null>(null);
 
   // Closed-trade edit modal. Hoisted to page level so a single modal
   // instance handles every Edit button in every trade card's Transaction
@@ -1664,9 +1668,34 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                             {filteredRows.map((row, i) => {
                               const tx = row.tx;
                               const txStop = parseFloat(String(tx.stop_loss || 0));
+                              // Lot-closure drilldown: SELL rows get their
+                              // BUY-lot breakdown; BUY rows get their SELL
+                              // consumption. Rows without any closure records
+                              // (data-only entries, e.g. the 6 deferred trades)
+                              // silently render as non-drillable.
+                              const rowTrxId = String((tx as any).trx_id || "");
+                              const drillKey = `${trade.trade_id}|${rowTrxId}`;
+                              const matchingClosures = row.isSell
+                                ? tradeClosures.filter(c => c.sell_trx_id === rowTrxId)
+                                : tradeClosures.filter(c => c.buy_trx_id === rowTrxId);
+                              const canDrill = matchingClosures.length > 0;
+                              const isDrillOpen = canDrill && expandedTxn === drillKey;
                               return (
-                                <tr key={i} style={{ borderBottom: i < filteredRows.length - 1 ? "1px solid var(--border)" : "none" }}>
-                                  <td className="px-2.5 py-2 font-semibold" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-3)" }}>{(tx as any).trx_id || ""}</td>
+                                <React.Fragment key={i}>
+                                <tr style={{ borderBottom: i < filteredRows.length - 1 ? "1px solid var(--border)" : "none",
+                                             background: isDrillOpen ? "color-mix(in oklab, #0d6efd 4%, transparent)" : undefined }}>
+                                  <td className="px-2.5 py-2 font-semibold" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-3)" }}>
+                                    {canDrill ? (
+                                      <button type="button"
+                                              onClick={() => setExpandedTxn(isDrillOpen ? null : drillKey)}
+                                              className="inline-flex items-center gap-1 cursor-pointer hover:brightness-125"
+                                              style={{ background: "none", border: "none", padding: 0, font: "inherit", color: "inherit" }}
+                                              title={row.isSell ? "Show BUY lots this SELL consumed" : "Show SELLs that consumed this BUY lot"}>
+                                        <span style={{ fontSize: 9, color: "var(--ink-4)", width: 8, display: "inline-block", textAlign: "center" }}>{isDrillOpen ? "▾" : "▸"}</span>
+                                        {rowTrxId}
+                                      </button>
+                                    ) : rowTrxId}
+                                  </td>
                                   <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontSize: 10, color: "var(--ink-4)" }}>{String(tx.date || "").slice(0, 10)}</td>
                                   <td className="px-2.5 py-2 font-semibold" style={{ fontFamily: mono, fontSize: 11 }}>{tx.ticker || trade.ticker}</td>
                                   <td className="px-2.5 py-2">
@@ -1725,6 +1754,20 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                                     </button>
                                   </td>
                                 </tr>
+                                {isDrillOpen && (
+                                  <tr style={{ borderBottom: i < filteredRows.length - 1 ? "1px solid var(--border)" : "none" }}>
+                                    <td colSpan={17} style={{ padding: 0, background: "color-mix(in oklab, #0d6efd 3%, var(--surface-2))" }}>
+                                      <LotClosureDrilldown
+                                        isSell={row.isSell}
+                                        tx={tx}
+                                        closures={matchingClosures}
+                                        matchMethod={(tx as any).match_method}
+                                        allDetails={txns}
+                                        multiplier={multiplier} />
+                                    </td>
+                                  </tr>
+                                )}
+                                </React.Fragment>
                               );
                             })}
                           </tbody>
@@ -2008,6 +2051,188 @@ export function TradeJournal({ navColor }: { navColor: string }) {
             </div>
           </div>
           <style jsx global>{`@keyframes cmdk-rise { from { transform: translateY(-10px) scale(0.97); opacity: 0; } }`}</style>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// LotClosureDrilldown — expanded row on click of a Trx ID in the
+// Transaction History table. Shows two flavors:
+//   * SELL row → the BUY lots this sell consumed (LIFO/HCFO breakdown)
+//   * BUY row  → the SELLs that consumed shares from this lot + how many
+//     shares of this lot remain open.
+// Data source: LotClosure[] (persisted from lot_closures table,
+// migration 017) filtered to the specific trx_id.
+// ═══════════════════════════════════════════════════════════════════════
+
+function LotClosureDrilldown({ isSell, tx, closures, matchMethod, allDetails, multiplier }: {
+  isSell: boolean;
+  tx: TradeDetail;
+  closures: LotClosure[];
+  matchMethod?: string | null;
+  allDetails: TradeDetail[];
+  multiplier: number;
+}) {
+  const mono = "var(--font-jetbrains), monospace";
+  const rowTrxId = String((tx as any).trx_id || "");
+  const method = (matchMethod && String(matchMethod).trim()) || "LIFO";
+
+  // Fast lookup: trx_id → detail row (for showing counterparty dates).
+  const byTrxId = useMemo(() => {
+    const m = new Map<string, TradeDetail>();
+    for (const d of allDetails) m.set(String((d as any).trx_id || ""), d);
+    return m;
+  }, [allDetails]);
+
+  const totalShares = closures.reduce((a, c) => a + Number(c.shares || 0), 0);
+  const totalPl = closures.reduce((a, c) => a + Number(c.realized_pl || 0), 0);
+
+  if (isSell) {
+    // SELL drilldown: "S6 consumed 100 sh from A5 + 25 sh from A3 + 10 sh from A2"
+    const sellDate = String(tx.date || "").slice(0, 10);
+    const sellPrice = parseFloat(String(tx.amount || 0));
+    const sellShares = parseFloat(String(tx.shares || 0));
+    return (
+      <div className="px-6 py-3">
+        <div className="text-[11px] mb-2" style={{ color: "var(--ink-3)" }}>
+          <span className="font-semibold" style={{ fontFamily: mono, color: "#dc2626" }}>{rowTrxId}</span>
+          {" "}({sellDate}) — <span style={{ fontFamily: mono }}>{Math.abs(sellShares)} sh</span> @ <span style={{ fontFamily: mono }}>{formatCurrency(sellPrice)}</span>
+          {" "}·{" "}
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                style={{ background: method === "HCFO" ? "rgba(245,159,0,0.14)" : "rgba(99,102,241,0.14)",
+                         color: method === "HCFO" ? "#d97706" : "#6366f1" }}>
+            {method}
+          </span>
+          {" "}· realized: <span className="font-semibold privacy-mask"
+                                style={{ fontFamily: mono, color: totalPl >= 0 ? "#08a86b" : "#e5484d" }}>
+            {formatCurrency(totalPl, { showSign: true })}
+          </span>
+        </div>
+        <div className="overflow-x-auto rounded-[6px]" style={{ border: "1px solid var(--border)", background: "var(--surface)" }}>
+          <table className="w-full text-[10.5px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--surface-2)" }}>
+                <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>BUY Trx</th>
+                <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Buy Date</th>
+                <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Shares</th>
+                <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Buy Price</th>
+                <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Sell Price</th>
+                <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Per-lot %</th>
+                <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Realized P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {closures.map((c, ci) => {
+                const buyDetail = byTrxId.get(c.buy_trx_id);
+                const buyDate = String(buyDetail?.date || "").slice(0, 10);
+                const perLotPct = c.buy_price > 0 ? ((c.sell_price - c.buy_price) / c.buy_price) * 100 : 0;
+                return (
+                  <tr key={ci} style={{ borderBottom: ci < closures.length - 1 ? "1px solid var(--border)" : "none" }}>
+                    <td className="px-2 py-1 font-semibold" style={{ fontFamily: mono, color: "#16a34a" }}>{c.buy_trx_id}</td>
+                    <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{buyDate}</td>
+                    <td className="px-2 py-1 text-right" style={{ fontFamily: mono }}>{c.shares}</td>
+                    <td className="px-2 py-1 text-right privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(c.buy_price)}</td>
+                    <td className="px-2 py-1 text-right privacy-mask" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{formatCurrency(c.sell_price)}</td>
+                    <td className="px-2 py-1 text-right" style={{ fontFamily: mono, color: perLotPct >= 0 ? "#08a86b" : "#e5484d" }}>
+                      {perLotPct >= 0 ? "+" : ""}{perLotPct.toFixed(2)}%
+                    </td>
+                    <td className="px-2 py-1 text-right font-semibold privacy-mask"
+                        style={{ fontFamily: mono, color: c.realized_pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                      {formatCurrency(c.realized_pl, { showSign: true })}
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr style={{ background: "var(--surface-2)" }}>
+                <td className="px-2 py-1 font-bold text-[9px] uppercase" style={{ color: "var(--ink-3)" }} colSpan={2}>Total</td>
+                <td className="px-2 py-1 text-right font-bold" style={{ fontFamily: mono }}>{totalShares}</td>
+                <td colSpan={3}></td>
+                <td className="px-2 py-1 text-right font-bold privacy-mask"
+                    style={{ fontFamily: mono, color: totalPl >= 0 ? "#08a86b" : "#e5484d" }}>
+                  {formatCurrency(totalPl, { showSign: true })}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {multiplier > 1 && (
+          <div className="text-[10px] mt-1.5 italic" style={{ color: "var(--ink-4)" }}>
+            Contract multiplier {multiplier}× — realized P&L reflects notional impact.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // BUY drilldown: "B1 lot: 35 of 150 sh sold across S2, S4, S6"
+  const buyDate = String(tx.date || "").slice(0, 10);
+  const buyPrice = parseFloat(String(tx.amount || 0));
+  const buyShares = parseFloat(String(tx.shares || 0));
+  const soldShares = totalShares;
+  const remaining = Math.max(0, buyShares - soldShares);
+  return (
+    <div className="px-6 py-3">
+      <div className="text-[11px] mb-2" style={{ color: "var(--ink-3)" }}>
+        <span className="font-semibold" style={{ fontFamily: mono, color: "#16a34a" }}>{rowTrxId}</span>
+        {" "}({buyDate}) — <span style={{ fontFamily: mono }}>{buyShares} sh</span> @ <span style={{ fontFamily: mono }}>{formatCurrency(buyPrice)}</span>
+        {" "}·{" "}
+        <span style={{ fontFamily: mono }}>{soldShares} sold</span> · <span style={{ fontFamily: mono, color: remaining > 0 ? "#08a86b" : "var(--ink-4)" }}>{remaining} remaining</span>
+        {" "}· realized so far: <span className="font-semibold privacy-mask"
+                                       style={{ fontFamily: mono, color: totalPl >= 0 ? "#08a86b" : "#e5484d" }}>
+          {formatCurrency(totalPl, { showSign: true })}
+        </span>
+      </div>
+      <div className="overflow-x-auto rounded-[6px]" style={{ border: "1px solid var(--border)", background: "var(--surface)" }}>
+        <table className="w-full text-[10.5px]" style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "var(--surface-2)" }}>
+              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>SELL Trx</th>
+              <th className="text-left px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Sell Date</th>
+              <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Shares</th>
+              <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Sell Price</th>
+              <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Per-lot %</th>
+              <th className="text-right px-2 py-1.5 text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Realized P&L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {closures.map((c, ci) => {
+              const sellDetail = byTrxId.get(c.sell_trx_id);
+              const sellDate = String(sellDetail?.date || "").slice(0, 10);
+              const perLotPct = c.buy_price > 0 ? ((c.sell_price - c.buy_price) / c.buy_price) * 100 : 0;
+              return (
+                <tr key={ci} style={{ borderBottom: ci < closures.length - 1 ? "1px solid var(--border)" : "none" }}>
+                  <td className="px-2 py-1 font-semibold" style={{ fontFamily: mono, color: "#dc2626" }}>{c.sell_trx_id}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-4)" }}>{sellDate}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontFamily: mono }}>{c.shares}</td>
+                  <td className="px-2 py-1 text-right privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(c.sell_price)}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontFamily: mono, color: perLotPct >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {perLotPct >= 0 ? "+" : ""}{perLotPct.toFixed(2)}%
+                  </td>
+                  <td className="px-2 py-1 text-right font-semibold privacy-mask"
+                      style={{ fontFamily: mono, color: c.realized_pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {formatCurrency(c.realized_pl, { showSign: true })}
+                  </td>
+                </tr>
+              );
+            })}
+            <tr style={{ background: "var(--surface-2)" }}>
+              <td className="px-2 py-1 font-bold text-[9px] uppercase" style={{ color: "var(--ink-3)" }} colSpan={2}>Total sold</td>
+              <td className="px-2 py-1 text-right font-bold" style={{ fontFamily: mono }}>{totalShares}</td>
+              <td colSpan={2}></td>
+              <td className="px-2 py-1 text-right font-bold privacy-mask"
+                  style={{ fontFamily: mono, color: totalPl >= 0 ? "#08a86b" : "#e5484d" }}>
+                {formatCurrency(totalPl, { showSign: true })}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {remaining > 0 && (
+        <div className="text-[10px] mt-1.5" style={{ color: "var(--ink-4)" }}>
+          <span className="font-semibold" style={{ color: "#08a86b" }}>{remaining} shares</span> of this lot remain OPEN — will be closed by future SELLs.
         </div>
       )}
     </div>
