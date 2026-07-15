@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SELL_RULES, SELL_RULE_LABELS, RULE_HIERARCHY } from "./trade-rules";
+import { SELL_RULES, SELL_RULE_LABELS, RULE_HIERARCHY, BUY_RULE_LABELS } from "./trade-rules";
 
 describe("SELL_RULES canonical taxonomy", () => {
   it("has exactly 16 entries (sr1..sr13 + sr8.1/sr8.2/sr8.3 cascade sub-rules)", () => {
@@ -107,6 +107,28 @@ describe("SELL_RULES — glossary content fields", () => {
     expect(sr8!.mechanics).toContain("Grateful Dead");
   });
 });
+
+describe("BUY_RULE_LABELS canonical taxonomy", () => {
+  it("is exported as a readonly array of strings (hoisted from 4 components)", () => {
+    expect(Array.isArray(BUY_RULE_LABELS)).toBe(true);
+    expect(BUY_RULE_LABELS.length).toBeGreaterThan(0);
+    for (const label of BUY_RULE_LABELS) {
+      expect(typeof label).toBe("string");
+      expect(label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("starts with br1.x base breakouts + includes br13.x MO RS Green pair", () => {
+    expect(BUY_RULE_LABELS[0]).toBe("br1.1 Consolidation");
+    expect(BUY_RULE_LABELS).toContain("br13.1 MO RS Green — Initial Entry");
+    expect(BUY_RULE_LABELS).toContain("br13.2 MO RS Green — Reset Entry");
+  });
+
+  it("has no duplicate entries", () => {
+    expect(new Set(BUY_RULE_LABELS).size).toBe(BUY_RULE_LABELS.length);
+  });
+});
+
 
 describe("RULE_HIERARCHY", () => {
   it("has 6 entries", () => {
