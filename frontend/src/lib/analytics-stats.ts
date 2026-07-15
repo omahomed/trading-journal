@@ -813,6 +813,151 @@ export function repeatOffenders(
 
 
 // ────────────────────────────────────────────────────────────────────
+// Confluence effect — buy-rule pair analysis (Migration 047)
+// ────────────────────────────────────────────────────────────────────
+
+export interface ConfluenceRow {
+  primary: string;
+  confluence: string;
+  n: number;
+  wins: number;
+  winPct: number;
+  netPl: number;
+  avgPlPerTrade: number;
+  /** Primary-alone baseline computed over ALL trades tagged with this
+   *  primary rule (regardless of whether they had confluence). Used to
+   *  compute lift — is the pair BETTER than the primary on its own? */
+  primaryAloneN: number;
+  primaryAloneWinPct: number;
+  primaryAloneAvgPl: number;
+  /** Lift = pair - primary_alone. Positive means the confluence tag
+   *  added edge; negative means it hurt or was noise. */
+  liftWinPct: number;
+  liftAvgPl: number;
+  trades: TradePosition[];
+}
+
+/** Extract a trade's rules array with a legacy fallback. Prefers
+ *  `buy_rules` (B1's array, canonical for the campaign) over `rules`
+ *  (summary's denormalized copy); either falls through to `[rule]`
+ *  when the array is missing/empty. */
+function _tradeRules(t: TradePosition): string[] {
+  const anyT = t as any;
+  const buy = Array.isArray(anyT.buy_rules) ? anyT.buy_rules as string[] : null;
+  if (buy && buy.length > 0) return buy.map(r => String(r).trim()).filter(Boolean);
+  const rls = Array.isArray(anyT.rules) ? anyT.rules as string[] : null;
+  if (rls && rls.length > 0) return rls.map(r => String(r).trim()).filter(Boolean);
+  const scalar = String(anyT.rule || "").trim();
+  return scalar ? [scalar] : [];
+}
+
+/** Group trades by (primary × each confluence rule) and compare each
+ *  pair against the primary-alone baseline. Answers "does the
+ *  confluence tag add edge or is it noise?"
+ *
+ *  Emits one row per unique pair. A trade tagged
+ *  [br8.1, br1.2, br3.1] contributes to TWO rows:
+ *    - (br8.1, br1.2)
+ *    - (br8.1, br3.1)
+ *  It does NOT combine into a triple — that would explode the
+ *  cardinality and dilute n. Pair-level is the actionable granularity.
+ *
+ *  Baseline uses ALL trades with the same primary — including trades
+ *  where confluence was empty AND trades where confluence was some
+ *  other tag. That's the honest denominator: "how does the setup
+ *  perform when THIS confluence is present vs. on average?"
+ *
+ *  Sort: biggest positive win-rate lift first. Rows below minN
+ *  filtered out to avoid single-trade noise. */
+export function confluenceAnalysis(
+  trades: TradePosition[],
+  opts: { minN?: number; pnlOf?: (t: TradePosition) => number } = {},
+): ConfluenceRow[] {
+  const minN = opts.minN ?? 3;
+  const pnlOf = opts.pnlOf ?? realized;
+
+  // Primary-alone baseline: every trade tagged with this primary rule,
+  // regardless of confluence. Used as the fair denominator.
+  const byPrimary = new Map<string, TradePosition[]>();
+  for (const t of trades) {
+    const rls = _tradeRules(t);
+    const primary = rls[0];
+    if (!primary) continue;
+    const list = byPrimary.get(primary);
+    if (list) list.push(t);
+    else byPrimary.set(primary, [t]);
+  }
+
+  // Pair aggregation: one entry per (primary, confluence_i) combination.
+  const pairMap = new Map<string, {
+    primary: string;
+    confluence: string;
+    trades: TradePosition[];
+  }>();
+  for (const t of trades) {
+    const rls = _tradeRules(t);
+    const primary = rls[0];
+    if (!primary || rls.length < 2) continue;
+    // Dedupe within a single trade (a duplicated confluence tag would
+    // double-count the same trade in one pair otherwise).
+    const seenPairs = new Set<string>();
+    for (const conf of rls.slice(1)) {
+      const key = `${primary}||${conf}`;
+      if (seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      const cell = pairMap.get(key) ?? { primary, confluence: conf, trades: [] };
+      cell.trades.push(t);
+      pairMap.set(key, cell);
+    }
+  }
+
+  const mean = (arr: number[]): number =>
+    arr.length > 0 ? arr.reduce((a, v) => a + v, 0) / arr.length : 0;
+
+  const rows: ConfluenceRow[] = [];
+  for (const cell of pairMap.values()) {
+    if (cell.trades.length < minN) continue;
+    const pairPls = cell.trades.map(pnlOf);
+    const wins = cell.trades.filter(t => pnlOf(t) > 0);
+    const netPl = pairPls.reduce((a, v) => a + v, 0);
+    const winPct = (wins.length / cell.trades.length) * 100;
+    const avgPl = mean(pairPls);
+
+    const baseline = byPrimary.get(cell.primary) ?? [];
+    const baselinePls = baseline.map(pnlOf);
+    const baselineWins = baseline.filter(t => pnlOf(t) > 0);
+    const baselineWinPct = baseline.length > 0 ? (baselineWins.length / baseline.length) * 100 : 0;
+    const baselineAvgPl = mean(baselinePls);
+
+    rows.push({
+      primary: cell.primary,
+      confluence: cell.confluence,
+      n: cell.trades.length,
+      wins: wins.length,
+      winPct,
+      netPl,
+      avgPlPerTrade: avgPl,
+      primaryAloneN: baseline.length,
+      primaryAloneWinPct: baselineWinPct,
+      primaryAloneAvgPl: baselineAvgPl,
+      liftWinPct: winPct - baselineWinPct,
+      liftAvgPl: avgPl - baselineAvgPl,
+      trades: cell.trades,
+    });
+  }
+
+  // Sort by lift-win-pct desc — biggest positive edge surfaces first.
+  // Ties broken by liftAvgPl desc, then by n desc.
+  rows.sort((a, b) => {
+    if (b.liftWinPct !== a.liftWinPct) return b.liftWinPct - a.liftWinPct;
+    if (b.liftAvgPl !== a.liftAvgPl) return b.liftAvgPl - a.liftAvgPl;
+    return b.n - a.n;
+  });
+  return rows;
+}
+
+
+// ────────────────────────────────────────────────────────────────────
 // Setup scorecard (per-rule profit factor + auto-verdict)
 // ────────────────────────────────────────────────────────────────────
 
