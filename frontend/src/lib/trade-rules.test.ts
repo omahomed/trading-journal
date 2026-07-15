@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import { SELL_RULES, SELL_RULE_LABELS, RULE_HIERARCHY } from "./trade-rules";
 
 describe("SELL_RULES canonical taxonomy", () => {
-  it("has exactly 13 entries", () => {
-    expect(SELL_RULES.length).toBe(13);
+  it("has exactly 16 entries (sr1..sr13 + sr8.1/sr8.2/sr8.3 cascade sub-rules)", () => {
+    expect(SELL_RULES.length).toBe(16);
   });
 
-  it("uses sequential sr1..sr13 codes in order", () => {
-    const expected = Array.from({ length: 13 }, (_, i) => `sr${i + 1}`);
-    expect(SELL_RULES.map((r) => r.code)).toEqual(expected);
+  it("uses codes sr1..sr13 with sr8.1/sr8.2/sr8.3 inserted after sr8", () => {
+    expect(SELL_RULES.map((r) => r.code)).toEqual([
+      "sr1", "sr2", "sr3", "sr4", "sr5", "sr6", "sr7", "sr8",
+      "sr8.1", "sr8.2", "sr8.3",
+      "sr9", "sr10", "sr11", "sr12", "sr13",
+    ]);
   });
 
   it("matches the locked canonical descriptions", () => {
@@ -21,6 +24,9 @@ describe("SELL_RULES canonical taxonomy", () => {
       "8e Momentum Trim",
       "Holding Winners - 21e Violation",
       "Big Cushion Sell Rule",
+      "SR8 Quick Trim",
+      "SR8 Quicksand Trim",
+      "SR8 Dreadful Dead",
       "Failed Breakout",
       "Earnings Exit",
       "BE Stop Out (moved at +10%)",
@@ -50,7 +56,10 @@ describe("SELL_RULES canonical taxonomy", () => {
 describe("SELL_RULE_LABELS — DB string format", () => {
   it("formats each label as `${code} ${description}`", () => {
     expect(SELL_RULE_LABELS[0]).toBe("sr1 Capital Protection");
-    expect(SELL_RULE_LABELS[12]).toBe("sr13 Change of Character");
+    expect(SELL_RULE_LABELS[SELL_RULE_LABELS.length - 1]).toBe("sr13 Change of Character");
+    expect(SELL_RULE_LABELS).toContain("sr8.1 SR8 Quick Trim");
+    expect(SELL_RULE_LABELS).toContain("sr8.2 SR8 Quicksand Trim");
+    expect(SELL_RULE_LABELS).toContain("sr8.3 SR8 Dreadful Dead");
   });
 
   it("has the same length as SELL_RULES", () => {
@@ -79,9 +88,9 @@ describe("SELL_RULES — glossary content fields", () => {
     expect(sr4!.mechanics).toBeUndefined();
   });
 
-  it("the other 12 rules all have mechanics", () => {
+  it("every rule except sr4 has mechanics (15 of 16)", () => {
     const withMechanics = SELL_RULES.filter((r) => r.mechanics);
-    expect(withMechanics.length).toBe(12);
+    expect(withMechanics.length).toBe(15);
   });
 
   it("sr7 mechanics contains the cushion-tier GFM table", () => {
