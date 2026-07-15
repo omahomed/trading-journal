@@ -644,6 +644,30 @@ describe("setupScorecard", () => {
     expect(rows[0].verdict).toBe("core");
   });
 
+  test("confluenceTradeCount tallies trades with ≥ 1 confluence tag", () => {
+    const trades = [
+      // 2 trades in rule 'X' with confluence, 3 without
+      closed({ rule: "X", realized_pl: 10, rules: ["X", "conf1"] }),
+      closed({ rule: "X", realized_pl: 10, rules: ["X", "conf2"] }),
+      closed({ rule: "X", realized_pl: 10, rules: ["X"] }),
+      closed({ rule: "X", realized_pl: 10, rules: ["X"] }),
+      closed({ rule: "X", realized_pl: 10 }),   // no rules array → no confluence
+    ];
+    const row = setupScorecard(trades as any)[0];
+    expect(row.n).toBe(5);
+    expect(row.confluenceTradeCount).toBe(2);
+  });
+
+  test("confluenceTradeCount prefers buy_rules over rules", () => {
+    const trades = Array.from({ length: 5 }, () => closed({
+      rule: "X", realized_pl: 10,
+      rules: ["X"],                     // no confluence per summary copy
+      buy_rules: ["X", "conf"],         // but B1 has confluence — canonical
+    }));
+    const row = setupScorecard(trades as any)[0];
+    expect(row.confluenceTradeCount).toBe(5);
+  });
+
   test("empty rule → '(unlabeled)' bucket", () => {
     const trades = Array.from({ length: 5 }, (_, i) => closed({ trade_id: `T${i}`, rule: "", realized_pl: 10 }));
     expect(setupScorecard(trades)[0].setup).toBe("(unlabeled)");

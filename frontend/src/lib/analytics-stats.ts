@@ -976,6 +976,12 @@ export interface SetupScorecardRow {
   expectancy: number;
   avgHoldDays: number | null;
   verdict: SetupVerdict;
+  /** Migration 047: how many trades in this row carry ≥ 1 confluence
+   *  tag on their rules array. Powers the "+N conf" badge on the
+   *  Setup Scorecard — a quick visual link from a setup to the
+   *  Confluence Effect card without recomputing. Uses `buy_rules`
+   *  first (canonical B1 array) with fallback to `rules`. */
+  confluenceTradeCount: number;
   /** Constituent trades — enables the drill-down modal. */
   trades: TradePosition[];
 }
@@ -1013,6 +1019,13 @@ export function setupScorecard(
     if (list) list.push(t);
     else byRule.set(r, [t]);
   }
+  const hasConfluence = (t: TradePosition): boolean => {
+    const anyT = t as any;
+    const arr = Array.isArray(anyT.buy_rules) && anyT.buy_rules.length > 0
+      ? anyT.buy_rules
+      : Array.isArray(anyT.rules) ? anyT.rules : [];
+    return arr.filter((r: any) => r != null && String(r).trim() !== "").length > 1;
+  };
   const rows: SetupScorecardRow[] = [];
   for (const [setup, arr] of byRule.entries()) {
     const wins = arr.filter(t => pnlOf(t) > 0);
@@ -1022,6 +1035,7 @@ export function setupScorecard(
     const netPl = arr.reduce((a, t) => a + pnlOf(t), 0);
     const pf = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
     const expectancy = arr.length > 0 ? netPl / arr.length : 0;
+    const confluenceTradeCount = arr.filter(hasConfluence).length;
     const holds = arr.map(holdDays).filter((d): d is number => d !== null);
     const avgHoldDays = holds.length > 0 ? holds.reduce((a, b) => a + b, 0) / holds.length : null;
     const winPct = arr.length > 0 ? (wins.length / arr.length) * 100 : 0;
@@ -1034,7 +1048,9 @@ export function setupScorecard(
     rows.push({
       setup, n: arr.length, wins: wins.length, losses: losses.length,
       winPct, grossWin, grossLoss, netPl, profitFactor: pf,
-      expectancy, avgHoldDays, verdict, trades: arr,
+      expectancy, avgHoldDays, verdict,
+      confluenceTradeCount,
+      trades: arr,
     });
   }
   rows.sort((a, b) => {

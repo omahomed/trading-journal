@@ -3191,6 +3191,18 @@ function ScenariosTab({ trades, journal: _journal, year, cohort, navColor: _navC
                       <td className="px-3 py-2 font-semibold" style={{ color: "var(--ink)" }}>
                         <span style={{ display: "inline-block", width: 14, textAlign: "center", color: "var(--ink-4)" }}>{isOpen ? "▾" : "▸"}</span>
                         {r.setup}
+                        {r.confluenceTradeCount > 0 && (
+                          <span className="ml-2 inline-flex items-center h-[18px] px-1.5 rounded-[5px] text-[10px] font-medium"
+                                title={`${r.confluenceTradeCount} of ${r.n} trades have confluence tags — see the Confluence Effect card on the Overview tab`}
+                                style={{
+                                  background: "color-mix(in oklab, #6366f1 10%, transparent)",
+                                  color: "#6366f1",
+                                  border: "1px solid color-mix(in oklab, #6366f1 20%, var(--border))",
+                                  fontFamily: mono,
+                                }}>
+                            +{r.confluenceTradeCount} conf
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
                       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.winPct.toFixed(0)}%</td>

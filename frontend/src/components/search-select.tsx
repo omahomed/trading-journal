@@ -26,7 +26,9 @@ export type SearchSelectOption =
 
 export function SearchSelect({ value, onChange, options, placeholder, disabled }: {
   value: string; onChange: (v: string) => void;
-  options: SearchSelectOption[]; placeholder?: string; disabled?: boolean;
+  // readonly accepted so `as const` arrays from @/lib/trade-rules
+  // (BUY_RULE_LABELS, SELL_RULE_LABELS) pass without spreading.
+  options: readonly SearchSelectOption[]; placeholder?: string; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
