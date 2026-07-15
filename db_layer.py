@@ -386,6 +386,10 @@ def load_summary(portfolio_name, status=None):
                     s.value AS "Value",
                     s.stop_loss AS "Stop_Loss",
                     s.rule AS "Rule",
+                    -- Migration 047: full ordered buy-rule confluence array.
+                    -- rules[0] mirrors s.rule (primary); rules[1..] are
+                    -- confluence tags for display / future analytics.
+                    s.rules AS "Rules",
                     s.buy_notes AS "Buy_Notes",
                     s.sell_notes AS "Sell_Notes",
                     s.risk_budget AS "Risk_Budget",
@@ -407,6 +411,20 @@ def load_summary(portfolio_name, status=None):
                          LIMIT 1),
                         s.rule
                     ) AS "Buy_Rule",
+                    -- Migration 047: B1's confluence array. Same convention
+                    -- as Buy_Rule above — earliest BUY (date ASC) wins,
+                    -- falls back to s.rules if no BUY row exists.
+                    COALESCE(
+                        (SELECT d.rules
+                         FROM trades_details d
+                         WHERE d.trade_id = s.trade_id
+                           AND d.portfolio_id = s.portfolio_id
+                           AND d.action = 'BUY'
+                           AND d.deleted_at IS NULL
+                         ORDER BY d.date ASC
+                         LIMIT 1),
+                        s.rules
+                    ) AS "Buy_Rules",
                     (SELECT d.amount
                      FROM trades_details d
                      WHERE d.trade_id = s.trade_id
@@ -509,6 +527,11 @@ def load_details(portfolio_name, trade_id=None):
                     d.amount AS "Amount",
                     d.value AS "Value",
                     d.rule AS "Rule",
+                    -- Migration 047: per-transaction buy-rule confluence
+                    -- array. rules[0] mirrors d.rule; rules[1..] are
+                    -- confluence tags. Sells stay single-value (rules[0]
+                    -- = sell rule) — the UI's multi-select is buy-only.
+                    d.rules AS "Rules",
                     d.notes AS "Notes",
                     d.realized_pl AS "Realized_PL",
                     d.stop_loss AS "Stop_Loss",
@@ -918,13 +941,18 @@ _TRADES_SUMMARY_UPDATE_COLUMNS = {
     "Instrument_Type": "instrument_type",
     "Multiplier":      "multiplier",
     "Strategy":        "strategy",
+    # Migration 047: buy-rule confluence support. Ordered JSONB array;
+    # rules[0] is the primary rule (kept in sync with legacy `rule`
+    # column). Value in row_dict may be a Python list OR pre-serialized
+    # JSON string — set-clause builder normalizes to JSON string.
+    "Rules":           "rules",
 }
 
 # Columns added in newer migrations (013+); removed from the working dict
 # on legacy-schema fallback so a DB that hasn't run those migrations can
 # still UPDATE successfully via the existing try/except retry pattern.
 _TRADES_SUMMARY_LEGACY_EXCLUDED = frozenset((
-    "Grade", "Instrument_Type", "Multiplier", "Strategy",
+    "Grade", "Instrument_Type", "Multiplier", "Strategy", "Rules",
 ))
 
 
@@ -958,6 +986,16 @@ def _build_summary_update_set_clauses(row_dict):
                 val = g if 1 <= g <= 5 else None
             except (ValueError, TypeError):
                 val = None
+        elif key == "Rules":
+            # Migration 047: JSONB column. Accept Python list OR
+            # pre-serialized JSON string. None → empty array (never NULL —
+            # the column is NOT NULL DEFAULT '[]').
+            if val is None:
+                val = "[]"
+            elif isinstance(val, list):
+                val = json.dumps([str(r) for r in val if r is not None and str(r).strip()])
+            elif not isinstance(val, str):
+                val = json.dumps([])
         set_clauses.append(f"{col} = %s")
         params_list.append(val)
 
@@ -1001,6 +1039,28 @@ def save_summary_row(portfolio_name, row_dict):
 
     # Sanitize all values in row_dict to prevent numpy types reaching psycopg2
     row_dict = {k: clean_value(v) for k, v in row_dict.items()}
+
+    # Migration 047: auto-sync Rule ↔ Rules so a caller sending ONE side
+    # doesn't leave the other stale. If both are supplied the array wins
+    # (rule ← rules[0]); if only rules is provided we derive rule; if
+    # only rule is provided we derive rules = [rule].
+    if "Rules" in row_dict and "Rule" not in row_dict:
+        _rls = row_dict["Rules"]
+        _first = None
+        if isinstance(_rls, list) and _rls:
+            _first = str(_rls[0]) if _rls[0] is not None else None
+        elif isinstance(_rls, str) and _rls.strip():
+            try:
+                _parsed = json.loads(_rls)
+                if isinstance(_parsed, list) and _parsed:
+                    _first = str(_parsed[0]) if _parsed[0] is not None else None
+            except (ValueError, TypeError):
+                pass
+        if _first:
+            row_dict["Rule"] = _first
+    elif "Rule" in row_dict and "Rules" not in row_dict:
+        _r = row_dict["Rule"]
+        row_dict["Rules"] = [str(_r)] if _r else []
 
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -1103,11 +1163,27 @@ def save_summary_row(portfolio_name, row_dict):
                 # INSERT new trade — try with grade + instrument_type, fall
                 # back without (legacy schema where Migration 016 hasn't run).
                 try:
+                    # Migration 047: derive rules from Rule if caller only
+                    # supplied the scalar (backwards-compat path). If Rules
+                    # is provided, keep both in sync — rule = rules[0].
+                    _rules_val = row_dict.get('Rules')
+                    _rule_val = row_dict.get('Rule')
+                    if _rules_val is None and _rule_val:
+                        _rules_json = json.dumps([str(_rule_val)])
+                    elif isinstance(_rules_val, list):
+                        _clean_rules = [str(r) for r in _rules_val if r is not None and str(r).strip()]
+                        _rules_json = json.dumps(_clean_rules)
+                        if _clean_rules and not _rule_val:
+                            _rule_val = _clean_rules[0]
+                    elif isinstance(_rules_val, str):
+                        _rules_json = _rules_val
+                    else:
+                        _rules_json = '[]'
                     insert_cols = [
                         "portfolio_id", "trade_id", "ticker", "status", "open_date", "closed_date",
                         "shares", "avg_entry", "avg_exit", "total_cost", "realized_pl", "unrealized_pl",
                         "return_pct", "sell_rule", "notes", "stop_loss", "rule",
-                        "buy_notes", "sell_notes", "risk_budget", "grade",
+                        "buy_notes", "sell_notes", "risk_budget", "grade", "rules",
                     ]
                     insert_vals = [
                         portfolio_id,
@@ -1126,11 +1202,12 @@ def save_summary_row(portfolio_name, row_dict):
                         row_dict.get('Sell_Rule'),
                         row_dict.get('Notes'),
                         row_dict.get('Stop_Loss'),
-                        row_dict.get('Rule'),
+                        _rule_val,
                         row_dict.get('Buy_Notes'),
                         row_dict.get('Sell_Notes'),
                         row_dict.get('Risk_Budget', 0),
                         grade_clean,
+                        _rules_json,
                     ]
                     if update_instrument:
                         insert_cols += ["instrument_type", "multiplier"]
@@ -1218,10 +1295,39 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
         return val
     row_dict = {k: _clean(v) for k, v in row_dict.items()}
 
+    # Migration 047: auto-sync Rule ↔ Rules for the detail row too.
+    # Same one-side-wins semantics as save_summary_row.
+    if "Rules" in row_dict and "Rule" not in row_dict:
+        _rls = row_dict["Rules"]
+        _first = None
+        if isinstance(_rls, list) and _rls:
+            _first = str(_rls[0]) if _rls[0] is not None else None
+        if _first:
+            row_dict["Rule"] = _first
+    elif "Rule" in row_dict and "Rules" not in row_dict:
+        _r = row_dict["Rule"]
+        row_dict["Rules"] = [str(_r)] if _r else []
+
+    # Migration 047: derive rules ↔ rule to keep both columns in sync.
+    # Caller can supply Rule alone (backwards-compat), Rules alone (new),
+    # or both. If both, we trust Rules and set rule = rules[0].
+    _detail_rules_val = row_dict.get('Rules')
+    _detail_rule_val = row_dict.get('Rule')
+    if _detail_rules_val is None and _detail_rule_val:
+        _detail_rules_json = json.dumps([str(_detail_rule_val)])
+    elif isinstance(_detail_rules_val, list):
+        _clean_detail_rules = [str(r) for r in _detail_rules_val if r is not None and str(r).strip()]
+        _detail_rules_json = json.dumps(_clean_detail_rules)
+        if _clean_detail_rules and not _detail_rule_val:
+            _detail_rule_val = _clean_detail_rules[0]
+    elif isinstance(_detail_rules_val, str):
+        _detail_rules_json = _detail_rules_val
+    else:
+        _detail_rules_json = '[]'
     insert_cols = [
         "portfolio_id", "trade_id", "ticker", "action", "date", "shares", "amount", "value",
         "rule", "notes", "realized_pl", "stop_loss", "trx_id",
-        "exec_grade", "behavior_tag", "retro_notes",
+        "exec_grade", "behavior_tag", "retro_notes", "rules",
     ]
     insert_vals = [
         portfolio_id,
@@ -1232,7 +1338,7 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
         row_dict.get('Shares'),
         row_dict.get('Amount'),
         row_dict.get('Value'),
-        row_dict.get('Rule'),
+        _detail_rule_val,
         row_dict.get('Notes'),
         row_dict.get('Realized_PL', 0),
         row_dict.get('Stop_Loss'),
@@ -1240,6 +1346,7 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
         row_dict.get('Exec_Grade'),
         row_dict.get('Behavior_Tag'),
         row_dict.get('Retro_Notes'),
+        _detail_rules_json,
     ]
     # Migration 016: persist instrument_type + multiplier when caller
     # passes them. Defaults (STOCK / 1) on the column take over when
@@ -1364,11 +1471,26 @@ def update_detail_row(portfolio_name, detail_id, row_dict):
             if not cur.fetchone():
                 raise ValueError(f"Detail row {detail_id} not found for portfolio '{portfolio_name}'")
 
+            # Migration 047: dual-write rule ↔ rules on updates.
+            _upd_rules_val = row_dict.get('Rules')
+            _upd_rule_val = row_dict.get('Rule')
+            if _upd_rules_val is None and _upd_rule_val is not None:
+                _upd_rules_json = json.dumps([str(_upd_rule_val)]) if _upd_rule_val else '[]'
+            elif isinstance(_upd_rules_val, list):
+                _clean = [str(r) for r in _upd_rules_val if r is not None and str(r).strip()]
+                _upd_rules_json = json.dumps(_clean)
+                if _clean and not _upd_rule_val:
+                    _upd_rule_val = _clean[0]
+            elif isinstance(_upd_rules_val, str):
+                _upd_rules_json = _upd_rules_val
+            else:
+                _upd_rules_json = '[]'
             update_query = """
                 UPDATE trades_details
                 SET trade_id = %s, ticker = %s, action = %s, date = %s,
                     shares = %s, amount = %s, value = %s, rule = %s,
-                    notes = %s, stop_loss = %s, trx_id = %s
+                    notes = %s, stop_loss = %s, trx_id = %s,
+                    rules = %s
                 WHERE id = %s
             """
             cur.execute(update_query, (
@@ -1379,10 +1501,11 @@ def update_detail_row(portfolio_name, detail_id, row_dict):
                 row_dict.get('Shares'),
                 row_dict.get('Amount'),
                 row_dict.get('Value'),
-                row_dict.get('Rule'),
+                _upd_rule_val,
                 row_dict.get('Notes'),
                 row_dict.get('Stop_Loss'),
                 row_dict.get('Trx_ID'),
+                _upd_rules_json,
                 detail_id
             ))
 
@@ -2205,12 +2328,12 @@ def mirror_detail_edit_to_summary(portfolio_name: str, trade_id: str) -> None:
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            # Earliest BUY — canonical row for summary.rule/buy_notes/stop_loss.
+            # Earliest BUY — canonical row for summary.rule/buy_notes/stop_loss/rules.
             # date ASC + id ASC tiebreak matches load_summary's Buy_Rule
             # projection conceptually (date ASC) with deterministic insertion-
             # order tiebreak for same-day rows.
             cur.execute("""
-                SELECT rule, notes, stop_loss
+                SELECT rule, notes, stop_loss, rules
                   FROM trades_details
                  WHERE portfolio_id = %s AND trade_id = %s
                    AND action = 'BUY' AND deleted_at IS NULL
@@ -2239,17 +2362,30 @@ def mirror_detail_edit_to_summary(portfolio_name: str, trade_id: str) -> None:
             latest_sell = cur.fetchone()
 
             if first_buy is not None:
+                # Migration 047: mirror the B1's rules array to summary too.
+                # psycopg2 auto-parses JSONB → Python list; re-serialize as
+                # JSON string for the UPDATE (json_dumps handles list, str,
+                # None).
+                _mirror_rules_raw = first_buy[3]
+                if isinstance(_mirror_rules_raw, list):
+                    _mirror_rules_json = json.dumps(_mirror_rules_raw)
+                elif isinstance(_mirror_rules_raw, str):
+                    _mirror_rules_json = _mirror_rules_raw
+                else:
+                    _mirror_rules_json = '[]'
                 cur.execute("""
                     UPDATE trades_summary
                        SET rule = %s,
                            buy_notes = %s,
-                           stop_loss = %s
+                           stop_loss = %s,
+                           rules = %s
                      WHERE portfolio_id = %s AND trade_id = %s
                        AND deleted_at IS NULL
                 """, (
                     clean_text_value(first_buy[0]),
                     clean_text_value(first_buy[1]),
                     first_buy[2],
+                    _mirror_rules_json,
                     portfolio_id, trade_id,
                 ))
 

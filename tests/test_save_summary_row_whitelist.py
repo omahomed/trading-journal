@@ -156,8 +156,10 @@ def test_partial_update_only_binds_provided_columns(monkeypatch):
 
 
 def test_explicit_none_sets_null(monkeypatch):
-    """Pass {Trade_ID, Rule: None}. UPDATE must bind rule = NULL.
-    Distinguishes "set to NULL" from "key not present"."""
+    """Pass {Trade_ID, Rule: None}. UPDATE must bind rule = NULL AND
+    the auto-synced rules array = []. Migration 047: any Rule write
+    also propagates to Rules to prevent divergence — Rule=None means
+    both columns clear."""
     conn, cur = _setup_for_update(monkeypatch)
 
     db_layer.save_summary_row("CanSlim", {
@@ -167,10 +169,12 @@ def test_explicit_none_sets_null(monkeypatch):
 
     sql, params = _trades_summary_updates(cur.executed)[0]
     assert "rule = %s" in sql
-    # Only one bound column + existing[0]
-    assert len(params) == 2
+    assert "rules = %s" in sql
+    # rule NULL + rules '[]' + existing[0]
+    assert len(params) == 3
     assert params[0] is None
-    assert params[1] == 7
+    assert params[1] == "[]"
+    assert params[2] == 7
 
 
 def test_empty_dict_raises_value_error(monkeypatch):
@@ -266,7 +270,11 @@ def _full_dict():
 def test_full_dict_caller_unchanged_behavior(monkeypatch):
     """A caller passing the complete 21-column dict (e.g., set_trade_grade)
     must produce a SET clause that still includes every column. Whitelist
-    refactor is semantically equivalent for full-dict callers."""
+    refactor is semantically equivalent for full-dict callers.
+
+    Migration 047: `Rule` auto-syncs to `Rules` (JSON-serialized array),
+    so a full-dict caller supplying only `Rule` now binds one extra
+    column (rules) — expected count is 21 base columns + existing[0]."""
     conn, cur = _setup_for_update(monkeypatch)
 
     db_layer.save_summary_row("CanSlim", _full_dict())
@@ -279,12 +287,13 @@ def test_full_dict_caller_unchanged_behavior(monkeypatch):
         "sell_rule", "notes", "stop_loss", "rule",
         "buy_notes", "sell_notes", "risk_budget",
         "instrument_type", "multiplier",
+        "rules",   # auto-synced from Rule
     )
     for col in expected_cols:
         assert f"{col} = %s" in sql, f"full dict should bind {col}"
 
-    # 20 columns + existing[0]
-    assert len(params) == 21
+    # 21 columns (20 base + rules) + existing[0]
+    assert len(params) == 22
 
 
 # ---------------------------------------------------------------------------
