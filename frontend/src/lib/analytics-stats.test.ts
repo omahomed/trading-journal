@@ -874,6 +874,18 @@ describe("winnerMaeDistribution", () => {
     expect(r.n).toBe(0);
     expect(r.buckets.every(b => b.n === 0 && b.pct === 0)).toBe(true);
   });
+
+  test("buckets carry constituent trades for drilldown", () => {
+    const trades = [
+      closed({ trade_id: "W1", realized_pl: 100, mae_pct: -1 }),
+      closed({ trade_id: "W2", realized_pl: 100, mae_pct: -1.5 }),
+      closed({ trade_id: "W3", realized_pl: 100, mae_pct: -6 }),
+    ];
+    const r = winnerMaeDistribution(trades as any);
+    expect(r.buckets[0].trades.map(t => t.trade_id)).toEqual(["W1", "W2"]);  // 0-2%
+    expect(r.buckets[2].trades.map(t => t.trade_id)).toEqual(["W3"]);         // 5-8%
+    expect(r.buckets[1].trades).toEqual([]);                                   // 2-5% empty
+  });
 });
 
 
@@ -959,5 +971,47 @@ describe("entryQualityBySetup", () => {
     const rows = entryQualityBySetup(trades as any);
     // Most punishing WINNER MAE first (B: -8), then A (-2), then C (no winners → end)
     expect(rows.map(r => r.setup)).toEqual(["B", "A", "C"]);
+  });
+
+  test("rows carry constituent trades for drilldown", () => {
+    const trades = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        closed({ trade_id: `T${i}`, rule: "A", realized_pl: 10, mae_pct: -1 })),
+    ];
+    const rows = entryQualityBySetup(trades as any);
+    expect(rows[0].trades).toHaveLength(5);
+    expect(rows[0].trades.map(t => t.trade_id)).toEqual(["T0","T1","T2","T3","T4"]);
+  });
+});
+
+
+describe("stopCapScenario — MAE-aware drilldown fields", () => {
+  test("losersBreaching + winnersClipped are populated when maePctOf provided", () => {
+    const trades = [
+      // Losers breaching -5%:
+      closed({ trade_id: "L1", realized_pl: -1000, total_cost: 10000, return_pct: -10, mae_pct: -10 }),
+      closed({ trade_id: "L2", realized_pl: -400,  total_cost: 10000, return_pct: -4,  mae_pct: -4 }),  // NOT breaching
+      // Winners clipped by -5% (MAE < -5%):
+      closed({ trade_id: "W1", realized_pl:  500,  total_cost: 10000, return_pct: 5,   mae_pct: -6 }),
+      closed({ trade_id: "W2", realized_pl:  500,  total_cost: 10000, return_pct: 5,   mae_pct: -2 }), // NOT clipped
+    ];
+    const rows = stopCapScenario(trades as any, [5], {
+      maePctOf: (t: any) => (t.mae_pct != null ? Number(t.mae_pct) : null),
+    });
+    expect(rows).toHaveLength(1);
+    const r = rows[0];
+    expect(r.losersBreaching.map(t => t.trade_id)).toEqual(["L1"]);
+    expect(r.winnersClipped.map(t => t.trade_id)).toEqual(["W1"]);
+  });
+
+  test("winnersClipped is empty when maePctOf omitted", () => {
+    const trades = [
+      closed({ trade_id: "L1", realized_pl: -1000, total_cost: 10000, return_pct: -10 }),
+      closed({ trade_id: "W1", realized_pl:  500,  total_cost: 10000, return_pct: 5 }),
+    ];
+    const rows = stopCapScenario(trades as any, [5]);
+    expect(rows[0].losersBreaching).toHaveLength(1);
+    expect(rows[0].winnersClipped).toEqual([]);
+    expect(rows[0].clippedWinnerCount).toBe(0);
   });
 });
