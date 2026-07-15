@@ -160,6 +160,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [tradeId, setTradeId] = useState("");
   const [rule, setRule] = useState("");
+  // Migration 047: buy-rule confluence — optional secondary rules that
+  // fired alongside the primary. Rendered as chips below the primary
+  // dropdown; each chip removable. Submitted as body.rules alongside
+  // the legacy `rule` scalar (which stays as rules[0] per the
+  // backend's auto-sync).
+  const [confluenceRules, setConfluenceRules] = useState<string[]>([]);
+  const [confluenceQuery, setConfluenceQuery] = useState("");
+  const [confluenceDropdownOpen, setConfluenceDropdownOpen] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState("");
   // Strategy tagging (Migration 019). Defaults to CanSlim — matches the DB
   // column DEFAULT and the user's primary strategy. On scale-in we render
@@ -721,6 +729,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   : parseFloat(price) * (1 - parseFloat(slPct) / 100))
           : null,
         rule,
+        // Migration 047: submit the ordered confluence array. Primary
+        // rule first, then any user-added confluence tags. Backend
+        // auto-syncs `rule` = `rules[0]` and stores the full array on
+        // both trades_details (this transaction) and trades_summary
+        // (denormalized from B1 on new campaigns).
+        rules: [rule, ...confluenceRules].filter(Boolean),
         strategy,
         notes,
         date: date,
@@ -769,6 +783,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         // already captured in uploadEntries so the background uploads are
         // unaffected.
         setTicker(""); setShares(""); setPrice(""); setStopValue(""); setNotes(""); setRule("");
+        setConfluenceRules([]); setConfluenceQuery(""); setConfluenceDropdownOpen(false);
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
         setOverrideSizeCap(false);
@@ -875,9 +890,80 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </Field>
             )}
 
-            {/* Buy Rule (searchable) */}
-            <Field label="Buy Rule *">
+            {/* Buy Rule (searchable) — primary drives all analytics. */}
+            <Field label="Primary Buy Rule *">
               <SearchSelect value={rule} onChange={setRule} options={BUY_RULES} placeholder="Type to search rules..." />
+            </Field>
+
+            {/* Confluence Rules (Migration 047) — optional secondary
+                buy rules that fired alongside the primary. Display-only
+                context; does NOT affect PF / analytics. Chip + typeahead
+                pattern. */}
+            <Field label="Confluence Rules (optional)">
+              <div className="flex items-center gap-1.5 flex-wrap min-h-[42px] p-1 rounded-[10px]"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                {confluenceRules.map(r => (
+                  <span key={r}
+                        className="inline-flex items-center gap-1 h-[28px] px-2 rounded-[8px] text-[11px] font-semibold"
+                        style={{
+                          background: "color-mix(in oklab, #6366f1 12%, transparent)",
+                          color: "#6366f1",
+                          border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
+                        }}>
+                    +{r}
+                    <button type="button"
+                            onClick={() => setConfluenceRules(prev => prev.filter(x => x !== r))}
+                            className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
+                            style={{ background: "none", border: "none", padding: 0, lineHeight: 1, color: "inherit", fontSize: 14 }}>×</button>
+                  </span>
+                ))}
+                <div className="relative flex-1 min-w-[180px]">
+                  <input type="text"
+                         value={confluenceQuery}
+                         placeholder={confluenceRules.length > 0 ? "Add another…" : "Type to add confluence rules…"}
+                         onChange={e => { setConfluenceQuery(e.target.value); setConfluenceDropdownOpen(true); }}
+                         onFocus={() => setConfluenceDropdownOpen(true)}
+                         onBlur={() => setTimeout(() => setConfluenceDropdownOpen(false), 150)}
+                         onKeyDown={e => {
+                           if (e.key === "Backspace" && !confluenceQuery && confluenceRules.length > 0) {
+                             setConfluenceRules(prev => prev.slice(0, -1));
+                           }
+                         }}
+                         className="w-full h-[34px] px-3 rounded-[8px] text-[12px] outline-none"
+                         style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                                  fontFamily: "var(--font-jetbrains), monospace" }} />
+                  {confluenceDropdownOpen && (() => {
+                    const q = confluenceQuery.trim().toLowerCase();
+                    const available = BUY_RULES
+                      .filter(r => r !== rule && !confluenceRules.includes(r))
+                      .filter(r => !q || r.toLowerCase().includes(q));
+                    return available.length > 0 ? (
+                      <div className="absolute z-50 mt-1 w-[280px] rounded-[10px] overflow-hidden shadow-lg"
+                           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                        <div className="overflow-y-auto" style={{ maxHeight: 240 }}>
+                          {available.slice(0, 30).map(r => (
+                            <button key={r} type="button"
+                                    onMouseDown={e => {
+                                      e.preventDefault();
+                                      setConfluenceRules(prev => [...prev, r]);
+                                      setConfluenceQuery("");
+                                      setConfluenceDropdownOpen(false);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-[12px] transition-colors cursor-pointer"
+                                    onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                              +{r}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+              </div>
+              <div className="text-[10px] mt-1" style={{ color: "var(--ink-4)" }}>
+                Primary drives analytics; confluence is display-only context (e.g. "Cup w Handle + STL Break").
+              </div>
             </Field>
 
             {/* Strategy (Migration 019). Read-only on scale-in (inherited

@@ -123,6 +123,12 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
   const [editTradeId, setEditTradeId] = useState("");
   const [editTxIdx, setEditTxIdx] = useState(-1);
   const [editFields, setEditFields] = useState<Record<string, string>>({});
+  // Migration 047: confluence rules for the transaction being edited.
+  // Populated from tx.rules[1..] when a transaction is selected. Empty
+  // for SELL rows (multi-select is buy-only) and for pre-047 rows.
+  const [editConfluence, setEditConfluence] = useState<string[]>([]);
+  const [editConfluenceQuery, setEditConfluenceQuery] = useState("");
+  const [editConfluenceOpen, setEditConfluenceOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editResult, setEditResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -532,15 +538,22 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                 setEditTxIdx(idx);
                 if (idx >= 0 && idx < editTxns.length) {
                   const tx = editTxns[idx];
+                  const txRules = Array.isArray((tx as any).rules) ? (tx as any).rules as string[] : [];
                   setEditFields({
                     date: String(tx.date || "").slice(0, 16),
-                    rule: tx.rule || "",
+                    rule: txRules[0] || tx.rule || "",
                     trx_id: tx.trx_id || "",
                     stop_loss: String(tx.stop_loss || ""),
                     notes: tx.notes || "",
                     shares: String(tx.shares || ""),
                     amount: String(tx.amount || ""),
                   });
+                  // Confluence carries rules[1..]; hydrate on select.
+                  setEditConfluence(txRules.slice(1));
+                  setEditConfluenceQuery("");
+                  setEditConfluenceOpen(false);
+                } else {
+                  setEditConfluence([]);
                 }
               }}
                       className={inputCls} style={{ ...inputStyle, appearance: "none" as any }}>
@@ -564,7 +577,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                     <input type="datetime-local" value={editFields.date || ""} onChange={e => setEditFields({ ...editFields, date: e.target.value })}
                            className={inputCls} style={inputStyle} />
                   </Field>
-                  <Field label="Rule (Strategy)">
+                  <Field label={editTx && String(editTx.action).toUpperCase() === "SELL" ? "Sell Rule" : "Primary Buy Rule"}>
                     <SearchSelect
                       value={editFields.rule || ""}
                       onChange={v => setEditFields({ ...editFields, rule: v })}
@@ -573,6 +586,77 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                     />
                   </Field>
                 </div>
+
+                {/* Migration 047: buy-side confluence chips. Renders
+                    only for BUY rows — SELL row multi-select is
+                    intentionally out of scope for now. */}
+                {editTx && String(editTx.action).toUpperCase() === "BUY" && (
+                  <div>
+                    <Field label="Confluence Rules (optional)">
+                      <div className="flex items-center gap-1.5 flex-wrap min-h-[42px] p-1 rounded-[10px]"
+                           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                        {editConfluence.map(r => (
+                          <span key={r}
+                                className="inline-flex items-center gap-1 h-[28px] px-2 rounded-[8px] text-[11px] font-semibold"
+                                style={{
+                                  background: "color-mix(in oklab, #6366f1 12%, transparent)",
+                                  color: "#6366f1",
+                                  border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
+                                }}>
+                            +{r}
+                            <button type="button"
+                                    onClick={() => setEditConfluence(prev => prev.filter(x => x !== r))}
+                                    className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
+                                    style={{ background: "none", border: "none", padding: 0, lineHeight: 1, color: "inherit", fontSize: 14 }}>×</button>
+                          </span>
+                        ))}
+                        <div className="relative flex-1 min-w-[180px]">
+                          <input type="text"
+                                 value={editConfluenceQuery}
+                                 placeholder={editConfluence.length > 0 ? "Add another…" : "Type to add confluence rules…"}
+                                 onChange={e => { setEditConfluenceQuery(e.target.value); setEditConfluenceOpen(true); }}
+                                 onFocus={() => setEditConfluenceOpen(true)}
+                                 onBlur={() => setTimeout(() => setEditConfluenceOpen(false), 150)}
+                                 onKeyDown={e => {
+                                   if (e.key === "Backspace" && !editConfluenceQuery && editConfluence.length > 0) {
+                                     setEditConfluence(prev => prev.slice(0, -1));
+                                   }
+                                 }}
+                                 className="w-full h-[34px] px-3 rounded-[8px] text-[12px] outline-none"
+                                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                                          fontFamily: "var(--font-jetbrains), monospace" }} />
+                          {editConfluenceOpen && (() => {
+                            const q = editConfluenceQuery.trim().toLowerCase();
+                            const available = BUY_RULES
+                              .filter(r => r !== editFields.rule && !editConfluence.includes(r))
+                              .filter(r => !q || r.toLowerCase().includes(q));
+                            return available.length > 0 ? (
+                              <div className="absolute z-50 mt-1 w-[280px] rounded-[10px] overflow-hidden shadow-lg"
+                                   style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                                <div className="overflow-y-auto" style={{ maxHeight: 240 }}>
+                                  {available.slice(0, 30).map(r => (
+                                    <button key={r} type="button"
+                                            onMouseDown={e => {
+                                              e.preventDefault();
+                                              setEditConfluence(prev => [...prev, r]);
+                                              setEditConfluenceQuery("");
+                                              setEditConfluenceOpen(false);
+                                            }}
+                                            className="w-full text-left px-3 py-1.5 text-[12px] transition-colors cursor-pointer"
+                                            onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                                            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                                      +{r}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null;
+                          })()}
+                        </div>
+                      </div>
+                    </Field>
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-4">
                   <Field label="Trx ID">
                     {/* Read-only — server generates trx_ids collision-safely
@@ -609,6 +693,13 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                             setEditSaving(true);
                             setEditResult(null);
                             try {
+                              // Migration 047: submit the ordered rules
+                              // array (primary + confluence) alongside
+                              // the legacy `rule` scalar. For SELL rows
+                              // editConfluence stays empty (multi-select
+                              // is buy-only), so the array collapses to
+                              // [rule] — identical to pre-047 behavior.
+                              const rulesPayload = [editFields.rule || "", ...editConfluence].filter(Boolean);
                               const res = await api.editTransaction({
                                 detail_id: editTx.detail_id,
                                 trade_id: editTx.trade_id,
@@ -619,10 +710,11 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
                                 amount: parseFloat(editFields.amount || "0"),
                                 value: parseFloat(editFields.shares || "0") * parseFloat(editFields.amount || "0"),
                                 rule: editFields.rule || "",
+                                rules: rulesPayload,
                                 notes: editFields.notes || "",
                                 stop_loss: parseFloat(editFields.stop_loss || "0"),
                                 trx_id: editFields.trx_id || "",
-                              });
+                              } as any);
                               if (res.error) {
                                 setEditResult({ ok: false, msg: res.error });
                               } else {

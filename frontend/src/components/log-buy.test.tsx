@@ -237,7 +237,7 @@ async function selectBuyRule(rule: string): Promise<void> {
   // SearchSelect's trigger is the first <button> inside the Field. Open
   // the dropdown, then click the rule option (rendered as a button by
   // its display text).
-  const ruleField = screen.getByText("Buy Rule *");
+  const ruleField = screen.getByText("Primary Buy Rule *");
   const trigger = ruleField.parentElement?.querySelector("button") as HTMLButtonElement;
   await act(async () => { fireEvent.click(trigger); });
   await act(async () => { fireEvent.click(screen.getByText(rule)); });

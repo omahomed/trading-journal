@@ -1528,10 +1528,38 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   </div>
                 )}
 
-                {/* Footer: dates + rule + strategy pill + expand toggle */}
+                {/* Footer: dates + rule + strategy pill + expand toggle.
+                    Migration 047: primary rule bold; confluence tags
+                    render inline as muted "+brX" chips. When no
+                    confluence, layout is identical to pre-047. */}
                 <div className="flex items-center justify-between mt-3 pt-2 gap-2 flex-wrap">
                   <div className="text-[11px] flex items-center gap-2 flex-wrap" style={{ color: "var(--ink-4)" }}>
-                    <span>{trade.rule}</span>
+                    <span className="font-semibold" style={{ color: "var(--ink-3)" }}>{trade.rule}</span>
+                    {(() => {
+                      // Confluence chips — everything past rules[0].
+                      // Prefer `buy_rules` (B1's array, canonical) when
+                      // present; fall back to `rules` (summary's copy).
+                      const rulesArr = ((trade as any).buy_rules && Array.isArray((trade as any).buy_rules))
+                        ? (trade as any).buy_rules as string[]
+                        : Array.isArray(trade.rules) ? trade.rules : [];
+                      const confluence = rulesArr.slice(1);
+                      return confluence.length > 0 ? (
+                        <>
+                          {confluence.map(r => (
+                            <span key={r}
+                                  className="inline-flex items-center h-[18px] px-1.5 rounded-[5px] text-[10px] font-medium"
+                                  style={{
+                                    background: "color-mix(in oklab, #6366f1 10%, transparent)",
+                                    color: "#6366f1",
+                                    border: "1px solid color-mix(in oklab, #6366f1 20%, var(--border))",
+                                  }}
+                                  title="Confluence rule">
+                              +{r}
+                            </span>
+                          ))}
+                        </>
+                      ) : null;
+                    })()}
                     {/* Phase 2 — strategy pill. Color from DB (strategies
                         table); chip continues to render even when the
                         strategy has been deactivated since this trade was
@@ -1744,7 +1772,31 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.realizedPl) }}>{!row.isSell && row.realizedPl !== 0 ? formatCurrency(row.realizedPl) : !row.isSell ? "$0.00" : ""}</td>
                                   <td className="px-2.5 py-2 privacy-mask" style={{ fontFamily: mono, color: PLColor(row.unrealizedPl || 0) }}>{!row.isSell && row.unrealizedPl !== 0 ? formatCurrency(row.unrealizedPl) : !row.isSell ? "$0.00" : ""}</td>
                                   <td className="px-2.5 py-2" style={{ fontFamily: mono, fontWeight: 600, color: PLColor(row.returnPct) }}>{!row.isSell ? `${row.returnPct.toFixed(2)}%` : ""}</td>
-                                  <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
+                                  <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-3)" }}>
+                                    {(() => {
+                                      // Migration 047: bold primary +
+                                      // muted confluence chips inline.
+                                      // Falls through to plain rule string
+                                      // when no rules array or single-value.
+                                      const rls = Array.isArray((tx as any).rules) ? (tx as any).rules as string[] : [];
+                                      const primary = rls[0] || tx.rule || "";
+                                      const confluence = rls.slice(1);
+                                      if (!primary) return "";
+                                      return (
+                                        <span className="inline-flex items-center gap-1 flex-wrap">
+                                          <span className="font-semibold" style={{ color: "var(--ink-2)" }}>{primary}</span>
+                                          {confluence.map(r => (
+                                            <span key={r}
+                                                  className="text-[9px] font-medium"
+                                                  style={{ color: "#6366f1" }}
+                                                  title="Confluence">
+                                              +{r}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
                                   <td className="px-2.5 py-2 text-[10px]" style={{ color: "var(--ink-4)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(tx as any).notes || ""}</td>
                                   <td className="px-2.5 py-2">
                                     <button onClick={() => openEditModal(tx)}
