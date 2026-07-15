@@ -33,6 +33,10 @@ import {
   type RepeatOffender,
   generateInsights,
   type Insight,
+  winnerMaeDistribution,
+  loserMfeDistribution,
+  entryQualityBySetup,
+  type EntryQualityRow,
 } from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
@@ -3005,6 +3009,12 @@ function ScenariosTab({ trades, journal: _journal, year, cohort, navColor: _navC
 }) {
   const scorecard = useMemo(() => setupScorecard(trades), [trades]);
   const anyMae = useMemo(() => trades.some(t => (t as any).mae_pct != null), [trades]);
+  const winnerDist = useMemo(() => winnerMaeDistribution(trades), [trades]);
+  const loserDist = useMemo(() => loserMfeDistribution(trades), [trades]);
+  const entryQuality = useMemo(() => entryQualityBySetup(trades), [trades]);
+  const stopCapMae = useMemo(() => stopCapScenario(trades, [3, 5, 7, 8, 10], {
+    maePctOf: (t: any) => (t.mae_pct != null ? Number(t.mae_pct) : null),
+  }), [trades]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const yearBadge = (
     <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
@@ -3129,23 +3139,201 @@ function ScenariosTab({ trades, journal: _journal, year, cohort, navColor: _navC
         )}
       </div>
 
-      {/* ─────────── Excursion section (conditional) ─────────── */}
-      <div className="mb-4 p-5 rounded-[14px]"
-           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-        <div className="text-[15px] font-semibold mb-1">
-          📉 Excursion (MAE/MFE-aware) {yearBadge}
-        </div>
-        {!anyMae ? (
+      {/* ─────────── Excursion section — real content when MAE data is present ─────────── */}
+      {!anyMae ? (
+        <div className="mb-4 p-5 rounded-[14px]"
+             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="text-[15px] font-semibold mb-1">
+            📉 Excursion (MAE/MFE-aware) {yearBadge}
+          </div>
           <div className="text-[12px] italic mt-2" style={{ color: "var(--ink-4)" }}>
             Awaiting excursion data — MAE/MFE feature runs the daily reconciler on open positions and requires a Phase-2 backfill for closed trades. This section will populate once mae_pct / mfe_pct fields are present on the trade rows in this cohort.
           </div>
+        </div>
+      ) : (
+        <ExcursionSection
+          yearBadge={yearBadge}
+          winnerDist={winnerDist}
+          loserDist={loserDist}
+          entryQuality={entryQuality}
+          stopCapMae={stopCapMae}
+        />
+      )}
+    </>
+  );
+}
+
+
+function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stopCapMae }: {
+  yearBadge: React.ReactNode;
+  winnerDist: ReturnType<typeof winnerMaeDistribution>;
+  loserDist: ReturnType<typeof loserMfeDistribution>;
+  entryQuality: EntryQualityRow[];
+  stopCapMae: ReturnType<typeof stopCapScenario>;
+}) {
+  const mono = "var(--font-jetbrains), monospace";
+
+  return (
+    <>
+      {/* ─────────── Winner-MAE Distribution ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          📉 Winner MAE Distribution {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          How deep did winners dip before working? Answers "how much pain do I have to tolerate to catch the average winner on this book?"
+          <strong> n = {winnerDist.n} winners with MAE populated.</strong>
+        </div>
+        {winnerDist.n === 0 ? (
+          <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No winners with MAE data in this cohort.</div>
         ) : (
-          <div className="text-[12px] mt-2" style={{ color: "var(--ink-3)" }}>
-            Excursion data detected — detailed stats will land in a follow-up commit (Phase 2 of item 8: winner-MAE distribution, MAE-aware stop-cap backtest, entry quality by setup, loser MFE study).
+          <div className="grid grid-cols-5 gap-3">
+            {winnerDist.buckets.map(b => (
+              <ExcursionBucketTile key={b.label} bucket={b} color="#08a86b" />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ─────────── Loser-MFE Distribution ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          📈 Loser MFE Distribution {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          How far did losers rally before rolling over? A big tail here is the "let winners turn into losers" pattern — candidate for a "trail once above X%" rule.
+          <strong> n = {loserDist.n} losers with MFE populated.</strong>
+        </div>
+        {loserDist.n === 0 ? (
+          <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No losers with MFE data in this cohort.</div>
+        ) : (
+          <div className="grid grid-cols-5 gap-3">
+            {loserDist.buckets.map(b => (
+              <ExcursionBucketTile key={b.label} bucket={b} color="#e5484d" />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ─────────── MAE-Aware Stop-Cap Backtest ─────────── */}
+      <div className="mb-5 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🛡️ Stop-Cap Backtest (MAE-aware) {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          For each hard stop cap X, this shows: <strong>$ saved</strong> from losers whose realized loss exceeded X (capping them there), MINUS <strong>$ foregone</strong> from winners whose MAE dipped below X (clipping them out). The <strong>Net delta</strong> is the honest answer.
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--bg)" }}>
+                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Cap</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Losers breaching</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>$ saved</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Winners clipped</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>$ foregone</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stopCapMae.map(r => {
+                const net = r.dollarsSaved - r.clippedWinnerForegonePl;
+                const netColor = net > 0 ? "#08a86b" : net < 0 ? "#e5484d" : "var(--ink-3)";
+                return (
+                  <tr key={r.capPct} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>−{r.capPct}%</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.breachCount}</td>
+                    <td className="px-3 py-2 text-right privacy-mask"
+                        style={{ fontFamily: mono, color: "#08a86b" }}>
+                      {formatCurrency(r.dollarsSaved, { showSign: false, decimals: 0 })}
+                    </td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{r.clippedWinnerCount}</td>
+                    <td className="px-3 py-2 text-right privacy-mask"
+                        style={{ fontFamily: mono, color: "#e5484d" }}>
+                      {formatCurrency(-r.clippedWinnerForegonePl, { showSign: false, decimals: 0 })}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                        style={{ fontFamily: mono, color: netColor }}>
+                      {formatCurrency(net, { showSign: true, decimals: 0 })}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-[11px] mt-3" style={{ color: "var(--ink-4)" }}>
+          Winners are "clipped" when their MAE dipped below the cap during holding — that trade would have stopped out before working. Foregone P&L = the realized P&L that trade eventually delivered.
+        </div>
+      </div>
+
+      {/* ─────────── Entry Quality by Setup ─────────── */}
+      <div className="mb-4 p-5 rounded-[14px]"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="text-[15px] font-semibold mb-1">
+          🎯 Entry Quality by Setup {yearBadge}
+        </div>
+        <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+          Per-setup MAE / MFE. Sorted by <strong>avg winner MAE ascending</strong> — most punishing setups first. "Winner MAE" is the drawdown a working entry subjects you to before paying off; a big number means valid setups need a wide stop or you'll shake yourself out.
+        </div>
+        {entryQuality.length === 0 ? (
+          <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No setups with ≥ 5 trades and MAE data in this cohort.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--bg)" }}>
+                  <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Setup</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>n</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Avg MAE</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Winner MAE</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Worst MAE</th>
+                  <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Avg MFE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entryQuality.map(r => (
+                  <tr key={r.setup} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td className="px-3 py-2 font-semibold">{r.setup}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
+                      {r.avgMae == null ? "—" : `${r.avgMae.toFixed(2)}%`}
+                    </td>
+                    <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: "#e5484d" }}>
+                      {r.avgMaeOnWinners == null ? "—" : `${r.avgMaeOnWinners.toFixed(2)}%`}
+                    </td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
+                      {r.worstMae == null ? "—" : `${r.worstMae.toFixed(2)}%`}
+                    </td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#08a86b" }}>
+                      {r.avgMfe == null ? "—" : `+${r.avgMfe.toFixed(2)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
     </>
+  );
+}
+
+
+function ExcursionBucketTile({ bucket, color }: { bucket: { label: string; n: number; pct: number }; color: string }) {
+  return (
+    <div className="p-3 rounded-[10px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+      <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
+        {bucket.label}
+      </div>
+      <div className="text-[22px] font-extrabold mt-1" style={{ color, fontFamily: "var(--font-jetbrains), monospace" }}>
+        {bucket.n}
+      </div>
+      <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{bucket.pct.toFixed(0)}%</div>
+    </div>
   );
 }
 

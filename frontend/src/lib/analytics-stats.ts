@@ -478,6 +478,133 @@ export function stopCapScenario(
 
 
 // ────────────────────────────────────────────────────────────────────
+// MAE / MFE — winner-MAE distribution, loser-MFE distribution,
+// entry-quality-by-setup. Powers the Scenarios tab Excursion section.
+// ────────────────────────────────────────────────────────────────────
+
+export interface ExcursionBucket {
+  label: string;
+  loInclusive: number;    // magnitude, always positive (e.g. 0, 2, 5, 8, 12)
+  hiExclusive: number | null;
+  n: number;
+  pct: number;             // n / total * 100
+}
+
+/** Winner-MAE distribution: how deep do winners typically dip before
+ *  the trade works? Cohort = trades with realized_pl > 0 AND mae_pct
+ *  populated. Buckets by |mae_pct| depth, ascending — "How much pain
+ *  do you have to survive to catch the average winner?". */
+export function winnerMaeDistribution(
+  trades: TradePosition[],
+): { buckets: ExcursionBucket[]; n: number } {
+  const winners = trades.filter(t => realized(t) > 0 && (t as any).mae_pct != null);
+  return _bucketByMagnitude(
+    winners.map(t => Number((t as any).mae_pct ?? 0)),
+    [0, 2, 5, 8, 12],
+    (lo, hi) => hi == null ? `≥ ${lo}%` : `${lo}–${hi}%`,
+  );
+}
+
+/** Loser-MFE distribution: how much did losers rally BEFORE rolling
+ *  over? Cohort = trades with realized_pl < 0 AND mfe_pct populated.
+ *  Big MFE-then-loss distribution ⇒ you're letting winners turn into
+ *  losers (candidate for a "trail once above X%" rule). */
+export function loserMfeDistribution(
+  trades: TradePosition[],
+): { buckets: ExcursionBucket[]; n: number } {
+  const losers = trades.filter(t => realized(t) < 0 && (t as any).mfe_pct != null);
+  return _bucketByMagnitude(
+    losers.map(t => Number((t as any).mfe_pct ?? 0)),
+    [0, 2, 5, 10, 20],
+    (lo, hi) => hi == null ? `≥ ${lo}%` : `${lo}–${hi}%`,
+  );
+}
+
+function _bucketByMagnitude(
+  values: number[],
+  edges: readonly number[],   // ascending, first is 0; magnitude buckets
+  label: (lo: number, hi: number | null) => string,
+): { buckets: ExcursionBucket[]; n: number } {
+  const n = values.length;
+  const magnitudes = values.map(v => Math.abs(v));
+  const buckets: ExcursionBucket[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    const lo = edges[i];
+    const hi = i + 1 < edges.length ? edges[i + 1] : null;
+    const count = magnitudes.filter(m =>
+      m >= lo && (hi == null || m < hi)
+    ).length;
+    buckets.push({
+      label: label(lo, hi),
+      loInclusive: lo,
+      hiExclusive: hi,
+      n: count,
+      pct: n > 0 ? (count / n) * 100 : 0,
+    });
+  }
+  return { buckets, n };
+}
+
+
+export interface EntryQualityRow {
+  setup: string;
+  n: number;
+  avgMae: number | null;        // signed (≤ 0)
+  avgMaeOnWinners: number | null; // "dip you must tolerate on this setup"
+  avgMfe: number | null;        // signed (≥ 0)
+  worstMae: number | null;
+}
+
+/** Per-setup MAE / MFE summary. Sorted by avgMaeOnWinners ascending
+ *  (most punishing entries first — biggest average dip on trades that
+ *  eventually work). The "avgMaeOnWinners" is the actionable signal:
+ *  it's the drawdown a valid setup subjects you to before paying off.
+ *  Small-n (< minN) setups filtered out. */
+export function entryQualityBySetup(
+  trades: TradePosition[],
+  opts: { minN?: number } = {},
+): EntryQualityRow[] {
+  const minN = opts.minN ?? 5;
+  const byRule = new Map<string, TradePosition[]>();
+  for (const t of trades) {
+    if ((t as any).mae_pct == null) continue;   // needs MAE data
+    const r = String(t.rule || "").trim() || "(unlabeled)";
+    const list = byRule.get(r);
+    if (list) list.push(t);
+    else byRule.set(r, [t]);
+  }
+  const mean = (arr: number[]): number | null =>
+    arr.length > 0 ? arr.reduce((a, v) => a + v, 0) / arr.length : null;
+  const rows: EntryQualityRow[] = [];
+  for (const [setup, arr] of byRule.entries()) {
+    if (arr.length < minN) continue;
+    const maes = arr.map(t => Number((t as any).mae_pct ?? 0));
+    const mfes = arr.map(t => Number((t as any).mfe_pct ?? 0));
+    const winnerMaes = arr
+      .filter(t => realized(t) > 0)
+      .map(t => Number((t as any).mae_pct ?? 0));
+    rows.push({
+      setup,
+      n: arr.length,
+      avgMae: mean(maes),
+      avgMaeOnWinners: mean(winnerMaes),
+      avgMfe: mean(mfes),
+      worstMae: maes.length > 0 ? Math.min(...maes) : null,
+    });
+  }
+  // Sort by avgMaeOnWinners ascending (most negative = most punishing
+  // first). Nulls parked at the end (setups with 0 winners).
+  rows.sort((a, b) => {
+    if (a.avgMaeOnWinners == null && b.avgMaeOnWinners == null) return 0;
+    if (a.avgMaeOnWinners == null) return 1;
+    if (b.avgMaeOnWinners == null) return -1;
+    return a.avgMaeOnWinners - b.avgMaeOnWinners;
+  });
+  return rows;
+}
+
+
+// ────────────────────────────────────────────────────────────────────
 // Fixed-size scenario
 // ────────────────────────────────────────────────────────────────────
 

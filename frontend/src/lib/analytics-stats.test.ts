@@ -21,6 +21,9 @@ import {
   repeatOffenders,
   makeMctStateResolver,
   generateInsights,
+  winnerMaeDistribution,
+  loserMfeDistribution,
+  entryQualityBySetup,
 } from "./analytics-stats";
 import type { TradePosition, JournalHistoryPoint } from "./api";
 
@@ -838,5 +841,123 @@ describe("generateInsights", () => {
     const over = ins.find(i => i.id === "overtrading");
     expect(over).toBeDefined();
     expect(over!.items!.length).toBeGreaterThan(0);
+  });
+});
+
+
+describe("winnerMaeDistribution", () => {
+  test("buckets winners by |MAE| depth", () => {
+    const trades = [
+      closed({ realized_pl: 100, mae_pct: -1.0 }),   // bucket 0-2
+      closed({ realized_pl: 100, mae_pct: -3.5 }),   // 2-5
+      closed({ realized_pl: 100, mae_pct: -6.0 }),   // 5-8
+      closed({ realized_pl: 100, mae_pct: -9.0 }),   // 8-12
+      closed({ realized_pl: 100, mae_pct: -15.0 }),  // ≥12
+      closed({ realized_pl: -100, mae_pct: -5.0 }),  // ← loser, excluded
+    ];
+    const r = winnerMaeDistribution(trades as any);
+    expect(r.n).toBe(5);
+    expect(r.buckets.map(b => b.n)).toEqual([1, 1, 1, 1, 1]);
+    expect(r.buckets.map(b => Math.round(b.pct))).toEqual([20, 20, 20, 20, 20]);
+  });
+
+  test("skips trades without mae_pct", () => {
+    const trades = [
+      closed({ realized_pl: 100 }),                 // no mae — excluded
+      closed({ realized_pl: 100, mae_pct: -3.0 }),  // included
+    ];
+    expect(winnerMaeDistribution(trades as any).n).toBe(1);
+  });
+
+  test("empty cohort → empty buckets, zero pct", () => {
+    const r = winnerMaeDistribution([]);
+    expect(r.n).toBe(0);
+    expect(r.buckets.every(b => b.n === 0 && b.pct === 0)).toBe(true);
+  });
+});
+
+
+describe("loserMfeDistribution", () => {
+  test("buckets losers by MFE magnitude, excludes winners", () => {
+    const trades = [
+      closed({ realized_pl: -100, mfe_pct: 1.5 }),   // 0-2
+      closed({ realized_pl: -100, mfe_pct: 4.0 }),   // 2-5
+      closed({ realized_pl: -100, mfe_pct: 8.0 }),   // 5-10
+      closed({ realized_pl: -100, mfe_pct: 15.0 }),  // 10-20
+      closed({ realized_pl: -100, mfe_pct: 30.0 }),  // ≥20
+      closed({ realized_pl: 100, mfe_pct: 50.0 }),   // winner — excluded
+    ];
+    const r = loserMfeDistribution(trades as any);
+    expect(r.n).toBe(5);
+    expect(r.buckets.map(b => b.n)).toEqual([1, 1, 1, 1, 1]);
+  });
+
+  test("bucket boundaries are [lo, hi) — hi is EXCLUSIVE", () => {
+    // 5.0% falls into the [5, 10) bucket, not [2, 5).
+    const trades = [closed({ realized_pl: -100, mfe_pct: 5.0 })];
+    const r = loserMfeDistribution(trades as any);
+    expect(r.buckets[1].n).toBe(0);  // 2-5
+    expect(r.buckets[2].n).toBe(1);  // 5-10
+  });
+});
+
+
+describe("entryQualityBySetup", () => {
+  test("computes per-setup avg MAE / winner-MAE / worst MAE", () => {
+    const trades = [
+      // A: 5 trades, 3 winners
+      closed({ rule: "A", realized_pl: 100, mae_pct: -2 }),
+      closed({ rule: "A", realized_pl: 100, mae_pct: -4 }),
+      closed({ rule: "A", realized_pl: 100, mae_pct: -6 }),
+      closed({ rule: "A", realized_pl: -50, mae_pct: -10 }),
+      closed({ rule: "A", realized_pl: -50, mae_pct: -12 }),
+    ];
+    const rows = entryQualityBySetup(trades as any);
+    expect(rows).toHaveLength(1);
+    const a = rows[0];
+    expect(a.n).toBe(5);
+    // avgMae = (-2-4-6-10-12)/5 = -6.8
+    expect(a.avgMae).toBeCloseTo(-6.8, 5);
+    // avgMaeOnWinners = (-2-4-6)/3 = -4
+    expect(a.avgMaeOnWinners).toBeCloseTo(-4, 5);
+    expect(a.worstMae).toBe(-12);
+  });
+
+  test("filters out setups below minN", () => {
+    const trades = [
+      ...Array.from({ length: 5 }, (_, i) => closed({ rule: "A", realized_pl: 10, mae_pct: -1 })),
+      closed({ rule: "B", realized_pl: 10, mae_pct: -1 }),   // n=1 only
+    ];
+    const rows = entryQualityBySetup(trades as any);
+    expect(rows.map(r => r.setup)).toEqual(["A"]);
+  });
+
+  test("skips trades without mae_pct", () => {
+    const trades = [
+      closed({ rule: "A", realized_pl: 10, mae_pct: -1 }),
+      closed({ rule: "A", realized_pl: 10 }),  // no mae — excluded
+      closed({ rule: "A", realized_pl: 10, mae_pct: -1 }),
+      closed({ rule: "A", realized_pl: 10, mae_pct: -1 }),
+      closed({ rule: "A", realized_pl: 10, mae_pct: -1 }),
+      closed({ rule: "A", realized_pl: 10, mae_pct: -1 }),
+    ];
+    const rows = entryQualityBySetup(trades as any);
+    expect(rows[0].n).toBe(5);   // 5 with mae, 1 excluded
+  });
+
+  test("sorted by avgMaeOnWinners ascending (most punishing first)", () => {
+    // A: winner MAE avg -2
+    // B: winner MAE avg -8
+    // C: no winners → sorted last
+    const mk = (rule: string, pl: number, mae: number) =>
+      closed({ rule, realized_pl: pl, mae_pct: mae });
+    const trades = [
+      ...Array.from({ length: 5 }, () => mk("A", 100, -2)),
+      ...Array.from({ length: 5 }, () => mk("B", 100, -8)),
+      ...Array.from({ length: 5 }, () => mk("C", -100, -5)),   // all losers
+    ];
+    const rows = entryQualityBySetup(trades as any);
+    // Most punishing WINNER MAE first (B: -8), then A (-2), then C (no winners → end)
+    expect(rows.map(r => r.setup)).toEqual(["B", "A", "C"]);
   });
 });
