@@ -513,6 +513,16 @@ export interface TradePosition {
   total_cost: number;
   realized_pl: number;
   rule: string;
+  // Migration 047: buy-rule confluence support. Ordered array; rules[0]
+  // is the primary rule (kept in sync with the legacy `rule` scalar
+  // above). rules[1..] are confluence tags — display-only context.
+  // Optional because legacy rows pre-migration may lack it; treat
+  // missing / empty as "single-rule mode" and render `rule` alone.
+  rules?: string[];
+  // Mirrors B1 (earliest BUY) detail row's rules array. Same convention
+  // as `Buy_Rule` — used by surfaces that want the campaign's primary-
+  // rule mix rather than the summary's denormalized copy.
+  buy_rules?: string[];
   grade?: number | null;
   // Migration 016: equity options carry instrument_type='OPTION' + multiplier=100
   // so the UI can format dollar amounts as notional (×100) instead of premium.
@@ -547,6 +557,11 @@ export interface TradeDetail {
   amount: number;
   value: number;
   rule: string;
+  // Migration 047: per-transaction buy-rule confluence array. Same
+  // semantics as TradePosition.rules — rules[0] mirrors `rule`;
+  // rules[1..] are confluence tags. SELL rows carry a single-element
+  // array (the sell rule); the multi-select UI is buy-side only.
+  rules?: string[];
   instrument_type?: "STOCK" | "OPTION";
   multiplier?: number;
   [key: string]: any;

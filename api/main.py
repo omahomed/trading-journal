@@ -2486,7 +2486,8 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Shares": "shares", "Avg_Entry": "avg_entry", "Avg_Exit": "avg_exit",
         "Total_Cost": "total_cost", "Realized_PL": "realized_pl",
         "Unrealized_PL": "unrealized_pl", "Return_Pct": "return_pct",
-        "Rule": "rule", "Buy_Notes": "buy_notes", "Sell_Rule": "sell_rule",
+        "Rule": "rule", "Rules": "rules", "Buy_Rules": "buy_rules",
+        "Buy_Notes": "buy_notes", "Sell_Rule": "sell_rule",
         "Sell_Notes": "sell_notes", "Risk_Budget": "risk_budget", "Grade": "grade",
         "BE_Stop_Moved_At": "be_stop_moved_at",
         "Last_Updated": "last_updated",
@@ -5680,6 +5681,21 @@ def log_buy(request: Request, body: dict):
         price = float(body.get("price") or 0)
         stop_loss = float(body.get("stop_loss") or 0)
         rule = body.get("rule", "")
+        # Migration 047: buy-rule confluence. Body may supply `rules`
+        # (ordered array, primary first) instead of / in addition to
+        # `rule`. Coerce to a clean list of non-empty strings; fall
+        # through to `[rule]` when only the legacy scalar is present.
+        rules_raw = body.get("rules")
+        if isinstance(rules_raw, list):
+            rules = [str(r).strip() for r in rules_raw if r is not None and str(r).strip()]
+        elif rule:
+            rules = [str(rule).strip()]
+        else:
+            rules = []
+        # Sync scalar to array's primary so any downstream reader that
+        # still consumes `rule` sees the right value.
+        if rules:
+            rule = rules[0]
         notes = body.get("notes", "")
         date_str = body.get("date", datetime.now().strftime("%Y-%m-%d"))
         time_str = body.get("time", datetime.now().strftime("%H:%M"))
@@ -5797,7 +5813,8 @@ def log_buy(request: Request, body: dict):
                 "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                 "Open_Date": date_str, "Shares": shares,
                 "Avg_Entry": price, "Total_Cost": value,
-                "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+                "Stop_Loss": stop_loss, "Rule": rule, "Rules": rules,
+                "Buy_Notes": notes,
                 "Risk_Budget": compute_trade_risk(new_buy_df, multiplier),
                 "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 "Strategy": strategy,
@@ -5880,7 +5897,8 @@ def log_buy(request: Request, body: dict):
                     "Trade_ID": trade_id, "Ticker": ticker, "Status": "OPEN",
                     "Open_Date": date_str, "Shares": shares,
                     "Avg_Entry": price, "Total_Cost": value,
-                    "Stop_Loss": stop_loss, "Rule": rule, "Buy_Notes": notes,
+                    "Stop_Loss": stop_loss, "Rule": rule, "Rules": rules,
+                    "Buy_Notes": notes,
                     "Risk_Budget": compute_trade_risk(orphan_new_buy_df, multiplier),
                     "Instrument_Type": instrument_type, "Multiplier": multiplier,
                     "Strategy": strategy,
@@ -5890,10 +5908,13 @@ def log_buy(request: Request, body: dict):
 
         # Save detail row (after summary so FK constraint is satisfied).
         # Trx_ID is assigned by the helper — the placeholder here is overwritten.
+        # Migration 047: Rules array carries the per-lot confluence tags.
+        # Scale-in lots can have their own rules distinct from the B1's.
         detail_row = {
             "Trade_ID": trade_id, "Ticker": ticker, "Action": "BUY",
             "Date": date_time, "Shares": shares, "Amount": price,
-            "Value": value, "Rule": rule, "Notes": notes,
+            "Value": value, "Rule": rule, "Rules": rules,
+            "Notes": notes,
             "Stop_Loss": stop_loss, "Trx_ID": "",
             "Instrument_Type": instrument_type, "Multiplier": multiplier,
         }
@@ -6563,6 +6584,21 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
         # shares × amount × multiplier regardless of what the form posted.
         value = round(shares * amount * multiplier, 2)
 
+        # Migration 047: accept `rules` (ordered array, primary first) in
+        # addition to the legacy `rule` scalar. When both are present the
+        # array wins; the scalar is derived as rules[0]. Behaves the same
+        # for the buy-side confluence multi-select and legacy single-rule
+        # forms.
+        _edit_rules_raw = body.get("rules")
+        _edit_rule_val = body.get("rule", "")
+        if isinstance(_edit_rules_raw, list):
+            _edit_rules = [str(r).strip() for r in _edit_rules_raw if r is not None and str(r).strip()]
+        elif _edit_rule_val:
+            _edit_rules = [str(_edit_rule_val).strip()]
+        else:
+            _edit_rules = []
+        if _edit_rules:
+            _edit_rule_val = _edit_rules[0]
         row_dict = {
             "Trade_ID": effective_trade_id,
             "Ticker": effective_ticker,
@@ -6571,7 +6607,8 @@ def edit_transaction_endpoint(request: Request, body: dict = Body(...)):
             "Shares": shares,
             "Amount": amount,
             "Value": value,
-            "Rule": body.get("rule", ""),
+            "Rule": _edit_rule_val,
+            "Rules": _edit_rules,
             "Notes": body.get("notes", ""),
             "Stop_Loss": body.get("stop_loss", 0),
             # trx_id is immutable post-creation — strict-mode check above
