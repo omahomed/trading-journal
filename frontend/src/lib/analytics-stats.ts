@@ -425,6 +425,9 @@ export interface StopCapRow {
    *  bound" caveat until this drops below Infinity. */
   clippedWinnerCount: number;
   clippedWinnerForegonePl: number;
+  /** Constituent trades — enables the row-level drilldown. */
+  losersBreaching: TradePosition[];
+  winnersClipped: TradePosition[];
 }
 
 /** Stop-cap upper bound: for each cap X, count losers whose |return_pct|
@@ -456,12 +459,15 @@ export function stopCapScenario(
     let breachCount = 0;
     let clippedWinnerCount = 0;
     let clippedWinnerForegonePl = 0;
+    const losersBreaching: TradePosition[] = [];
+    const winnersClipped: TradePosition[] = [];
     for (const t of trades) {
       const rp = returnPctOf(t);
       const cost = totalCostOf(t);
       if (rp < -X && cost > 0) {
         breachCount += 1;
         dollarsSaved += ((Math.abs(rp) - X) / 100) * cost;
+        losersBreaching.push(t);
       }
       if (maePctOf) {
         const mae = maePctOf(t);
@@ -469,10 +475,15 @@ export function stopCapScenario(
         if (mae != null && mae < -X && realizedPl > 0) {
           clippedWinnerCount += 1;
           clippedWinnerForegonePl += realizedPl;
+          winnersClipped.push(t);
         }
       }
     }
-    return { capPct: X, breachCount, dollarsSaved, clippedWinnerCount, clippedWinnerForegonePl };
+    return {
+      capPct: X, breachCount, dollarsSaved,
+      clippedWinnerCount, clippedWinnerForegonePl,
+      losersBreaching, winnersClipped,
+    };
   });
 }
 
@@ -488,6 +499,8 @@ export interface ExcursionBucket {
   hiExclusive: number | null;
   n: number;
   pct: number;             // n / total * 100
+  /** Constituent trades in this bucket — enables drilldown. */
+  trades: TradePosition[];
 }
 
 /** Winner-MAE distribution: how deep do winners typically dip before
@@ -499,7 +512,8 @@ export function winnerMaeDistribution(
 ): { buckets: ExcursionBucket[]; n: number } {
   const winners = trades.filter(t => realized(t) > 0 && (t as any).mae_pct != null);
   return _bucketByMagnitude(
-    winners.map(t => Number((t as any).mae_pct ?? 0)),
+    winners,
+    (t) => Number((t as any).mae_pct ?? 0),
     [0, 2, 5, 8, 12],
     (lo, hi) => hi == null ? `≥ ${lo}%` : `${lo}–${hi}%`,
   );
@@ -514,32 +528,35 @@ export function loserMfeDistribution(
 ): { buckets: ExcursionBucket[]; n: number } {
   const losers = trades.filter(t => realized(t) < 0 && (t as any).mfe_pct != null);
   return _bucketByMagnitude(
-    losers.map(t => Number((t as any).mfe_pct ?? 0)),
+    losers,
+    (t) => Number((t as any).mfe_pct ?? 0),
     [0, 2, 5, 10, 20],
     (lo, hi) => hi == null ? `≥ ${lo}%` : `${lo}–${hi}%`,
   );
 }
 
 function _bucketByMagnitude(
-  values: number[],
+  items: TradePosition[],
+  valueOf: (t: TradePosition) => number,
   edges: readonly number[],   // ascending, first is 0; magnitude buckets
   label: (lo: number, hi: number | null) => string,
 ): { buckets: ExcursionBucket[]; n: number } {
-  const n = values.length;
-  const magnitudes = values.map(v => Math.abs(v));
+  const n = items.length;
   const buckets: ExcursionBucket[] = [];
   for (let i = 0; i < edges.length; i++) {
     const lo = edges[i];
     const hi = i + 1 < edges.length ? edges[i + 1] : null;
-    const count = magnitudes.filter(m =>
-      m >= lo && (hi == null || m < hi)
-    ).length;
+    const inBucket = items.filter(t => {
+      const m = Math.abs(valueOf(t));
+      return m >= lo && (hi == null || m < hi);
+    });
     buckets.push({
       label: label(lo, hi),
       loInclusive: lo,
       hiExclusive: hi,
-      n: count,
-      pct: n > 0 ? (count / n) * 100 : 0,
+      n: inBucket.length,
+      pct: n > 0 ? (inBucket.length / n) * 100 : 0,
+      trades: inBucket,
     });
   }
   return { buckets, n };
@@ -553,6 +570,8 @@ export interface EntryQualityRow {
   avgMaeOnWinners: number | null; // "dip you must tolerate on this setup"
   avgMfe: number | null;        // signed (≥ 0)
   worstMae: number | null;
+  /** Constituent trades — enables drilldown. */
+  trades: TradePosition[];
 }
 
 /** Per-setup MAE / MFE summary. Sorted by avgMaeOnWinners ascending
@@ -590,6 +609,7 @@ export function entryQualityBySetup(
       avgMaeOnWinners: mean(winnerMaes),
       avgMfe: mean(mfes),
       worstMae: maes.length > 0 ? Math.min(...maes) : null,
+      trades: arr,
     });
   }
   // Sort by avgMaeOnWinners ascending (most negative = most punishing

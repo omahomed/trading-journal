@@ -3172,6 +3172,11 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
   stopCapMae: ReturnType<typeof stopCapScenario>;
 }) {
   const mono = "var(--font-jetbrains), monospace";
+  // One expansion slot per section — click again on the same key to collapse.
+  const [winnerOpen, setWinnerOpen] = useState<string | null>(null);
+  const [loserOpen, setLoserOpen] = useState<string | null>(null);
+  const [stopCapOpen, setStopCapOpen] = useState<number | null>(null);
+  const [qualityOpen, setQualityOpen] = useState<string | null>(null);
 
   return (
     <>
@@ -3183,16 +3188,26 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
           How deep did winners dip before working? Answers "how much pain do I have to tolerate to catch the average winner on this book?"
-          <strong> n = {winnerDist.n} winners with MAE populated.</strong>
+          <strong> n = {winnerDist.n} winners with MAE populated.</strong> Click any bucket to see the constituent trades.
         </div>
         {winnerDist.n === 0 ? (
           <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No winners with MAE data in this cohort.</div>
         ) : (
-          <div className="grid grid-cols-5 gap-3">
-            {winnerDist.buckets.map(b => (
-              <ExcursionBucketTile key={b.label} bucket={b} color="#08a86b" />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-5 gap-3">
+              {winnerDist.buckets.map(b => (
+                <ExcursionBucketTile key={b.label} bucket={b} color="#08a86b"
+                                     selected={winnerOpen === b.label}
+                                     onClick={() => setWinnerOpen(winnerOpen === b.label ? null : b.label)} />
+              ))}
+            </div>
+            {winnerOpen && (
+              <MaeMfeTradesTable
+                title={`${winnerDist.buckets.find(b => b.label === winnerOpen)?.n ?? 0} winners with |MAE| in ${winnerOpen}`}
+                trades={winnerDist.buckets.find(b => b.label === winnerOpen)?.trades ?? []}
+                sortBy="mae-asc" />
+            )}
+          </>
         )}
       </div>
 
@@ -3204,16 +3219,26 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
           How far did losers rally before rolling over? A big tail here is the "let winners turn into losers" pattern — candidate for a "trail once above X%" rule.
-          <strong> n = {loserDist.n} losers with MFE populated.</strong>
+          <strong> n = {loserDist.n} losers with MFE populated.</strong> Click any bucket to see the constituent trades.
         </div>
         {loserDist.n === 0 ? (
           <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No losers with MFE data in this cohort.</div>
         ) : (
-          <div className="grid grid-cols-5 gap-3">
-            {loserDist.buckets.map(b => (
-              <ExcursionBucketTile key={b.label} bucket={b} color="#e5484d" />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-5 gap-3">
+              {loserDist.buckets.map(b => (
+                <ExcursionBucketTile key={b.label} bucket={b} color="#e5484d"
+                                     selected={loserOpen === b.label}
+                                     onClick={() => setLoserOpen(loserOpen === b.label ? null : b.label)} />
+              ))}
+            </div>
+            {loserOpen && (
+              <MaeMfeTradesTable
+                title={`${loserDist.buckets.find(b => b.label === loserOpen)?.n ?? 0} losers with MFE in ${loserOpen}`}
+                trades={loserDist.buckets.find(b => b.label === loserOpen)?.trades ?? []}
+                sortBy="mfe-desc" />
+            )}
+          </>
         )}
       </div>
 
@@ -3224,7 +3249,7 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
           🛡️ Stop-Cap Backtest (MAE-aware) {yearBadge}
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
-          For each hard stop cap X, this shows: <strong>$ saved</strong> from losers whose realized loss exceeded X (capping them there), MINUS <strong>$ foregone</strong> from winners whose MAE dipped below X (clipping them out). The <strong>Net delta</strong> is the honest answer.
+          For each hard stop cap X, this shows: <strong>$ saved</strong> from losers whose realized loss exceeded X (capping them there), MINUS <strong>$ foregone</strong> from winners whose MAE dipped below X (clipping them out). The <strong>Net delta</strong> is the honest answer. Click a row to see the trades on both sides.
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
@@ -3242,24 +3267,53 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
               {stopCapMae.map(r => {
                 const net = r.dollarsSaved - r.clippedWinnerForegonePl;
                 const netColor = net > 0 ? "#08a86b" : net < 0 ? "#e5484d" : "var(--ink-3)";
+                const isOpen = stopCapOpen === r.capPct;
                 return (
-                  <tr key={r.capPct} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>−{r.capPct}%</td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.breachCount}</td>
-                    <td className="px-3 py-2 text-right privacy-mask"
-                        style={{ fontFamily: mono, color: "#08a86b" }}>
-                      {formatCurrency(r.dollarsSaved, { showSign: false, decimals: 0 })}
-                    </td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{r.clippedWinnerCount}</td>
-                    <td className="px-3 py-2 text-right privacy-mask"
-                        style={{ fontFamily: mono, color: "#e5484d" }}>
-                      {formatCurrency(-r.clippedWinnerForegonePl, { showSign: false, decimals: 0 })}
-                    </td>
-                    <td className="px-3 py-2 text-right font-semibold privacy-mask"
-                        style={{ fontFamily: mono, color: netColor }}>
-                      {formatCurrency(net, { showSign: true, decimals: 0 })}
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={r.capPct}
+                        onClick={() => setStopCapOpen(isOpen ? null : r.capPct)}
+                        style={{ borderBottom: "1px solid var(--border)", cursor: "pointer",
+                                 background: isOpen ? "color-mix(in oklab, #0d6efd 5%, transparent)" : "transparent" }}>
+                      <td className="px-3 py-2 font-semibold" style={{ fontFamily: mono }}>
+                        <span style={{ display: "inline-block", width: 14, textAlign: "center", color: "var(--ink-4)" }}>{isOpen ? "▾" : "▸"}</span>
+                        −{r.capPct}%
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.breachCount}</td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: "#08a86b" }}>
+                        {formatCurrency(r.dollarsSaved, { showSign: false, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{r.clippedWinnerCount}</td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: "#e5484d" }}>
+                        {formatCurrency(-r.clippedWinnerForegonePl, { showSign: false, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                          style={{ fontFamily: mono, color: netColor }}>
+                        {formatCurrency(net, { showSign: true, decimals: 0 })}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr key={r.capPct + "-open"}>
+                        <td colSpan={6} style={{ padding: 0, background: "var(--bg)" }}>
+                          <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <div className="text-[11px] uppercase font-bold mb-2" style={{ color: "#e5484d" }}>
+                                Losers breaching −{r.capPct}% ({r.losersBreaching.length})
+                              </div>
+                              <MaeMfeTradesTable title="" trades={r.losersBreaching} sortBy="return-asc" compact />
+                            </div>
+                            <div>
+                              <div className="text-[11px] uppercase font-bold mb-2" style={{ color: "#08a86b" }}>
+                                Winners clipped by −{r.capPct}% ({r.winnersClipped.length})
+                              </div>
+                              <MaeMfeTradesTable title="" trades={r.winnersClipped} sortBy="mae-asc" compact />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 );
               })}
             </tbody>
@@ -3277,7 +3331,7 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
           🎯 Entry Quality by Setup {yearBadge}
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
-          Per-setup MAE / MFE. Sorted by <strong>avg winner MAE ascending</strong> — most punishing setups first. "Winner MAE" is the drawdown a working entry subjects you to before paying off; a big number means valid setups need a wide stop or you'll shake yourself out.
+          Per-setup MAE / MFE. Sorted by <strong>avg winner MAE ascending</strong> — most punishing setups first. "Winner MAE" is the drawdown a working entry subjects you to before paying off; a big number means valid setups need a wide stop or you'll shake yourself out. Click a row to see the trades tagged that setup.
         </div>
         {entryQuality.length === 0 ? (
           <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No setups with ≥ 5 trades and MAE data in this cohort.</div>
@@ -3295,24 +3349,47 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
                 </tr>
               </thead>
               <tbody>
-                {entryQuality.map(r => (
-                  <tr key={r.setup} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td className="px-3 py-2 font-semibold">{r.setup}</td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
-                      {r.avgMae == null ? "—" : `${r.avgMae.toFixed(2)}%`}
-                    </td>
-                    <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: "#e5484d" }}>
-                      {r.avgMaeOnWinners == null ? "—" : `${r.avgMaeOnWinners.toFixed(2)}%`}
-                    </td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
-                      {r.worstMae == null ? "—" : `${r.worstMae.toFixed(2)}%`}
-                    </td>
-                    <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#08a86b" }}>
-                      {r.avgMfe == null ? "—" : `+${r.avgMfe.toFixed(2)}%`}
-                    </td>
-                  </tr>
-                ))}
+                {entryQuality.map(r => {
+                  const isOpen = qualityOpen === r.setup;
+                  return (
+                    <>
+                      <tr key={r.setup}
+                          onClick={() => setQualityOpen(isOpen ? null : r.setup)}
+                          style={{ borderBottom: "1px solid var(--border)", cursor: "pointer",
+                                   background: isOpen ? "color-mix(in oklab, #0d6efd 5%, transparent)" : "transparent" }}>
+                        <td className="px-3 py-2 font-semibold">
+                          <span style={{ display: "inline-block", width: 14, textAlign: "center", color: "var(--ink-4)" }}>{isOpen ? "▾" : "▸"}</span>
+                          {r.setup}
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
+                        <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
+                          {r.avgMae == null ? "—" : `${r.avgMae.toFixed(2)}%`}
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: "#e5484d" }}>
+                          {r.avgMaeOnWinners == null ? "—" : `${r.avgMaeOnWinners.toFixed(2)}%`}
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
+                          {r.worstMae == null ? "—" : `${r.worstMae.toFixed(2)}%`}
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#08a86b" }}>
+                          {r.avgMfe == null ? "—" : `+${r.avgMfe.toFixed(2)}%`}
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr key={r.setup + "-open"}>
+                          <td colSpan={6} style={{ padding: 0, background: "var(--bg)" }}>
+                            <div className="px-6 py-4">
+                              <div className="text-[11px] uppercase font-bold mb-2" style={{ color: "var(--ink-4)" }}>
+                                {r.n} trades tagged {r.setup} · sorted by MAE (worst first)
+                              </div>
+                              <MaeMfeTradesTable title="" trades={r.trades} sortBy="mae-asc" compact />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -3323,9 +3400,21 @@ function ExcursionSection({ yearBadge, winnerDist, loserDist, entryQuality, stop
 }
 
 
-function ExcursionBucketTile({ bucket, color }: { bucket: { label: string; n: number; pct: number }; color: string }) {
+function ExcursionBucketTile({ bucket, color, selected, onClick }: {
+  bucket: { label: string; n: number; pct: number };
+  color: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="p-3 rounded-[10px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+    <button type="button" onClick={onClick}
+            className="p-3 rounded-[10px] text-left transition-all"
+            style={{
+              background: selected ? "color-mix(in oklab, #0d6efd 10%, var(--bg))" : "var(--bg)",
+              border: `1px solid ${selected ? "#0d6efd" : "var(--border)"}`,
+              cursor: "pointer",
+              boxShadow: selected ? "0 0 0 2px color-mix(in oklab, #0d6efd 20%, transparent)" : "none",
+            }}>
       <div className="text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
         {bucket.label}
       </div>
@@ -3333,6 +3422,96 @@ function ExcursionBucketTile({ bucket, color }: { bucket: { label: string; n: nu
         {bucket.n}
       </div>
       <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{bucket.pct.toFixed(0)}%</div>
+    </button>
+  );
+}
+
+
+/** Shared MAE/MFE-aware trades table used by all four Excursion drilldowns.
+ *  sortBy:
+ *    - "mae-asc"    → most negative MAE first (worst drawdown surfaces)
+ *    - "mfe-desc"   → largest MFE first (biggest give-back surfaces)
+ *    - "return-asc" → most negative return_pct first (biggest realized loss) */
+function MaeMfeTradesTable({ title, trades, sortBy, compact }: {
+  title: string;
+  trades: TradePosition[];
+  sortBy: "mae-asc" | "mfe-desc" | "return-asc";
+  compact?: boolean;
+}) {
+  const mono = "var(--font-jetbrains), monospace";
+  const sorted = useMemo(() => {
+    const key = (t: TradePosition): number => {
+      const anyT = t as any;
+      if (sortBy === "mae-asc") return Number(anyT.mae_pct ?? 0);
+      if (sortBy === "mfe-desc") return -Number(anyT.mfe_pct ?? 0);
+      // return-asc
+      return Number(anyT.return_pct ?? 0);
+    };
+    return [...trades].sort((a, b) => key(a) - key(b));
+  }, [trades, sortBy]);
+  if (sorted.length === 0) {
+    return (
+      <div className="text-[11px] italic px-3 py-3" style={{ color: "var(--ink-4)" }}>
+        (no trades)
+      </div>
+    );
+  }
+  return (
+    <div className={compact ? "" : "mt-3 rounded-[10px]"}
+         style={compact ? undefined : { background: "var(--bg)", border: "1px solid var(--border)" }}>
+      {!compact && title && (
+        <div className="px-3 py-2 text-[11px] uppercase font-bold"
+             style={{ color: "var(--ink-4)", borderBottom: "1px solid var(--border)" }}>
+          {title}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]" style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: compact ? "var(--surface)" : "var(--surface)" }}>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Ticker</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Trade ID</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Setup</th>
+              <th className="px-2 py-1 text-left text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Open</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>MAE</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>MFE</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Return %</th>
+              <th className="px-2 py-1 text-right text-[10px] uppercase" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(t => {
+              const anyT = t as any;
+              const mae = anyT.mae_pct != null ? Number(anyT.mae_pct) : null;
+              const mfe = anyT.mfe_pct != null ? Number(anyT.mfe_pct) : null;
+              const rp = anyT.return_pct != null ? Number(anyT.return_pct) : null;
+              const pl = parseFloat(String(t.realized_pl || 0));
+              return (
+                <tr key={t.trade_id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td className="px-2 py-1 font-semibold" style={{ fontFamily: mono }}>{t.ticker}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{t.trade_id}</td>
+                  <td className="px-2 py-1" style={{ color: "var(--ink-2)" }}>{t.rule || "—"}</td>
+                  <td className="px-2 py-1" style={{ fontFamily: mono, color: "var(--ink-3)" }}>{String(t.open_date || "").slice(0, 10)}</td>
+                  <td className="px-2 py-1 text-right" style={{ fontFamily: mono, color: "#e5484d" }}>
+                    {mae == null ? "—" : `${mae.toFixed(2)}%`}
+                  </td>
+                  <td className="px-2 py-1 text-right" style={{ fontFamily: mono, color: "#08a86b" }}>
+                    {mfe == null ? "—" : `+${mfe.toFixed(2)}%`}
+                  </td>
+                  <td className="px-2 py-1 text-right"
+                      style={{ fontFamily: mono, color: rp == null ? "var(--ink-4)" : rp >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {rp == null ? "—" : `${rp >= 0 ? "+" : ""}${rp.toFixed(2)}%`}
+                  </td>
+                  <td className="px-2 py-1 text-right font-semibold privacy-mask"
+                      style={{ fontFamily: mono, color: pl >= 0 ? "#08a86b" : "#e5484d" }}>
+                    {formatCurrency(pl, { showSign: true, decimals: 0 })}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
