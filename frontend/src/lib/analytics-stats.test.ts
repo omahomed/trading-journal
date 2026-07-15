@@ -24,6 +24,7 @@ import {
   winnerMaeDistribution,
   loserMfeDistribution,
   entryQualityBySetup,
+  confluenceAnalysis,
 } from "./analytics-stats";
 import type { TradePosition, JournalHistoryPoint } from "./api";
 
@@ -1013,5 +1014,134 @@ describe("stopCapScenario — MAE-aware drilldown fields", () => {
     expect(rows[0].losersBreaching).toHaveLength(1);
     expect(rows[0].winnersClipped).toEqual([]);
     expect(rows[0].clippedWinnerCount).toBe(0);
+  });
+});
+
+
+describe("confluenceAnalysis", () => {
+  test("aggregates by (primary, confluence) pair; emits one row per unique combo", () => {
+    const trades = [
+      // 3 trades tagged (br8.1, br1.2) — a pair
+      closed({ trade_id: "T1", realized_pl: 100, rules: ["br8.1", "br1.2"] }),
+      closed({ trade_id: "T2", realized_pl: 200, rules: ["br8.1", "br1.2"] }),
+      closed({ trade_id: "T3", realized_pl: -50, rules: ["br8.1", "br1.2"] }),
+      // 3 trades tagged (br8.1, br3.1) — different pair
+      closed({ trade_id: "T4", realized_pl: 50,  rules: ["br8.1", "br3.1"] }),
+      closed({ trade_id: "T5", realized_pl: 50,  rules: ["br8.1", "br3.1"] }),
+      closed({ trade_id: "T6", realized_pl: 50,  rules: ["br8.1", "br3.1"] }),
+    ];
+    const rows = confluenceAnalysis(trades as any);
+    expect(rows).toHaveLength(2);
+    const pairs = rows.map(r => `${r.primary}||${r.confluence}`);
+    expect(pairs).toContain("br8.1||br1.2");
+    expect(pairs).toContain("br8.1||br3.1");
+  });
+
+  test("a triple-tag trade emits ONE row per confluence rule (no combinatorial explosion)", () => {
+    const trades = Array.from({ length: 3 }, (_, i) =>
+      closed({ trade_id: `T${i}`, realized_pl: 100, rules: ["br8.1", "br1.2", "br3.1"] })
+    );
+    const rows = confluenceAnalysis(trades as any);
+    // 2 confluence rules × 3 trades each = 2 rows
+    expect(rows).toHaveLength(2);
+    // Each row has n=3 (all 3 trades contribute to each pair)
+    for (const r of rows) expect(r.n).toBe(3);
+  });
+
+  test("lift = pair - primary_alone baseline; positive means confluence adds edge", () => {
+    // Primary br8.1 baseline: 5 trades, 3 wins (60% win rate)
+    // With confluence +br1.2: 3 trades, all wins (100% win rate) → +40 lift
+    const trades = [
+      closed({ trade_id: "T1", realized_pl: 100, rules: ["br8.1", "br1.2"] }),
+      closed({ trade_id: "T2", realized_pl: 200, rules: ["br8.1", "br1.2"] }),
+      closed({ trade_id: "T3", realized_pl: 300, rules: ["br8.1", "br1.2"] }),
+      // 2 more br8.1 without confluence — losers, drag baseline
+      closed({ trade_id: "T4", realized_pl: -100, rules: ["br8.1"] }),
+      closed({ trade_id: "T5", realized_pl: -100, rules: ["br8.1"] }),
+    ];
+    const rows = confluenceAnalysis(trades as any);
+    expect(rows).toHaveLength(1);
+    const r = rows[0];
+    expect(r.n).toBe(3);
+    expect(r.winPct).toBe(100);
+    expect(r.primaryAloneN).toBe(5);   // all 5 br8.1 trades in the baseline
+    expect(r.primaryAloneWinPct).toBe(60);
+    expect(r.liftWinPct).toBe(40);     // 100 - 60
+  });
+
+  test("minN filters out small-sample pairs", () => {
+    const trades = [
+      closed({ trade_id: "T1", realized_pl: 100, rules: ["br8.1", "br1.2"] }),
+      closed({ trade_id: "T2", realized_pl: 100, rules: ["br8.1", "br1.2"] }),
+      // Only 2 trades — below default minN=3, filtered out
+    ];
+    expect(confluenceAnalysis(trades as any)).toEqual([]);
+    expect(confluenceAnalysis(trades as any, { minN: 2 })).toHaveLength(1);
+  });
+
+  test("empty cohort → empty result", () => {
+    expect(confluenceAnalysis([])).toEqual([]);
+  });
+
+  test("trades without confluence contribute to primary baseline but not to any pair", () => {
+    // 5 br8.1 trades, none with confluence → no pair rows even though the
+    // primary is well-represented.
+    const trades = Array.from({ length: 5 }, (_, i) =>
+      closed({ trade_id: `T${i}`, realized_pl: 100, rules: ["br8.1"] })
+    );
+    expect(confluenceAnalysis(trades as any)).toEqual([]);
+  });
+
+  test("prefers buy_rules (B1 array) over rules (summary copy) when both are present", () => {
+    // buy_rules is the canonical B1 array from the LATERAL join; rules
+    // is the summary's denormalized copy. When they differ we trust buy_rules.
+    const trades = Array.from({ length: 3 }, (_, i) =>
+      closed({
+        trade_id: `T${i}`,
+        realized_pl: 100,
+        rule: "stale-rule",
+        rules: ["stale-primary", "stale-conf"],
+        buy_rules: ["br8.1", "br1.2"],   // canonical
+      })
+    );
+    const rows = confluenceAnalysis(trades as any);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].primary).toBe("br8.1");
+    expect(rows[0].confluence).toBe("br1.2");
+  });
+
+  test("sorted by liftWinPct descending (biggest positive edge first)", () => {
+    // Two pairs:
+    //   (br8.1, +br1.2) has 100% win rate; baseline 60% → +40 lift
+    //   (br8.1, +br3.1) has 33% win rate; baseline 60% → -27 lift
+    const trades = [
+      // (br8.1, br1.2) — 3 wins
+      ...Array.from({ length: 3 }, (_, i) =>
+        closed({ trade_id: `A${i}`, realized_pl: 100, rules: ["br8.1", "br1.2"] })),
+      // (br8.1, br3.1) — 1 win 2 losses
+      closed({ trade_id: "B0", realized_pl: 100, rules: ["br8.1", "br3.1"] }),
+      closed({ trade_id: "B1", realized_pl: -50, rules: ["br8.1", "br3.1"] }),
+      closed({ trade_id: "B2", realized_pl: -50, rules: ["br8.1", "br3.1"] }),
+      // primary-alone extras to establish baseline ≈ 60%
+      closed({ trade_id: "C0", realized_pl: 100, rules: ["br8.1"] }),
+      closed({ trade_id: "C1", realized_pl: 100, rules: ["br8.1"] }),
+      closed({ trade_id: "C2", realized_pl: -50, rules: ["br8.1"] }),
+      closed({ trade_id: "C3", realized_pl: -50, rules: ["br8.1"] }),
+    ];
+    const rows = confluenceAnalysis(trades as any);
+    expect(rows).toHaveLength(2);
+    // Positive-lift pair first
+    expect(rows[0].confluence).toBe("br1.2");
+    expect(rows[1].confluence).toBe("br3.1");
+    expect(rows[0].liftWinPct).toBeGreaterThan(rows[1].liftWinPct);
+  });
+
+  test("carries constituent trades on each row (drilldown enabler)", () => {
+    const trades = Array.from({ length: 3 }, (_, i) =>
+      closed({ trade_id: `T${i}`, realized_pl: 100, rules: ["br8.1", "br1.2"] })
+    );
+    const rows = confluenceAnalysis(trades as any);
+    expect(rows[0].trades).toHaveLength(3);
+    expect(rows[0].trades.map(t => t.trade_id)).toEqual(["T0", "T1", "T2"]);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy, type AddEffectivenessResponse } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
@@ -37,6 +37,8 @@ import {
   loserMfeDistribution,
   entryQualityBySetup,
   type EntryQualityRow,
+  confluenceAnalysis,
+  type ConfluenceRow,
 } from "@/lib/analytics-stats";
 // Pure CSS bar chart — no Recharts dependency
 
@@ -2483,6 +2485,7 @@ function EdgeCards({ trades, journal, mctStates, year, cohort }: {
     () => generateInsights(trades, { mctStateResolver: mctResolver }),
     [trades, mctResolver],
   );
+  const confluence = useMemo(() => confluenceAnalysis(trades), [trades]);
 
   const yearBadge = (
     <span className="text-[11px] font-normal" style={{ color: "var(--ink-4)" }}>
@@ -2507,6 +2510,9 @@ function EdgeCards({ trades, journal, mctStates, year, cohort }: {
           </div>
         </div>
       )}
+
+      {/* ─────────── Confluence Effect ─────────── */}
+      <ConfluenceCard rows={confluence} yearBadge={yearBadge} />
 
       {/* ─────────── Risk Metrics ─────────── */}
       <div className="mb-5 p-5 rounded-[14px]"
@@ -2873,6 +2879,114 @@ function ParetoTile({ label, pct, value, netPl, selected, onClick }: {
         {formatCurrency(netPl, { showSign: true, decimals: 0 })}
       </div>
     </button>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// ConfluenceCard — pair analysis with click-to-drill on each row.
+// Empty state renders a "no confluence yet" pitch pointing at Log Buy.
+// ═══════════════════════════════════════════════════════════════════════
+
+function ConfluenceCard({ rows, yearBadge }: {
+  rows: ConfluenceRow[];
+  yearBadge: React.ReactNode;
+}) {
+  const mono = "var(--font-jetbrains), monospace";
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  return (
+    <div className="mb-5 p-5 rounded-[14px]"
+         style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+      <div className="text-[15px] font-semibold mb-1">
+        🔀 Confluence Effect {yearBadge}
+      </div>
+      <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
+        Do secondary tags add edge? Each row compares a (primary + confluence) pair against the primary rule alone.
+        <strong> Lift columns are the answer</strong> — positive = the confluence tag helped; negative = noise or worse.
+        A trade tagged with 2 confluence rules contributes to 2 rows (pair-level, not triples).
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-[12px] italic mt-2 p-3 rounded-[10px]"
+             style={{ color: "var(--ink-4)", background: "var(--bg)", border: "1px solid var(--border)" }}>
+          No confluence tags in this cohort. Tag secondary rules in Log Buy or Trade Manager → Edit Transaction
+          to unlock this analysis. Pairs with n &lt; 3 are also filtered out to avoid single-trade noise.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "var(--bg)" }}>
+                <th className="px-3 py-2 text-left text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Primary → Confluence</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>n</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Pair Win %</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Baseline Win %</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Δ Win %</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Pair Avg P&L</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Δ Avg P&L</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase font-bold" style={{ color: "var(--ink-4)" }}>Net P&L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const key = `${r.primary}||${r.confluence}`;
+                const isOpen = expanded === key;
+                const liftWColor = r.liftWinPct > 0 ? "#08a86b" : r.liftWinPct < 0 ? "#e5484d" : "var(--ink-3)";
+                const liftPColor = r.liftAvgPl > 0 ? "#08a86b" : r.liftAvgPl < 0 ? "#e5484d" : "var(--ink-3)";
+                const netColor = r.netPl > 0 ? "#08a86b" : r.netPl < 0 ? "#e5484d" : "var(--ink-3)";
+                return (
+                  <React.Fragment key={key}>
+                    <tr onClick={() => setExpanded(isOpen ? null : key)}
+                        style={{ borderBottom: "1px solid var(--border)", cursor: "pointer",
+                                 background: isOpen ? "color-mix(in oklab, #0d6efd 5%, transparent)" : "transparent" }}>
+                      <td className="px-3 py-2 font-semibold">
+                        <span style={{ display: "inline-block", width: 14, textAlign: "center", color: "var(--ink-4)" }}>{isOpen ? "▾" : "▸"}</span>
+                        <span style={{ fontFamily: mono, color: "var(--ink-2)" }}>{r.primary}</span>
+                        <span style={{ color: "var(--ink-4)", margin: "0 4px" }}>→</span>
+                        <span style={{ fontFamily: mono, color: "#6366f1" }}>+{r.confluence}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{r.n}</td>
+                      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono }}>{r.winPct.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                        {r.primaryAloneWinPct.toFixed(0)}% <span style={{ opacity: 0.5 }}>(n={r.primaryAloneN})</span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold"
+                          style={{ fontFamily: mono, color: liftWColor }}>
+                        {r.liftWinPct >= 0 ? "+" : ""}{r.liftWinPct.toFixed(0)} pp
+                      </td>
+                      <td className="px-3 py-2 text-right privacy-mask"
+                          style={{ fontFamily: mono, color: r.avgPlPerTrade >= 0 ? "#08a86b" : "#e5484d" }}>
+                        {formatCurrency(r.avgPlPerTrade, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                          style={{ fontFamily: mono, color: liftPColor }}>
+                        {formatCurrency(r.liftAvgPl, { showSign: true, decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold privacy-mask"
+                          style={{ fontFamily: mono, color: netColor }}>
+                        {formatCurrency(r.netPl, { showSign: true, decimals: 0 })}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: 0, background: "var(--bg)" }}>
+                          <div className="px-6 py-4">
+                            <div className="text-[11px] uppercase font-bold mb-2" style={{ color: "var(--ink-4)" }}>
+                              {r.n} trades tagged {r.primary} + {r.confluence} · sorted by realized P&L desc
+                            </div>
+                            <MaeMfeTradesTable title="" trades={r.trades} sortBy="return-asc" compact />
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
