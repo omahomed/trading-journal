@@ -230,6 +230,53 @@ higher-risk flow (orphan-sell edge case). Wait for the user's "commit"
 before running `/commit`. Same-day `--exclude` filter can be added if
 they flag a specific dup.
 
+**Applies verbatim to Diva** — same procedure, account_number
+`600844252` (nickname "Diva"). Say "sync Diva trades" and follow the
+LTG steps against Diva's account. The user's "sync LTG and Diva trades"
+shorthand runs both accounts in parallel; each portfolio is committed
+independently ("commit ltg" / "commit diva" / "commit" for both).
+
+**Buy-only vs. sell-side days (KNOWN LIMITATION):**
+`scripts/import_robinhood_csv.py` is designed for full-history CSV
+imports — it reconstructs campaigns from a **self-contained** buy → sell
+walk within the file itself. It does NOT match a fresh SELL row against
+an already-committed OPEN summary. On days that include SELLs closing
+prior-day (or older) BUYs:
+
+  * The importer emits `"SELL without prior BUY for XYZ on YYYY-MM-DD
+    — skipped"` warnings and writes zero rows.
+  * Widening `--since` past the buy date doesn't fix it either: the
+    prior BUYs are already in the DB and the importer would try to
+    create duplicate campaigns.
+
+The **fallback**: call the same DB helpers `/api/trades/sell` uses,
+programmatically per sell. Reference implementation at
+[scratchpad/commit_sells.py from 2026-07-16 session]:
+
+```python
+import db_layer as db
+from api.main import (
+    _save_detail_with_unique_trx_id,
+    _recompute_summary_matching,
+    _normalize_trades,
+)
+# Founder UUID — sets tenant context so trades_details.user_id
+# NOT NULL / RLS passes (same fallback as migration triggers).
+db.current_user_id.set("d7e8f9a0-1b2c-4d3e-8f4a-5b6c7d8e9f0a")
+
+# For each sell: look up open trade_id by (portfolio, ticker), build
+# a detail_row (Action='SELL', Instrument_Type, Multiplier from the
+# existing summary), then:
+detail_id, trx_id = _save_detail_with_unique_trx_id(
+    portfolio, trade_id, "S", detail_row,
+)
+summary = _recompute_summary_matching(portfolio, trade_id, ticker)
+```
+
+Same LIFO walk + lot_closures population as normal Log Sell. Every
+sell that closes an existing OPEN campaign lands as a proper CLOSED
+row with realized_pl + trx_id `S{n}`.
+
 **`sync LTG`** (both) = `sync LTG prices` immediately, then `sync LTG trades`
 stopping at preview.
 
