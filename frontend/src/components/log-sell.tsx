@@ -464,10 +464,7 @@ export function LogSell({ navColor }: { navColor: string }) {
             })()}
 
             <FormField label="Sell Rule">
-              <select value={rule} onChange={e => setRule(e.target.value)}
-                      className="w-full h-[38px] px-3 rounded-[10px] text-[13px] appearance-none" style={inputStyle}>
-                {SELL_RULES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
+              <SearchSelect value={rule} onChange={setRule} options={SELL_RULES} placeholder="Type to search rules..." />
             </FormField>
 
             <div className="grid grid-cols-2 gap-4">
