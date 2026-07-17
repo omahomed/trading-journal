@@ -1376,8 +1376,24 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           const closeDate = trade.closed_date ? new Date(trade.closed_date) : new Date();
           const daysHeld = Math.max(1, Math.floor((closeDate.getTime() - openDate.getTime()) / 86400000));
 
-          // B1 entry (first buy)
-          const b1 = buys.length > 0 ? buys[0] : null;
+          // B1 entry (earliest BUY by date ASC, id ASC — matches the
+          // backend convention in db_layer.mirror_detail_edit_to_summary).
+          //
+          // NOT `buys[0]`: `allDetails` is loaded via api.tradesRecent()
+          // which returns rows recency-DESC. Passing that through the
+          // `.filter(action === 'BUY')` preserves the DESC order, so
+          // `buys[0]` is the LATEST buy (A13, not B1) — which made every
+          // downstream b1-derived metric (Core P&L, B1 Price, Core Band,
+          // scale-out ladder attribution) point at the wrong lot.
+          const buysSortedAsc = [...buys].sort((a, b) => {
+            const ad = new Date(String(a.date || "")).getTime();
+            const bd = new Date(String(b.date || "")).getTime();
+            if (ad !== bd) return ad - bd;
+            const aid = Number((a as any).detail_id ?? (a as any).id ?? 0);
+            const bid = Number((b as any).detail_id ?? (b as any).id ?? 0);
+            return aid - bid;
+          });
+          const b1 = buysSortedAsc.length > 0 ? buysSortedAsc[0] : null;
           const b1Price = b1 ? parseFloat(String(b1.amount || 0)) : 0;
           const bandLow = b1Price > 0 ? b1Price * 0.975 : 0;
           const bandHigh = b1Price > 0 ? b1Price * 1.025 : 0;
