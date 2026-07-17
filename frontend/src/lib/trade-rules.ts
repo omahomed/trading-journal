@@ -159,14 +159,14 @@ export const SELL_RULES: readonly SellRule[] = [
   },
   {
     code: "sr8.3",
-    description: "SR8 Dreadful Dead",
+    description: "SR8 Grateful Dead",
     oneLiner:
       "Final MO RS cascade fire. RS breaks below the 21-week MA — full exit, one-way. Terminates the campaign in `terminate` mode; awaits a fresh GREEN in `revert` mode.",
     mechanics: [
       "- **Trigger**: weekly RS breaks below its 21w MA (the deep-trend line)",
       "- **Action**: **full exit** — cascade target is **0% NLV**",
       "- **Not reversible**: this is the one-way signal. In `terminate` mode (default), the campaign is over. In `revert` mode, position closes and a fresh daily GREEN opens a new sub-entry.",
-      "- **Named separately from SR8.1 / SR8.2** so realized outcomes can be analyzed independently — DD exits typically capture the full downside; the analytical question is whether the earlier QUICK/QS trims added or subtracted value.",
+      "- **Named separately from SR8.1 / SR8.2** so realized outcomes can be analyzed independently — GD exits typically capture the full downside; the analytical question is whether the earlier QUICK/QS trims added or subtracted value.",
     ].join("\n"),
   },
   {

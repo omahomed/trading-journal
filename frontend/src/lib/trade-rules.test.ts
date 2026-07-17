@@ -26,7 +26,7 @@ describe("SELL_RULES canonical taxonomy", () => {
       "Big Cushion Sell Rule",
       "SR8 Quick Trim",
       "SR8 Quicksand Trim",
-      "SR8 Dreadful Dead",
+      "SR8 Grateful Dead",
       "Failed Breakout",
       "Earnings Exit",
       "BE Stop Out (moved at +10%)",
@@ -59,7 +59,7 @@ describe("SELL_RULE_LABELS — DB string format", () => {
     expect(SELL_RULE_LABELS[SELL_RULE_LABELS.length - 1]).toBe("sr13 Change of Character");
     expect(SELL_RULE_LABELS).toContain("sr8.1 SR8 Quick Trim");
     expect(SELL_RULE_LABELS).toContain("sr8.2 SR8 Quicksand Trim");
-    expect(SELL_RULE_LABELS).toContain("sr8.3 SR8 Dreadful Dead");
+    expect(SELL_RULE_LABELS).toContain("sr8.3 SR8 Grateful Dead");
   });
 
   it("has the same length as SELL_RULES", () => {
