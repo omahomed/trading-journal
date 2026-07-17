@@ -1406,10 +1406,42 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           const b1LadderAvgStop = b1Ladder && avgEntry > 0 ? avgEntry * (1 - b1LadderAvgPct / 100) : 0;
           const b1TrxId = b1 ? String((b1 as any).trx_id || "") : "";
 
-          // Core vs Add-on P&L
+          // Core vs Add-on P&L — LIFO-exact via lot_closures (migration
+          // 017). Sum the realized_pl on every closure where the B1 lot
+          // was the source, plus unrealized on any B1 shares still open.
+          //
+          // Prior implementation used (avgExit − b1Price) × b1Shares — a
+          // naive approximation that treats every B1 share as sold at the
+          // campaign-wide avg exit price. Under LIFO the B1 lot (oldest)
+          // is actually consumed LAST, and its shares get matched to
+          // various sells at different prices; averaging misses the
+          // point. Example — SNDK 202604-014: B1 (50 sh @ $726) sold via
+          // LIFO to SB1/SB2 (early, ~$700, losses) and S7/S8 (very late,
+          // $1,349–$1,612, wins). Naive avgExit approximation → +$42,119.
+          // LIFO-exact via lot_closures → +$17,074.
+          //
+          // Falls back to the naive formula for legacy trades with no
+          // persisted closures (pre-migration-017 imports) so the tile
+          // still renders something defensible.
           const hasAddons = buys.length > 1;
           const b1Shares = b1 ? parseFloat(String(b1.shares || 0)) : 0;
-          const corePl = b1Price > 0 && avgExit > 0 ? (avgExit - b1Price) * b1Shares * multiplier : 0;
+          const b1ClosureTrxId = b1 ? String((b1 as any).trx_id || "") : "";
+          let corePl = 0;
+          if (b1ClosureTrxId && tradeClosures.length > 0) {
+            const b1Closures = tradeClosures.filter(c => c.buy_trx_id === b1ClosureTrxId);
+            const coreRealized = b1Closures.reduce((a, c) => a + Number(c.realized_pl || 0), 0);
+            const coreClosedShares = b1Closures.reduce((a, c) => a + Number(c.shares || 0), 0);
+            const coreOpenShares = Math.max(0, b1Shares - coreClosedShares);
+            const currentPrice = isOpen ? (livePrices[trade.ticker] || 0) : 0;
+            const coreUnrealized = isOpen && coreOpenShares > 0 && b1Price > 0 && currentPrice > 0
+              ? (currentPrice - b1Price) * coreOpenShares * multiplier
+              : 0;
+            corePl = coreRealized + coreUnrealized;
+          } else {
+            corePl = b1Price > 0 && avgExit > 0
+              ? (avgExit - b1Price) * b1Shares * multiplier
+              : 0;
+          }
 
           const isExpanded = expandedCard === trade.trade_id;
 
