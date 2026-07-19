@@ -9,6 +9,7 @@ import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { SIZING_MODES, mctStateToSizingMode, type SizingModeIndex } from "@/lib/sizing-mode";
 import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
+import { computePyramidSizing, type PyramidSizerResults, PYRAMID_ADD_CAP_PCT, PYRAMID_CAMPAIGN_CEILING_PCT } from "@/lib/pyramid-sizer";
 import { MobileSelectSheet } from "./mobile-select-sheet";
 import { MobileHoldingPicker } from "./mobile-holding-picker";
 import { NumberFieldCell, ReadOnlyFieldCell } from "./mobile-form-fields";
@@ -185,7 +186,7 @@ const DEFAULT_PYRAMID_RULES = { trigger_pct: 5, alloc_pct: 20 };
 // with BUY-before-SELL tiebreak, SELLs pop from end. Result: array of
 // surviving BUY lots in chronological order; inventory[last] is the
 // most recent BUY not fully consumed.
-type InventoryLot = { qty: number; price: number };
+type InventoryLot = { qty: number; price: number; stopLoss: number; label?: string };
 
 function buildLIFOInventory(
   details: TradeDetail[],
@@ -211,7 +212,9 @@ function buildLIFOInventory(
 
     if (action === "BUY") {
       if (price === 0) price = fallbackAvg;
-      inventory.push({ qty: shares, price });
+      const stopLoss = Number((tx as any).stop_loss ?? 0) || 0;
+      const label = String((tx as any).trx_id ?? "") || undefined;
+      inventory.push({ qty: shares, price, stopLoss, label });
     } else if (action === "SELL") {
       let sellQty = shares;
       while (sellQty > 0 && inventory.length > 0) {
@@ -381,6 +384,11 @@ export function MobilePositionSizer() {
         if (data && typeof data.price === "number") {
           setEntryPrice(String(data.price));
           if (typeof data.atr_pct === "number") setAtrPct(data.atr_pct);
+          // Pyramid tab needs ema_21 + sma_50 to gate rule 1 (location)
+          // and populate the Use → cells. Volatility gets these from the
+          // ticker-input effect; the holding path was missing them.
+          setEma21(data.ema_21);
+          setSma50(data.sma_50);
           setPriceError(null);
         }
       })
@@ -535,75 +543,41 @@ export function MobilePositionSizer() {
     return avg > 0 ? avg : Number(selectedHolding.avg_entry ?? 0) || 0;
   }, [selectedHolding, holdingInventory]);
 
-  // Pyramid audit — inline math mirroring desktop pyramidResults
-  // (position-sizer.tsx:437-484) field-for-field. Cushion-driven
-  // tiers (NOT MCT-driven SIZING_MODES) defined inline via
-  // pyramidTierForCushion above.
-  const pyramid = useMemo(() => {
+  // Pyramid audit — delegates to computePyramidSizing (six-rule model,
+  // 2026-07-18). Requires Key Level input + 21 EMA from priceLookup.
+  const pyramid: PyramidSizerResults | null = useMemo(() => {
     if (activeTab !== "pyramid") return null;
     if (!selectedHolding) return null;
     if (entry <= 0 || eq <= 0 || atr <= 0) return null;
     if (holdingInventory.length === 0) return null;
+    if (!(ema21 && ema21 > 0)) return null;
+    if (keyLevel <= 0) return null;
 
-    const shares = Number(selectedHolding.shares ?? 0) || 0;
-    const avgCost = holdingAvgCost;
-    const lastBuy = holdingInventory[holdingInventory.length - 1];
-    const lastBuyPrice = lastBuy.price;
-    const lastBuyProfitPct = lastBuyPrice > 0 ? ((entry - lastBuyPrice) / lastBuyPrice) * 100 : 0;
-    const cushionPct = avgCost > 0 ? ((entry - avgCost) / avgCost) * 100 : 0;
+    const heldLots = holdingInventory.map((l) => ({
+      shares: l.qty,
+      entry: l.price,
+      stopLoss: l.stopLoss,
+      label: l.label,
+    }));
+    const lastHeldBuyPrice = holdingInventory[holdingInventory.length - 1]?.price ?? 0;
 
-    const baseAddPct = pyramidRules.alloc_pct / 100;
-    const thresholdPct = pyramidRules.trigger_pct;
-
-    let scaleFactor: number;
-    if (lastBuyProfitPct >= thresholdPct) scaleFactor = 1.0;
-    else if (lastBuyProfitPct > 0) scaleFactor = lastBuyProfitPct / thresholdPct;
-    else scaleFactor = 0;
-
-    const pyramidMaxShares = Math.ceil(shares * baseAddPct * scaleFactor);
-
-    const tier = pyramidTierForCushion(cushionPct);
-    const dailyRiskBudget = eq * (tier.tolPct / 100);
-    const atrRiskBudget = dailyRiskBudget * tier.atrMult;
-    const atrDecimal = atr / 100;
-    const maxSharesAtr = Math.floor(atrRiskBudget / (entry * atrDecimal));
-    const maxSharesCap = Math.floor((eq * (PYRAMID_HARD_CAP_PCT / 100)) / entry);
-    const positionCeiling = Math.min(maxSharesAtr, maxSharesCap);
-    const roomToAdd = Math.max(0, positionCeiling - Math.floor(shares));
-
-    const pyramidAllowed = Math.min(pyramidMaxShares, roomToAdd);
-    const pyramidValue = pyramidAllowed * entry;
-    const baseAdd = Math.floor(shares * baseAddPct);
-
-    const newTotalAfter = Math.floor(shares) + pyramidAllowed;
-    const newAvgCostAfter =
-      newTotalAfter > 0
-        ? (Math.floor(shares) * avgCost + pyramidAllowed * entry) / newTotalAfter
-        : 0;
-    const newWeightAfter = eq > 0 ? (newTotalAfter * entry) / eq * 100 : 0;
-    const currentWeight = eq > 0 ? (shares * entry) / eq * 100 : 0;
-
-    return {
-      ticker: selectedHolding.ticker,
-      shares,
-      avgCost,
-      lastBuyPrice,
-      lastBuyProfitPct,
-      cushionPct,
-      scaleFactor,
-      pyramidMaxShares,
-      baseAdd,
-      tier,
-      positionCeiling,
-      roomToAdd,
-      pyramidAllowed,
-      pyramidValue,
-      newTotalAfter,
-      newAvgCostAfter,
-      newWeightAfter,
-      currentWeight,
-    };
-  }, [activeTab, selectedHolding, entry, eq, atr, pyramidRules, holdingInventory, holdingAvgCost]);
+    try {
+      return computePyramidSizing({
+        equity: eq,
+        entry,
+        atrPct: atr,
+        ema21,
+        keyLevel,
+        tolPct,
+        heldLots,
+        currentPrice: entry,
+        lastHeldBuyPrice,
+      });
+    } catch (err) {
+      log.error("mobile-position-sizer", "pyramid-sizer compute failed", err);
+      return null;
+    }
+  }, [activeTab, selectedHolding, entry, eq, atr, ema21, keyLevel, tolPct, holdingInventory]);
 
   // Trim audit — inline math mirroring desktop trimResults
   // (position-sizer.tsx:486-531) field-for-field. Sell-side flow:
@@ -1131,7 +1105,6 @@ export function MobilePositionSizer() {
             </div>
           )}
 
-          {/* Inputs: Current Price + Equity on row 1, ATR % spans row 2 */}
           <div className="grid grid-cols-2 gap-2">
             <NumberFieldCell
               label="Current Price"
@@ -1140,33 +1113,80 @@ export function MobilePositionSizer() {
               ariaLabel="Current price"
               placeholder="0.00"
             />
+            <ReadOnlyFieldCell
+              label="NLV"
+              labelIcon={<Lock size={9} strokeWidth={1} className="text-m-text-dim" aria-hidden="true" />}
+              value={equityDisplay}
+            />
             <NumberFieldCell
-              label="Account Equity"
-              value={equity != null ? String(equity) : ""}
-              onChange={(v) => {
-                const n = parseFloat(v);
-                setEquity(Number.isFinite(n) && n > 0 ? n : null);
-              }}
-              ariaLabel="Account equity"
-              placeholder="0"
+              label="Key Level"
+              value={keyLevelStr}
+              onChange={setKeyLevelStr}
+              ariaLabel="Key level"
+              placeholder="0.00"
+            />
+            <ReadOnlyFieldCell
+              label="ATR (21D)"
+              labelIcon={<Lock size={9} strokeWidth={1} className="text-m-text-dim" aria-hidden="true" />}
+              value={atrDisplay}
             />
           </div>
-          <NumberFieldCell
-            label="ATR %"
-            value={atrPct != null ? String(atrPct) : ""}
-            onChange={(v) => {
-              const n = parseFloat(v);
-              setAtrPct(Number.isFinite(n) ? n : null);
+
+          {/* 21 EMA / 50 SMA cells with Use → shortcuts (mirror volatility tab). */}
+          {(ema21 !== null || sma50 !== null) && (
+            <div className="grid grid-cols-2 gap-2">
+              {ema21 !== null && (
+                <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px] flex items-center justify-between"
+                     data-testid="pyramid-ema21-cell">
+                  <div>
+                    <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">21 EMA</div>
+                    <div className="font-m-num text-base font-medium tabular-nums text-m-text">
+                      {formatCurrency(ema21)}
+                    </div>
+                  </div>
+                  <button type="button"
+                          data-testid="pyramid-use-ema21-btn"
+                          onClick={() => setKeyLevelStr(String(ema21))}
+                          className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
+                          style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}>
+                    Use →
+                  </button>
+                </div>
+              )}
+              {sma50 !== null && (
+                <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px] flex items-center justify-between"
+                     data-testid="pyramid-sma50-cell">
+                  <div>
+                    <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">50 SMA</div>
+                    <div className="font-m-num text-base font-medium tabular-nums text-m-text">
+                      {formatCurrency(sma50)}
+                    </div>
+                  </div>
+                  <button type="button"
+                          data-testid="pyramid-use-sma50-btn"
+                          onClick={() => setKeyLevelStr(String(sma50))}
+                          className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
+                          style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}>
+                    Use →
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mode picker (MCT auto-fills, manual downshift or Max upshift). */}
+          <ModePickerTile
+            sizingMode={sizingMode}
+            onChange={(i) => {
+              setSizingMode(i);
+              setSizingModeManual(true);
             }}
-            ariaLabel="ATR percent"
-            suffix="%"
-            placeholder="5.0"
           />
 
           {/* Pyramid Rules expander (collapsible, default closed) */}
-          <PyramidRulesExpander rules={pyramidRules} />
+          <PyramidRulesExpander />
 
-          <PyramidResultBlock result={pyramid} rules={pyramidRules} />
+          <PyramidResultBlock result={pyramid} tolPct={tolPct} ema21={ema21} entry={entry} />
         </div>
       )}
 
@@ -1448,11 +1468,9 @@ function ScaleInResultBlock({
 }
 
 
-// ── Pyramid rules expander ────────────────────────────────────────
+// ── Pyramid rules expander (six-rule composite model, 2026-07-18) ──
 
-type PyramidRulesShape = { trigger_pct: number; alloc_pct: number };
-
-function PyramidRulesExpander({ rules }: { rules: PyramidRulesShape }) {
+function PyramidRulesExpander() {
   return (
     <details className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-4 py-2.5">
       <summary
@@ -1462,258 +1480,206 @@ function PyramidRulesExpander({ rules }: { rules: PyramidRulesShape }) {
         View Pyramid Rules
       </summary>
       <div className="mt-2 pb-1 text-[12px] leading-relaxed text-m-text-dim">
-        <p className="mb-1">
-          <strong className="text-m-text">How it works:</strong>
-        </p>
+        <p className="mb-1"><strong className="text-m-text">Four gates + sizing:</strong></p>
         <ol className="ml-4 flex list-decimal flex-col gap-0.5">
-          <li>
-            Each add is capped at <strong className="text-m-text">{rules.alloc_pct}%</strong> of your current shares
-          </li>
-          <li>
-            Your last buy must be up <strong className="text-m-text">at least {rules.trigger_pct}%</strong> for a full-size add
-          </li>
-          <li>
-            If last buy is up less than {rules.trigger_pct}%, the add scales proportionally:{" "}
-            <code className="rounded-[4px] bg-m-surface-2 px-1 py-px font-m-num text-[11px] tabular-nums text-m-text-muted">
-              (profit% / {rules.trigger_pct}%) × {rules.alloc_pct}%
-            </code>
-          </li>
-          <li>
-            If last buy is <strong className="text-m-text">flat or down</strong>, no add is allowed
-          </li>
-          <li>
-            The add is also capped by your ATR limit and {rules.alloc_pct}% hard cap
-          </li>
+          <li>Price ≤ 21 EMA + 1 × ATR (else extended → no add)</li>
+          <li>Last held buy up ≥ 5% for full size; 0–5% prorated; below → no add</li>
+          <li>Budget = Mode% × NAV; headroom = budget − Σ (held lots × max(0, entry − stop))</li>
+          <li>Total notional ≤ 25% NAV (appreciation-inclusive)</li>
         </ol>
+        <p className="mt-2 mb-1"><strong className="text-m-text">Sizing:</strong> composite = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%)). Shares = min(headroom / dist, 5% NAV / entry) × progress mult.</p>
+        <p className="mt-2 text-[11px]"><strong className="text-m-text">Broker note:</strong> every fill needs a trailing stop set at 21 EMA − 0.5 ATR (rising only). The output card includes the exact stop price to place.</p>
       </div>
     </details>
   );
 }
 
-// ── Pyramid result block ──────────────────────────────────────────
-
-type PyramidSuccess = {
-  ticker: string;
-  shares: number;
-  avgCost: number;
-  lastBuyPrice: number;
-  lastBuyProfitPct: number;
-  cushionPct: number;
-  scaleFactor: number;
-  pyramidMaxShares: number;
-  baseAdd: number;
-  tier: { name: string; tolPct: number; atrMult: number };
-  positionCeiling: number;
-  roomToAdd: number;
-  pyramidAllowed: number;
-  pyramidValue: number;
-  newTotalAfter: number;
-  newAvgCostAfter: number;
-  newWeightAfter: number;
-  currentWeight: number;
-};
+// ── Pyramid result block (composite-model output) ─────────────────
 
 function PyramidResultBlock({
-  result,
-  rules,
+  result, tolPct, ema21, entry,
 }: {
-  result: PyramidSuccess | null;
-  rules: PyramidRulesShape;
+  result: PyramidSizerResults | null;
+  tolPct: number;
+  ema21: number | null;
+  entry: number;
 }) {
   if (result == null) {
     return (
-      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-5 text-center">
+      <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 py-5 text-center"
+           data-testid="pyramid-empty">
         <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
           Pyramid Analysis
         </div>
         <div className="mt-2 text-[12px] text-m-text-dim">
-          Select a holding and enter price, equity, and ATR to compute the pyramid.
+          Pick a holding, then enter Key Level. 21 EMA + ATR fill from the ticker.
         </div>
       </div>
     );
   }
 
-  const r = result;
-  const lastBuyToneIsUp = r.lastBuyProfitPct >= 0;
+  const { composite, budget, progress } = result;
+  const compositeSubtitle = composite.winner === "atr_floor"
+    ? `1 ATR floor: Entry − ${formatCurrency(result.atrPerShare)}`
+    : `Key Level − ${formatCurrency(composite.candidates.bufferApplied)} buffer`;
+  const bindLabel =
+    result.bind === "risk" ? `risk budget (${tolPct.toFixed(2)}%)` :
+    result.bind === "notional_cap" ? `per-add cap (${PYRAMID_ADD_CAP_PCT}% NAV)` :
+    result.bind === "progress" ? `progress (${(progress.multiplier * 100).toFixed(0)}%)` :
+    result.bind === "ceiling" ? `campaign ceiling (${PYRAMID_CAMPAIGN_CEILING_PCT}% NAV)` :
+    "blocked";
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="text-[13px] font-semibold text-m-text">
-        Pyramid Analysis: <span className="font-m-num tabular-nums text-m-accent">{r.ticker}</span>
+    <div className="flex flex-col gap-2.5" data-testid="pyramid-results">
+      {/* Context row: budget / campaign risk / headroom */}
+      <div className="grid grid-cols-3 gap-2">
+        <MiniMetric label="Budget" value={formatCurrency(budget.budgetDollars, { decimals: 0 })}
+                    sub={`${tolPct.toFixed(2)}% NAV`} />
+        <MiniMetric label="Campaign Risk" value={formatCurrency(budget.campaignRisk, { decimals: 0 })}
+                    sub={`${result.existingShares} sh held`} />
+        <MiniMetric label="Headroom" value={formatCurrency(Math.max(0, budget.headroom), { decimals: 0 })}
+                    sub={budget.headroom > 0 ? "available" : "none"} />
       </div>
 
-      {/* Last Buy Info — 3 stacked inline cards */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
-          Last Buy Info
-        </div>
-        <div className="grid grid-cols-1 gap-2">
-          <ResultCard
-            label="Last Buy Price"
-            value={formatCurrency(r.lastBuyPrice)}
-            inline
-          />
-          <ResultCard
-            label="Last Buy P&L"
-            value={`${r.lastBuyProfitPct >= 0 ? "+" : ""}${r.lastBuyProfitPct.toFixed(2)}%`}
-            sub={`${formatCurrency(r.lastBuyPrice * (r.lastBuyProfitPct / 100))}/share`}
-            tone={lastBuyToneIsUp ? "up" : "down"}
-            inline
-          />
-          <ResultCard
-            label="Total Cushion"
-            value={`${r.cushionPct >= 0 ? "+" : ""}${r.cushionPct.toFixed(2)}%`}
-            sub={`avg cost ${formatCurrency(r.avgCost)}`}
-            tone="warn"
-            inline
-          />
-        </div>
-      </div>
-
-      {/* Pyramid Calculation — 3 stacked inline cards */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
-          Pyramid Calculation
-        </div>
-        <div className="grid grid-cols-1 gap-2">
-          <ResultCard
-            label={`Base Add (${rules.alloc_pct}%)`}
-            value={`${r.baseAdd} shs`}
-            sub={`${rules.alloc_pct}% of ${Math.floor(r.shares)} shares`}
-            inline
-          />
-          <ResultCard
-            label="Scale Factor"
-            value={`${(r.scaleFactor * 100).toFixed(0)}%`}
-            sub={`last buy up ${r.lastBuyProfitPct.toFixed(1)}% (need ${rules.trigger_pct}%)`}
-            inline
-          />
-          <ResultCard
-            label="Pyramid Max"
-            value={`${r.pyramidMaxShares} shs`}
-            sub="after scaling"
-            inline
-          />
-        </div>
-      </div>
-
-      {/* Ceiling Check — 3 stacked inline cards */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
-          Ceiling Check
-        </div>
-        <div className="grid grid-cols-1 gap-2">
-          <ResultCard
-            label="Position Ceiling"
-            value={`${r.positionCeiling} shs`}
-            sub={`${r.tier.name} · ${r.tier.atrMult.toFixed(1)}× ATR`}
-            inline
-          />
-          <ResultCard
-            label="Current Position"
-            value={`${Math.floor(r.shares)} shs`}
-            sub={`${r.currentWeight.toFixed(1)}% weight`}
-            inline
-          />
-          <ResultCard
-            label="Room to Add"
-            value={`${r.roomToAdd} shs`}
-            sub="before hitting ceiling"
-            inline
-          />
-        </div>
-      </div>
-
-      {/* Verdict — 4 branches mirroring desktop L1015-1047 */}
-      <PyramidVerdict result={r} />
-    </div>
-  );
-}
-
-function PyramidVerdict({ result }: { result: PyramidSuccess }) {
-  const r = result;
-
-  if (r.scaleFactor === 0) {
-    const direction = r.lastBuyProfitPct < 0 ? "down" : "flat";
-    return (
-      <div
-        data-testid="pyramid-verdict-error"
-        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
-        style={{
-          background: "color-mix(in oklab, var(--m-down) 12%, transparent)",
-          borderColor: "var(--m-down)",
-          color: "var(--m-down)",
-        }}
-      >
-        <strong>NO ADD</strong> — Last buy is {direction} ({r.lastBuyProfitPct.toFixed(2)}%). Wait for it to work.
-      </div>
-    );
-  }
-
-  if (r.pyramidAllowed === 0 && r.pyramidMaxShares > 0) {
-    return (
-      <div
-        data-testid="pyramid-verdict-warning"
-        className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
-        style={{
-          background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
-          borderColor: "var(--m-warn-border)",
-          color: "var(--m-text)",
-        }}
-      >
-        <strong>NO ROOM</strong> — Pyramid says {r.pyramidMaxShares} shares, but position is at ATR/cap ceiling ({r.positionCeiling} shs).
-      </div>
-    );
-  }
-
-  if (r.pyramidAllowed > 0) {
-    const limitedBy = r.pyramidAllowed === r.pyramidMaxShares ? "Pyramid pace" : "ATR/Cap ceiling";
-    return (
-      <div className="flex flex-col gap-3">
+      {/* Block reasons */}
+      {result.blocked && (
         <div
-          data-testid="pyramid-verdict-success"
+          data-testid="pyramid-blocked"
           className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
           style={{
-            background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
-            borderColor: "var(--m-accent-border)",
+            background: "color-mix(in oklab, var(--m-warn) 12%, var(--m-surface))",
+            borderColor: "var(--m-warn-border)",
             color: "var(--m-text)",
           }}
         >
-          <strong>ADD {r.pyramidAllowed} shares</strong> ({formatCurrency(r.pyramidValue, { decimals: 0 })}) — limited by: {limitedBy}.
+          <strong className="uppercase tracking-[0.05em]">
+            {result.finalShares === 0 ? "No add" : `Clipped to ${result.finalShares} sh`}
+          </strong>
+          {result.blockReasons.map((r, i) => (
+            <div key={i} className="mt-1 text-[11px] text-m-text-dim">· {r}</div>
+          ))}
         </div>
+      )}
 
-        {/* 3 follow-up cards on success */}
-        <div className="grid grid-cols-1 gap-2">
-          <ResultCard
-            label="Add Shares"
-            value={`${r.pyramidAllowed} shs`}
-            sub={formatCurrency(r.pyramidValue, { decimals: 0 })}
-            tone="up"
-            inline
-          />
-          <ResultCard
-            label="New Total"
-            value={`${r.newTotalAfter} shs`}
-            sub={`${r.newWeightAfter.toFixed(1)}% weight`}
-            inline
-          />
-          <ResultCard
-            label="New Avg Cost"
-            value={formatCurrency(r.newAvgCostAfter)}
-            sub={`from ${formatCurrency(r.avgCost)}`}
-            inline
-          />
+      {/* THE ANSWER card */}
+      <div
+        data-testid="pyramid-answer"
+        className="rounded-m-xl border-[0.5px] px-5 pt-4 pb-4"
+        style={{
+          background: result.finalShares > 0
+            ? "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))"
+            : "var(--m-surface)",
+          borderColor: result.finalShares > 0 ? "var(--m-accent-border)" : "var(--m-border)",
+        }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
+            New Add
+          </div>
+          {result.finalShares > 0 && (
+            <span data-testid="pyramid-bind-badge"
+                  className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                  style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}>
+              {result.bind === "risk" ? "Risk-bound" :
+               result.bind === "notional_cap" ? "Cap-bound" :
+               result.bind === "ceiling" ? "Ceiling-bound" :
+               result.bind === "progress" ? "Progress-bound" : "Bound"}
+            </span>
+          )}
+        </div>
+        <div className="mt-1.5 flex items-baseline gap-2">
+          <span data-testid="pyramid-final-shares"
+                className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text">
+            {result.finalShares}
+          </span>
+          <span className="text-[15px] text-m-text-muted">
+            shs · {formatCurrency(result.addNotional, { decimals: 0 })}
+          </span>
+        </div>
+        <div className="mt-1 text-[11px] text-m-text-dim">
+          Composite <strong className="text-m-text">{formatCurrency(composite.price)}</strong>{" "}
+          · {composite.distancePct.toFixed(2)}% ({composite.atrFraction.toFixed(2)}× ATR)
+        </div>
+        <div className="mt-0.5 text-[11px] text-m-text-dim">Winner: {compositeSubtitle}</div>
+        <div className="mt-2 pt-1.5 flex items-baseline justify-between text-[11px] text-m-text-dim"
+             style={{ borderTop: "1px dashed var(--m-border)" }}>
+          <span>
+            Risk: <strong className="text-m-text">{formatCurrency(result.addRiskDollars, { decimals: 0 })}</strong>{" "}
+            ({result.addRiskPct.toFixed(2)}%)
+          </span>
+          <span>Bound by {bindLabel}</span>
         </div>
       </div>
-    );
-  }
 
-  return (
-    <div
-      data-testid="pyramid-verdict-info"
-      className="rounded-m-md border-[0.5px] border-m-border bg-m-surface-2 px-[14px] py-3 text-[12px] text-m-text-muted"
-    >
-      Scale factor resulted in 0 shares. Last buy needs more profit before adding.
+      {/* Campaign-after tile */}
+      <div
+        data-testid="pyramid-campaign-after"
+        className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
+      >
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          Campaign After Add
+        </div>
+        <div className="mt-1 font-m-num text-[20px] font-medium tabular-nums text-m-text">
+          {formatCurrency(result.projectedNotional, { decimals: 0 })}
+          <span className="ml-2 text-[13px] text-m-text-muted">
+            {result.projectedNotionalPct.toFixed(1)}% NAV · {result.projectedShares} sh
+          </span>
+        </div>
+      </div>
+
+      {/* Broker setup callout */}
+      {result.finalShares > 0 && (
+        <div
+          data-testid="pyramid-broker-callout"
+          className="rounded-m-md border-[0.5px] px-[14px] py-3 text-[12px]"
+          style={{
+            background: "color-mix(in oklab, var(--m-warn) 8%, var(--m-surface))",
+            borderColor: "var(--m-warn-border)",
+            color: "var(--m-text)",
+          }}
+        >
+          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--m-warn)" }}>
+            📌 Set up at broker
+          </div>
+          <div className="mt-1">
+            Trailing stop: <strong>{result.finalShares} sh @ {formatCurrency(composite.price)}</strong>
+          </div>
+          <div className="mt-0.5 text-[11px] text-m-text-dim">
+            {ema21 && ema21 > 0
+              ? `Anchor: 21 EMA − 0.5 ATR (rising only); MAX(${formatCurrency(composite.price)}, 21EMA_today − 0.5 ATR)`
+              : "Anchor: 21 EMA − 0.5 ATR (rising only)"}
+            {" · entry "}
+            {formatCurrency(entry)}
+          </div>
+        </div>
+      )}
+
+      {/* Held-lots table */}
+      {budget.lotRisks.length > 0 && (
+        <div
+          data-testid="pyramid-held-lots"
+          className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
+        >
+          <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim mb-1.5">
+            Held Lots (Risk Contribution)
+          </div>
+          <div className="flex flex-col gap-1 text-[11px] font-m-num tabular-nums">
+            {budget.lotRisks.map((l, i) => (
+              <div key={i}
+                   data-testid={`pyramid-lot-row-${i}`}
+                   className="grid grid-cols-[36px_1fr_1fr] items-baseline gap-2">
+                <span className="font-semibold text-m-text-muted">{l.label || `L${i + 1}`}</span>
+                <span className="text-m-text">{l.shares}sh @ {formatCurrency(l.entry)}</span>
+                <span className="text-right">
+                  {l.risk === 0
+                    ? <span style={{ color: "var(--m-accent)" }}>risk-free</span>
+                    : <span className="text-m-warn">{formatCurrency(l.risk, { decimals: 0 })}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -81,6 +81,13 @@ function detailFixture(opts: {
   action?: "BUY" | "SELL";
   shares: number;
   amount: number;
+  /** Per-lot stop from trades_details.stop_loss — feeds Pyramid's
+   *  Rule 3 risk accounting. Optional; defaults to 0 for callers that
+   *  don't care about pyramid math. */
+  stop_loss?: number;
+  /** Transaction ID (B1, A1, ...) — shown in the pyramid held-lots
+   *  table so the user can identify which lot is contributing risk. */
+  trx_id?: string;
 }): TradeDetail {
   return {
     trade_id: opts.trade_id,
@@ -91,6 +98,8 @@ function detailFixture(opts: {
     amount: opts.amount,
     value: opts.shares * opts.amount,
     rule: "",
+    stop_loss: opts.stop_loss ?? 0,
+    trx_id: opts.trx_id ?? "",
   } as TradeDetail;
 }
 
@@ -680,61 +689,99 @@ describe("MobilePositionSizer — Pyramid mount fetch", () => {
     expect(api.config).toHaveBeenCalledWith("pyramid_rules");
   });
 
-  test("uses fallback {trigger 5, alloc 20} when config fetch rejects", async () => {
+  test("renders the six-rule expander even when config fetch rejects (rules no longer config-driven)", async () => {
+    // Post-2026-07-18: pyramid rules are constants in @/lib/pyramid-sizer.
+    // The config fetch stays for backward-compat with any consumer, but
+    // it no longer influences the expander copy.
     setApiMocks({ pyramidRulesRejects: true });
     render(<MobilePositionSizer />);
     await waitFor(() => expect(api.config).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
     fireEvent.click(await screen.findByTestId("pyramid-rules-summary"));
-    // Default copy mentions "20%" and "5%"
-    const summaryContent = await screen.findByText(/Each add is capped at/i);
-    expect(summaryContent.textContent).toMatch(/20%/);
+    expect(await screen.findByText(/Total notional ≤ 25% NAV/)).toBeInTheDocument();
   });
 });
 
-describe("MobilePositionSizer — Pyramid Rules expander", () => {
+describe("MobilePositionSizer — Pyramid Rules expander (six-rule composite model)", () => {
   beforeEach(() => {
     withPortfolio();
     resetApiMocks();
-    setApiMocks({ pyramidRules: { trigger_pct: 7, alloc_pct: 25 } });
+    setApiMocks();
   });
 
-  test("renders the expander with config-driven copy after mount", async () => {
+  test("renders the four-gate summary in the expander", async () => {
     render(<MobilePositionSizer />);
-    await waitFor(() => expect(api.config).toHaveBeenCalled());
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
 
     const summary = await screen.findByTestId("pyramid-rules-summary");
     expect(summary).toHaveTextContent(/View Pyramid Rules/);
 
-    // Expand and confirm config values flow through
     fireEvent.click(summary);
-    const firstRule = await screen.findByText(/Each add is capped at/i);
-    expect(firstRule.textContent).toMatch(/25%/);
-    const secondRule = screen.getByText(/Your last buy must be up/i);
-    expect(secondRule.textContent).toMatch(/7%/);
+    // Four gates: location / progress / budget / ceiling.
+    expect(await screen.findByText(/Price ≤ 21 EMA/)).toBeInTheDocument();
+    expect(screen.getByText(/Last held buy up ≥ 5%/)).toBeInTheDocument();
+    expect(screen.getByText(/Budget = Mode/)).toBeInTheDocument();
+    expect(screen.getByText(/Total notional ≤ 25% NAV/)).toBeInTheDocument();
   });
 });
 
-describe("MobilePositionSizer — Pyramid math", () => {
+describe("MobilePositionSizer — Pyramid math (composite-stop model)", () => {
   beforeEach(() => {
     withPortfolio();
     resetApiMocks();
   });
 
-  test("success verdict: 100 shs @ avg 50, entry 60 → ADD 20 shares (Pyramid pace)", async () => {
-    // Cushion = (60-50)/50*100 = 20% → Tier 1 (tolPct 1.0, atrMult 2.0)
-    // baseAddPct = 0.20, threshold = 5; lastBuyProfitPct = 20% ≥ 5 → scaleFactor 1.0
-    // pyramidMaxShares = ceil(100 * 0.20 * 1.0) = 20
-    // maxSharesCap = floor(100000*0.20/60) = 333; positionCeiling = min(666, 333) = 333
-    // roomToAdd = 333 - 100 = 233; pyramidAllowed = min(20, 233) = 20 → success "Pyramid pace"
+  test("happy path: profitable name with Key Level anchor → answer card + broker callout", async () => {
+    // Fixture: NAV $400K, DELL-ish. 100sh @ 150 stopped at 148 (small
+    // per-lot risk), adding at 180. Key Level = 175, ATR 4.5%. Tight
+    // stops → positive headroom → sizer produces a real add.
     setApiMocks({
-      endNlv: 100_000,
-      atrPct: 5,
-      holdings: [holdingFixture({ trade_id: "T1", ticker: "AAA", shares: 100, avg_entry: 50 })],
-      details: [detailFixture({ trade_id: "T1", ticker: "AAA", shares: 100, amount: 50 })],
+      endNlv: 400_000,
+      state: "UPTREND",
+      price: 180,
+      atrPct: 4.5,
+      holdings: [holdingFixture({ trade_id: "T1", ticker: "DELL", shares: 100, avg_entry: 150 })],
+      details: [
+        detailFixture({ trade_id: "T1", ticker: "DELL", shares: 100, amount: 150, stop_loss: 148, trx_id: "B1" }),
+      ],
     });
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "DELL", price: 180, atr: 8.1, atr_pct: 4.5, ema_21: 175, sma_50: 165,
+    } as any);
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByText("DELL"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalledWith("DELL"));
+
+    // Type Key Level to trigger the sizer.
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "175" } });
+
+    // Answer + broker callout + held-lots table all render on success.
+    await screen.findByTestId("pyramid-answer");
+    expect(await screen.findByTestId("pyramid-broker-callout")).toBeInTheDocument();
+    expect(screen.getByTestId("pyramid-held-lots")).toBeInTheDocument();
+    expect(screen.getByTestId("pyramid-lot-row-0")).toHaveTextContent(/B1/);
+  });
+
+  test("blocked: extended above 21 EMA + 1 ATR → NO ADD with location reason", async () => {
+    setApiMocks({
+      endNlv: 400_000,
+      state: "UPTREND",
+      price: 200,
+      atrPct: 4.5,
+      holdings: [holdingFixture({ trade_id: "T2", ticker: "AAA", shares: 100, avg_entry: 150 })],
+      details: [detailFixture({ trade_id: "T2", ticker: "AAA", shares: 100, amount: 150, stop_loss: 145, trx_id: "B1" })],
+    });
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      // Entry 200, ATR = 9 → ceiling = 175 + 9 = 184 → 200 > 184 → BLOCK.
+      ticker: "AAA", price: 200, atr: 9, atr_pct: 4.5, ema_21: 175, sma_50: 170,
+    } as any);
     render(<MobilePositionSizer />);
     await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
 
@@ -742,23 +789,31 @@ describe("MobilePositionSizer — Pyramid math", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByText("AAA"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
 
-    // priceLookup auto-filled entry to 100 (default mock). Override + ATR.
-    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
-    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "175" } });
 
-    const verdict = await screen.findByTestId("pyramid-verdict-success");
-    expect(verdict).toHaveTextContent(/ADD 20 shares/);
-    expect(verdict).toHaveTextContent(/Pyramid pace/);
+    const blocked = await screen.findByTestId("pyramid-blocked");
+    expect(blocked).toHaveTextContent(/No add/i);
+    expect(blocked).toHaveTextContent(/Extended/);
+    // Broker callout absent on blocked adds.
+    expect(screen.queryByTestId("pyramid-broker-callout")).not.toBeInTheDocument();
   });
 
-  test("error verdict: lastBuy at 65 vs entry 60 → scaleFactor 0 → NO ADD (down)", async () => {
+  test("blocked: budget exhausted by held-lot risk → NO ADD with headroom reason", async () => {
+    // NAV $400K × Normal 0.50% = $2000 budget. Held lot with $3000 risk
+    // (100 sh × $30 open-risk) → headroom −$1000.
     setApiMocks({
-      endNlv: 100_000,
-      atrPct: 5,
-      holdings: [holdingFixture({ trade_id: "T2", ticker: "BBB", shares: 100, avg_entry: 65 })],
-      details: [detailFixture({ trade_id: "T2", ticker: "BBB", shares: 100, amount: 65 })],
+      endNlv: 400_000,
+      state: "UPTREND",
+      price: 180,
+      atrPct: 4.5,
+      holdings: [holdingFixture({ trade_id: "T3", ticker: "BBB", shares: 100, avg_entry: 150 })],
+      details: [detailFixture({ trade_id: "T3", ticker: "BBB", shares: 100, amount: 150, stop_loss: 120, trx_id: "B1" })],
     });
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "BBB", price: 180, atr: 8.1, atr_pct: 4.5, ema_21: 175, sma_50: 165,
+    } as any);
     render(<MobilePositionSizer />);
     await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
 
@@ -766,73 +821,13 @@ describe("MobilePositionSizer — Pyramid math", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByText("BBB"));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
 
-    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
-    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "175" } });
 
-    const verdict = await screen.findByTestId("pyramid-verdict-error");
-    expect(verdict).toHaveTextContent(/NO ADD/);
-    expect(verdict).toHaveTextContent(/down/);
-  });
-
-  test("warning verdict: position already at hard-cap ceiling → NO ROOM", async () => {
-    // Position 400 shares; equity 100k, entry 60 → maxSharesCap = 333
-    // positionCeiling ≤ 333 < 400 → roomToAdd = 0
-    // baseAddPct 0.20 × 400 × scaleFactor 1.0 → pyramidMaxShares = 80
-    // pyramidAllowed = min(80, 0) = 0 → warning path
-    setApiMocks({
-      endNlv: 100_000,
-      atrPct: 5,
-      holdings: [holdingFixture({ trade_id: "T3", ticker: "CCC", shares: 400, avg_entry: 50 })],
-      details: [detailFixture({ trade_id: "T3", ticker: "CCC", shares: 400, amount: 50 })],
-    });
-    render(<MobilePositionSizer />);
-    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
-
-    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByText("CCC"));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: "60" } });
-    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
-
-    const verdict = await screen.findByTestId("pyramid-verdict-warning");
-    expect(verdict).toHaveTextContent(/NO ROOM/);
-    expect(verdict).toHaveTextContent(/Pyramid says 80 shares/);
-  });
-
-  test.each([
-    { entry: 60, expected: "Tier 1 (High Cushion)" }, // cushion = 20% → Tier 1
-    { entry: 59.99, expected: "Tier 2 (Moderate)" },  // cushion = 19.98% → Tier 2
-    { entry: 52.5, expected: "Tier 2 (Moderate)" },   // cushion = 5% → Tier 2
-    { entry: 52.4, expected: "Tier 3 (Defense)" },    // cushion = 4.8% → Tier 3
-  ])("tier boundary: entry $entry → $expected", async ({ entry, expected }) => {
-    setApiMocks({
-      endNlv: 100_000,
-      atrPct: 5,
-      holdings: [holdingFixture({ trade_id: "T4", ticker: "DDD", shares: 100, avg_entry: 50 })],
-      details: [detailFixture({ trade_id: "T4", ticker: "DDD", shares: 100, amount: 50 })],
-    });
-    render(<MobilePositionSizer />);
-    await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
-
-    fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
-    fireEvent.click(await screen.findByRole("button", { name: /Holding:/ }));
-    fireEvent.click(within(await screen.findByRole("dialog")).getByText("DDD"));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText("Current price"), { target: { value: String(entry) } });
-    fireEvent.change(screen.getByLabelText("ATR percent"), { target: { value: "5" } });
-
-    // Position Ceiling card sub-text includes the tier name. Walk to the
-    // card root (rounded-m-md class) so we capture both the label row and
-    // the sub line below it.
-    await waitFor(() => {
-      const positionCeiling = screen.getByText("Position Ceiling");
-      const card = positionCeiling.closest("div.rounded-m-md") as HTMLElement | null;
-      expect(card?.textContent ?? "").toContain(expected);
-    });
+    const blocked = await screen.findByTestId("pyramid-blocked");
+    expect(blocked).toHaveTextContent(/No add/i);
+    expect(blocked).toHaveTextContent(/No headroom/);
   });
 });
 
