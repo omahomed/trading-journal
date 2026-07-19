@@ -5641,21 +5641,20 @@ def _save_detail_with_unique_trx_id(
     )
 
 
-# Phase 2 B-1: per-SELL matching-method stamping. log_sell and the
-# exercise_option option-leg SELL read the live MATCH_METHOD env var
-# at request time and write the resolved value into trades_details.
-# Per-call resolution (not module-load) keeps tests cleanly isolated
-# via monkeypatch.setenv.
-_VALID_MATCH_METHODS = ("LIFO", "HCFO")
+# Per-SELL matching-method stamping. Only 'LIFO' is a valid stamp for
+# new sells; HCFO was removed as a live option (2026-07-18). The calc
+# engine still walks HCFO for the 191 historical HCFO SELL rows on
+# recompute — do NOT strip the branch from trade_calc.py.
+_VALID_MATCH_METHODS = ("LIFO",)
 
 
 def _resolve_match_method() -> str:
-    """Read MATCH_METHOD env. Default 'LIFO'. Invalid → ValueError.
+    """Read MATCH_METHOD env. Only 'LIFO' is valid; anything else raises.
 
     Empty string and unset both resolve to 'LIFO'. Case-insensitive on
-    the env value. Whitespace stripped. Any other value raises so a
-    typo in deployment config surfaces loudly instead of silently
-    landing as NULL.
+    the env value. Whitespace stripped. HCFO was removed as a stamp
+    option — a lingering MATCH_METHOD=HCFO deploy config raises loudly
+    instead of silently stamping new sells with a discontinued method.
     """
     val = os.environ.get("MATCH_METHOD", "LIFO").strip().upper()
     if not val:
@@ -5663,7 +5662,8 @@ def _resolve_match_method() -> str:
     if val not in _VALID_MATCH_METHODS:
         raise ValueError(
             f"MATCH_METHOD={val!r} is invalid. Must be one of "
-            f"{_VALID_MATCH_METHODS} (or unset for LIFO default)."
+            f"{_VALID_MATCH_METHODS} (or unset for LIFO default). "
+            f"HCFO was removed as a stamp option; unset the env var."
         )
     return val
 

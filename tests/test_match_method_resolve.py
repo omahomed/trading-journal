@@ -3,11 +3,13 @@ helper that resolves MATCH_METHOD at SELL-write time.
 
 Behavior:
   Unset / empty / "LIFO" / "lifo" / etc.  → 'LIFO' (default)
-  "HCFO" / "hcfo" / "  HCFO  "            → 'HCFO'
   Any other non-empty value               → ValueError
 
-The helper is called once per log_sell request and once per
-exercise_option request (option-leg only — stock-leg BUY stays NULL).
+HCFO was removed as a stamp option (2026-07-18). New sells only stamp
+LIFO; a lingering MATCH_METHOD=HCFO env raises loudly. The calc engine
+still walks HCFO on recompute for historical SELL rows — this helper
+is only about *new* stamps.
+
 Per-call resolution (rather than module-load) is what makes these
 tests cleanly isolated via monkeypatch.setenv / delenv.
 """
@@ -47,28 +49,24 @@ class TestValidValues:
         monkeypatch.setenv("MATCH_METHOD", "LIFO")
         assert resolve() == "LIFO"
 
-    def test_hcfo_when_env_set_hcfo(self, resolve, monkeypatch):
-        monkeypatch.setenv("MATCH_METHOD", "HCFO")
-        assert resolve() == "HCFO"
-
     def test_lowercase_lifo(self, resolve, monkeypatch):
         monkeypatch.setenv("MATCH_METHOD", "lifo")
         assert resolve() == "LIFO"
 
-    def test_lowercase_hcfo(self, resolve, monkeypatch):
-        monkeypatch.setenv("MATCH_METHOD", "hcfo")
-        assert resolve() == "HCFO"
-
-    def test_mixed_case(self, resolve, monkeypatch):
-        monkeypatch.setenv("MATCH_METHOD", "HcFo")
-        assert resolve() == "HCFO"
-
     def test_surrounding_whitespace_stripped(self, resolve, monkeypatch):
-        monkeypatch.setenv("MATCH_METHOD", "  HCFO  ")
-        assert resolve() == "HCFO"
+        monkeypatch.setenv("MATCH_METHOD", "  LIFO  ")
+        assert resolve() == "LIFO"
 
 
 class TestInvalidValues:
+    def test_hcfo_now_raises(self, resolve, monkeypatch):
+        """HCFO was removed as a stamp option. A lingering deploy config
+        with MATCH_METHOD=HCFO must fail loudly instead of silently
+        stamping new sells with a discontinued method."""
+        monkeypatch.setenv("MATCH_METHOD", "HCFO")
+        with pytest.raises(ValueError, match="HCFO was removed"):
+            resolve()
+
     def test_invalid_value_raises_valueerror(self, resolve, monkeypatch):
         monkeypatch.setenv("MATCH_METHOD", "FIFO")
         with pytest.raises(ValueError, match="MATCH_METHOD"):
@@ -91,7 +89,6 @@ class TestInvalidValues:
         with pytest.raises(ValueError) as exc:
             resolve()
         assert "LIFO" in str(exc.value)
-        assert "HCFO" in str(exc.value)
 
 
 class TestPerCallResolution:
@@ -102,7 +99,5 @@ class TestPerCallResolution:
     def test_changes_between_calls_are_observed(self, resolve, monkeypatch):
         monkeypatch.setenv("MATCH_METHOD", "LIFO")
         assert resolve() == "LIFO"
-        monkeypatch.setenv("MATCH_METHOD", "HCFO")
-        assert resolve() == "HCFO"
         monkeypatch.delenv("MATCH_METHOD")
         assert resolve() == "LIFO"

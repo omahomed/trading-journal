@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS trades_details (
     trade_id VARCHAR(50) NOT NULL,
     ticker VARCHAR(20) NOT NULL,
     action VARCHAR(10) NOT NULL,  -- 'BUY' or 'SELL'
-    match_method TEXT,  -- 'LIFO' or 'HCFO' on SELL rows; NULL on BUY rows (migration 041)
+    match_method TEXT,  -- 'LIFO' on new SELL rows; NULL on BUY rows. 'HCFO' is legacy — historical rows only (2026-07-18 removal); the CHECK constraint still allows it so the calc engine can recompute those rows correctly.
     date TIMESTAMP NOT NULL,
     shares NUMERIC(12, 4) NOT NULL,
     amount NUMERIC(12, 4) NOT NULL,  -- Price per share
