@@ -2521,7 +2521,7 @@ function EdgeCards({ trades, journal, mctStates, year, cohort }: {
           🛡️ Risk Metrics {yearBadge}
         </div>
         <div className="text-[12px] mb-3" style={{ color: "var(--ink-4)" }}>
-          Actualized risk shape of the cohort — matches the New Entry page formula (position × stop = risk budget).
+          Actualized risk shape of the cohort — position × stop = risk budget.
         </div>
         <div className="grid grid-cols-4 gap-3">
           <RiskTile label="Avg Stop Distance"
@@ -2543,7 +2543,7 @@ function EdgeCards({ trades, journal, mctStates, year, cohort }: {
           <RiskTile label="Avg Risk / Trade"
                     value={risk.avgRiskPerTradePct}
                     suffix="%"
-                    tooltip="Theoretical risk budget = avg position % × avg stop distance % / 100. Compares to the New Entry page's 0.5%-of-NAV target."
+                    tooltip="Theoretical risk budget = avg position % × avg stop distance % / 100. Compares to the 0.5%-of-NAV target."
                     coverage="of NAV" />
         </div>
       </div>

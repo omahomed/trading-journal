@@ -6,18 +6,17 @@ import {
   exitLadderFloor,
   deriveAutoSizingMode,
   describeMctSource,
-  clampManualToDownwardOnly,
 } from "./sizing-mode";
 
 
 describe("sizing-mode lib", () => {
   describe("SIZING_MODES constant", () => {
     test("indices are stable: 0=pilot, 1=normal, 2=offense, 3=max (aggression order)", () => {
-      // Position Sizer + Log Buy + New Entry index into this array
-      // directly. Array order equals aggression order (least → most
-      // aggressive). Max (index 3, 1.00%) was added 2026-07-18 as a
-      // manual-only conviction upshift — MCT-state auto never lands
-      // on it. Reordering would silently flip user-visible behavior.
+      // Position Sizer + Log Buy index into this array directly. Array
+      // order equals aggression order (least → most aggressive). Max
+      // (index 3, 1.00%) was added 2026-07-18 as a manual-only
+      // conviction upshift — MCT-state auto never lands on it.
+      // Reordering would silently flip user-visible behavior.
       expect(SIZING_MODES).toHaveLength(4);
       expect(SIZING_MODES[0].key).toBe("pilot");
       expect(SIZING_MODES[1].key).toBe("normal");
@@ -272,42 +271,4 @@ describe("sizing-mode lib", () => {
     });
   });
 
-  describe("clampManualToDownwardOnly (New Entry override guard)", () => {
-    // New helper introduced with the retier. New Entry's manual mode
-    // override is DOWNWARD-ONLY: the user may pick a tier smaller than
-    // the auto-selected one, never larger. Position Sizer + Log Buy
-    // retain their bidirectional override — this helper is used only
-    // by New Entry.
-    test("user picks smaller (more conservative) than auto → user wins", () => {
-      // Auto = Offense (2); user picks Pilot (0). Downshift honored.
-      expect(clampManualToDownwardOnly(2, 0)).toBe(0);
-    });
-
-    test("user picks equal to auto → auto index unchanged", () => {
-      expect(clampManualToDownwardOnly(1, 1)).toBe(1);
-      expect(clampManualToDownwardOnly(2, 2)).toBe(2);
-      expect(clampManualToDownwardOnly(0, 0)).toBe(0);
-    });
-
-    test("user picks larger (more aggressive) than auto → auto still wins (clamp)", () => {
-      // The whole reason the helper exists. If auto is Pilot because
-      // exit ladder is firing, the user can't manually re-lift back
-      // to Normal / Offense on New Entry. Position Sizer + Log Buy
-      // still allow it via their existing bidirectional override —
-      // this helper is New Entry-only.
-      expect(clampManualToDownwardOnly(0, 2)).toBe(0);  // Pilot auto, Offense user → Pilot
-      expect(clampManualToDownwardOnly(1, 2)).toBe(1);  // Normal auto, Offense user → Normal
-      expect(clampManualToDownwardOnly(0, 1)).toBe(0);  // Pilot auto, Normal  user → Pilot
-    });
-
-    test("user picks Max (3) → clamps back to auto (Max is manual-only-upshift)", () => {
-      // Max is above every auto tier. Under New Entry's downward-only
-      // rule, clicking Max silently clamps to auto — the New Entry
-      // page filters Max out of its radio grid entirely for that
-      // reason, but the clamp is the last line of defense.
-      expect(clampManualToDownwardOnly(2, 3)).toBe(2); // Offense auto, Max user → Offense
-      expect(clampManualToDownwardOnly(1, 3)).toBe(1); // Normal auto,  Max user → Normal
-      expect(clampManualToDownwardOnly(0, 3)).toBe(0); // Pilot auto,   Max user → Pilot
-    });
-  });
 });

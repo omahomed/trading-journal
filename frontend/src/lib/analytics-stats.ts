@@ -692,11 +692,10 @@ export interface RiskMetrics {
   avgRiskPerTradePct: number | null;
 }
 
-/** Aggregate risk-shape metrics for the cohort. Mirrors the New Entry
- *  page's math (stop distance from entry, position size as % of prior-day
- *  NAV) so the operator sees the actualized-vs-planned side of the risk
- *  formula. Coverage counts included because stop_loss population is
- *  ~55% in production data. */
+/** Aggregate risk-shape metrics for the cohort — stop distance from
+ *  entry, position size as % of prior-day NAV — so the operator sees
+ *  the actualized-vs-planned side of the risk formula. Coverage counts
+ *  included because stop_loss population is ~55% in production data. */
 export function riskMetrics(
   trades: TradePosition[],
   journal: JournalHistoryPoint[],

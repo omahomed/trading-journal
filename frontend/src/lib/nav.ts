@@ -36,11 +36,6 @@ export const NAV: NavGroup[] = [
       { id: "logsell", label: "Log Sell", href: "/log-sell" },
       { id: "sizer", label: "Position Sizer", href: "/position-sizer" },
       { id: "sizer:volatility", label: "New Position Sizer", parentPage: "sizer", tab: "volatility" },
-      // Parallel implementation of the ATR risk-unit model. Sits
-      // immediately after the New Position Sizer so the two live side-
-      // by-side in the nav during evaluation; retirement of the old
-      // Position Sizer is a later step.
-      { id: "new-entry", label: "New Entry", href: "/new-entry" },
       { id: "sizer:scalein", label: "Scale In Sizer", parentPage: "sizer", tab: "scalein" },
       { id: "sizer:pyramid", label: "Pyramid Sizer", parentPage: "sizer", tab: "pyramid" },
       { id: "sizer:trim", label: "Trim / Sell Down", parentPage: "sizer", tab: "trim" },

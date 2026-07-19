@@ -1,4 +1,4 @@
-// Sizing-mode mapping shared by Position Sizer, Log Buy, and New Entry.
+// Sizing-mode mapping shared by Position Sizer and Log Buy.
 //
 // Risk-per-trade is derived from the V11 MCT state. The auto mapping is
 // three tiers; Max is a fourth MANUAL-ONLY tier for conviction upshifts.
@@ -12,18 +12,11 @@
 //   CORRECTION               →  Pilot        →  0.25%
 //   (no state maps here)     →  Max          →  1.00%  ← manual only
 //
-// Rationale for the retier: the old ladder (Defense 0.50 / Normal 0.75 /
-// Offense 1.00, plus a manual-only Pilot 0.25) was calibrated to a
-// hard-stop denominator; the New Entry model sizes against the trader's
-// TRAILING REALIZED AVERAGE LOSS (~4.5% on the 2026 sample), which is a
-// tighter denominator and needed proportionally smaller risk units to
-// land the same shares recommendation. The Defense tier and the 1.0%
-// tier are retired; the three surviving tiers are Pilot / Normal /
-// Offense, indexed 0 / 1 / 2. Unknown-state fallback lands on Pilot
-// (safest) rather than a middle-tier auto-pick — the redesign is
-// intentionally conservative and the manual override is DOWNWARD-ONLY,
-// so a middle-tier default would contradict that philosophy on a
-// transient engine hiccup.
+// Ladder sizes against the trader's TRAILING REALIZED AVERAGE LOSS
+// (~4.5% on the 2026 sample) rather than a hard-stop denominator, so
+// the three tiers (Pilot / Normal / Offense, indexed 0 / 1 / 2) land
+// proportionally correct shares recommendations. Unknown-state
+// fallback lands on Pilot (safest) rather than a middle-tier auto-pick.
 //
 // cap_at_100 does NOT enter this mapping. The 100% total-exposure
 // ceiling is enforced separately by V11's exposure cap logic; per-trade
@@ -37,9 +30,7 @@ export type SizingModeKey = "pilot" | "normal" | "offense" | "max";
  *  Offense — the tiers the MCT-state auto-picker can land on. Index 3
  *  is Max (1.00%), a MANUAL-ONLY conviction upshift the auto-picker
  *  never returns. Position Sizer + Log Buy expose Max as a clickable
- *  radio (their manual override is bidirectional). The New Entry
- *  downward-only clamp naturally excludes Max — see
- *  clampManualToDownwardOnly below. */
+ *  radio (their manual override is bidirectional). */
 export type SizingModeIndex = 0 | 1 | 2 | 3;
 
 /** Subset of SizingModeIndex the MCT-state auto-picker can return.
@@ -52,10 +43,10 @@ export interface SizingMode {
   /** Risk per trade as a percentage of equity. */
   pct: number;
   icon: string;
-  /** Canonical lookup index — position-sizer / log-buy / new-entry
-      state machines key off this number. Array order equals aggression
-      order (Pilot=0 → Normal=1 → Offense=2 → Max=3), so SIZING_MODES
-      itself is also the UI-display order left-to-right. */
+  /** Canonical lookup index — position-sizer / log-buy state machines
+      key off this number. Array order equals aggression order
+      (Pilot=0 → Normal=1 → Offense=2 → Max=3), so SIZING_MODES itself
+      is also the UI-display order left-to-right. */
   index: SizingModeIndex;
 }
 
@@ -160,10 +151,10 @@ export function deriveAutoSizingMode(
 }
 
 /** Human-readable label for the source of a sizing-mode pick. Used by
- *  Position Sizer / Log Buy / New Entry to render the "Auto: Offense
- *  (from M Factor POWERTREND)" / "Manual: Pilot" indicator. Function
- *  name stays as describeMctSource — the engine internals are still
- *  called MCT — but the user-visible string says "M Factor".
+ *  Position Sizer / Log Buy to render the "Auto: Offense (from M Factor
+ *  POWERTREND)" / "Manual: Pilot" indicator. Function name stays as
+ *  describeMctSource — the engine internals are still called MCT —
+ *  but the user-visible string says "M Factor".
  *
  *  Optional `floor` arg: when the exit-ladder downshifted the mode
  *  below what the state alone would have picked, the label says so
@@ -195,26 +186,3 @@ export function describeMctSource(
   return base;
 }
 
-/** Downward-only manual override guard (New Entry semantics).
- *
- *  The New Entry page allows manual mode override but ONLY downward —
- *  the user may pick a tier smaller than the auto-selected one, never
- *  larger. This function returns the effective index given the
- *  auto-derived tier and a user-picked tier: whichever is more
- *  conservative wins. "Reset to auto" (in the calling component) simply
- *  discards the user pick and re-applies the auto value.
- *
- *  Position Sizer + Log Buy have their own longstanding upward-and-
- *  downward manual override — this helper is not used there, only in
- *  New Entry. */
-export function clampManualToDownwardOnly(
-  autoIdx: AutoSizingModeIndex,
-  userIdx: SizingModeIndex,
-): AutoSizingModeIndex {
-  // Max (3) is a manual-only conviction upshift. Under the downward-
-  // only rule (New Entry), clicking Max silently clamps back down to
-  // the auto ceiling — the New Entry page doesn't expose an upshift
-  // path. Position Sizer + Log Buy don't call this helper; their
-  // manual override is bidirectional and Max is fully selectable there.
-  return Math.min(autoIdx, userIdx) as AutoSizingModeIndex;
-}

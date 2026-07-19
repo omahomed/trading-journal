@@ -895,7 +895,7 @@ export const api = {
       `/api/analytics/weekly-metrics?portfolio=${encodeURIComponent(portfolio)}&week_start=${encodeURIComponent(weekStart)}`
     ),
 
-  // Trailing avg-loss aggregate — feeds the New Entry sizing
+  // Trailing avg-loss aggregate — feeds the Position Sizer's
   // denominator. Backend excludes options + zero-return trades and
   // returns null pcts when sample_size = 0 (client applies 4% floor
   // and can distinguish "no data" from "tighter than floor").
