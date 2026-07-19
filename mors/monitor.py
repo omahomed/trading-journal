@@ -6,13 +6,35 @@ Daily monitor for live SR8 positions managed under the MO RS framework.
 Reads positions.json, takes today's NLV from --nlv, replays each cascade from
 its B1 date through today, and reports current tier + any action needed.
 
-Cascade selection (based on each position's CURRENT % NLV):
-  Position >= 20% NLV  -> "20 cascade":  20% / 15% / 10% / 0%  (GREEN/QUICK/QS/GD)
-  Position <  20% NLV  -> "15 cascade":  15% / 11.25% / 7.5% / 0%
+Anchoring invariant (2026-07-18 fix):
+  SR8 trim TARGETS (Quick/Quicksand destination share count) are anchored to
+  the campaign's activation-day NLV, NOT live NLV. Formula:
 
-Add-ons are intentionally skipped from cascade math; shares_held is the current
-total share count and b1_price anchors the cushion (1.5 * b1_price for Phase 2
-latch). avg_price is used only for P&L display.
+    quick_target_dollars = 0.10 × sr8_activation_nlv
+    qs_target_dollars    = 0.05 × sr8_activation_nlv
+    gd_target_dollars    = 0
+
+  Live NLV is used ONLY for:
+    - Display metrics (`current_pct_nlv` — "what % of live NLV am I now?")
+    - Cap-restore (rebuild ceiling; cap-restore is a downside defense).
+
+  Why: core_shares is fixed at activation. When live-NAV grew (say 2×), old
+  "0.10 × live_NLV / price" would compute a target share count LARGER than
+  the fixed core. The trim then reads as no-op ("already at target"), leaving
+  cores undefended on valid signals. See regression case in
+  tests/test_sr8_monitor.py (BE campaign 2026-06-26 fire — old formula
+  gave target 319 shs vs 224 held; new formula gives 149 shs, a valid 75-shs
+  trim).
+
+Add-ons: allowed on SR8-tagged positions but belong to the "trim-first
+cohort" — any shares above core_shares are trimmed before the cascade dips
+into core toward the anchored target.
+
+Cascade tier percentages (unchanged, applied to activation_nlv):
+  GREEN     15%   (rebuild target only — GREEN never sells)
+  QUICK     10%   trim floor
+  QUICKSAND  5%   trim floor
+  GD         0%   full exit
 
 Usage:
   cd mors && python3 monitor.py --nlv 826486
@@ -62,7 +84,22 @@ def load_positions(path):
         return json.load(f)
 
 
-def analyze(pos, nlv, refresh=False):
+def analyze(pos, nlv, refresh=False, activation_nlv=None):
+    """Replay + score one SR8 position for the day.
+
+    `nlv` — live NLV (used ONLY for display metrics + cap-restore reference).
+    `activation_nlv` — the position's SR8-activation-day NLV. When present,
+      Quick/Quicksand trim targets anchor to it (see module docstring for
+      why). Falls back to live `nlv` when NULL, for legacy positions that
+      pre-date the backfill or activated before migration 048 shipped —
+      when this fallback fires the audit line at the report level flags
+      the divergence.
+
+    Returns dict shape unchanged EXCEPT for two new fields:
+      `activation_nlv` — echoed back on the payload for display
+      `anchor_source` — 'activation' | 'live_fallback' — surfaced so
+      the daily report can show which anchor drove the target.
+    """
     ticker = pos["ticker"]
     tkr_path = f"{DATA_DIR}/{ticker}_price_data.csv"
     # SR8 positions always run the weekly 8/13/21 cascade (force_weekly=True)
@@ -86,6 +123,9 @@ def analyze(pos, nlv, refresh=False):
     shares_held = pos["shares_held"]
     avg_price = pos["avg_price"]
     current_dollars = shares_held * current_price
+    # Display metric: what % of LIVE NLV is this position now. Correctly
+    # uses live nlv — this is a "where is my portfolio right now" number,
+    # not a trim target.
     current_pct_nlv = current_dollars / nlv * 100.0 if nlv > 0 else 0.0
 
     # Live tier from the cascade ratchet (NOT the last emission in the log).
@@ -94,7 +134,19 @@ def analyze(pos, nlv, refresh=False):
     # SR8 positions since they require peak ≥ 50%).
     current_tier = str(res.get("current_tier_label") or "GREEN")
     tier_pct_nlv = TIER_NLV_FLOORS.get(current_tier, 0.0)
-    target_dollars = nlv * tier_pct_nlv / 100.0
+
+    # ── ANCHORED TARGET (this is the bug fix) ───────────────────────────
+    # target_dollars uses the ACTIVATION-day NLV, not live NLV. When a
+    # position's activation_nlv hasn't been backfilled yet, fall back to
+    # live nlv (matches pre-fix behavior for those rows) and flag it so
+    # the report shows the divergence.
+    anchor_source: str
+    if activation_nlv is not None and activation_nlv > 0:
+        target_dollars = activation_nlv * tier_pct_nlv / 100.0
+        anchor_source = "activation"
+    else:
+        target_dollars = nlv * tier_pct_nlv / 100.0
+        anchor_source = "live_fallback"
 
     # GREEN never sells. The 15% NAV figure is a REBUILD target, not a trim
     # floor — a Green position currently above 15% is held (SR7 owns the
@@ -142,6 +194,8 @@ def analyze(pos, nlv, refresh=False):
         "signal_today": signal_today,
         "terminated": terminated,
         "phase": phase,
+        "activation_nlv": activation_nlv,
+        "anchor_source": anchor_source,
     }
 
 
@@ -164,6 +218,21 @@ def is_actionable(r):
 
 def fmt_hold_row(r):
     pl_sign = "+" if r["unreal_dollars"] >= 0 else ""
+    # Anchor annotation surfaces the ladder's teeth at a glance. When
+    # activation_nlv is present, show it + the derived Quick/QS targets
+    # in shares. Fallback rows get a "[live]" tag so it's obvious the
+    # anchor is missing and the trim numbers are subject to the NAV-
+    # inflation bug this rewrite fixes.
+    px = r["current_price"] or 0
+    if r.get("activation_nlv") and px > 0:
+        q_shs = int(round(0.10 * r["activation_nlv"] / px))
+        qs_shs = int(round(0.05 * r["activation_nlv"] / px))
+        anchor_tag = (
+            f" | anchor ${r['activation_nlv']:>10,.0f} "
+            f"(Q→{q_shs}sh  QS→{qs_shs}sh)"
+        )
+    else:
+        anchor_tag = " | anchor [live-NAV fallback — backfill needed]"
     return (
         f"  {r['ticker']:<5} "
         f"{r['current_tier']:<10} "
@@ -173,6 +242,7 @@ def fmt_hold_row(r):
         f"avg ${r['avg_price']:>8,.2f}  "
         f"now ${r['current_price']:>8,.2f}  | "
         f"P&L {pl_sign}${r['unreal_dollars']:>10,.0f}  ({pl_sign}{r['unreal_pct']:>5.1f}%)"
+        f"{anchor_tag}"
     )
 
 
@@ -228,7 +298,17 @@ def main():
         print(f"No positions in {args.positions}.")
         return
 
-    results = [analyze(p, args.nlv, refresh=args.refresh) for p in positions]
+    # Pass through activation_nlv from positions.json when present. The
+    # DB-driven API caller (_sr8_load_db_positions in api/main.py) fills
+    # this from trades_summary.sr8_activation_nlv; the CLI's positions.json
+    # is optional — legacy files without the field cleanly fall back.
+    results = [
+        analyze(
+            p, args.nlv, refresh=args.refresh,
+            activation_nlv=p.get("activation_nlv"),
+        )
+        for p in positions
+    ]
     today_str = date.today().isoformat()
     report = format_report(results, args.nlv, today_str)
     print(report)

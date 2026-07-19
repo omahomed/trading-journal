@@ -62,6 +62,12 @@ export interface EnrichedPosition {
   mfe_pct?: number | null;
   atr21_entry_pct?: number | null;
   max_retrace_pct?: number | null;
+  // Migration 048 — SR8 activation anchor. Trim targets in
+  // sr8-trim-calc.ts prefer these over live NAV when present. Null
+  // for campaigns pre-dating backfill or below +50% cushion.
+  sr8_activation_date?: string | null;
+  sr8_activation_nlv?: number | null;
+  sr8_core_shares?: number | null;
 }
 
 export function computeEnrichedPositions(
@@ -226,6 +232,12 @@ export function computeEnrichedPositions(
       mfe_pct:          _passThroughNum((trade as any).mfe_pct),
       atr21_entry_pct:  _passThroughNum((trade as any).atr21_entry_pct),
       max_retrace_pct:  _passThroughNum((trade as any).max_retrace_pct),
+      // Migration 048 anchor. sr8_activation_date is a string (YYYY-MM-DD)
+      // from the DB; pass through untouched. Values only populated for
+      // SR8-tier campaigns after backfill / live activation.
+      sr8_activation_date: (trade as any).sr8_activation_date ?? null,
+      sr8_activation_nlv:  _passThroughNum((trade as any).sr8_activation_nlv),
+      sr8_core_shares:     _passThroughNum((trade as any).sr8_core_shares),
     };
   });
 }

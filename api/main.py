@@ -4366,6 +4366,13 @@ def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
     open_df["_b1_max_num"] = pd.to_numeric(open_df.get("b1_max_return_pct"), errors="coerce")
     open_df["_b1_entry_num"] = pd.to_numeric(open_df.get("b1_entry_price"), errors="coerce")
     open_df["_avg_entry_num"] = pd.to_numeric(open_df.get("avg_entry"), errors="coerce").fillna(0)
+    # Migration 048 anchors — sr8_activation_nlv locks trim targets to
+    # the campaign's activation-day NAV rather than live NAV. NaN when
+    # the position pre-dates the backfill / hasn't crossed +50% yet;
+    # analyze() treats NaN as fallback-to-live and flags it.
+    open_df["_sr8_activation_nlv"] = pd.to_numeric(
+        open_df.get("sr8_activation_nlv"), errors="coerce"
+    )
 
     # Pre-filter to viable candidates: held shares, valid B1 entry, not
     # an option. We need the live-price overlay BEFORE filtering on the
@@ -4466,12 +4473,19 @@ def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
         b1_entry = row["_b1_entry_num"]
         if pd.isna(b1_entry) or float(b1_entry) <= 0:
             continue
+        act_nlv_raw = row.get("_sr8_activation_nlv")
+        activation_nlv = (
+            float(act_nlv_raw)
+            if act_nlv_raw is not None and not pd.isna(act_nlv_raw)
+            else None
+        )
         positions.append({
             "ticker": ticker,
             "b1_date": b1_date_iso,
             "b1_price": float(b1_entry),
             "shares_held": float(row["_shares_num"]),
             "avg_price": float(row["_avg_entry_num"]),
+            "activation_nlv": activation_nlv,
         })
     return positions
 
@@ -4602,7 +4616,10 @@ def _sr8_run_monitor(nlv: float, portfolio: str = "CanSlim", refresh: bool = Fal
     rows: list[dict[str, Any]] = []
     for pos in positions:
         try:
-            r = mors_analyze(pos, nlv, refresh=refresh)
+            r = mors_analyze(
+                pos, nlv, refresh=refresh,
+                activation_nlv=pos.get("activation_nlv"),
+            )
             rows.append(_sr8_enrich(pos, r))
         except Exception as e:
             ticker = str(pos.get("ticker") or "")

@@ -96,6 +96,15 @@ CREATE TABLE IF NOT EXISTS trades_summary (
     -- RESTRICT prevents deleting a strategy that's in use by a trade.
     strategy TEXT NOT NULL DEFAULT 'CanSlim'
         REFERENCES strategies(name) ON UPDATE CASCADE ON DELETE RESTRICT,
+    -- Migration 048. SR8 activation anchor — locked at the moment cushion
+    -- first crosses +50% from B1 entry. SR8 Quick / Quicksand trim targets
+    -- are computed as % × sr8_activation_nlv / current_price (NOT % × live
+    -- NLV). Prevents NAV appreciation from inflating trim destinations past
+    -- the fixed core count. All three NULL until activation; cleared with
+    -- the row on campaign close.
+    sr8_activation_date DATE,
+    sr8_activation_nlv  NUMERIC(15, 2),
+    sr8_core_shares     NUMERIC(12, 4),
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT unique_trade_per_portfolio UNIQUE (portfolio_id, trade_id)

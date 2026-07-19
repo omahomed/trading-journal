@@ -904,6 +904,111 @@ def update_b1_max_return_pct(portfolio_name, trade_id, new_max_pct):
             }
 
 
+def snapshot_sr8_activation_if_null(
+    portfolio_name: str,
+    trade_id: str,
+    activation_date,
+    activation_nlv: float,
+) -> dict | None:
+    """Capture the SR8 activation anchor trio on first +50% crossing.
+
+    Called from b1_reconcile after b1_max_return_pct is raised past 50%
+    on a campaign whose sr8_activation_date is still NULL. Writes:
+
+      sr8_activation_date = `activation_date` (the day the peak crossed)
+      sr8_activation_nlv  = `activation_nlv` (portfolio end_nlv that day)
+      sr8_core_shares     = LIVE net held shares (sum of BUY − SELL on
+                            trades_details, computed inline via SQL —
+                            avoids re-loading via load_details).
+
+    Idempotent: only writes when all three fields are NULL. Never
+    overwrites a set anchor — the backfill script or an earlier
+    activation always wins.
+
+    Returns:
+      {"was_written": bool, "activation_date": date, "activation_nlv": float,
+       "core_shares": float} on success.
+      None when the trade_id isn't found in the portfolio.
+
+    Migration-tolerance: if the sr8_* columns don't exist yet (deploy
+    raced migration 048), returns {"was_written": False, …} so callers
+    don't 500. Same pattern as update_b1_max_return_pct.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'trades_summary' "
+                "AND column_name = 'sr8_activation_date'"
+            )
+            if cur.fetchone() is None:
+                return {"was_written": False, "activation_date": None,
+                        "activation_nlv": None, "core_shares": None}
+
+            cur.execute(
+                "SELECT id FROM portfolios WHERE name = %s", (portfolio_name,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            # Compute live held shares in the same query — SUM(BUY) −
+            # SUM(SELL) on trades_details for this trade_id. Matches
+            # how load_summary derives "shares" for OPEN campaigns.
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(
+                    CASE WHEN UPPER(action) = 'BUY'  THEN shares
+                         WHEN UPPER(action) = 'SELL' THEN -shares
+                         ELSE 0 END
+                ), 0) AS held
+                  FROM trades_details
+                 WHERE trade_id = %s
+                """,
+                (trade_id,),
+            )
+            core_shares_row = cur.fetchone()
+            core_shares = float(core_shares_row["held"] or 0) if core_shares_row else 0.0
+            if core_shares <= 0:
+                # Position is flat — pyramid or full exit already happened.
+                # No point recording an anchor with 0 shares.
+                return {"was_written": False, "activation_date": None,
+                        "activation_nlv": None, "core_shares": core_shares}
+
+            # Conditional UPDATE: only writes if all three anchor fields
+            # are still NULL. RETURNING confirms whether a write happened.
+            cur.execute(
+                """
+                UPDATE trades_summary
+                   SET sr8_activation_date = %s,
+                       sr8_activation_nlv  = %s,
+                       sr8_core_shares     = %s,
+                       last_updated        = CURRENT_TIMESTAMP
+                 WHERE portfolio_id = %s AND trade_id = %s
+                   AND deleted_at IS NULL
+                   AND sr8_activation_date IS NULL
+                   AND sr8_activation_nlv  IS NULL
+                   AND sr8_core_shares     IS NULL
+                 RETURNING sr8_activation_date, sr8_activation_nlv, sr8_core_shares
+                """,
+                (activation_date, activation_nlv, core_shares,
+                 portfolio_id, trade_id),
+            )
+            written = cur.fetchone()
+            conn.commit()
+            if written is not None:
+                return {
+                    "was_written": True,
+                    "activation_date": written["sr8_activation_date"],
+                    "activation_nlv": float(written["sr8_activation_nlv"]),
+                    "core_shares": float(written["sr8_core_shares"]),
+                }
+            # No write — either row missing, or anchor already set.
+            return {"was_written": False, "activation_date": None,
+                    "activation_nlv": None, "core_shares": core_shares}
+
+
 # ============================================
 # CORE WRITE OPERATIONS (Replace secure_save)
 # ============================================

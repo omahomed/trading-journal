@@ -193,6 +193,146 @@ describe("computeTrim — SR8 Grateful Dead / SR13 (full exit)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────
+// Regression tests for the SR8 activation-anchor fix (2026-07-18)
+//
+// The bug: SR8 Quick/QS targets computed 10% × LIVE NAV / price.
+// When NAV grew past activation NAV, target shares > held → no-op
+// trims on valid signals → cores undefended.
+//
+// The fix: anchor targets to sr8_activation_nlv (fixed at first +50%
+// crossing). Pass activationNlv + coreShares to computeTrim; result
+// exposes anchorSource='activation' vs 'live_fallback' so the UI can
+// flag legacy positions.
+//
+// BE case (from the spec):
+//   activation 4/29 NAV=$430,249, core=224 shs
+//   Quick fires 6/26 at NAV=$805,679, current price ~ $288
+//   OLD formula: 10% × 805679 / 288 = 280 shs  → BE held 224 → 0 trim
+//   NEW formula: 10% × 430249 / 288 = 149 shs  → trim 75 shs ✓
+//
+// MU case (adjacent):
+//   activation 5/5 NAV=$551,423 (backfill matches exactly).
+// ─────────────────────────────────────────────────────────────────
+
+describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
+  test("BE regression: Quick target 149 shs (anchored) vs 279 (live-nav bug)", () => {
+    // NAV grew from activation $430K to live $805K — 87% appreciation.
+    // Under old formula, target = 0.10 × 805679 / 288 ≈ 279 shs;
+    // under new formula (anchored), target = 0.10 × 430249 / 288 ≈ 149 shs.
+    const priceOnSignalDay = 288;
+    const activationNlv = 430_249;
+    const liveNav = 805_679;
+    const coreShares = 224;
+
+    // Anchored — this is the fix's contract.
+    const anchored = computeTrim({
+      totalShares: 224,
+      currentPrice: priceOnSignalDay,
+      b1ReturnPct: 80,
+      nav: liveNav,
+      activationNlv,
+      coreShares,
+      rule: "sr8-quick",
+    });
+    // 0.10 × 430249 / 288 = 149.39 → floor to 149.
+    expect(anchored.trimShares).toBeGreaterThanOrEqual(74);
+    expect(anchored.trimShares).toBeLessThanOrEqual(76);
+    expect(anchored.anchorSource).toBe("activation");
+    // Resulting position = 224 − 75 = 149 shs (= 10% × activation / px).
+    expect(anchored.resultingShares).toBeGreaterThanOrEqual(148);
+    expect(anchored.resultingShares).toBeLessThanOrEqual(150);
+
+    // Live-nav fallback (what the old formula produced) — target >= held
+    // → NO trim → the bug we're eliminating.
+    const buggy = computeTrim({
+      totalShares: 224,
+      currentPrice: priceOnSignalDay,
+      b1ReturnPct: 80,
+      nav: liveNav,
+      // Neither activationNlv nor coreShares supplied — fallback path.
+      rule: "sr8-quick",
+    });
+    expect(buggy.anchorSource).toBe("live_fallback");
+    expect(buggy.trimShares).toBe(0); // pre-fix behavior: silent no-op
+  });
+
+  test("Quicksand: 5% of activation NAV drives the destination too", () => {
+    // Same BE fixture, QS target = 0.05 × 430249 / 288 ≈ 74.69 → 74.
+    const r = computeTrim({
+      totalShares: 149,
+      currentPrice: 288,
+      b1ReturnPct: 75,
+      nav: 805_679,
+      activationNlv: 430_249,
+      coreShares: 224,
+      rule: "sr8-quicksand",
+    });
+    // 149 − 74 = 75 trim (or +/- 1 for floor rounding).
+    expect(r.trimShares).toBeGreaterThanOrEqual(74);
+    expect(r.trimShares).toBeLessThanOrEqual(76);
+    expect(r.anchorSource).toBe("activation");
+  });
+
+  test("MU adjacent case: small NAV drift, target barely moves", () => {
+    // Spec anti-regression: when NAV moves LITTLE from activation, the
+    // anchored + live-nav answers should be within ~1-2 shs. Verifies
+    // the fix doesn't distort the calm-drift case.
+    const activationNlv = 551_423;
+    const liveNav = 553_000; // ~0.3% drift
+    const priceOnSignal = 900;
+
+    const anchored = computeTrim({
+      totalShares: 100,
+      currentPrice: priceOnSignal,
+      b1ReturnPct: 90,
+      nav: liveNav,
+      activationNlv,
+      coreShares: 116,
+      rule: "sr8-quick",
+    });
+    const liveFallback = computeTrim({
+      totalShares: 100,
+      currentPrice: priceOnSignal,
+      b1ReturnPct: 90,
+      nav: liveNav,
+      rule: "sr8-quick",
+    });
+    // Anchored target = 61.27 → 61; live-nav target = 61.44 → 61.
+    // Delta of trim should be ≤ 1 share.
+    expect(Math.abs(anchored.trimShares - liveFallback.trimShares)).toBeLessThanOrEqual(1);
+  });
+
+  test("coreShares directly wins over derived core (fixed count preserved)", () => {
+    // When both activationNlv and coreShares are passed, coreShares is
+    // the source of truth for the core count (used in ADDS calcs).
+    // Test: coreShares=224 → adds = 300 − 224 = 76, ignoring what
+    // (nav × 15%) would have produced.
+    const r = computeTrim({
+      totalShares: 300,
+      currentPrice: 288,
+      b1ReturnPct: 60,
+      nav: 800_000,
+      activationNlv: 430_249,
+      coreShares: 224,
+      rule: "sr2",
+    });
+    expect(r.coreTargetShares).toBe(224);
+    expect(r.addsShares).toBe(76);
+    expect(r.anchorSource).toBe("activation");
+  });
+
+  test("anchorSource='live_fallback' when neither activationNlv nor coreShares supplied", () => {
+    const r = computeTrim(baseInput());
+    expect(r.anchorSource).toBe("live_fallback");
+  });
+
+  test("anchorSource='activation' when only activationNlv supplied", () => {
+    const r = computeTrim(baseInput({ activationNlv: 430_249 }));
+    expect(r.anchorSource).toBe("activation");
+  });
+});
+
 describe("computeTrim — resultingState transitions", () => {
   test("resulting > core: 'with-adds'", () => {
     const r = computeTrim(baseInput({ rule: "sr2" }));

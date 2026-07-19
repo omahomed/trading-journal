@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import yfinance as yf
 
-from db_layer import get_db_connection, update_b1_max_return_pct
+from db_layer import get_db_connection, update_b1_max_return_pct, snapshot_sr8_activation_if_null
 
 log = logging.getLogger("b1_reconcile")
 
@@ -39,6 +39,32 @@ log = logging.getLogger("b1_reconcile")
 # labeling only (the frontend classifies from the stored peak this job writes).
 SR8_THRESHOLD = 50.0
 SR1_THRESHOLD = 10.0
+
+
+def _latest_portfolio_nlv(portfolio_name: str) -> float | None:
+    """Latest trading_journal.end_nlv for `portfolio_name`. Used by the
+    SR8 activation snapshot to record today's NLV as the anchor when
+    b1_max first crosses +50%. Falls back to None on missing data —
+    the caller then skips the snapshot rather than write a bad value."""
+    try:
+        with get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT j.end_nlv
+                  FROM trading_journal j
+                  JOIN portfolios p ON p.id = j.portfolio_id
+                 WHERE p.name = %s AND j.end_nlv IS NOT NULL
+                 ORDER BY j.day DESC
+                 LIMIT 1
+                """,
+                (portfolio_name,),
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                return float(row[0])
+    except Exception as exc:
+        log.warning("Latest NLV lookup failed for %s: %s", portfolio_name, exc)
+    return None
 
 
 def fetch_candidates(portfolio: str | None = None, reconcile: bool = False) -> list[dict]:
@@ -230,6 +256,34 @@ def reconcile_open_positions(
                     action = "RAISED"
                     log.info("Raised %s (%s) b1_max_return_pct → %.2f%% (%s)",
                              ticker, trade_id, pct, tier)
+                    # Auto-snapshot the SR8 activation anchor on first
+                    # +50% crossing. Guarded by pct >= SR8_THRESHOLD and
+                    # the helper's own NULL-only condition, so it's
+                    # idempotent and doesn't clobber prior anchors.
+                    if pct >= SR8_THRESHOLD:
+                        try:
+                            nlv = _latest_portfolio_nlv(portfolio_name)
+                            if nlv is not None:
+                                snap = snapshot_sr8_activation_if_null(
+                                    portfolio_name, trade_id,
+                                    activation_date=date.today(),
+                                    activation_nlv=nlv,
+                                )
+                                if snap and snap.get("was_written"):
+                                    log.info(
+                                        "SR8 anchor snapshot %s (%s): "
+                                        "date=%s nlv=$%.0f core_shs=%.2f",
+                                        ticker, trade_id,
+                                        snap["activation_date"],
+                                        snap["activation_nlv"],
+                                        snap["core_shares"],
+                                    )
+                        except Exception as anchor_exc:
+                            # Snapshot failure MUST NOT abort the reconcile.
+                            log.warning(
+                                "SR8 anchor snapshot skipped for %s/%s: %s",
+                                portfolio_name, trade_id, anchor_exc,
+                            )
                 else:
                     counters["unchanged"] += 1
                     action = "keep"

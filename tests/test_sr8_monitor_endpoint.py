@@ -119,7 +119,12 @@ def stubbed(monkeypatch):
 
     fake_mod = types.ModuleType("mors.monitor")
 
-    def fake_analyze(pos: dict[str, Any], nlv: float, refresh: bool = False):
+    def fake_analyze(pos: dict[str, Any], nlv: float, refresh: bool = False,
+                     activation_nlv=None):
+        # Ignore activation_nlv in the fake — the endpoint passes it through
+        # but the analyze() output shape it drives is asserted elsewhere
+        # (tests/test_sr8_monitor_anchor.py). Here we care only about the
+        # endpoint plumbing.
         state["analyze_calls"].append((pos.get("ticker"), nlv, refresh))
         entry = state["analyze_by_ticker"].get(pos.get("ticker"))
         if entry is None:

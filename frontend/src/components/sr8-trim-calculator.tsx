@@ -125,6 +125,13 @@ export function SR8TrimCalculator({ positions, preselectedTradeId }: Props) {
           b1ReturnPct: position.b1_return_pct,
           nav,
           rule,
+          // Migration 048 anchor: prefer sr8_activation_nlv +
+          // sr8_core_shares over live NAV when both are populated.
+          // Null-safe: computeTrim falls back to live NAV and tags
+          // the result with anchorSource='live_fallback' so the UI
+          // can badge it.
+          activationNlv: position.sr8_activation_nlv,
+          coreShares: position.sr8_core_shares,
         })
       : null;
 
