@@ -175,6 +175,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // component lifetime; the backend SQL guard handles cross-tab races.
   const promotedRef = useRef<Set<string>>(new Set());
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
+  // Glossary sits just above Risk Monitor with the same collapsible
+  // shell. Closed by default — the values in the tables are the
+  // primary attention target; the glossary is a reference the trader
+  // opens when they need it.
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
 
   // Independent sort state for each section. No localStorage persistence —
   // resets to "Return % desc" on every mount per spec.
@@ -1547,6 +1552,120 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
         );
       })()}
+
+      {/* Glossary — collapsible reference for column meanings + the
+          Pyramid screener's four states. Same visual language as the
+          Risk Monitor block below so they read as sibling collapsibles. */}
+      <div className="mt-6 rounded-[14px] overflow-hidden"
+           data-testid="acs-glossary"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+        <button onClick={() => setGlossaryOpen(!glossaryOpen)}
+                data-testid="acs-glossary-toggle"
+                className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                style={{ borderBottom: glossaryOpen ? "1px solid var(--border)" : "none", background: "var(--surface-2)" }}>
+          <span className="text-[10px] transition-transform" style={{ transform: glossaryOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+          <span className="text-[13px] font-semibold">Glossary</span>
+          <span className="text-xs" style={{ color: "var(--ink-4)" }}>
+            Column definitions + Pyramid states
+            {!glossaryOpen && " · click to expand"}
+          </span>
+        </button>
+        {glossaryOpen && (
+          <div className="p-4 flex flex-col gap-4 text-[12px] leading-relaxed" style={{ color: "var(--ink-2)" }}>
+
+            {/* Pyramid screener states — biggest reader-facing change,
+                gets top billing so the trader knows why the chip
+                looks like it does. */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                Pyramid column (screener)
+              </div>
+              <div className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5">
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold text-center"
+                      style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff" }}>
+                  🔺 Full
+                </span>
+                <span>Rule 2 satisfied: last held buy up ≥ 5% AND Ceiling + Budget clear. Sizer verifies Rule 1 (Location) before you log the buy.</span>
+
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold text-center"
+                      style={{ background: "linear-gradient(135deg, #fbbf24, #f59e0b)", color: "#451a03" }}>
+                  +2.6%
+                </span>
+                <span>Prorated — last held buy up 0–5%. Sizer's multiplier = pct ÷ 5. Fine to open the sizer, just size smaller.</span>
+
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
+                      style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                  ⛔ Ceiling
+                </span>
+                <span>Position already at or above 25% NAV — the campaign cap. Trim before adding.</span>
+
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
+                      style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                  ⛔ Budget
+                </span>
+                <span>Current risk-to-stops already exceeds the 0.50% × NAV budget (Normal mode assumed). Sizer verifies against your live MCT mode.</span>
+
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
+                      style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                  ⛔ Below
+                </span>
+                <span>Current price below last held buy. Wait for the recent add to work.</span>
+
+                <span className="text-center" style={{ color: "var(--ink-4)" }}>—</span>
+                <span>Options — pyramid semantics don't apply.</span>
+              </div>
+              <div className="mt-2 text-[11px]" style={{ color: "var(--ink-4)" }}>
+                Rule 1 (Location: price ≤ 21 EMA + 1 × ATR) needs live 21 EMA per ticker and is <strong>not</strong> checked here — the Position Sizer verifies it before the buy fires. Right-click a row → Open Position Sizer Pyramid.
+              </div>
+            </div>
+
+            {/* Equity table columns */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                Equity columns
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-1.5">
+                <strong>Days</strong><span>Calendar days since the first BUY in this campaign.</span>
+                <strong>Sell Rule</strong><span>SR-tier badge from B1's best return %. SR8 cores (peak ≥ 100%) never auto-demote on a pullback; SR7/SR6/etc. reflect current tier.</span>
+                <strong>Return %</strong><span>Campaign-level return: (current − avg cost) / avg cost × 100. Weighted by held lots — dilutes when you scale in at higher prices.</span>
+                <strong>Pos Size %</strong><span>Current market value ÷ NAV × 100. Also feeds the Pyramid Ceiling gate at 25%.</span>
+                <strong>Shares</strong><span>Total held shares (after all SELLs LIFO-consumed).</span>
+                <strong>Avg Entry</strong><span>LIFO-weighted cost basis of currently-held lots.</span>
+                <strong>Avg Stop</strong><span>Volume-weighted average of held-lot stops. "—" means no stops set (whole position defaults to at-risk vs. entry).</span>
+                <strong>Current Value</strong><span>shares × current price × multiplier. Multiplier is 100 for options, 1 for stock.</span>
+                <strong>Current Risk $</strong><span>(avg stop − avg entry) × shares × multiplier. Signed: negative = at risk, zero = free roll, positive = stop locks profit.</span>
+                <strong>Current Risk %</strong><span>Current Risk $ ÷ NAV × 100. Same sign convention as the $ column.</span>
+                <strong>Overall P&L</strong><span>Realized bank + current unrealized. What you'd walk away with if you exited at the current price right now.</span>
+                <strong>Trade Risk $</strong><span>Historical <em>locked</em> risk at buy-time (the initial risk budget you committed). Doesn't change with stop moves. Risk Monitor alerts when Current Risk exceeds this by more than $5 — a stop that got looser than the original plan.</span>
+              </div>
+            </div>
+
+            {/* Risk states */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                Risk states
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-1.5">
+                <strong>Free Roll 🆓</strong><span>Stop above entry — the trade has locked in profit; a stop-out banks a gain, not a loss.</span>
+                <strong>At Risk</strong><span>Stop below entry — a stop-out books a realized loss.</span>
+                <strong>Projected P&L</strong><span>Total exposure: realized losses on closed lots + open-to-stop on the rest. Different from Current Risk $, which is stop-vs-entry on held shares only.</span>
+              </div>
+            </div>
+
+            {/* Options-specific columns */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
+                Options columns (extra)
+              </div>
+              <div className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-1.5">
+                <strong>Exp Date / DTE</strong><span>Expiration date and days-to-expiration. DTE colors in red under 21 days (theta bleed accelerating).</span>
+                <strong>Current Price</strong><span>Inline-editable — updates <code>manual_price</code> on <code>trades_summary</code>. Use the daily <em>sync LTG prices</em> / <em>sync CanSlim prices</em> MCP workflows to bulk-refresh.</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Risk Monitor (equity-only) */}
       <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>

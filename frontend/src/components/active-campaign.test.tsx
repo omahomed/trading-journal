@@ -524,3 +524,32 @@ describe("ActiveCampaign — Pyramid screener column", () => {
   // 'n/a' branch is still covered by the pure-lib test suite;
   // there's no equivalent UI to assert on for the ACS renderer.
 });
+
+describe("ActiveCampaign — Glossary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("Glossary starts collapsed and expands on click", async () => {
+    setupApi([stockPosition()]);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+
+    const toggle = await screen.findByTestId("acs-glossary-toggle");
+    // Collapsed by default → click-to-expand hint present.
+    expect(toggle.textContent).toMatch(/click to expand/);
+    // Pyramid-state row copy is only visible when the panel is open.
+    expect(screen.queryByText(/Rule 2 satisfied/)).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    // Now open — column definitions render. "Trade Risk $" appears
+    // multiple times (column header + glossary term), so assert on
+    // unique glossary-only copy.
+    expect(await screen.findByText(/Rule 2 satisfied/)).toBeInTheDocument();
+    expect(screen.getByText(/Historical/i)).toBeInTheDocument();
+    expect(screen.getByText(/Stop above entry/)).toBeInTheDocument();
+    // Location gate is explicitly disclaimed as sizer-only.
+    expect(screen.getByText(/Rule 1 \(Location:/)).toBeInTheDocument();
+  });
+});
