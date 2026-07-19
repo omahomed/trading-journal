@@ -366,6 +366,28 @@ def load_summary(portfolio_name, status=None):
                 'NULL::numeric AS "Max_Retrace_Pct",\n                    '
                 'NULL::date    AS "Mae_Mfe_Last_Updated",\n                    '
             )
+            # Migration-tolerance for migration 048 — SR8 activation
+            # anchor columns. Same pattern as mae_mfe above. When absent,
+            # the trim calculator + SR8 monitor fall back to live NAV
+            # (subject to the pre-2026-07-18 inflation bug).
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'sr8_activation_nlv'"
+                )
+                has_sr8_activation = cur.fetchone() is not None
+            except Exception:
+                has_sr8_activation = False
+            sr8_activation_select = (
+                's.sr8_activation_date AS "Sr8_Activation_Date",\n                    '
+                's.sr8_activation_nlv  AS "Sr8_Activation_Nlv",\n                    '
+                's.sr8_core_shares     AS "Sr8_Core_Shares",\n                    '
+                if has_sr8_activation else
+                'NULL::date    AS "Sr8_Activation_Date",\n                    '
+                'NULL::numeric AS "Sr8_Activation_Nlv",\n                    '
+                'NULL::numeric AS "Sr8_Core_Shares",\n                    '
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -398,7 +420,7 @@ def load_summary(portfolio_name, status=None):
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
                     {b1_max_select}
-                    {mae_mfe_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {mae_mfe_select}{sr8_activation_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule
