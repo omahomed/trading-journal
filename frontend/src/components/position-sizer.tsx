@@ -1421,53 +1421,72 @@ function VolatilityResults({
                     accent="#3b82f6" />
       </div>
 
-      {/* THE ANSWER — one card. */}
-      <div className="p-5 rounded-[14px] mb-3 relative overflow-hidden"
-           data-testid="composite-answer"
-           style={{
-             border: "1px solid var(--border)",
-             borderLeft: "6px solid #08a86b",
-             background: "color-mix(in oklab, #08a86b 7%, var(--surface))",
-           }}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+      {/* THE ANSWER — two tiles side by side. Left = shares + composite
+          detail; Right = notional + NLV% + bind. Eyes travel a much
+          shorter horizontal distance than the original single wide card. */}
+      <div className="grid grid-cols-2 gap-3 mb-3" data-testid="composite-answer">
+        {/* Left tile — Recommended shares + composite stop. */}
+        <div className="p-4 rounded-[14px] relative overflow-hidden"
+             data-testid="composite-answer-shares"
+             style={{
+               border: "1px solid var(--border)",
+               borderLeft: "6px solid #08a86b",
+               background: "color-mix(in oklab, #08a86b 7%, var(--surface))",
+             }}>
+          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>
             Recommended
           </div>
-          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
-                data-testid="bind-badge"
-                style={{ background: "#08a86b", color: "#fff" }}>
-            {results.bind === "risk" ? "Risk-bound" : "Ceiling-bound"}
-          </span>
-        </div>
-        <div className="flex items-baseline justify-between">
-          <div>
-            <div className="text-[28px] font-semibold privacy-mask"
-                 style={{ fontFamily: "var(--font-jetbrains), monospace" }}
-                 data-testid="final-shares">
-              {results.finalShares} <span className="text-[14px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
-            </div>
-            <div className="text-[12px] mt-1" style={{ color: "var(--ink-4)" }}>
-              Composite stop: <strong style={{ color: "var(--ink)" }}>{formatCurrency(composite.price)}</strong>{" "}
-              · {composite.distancePct.toFixed(2)}% below entry · {composite.atrFraction.toFixed(2)}× ATR
-            </div>
-            <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
-              Winner: <strong style={{ color: "var(--ink-3)" }}>{compositeSubtitle}</strong>
-            </div>
+          <div className="text-[28px] font-semibold privacy-mask"
+               style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}
+               data-testid="final-shares">
+            {results.finalShares} <span className="text-[14px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
           </div>
-          <div className="text-right">
-            <div className="text-[14px] font-medium privacy-mask"
-                 style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-              {formatCurrency(results.positionCost, { decimals: 0 })}
-            </div>
-            <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
-              {results.positionPct.toFixed(1)}% NLV
-            </div>
+          <div className="text-[12px] mt-2" style={{ color: "var(--ink-4)" }}>
+            Composite stop: <strong style={{ color: "#3b82f6" }}>{formatCurrency(composite.price)}</strong>{" "}
+            · <strong style={{ color: "var(--ink-3)" }}>{composite.distancePct.toFixed(2)}%</strong> below entry ·{" "}
+            <strong style={{ color: "var(--ink-3)" }}>{composite.atrFraction.toFixed(2)}× ATR</strong>
+          </div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+            Winner: <strong style={{ color: "var(--ink-3)" }}>{compositeSubtitle}</strong>
+          </div>
+          <div className="mt-3 pt-2 text-[11px]"
+               style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
+            Risk if stopped: <strong style={{ color: "#d97706" }}>{formatCurrency(results.riskIfStopped, { decimals: 0 })}</strong>{" "}
+            (<strong style={{ color: "#d97706" }}>{results.riskPct.toFixed(2)}%</strong> NLV)
           </div>
         </div>
-        <div className="mt-3 pt-2 flex items-baseline justify-between text-[11px]"
-             style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
-          <span>Risk if stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(results.riskIfStopped, { decimals: 0 })}</strong> ({results.riskPct.toFixed(2)}% NLV)</span>
-          <span>Bound by {bindLabel}</span>
+
+        {/* Right tile — Notional + NLV% + bind. Same accent so they
+            read as a pair, mirror layout: right-aligned totals, bind
+            footer where the risk footer sits on the left. */}
+        <div className="p-4 rounded-[14px] relative overflow-hidden"
+             data-testid="composite-answer-notional"
+             style={{
+               border: "1px solid var(--border)",
+               borderLeft: "6px solid #08a86b",
+               background: "color-mix(in oklab, #08a86b 7%, var(--surface))",
+             }}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+              Notional
+            </div>
+            <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                  data-testid="bind-badge"
+                  style={{ background: "#08a86b", color: "#fff" }}>
+              {results.bind === "risk" ? "Risk-bound" : "Ceiling-bound"}
+            </span>
+          </div>
+          <div className="text-[28px] font-semibold privacy-mask"
+               style={{ fontFamily: "var(--font-jetbrains), monospace", color: "#08a86b" }}>
+            {formatCurrency(results.positionCost, { decimals: 0 })}
+          </div>
+          <div className="text-[12px] mt-2" style={{ color: "var(--ink-4)" }}>
+            <strong style={{ color: "#08a86b" }}>{results.positionPct.toFixed(1)}%</strong> of NLV
+          </div>
+          <div className="mt-3 pt-2 text-[11px]"
+               style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
+            Bound by <strong style={{ color: results.bind === "ceiling" ? "#d97706" : "var(--ink-3)" }}>{bindLabel}</strong>
+          </div>
         </div>
       </div>
 
