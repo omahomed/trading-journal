@@ -1,68 +1,103 @@
 /**
- * Pure volatility-sizing math for the Volatility Sizer page.
+ * Composite-stop volatility sizing for the Position Sizer's Volatility tab.
  *
- * Given equity, entry, MA-based tech stop, and ATR%, returns:
- *   - The tech-stop sizing scenario (bound by the risk budget OR the
- *     position tier cap, whichever is smaller).
- *   - Three ATR-cushion scenarios at fixed multipliers 1x / 1.5x / 2x.
- *   - A recommended scenario (tech stop when it sits >= 1 ATR away from
- *     entry; otherwise the 1.5x ATR scenario — sub-1-ATR stops get
- *     chopped by daily noise).
- *   - A warning when the tech stop sits inside 1 ATR.
+ * The math:
+ *   Risk Budget ($)   = NLV × Mode%                       (Pilot 0.25 / Normal 0.50 / Offense 0.75)
+ *   Composite Stop    = MIN of:
+ *                        • Entry − 1 ATR21                (ATR floor — never sizes tighter than 1 ATR)
+ *                        • Key Level − max(0.5 ATR, 1%)   (structural low or key MA the user types from the chart)
+ *   Stop Distance ($) = Entry − Composite Stop
+ *   Raw shares        = Risk Budget ÷ Stop Distance
+ *   Final shares      = min(Raw, Ceiling × NLV ÷ Entry)
+ *                        Ceiling policy: 15% standard, 5% young-IPO clamp
+ *                        (20% is the documented hard max but not auto-selectable — use Log Buy manually for conviction plays)
+ *
+ * The composite is intentionally the WIDEST of the two candidates (LOWEST
+ * price = furthest from entry). That's the "give the trade room" rule:
+ * whichever candidate sits further from entry wins, because taking the
+ * tighter of the two would let the trade fail on noise the other candidate
+ * says is still inside the setup. The trade-off is smaller position, which
+ * is the intentionally-conservative tilt.
+ *
+ * Scale-out ladder anchored to ENTRY:
+ *   Tier 1  at Entry − 0.5 ATR   (warning-shot partial)
+ *   Tier 2  at Entry − 1.0 ATR   (composite anchor for most trades)
+ *   Tier 3  at Entry − 1.5 ATR   (deep flush)
+ *   Shares split floor / floor / remainder.
+ *   Avg exit = 1 ATR below entry — matches the risk budget when the
+ *   composite lands at 1 ATR. When composite is TIGHTER than 1 ATR (Key
+ *   Level candidate won), tier 2 and 3 sit BELOW the composite; the ladder
+ *   is intentionally saying "if the trade breaches your structural stop,
+ *   give it more room, not less."
  *
  * Degenerate / edge behavior:
- *   - `atrPct <= 0` throws `VolSizerError` (every ATR scenario would
- *     divide by zero risk-per-share).
- *   - `equity`, `entry`, `ma`, `tolPct`, `targetSizePct` must be > 0;
- *     otherwise throws.
- *   - `bufferPct` must be >= 0 (negative makes no sense; 0 means
- *     "stop exactly at MA" which is valid).
- *   - Tech stop at or above entry (e.g. `ma > entry` with small buffer)
- *     is NOT treated as an error — the tech-stop scenario returns
- *     `finalShares: 0` and the recommendation correctly falls through
- *     to the 1.5x ATR cushion.
+ *   - Non-positive equity / entry / atrPct / tolPct / keyLevel → VolSizerError.
+ *   - Composite Stop ≥ Entry (bad key level, or entry inside a support
+ *     that's actually resistance) → warning banner, finalShares = 0.
+ *   - Key Level > Entry → still valid input; the key-level candidate just
+ *     resolves to (KeyLevel − buffer) which may be above entry, in which
+ *     case the ATR floor typically wins.
  */
 
 export interface VolSizerInputs {
+  /** Portfolio equity / NLV. */
   equity: number;
+  /** Entry price per share. */
   entry: number;
-  ma: number;
-  bufferPct: number;
+  /** ATR21 as percentage (e.g. 4.5 for 4.5%). */
   atrPct: number;
+  /** Structural low OR key MA — user types this from the chart. Used
+   *  as the anchor for the key-level candidate stop. */
+  keyLevel: number;
+  /** Sizing-mode risk tolerance percentage (Pilot 0.25 / Normal 0.50 /
+   *  Offense 0.75). */
   tolPct: number;
-  targetSizePct: number;
+  /** True when the ticker is a young IPO (≤12 months since IPO by user
+   *  judgment) — triggers the 5% ceiling clamp. Default false. */
+  youngIpo?: boolean;
 }
 
-export type ScenarioLabel = "Tech Stop" | "1x ATR" | "1.5x ATR" | "2x ATR";
+/** Which candidate stop won the composite MIN. */
+export type CompositeWinner = "atr_floor" | "key_level_buffer";
 
-export interface SizingScenario {
-  label: ScenarioLabel;
-  effectiveStop: number;
-  stopDistancePct: number;
+export interface CompositeStop {
+  /** Winning stop price (the LOWER of the two candidates). */
+  price: number;
+  /** Entry − price. */
+  distance: number;
+  /** distance / entry × 100. */
+  distancePct: number;
+  /** distance / atrPerShare — how many ATRs of headroom. Always ≥ 1
+   *  by construction (the ATR floor guarantees it). */
   atrFraction: number;
-  candidateShares: number;
-  finalShares: number;
-  capBinds: boolean;
-  positionCost: number;
-  positionPct: number;
-  riskIfStopped: number;
-  riskPct: number;
+  winner: CompositeWinner;
+  /** Human-readable label for the winning candidate. */
+  winnerLabel: string;
+  candidates: {
+    /** Entry − 1 ATR. Always available. */
+    atrFloor: number;
+    /** Key Level − max(0.5 ATR, 1% of entry). */
+    keyLevelBuffer: number;
+    /** The buffer applied under the key level, in $/share, for
+     *  display: "Key Level − $X.XX buffer". */
+    bufferApplied: number;
+    /** Which of {0.5 × ATR, 1% of entry} the buffer resolved to. */
+    bufferBasis: "half_atr" | "one_percent";
+  };
 }
 
-export type RecommendationReason =
-  | "tech_stop_safe"
-  | "tech_stop_inside_noise";
+/** Which constraint governed the final share count. */
+export type Bind = "risk" | "ceiling";
 
-// Staged scale-out at -3% / -5% / -7% from entry. Equal thirds with the
-// remainder on the last leg — always locked at those percentages, per
-// standing user preference (Phase 0 spec).
-export const SCALE_OUT_PCTS = [3, 5, 7] as const;
+/** Which policy tier the ceiling came from. */
+export type CeilingPolicy = "standard" | "young_ipo";
 
 export interface ScaleOutLeg {
-  pctBelow: number;   // 3, 5, or 7
+  /** ATR multiplier below entry (0.5, 1.0, or 1.5). */
+  atrMultiple: number;
   stopPrice: number;
   shares: number;
-  loss: number;       // dollars if this leg fires
+  loss: number;
   lossPctNlv: number;
 }
 
@@ -72,28 +107,35 @@ export interface ScaleOutStops {
   legs: [ScaleOutLeg, ScaleOutLeg, ScaleOutLeg];
   totalLoss: number;
   totalLossPctNlv: number;
-  avgExitPct: number; // -5.00 for equal thirds at 3/5/7
+  /** Weighted average exit price. Equal thirds at 0.5/1.0/1.5 ATR
+   *  give avg = entry − 1 ATR ≈ the risk budget anchor. */
+  avgExitPrice: number;
+  avgExitPct: number;
 }
 
 export interface VolSizerResults {
   riskBudget: number;
   atrPerShare: number;
-  positionCap: number;
-  positionCapShares: number;
+  ceilingPct: number;
+  ceilingShares: number;
+  ceilingPolicy: CeilingPolicy;
 
-  techStop: SizingScenario;
-  atrScenarios: [SizingScenario, SizingScenario, SizingScenario];
+  composite: CompositeStop;
 
-  recommended: SizingScenario;
-  recommendationReason: RecommendationReason;
+  /** riskBudget ÷ composite.distance, floored. */
+  candidateShares: number;
+  /** min(candidateShares, ceilingShares). */
+  finalShares: number;
+  bind: Bind;
+  positionCost: number;
+  positionPct: number;
+  riskIfStopped: number;
+  riskPct: number;
 
-  // Scale-out ladder pinned to the Tech Stop share count. Always present.
-  scaleOutTech: ScaleOutStops;
-  // Second ladder pinned to the Recommended share count. Null when the
-  // recommendation IS the tech stop (nothing to show twice).
-  scaleOutRecommended: ScaleOutStops | null;
+  scaleOut: ScaleOutStops;
 
-  warning: { show: boolean; text: string };
+  /** Zero or more non-blocking advisories. Blocking errors throw. */
+  warnings: string[];
 }
 
 export class VolSizerError extends Error {
@@ -103,175 +145,165 @@ export class VolSizerError extends Error {
   }
 }
 
-const ATR_MULTIPLIERS: readonly [1, 1.5, 2] = [1, 1.5, 2] as const;
+/** Position-size ceiling policy. `standard` = the everyday cap;
+ *  `young_ipo` = the tighter clamp for IPOs ≤ 12 months old;
+ *  `hard_max` = the absolute ceiling that even manual overrides can't
+ *  breach (currently informational only — the sizer doesn't return it
+ *  as a policy, but Log Buy consumers can enforce it). */
+export const STANDARD_CEILING_PCT = 15;
+export const YOUNG_IPO_CEILING_PCT = 5;
+export const HARD_MAX_CEILING_PCT = 20;
 
-function labelFor(multiplier: 1 | 1.5 | 2): ScenarioLabel {
-  if (multiplier === 1) return "1x ATR";
-  if (multiplier === 1.5) return "1.5x ATR";
-  return "2x ATR";
+/** Locked scale-out multipliers. Equal-thirds shares split at
+ *  0.5 / 1.0 / 1.5 ATR below entry → avg exit at 1 ATR below entry,
+ *  which is the risk-budget anchor when the composite lands at 1 ATR.
+ *  The 1.25 ATR-avg proposal was rejected as a 25% risk-budget overrun
+ *  — see the design conversation and comment on
+ *  ScaleOutStops.avgExitPrice. */
+export const SCALE_OUT_ATR_MULTIPLIERS: readonly [0.5, 1.0, 1.5] = [0.5, 1.0, 1.5] as const;
+
+function winnerLabelOf(winner: CompositeWinner): string {
+  return winner === "atr_floor" ? "1 ATR floor" : "Key Level − buffer";
 }
 
-function buildScenario(args: {
-  label: ScenarioLabel;
+/** Compute the composite stop from entry, ATR%, and the user's Key Level. */
+export function computeCompositeStop(args: {
   entry: number;
-  equity: number;
   atrPct: number;
-  effectiveStop: number;
-  riskBudget: number;
-  positionCapShares: number;
-}): SizingScenario {
-  const { label, entry, equity, atrPct, effectiveStop, riskBudget, positionCapShares } = args;
+  keyLevel: number;
+}): CompositeStop {
+  const { entry, atrPct, keyLevel } = args;
+  if (!(entry > 0)) throw new VolSizerError("entry must be > 0");
+  if (!(atrPct > 0)) throw new VolSizerError("atrPct must be > 0");
+  if (!(keyLevel > 0)) throw new VolSizerError("keyLevel must be > 0");
 
-  const riskPerShare = entry - effectiveStop;
-  const stopDistancePct = (riskPerShare / entry) * 100;
-  const atrFraction = stopDistancePct / atrPct;
+  const atrPerShare = (entry * atrPct) / 100;
+  const atrFloor = entry - atrPerShare;
 
-  if (riskPerShare <= 0) {
-    return {
-      label,
-      effectiveStop,
-      stopDistancePct,
-      atrFraction,
-      candidateShares: 0,
-      finalShares: 0,
-      capBinds: false,
-      positionCost: 0,
-      positionPct: 0,
-      riskIfStopped: 0,
-      riskPct: 0,
-    };
-  }
+  // Buffer under Key Level scales with the name's volatility: max of
+  // half an ATR or 1% of entry. Under a hot 9.6% name, 0.5 ATR wins;
+  // under a calm 2% name, the 1% floor kicks in so we don't stop
+  // uselessly tight when the name barely moves.
+  const halfAtrBuffer = atrPerShare / 2;
+  const onePctBuffer = entry * 0.01;
+  const bufferApplied = Math.max(halfAtrBuffer, onePctBuffer);
+  const bufferBasis: CompositeStop["candidates"]["bufferBasis"] =
+    halfAtrBuffer >= onePctBuffer ? "half_atr" : "one_percent";
+  const keyLevelBuffer = keyLevel - bufferApplied;
 
-  const candidateShares = Math.floor(riskBudget / riskPerShare);
-  const finalShares = Math.min(candidateShares, positionCapShares);
-  const capBinds = positionCapShares < candidateShares;
-  const positionCost = finalShares * entry;
-  const positionPct = (positionCost / equity) * 100;
-  const riskIfStopped = finalShares * riskPerShare;
-  const riskPct = (riskIfStopped / equity) * 100;
+  // Composite = LOWEST price = WIDEST stop = MOST DEFENSIVE placement.
+  // The narrower (higher price) candidate loses; the trade gets the
+  // room the wider candidate says it needs.
+  const winner: CompositeWinner = atrFloor <= keyLevelBuffer ? "atr_floor" : "key_level_buffer";
+  const price = Math.min(atrFloor, keyLevelBuffer);
+  const distance = entry - price;
+  const distancePct = (distance / entry) * 100;
+  const atrFraction = distance / atrPerShare;
 
   return {
-    label,
-    effectiveStop,
-    stopDistancePct,
+    price,
+    distance,
+    distancePct,
     atrFraction,
-    candidateShares,
-    finalShares,
-    capBinds,
-    positionCost,
-    positionPct,
-    riskIfStopped,
-    riskPct,
+    winner,
+    winnerLabel: winnerLabelOf(winner),
+    candidates: { atrFloor, keyLevelBuffer, bufferApplied, bufferBasis },
   };
 }
 
-// Split totalShares into three equal-ish legs (floor, floor, remainder)
-// and price each leg at entry × (1 − pct/100). Locked percentages; the
-// only variable is share count. If totalShares is 0 or negative, all
-// legs come back with 0 shares / 0 loss so the tile renders empty.
-export function computeScaleOutStops(entry: number, totalShares: number, equity: number): ScaleOutStops {
+/** Ceiling in percent-of-NLV for a given policy flag. */
+export function ceilingPctFor(youngIpo: boolean | undefined): { pct: number; policy: CeilingPolicy } {
+  return youngIpo
+    ? { pct: YOUNG_IPO_CEILING_PCT, policy: "young_ipo" }
+    : { pct: STANDARD_CEILING_PCT, policy: "standard" };
+}
+
+/** Split totalShares into three equal-ish legs (floor, floor, remainder)
+ *  and price each leg at Entry − multiplier × ATR $/share. Locked ATR
+ *  multipliers 0.5 / 1.0 / 1.5. */
+export function computeScaleOutStops(entry: number, atrPct: number, totalShares: number, equity: number): ScaleOutStops {
   const shares = Math.max(0, Math.floor(totalShares));
+  const atrPerShare = (entry * atrPct) / 100;
   const base = Math.floor(shares / 3);
   const legShares: [number, number, number] = [base, base, shares - 2 * base];
 
-  const legs = SCALE_OUT_PCTS.map((pct, i) => {
-    const stopPrice = entry * (1 - pct / 100);
+  const legs = SCALE_OUT_ATR_MULTIPLIERS.map((mult, i) => {
+    const stopPrice = entry - mult * atrPerShare;
     const shs = legShares[i];
     const lossPerShare = entry - stopPrice;
     const loss = shs * lossPerShare;
     const lossPctNlv = equity > 0 ? (loss / equity) * 100 : 0;
-    return { pctBelow: pct, stopPrice, shares: shs, loss, lossPctNlv };
+    return { atrMultiple: mult, stopPrice, shares: shs, loss, lossPctNlv };
   }) as [ScaleOutLeg, ScaleOutLeg, ScaleOutLeg];
 
   const totalLoss = legs[0].loss + legs[1].loss + legs[2].loss;
   const totalLossPctNlv = equity > 0 ? (totalLoss / equity) * 100 : 0;
-  // For equal thirds at 3/5/7 this is exactly -5.00. Compute anyway so
-  // it stays correct if the remainder lands unevenly (small share counts).
-  const avgExitPct = shares > 0
-    ? -((legs[0].shares * 3 + legs[1].shares * 5 + legs[2].shares * 7) / shares)
-    : 0;
+  // Share-weighted average exit. For equal thirds this is exactly
+  // Entry − 1 ATR (the middle leg). Compute explicitly so uneven
+  // remainders (small share counts) still land correctly.
+  const totalStopValue = legs[0].shares * legs[0].stopPrice + legs[1].shares * legs[1].stopPrice + legs[2].shares * legs[2].stopPrice;
+  const avgExitPrice = shares > 0 ? totalStopValue / shares : entry;
+  const avgExitPct = entry > 0 ? -((entry - avgExitPrice) / entry) * 100 : 0;
 
-  return { entry, totalShares: shares, legs, totalLoss, totalLossPctNlv, avgExitPct };
+  return { entry, totalShares: shares, legs, totalLoss, totalLossPctNlv, avgExitPrice, avgExitPct };
 }
 
+/** Compute the whole volatility sizer result — risk budget, composite
+ *  stop, final shares, scale-out ladder — from user inputs. Pure. */
 export function computeVolatilitySizing(input: VolSizerInputs): VolSizerResults {
-  const { equity, entry, ma, bufferPct, atrPct, tolPct, targetSizePct } = input;
+  const { equity, entry, atrPct, keyLevel, tolPct, youngIpo } = input;
 
   if (!(equity > 0)) throw new VolSizerError("equity must be > 0");
   if (!(entry > 0)) throw new VolSizerError("entry must be > 0");
-  if (!(ma > 0)) throw new VolSizerError("ma must be > 0");
-  if (!(bufferPct >= 0)) throw new VolSizerError("bufferPct must be >= 0");
   if (!(atrPct > 0)) throw new VolSizerError("atrPct must be > 0");
+  if (!(keyLevel > 0)) throw new VolSizerError("keyLevel must be > 0");
   if (!(tolPct > 0)) throw new VolSizerError("tolPct must be > 0");
-  if (!(targetSizePct > 0)) throw new VolSizerError("targetSizePct must be > 0");
 
   const riskBudget = (equity * tolPct) / 100;
   const atrPerShare = (entry * atrPct) / 100;
-  const positionCap = (equity * targetSizePct) / 100;
-  const positionCapShares = Math.floor(positionCap / entry);
 
-  const techEffectiveStop = ma * (1 - bufferPct / 100);
-  const techStop = buildScenario({
-    label: "Tech Stop",
-    entry,
-    equity,
-    atrPct,
-    effectiveStop: techEffectiveStop,
-    riskBudget,
-    positionCapShares,
-  });
+  const { pct: ceilingPct, policy: ceilingPolicy } = ceilingPctFor(youngIpo);
+  const ceilingShares = Math.floor((equity * ceilingPct) / 100 / entry);
 
-  const atrScenarios = ATR_MULTIPLIERS.map((m) => {
-    const effStop = entry * (1 - (m * atrPct) / 100);
-    return buildScenario({
-      label: labelFor(m),
-      entry,
-      equity,
-      atrPct,
-      effectiveStop: effStop,
-      riskBudget,
-      positionCapShares,
-    });
-  }) as [SizingScenario, SizingScenario, SizingScenario];
+  const composite = computeCompositeStop({ entry, atrPct, keyLevel });
 
-  let recommended: SizingScenario;
-  let recommendationReason: RecommendationReason;
-  if (techStop.atrFraction >= 1.0) {
-    recommended = techStop;
-    recommendationReason = "tech_stop_safe";
+  const warnings: string[] = [];
+
+  let candidateShares = 0;
+  let finalShares = 0;
+  let bind: Bind = "risk";
+  if (composite.distance <= 0) {
+    warnings.push(
+      `Composite stop (${composite.price.toFixed(2)}) is at or above entry (${entry.toFixed(2)}) — Key Level too high, or the ATR is degenerate.`,
+    );
   } else {
-    recommended = atrScenarios[1];
-    recommendationReason = "tech_stop_inside_noise";
+    candidateShares = Math.floor(riskBudget / composite.distance);
+    finalShares = Math.min(candidateShares, ceilingShares);
+    bind = ceilingShares < candidateShares ? "ceiling" : "risk";
   }
 
-  const warningShow = techStop.atrFraction < 1.0;
-  let warningText = "";
-  if (warningShow) {
-    if (techStop.stopDistancePct <= 0) {
-      warningText =
-        "Tech stop is at or above entry — invalid stop. Consider 1.5x ATR or skip.";
-    } else {
-      warningText =
-        `Tech stop is ${techStop.atrFraction.toFixed(2)} ATR — daily noise will likely stop you out. Consider 1.5x ATR or skip.`;
-    }
-  }
+  const positionCost = finalShares * entry;
+  const positionPct = equity > 0 ? (positionCost / equity) * 100 : 0;
+  const riskIfStopped = finalShares * composite.distance;
+  const riskPct = equity > 0 ? (riskIfStopped / equity) * 100 : 0;
 
-  const scaleOutTech = computeScaleOutStops(entry, techStop.finalShares, equity);
-  const scaleOutRecommended = recommended === techStop
-    ? null
-    : computeScaleOutStops(entry, recommended.finalShares, equity);
+  const scaleOut = computeScaleOutStops(entry, atrPct, finalShares, equity);
 
   return {
     riskBudget,
     atrPerShare,
-    positionCap,
-    positionCapShares,
-    techStop,
-    atrScenarios,
-    recommended,
-    recommendationReason,
-    scaleOutTech,
-    scaleOutRecommended,
-    warning: { show: warningShow, text: warningText },
+    ceilingPct,
+    ceilingShares,
+    ceilingPolicy,
+    composite,
+    candidateShares,
+    finalShares,
+    bind,
+    positionCost,
+    positionPct,
+    riskIfStopped,
+    riskPct,
+    scaleOut,
+    warnings,
   };
 }

@@ -8,7 +8,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { SIZING_MODES, mctStateToSizingMode } from "@/lib/sizing-mode";
-import { computeVolatilitySizing, type VolSizerResults, type SizingScenario } from "@/lib/vol-sizer";
+import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
 import { MobileSelectSheet } from "./mobile-select-sheet";
 import { MobileHoldingPicker } from "./mobile-holding-picker";
 import { NumberFieldCell, ReadOnlyFieldCell } from "./mobile-form-fields";
@@ -125,11 +125,14 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string; icon: string }> = [
 
 const TAB_INPUTS: Record<TabKey, TabInputs> = {
   volatility: {
+    // Volatility tab uses the composite-stop model (Key Level + Young
+    // IPO checkbox), NOT the MA+buffer / size-picker pair. The MA
+    // fields are hidden by needsMaBuffer=false; the target-size ladder
+    // is hidden by needsTargetSize=false — the sizer applies its own
+    // 15% (5% young-IPO) ceiling policy.
     needsTickerInput: true,
-    needsMaBuffer: true,
     needsAtr: true,
     needsSizingMode: true,
-    needsTargetSize: true,
   },
   scalein: {
     needsHolding: true,
@@ -241,8 +244,12 @@ export function MobilePositionSizer() {
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [ticker, setTicker] = useState("");
   const [entryPrice, setEntryPrice] = useState("");
+  // maLevel + buffer serve the legacy MA-tech-stop path (Scale-In).
+  // Volatility moved to composite-stop (keyLevelStr + youngIpo).
   const [maLevel, setMaLevel] = useState("");
   const [buffer, setBuffer] = useState("1.00");
+  const [keyLevelStr, setKeyLevelStr] = useState("");
+  const [youngIpo, setYoungIpo] = useState(false);
   // Index 3 (Pilot, 0.25%) is manual-only; auto path lands on 0/1/2.
   const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1); // overwritten on mount
   const [sizingModeManual, setSizingModeManual] = useState(false);
@@ -381,40 +388,35 @@ export function MobilePositionSizer() {
   const entry = parseFloat(entryPrice) || 0;
   const ma = parseFloat(maLevel) || 0;
   const buf = parseFloat(buffer) || 1;
+  const keyLevel = parseFloat(keyLevelStr) || 0;
   const atr = atrPct ?? 0;
   const eq = equity ?? 0;
   const tolPct = SIZING_MODES[sizingMode].pct;
   const targetSize = SIZE_OPTIONS[sizeIdx].pct;
 
-  // Calculated stop banner derives from raw inputs (so it surfaces
-  // before the audit lib has all its inputs).
+  // Scale-In calculated-stop banner (MA-based; not used by Volatility).
   const calcStop = ma > 0 ? ma * (1 - buf / 100) : 0;
   const stopDistPct = entry > 0 && calcStop > 0 && calcStop < entry ? ((entry - calcStop) / entry) * 100 : 0;
-  const calcAtrFraction = atr > 0 && stopDistPct > 0 ? stopDistPct / atr : null;
 
-  // Volatility audit — delegates to the shared vol-sizer lib.
+  // Volatility audit — delegates to the shared vol-sizer lib
+  // (composite-stop model).
   const audit: VolSizerResults | null = useMemo(() => {
     if (activeTab !== "volatility") return null;
-    if (entry <= 0 || eq <= 0 || atr <= 0 || ma <= 0) return null;
-    if (calcStop >= entry) return null;
+    if (entry <= 0 || eq <= 0 || atr <= 0 || keyLevel <= 0) return null;
     try {
       return computeVolatilitySizing({
         equity: eq,
         entry,
-        ma,
-        bufferPct: buf,
         atrPct: atr,
+        keyLevel,
         tolPct,
-        targetSizePct: targetSize,
+        youngIpo,
       });
     } catch (err) {
       log.error("mobile-position-sizer", "vol-sizer compute failed", err);
       return null;
     }
-  }, [activeTab, entry, ma, buf, eq, atr, tolPct, targetSize, calcStop]);
-
-  const rec = audit?.recommended ?? null;
-  const recIsTechStop = audit?.recommendationReason === "tech_stop_safe";
+  }, [activeTab, entry, keyLevel, eq, atr, tolPct, youngIpo]);
 
   // Scale-In audit — inline math mirroring desktop scaleResults
   // (position-sizer.tsx:377-435) field-for-field. INLINE per directive;
@@ -807,7 +809,7 @@ export function MobilePositionSizer() {
             </div>
           )}
 
-          {/* 2×2 input grid (Entry / NLV / MA / Buffer) */}
+          {/* 2×2 input grid (Entry / NLV / Key Level / ATR) */}
           <div className="grid grid-cols-2 gap-2">
             <NumberFieldCell
               label="Entry"
@@ -822,63 +824,49 @@ export function MobilePositionSizer() {
               value={equityDisplay}
             />
             <NumberFieldCell
-              label="Key MA"
-              value={maLevel}
-              onChange={setMaLevel}
-              ariaLabel="Key MA level"
+              label="Key Level"
+              value={keyLevelStr}
+              onChange={setKeyLevelStr}
+              ariaLabel="Key level"
               placeholder="0.00"
             />
-            <NumberFieldCell
-              label="Buffer"
-              value={buffer}
-              onChange={setBuffer}
-              ariaLabel="Buffer percent"
-              suffix="%"
-              placeholder="1.00"
-            />
+            {flags.needsAtr && (
+              <ReadOnlyFieldCell
+                label="ATR (21D)"
+                labelIcon={<Lock size={9} strokeWidth={1} className="text-m-text-dim" aria-hidden="true" />}
+                value={atrDisplay}
+              />
+            )}
           </div>
 
-          {/* ATR row */}
-          {flags.needsAtr && (
-            <div className="flex items-baseline justify-between rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]">
-              <span className="text-[11px] font-medium text-m-text-dim">ATR % (21D)</span>
-              <span className="font-m-num text-xl font-medium tabular-nums tracking-[-0.01em] text-m-text">
-                {atrDisplay}
-              </span>
-            </div>
-          )}
-
-          {/* Mode + Size pickers (shared with Scale-In, but Volatility
-              renders them here to keep the Volatility layout self-
-              contained). Scale-In's render block below mirrors. */}
-          <div className="grid grid-cols-2 gap-2">
-            <ModePickerTile
-              sizingMode={sizingMode}
-              onChange={(i) => {
-                setSizingMode(i);
-                setSizingModeManual(true);
-              }}
+          {/* Young IPO clamp */}
+          <label
+            htmlFor="mobile-young-ipo"
+            data-testid="young-ipo-checkbox-label"
+            className="flex items-center gap-2.5 rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px] text-[12px] cursor-pointer"
+            style={{ color: "var(--m-text)" }}
+          >
+            <input
+              id="mobile-young-ipo"
+              data-testid="young-ipo-checkbox"
+              type="checkbox"
+              checked={youngIpo}
+              onChange={(e) => setYoungIpo(e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: "var(--m-accent)" }}
             />
-            <SizePickerTile sizeIdx={sizeIdx} onChange={setSizeIdx} />
-          </div>
+            Young IPO (≤12 mo) — clamp ceiling to 5% NLV
+          </label>
 
-          {/* Calculated Stop banner */}
-          {calcStop > 0 && entry > 0 && (
-            <div
-              data-testid="calc-stop-banner"
-              className="rounded-m-md border-[0.5px] px-[14px] py-[10px] text-[12px]"
-              style={{
-                background: "var(--m-accent-tint)",
-                borderColor: "var(--m-accent-border)",
-                color: "var(--m-text)",
-              }}
-            >
-              Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA {formatCurrency(ma)} − {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
-              {calcAtrFraction !== null && ` · ${calcAtrFraction.toFixed(2)}× ATR`}
-            </div>
-          )}
+          {/* Mode picker (no size picker — Volatility uses policy). */}
+          <ModePickerTile
+            sizingMode={sizingMode}
+            onChange={(i) => {
+              setSizingMode(i);
+              setSizingModeManual(true);
+            }}
+          />
 
-          {audit?.warning?.show && (
+          {audit && audit.warnings.length > 0 && (
             <div
               data-testid="vol-warning"
               className="rounded-m-md border-[0.5px] px-[14px] py-[10px] text-[12px]"
@@ -888,7 +876,7 @@ export function MobilePositionSizer() {
                 color: "var(--m-warn)",
               }}
             >
-              {audit.warning.text}
+              {audit.warnings.join(" · ")}
             </div>
           )}
 
@@ -900,69 +888,66 @@ export function MobilePositionSizer() {
               sub={`${tolPct.toFixed(2)}%`}
             />
             <MiniMetric
-              label="ATR Noise"
+              label="ATR"
               value={atrPct != null ? `${atrPct.toFixed(2)}%` : "—"}
               sub={audit ? `${formatCurrency(audit.atrPerShare)}/sh` : undefined}
             />
             <MiniMetric
-              label="Position Cap"
-              value={audit ? `${audit.positionCapShares} shs` : "—"}
-              sub={`${targetSize}% NLV`}
+              label="Ceiling"
+              value={audit ? `${audit.ceilingShares} shs` : "—"}
+              sub={audit ? `${audit.ceilingPct}% NLV${audit.ceilingPolicy === "young_ipo" ? " · IPO" : ""}` : undefined}
             />
           </div>
 
-          {audit && (
-            <ScenarioRow
-              scenario={audit.techStop}
-              targetSize={targetSize}
-              isRecommended={!!recIsTechStop}
-            />
-          )}
-
-          {audit && (
-            <div className="flex flex-col gap-2">
-              {audit.atrScenarios.map((s, i) => (
-                <ScenarioRow
-                  key={s.label}
-                  scenario={s}
-                  targetSize={targetSize}
-                  isRecommended={!recIsTechStop && i === 1}
-                />
-              ))}
-            </div>
-          )}
-
-          {rec && audit && (
+          {/* THE ANSWER — one card. */}
+          {audit ? (
             <div
-              data-testid="verdict-card"
+              data-testid="composite-answer"
               className="rounded-m-xl border-[0.5px] px-5 pt-4 pb-4"
               style={{
                 background: "color-mix(in oklab, var(--m-accent) 10%, var(--m-surface))",
                 borderColor: "var(--m-accent-border)",
               }}
             >
-              <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
-                Recommended
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
+                  Recommended
+                </div>
+                <span
+                  data-testid="bind-badge"
+                  className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                  style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}
+                >
+                  {audit.bind === "risk" ? "Risk-bound" : "Ceiling-bound"}
+                </span>
               </div>
               <div className="mt-1.5 flex items-baseline gap-2">
                 <span
                   data-testid="audit-shares"
                   className="font-m-num text-[38px] font-medium tabular-nums tracking-[-0.03em] text-m-text"
                 >
-                  {rec.finalShares.toLocaleString()}
+                  {audit.finalShares.toLocaleString()}
                 </span>
                 <span className="text-[15px] text-m-text-muted">
-                  shares · {formatCurrency(rec.positionCost, { decimals: 0 })}
+                  shares · {formatCurrency(audit.positionCost, { decimals: 0 })}
                 </span>
               </div>
               <div className="mt-1 text-[11px] text-m-text-dim">
-                Sized by {recIsTechStop ? "tech stop" : "1.5× ATR cushion"} · bound by{" "}
-                {rec.capBinds ? `position-size tier (${targetSize}% NLV)` : `risk budget (${tolPct.toFixed(2)}%)`}
+                Composite stop <strong className="text-m-text">{formatCurrency(audit.composite.price)}</strong> · {audit.composite.distancePct.toFixed(2)}% ({audit.composite.atrFraction.toFixed(2)}× ATR)
+              </div>
+              <div className="mt-0.5 text-[11px] text-m-text-dim">
+                Winner: {audit.composite.winner === "atr_floor"
+                  ? `1 ATR floor: Entry − ${formatCurrency(audit.atrPerShare)}`
+                  : `Key Level − ${formatCurrency(audit.composite.candidates.bufferApplied)} buffer (${audit.composite.candidates.bufferBasis === "half_atr" ? "0.5 ATR" : "1% floor"})`}
+              </div>
+              <div className="mt-1 pt-2 text-[11px] text-m-text-dim"
+                   style={{ borderTop: "1px dashed var(--m-border)" }}>
+                Bound by {audit.bind === "risk"
+                  ? `risk budget (${tolPct.toFixed(2)}%)`
+                  : `${audit.ceilingPct}% ${audit.ceilingPolicy === "young_ipo" ? "young-IPO" : "position"} ceiling`}
               </div>
             </div>
-          )}
-
-          {!audit && (
+          ) : (
             <div className="rounded-m-xl border-[0.5px] border-m-border bg-m-surface px-5 pt-4 pb-3.5">
               <div className="text-[11px] font-medium text-m-text-dim uppercase tracking-[0.08em]">
                 Recommended
@@ -977,9 +962,14 @@ export function MobilePositionSizer() {
                 <span className="text-[15px] text-m-text-muted">shares</span>
               </div>
               <div className="mt-1 text-[11px] text-m-text-dim">
-                Enter ticker, MA, and ATR to size.
+                Enter ticker, entry, ATR, and Key Level to size.
               </div>
             </div>
+          )}
+
+          {/* Scale-out ladder. */}
+          {audit && audit.finalShares > 0 && (
+            <MobileScaleOutLadder ladder={audit.scaleOut} atrPerShare={audit.atrPerShare} />
           )}
         </div>
       )}
@@ -2024,56 +2014,44 @@ function MiniMetric({
   );
 }
 
-function ScenarioRow({
-  scenario,
-  targetSize,
-  isRecommended,
-}: {
-  scenario: SizingScenario;
-  targetSize: number;
-  isRecommended: boolean;
-}) {
-  const accentVar = scenario.label === "Tech Stop" ? "var(--m-accent)" : "var(--m-warn)";
+// Mobile scale-out ladder — mirrors desktop's ScaleOutStopsCard but
+// laid out for narrow viewports. 3 legs at Entry − 0.5/1.0/1.5 ATR.
+function MobileScaleOutLadder({ ladder, atrPerShare }: { ladder: ScaleOutStops; atrPerShare: number }) {
   return (
     <div
-      data-testid={`scenario-${scenario.label.replace(/\s+/g, "-").replace("×", "x").toLowerCase()}`}
-      className="rounded-m-md border-[0.5px] px-[14px] py-[10px]"
-      style={{
-        background: isRecommended
-          ? `color-mix(in oklab, ${accentVar} 10%, var(--m-surface))`
-          : "var(--m-surface)",
-        borderColor: isRecommended ? "var(--m-accent-border)" : "var(--m-border)",
-        borderLeftWidth: isRecommended ? 3 : 1,
-        borderLeftColor: accentVar,
-      }}
+      data-testid="scale-out-stops"
+      className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-1.5">
         <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
-          {scenario.label}
+          Scale-Out Stops
         </div>
-        {isRecommended && (
-          <span
-            data-testid="recommended-pill"
-            className="text-[9px] uppercase tracking-[0.08em] font-semibold px-1.5 py-0.5 rounded-[6px]"
-            style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}
-          >
-            Recommended
-          </span>
-        )}
-      </div>
-      <div className="mt-1 flex items-baseline justify-between">
-        <span className="font-m-num text-[20px] font-medium tabular-nums text-m-text">
-          {scenario.finalShares.toLocaleString()} <span className="text-[12px] text-m-text-muted">shs</span>
-        </span>
-        <span className="font-m-num text-[12px] tabular-nums text-m-text-muted">
-          {scenario.positionPct.toFixed(1)}% NLV
+        <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-1.5 py-0.5 rounded-[6px]"
+              style={{ background: "color-mix(in oklab, var(--m-accent) 15%, transparent)", color: "var(--m-accent)" }}>
+          3-Leg ATR
         </span>
       </div>
-      <div className="mt-0.5 flex items-baseline justify-between text-[11px] text-m-text-dim">
-        <span>Stop {formatCurrency(scenario.effectiveStop)} ({scenario.atrFraction.toFixed(2)}× ATR)</span>
-        {scenario.capBinds && (
-          <span data-testid="cap-binds" className="text-m-warn">capped @ {targetSize}%</span>
-        )}
+      <div className="text-[11px] mb-1.5 text-m-text-dim">
+        {ladder.totalShares} shs @ {formatCurrency(ladder.entry)} · ATR {formatCurrency(atrPerShare)}/sh
+      </div>
+      <div className="flex flex-col gap-1">
+        {ladder.legs.map((leg) => (
+          <div key={leg.atrMultiple}
+               data-testid={`scale-out-leg-${SCALE_OUT_ATR_MULTIPLIERS.indexOf(leg.atrMultiple as 0.5 | 1.0 | 1.5)}`}
+               className="grid grid-cols-[50px_1fr_44px_1fr] items-baseline gap-2 text-[11px] font-m-num tabular-nums">
+            <span className="font-medium" style={{ color: "var(--m-accent)" }}>−{leg.atrMultiple.toFixed(2)} ATR</span>
+            <span className="text-m-text">{formatCurrency(leg.stopPrice)}</span>
+            <span className="text-m-text-muted">{leg.shares} shs</span>
+            <span className="text-right text-m-text-muted">
+              −{formatCurrency(leg.loss, { decimals: 0 })} <span className="text-m-text-dim">({leg.lossPctNlv.toFixed(2)}%)</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 pt-1.5 flex items-baseline justify-between text-[11px] text-m-text-dim"
+           style={{ borderTop: "1px dashed var(--m-border)" }}>
+        <span>Full-stop loss <strong className="text-m-text">{formatCurrency(ladder.totalLoss, { decimals: 0 })}</strong> ({ladder.totalLossPctNlv.toFixed(2)}% NLV)</span>
+        <span>avg {ladder.avgExitPct.toFixed(2)}%</span>
       </div>
     </div>
   );

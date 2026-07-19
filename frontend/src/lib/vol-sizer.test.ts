@@ -1,283 +1,262 @@
-import { describe, test, expect } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   computeVolatilitySizing,
+  computeCompositeStop,
+  computeScaleOutStops,
+  ceilingPctFor,
   VolSizerError,
-  type VolSizerInputs,
+  STANDARD_CEILING_PCT,
+  YOUNG_IPO_CEILING_PCT,
+  HARD_MAX_CEILING_PCT,
+  SCALE_OUT_ATR_MULTIPLIERS,
 } from "./vol-sizer";
 
-const GOOGL: VolSizerInputs = {
-  equity: 702924,
-  entry: 382.97,
-  ma: 379.40,
-  bufferPct: 1.0,
-  atrPct: 2.87,
-  tolPct: 1.0,
-  targetSizePct: 10,
+// Reusable defaults: DELL-style "calm 4.5% ATR" name, NLV $400K, Normal
+// mode (0.50% risk budget = $2000). Key Level chosen to make the
+// composite land at ~$167.40 (structural stop wider than 1 ATR floor).
+const DELL_BASE = {
+  equity: 400_000,
+  entry: 176.21,
+  atrPct: 4.5,
+  keyLevel: 171.365, // yields keyLevelBuffer = 171.365 - 3.965 = 167.40
+  tolPct: 0.5,
 };
 
-describe("vol-sizer lib", () => {
-  describe("GOOGL canonical case", () => {
-    const r = computeVolatilitySizing(GOOGL);
+// COHR-style "hot 9.6% ATR" name — Key Level set well below entry so
+// the ATR floor ends up being the tighter (higher-price) candidate;
+// the composite falls back to the 1-ATR floor.
+const COHR_BASE = {
+  equity: 400_000,
+  entry: 246.53,
+  atrPct: 9.6,
+  keyLevel: 240.0, // keyLevelBuffer = 240 - 11.83 = 228.17 > atrFloor 222.86 → ATR wins
+  tolPct: 0.5,
+};
 
-    test("positionCapShares = 183 (floor of 70292.4 / 382.97)", () => {
-      expect(r.positionCapShares).toBe(183);
-    });
-
-    test("all four scenarios bind at 183 shares", () => {
-      expect(r.techStop.finalShares).toBe(183);
-      expect(r.atrScenarios[0].finalShares).toBe(183);
-      expect(r.atrScenarios[1].finalShares).toBe(183);
-      expect(r.atrScenarios[2].finalShares).toBe(183);
-    });
-
-    test("all four scenarios show capBinds=true (candidate > cap)", () => {
-      expect(r.techStop.capBinds).toBe(true);
-      expect(r.atrScenarios[0].capBinds).toBe(true);
-      expect(r.atrScenarios[1].capBinds).toBe(true);
-      expect(r.atrScenarios[2].capBinds).toBe(true);
-    });
-
-    test("recommended = 1.5x ATR (referential, reason tech_stop_inside_noise)", () => {
-      expect(r.recommended.label).toBe("1.5x ATR");
-      expect(r.recommendationReason).toBe("tech_stop_inside_noise");
-      expect(r.recommended).toBe(r.atrScenarios[1]);
-    });
-
-    test("techStop.atrFraction ≈ 0.67 and warning text includes it", () => {
-      expect(r.techStop.atrFraction).toBeCloseTo(0.67, 2);
-      expect(r.warning.show).toBe(true);
-      expect(r.warning.text).toContain("0.67");
-      expect(r.warning.text).toContain("ATR");
-    });
-
-    test("ATR scenario fractions equal their multipliers by construction", () => {
-      expect(r.atrScenarios[0].atrFraction).toBeCloseTo(1.0, 10);
-      expect(r.atrScenarios[1].atrFraction).toBeCloseTo(1.5, 10);
-      expect(r.atrScenarios[2].atrFraction).toBeCloseTo(2.0, 10);
-    });
-
-    test("derived budget / cap fields", () => {
-      expect(r.riskBudget).toBeCloseTo(7029.24, 6);
-      expect(r.positionCap).toBeCloseTo(70292.4, 6);
-      expect(r.atrPerShare).toBeCloseTo(10.991239, 6);
-    });
+describe("computeCompositeStop", () => {
+  it("picks the LOWEST of the two candidates (widest stop = most defensive)", () => {
+    const c = computeCompositeStop({ entry: 176.21, atrPct: 4.5, keyLevel: 171.365 });
+    // atrFloor = 176.21 − 7.9295 = 168.28
+    // keyLevelBuffer = 171.365 − max(3.965, 1.76) = 171.365 − 3.965 = 167.40
+    // composite = min(168.28, 167.40) = 167.40 → key_level_buffer wins
+    expect(c.winner).toBe("key_level_buffer");
+    expect(c.price).toBeCloseTo(167.4, 2);
+    expect(c.distance).toBeCloseTo(8.81, 2);
+    expect(c.candidates.atrFloor).toBeCloseTo(168.28, 2);
+    expect(c.candidates.keyLevelBuffer).toBeCloseTo(167.4, 2);
   });
 
-  describe("tier cap binds ATR sizing", () => {
-    // 5% tier with low ATR: candidate shares far exceed positionCapShares.
-    const r = computeVolatilitySizing({
-      equity: 1_000_000,
-      entry: 100,
-      ma: 99,
-      bufferPct: 1,
-      atrPct: 2,
-      tolPct: 1,
-      targetSizePct: 5,
-    });
-
-    test("positionCapShares = 500", () => {
-      expect(r.positionCapShares).toBe(500);
-    });
-
-    test("all three ATR scenarios cap at 500 with capBinds=true", () => {
-      for (const s of r.atrScenarios) {
-        expect(s.finalShares).toBe(500);
-        expect(s.capBinds).toBe(true);
-        expect(s.candidateShares).toBeGreaterThan(500);
-      }
-    });
-
-    test("tech stop also capped at 500", () => {
-      expect(r.techStop.finalShares).toBe(500);
-      expect(r.techStop.capBinds).toBe(true);
-    });
+  it("falls back to the 1 ATR floor when Key Level candidate is tighter", () => {
+    // COHR: Key Level $240 sits close to entry; atrFloor 222.86 is
+    // further away → atrFloor wins.
+    const c = computeCompositeStop({ entry: 246.53, atrPct: 9.6, keyLevel: 240 });
+    expect(c.winner).toBe("atr_floor");
+    expect(c.price).toBeCloseTo(222.86, 2);
+    expect(c.distance).toBeCloseTo(23.67, 2);
+    expect(c.atrFraction).toBeCloseTo(1.0, 3);
   });
 
-  describe("ATR sizing binds below tier cap (high ATR)", () => {
-    // 8% ATR with 10% tier on $100k equity, $100 entry:
-    //   positionCapShares = 100
-    //   1.5x: stop=88, rps=12, candidate=floor(1000/12)=83  → final=83, capBinds=false
-    //   2x:   stop=84, rps=16, candidate=62                 → final=62, capBinds=false
-    const r = computeVolatilitySizing({
-      equity: 100_000,
-      entry: 100,
-      ma: 99,
-      bufferPct: 1,
-      atrPct: 8,
-      tolPct: 1,
-      targetSizePct: 10,
-    });
-
-    test("positionCapShares = 100", () => {
-      expect(r.positionCapShares).toBe(100);
-    });
-
-    test("1.5x ATR scenario sizes to 83, cap does not bind", () => {
-      expect(r.atrScenarios[1].finalShares).toBe(83);
-      expect(r.atrScenarios[1].capBinds).toBe(false);
-    });
-
-    test("2x ATR scenario sizes to 62, cap does not bind", () => {
-      expect(r.atrScenarios[2].finalShares).toBe(62);
-      expect(r.atrScenarios[2].capBinds).toBe(false);
-    });
+  it("buffer basis: 0.5 ATR wins under high volatility (>= 2% ATR)", () => {
+    const c = computeCompositeStop({ entry: 100, atrPct: 5, keyLevel: 95 });
+    // 0.5 ATR = 2.50; 1% of entry = 1.00 → 0.5 ATR wins
+    expect(c.candidates.bufferApplied).toBeCloseTo(2.5, 4);
+    expect(c.candidates.bufferBasis).toBe("half_atr");
   });
 
-  describe("recommendation boundary around atrFraction = 1.0", () => {
-    const base = {
-      equity: 100_000,
-      entry: 100,
-      ma: 100,
-      atrPct: 2,
-      tolPct: 1,
-      targetSizePct: 10,
-    } as const;
-
-    test("buffer < 1 ATR → recommended is 1.5x ATR", () => {
-      // bufferPct=1.5 → stop=98.5, rps=1.5, atrFraction=0.75
-      const r = computeVolatilitySizing({ ...base, bufferPct: 1.5 });
-      expect(r.techStop.atrFraction).toBeLessThan(1.0);
-      expect(r.recommended).toBe(r.atrScenarios[1]);
-      expect(r.recommendationReason).toBe("tech_stop_inside_noise");
-    });
-
-    test("buffer > 1 ATR → recommended is tech stop", () => {
-      // bufferPct=3 → stop=97, rps=3, atrFraction=1.5
-      const r = computeVolatilitySizing({ ...base, bufferPct: 3 });
-      expect(r.techStop.atrFraction).toBeGreaterThan(1.0);
-      expect(r.recommended).toBe(r.techStop);
-      expect(r.recommendationReason).toBe("tech_stop_safe");
-    });
-
-    test("recommended is always referentially one of the four scenarios", () => {
-      const r1 = computeVolatilitySizing({ ...base, bufferPct: 1.5 });
-      const r2 = computeVolatilitySizing({ ...base, bufferPct: 3 });
-      expect([r1.techStop, ...r1.atrScenarios]).toContain(r1.recommended);
-      expect([r2.techStop, ...r2.atrScenarios]).toContain(r2.recommended);
-    });
+  it("buffer basis: 1% floor wins under LOW volatility (< 2% ATR)", () => {
+    const c = computeCompositeStop({ entry: 100, atrPct: 1.5, keyLevel: 95 });
+    // 0.5 ATR = 0.75; 1% of entry = 1.00 → 1% floor wins
+    expect(c.candidates.bufferApplied).toBeCloseTo(1.0, 4);
+    expect(c.candidates.bufferBasis).toBe("one_percent");
   });
 
-  describe("floor rounding — all share counts are integers", () => {
-    const r = computeVolatilitySizing({
-      equity: 123_456,
-      entry: 73.42,
-      ma: 71.10,
-      bufferPct: 1.27,
-      atrPct: 3.41,
-      tolPct: 0.75,
-      targetSizePct: 7.5,
-    });
-
-    test("positionCapShares and per-scenario share counts are integers", () => {
-      expect(Number.isInteger(r.positionCapShares)).toBe(true);
-      expect(Number.isInteger(r.techStop.candidateShares)).toBe(true);
-      expect(Number.isInteger(r.techStop.finalShares)).toBe(true);
-      for (const s of r.atrScenarios) {
-        expect(Number.isInteger(s.candidateShares)).toBe(true);
-        expect(Number.isInteger(s.finalShares)).toBe(true);
-      }
-    });
+  it("throws on non-positive entry / atrPct / keyLevel", () => {
+    expect(() => computeCompositeStop({ entry: 0, atrPct: 5, keyLevel: 95 })).toThrow(VolSizerError);
+    expect(() => computeCompositeStop({ entry: 100, atrPct: 0, keyLevel: 95 })).toThrow(VolSizerError);
+    expect(() => computeCompositeStop({ entry: 100, atrPct: 5, keyLevel: 0 })).toThrow(VolSizerError);
   });
 
-  describe("no-warning case (tech stop well outside 1 ATR)", () => {
-    // bufferPct=5 against atrPct=2 → atrFraction = 2.5
-    const r = computeVolatilitySizing({
-      equity: 100_000,
-      entry: 100,
-      ma: 100,
-      bufferPct: 5,
-      atrPct: 2,
-      tolPct: 1,
-      targetSizePct: 10,
-    });
-
-    test("techStop.atrFraction > 1.0", () => {
-      expect(r.techStop.atrFraction).toBeGreaterThan(1.0);
-    });
-
-    test("warning hidden with empty text", () => {
-      expect(r.warning.show).toBe(false);
-      expect(r.warning.text).toBe("");
-    });
-
-    test("recommended = tech stop", () => {
-      expect(r.recommended).toBe(r.techStop);
-      expect(r.recommendationReason).toBe("tech_stop_safe");
-    });
+  it("atrFraction is exactly 1.0 when the ATR floor wins", () => {
+    // By construction: atrFloor is at Entry − 1 ATR → distance = 1 ATR
+    // → atrFraction = 1.0.
+    const c = computeCompositeStop({ entry: 246.53, atrPct: 9.6, keyLevel: 240 });
+    expect(c.atrFraction).toBeCloseTo(1.0, 3);
   });
 
-  describe("degenerate: tech stop at or above entry (ma > entry)", () => {
-    const r = computeVolatilitySizing({
-      equity: 100_000,
-      entry: 100,
-      ma: 105,
-      bufferPct: 0,
-      atrPct: 2,
-      tolPct: 1,
-      targetSizePct: 10,
-    });
+  it("atrFraction is > 1.0 when the Key Level candidate wins", () => {
+    // When Key Level − buffer sits LOWER than the ATR floor, the
+    // composite distance exceeds 1 ATR by construction.
+    const c = computeCompositeStop({ entry: 176.21, atrPct: 4.5, keyLevel: 171.365 });
+    expect(c.atrFraction).toBeGreaterThan(1.0);
+  });
+});
 
-    test("does not throw", () => {
-      expect(r).toBeDefined();
-    });
-
-    test("techStop scenario returns zero shares with capBinds=false", () => {
-      expect(r.techStop.finalShares).toBe(0);
-      expect(r.techStop.candidateShares).toBe(0);
-      expect(r.techStop.capBinds).toBe(false);
-      expect(r.techStop.positionCost).toBe(0);
-      expect(r.techStop.riskIfStopped).toBe(0);
-    });
-
-    test("ATR scenarios still compute normally (non-zero shares)", () => {
-      expect(r.atrScenarios[0].finalShares).toBeGreaterThan(0);
-      expect(r.atrScenarios[1].finalShares).toBeGreaterThan(0);
-      expect(r.atrScenarios[2].finalShares).toBeGreaterThan(0);
-    });
-
-    test("recommendation falls through to 1.5x ATR with degenerate warning text", () => {
-      expect(r.recommended).toBe(r.atrScenarios[1]);
-      expect(r.warning.show).toBe(true);
-      expect(r.warning.text).toContain("at or above entry");
-    });
+describe("ceilingPctFor", () => {
+  it("returns 15% standard when youngIpo is falsy", () => {
+    expect(ceilingPctFor(undefined)).toEqual({ pct: STANDARD_CEILING_PCT, policy: "standard" });
+    expect(ceilingPctFor(false)).toEqual({ pct: STANDARD_CEILING_PCT, policy: "standard" });
   });
 
-  describe("input validation", () => {
-    test("atrPct = 0 throws VolSizerError", () => {
-      expect(() => computeVolatilitySizing({ ...GOOGL, atrPct: 0 })).toThrow(
-        VolSizerError,
-      );
-    });
+  it("returns 5% young-ipo clamp when youngIpo is true", () => {
+    expect(ceilingPctFor(true)).toEqual({ pct: YOUNG_IPO_CEILING_PCT, policy: "young_ipo" });
+  });
 
-    test("atrPct negative throws", () => {
-      expect(() => computeVolatilitySizing({ ...GOOGL, atrPct: -1 })).toThrow(
-        VolSizerError,
-      );
-    });
+  it("exposes HARD_MAX_CEILING_PCT = 20", () => {
+    // Not returned by ceilingPctFor — informational constant that Log
+    // Buy / any manual override consumer can enforce.
+    expect(HARD_MAX_CEILING_PCT).toBe(20);
+  });
+});
 
-    test.each([
-      ["equity zero", { equity: 0 }],
-      ["equity negative", { equity: -1 }],
-      ["entry zero", { entry: 0 }],
-      ["ma zero", { ma: 0 }],
-      ["tolPct zero", { tolPct: 0 }],
-      ["targetSizePct zero", { targetSizePct: 0 }],
-    ])("rejects %s", (_label, override) => {
-      expect(() =>
-        computeVolatilitySizing({ ...GOOGL, ...override }),
-      ).toThrow(VolSizerError);
-    });
+describe("computeScaleOutStops", () => {
+  it("splits shares floor / floor / remainder", () => {
+    const s = computeScaleOutStops(100, 5, 100, 100_000);
+    expect(s.legs[0].shares).toBe(33);
+    expect(s.legs[1].shares).toBe(33);
+    expect(s.legs[2].shares).toBe(34);
+    expect(s.totalShares).toBe(100);
+  });
 
-    test("bufferPct = 0 is allowed (stop exactly at MA)", () => {
-      expect(() =>
-        computeVolatilitySizing({ ...GOOGL, bufferPct: 0 }),
-      ).not.toThrow();
-    });
+  it("prices legs at Entry − 0.5/1.0/1.5 × ATR $/share", () => {
+    // Entry 100, ATR 5% → atrPerShare $5.
+    const s = computeScaleOutStops(100, 5, 100, 100_000);
+    expect(s.legs[0].stopPrice).toBeCloseTo(97.5, 4); // -0.5 ATR
+    expect(s.legs[1].stopPrice).toBeCloseTo(95.0, 4); // -1.0 ATR
+    expect(s.legs[2].stopPrice).toBeCloseTo(92.5, 4); // -1.5 ATR
+  });
 
-    test("bufferPct negative is rejected", () => {
-      expect(() =>
-        computeVolatilitySizing({ ...GOOGL, bufferPct: -0.1 }),
-      ).toThrow(VolSizerError);
-    });
+  it("avg exit lands EXACTLY at 1 ATR for share counts divisible by 3", () => {
+    const s = computeScaleOutStops(100, 5, 99, 100_000);
+    expect(s.avgExitPrice).toBeCloseTo(95.0, 4);
+    expect(s.avgExitPct).toBeCloseTo(-5.0, 4);
+  });
+
+  it("avg exit drifts slightly on uneven remainders (small share counts)", () => {
+    // 100 shares → 33/33/34. Total value = 33*97.5 + 33*95 + 34*92.5 = 9502.
+    // avg = 9502/100 = 95.02. Pure 1 ATR would be 95.00. Drift = $0.02.
+    const s = computeScaleOutStops(100, 5, 100, 100_000);
+    expect(s.avgExitPrice).toBeCloseTo(95.0, 1);
+    expect(s.avgExitPrice).not.toBe(95.0);
+  });
+
+  it("locked ATR multipliers 0.5 / 1.0 / 1.5", () => {
+    expect(SCALE_OUT_ATR_MULTIPLIERS).toEqual([0.5, 1.0, 1.5]);
+  });
+
+  it("returns empty legs when shares = 0", () => {
+    const s = computeScaleOutStops(100, 5, 0, 100_000);
+    expect(s.legs.every((l) => l.shares === 0)).toBe(true);
+    expect(s.totalLoss).toBe(0);
+    expect(s.avgExitPrice).toBe(100); // fallback = entry when no shares
+    // -0 vs 0 quirk from the negation in the pct formula; toBeCloseTo
+    // avoids the Object.is trap.
+    expect(s.avgExitPct).toBeCloseTo(0, 6);
+  });
+});
+
+describe("computeVolatilitySizing — DELL scenario (calm 4.5% ATR)", () => {
+  const results = computeVolatilitySizing(DELL_BASE);
+
+  it("computes risk budget $2000 at Normal (0.50%) on $400K NLV", () => {
+    expect(results.riskBudget).toBe(2000);
+  });
+
+  it("composite stop at $167.40 (Key Level candidate wins over 1 ATR floor $168.28)", () => {
+    expect(results.composite.winner).toBe("key_level_buffer");
+    expect(results.composite.price).toBeCloseTo(167.4, 2);
+    expect(results.composite.distance).toBeCloseTo(8.81, 2);
+  });
+
+  it("candidate shares = 2000 / 8.81 = 227", () => {
+    expect(results.candidateShares).toBe(227);
+  });
+
+  it("ceiling shares at 15% = floor(400K × 0.15 / 176.21) = 340", () => {
+    expect(results.ceilingShares).toBe(340);
+  });
+
+  it("final shares = 227 (risk-bound, not ceiling-bound)", () => {
+    expect(results.finalShares).toBe(227);
+    expect(results.bind).toBe("risk");
+  });
+
+  it("position notional ≈ $40K = 10% NLV", () => {
+    expect(results.positionCost).toBeCloseTo(227 * 176.21, 2);
+    expect(results.positionPct).toBeCloseTo(10, 0);
+  });
+
+  it("realized risk = shares × distance ≈ $2000", () => {
+    expect(results.riskIfStopped).toBeCloseTo(2000, 0);
+    expect(results.riskPct).toBeCloseTo(0.5, 2);
+  });
+
+  it("scale-out avg exit ≈ 1 ATR below entry ($168.28), matching risk budget", () => {
+    // avg exit price should be close to entry − 1 ATR = 168.28
+    expect(results.scaleOut.avgExitPrice).toBeCloseTo(168.28, 1);
+  });
+
+  it("no warnings for the happy path", () => {
+    expect(results.warnings).toEqual([]);
+  });
+});
+
+describe("computeVolatilitySizing — COHR scenario (hot 9.6% ATR)", () => {
+  const results = computeVolatilitySizing(COHR_BASE);
+
+  it("composite stop = 1 ATR floor at $222.86 (ATR wins over Key Level)", () => {
+    expect(results.composite.winner).toBe("atr_floor");
+    expect(results.composite.price).toBeCloseTo(222.86, 2);
+    expect(results.composite.distance).toBeCloseTo(23.67, 2);
+  });
+
+  it("candidate shares = 2000 / 23.67 = 84", () => {
+    expect(results.candidateShares).toBe(84);
+  });
+
+  it("final shares = 84 (risk-bound; ceiling at 15% = 243 wouldn't bind)", () => {
+    expect(results.finalShares).toBe(84);
+    expect(results.bind).toBe("risk");
+    expect(results.ceilingShares).toBe(243);
+  });
+
+  it("position notional ~$20.7K ≈ 5.2% NLV", () => {
+    expect(results.positionPct).toBeCloseTo(5.2, 1);
+  });
+});
+
+describe("computeVolatilitySizing — ceiling bind at Offense on calm names", () => {
+  it("clearly ceiling-binds with a tighter composite", () => {
+    // Tighten Key Level to produce a smaller stop distance and thus
+    // higher candidate shares — ceiling then unambiguously binds.
+    const tightened = computeVolatilitySizing({ ...DELL_BASE, tolPct: 0.75, keyLevel: 174 });
+    expect(tightened.candidateShares).toBeGreaterThan(tightened.ceilingShares);
+    expect(tightened.finalShares).toBe(tightened.ceilingShares);
+    expect(tightened.bind).toBe("ceiling");
+  });
+});
+
+describe("computeVolatilitySizing — young-IPO clamp", () => {
+  const results = computeVolatilitySizing({ ...DELL_BASE, youngIpo: true });
+
+  it("ceiling pct drops to 5% policy", () => {
+    expect(results.ceilingPct).toBe(YOUNG_IPO_CEILING_PCT);
+    expect(results.ceilingPolicy).toBe("young_ipo");
+    expect(results.ceilingShares).toBe(Math.floor((400_000 * 5) / 100 / 176.21)); // 113
+  });
+
+  it("bind flips to ceiling when 5% ceiling is tighter than risk-bound raw shares", () => {
+    // raw shares = 227 (from DELL happy path), ceiling shares = 113 → 5% ceiling binds
+    expect(results.finalShares).toBe(113);
+    expect(results.bind).toBe("ceiling");
+  });
+});
+
+describe("computeVolatilitySizing — validation & edge cases", () => {
+  it("throws on missing / non-positive inputs", () => {
+    expect(() => computeVolatilitySizing({ ...DELL_BASE, equity: 0 })).toThrow(VolSizerError);
+    expect(() => computeVolatilitySizing({ ...DELL_BASE, entry: 0 })).toThrow(VolSizerError);
+    expect(() => computeVolatilitySizing({ ...DELL_BASE, atrPct: 0 })).toThrow(VolSizerError);
+    expect(() => computeVolatilitySizing({ ...DELL_BASE, keyLevel: 0 })).toThrow(VolSizerError);
+    expect(() => computeVolatilitySizing({ ...DELL_BASE, tolPct: 0 })).toThrow(VolSizerError);
   });
 });

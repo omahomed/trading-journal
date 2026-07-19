@@ -175,277 +175,226 @@ describe("PositionSizer — MCT-driven sizing mode", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// Volatility Sizer redesign — Commit A
+// Volatility Sizer — composite-stop model (2026-07-18)
 //
-// Tests below pin the new layout: three ATR-cushion scenarios + tech
-// stop, a referential recommendation, a calculated-stop banner annotated
-// with the tech stop's ATR fraction, and a warning banner when the stop
-// sits inside one ATR of daily noise.
-//
-// Inputs use the GOOGL canonical case from frontend/src/lib/vol-sizer
-// .test.ts so the rendered output stays in lockstep with the lib's
-// unit tests.
+// The tab moved from a 4-tile grid (Tech Stop + 1×/1.5×/2× ATR) with a
+// user-picked size ladder to ONE answer computed from a composite stop:
+//    Composite = MIN(Entry − 1 ATR, KeyLevel − max(0.5 ATR, 1%))
+//    Shares    = RiskBudget ÷ (Entry − Composite), capped at 15% (5% young-IPO).
+// Tests below pin the new inputs (Key Level, Young-IPO checkbox), the
+// single answer card, the bind indicator, and the ATR-based scale-out.
 // ─────────────────────────────────────────────────────────────────────
 
 async function fillVolTabInputs(opts: {
   ticker?: string;
   entry: string;
-  ma: string;
-  buffer?: string;
+  keyLevel: string;
   atr: string;
   equity: string;
-  targetPct?: number;
+  youngIpo?: boolean;
 }) {
-  // Switch to the Volatility tab
+  // Switch to the Volatility tab.
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
   });
 
   const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
   await act(async () => {
-    fireEvent.change(ticker, { target: { value: opts.ticker ?? "GOOGL" } });
+    fireEvent.change(ticker, { target: { value: opts.ticker ?? "DELL" } });
   });
 
-  // Entry / Equity (placeholders 0.00 + step 1000)
-  const entryInputs = screen.getAllByPlaceholderText("0.00") as HTMLInputElement[];
-  // Order in the inputs section: Entry Price, MA Level (both placeholder 0.00)
+  // Entry Price (placeholder 0.00, first "0.00" placeholder).
+  const numInputs = screen.getAllByPlaceholderText("0.00") as HTMLInputElement[];
   await act(async () => {
-    fireEvent.change(entryInputs[0], { target: { value: opts.entry } });
+    fireEvent.change(numInputs[0], { target: { value: opts.entry } });
   });
 
-  // Equity input has no placeholder text — find by step
+  // Equity has no placeholder text — find by step attribute.
   const equityInput = document.querySelector('input[step="1000"]') as HTMLInputElement;
   await act(async () => {
     fireEvent.change(equityInput, { target: { value: opts.equity } });
   });
 
-  // MA Level + Buffer
+  // Key Level is testable via a distinct data-testid.
+  const keyLevelInput = screen.getByTestId("key-level-input") as HTMLInputElement;
   await act(async () => {
-    fireEvent.change(entryInputs[1], { target: { value: opts.ma } });
+    fireEvent.change(keyLevelInput, { target: { value: opts.keyLevel } });
   });
-  if (opts.buffer) {
-    const bufferInput = screen.getByPlaceholderText("1.00") as HTMLInputElement;
-    await act(async () => {
-      fireEvent.change(bufferInput, { target: { value: opts.buffer } });
-    });
-  }
 
-  // ATR
+  // ATR placeholder is 5.0.
   const atrInput = screen.getByPlaceholderText("5.0") as HTMLInputElement;
   await act(async () => {
     fireEvent.change(atrInput, { target: { value: opts.atr } });
   });
 
-  // Target tier (optional override; default 10% selected on mount)
-  if (opts.targetPct !== undefined && opts.targetPct !== 10) {
-    const tierLabels: Record<number, string> = {
-      2.5: "Shotgun (2.5%)", 5: "Half (5%)", 7.5: "Standard (7.5%)",
-      10: "Full (10%)", 12.5: "Overweight (12.5%)", 15: "Core (15%)",
-      17.5: "Core+ (17.5%)", 20: "Max (20%)",
-    };
+  if (opts.youngIpo) {
+    const cb = screen.getByTestId("young-ipo-checkbox") as HTMLInputElement;
     await act(async () => {
-      fireEvent.click(screen.getByText(tierLabels[opts.targetPct!]));
+      fireEvent.click(cb);
     });
   }
 }
 
-describe("PositionSizer — Volatility Sizer redesign (Commit A)", () => {
+describe("PositionSizer — Volatility Sizer composite-stop model", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupDefaults();
-    // POWERTREND → Offense (0.75%) post-retier. GOOGL canonical case is
-    // cap-bound (10% NLV = 183 shares) regardless of tolPct, so the
-    // recommended shares assertion below survives the retier.
-    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
+    // UPTREND → Normal (0.50%) — matches the DELL/COHR canonical
+    // examples in the design conversation and vol-sizer.test.ts.
+    mRally.mockResolvedValue({ prefix: "", state: "UPTREND" } as any);
     try { localStorage.removeItem("ps_prefill"); } catch { /* JSDOM polyfill quirk */ }
   });
 
-  test("audit-mode UI is gone: no Sizing Context, no holding picker on vol tab, no Stock Volatility Profile", async () => {
+  test("legacy 4-tile UI is gone: no Tech Stop / 1x / 1.5x / 2x ATR scenario cards", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
     });
 
-    expect(screen.queryByText(/Sizing Context/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Audit Active Position/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Stock Volatility Profile/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Tight \(1\.0x\)/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/High-Vol \(1\.5x\)/)).not.toBeInTheDocument();
-    // The vol tab no longer renders the Select Position dropdown
-    expect(screen.queryByText(/^Select Position$/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-tech-stop")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-1x-atr")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-1.5x-atr")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-2x-atr")).not.toBeInTheDocument();
+    // No user-picked target-size ladder on this tab.
+    expect(screen.queryByText(/Shotgun \(2\.5%\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Overweight \(12\.5%\)/)).not.toBeInTheDocument();
   });
 
-  test("GOOGL canonical case → recommended = 1.5x ATR, three ATR cards render, warning visible", async () => {
+  test("DELL canonical case → composite stop wins on Key Level, 227 shares, risk-bound", async () => {
     render(<PositionSizer navColor="#6366f1" />);
-    // Wait for MCT auto-pick (POWERTREND → Offense) so tolPct = 0.75
     const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense \(0\.75%\)/));
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal \(0\.50%\)/));
 
     await fillVolTabInputs({
-      ticker: "GOOGL",
-      entry: "382.97",
-      ma: "379.40",
-      buffer: "1.0",
-      atr: "2.87",
-      equity: "702924",
-      targetPct: 10,
+      ticker: "DELL",
+      entry: "176.21",
+      keyLevel: "171.365",   // yields composite = 167.40 (Key Level wins)
+      atr: "4.5",
+      equity: "400000",
     });
 
-    // Trigger calculation
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
     });
 
-    // Three ATR cards present with their labels
-    expect(await screen.findByTestId("scenario-1x-atr")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-1.5x-atr")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-2x-atr")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-tech-stop")).toBeInTheDocument();
+    // Final shares 227 from the DELL example in the design conversation.
+    const finalShares = await screen.findByTestId("final-shares");
+    expect(finalShares.textContent).toMatch(/227/);
 
-    // Recommended pill is on the 1.5x ATR card (tech_stop_inside_noise path)
-    const pills = screen.getAllByTestId("recommended-pill");
-    expect(pills).toHaveLength(1);
-    expect(screen.getByTestId("scenario-1.5x-atr")).toContainElement(pills[0]);
+    // Bind badge = Risk-bound (Ceiling at 15% would be 340 shs).
+    expect(screen.getByTestId("bind-badge").textContent).toBe("Risk-bound");
 
-    // Verdict text reflects the 1.5x ATR recommendation + tier-cap binding
-    const verdict = screen.getByText(/RECOMMENDED: Buy/);
-    expect(verdict.textContent).toMatch(/183/);
-    expect(verdict.parentElement?.parentElement?.textContent).toMatch(/Sized by 1\.5× ATR cushion/);
-    expect(verdict.parentElement?.parentElement?.textContent).toMatch(/position-size tier \(10% NLV\)/);
+    // Composite winner subtitle mentions the Key Level candidate.
+    const answerCard = screen.getByTestId("composite-answer");
+    expect(answerCard.textContent).toMatch(/Key Level/);
+    expect(answerCard.textContent).toMatch(/0\.5 ATR/);   // buffer basis under 4.5% ATR
   });
 
-  test("Calculated Stop banner annotates with the tech stop's ATR fraction (0.67x for GOOGL)", async () => {
+  test("COHR-style hot ATR → composite falls back to 1 ATR floor, 84 shares", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
 
     await fillVolTabInputs({
-      entry: "382.97",
-      ma: "379.40",
-      buffer: "1.0",
-      atr: "2.87",
-      equity: "702924",
+      ticker: "COHR",
+      entry: "246.53",
+      keyLevel: "240.00",   // Key Level too close; 1 ATR floor wider → ATR wins
+      atr: "9.6",
+      equity: "400000",
     });
 
-    // Banner annotation: tech stop is 7.364/382.97 ≈ 1.92% below entry,
-    // divided by 2.87% ATR ≈ 0.67× ATR (matches vol-sizer.test.ts GOOGL).
-    await waitFor(() => {
-      expect(screen.getByText(/0\.67× ATR/)).toBeInTheDocument();
-    });
-  });
-
-  test("warning sub-banner shows when stop < 1 ATR (GOOGL) and hides when stop >= 1 ATR", async () => {
-    const { unmount } = render(<PositionSizer navColor="#6366f1" />);
-    const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
-
-    // Sub-1-ATR case (GOOGL). Warning renders in two places — the
-    // input-section sub-banner AND embedded in the verdict card — so
-    // use getAllByText. We assert at least one match.
-    await fillVolTabInputs({ entry: "382.97", ma: "379.40", buffer: "1.0", atr: "2.87", equity: "702924" });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
     });
-    await waitFor(() => {
-      const matches = screen.queryAllByText(/Tech stop is 0\.\d{2} ATR — daily noise/);
-      expect(matches.length).toBeGreaterThan(0);
-    });
-    unmount();
 
-    // Tech stop ≥ 1 ATR case → no warning, tech stop is recommended
-    setupDefaults();
-    mRally.mockResolvedValue({ prefix: "", state: "POWERTREND" } as any);
-    render(<PositionSizer navColor="#6366f1" />);
-    const ind2 = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(ind2.textContent).toMatch(/Offense/));
-    // entry=100, ma=100, buf=3, atr=2 → stop=97, stopDist=3, atrFraction=1.5
-    await fillVolTabInputs({ entry: "100", ma: "100", buffer: "3.0", atr: "2.0", equity: "100000" });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
-    });
-    expect(screen.queryByText(/daily noise will likely stop you out/)).not.toBeInTheDocument();
-    // Tech stop is recommended
-    const pills = screen.getAllByTestId("recommended-pill");
-    expect(screen.getByTestId("scenario-tech-stop")).toContainElement(pills[0]);
-    expect(screen.getByText(/Sized by tech stop/)).toBeInTheDocument();
+    const finalShares = await screen.findByTestId("final-shares");
+    expect(finalShares.textContent).toMatch(/84/);
+
+    // Composite subtitle names the ATR floor winner.
+    const answerCard = screen.getByTestId("composite-answer");
+    expect(answerCard.textContent).toMatch(/1 ATR floor/);
   });
 
-  test("Send to Log Buy emits ATR payload (stopMode + multiplier) when ATR scenario is recommended", async () => {
-    // ATR scenarios no longer pre-resolve a dollar stop. The Sizer emits
-    // {stopMode:"atr", atrMultiplier:1.5} and Log Buy fetches its own
-    // atrPct from /api/prices/lookup to recompute the effective stop —
-    // eliminates two-fetch drift between Sizer time and Log Buy time.
+  test("Young-IPO checkbox clamps ceiling to 5% → DELL case flips to ceiling-bound at 113 shs", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
 
     await fillVolTabInputs({
-      ticker: "GOOGL",
-      entry: "382.97",
-      ma: "379.40",
-      buffer: "1.0",
-      atr: "2.87",
-      equity: "702924",
+      ticker: "IPO",
+      entry: "176.21",
+      keyLevel: "171.365",
+      atr: "4.5",
+      equity: "400000",
+      youngIpo: true,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
+    });
+
+    // 5% × 400K / 176.21 = 113 (floored) — vs raw 227 → ceiling wins.
+    const finalShares = await screen.findByTestId("final-shares");
+    expect(finalShares.textContent).toMatch(/113/);
+    expect(screen.getByTestId("bind-badge").textContent).toBe("Ceiling-bound");
+  });
+
+  test("Send to Log Buy emits price payload with the resolved composite stop", async () => {
+    // Under the new model, the sizer always sends a resolved dollar
+    // stop (composite.price) with stopMode='price'. The old ATR-mode
+    // handoff is retired — Log Buy no longer needs to recompute a stop
+    // from its own ATR lookup because the composite is already fixed.
+    render(<PositionSizer navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("sizer-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
+
+    await fillVolTabInputs({
+      ticker: "DELL",
+      entry: "176.21",
+      keyLevel: "171.365",
+      atr: "4.5",
+      equity: "400000",
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
     });
 
-    // Click "Send to Log Buy"
-    // Match the primary Verdict button; the Scale-Out card also has a
-// "Send to Log Buy with ladder" button that would otherwise match.
-const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy —/ });
+    // Match the primary Send button; the Scale-Out card also has a
+    // "with ladder" button that would otherwise match.
+    const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy —/ });
     await act(async () => { fireEvent.click(sendBtn); });
 
     const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
-    expect(stored.ticker).toBe("GOOGL");
-    expect(stored.shares).toBe(183);
-    expect(stored.price).toBe(382.97);
-    expect(stored.action).toBe("new");
-    // Recommended = 1.5× ATR scenario. ATR-mode handoff:
-    expect(stored.stopMode).toBe("atr");
-    expect(stored.atrMultiplier).toBe(1.5);
-    // No resolved dollar stop on ATR scenarios — Log Buy recomputes
-    // from its own atrPct lookup. (Pre-B-3 the field was 366.48.)
-    expect(stored.stop).toBeUndefined();
-  });
-
-  test("Send to Log Buy emits price payload (stopMode='price' + resolved stop) when tech stop is recommended", async () => {
-    // Companion to the ATR-payload test above. Tech-stop scenarios
-    // continue to emit a resolved dollar `stop`, tagged stopMode='price'
-    // so the receiver flips Log Buy out of its default pct mode.
-    // setupDefaults() (and a fresh mRally MOMENTUM mock at the top of
-    // this suite) puts us in a fixture where 100/100/3.0/2.0 gives
-    // tech_stop_safe (stop=97, stopDist=3, atrFraction=1.5).
-    render(<PositionSizer navColor="#6366f1" />);
-    const indicator = await screen.findByTestId("sizer-mode-indicator");
-    await waitFor(() => expect(indicator.textContent).toMatch(/Offense/));
-
-    await fillVolTabInputs({
-      ticker: "AAPL",
-      entry: "100",
-      ma: "100",
-      buffer: "3.0",
-      atr: "2.0",
-      equity: "100000",
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
-    });
-
-    // Match the primary Verdict button; the Scale-Out card also has a
-// "Send to Log Buy with ladder" button that would otherwise match.
-const sendBtn = await screen.findByRole("button", { name: /Send to Log Buy —/ });
-    await act(async () => { fireEvent.click(sendBtn); });
-
-    const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
-    expect(stored.ticker).toBe("AAPL");
-    expect(stored.price).toBe(100);
+    expect(stored.ticker).toBe("DELL");
+    expect(stored.shares).toBe(227);
+    expect(stored.price).toBe(176.21);
     expect(stored.stopMode).toBe("price");
-    // Tech-stop math: entry - (entry × stopDistPct/100) = 100 × 0.97 = 97.
-    expect(stored.stop).toBeCloseTo(97, 2);
-    // No multiplier on tech-stop payload.
+    expect(stored.stop).toBeCloseTo(167.4, 1);   // composite stop
     expect(stored.atrMultiplier).toBeUndefined();
     expect(stored.action).toBe("new");
+  });
+
+  test("Scale-out ladder uses ATR multiples 0.5 / 1.0 / 1.5, not the old −3/−5/−7 percentages", async () => {
+    render(<PositionSizer navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("sizer-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
+
+    await fillVolTabInputs({
+      ticker: "DELL",
+      entry: "176.21",
+      keyLevel: "171.365",
+      atr: "4.5",
+      equity: "400000",
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
+    });
+
+    const ladder = await screen.findByTestId("scale-out-stops");
+    expect(ladder.textContent).toMatch(/−0\.50 ATR/);
+    expect(ladder.textContent).toMatch(/−1\.00 ATR/);
+    expect(ladder.textContent).toMatch(/−1\.50 ATR/);
+    // Old locked-percent ladder is gone.
+    expect(ladder.textContent).not.toMatch(/−3%|−5%|−7%/);
   });
 });

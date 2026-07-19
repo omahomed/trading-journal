@@ -334,83 +334,97 @@ describe("MobilePositionSizer — debounced priceLookup", () => {
   });
 });
 
-describe("MobilePositionSizer — Volatility live compute", () => {
+describe("MobilePositionSizer — Volatility composite-stop model", () => {
   beforeEach(() => {
     withPortfolio();
     resetApiMocks();
-    setApiMocks({ endNlv: 100_000, state: "POWERTREND", price: 100, atrPct: 5 });
+    // NLV $400K, UPTREND → Normal (0.50%) mode — matches the DELL/COHR
+    // canonical examples in the design conversation.
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 100, atrPct: 5 });
   });
 
-  test("audit card shows '—' before any inputs are entered", async () => {
+  test("answer card shows '—' before any inputs are entered", async () => {
     render(<MobilePositionSizer />);
-    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
     expect(screen.getByTestId("audit-shares")).toHaveTextContent("—");
   });
 
-  test("computes via shared vol-sizer lib when entry + ATR + MA + NLV are present", async () => {
+  test("legacy 4-tile UI is gone: no Tech Stop / 1x / 1.5x / 2x ATR cards", async () => {
     render(<MobilePositionSizer />);
-    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
+    expect(screen.queryByTestId("scenario-tech-stop")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-1x-atr")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-1.5x-atr")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-2x-atr")).not.toBeInTheDocument();
+    // No Size trigger on the volatility tab either — ceiling is policy-driven.
+    expect(screen.queryByRole("button", { name: /Size: /i })).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(screen.getByLabelText("Entry price"), { target: { value: "100" } });
-    fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "95" } });
+  test("DELL canonical case → composite lands on Key Level, risk-bound", async () => {
+    // Seed the priceLookup mock with the DELL numbers so the auto-fill
+    // populates entry=176.21 / ATR=4.5% for us. The user only needs to
+    // type Key Level, which the sizer doesn't fetch from anywhere.
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 176.21, atrPct: 4.5 });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
 
     const ticker = screen.getByLabelText("Ticker symbol");
-    fireEvent.change(ticker, { target: { value: "X" } });
+    fireEvent.change(ticker, { target: { value: "DELL" } });
     await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
+    // Wait for the auto-fill to hydrate the read-only ATR display.
+    await waitFor(() => expect(screen.getByText("4.5%")).toBeInTheDocument());
+    // The read-only ATR display + entry input picked up the fetched
+    // values. Now the user only types Key Level (no auto-source).
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "171.365" } });
 
+    // atrPerShare = 176.21 × 4.5% = 7.929
+    // atrFloor = 176.21 − 7.929 = 168.28
+    // keyLevel − max(0.5×7.929, 1.7621) = 171.365 − 3.965 = 167.40
+    // composite = min(168.28, 167.40) = 167.40 → distance 8.81
+    // raw = floor(2000/8.81) = 227; ceiling shares = 340; final = 227.
     const sharesEl = await screen.findByTestId("audit-shares");
-    await waitFor(() => expect(sharesEl).toHaveTextContent("100"), { timeout: 2000 });
+    await waitFor(() => expect(sharesEl.textContent).toMatch(/227/), { timeout: 2000 });
 
-    const verdict = screen.getByTestId("verdict-card");
-    expect(verdict).toHaveTextContent(/Sized by tech stop/);
-    expect(verdict).toHaveTextContent(/position-size tier/);
-
-    expect(screen.getByTestId("scenario-tech-stop")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-1x-atr")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-1.5x-atr")).toBeInTheDocument();
-    expect(screen.getByTestId("scenario-2x-atr")).toBeInTheDocument();
-
-    const pills = screen.getAllByTestId("recommended-pill");
-    expect(pills).toHaveLength(1);
-    expect(screen.getByTestId("scenario-tech-stop")).toContainElement(pills[0]);
+    expect(screen.getByTestId("bind-badge").textContent).toBe("Risk-bound");
+    // Composite subtitle mentions Key Level winner.
+    expect(screen.getByTestId("composite-answer").textContent).toMatch(/Key Level/);
   });
 
-  test("flips recommendation to 1.5× ATR when tech stop sits inside 1 ATR (warning visible)", async () => {
+  test("Young-IPO checkbox clamps ceiling to 5% → answer becomes ceiling-bound", async () => {
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 176.21, atrPct: 4.5 });
     render(<MobilePositionSizer />);
-    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText("Entry price"), { target: { value: "100" } });
-    fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "99" } });
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
 
     const ticker = screen.getByLabelText("Ticker symbol");
-    fireEvent.change(ticker, { target: { value: "Y" } });
-    await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
+    fireEvent.change(ticker, { target: { value: "IPO" } });
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("4.5%")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "171.365" } });
+    // Toggle Young IPO clamp.
+    fireEvent.click(screen.getByTestId("young-ipo-checkbox"));
 
-    const warning = await screen.findByTestId("vol-warning");
-    expect(warning).toHaveTextContent(/ATR/);
-
-    const verdict = screen.getByTestId("verdict-card");
-    expect(verdict).toHaveTextContent(/Sized by 1.5× ATR cushion/);
-
-    const pills = screen.getAllByTestId("recommended-pill");
-    expect(pills).toHaveLength(1);
-    expect(screen.getByTestId("scenario-1.5x-atr")).toContainElement(pills[0]);
+    // 5% × 400K / 176.21 = 113 shs (floored). Ceiling now binds.
+    const sharesEl = await screen.findByTestId("audit-shares");
+    await waitFor(() => expect(sharesEl.textContent).toMatch(/113/), { timeout: 2000 });
+    expect(screen.getByTestId("bind-badge").textContent).toBe("Ceiling-bound");
   });
 
-  test("calculated-stop banner annotates with ATR fraction", async () => {
+  test("scale-out ladder renders 3 legs at −0.5 / −1.0 / −1.5 ATR (not old locked percentages)", async () => {
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 176.21, atrPct: 4.5 });
     render(<MobilePositionSizer />);
-    await waitFor(() => expect(screen.getByText("$100,000")).toBeInTheDocument());
-
-    fireEvent.change(screen.getByLabelText("Entry price"), { target: { value: "100" } });
-    fireEvent.change(screen.getByLabelText("Key MA level"), { target: { value: "95" } });
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
 
     const ticker = screen.getByLabelText("Ticker symbol");
-    fireEvent.change(ticker, { target: { value: "Z" } });
-    await waitFor(() => expect(screen.getByText("5.0%")).toBeInTheDocument());
+    fireEvent.change(ticker, { target: { value: "DELL" } });
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("4.5%")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "171.365" } });
 
-    const banner = await screen.findByTestId("calc-stop-banner");
-    expect(banner).toHaveTextContent(/1\.19× ATR/);
+    const ladder = await screen.findByTestId("scale-out-stops");
+    await waitFor(() => expect(ladder.textContent).toMatch(/−0\.50 ATR/));
+    expect(ladder.textContent).toMatch(/−1\.00 ATR/);
+    expect(ladder.textContent).toMatch(/−1\.50 ATR/);
+    expect(ladder.textContent).not.toMatch(/−3%|−5%|−7%/);
   });
 });
 
@@ -447,8 +461,16 @@ describe("MobilePositionSizer — Size picker", () => {
     setApiMocks({ endNlv: 100_000 });
   });
 
-  test("Size picker exposes all 8 desktop SIZE_OPTIONS", async () => {
+  test("Size picker exposes all 8 desktop SIZE_OPTIONS (Scale-In tab)", async () => {
+    // Volatility tab no longer has a size picker — the ceiling is
+    // policy-driven (15% standard / 5% young-IPO). Scale-In still uses
+    // the 8-tier ladder for target-weight sizing.
+    setApiMocks({ endNlv: 100_000, holdings: [holdingFixture()] });
     render(<MobilePositionSizer />);
+    await waitFor(() => expect(api.tradesOpen).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("tab", { name: /Scale In/ }));
+
     const trigger = await screen.findByRole("button", { name: /Size: Full/ });
     fireEvent.click(trigger);
 

@@ -28,7 +28,7 @@ import {
   describeMctSource,
   type ExitAlert,
 } from "@/lib/sizing-mode";
-import { computeVolatilitySizing, type SizingScenario, type VolSizerResults, type ScaleOutStops, type ScenarioLabel } from "@/lib/vol-sizer";
+import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
 
 // Local view shape — keeps the component-internal usage of
 // `SIZING_MODES[i].label` untouched. The labels here include the leading
@@ -212,8 +212,15 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [activeExits, setActiveExits] = useState<readonly { signal: string; severity?: string }[]>([]);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [entryPrice, setEntryPrice] = useState("");
+  // maLevel + buffer are used by the LEGACY MA-tech-stop path
+  // (Scale-In tab). The Volatility tab moved to the composite-stop
+  // model — user types a single Key Level and the sizer applies its
+  // own buffer of max(0.5 ATR, 1%). See @/lib/vol-sizer.
   const [maLevel, setMaLevel] = useState("");
   const [buffer, setBuffer] = useState("1.00");
+  // Volatility tab inputs (composite-stop model).
+  const [keyLevelStr, setKeyLevelStr] = useState("");
+  const [youngIpo, setYoungIpo] = useState(false);
   const [atrPct, setAtrPct] = useState("5.0");
   const [ticker, setTicker] = useState("");
   // selectedHolding is shared by Scale-In / Pyramid / Trim tabs. The
@@ -318,6 +325,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const calcStop = ma > 0 ? ma * (1 - buf / 100) : 0;
   const stopDist = entry > 0 && calcStop > 0 ? entry - calcStop : 0;
   const stopDistPct = entry > 0 && stopDist > 0 ? (stopDist / entry) * 100 : 0;
+  // Volatility tab uses Key Level (composite-stop model).
+  const keyLevel = parseFloat(keyLevelStr) || 0;
 
   // Holding data
   const holdingData = openTrades.find(t => t.trade_id === selectedHolding);
@@ -342,15 +351,13 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         setErrorMsg("Please ensure Ticker, Price, and ATR are entered correctly.");
         return;
       }
-      if (ma <= 0) {
-        setErrorMsg("Please enter a Key MA Level — the new sizer always grounds risk against a technical stop.");
+      if (keyLevel <= 0) {
+        setErrorMsg("Please enter a Key Level — structural low or key MA from the chart. The composite stop needs it.");
         return;
       }
-      const stop = ma * (1 - buf / 100);
-      if (stop >= entry) {
-        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above entry price (${formatCurrency(entry)}).`);
-        return;
-      }
+      // Composite validation is done inside the vol-sizer lib; a
+      // Key Level that's degenerately high just makes the ATR floor
+      // win the MIN — no error here.
     } else if (tab === "scalein") {
       if (ma <= 0) {
         setErrorMsg("Enter a Key MA Level to calculate your global stop.");
@@ -396,17 +403,16 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       return computeVolatilitySizing({
         equity,
         entry,
-        ma,
-        bufferPct: buf,
         atrPct: atr,
+        keyLevel,
         tolPct: SIZING_MODES[sizingMode].pct,
-        targetSizePct: targetSize,
+        youngIpo,
       });
     } catch (err) {
       log.error("position-sizer", "vol-sizer compute failed", err);
       return null;
     }
-  }, [calculated, tab, entry, atr, ma, buf, sizingMode, equity, targetSize]);
+  }, [calculated, tab, entry, atr, keyLevel, sizingMode, equity, youngIpo]);
 
   // ━━━ Scale-In Results ━━━
   const scaleResults = useMemo(() => {
@@ -615,8 +621,13 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, costPerContract, equity, riskBudget, optMode, entryPrice, sizingMode]);
 
   const needsHolding = ["scalein", "pyramid", "trim"].includes(tab);
-  const needsMaBuffer = ["scalein", "volatility"].includes(tab);
-  const needsTarget = tab === "trim" || tab === "volatility" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
+  // Volatility tab moved to composite-stop model (Key Level input); the
+  // MA + Buffer pair is now only relevant for Scale-In.
+  const needsMaBuffer = tab === "scalein";
+  const needsKeyLevel = tab === "volatility";
+  // Volatility tab derives its ceiling from policy (15% / 5% young-IPO),
+  // no user-picked target from the ladder — so it's excluded here.
+  const needsTarget = tab === "trim" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -648,7 +659,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           {TABS.find(t => t.key === tab)?.icon} {TABS.find(t => t.key === tab)?.label}
         </h2>
         <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
-          {tab === "volatility" && "Normalize risk by sizing based on ATR volatility AND technical stop."}
+          {tab === "volatility" && "Composite stop from the LOWER of (Entry − 1 ATR) or (Key Level − max(0.5 ATR, 1%)). Shares = Risk Budget ÷ Stop Distance, capped at 15% NLV (5% for young IPOs)."}
           {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
           {tab === "pyramid" && `Size add-on purchases to winning positions. Max ${pyramidRules.alloc_pct}% of shares per add, gated by last buy's profit.`}
           {tab === "trim" && "Calculate shares to sell to reach a desired weight, with LIFO P&L estimation."}
@@ -675,41 +686,50 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         </details>
       )}
 
-      {/* Volatility Sizer Rules Expander */}
+      {/* Volatility Sizer Rules Expander — composite-stop model. */}
       {tab === "volatility" && (
         <details className="mb-4 rounded-[10px] overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
           <summary className="px-4 py-2.5 text-[12px] font-semibold cursor-pointer" style={{ color: "var(--ink-3)" }}>
             View Sizer Rules
           </summary>
           <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            <p className="mb-1"><strong>Sizing Mode (auto-derived from M Factor state):</strong></p>
+            <p className="mb-1"><strong>The formula, four steps:</strong></p>
+            <ol className="list-decimal ml-4 mb-2">
+              <li><strong>Risk Budget ($)</strong> = NLV × Mode% (Pilot 0.25 / Normal 0.50 / Offense 0.75, from M Factor)</li>
+              <li><strong>Composite Stop</strong> = LOWEST of:
+                <ul className="list-disc ml-4">
+                  <li>Entry − 1 ATR21 (the ATR floor — never sizes tighter than 1 ATR)</li>
+                  <li>Key Level − max(0.5 ATR, 1%) (structural low or key MA you typed from the chart)</li>
+                </ul>
+              </li>
+              <li><strong>Raw shares</strong> = Risk Budget ÷ (Entry − Composite Stop)</li>
+              <li><strong>Final shares</strong> = min(Raw, Ceiling × NLV ÷ Entry)</li>
+            </ol>
+            <p className="mb-1"><strong>Sizing Mode (auto from M Factor):</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Pilot:</strong> 0.25% risk — CORRECTION / RALLY MODE / UPTREND UNDER PRESSURE (probe size)</li>
-              <li><strong>Normal:</strong> 0.50% risk — UPTREND</li>
-              <li><strong>Offense:</strong> 0.75% risk — POWERTREND (confirmed uptrend)</li>
+              <li><strong>Pilot 0.25%</strong> — CORRECTION / RALLY MODE / UPTREND UNDER PRESSURE (probe)</li>
+              <li><strong>Normal 0.50%</strong> — UPTREND</li>
+              <li><strong>Offense 0.75%</strong> — POWERTREND</li>
+              <li>Manual override is downward-only. Unknown state → Pilot.</li>
             </ul>
-            <p className="mb-2 text-[11px]" style={{ color: "var(--ink-4)" }}>
-              Ladder retiered as part of the New Entry model rollout (Defense
-              and 1.0% tiers retired). Unknown-state fallback lands on Pilot.
-            </p>
-            <p className="mb-1"><strong>The two tile groups explained:</strong></p>
+            <p className="mb-1"><strong>Ceiling policy (no ladder to pick):</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li><strong>Risk Budget</strong> = NLV × Sizing Mode risk % (the $ you allow to lose on this trade)</li>
-              <li><strong>Position Cap</strong> = NLV × Target Position Size % (Shotgun 2.5% → Max 20%)</li>
-              <li><strong>Tech Stop:</strong> shares the risk budget can absorb to (MA − buffer)</li>
-              <li><strong>1× / 1.5× / 2× ATR:</strong> shares the risk budget can absorb if the stop is that ATR distance below entry</li>
-              <li>Every scenario is floored by the Position Cap so no single trade breaks concentration</li>
+              <li><strong>15%</strong> standard — the everyday cap for full-conviction entries</li>
+              <li><strong>5%</strong> young-IPO clamp — check the box when the name is ≤12 months since IPO</li>
+              <li><strong>20%</strong> is the documented hard max — reserved for manual Log Buy overrides on high-conviction plays, not auto-selectable here</li>
             </ul>
-            <p className="mb-1"><strong>Recommendation logic (ATR is a quality filter, not just a stop generator):</strong></p>
+            <p className="mb-1"><strong>Which candidate wins the composite?</strong> The LOWEST price = the WIDEST stop = the most defensive placement. Whichever candidate sits further from entry wins; the trade gets the room the wider candidate says it needs. Trade-off is a smaller position — the intentionally-conservative tilt.</p>
+            <p className="mb-1 mt-2"><strong>Which constraint binds?</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li>Tech stop ≥ 1 ATR away from entry → RECOMMENDED = Tech Stop</li>
-              <li>Tech stop {"<"} 1 ATR away → daily noise will chop you out; RECOMMENDED flips to 1.5× ATR + warning banner shows</li>
+              <li><strong>Risk-bound:</strong> the composite stop drives share count. Most trades in Normal / Pilot mode.</li>
+              <li><strong>Ceiling-bound:</strong> the 15% (or 5%) cap drives share count. Reachable only in Offense mode on calm names — a market-timing discipline hiding inside a sizing formula.</li>
             </ul>
-            <p className="mb-1"><strong>Scale-Out Stops (Tech Stop + Recommended tiles only, B1 lots):</strong></p>
+            <p className="mb-1"><strong>Scale-Out Stops (3-leg ladder, B1 lots):</strong></p>
             <ul className="list-disc ml-4">
-              <li>3-leg ladder at locked −3% / −5% / −7% from entry (average exit ≈ −5%)</li>
-              <li>Shares split floor / floor / remainder; sends into Log Buy as a laddered stop</li>
-              <li>ATR-scenario tiles do NOT get a scale-out ladder — they're what-if references, not entry candidates</li>
+              <li>Legs at Entry − 0.5 / 1.0 / 1.5 ATR (shares split floor / floor / remainder)</li>
+              <li>Average exit = 1 ATR below entry — matches the risk budget when composite = 1 ATR</li>
+              <li>Under a Key-Level-wins composite, tier 2 and 3 sit BELOW the composite. Intentional: "if it breaches your structural stop, give it more room, not less"</li>
+              <li>Sends into Log Buy as a laddered stop</li>
             </ul>
           </div>
         </details>
@@ -788,7 +808,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </div>
         )}
 
-        {/* MA Level + Buffer */}
+        {/* MA Level + Buffer — Scale-In tab only. Volatility tab moved
+            to the composite-stop model (Key Level input below). */}
         {needsMaBuffer && (
           <div className="grid grid-cols-2 gap-4">
             <Field label="Key MA Level ($)">
@@ -802,26 +823,36 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </div>
         )}
 
-        {/* Calculated stop info banner.
-            On the volatility tab we annotate the banner with the tech
-            stop's ATR fraction (read from volResults once available)
-            and show a warning sub-banner when the stop sits inside 1
-            ATR. Both come from the shared vol-sizer lib — the banner
-            reflects the lib's view of the inputs the user can see. */}
-        {needsMaBuffer && calcStop > 0 && entry > 0 && (() => {
-          const volAtr = atr > 0 && entry > 0 && calcStop > 0 ? stopDistPct / atr : null;
-          return (
-            <>
-              <Banner type="info">
-                Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
-                {tab === "volatility" && volAtr !== null && ` · ${volAtr.toFixed(2)}× ATR`}
-              </Banner>
-              {tab === "volatility" && volResults?.warning?.show && (
-                <Banner type="warning">{volResults.warning.text}</Banner>
-              )}
-            </>
-          );
-        })()}
+        {/* Scale-In calculated-stop info banner. */}
+        {needsMaBuffer && calcStop > 0 && entry > 0 && (
+          <Banner type="info">
+            Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
+          </Banner>
+        )}
+
+        {/* Key Level + Young-IPO clamp — Volatility tab only. Key Level
+            is the user-typed structural low OR key MA from the chart;
+            the sizer applies its own buffer of max(0.5 ATR, 1%) and
+            composites against the 1-ATR floor. Young-IPO checkbox
+            clamps the ceiling to 5% (default 15%). */}
+        {needsKeyLevel && (
+          <>
+            <Field label="Key Level ($)">
+              <input type="number" value={keyLevelStr} onChange={e => { setKeyLevelStr(e.target.value); resetCalc(); }}
+                     step="0.01" placeholder="e.g. structural low or 21 EMA" className={inputCls} style={inputStyle}
+                     data-testid="key-level-input" />
+            </Field>
+            <div className="flex items-center gap-2.5 text-[12px]" style={{ color: "var(--ink-3)" }}>
+              <input type="checkbox" id="young-ipo-checkbox" checked={youngIpo}
+                     onChange={e => { setYoungIpo(e.target.checked); resetCalc(); }}
+                     data-testid="young-ipo-checkbox"
+                     style={{ width: 15, height: 15, accentColor: navColor }} />
+              <label htmlFor="young-ipo-checkbox" className="cursor-pointer select-none">
+                Young IPO (≤12 mo since IPO) — clamp ceiling to 5% NLV
+              </label>
+            </div>
+          </>
+        )}
 
         {/* ATR (volatility, pyramid) */}
         {(tab === "volatility" || tab === "pyramid") && (
@@ -966,8 +997,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             <VolatilityResults
               ticker={ticker}
               entry={entry}
-              equity={equity}
-              targetSize={targetSize}
               tolPct={SIZING_MODES[sizingMode].pct}
               modeName={SIZING_MODES_BASE[sizingMode].label}
               results={volResults}
@@ -1286,17 +1315,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   );
 }
 
-// ── Volatility Sizer output (extracted: keeps the main render readable
-// and makes per-card pill/binding-constraint logic colocated with the
-// presentation). Consumes the shared `vol-sizer` lib output verbatim;
-// any future shape change should land in the lib, not here.
+// ── Volatility Sizer output (composite-stop model). One answer card,
+// composite winner subtitle, bind indicator, and a locked 0.5/1.0/1.5
+// ATR scale-out ladder. All math lives in @/lib/vol-sizer.
 function VolatilityResults({
-  ticker, entry, equity, targetSize, tolPct, modeName, results, onSendToLogBuy,
+  ticker, entry, tolPct, modeName, results, onSendToLogBuy,
 }: {
   ticker: string;
   entry: number;
-  equity: number;
-  targetSize: number;
   tolPct: number;
   modeName: string;
   results: VolSizerResults;
@@ -1311,195 +1337,145 @@ function VolatilityResults({
     action: string;
   }) => void;
 }) {
-  const rec = results.recommended;
-  const recIsTechStop = results.recommendationReason === "tech_stop_safe";
-  const method = recIsTechStop ? "tech stop" : "1.5× ATR cushion";
-  // Map the recommended scenario's label back to the multiplier the
-  // ATR pills in Log Buy expect. Returns null for the tech-stop case,
-  // which routes through the price-mode branch instead.
-  const atrMultFromLabel = (label: typeof rec.label): 1 | 1.5 | 2 | null => {
-    if (label === "1x ATR") return 1;
-    if (label === "1.5x ATR") return 1.5;
-    if (label === "2x ATR") return 2;
-    return null;
-  };
-  const recAtrMult = atrMultFromLabel(rec.label);
-  const constraint = rec.capBinds
-    ? `position-size tier (${targetSize}% NLV)`
-    : `risk budget (${tolPct}%)`;
+  const { composite, scaleOut } = results;
+  const bindLabel = results.bind === "risk"
+    ? `risk budget (${tolPct}%)`
+    : `${results.ceilingPct}% ${results.ceilingPolicy === "young_ipo" ? "young-IPO" : "position"} ceiling`;
+
+  // Composite winner subtitle — tells the user which of the two
+  // candidate stops governed. When Key Level wins, mention the buffer
+  // basis so the reader can trace the number back.
+  const compositeSubtitle = composite.winner === "atr_floor"
+    ? `1 ATR floor: Entry − ${formatCurrency(results.atrPerShare)} ATR`
+    : `Key Level − ${formatCurrency(composite.candidates.bufferApplied)} buffer (${composite.candidates.bufferBasis === "half_atr" ? "0.5 ATR" : "1% floor"})`;
 
   return (
     <div data-testid="vol-results">
       <h3 className="text-[15px] font-semibold mb-4">Sizing Profile: {ticker || "—"}</h3>
 
-      {/* Context grid */}
+      {/* Context row */}
       <div className="grid grid-cols-3 gap-3 mb-4">
         <MetricCard label="Risk Budget" value={formatCurrency(results.riskBudget, { decimals: 0 })}
                     sub={`${tolPct}% Risk (${modeName} Mode)`}
                     accent="#6366f1" />
-        <MetricCard label="ATR Noise" value={`${(results.atrPerShare / entry * 100).toFixed(2)}%`}
+        <MetricCard label="ATR" value={`${(results.atrPerShare / entry * 100).toFixed(2)}%`}
                     sub={`${formatCurrency(results.atrPerShare)}/share`}
                     accent="#f59f00" />
-        <MetricCard label="Position Cap" value={`${results.positionCapShares} shs`}
-                    sub={`${formatCurrency(results.positionCap, { decimals: 0 })} (${targetSize}% NLV)`}
+        <MetricCard label="Ceiling" value={`${results.ceilingShares} shs`}
+                    sub={`${results.ceilingPct}% NLV${results.ceilingPolicy === "young_ipo" ? " · young IPO" : ""}`}
                     accent="#3b82f6" />
       </div>
 
-      {/* Tech Stop + Scale-Out row. Two-column so the ladder sits next
-          to the primary entry-side tile. Scale-Out is advisory (teal),
-          never wears the Recommended pill. */}
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <ScenarioCard scenario={results.techStop} entry={entry} equity={equity} targetSize={targetSize}
-                      accent="#3b82f6" tone="tech" isRecommended={recIsTechStop} />
-        <ScaleOutStopsCard
-          techLadder={results.scaleOutTech}
-          recLadder={results.scaleOutRecommended}
-          recLabel={rec.label}
-          accent="#0ea5a4"
-          onSendLadder={(ladder) => {
-            onSendToLogBuy({
-              ticker,
-              shares: ladder.totalShares,
-              price: ladder.entry,
-              stopMode: "ladder",
-              ladderShares: [ladder.legs[0].shares, ladder.legs[1].shares, ladder.legs[2].shares],
-              action: "new",
-            });
-          }}
-        />
-      </div>
-
-      {/* ATR Cushion grid */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        {results.atrScenarios.map((s, i) => (
-          <ScenarioCard key={s.label} scenario={s} entry={entry} equity={equity} targetSize={targetSize}
-                        accent="#f59f00" tone="atr"
-                        isRecommended={!recIsTechStop && i === 1} />
-        ))}
-      </div>
-
-      {/* Verdict */}
-      <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
-      <Banner type="success">
-        <div>
-          RECOMMENDED: Buy <strong>{rec.finalShares}</strong> shares · <strong>{rec.positionPct.toFixed(1)}%</strong> of NLV
-        </div>
-        <div className="mt-1 text-[12px] font-normal" style={{ opacity: 0.85 }}>
-          Sized by {method} · bound by {constraint}
-        </div>
-        {results.warning.show && (
-          <div className="mt-2 px-3 py-2 rounded-[8px] text-[12px] font-medium"
-               style={{
-                 background: "color-mix(in oklab, #f59f00 12%, transparent)",
-                 color: "#d97706",
-                 border: "1px solid color-mix(in oklab, #f59f00 30%, transparent)",
-               }}>
-            {results.warning.text}
+      {/* THE ANSWER — one card. */}
+      <div className="p-5 rounded-[14px] mb-3 relative overflow-hidden"
+           data-testid="composite-answer"
+           style={{
+             border: "1px solid var(--border)",
+             borderLeft: "6px solid #08a86b",
+             background: "color-mix(in oklab, #08a86b 7%, var(--surface))",
+           }}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+            Recommended
           </div>
-        )}
-      </Banner>
+          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+                data-testid="bind-badge"
+                style={{ background: "#08a86b", color: "#fff" }}>
+            {results.bind === "risk" ? "Risk-bound" : "Ceiling-bound"}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between">
+          <div>
+            <div className="text-[28px] font-semibold privacy-mask"
+                 style={{ fontFamily: "var(--font-jetbrains), monospace" }}
+                 data-testid="final-shares">
+              {results.finalShares} <span className="text-[14px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
+            </div>
+            <div className="text-[12px] mt-1" style={{ color: "var(--ink-4)" }}>
+              Composite stop: <strong style={{ color: "var(--ink)" }}>{formatCurrency(composite.price)}</strong>{" "}
+              · {composite.distancePct.toFixed(2)}% below entry · {composite.atrFraction.toFixed(2)}× ATR
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+              Winner: <strong style={{ color: "var(--ink-3)" }}>{compositeSubtitle}</strong>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[14px] font-medium privacy-mask"
+                 style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+              {formatCurrency(results.positionCost, { decimals: 0 })}
+            </div>
+            <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+              {results.positionPct.toFixed(1)}% NLV
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 pt-2 flex items-baseline justify-between text-[11px]"
+             style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
+          <span>Risk if stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(results.riskIfStopped, { decimals: 0 })}</strong> ({results.riskPct.toFixed(2)}% NLV)</span>
+          <span>Bound by {bindLabel}</span>
+        </div>
+      </div>
+
+      {/* Scale-out ladder — locked 0.5/1.0/1.5 ATR. */}
+      <ScaleOutStopsCard
+        ladder={scaleOut}
+        atrPerShare={results.atrPerShare}
+        accent="#0ea5a4"
+        onSendLadder={(ladder) => {
+          onSendToLogBuy({
+            ticker,
+            shares: ladder.totalShares,
+            price: ladder.entry,
+            stopMode: "ladder",
+            ladderShares: [ladder.legs[0].shares, ladder.legs[1].shares, ladder.legs[2].shares],
+            action: "new",
+          });
+        }}
+      />
+
+      {results.warnings.length > 0 && (
+        <div className="mt-3">
+          {results.warnings.map((w) => (
+            <Banner key={w} type="warning">{w}</Banner>
+          ))}
+        </div>
+      )}
 
       <div className="mt-4">
         <button onClick={() => {
-                  // ATR scenario → emit multiplier; Log Buy fetches atrPct
-                  // itself and recomputes the stop. Tech stop → emit
-                  // resolved dollar price; stopMode='price' flips the
-                  // receiver out of its default pct mode.
-                  if (recAtrMult !== null) {
-                    onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stopMode: "atr", atrMultiplier: recAtrMult, action: "new" });
-                  } else {
-                    onSendToLogBuy({ ticker, shares: rec.finalShares, price: entry, stop: rec.effectiveStop, stopMode: "price", action: "new" });
-                  }
+                  // Send with the resolved composite stop as a dollar
+                  // price. Log Buy consumes stopMode='price' to skip
+                  // its default pct-mode ATR recomputation.
+                  onSendToLogBuy({
+                    ticker,
+                    shares: results.finalShares,
+                    price: entry,
+                    stop: composite.price,
+                    stopMode: "price",
+                    action: "new",
+                  });
                 }}
                 className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-          📝 Send to Log Buy — {ticker || "—"} ({rec.finalShares} shs @ {formatCurrency(entry)})
+          📝 Send to Log Buy — {ticker || "—"} ({results.finalShares} shs @ {formatCurrency(entry)})
         </button>
       </div>
     </div>
   );
 }
 
-function ScenarioCard({
-  scenario, entry, equity, targetSize, accent, tone, isRecommended,
-}: {
-  scenario: SizingScenario;
-  entry: number;
-  equity: number;
-  targetSize: number;
-  accent: string;
-  tone: "tech" | "atr";
-  isRecommended: boolean;
-}) {
-  const borderWidth = isRecommended ? 6 : 4;
-  return (
-    <div className="p-4 rounded-[12px] relative overflow-hidden"
-         data-testid={`scenario-${scenario.label.replace(/\s+/g, "-").replace("×", "x").toLowerCase()}`}
-         style={{
-           border: "1px solid var(--border)",
-           borderLeft: `${borderWidth}px solid ${accent}`,
-           background: `color-mix(in oklab, ${accent} ${isRecommended ? 7 : 4}%, var(--surface))`,
-         }}>
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
-          {scenario.label}
-        </div>
-        {isRecommended && (
-          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
-                data-testid="recommended-pill"
-                style={{ background: "#08a86b", color: "#fff" }}>
-            Recommended
-          </span>
-        )}
-      </div>
-      <div className="flex items-baseline justify-between">
-        <div>
-          <div className="text-[22px] font-semibold privacy-mask"
-               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-            {scenario.finalShares} <span className="text-[13px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
-          </div>
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
-            Stop {formatCurrency(scenario.effectiveStop)} · {scenario.stopDistancePct.toFixed(2)}% ({tone === "atr" ? `${scenario.atrFraction.toFixed(1)}× ATR` : `${scenario.atrFraction.toFixed(2)}× ATR`})
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-[13px] font-medium privacy-mask"
-               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-            {formatCurrency(scenario.positionCost, { decimals: 0 })}
-          </div>
-          <div className="text-[10px]" style={{ color: "var(--ink-4)" }}>
-            {scenario.positionPct.toFixed(1)}% NLV
-          </div>
-        </div>
-      </div>
-      <div className="mt-2 flex items-baseline justify-between text-[11px]" style={{ color: "var(--ink-4)" }}>
-        <span>Risk if stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(scenario.riskIfStopped, { decimals: 0 })}</strong> ({scenario.riskPct.toFixed(2)}% NLV)</span>
-        {scenario.capBinds && (
-          <span data-testid="cap-binds" style={{ color: "#d97706" }}>capped @ {targetSize}% NLV</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Advisory tile — three-leg scale-out at -3% / -5% / -7% from entry.
-// Sized off the Tech Stop share count by default; if the Recommended
-// scenario is different, offers a segmented toggle to switch. Never
-// wears the Recommended pill — it's a plan, not a sizing option.
+// Advisory 3-leg scale-out at Entry − 0.5 / 1.0 / 1.5 ATR. Equal-thirds
+// share split → average exit lands at 1 ATR below entry, matching the
+// risk budget when the composite lands at 1 ATR. See @/lib/vol-sizer
+// for the ratio-choice rationale.
 function ScaleOutStopsCard({
-  techLadder, recLadder, recLabel, accent, onSendLadder,
+  ladder, atrPerShare, accent, onSendLadder,
 }: {
-  techLadder: ScaleOutStops;
-  recLadder: ScaleOutStops | null;
-  recLabel: ScenarioLabel;
+  ladder: ScaleOutStops;
+  atrPerShare: number;
   accent: string;
   onSendLadder: (ladder: ScaleOutStops) => void;
 }) {
-  const [view, setView] = useState<"tech" | "rec">("tech");
-  const showToggle = recLadder !== null;
-  const active = view === "rec" && recLadder ? recLadder : techLadder;
-  const sourceLabel = view === "rec" ? recLabel : "Tech Stop";
-
   return (
     <div className="p-4 rounded-[12px] relative overflow-hidden"
          data-testid="scale-out-stops"
@@ -1512,37 +1488,22 @@ function ScaleOutStopsCard({
         <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
           Scale-Out Stops
         </div>
-        {showToggle ? (
-          <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-            {(["tech", "rec"] as const).map(v => (
-              <button key={v} type="button" onClick={() => setView(v)}
-                      className="px-2 py-0.5 rounded-[6px] text-[10px] font-medium capitalize transition-all"
-                      style={{
-                        background: view === v ? "var(--surface)" : "transparent",
-                        color: view === v ? "var(--ink)" : "var(--ink-4)",
-                        boxShadow: view === v ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
-                      }}>
-                {v === "tech" ? "Tech" : "Recommended"}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
-                style={{ background: `color-mix(in oklab, ${accent} 15%, transparent)`, color: accent }}>
-            3-Leg Ladder
-          </span>
-        )}
+        <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+              style={{ background: `color-mix(in oklab, ${accent} 15%, transparent)`, color: accent }}>
+          3-Leg ATR Ladder
+        </span>
       </div>
 
       <div className="text-[11px] mb-2" style={{ color: "var(--ink-4)" }}>
-        Sized off: <strong style={{ color: "var(--ink)" }}>{sourceLabel}</strong> · {active.totalShares} shs @ {formatCurrency(active.entry)}
+        {ladder.totalShares} shs @ {formatCurrency(ladder.entry)} · ATR = {formatCurrency(atrPerShare)}/share
       </div>
 
       <div className="flex flex-col gap-1">
-        {active.legs.map((leg) => (
-          <div key={leg.pctBelow} className="grid grid-cols-[36px_1fr_60px_1fr] items-baseline gap-2 text-[11px]"
+        {ladder.legs.map((leg) => (
+          <div key={leg.atrMultiple} className="grid grid-cols-[52px_1fr_60px_1fr] items-baseline gap-2 text-[11px]"
+               data-testid={`scale-out-leg-${SCALE_OUT_ATR_MULTIPLIERS.indexOf(leg.atrMultiple as 0.5 | 1.0 | 1.5)}`}
                style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-            <span className="font-semibold" style={{ color: accent }}>−{leg.pctBelow}%</span>
+            <span className="font-semibold" style={{ color: accent }}>−{leg.atrMultiple.toFixed(2)} ATR</span>
             <span style={{ color: "var(--ink)" }}>{formatCurrency(leg.stopPrice)}</span>
             <span style={{ color: "var(--ink-3)" }}>{leg.shares} shs</span>
             <span className="text-right" style={{ color: "var(--ink-3)" }}>
@@ -1554,13 +1515,13 @@ function ScaleOutStopsCard({
 
       <div className="mt-2 pt-2 flex items-baseline justify-between text-[11px]"
            style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
-        <span>Risk if fully stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(active.totalLoss, { decimals: 0 })}</strong> ({active.totalLossPctNlv.toFixed(2)}% NLV)</span>
-        <span style={{ color: "var(--ink-4)" }}>avg exit {active.avgExitPct.toFixed(2)}%</span>
+        <span>Risk if fully stopped: <strong style={{ color: "var(--ink)" }}>{formatCurrency(ladder.totalLoss, { decimals: 0 })}</strong> ({ladder.totalLossPctNlv.toFixed(2)}% NLV)</span>
+        <span style={{ color: "var(--ink-4)" }}>avg exit {ladder.avgExitPct.toFixed(2)}%</span>
       </div>
 
       <button type="button"
-              onClick={() => onSendLadder(active)}
-              disabled={active.totalShares <= 0}
+              onClick={() => onSendLadder(ladder)}
+              disabled={ladder.totalShares <= 0}
               className="mt-3 w-full h-[34px] rounded-[10px] text-[12px] font-semibold transition-all hover:brightness-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               data-testid="send-ladder-to-logbuy"
               style={{
@@ -1568,7 +1529,7 @@ function ScaleOutStopsCard({
                 color: accent,
                 border: `1px solid color-mix(in oklab, ${accent} 40%, var(--border))`,
               }}>
-        📝 Send to Log Buy with ladder ({active.totalShares} shs)
+        📝 Send to Log Buy with ladder ({ladder.totalShares} shs)
       </button>
     </div>
   );
