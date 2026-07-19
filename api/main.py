@@ -2841,7 +2841,14 @@ _ATR_CACHE_TTL_S = 300
 @app.get("/api/prices/lookup")
 @limiter.limit("30/minute")
 def price_lookup(request: Request, ticker: str = ""):
-    """Get live price + ATR for a single ticker. Used by Position Sizer and Log Buy."""
+    """Get live price + ATR + 21 EMA + 50 SMA for a single ticker.
+    Used by Position Sizer and Log Buy.
+
+    Fetches a 90-day window (previously 40d) so the 50 SMA has enough
+    warmup to be meaningful. Returns null for ema_21 / sma_50 when the
+    ticker has fewer than 21 / 50 bars available, respectively — the
+    frontend then hides the affected read-only display cell.
+    """
     if not ticker.strip():
         raise HTTPException(status_code=400, detail="No ticker provided")
     import yfinance as yf
@@ -2853,7 +2860,10 @@ def price_lookup(request: Request, ticker: str = ""):
 
     try:
         stock = yf.Ticker(t)
-        df = stock.history(period="40d")
+        # 90d gives ~62 trading days — 50 SMA has ~12 bars of warmup
+        # headroom past its window, so the last value is a proper
+        # 50-bar mean rather than a partial fill.
+        df = stock.history(period="90d")
         if df.empty:
             raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}")
 
@@ -2877,11 +2887,25 @@ def price_lookup(request: Request, ticker: str = ""):
             if sma_low > 0:
                 atr_pct = (sma_tr / sma_low) * 100
 
+        # 21 EMA + 50 SMA — canonical MA definitions used across MCT /
+        # cascades / MO RS backtest. `ewm(span=21, adjust=False)` matches
+        # the Streamlit / MCT engines exactly; `rolling(50).mean()` is
+        # the standard 50-bar simple moving average. Both return null on
+        # sparse history so the frontend hides the cell.
+        ema_21 = None
+        sma_50 = None
+        if len(df) >= 21:
+            ema_21 = float(df["Close"].ewm(span=21, adjust=False).mean().iloc[-1])
+        if len(df) >= 50:
+            sma_50 = float(df["Close"].tail(50).mean())
+
         result = {
             "ticker": t,
             "price": round(price, 2),
             "atr": round(atr_21, 2),
             "atr_pct": round(atr_pct, 2),
+            "ema_21": round(ema_21, 2) if ema_21 is not None else None,
+            "sma_50": round(sma_50, 2) if sma_50 is not None else None,
         }
         _atr_cache[t] = (time.time(), result)
         return result

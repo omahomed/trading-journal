@@ -1131,8 +1131,17 @@ export const api = {
     >(`/api/ibkr/nav-for-date?date=${encodeURIComponent(date)}`),
 
   // Prices
+  // ema_21 / sma_50 are nullable — the backend returns null on tickers
+  // with fewer than 21 / 50 bars of history, respectively.
   priceLookup: (ticker: string) =>
-    fetchJSON<{ ticker: string; price: number; atr: number; atr_pct: number }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),
+    fetchJSON<{
+      ticker: string;
+      price: number;
+      atr: number;
+      atr_pct: number;
+      ema_21: number | null;
+      sma_50: number | null;
+    }>(`/api/prices/lookup?ticker=${encodeURIComponent(ticker)}`),
 
   // Batch live price + ATR — single rate-limit slot covers many tickers.
   // Each per-ticker result carries a `status` field so the UI can render

@@ -121,6 +121,8 @@ function setApiMocks(opts: {
       price: opts.price ?? 100,
       atr: 5,
       atr_pct: opts.atrPct ?? 5,
+      ema_21: null,
+      sma_50: null,
     });
   }
   vi.mocked(api.tradesOpen).mockResolvedValue((opts.holdings ?? []) as any);
@@ -407,6 +409,33 @@ describe("MobilePositionSizer — Volatility composite-stop model", () => {
     const sharesEl = await screen.findByTestId("audit-shares");
     await waitFor(() => expect(sharesEl.textContent).toMatch(/113/), { timeout: 2000 });
     expect(screen.getByTestId("bind-badge").textContent).toBe("Ceiling-bound");
+  });
+
+  test("21 EMA / 50 SMA cells render when priceLookup returns non-null values; Use → paste into Key Level", async () => {
+    // Override the default mock to include real MA levels for one call.
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 176.21, atrPct: 4.5 });
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "DELL",
+      price: 176.21,
+      atr: 7.93,
+      atr_pct: 4.5,
+      ema_21: 172.34,
+      sma_50: 165.20,
+    } as any);
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
+
+    const ticker = screen.getByLabelText("Ticker symbol");
+    fireEvent.change(ticker, { target: { value: "DELL" } });
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+
+    const emaCell = await screen.findByTestId("ema21-cell", {}, { timeout: 2000 });
+    expect(emaCell.textContent).toMatch(/172\.34/);
+    expect(screen.getByTestId("sma50-cell").textContent).toMatch(/165\.20/);
+
+    fireEvent.click(screen.getByTestId("use-sma50-btn"));
+    const keyLevelInput = screen.getByLabelText("Key level") as HTMLInputElement;
+    expect(keyLevelInput.value).toBe("165.2");
   });
 
   test("scale-out ladder renders 3 legs at −0.5 / −1.0 / −1.5 ATR (not old locked percentages)", async () => {

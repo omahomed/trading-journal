@@ -250,6 +250,9 @@ export function MobilePositionSizer() {
   const [buffer, setBuffer] = useState("1.00");
   const [keyLevelStr, setKeyLevelStr] = useState("");
   const [youngIpo, setYoungIpo] = useState(false);
+  // Live 21 EMA / 50 SMA from priceLookup, mirrored to desktop.
+  const [ema21, setEma21] = useState<number | null>(null);
+  const [sma50, setSma50] = useState<number | null>(null);
   // Index 3 (Pilot, 0.25%) is manual-only; auto path lands on 0/1/2.
   // Includes 3 (Max, 1.00%) — a manual-only conviction upshift. Auto-
   // pick from MCT state still returns 0/1/2 only.
@@ -354,6 +357,8 @@ export function MobilePositionSizer() {
           if (data && typeof data.price === "number") {
             setEntryPrice(String(data.price));
             if (typeof data.atr_pct === "number") setAtrPct(data.atr_pct);
+            setEma21(data.ema_21);
+            setSma50(data.sma_50);
             setPriceError(null);
           }
         })
@@ -840,6 +845,49 @@ export function MobilePositionSizer() {
               />
             )}
           </div>
+
+          {/* 21 EMA / 50 SMA cells with Use → shortcuts. Populated by
+              priceLookup; each hides if the backend returned null. */}
+          {(ema21 !== null || sma50 !== null) && (
+            <div className="grid grid-cols-2 gap-2">
+              {ema21 !== null && (
+                <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px] flex items-center justify-between"
+                     data-testid="ema21-cell">
+                  <div>
+                    <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">21 EMA</div>
+                    <div className="font-m-num text-base font-medium tabular-nums text-m-text">
+                      {formatCurrency(ema21)}
+                    </div>
+                  </div>
+                  <button type="button"
+                          data-testid="use-ema21-btn"
+                          onClick={() => setKeyLevelStr(String(ema21))}
+                          className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
+                          style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}>
+                    Use →
+                  </button>
+                </div>
+              )}
+              {sma50 !== null && (
+                <div className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px] flex items-center justify-between"
+                     data-testid="sma50-cell">
+                  <div>
+                    <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">50 SMA</div>
+                    <div className="font-m-num text-base font-medium tabular-nums text-m-text">
+                      {formatCurrency(sma50)}
+                    </div>
+                  </div>
+                  <button type="button"
+                          data-testid="use-sma50-btn"
+                          onClick={() => setKeyLevelStr(String(sma50))}
+                          className="text-[11px] px-2 py-1 rounded-[6px] font-medium"
+                          style={{ background: "var(--m-accent)", color: "var(--m-bg)" }}>
+                    Use →
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Young IPO clamp */}
           <label

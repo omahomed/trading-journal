@@ -225,6 +225,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [keyLevelStr, setKeyLevelStr] = useState("");
   const [youngIpo, setYoungIpo] = useState(false);
   const [atrPct, setAtrPct] = useState("5.0");
+  // Live MA levels from /api/prices/lookup — read-only display cells
+  // on the Volatility tab, each with a "Use as Key Level" one-click
+  // paste into keyLevelStr. Null when the ticker has < 21 / < 50 bars.
+  const [ema21, setEma21] = useState<number | null>(null);
+  const [sma50, setSma50] = useState<number | null>(null);
   const [ticker, setTicker] = useState("");
   // selectedHolding is shared by Scale-In / Pyramid / Trim tabs. The
   // legacy Volatility "Audit Active Position" mode also used it but
@@ -250,7 +255,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // Pyramid config
   const [pyramidRules, setPyramidRules] = useState({ trigger_pct: 5, alloc_pct: 20 });
 
-  // Auto-fetch price + ATR when ticker changes (debounced)
+  // Auto-fetch price + ATR + 21 EMA + 50 SMA when ticker changes (debounced)
   useEffect(() => {
     if (!ticker || ticker.length < 1) return;
     const timeout = setTimeout(() => {
@@ -259,6 +264,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         if (data && !("error" in data)) {
           setEntryPrice(String(data.price));
           setAtrPct(String(data.atr_pct));
+          setEma21(data.ema_21);
+          setSma50(data.sma_50);
         }
       }).catch((err) => {
         log.debug.devOnly("position-sizer", "priceLookup missing (expected)", err);
@@ -840,6 +847,51 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             clamps the ceiling to 5% (default 15%). */}
         {needsKeyLevel && (
           <>
+            {/* Live 21 EMA / 50 SMA display cells (populated by
+                priceLookup). Each has a "Use as Key Level" button that
+                pastes the value into keyLevelStr in one click — removes
+                the tab-to-chart step. Cells hide entirely when the
+                ticker has insufficient history (null from backend). */}
+            {(ema21 !== null || sma50 !== null) && (
+              <div className="grid grid-cols-2 gap-4">
+                {ema21 !== null && (
+                  <div className="p-3 rounded-[10px] flex items-center justify-between"
+                       data-testid="ema21-cell"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>21 EMA</div>
+                      <div className="text-[16px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(ema21)}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => { setKeyLevelStr(String(ema21)); resetCalc(); }}
+                            data-testid="use-ema21-btn"
+                            className="text-[11px] px-2.5 py-1 rounded-[6px] transition-all hover:brightness-95 cursor-pointer"
+                            style={{ background: navColor, color: "#fff", border: "none" }}>
+                      Use →
+                    </button>
+                  </div>
+                )}
+                {sma50 !== null && (
+                  <div className="p-3 rounded-[10px] flex items-center justify-between"
+                       data-testid="sma50-cell"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>50 SMA</div>
+                      <div className="text-[16px] font-semibold privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+                        {formatCurrency(sma50)}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => { setKeyLevelStr(String(sma50)); resetCalc(); }}
+                            data-testid="use-sma50-btn"
+                            className="text-[11px] px-2.5 py-1 rounded-[6px] transition-all hover:brightness-95 cursor-pointer"
+                            style={{ background: navColor, color: "#fff", border: "none" }}>
+                      Use →
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <Field label="Key Level ($)">
               <input type="number" value={keyLevelStr} onChange={e => { setKeyLevelStr(e.target.value); resetCalc(); }}
                      step="0.01" placeholder="e.g. structural low or 21 EMA" className={inputCls} style={inputStyle}

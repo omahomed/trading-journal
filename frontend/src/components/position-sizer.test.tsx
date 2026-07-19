@@ -374,6 +374,64 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     expect(stored.action).toBe("new");
   });
 
+  test("21 EMA / 50 SMA cells render when priceLookup returns non-null values; Use → paste into Key Level", async () => {
+    // Override the default mock (which rejects) so priceLookup returns
+    // real MA levels. The cells + Use buttons should appear after the
+    // ticker debounce fires and populate. Clicking Use → on the 21 EMA
+    // cell should paste 172.34 into the Key Level input.
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "DELL",
+      price: 176.21,
+      atr: 7.93,
+      atr_pct: 4.5,
+      ema_21: 172.34,
+      sma_50: 165.20,
+    } as any);
+    render(<PositionSizer navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("sizer-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+    });
+    const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
+    await act(async () => { fireEvent.change(ticker, { target: { value: "DELL" } }); });
+
+    // Cells populate after the priceLookup fires. The 600ms debounce
+    // + async resolve is why we waitFor here.
+    const emaCell = await screen.findByTestId("ema21-cell", {}, { timeout: 2000 });
+    expect(emaCell.textContent).toMatch(/172\.34/);
+    expect(screen.getByTestId("sma50-cell").textContent).toMatch(/165\.20/);
+
+    // Click Use → on the 21 EMA cell — Key Level input picks up 172.34.
+    await act(async () => { fireEvent.click(screen.getByTestId("use-ema21-btn")); });
+    const keyLevelInput = screen.getByTestId("key-level-input") as HTMLInputElement;
+    expect(keyLevelInput.value).toBe("172.34");
+  });
+
+  test("cells hide when priceLookup returns null MA levels (sparse-history ticker)", async () => {
+    vi.mocked(api.priceLookup).mockResolvedValue({
+      ticker: "IPO",
+      price: 100,
+      atr: 5,
+      atr_pct: 5,
+      ema_21: null,
+      sma_50: null,
+    } as any);
+    render(<PositionSizer navColor="#6366f1" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+    });
+    const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
+    await act(async () => { fireEvent.change(ticker, { target: { value: "IPO" } }); });
+
+    // Wait a beat for the debounced lookup to complete, then confirm
+    // both cells are absent.
+    await new Promise(r => setTimeout(r, 700));
+    expect(screen.queryByTestId("ema21-cell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sma50-cell")).not.toBeInTheDocument();
+  });
+
   test("Scale-out ladder uses ATR multiples 0.5 / 1.0 / 1.5, not the old −3/−5/−7 percentages", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
