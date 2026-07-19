@@ -25,6 +25,7 @@ import {
   exitLadderFloor,
   describeMctSource,
   type ExitAlert,
+  type SizingModeIndex,
 } from "@/lib/sizing-mode";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -171,7 +172,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // override flows naturally into the saved buy. Override is form-local:
   // refresh / navigate-away / submit all reset it (the component
   // remounts and the auto pick takes over again).
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  // Includes 3 (Max, 1.00%) — a manual-only conviction upshift. Auto-
+  // pick from MCT state still returns 0/1/2 only.
+  const [sizingMode, setSizingMode] = useState<SizingModeIndex>(1);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");

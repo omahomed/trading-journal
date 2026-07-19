@@ -27,6 +27,7 @@ import {
   exitLadderFloor,
   describeMctSource,
   type ExitAlert,
+  type SizingModeIndex,
 } from "@/lib/sizing-mode";
 import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
 
@@ -198,7 +199,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // (mctStateToSizingMode falls back to safe middle ground). Index 3
   // (Pilot, 0.25%) is reachable ONLY via manual radio click; the auto
   // path returns 0|1|2 only.
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1);
+  // Includes 3 (Max, 1.00%) — a manual-only conviction upshift. Auto-
+  // pick from MCT state still returns 0/1/2 only.
+  const [sizingMode, setSizingMode] = useState<SizingModeIndex>(1);
   // mctState + sizingModeManual track WHY the current mode is what it is.
   // - sizingModeManual=false → set by MCT state read (auto)
   // - sizingModeManual=true  → user clicked a Radio (override). Reset by

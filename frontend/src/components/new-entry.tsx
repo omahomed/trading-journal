@@ -68,6 +68,8 @@ import {
   describeMctSource,
   clampManualToDownwardOnly,
   type ExitAlert,
+  type SizingModeIndex,
+  type AutoSizingModeIndex,
 } from "@/lib/sizing-mode";
 
 // ─────────────────────────────────────────────────────────────────────
@@ -361,7 +363,10 @@ export function NewEntry({ navColor }: { navColor: string }) {
   const [avgLossSample, setAvgLossSample] = useState<number>(0);
 
   // Sizing mode state
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(0);
+  // New Entry's downward-only clamp caps at autoIdx (0/1/2), so Max
+  // (3, manual-only conviction upshift) is naturally unreachable here.
+  // State stays typed as AutoSizingModeIndex.
+  const [sizingMode, setSizingMode] = useState<AutoSizingModeIndex>(0);
   const [sizingModeManual, setSizingModeManual] = useState(false);
 
   // User inputs
@@ -429,7 +434,10 @@ export function NewEntry({ navColor }: { navColor: string }) {
     [mctState, activeExits],
   );
 
-  const handleModePick = useCallback((idx: 0 | 1 | 2) => {
+  const handleModePick = useCallback((idx: SizingModeIndex) => {
+    // Max (3) is manual-only-upshift; the New Entry ladder doesn't
+    // permit it. Clamp naturally caps back to autoIdx (≤ 2) so a
+    // stray Max click here silently downshifts to auto.
     const clamped = clampManualToDownwardOnly(autoIdx, idx);
     setSizingMode(clamped);
     setSizingModeManual(clamped !== autoIdx);
@@ -621,8 +629,13 @@ export function NewEntry({ navColor }: { navColor: string }) {
              style={{ color: "var(--ink-4)" }}>
           Sizing Mode override (downward-only)
         </div>
+        {/* Only the 3 auto-selectable tiers show here (Pilot / Normal /
+            Offense). Max (1.00%) is a MANUAL-ONLY conviction upshift —
+            unreachable under New Entry's downward-only rule — so it's
+            filtered out entirely rather than rendered permanently
+            disabled. Position Sizer + Log Buy expose it separately. */}
         <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-          {SIZING_MODES_DISPLAY.map(m => {
+          {SIZING_MODES_DISPLAY.filter(m => m.index <= 2).map(m => {
             const isBlocked = m.index > autoIdx;
             return (
               <Radio key={m.key}

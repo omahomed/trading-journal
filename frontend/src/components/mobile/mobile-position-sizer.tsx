@@ -7,7 +7,7 @@ import { api, getActivePortfolio, type TradeDetail, type TradePosition } from "@
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
-import { SIZING_MODES, mctStateToSizingMode } from "@/lib/sizing-mode";
+import { SIZING_MODES, mctStateToSizingMode, type SizingModeIndex } from "@/lib/sizing-mode";
 import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
 import { MobileSelectSheet } from "./mobile-select-sheet";
 import { MobileHoldingPicker } from "./mobile-holding-picker";
@@ -251,7 +251,9 @@ export function MobilePositionSizer() {
   const [keyLevelStr, setKeyLevelStr] = useState("");
   const [youngIpo, setYoungIpo] = useState(false);
   // Index 3 (Pilot, 0.25%) is manual-only; auto path lands on 0/1/2.
-  const [sizingMode, setSizingMode] = useState<0 | 1 | 2>(1); // overwritten on mount
+  // Includes 3 (Max, 1.00%) — a manual-only conviction upshift. Auto-
+  // pick from MCT state still returns 0/1/2 only.
+  const [sizingMode, setSizingMode] = useState<SizingModeIndex>(1); // overwritten on mount
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [sizeIdx, setSizeIdx] = useState<number>(DEFAULT_SIZE_INDEX);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
@@ -1823,13 +1825,14 @@ function ModePickerTile({
   sizingMode,
   onChange,
 }: {
-  sizingMode: 0 | 1 | 2;
-  onChange: (i: 0 | 1 | 2) => void;
+  sizingMode: SizingModeIndex;
+  onChange: (i: SizingModeIndex) => void;
 }) {
   const m = SIZING_MODES[sizingMode];
   const displayLabel =
     m.key === "normal" ? "Normal"
     : m.key === "offense" ? "Offense"
+    : m.key === "max" ? "Max"
     : "Pilot";
   return (
     <MobileSelectSheet
@@ -1847,6 +1850,7 @@ function ModePickerTile({
             const label =
               opt.key === "normal" ? "Normal"
               : opt.key === "offense" ? "Offense"
+              : opt.key === "max" ? "Max"
               : "Pilot";
             return (
               <button
@@ -2129,7 +2133,7 @@ function OptionsResultBlock({
   targetSize,
 }: {
   result: OptionsResult | null;
-  sizingMode: 0 | 1 | 2;
+  sizingMode: SizingModeIndex;
   costPerContract: string;
   equity: number;
   ticker: string;

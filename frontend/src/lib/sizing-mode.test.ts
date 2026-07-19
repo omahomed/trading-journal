@@ -12,48 +12,41 @@ import {
 
 describe("sizing-mode lib", () => {
   describe("SIZING_MODES constant", () => {
-    test("indices are stable: 0=pilot, 1=normal, 2=offense (aggression order)", () => {
+    test("indices are stable: 0=pilot, 1=normal, 2=offense, 3=max (aggression order)", () => {
       // Position Sizer + Log Buy + New Entry index into this array
-      // directly. The retier (New Entry rollout) moved Pilot to index 0
-      // and retired Defense; array order now equals aggression order
-      // (least → most aggressive). Reordering would silently flip
-      // user-visible behavior. This test pins the ordering.
-      expect(SIZING_MODES).toHaveLength(3);
+      // directly. Array order equals aggression order (least → most
+      // aggressive). Max (index 3, 1.00%) was added 2026-07-18 as a
+      // manual-only conviction upshift — MCT-state auto never lands
+      // on it. Reordering would silently flip user-visible behavior.
+      expect(SIZING_MODES).toHaveLength(4);
       expect(SIZING_MODES[0].key).toBe("pilot");
       expect(SIZING_MODES[1].key).toBe("normal");
       expect(SIZING_MODES[2].key).toBe("offense");
+      expect(SIZING_MODES[3].key).toBe("max");
     });
 
-    test("risk percentages match the retiered values", () => {
-      // 0.25 / 0.50 / 0.75 are the New Entry–derived risk-per-trade
-      // values, adopted globally. Touching these requires explicit
-      // greenlight (not in a refactor).
+    test("risk percentages match the locked values", () => {
+      // 0.25 / 0.50 / 0.75 / 1.00 are the risk-per-trade values.
+      // Touching these requires explicit greenlight (not in a refactor).
       expect(SIZING_MODES[0].pct).toBe(0.25);
       expect(SIZING_MODES[1].pct).toBe(0.50);
       expect(SIZING_MODES[2].pct).toBe(0.75);
+      expect(SIZING_MODES[3].pct).toBe(1.00);
     });
 
     test("Defense tier is retired (no key === 'defense' in the lineup)", () => {
-      // Explicit regression guard: nothing in SIZING_MODES should
-      // carry the retired Defense key. If it comes back, this test
-      // fires immediately.
       const keys = SIZING_MODES.map(m => m.key);
       expect(keys).not.toContain("defense");
     });
   });
 
   describe("SIZING_MODES_DISPLAY", () => {
-    test("renders in conservatism order: Pilot · Normal · Offense", () => {
-      // UI radios iterate this array. Now equal to SIZING_MODES since
-      // the canonical array is already in aggression order — kept as
-      // a named export so callsites don't have to change.
-      expect(SIZING_MODES_DISPLAY.map(m => m.key)).toEqual(["pilot", "normal", "offense"]);
+    test("renders in conservatism order: Pilot · Normal · Offense · Max", () => {
+      expect(SIZING_MODES_DISPLAY.map(m => m.key)).toEqual(["pilot", "normal", "offense", "max"]);
     });
 
     test("each entry carries its canonical SIZING_MODES.index for lookup", () => {
-      // setSizingMode(m.index) in both pages relies on this. Display
-      // position now identical to canonical position (0/1/2).
-      expect(SIZING_MODES_DISPLAY.map(m => m.index)).toEqual([0, 1, 2]);
+      expect(SIZING_MODES_DISPLAY.map(m => m.index)).toEqual([0, 1, 2, 3]);
     });
   });
 
@@ -254,11 +247,11 @@ describe("sizing-mode lib", () => {
       ]).idx).toBe(2);
     });
 
-    test("auto-derivation always returns a canonical 0/1/2 across the state matrix", () => {
-      // Retier collapsed the tier count from 4 to 3, so the auto
-      // path IS the full canonical index range now. Exhaustive smoke
-      // test across state × alert-set combinations pins that no
-      // out-of-range index can leak.
+    test("auto-derivation never returns Max (3) across the state matrix", () => {
+      // Max (index 3, 1.00%) is manual-only. Regardless of state or
+      // exit-ladder combination, deriveAutoSizingMode must never
+      // return it — the whole point of a manual-only tier is that no
+      // engine path can land you there.
       const states = ["POWERTREND", "UPTREND", "UPTREND UNDER PRESSURE",
                       "RALLY MODE", "CORRECTION", null, "UNKNOWN"];
       const alertSets = [
@@ -305,6 +298,16 @@ describe("sizing-mode lib", () => {
       expect(clampManualToDownwardOnly(0, 2)).toBe(0);  // Pilot auto, Offense user → Pilot
       expect(clampManualToDownwardOnly(1, 2)).toBe(1);  // Normal auto, Offense user → Normal
       expect(clampManualToDownwardOnly(0, 1)).toBe(0);  // Pilot auto, Normal  user → Pilot
+    });
+
+    test("user picks Max (3) → clamps back to auto (Max is manual-only-upshift)", () => {
+      // Max is above every auto tier. Under New Entry's downward-only
+      // rule, clicking Max silently clamps to auto — the New Entry
+      // page filters Max out of its radio grid entirely for that
+      // reason, but the clamp is the last line of defense.
+      expect(clampManualToDownwardOnly(2, 3)).toBe(2); // Offense auto, Max user → Offense
+      expect(clampManualToDownwardOnly(1, 3)).toBe(1); // Normal auto,  Max user → Normal
+      expect(clampManualToDownwardOnly(0, 3)).toBe(0); // Pilot auto,   Max user → Pilot
     });
   });
 });
