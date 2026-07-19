@@ -452,3 +452,75 @@ describe("ActiveCampaign — Increase / Decrease position flow", () => {
     expect(onNavigate).toHaveBeenCalledWith("logsell");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Pyramid screener column — spectrum + cheap gates (2026-07-18)
+//
+// The column no longer shows a binary "Ready" chip; it now surfaces
+// classifyPyramidScreener output (full / prorated / blocked). These
+// tests pin the four visible states (excluding location-block since
+// Rule 1 stays in the sizer). Fixtures dial pyramid_pct via
+// livePrices, and pos_size_pct + risk via stop and share count.
+// ---------------------------------------------------------------------------
+
+describe("ActiveCampaign — Pyramid screener column", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("full: current up 7.7% vs last held buy, risk within Normal budget → 🔺 Full", async () => {
+    // 100 sh @ 195, stop 194 → risk = $100 (< $500 = 0.50% × 100K)
+    // pos_size = 100 × 210 / 100_000 × 100 = 21% (< 25% ceiling)
+    // pyramid_pct = (210 − 195) / 195 × 100 = 7.69% (≥ 5)
+    setupApi([stockPosition({ avg_entry: 195, stop_loss: 194 })]);
+    mBatch.mockResolvedValue({ AAPL: 210 } as any);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mOpen).toHaveBeenCalled());
+    await waitFor(() => expect(mBatch).toHaveBeenCalled());
+    expect(await screen.findByTestId("acs-pyramid-full")).toHaveTextContent(/Full/);
+  });
+
+  test("prorated: current up 2.6% (between 0 and 5) → amber chip with pct", async () => {
+    // Same fixture, current 200 → pyramid_pct 2.56%.
+    setupApi([stockPosition({ avg_entry: 195, stop_loss: 194 })]);
+    mBatch.mockResolvedValue({ AAPL: 200 } as any);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mBatch).toHaveBeenCalled());
+    const chip = await screen.findByTestId("acs-pyramid-prorated");
+    expect(chip.textContent).toMatch(/\+2\.6%/);
+  });
+
+  test("blocked (ceiling): pos_size_pct ≥ 25% → ⛔ Ceiling", async () => {
+    // 200 sh @ 195, current 150 → notional 30K / 100K = 30% ≥ 25
+    setupApi([stockPosition({ shares: 200, avg_entry: 195, total_cost: 39000, stop_loss: 194 })]);
+    mBatch.mockResolvedValue({ AAPL: 150 } as any);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mBatch).toHaveBeenCalled());
+    expect(await screen.findByTestId("acs-pyramid-blocked-ceiling")).toHaveTextContent(/Ceiling/);
+  });
+
+  test("blocked (budget): risk > 0.50% × NAV under Normal assumption → ⛔ Budget", async () => {
+    // Default stockPosition: shares 100, stop 185, entry 195 → risk 100 × 10 = $1000
+    // NAV 100K × 0.50% = $500 budget → 1000 > 500 → block
+    // Also set current 210 so progress WOULD be full but budget wins first
+    setupApi([stockPosition()]);
+    mBatch.mockResolvedValue({ AAPL: 210 } as any);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mBatch).toHaveBeenCalled());
+    expect(await screen.findByTestId("acs-pyramid-blocked-budget")).toHaveTextContent(/Budget/);
+  });
+
+  test("blocked (progress): current below last held buy → ⛔ Below", async () => {
+    // Tight stop so budget passes; drop current below entry → progress blocks.
+    setupApi([stockPosition({ avg_entry: 195, stop_loss: 194 })]);
+    mBatch.mockResolvedValue({ AAPL: 190 } as any);
+    render(<ActiveCampaign navColor="#6366f1" />);
+    await waitFor(() => expect(mBatch).toHaveBeenCalled());
+    expect(await screen.findByTestId("acs-pyramid-blocked-progress")).toHaveTextContent(/Below/);
+  });
+
+  // Options render in a separate table without a Pyramid column at
+  // all (ACS's is_option split at line ~559-560). The classifier's
+  // 'n/a' branch is still covered by the pure-lib test suite;
+  // there's no equivalent UI to assert on for the ACS renderer.
+});

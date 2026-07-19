@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   computePyramidSizing,
+  classifyPyramidScreener,
   PyramidSizerError,
   PYRAMID_ADD_CAP_PCT,
   PYRAMID_CAMPAIGN_CEILING_PCT,
   PYRAMID_FULL_SIZE_TRIGGER_PCT,
   PYRAMID_LOCATION_ATR_MULTIPLE,
+  PYRAMID_SCREENER_DEFAULT_TOL_PCT,
   type PyramidSizerInputs,
 } from "./pyramid-sizer";
 
@@ -310,6 +312,67 @@ describe("computePyramidSizing — ceiling gate (rule 6)", () => {
     expect(r.blocked).toBe(true);
     expect(r.finalShares).toBe(0);
     expect(PYRAMID_CAMPAIGN_CEILING_PCT).toBe(25);
+  });
+});
+
+describe("classifyPyramidScreener — ACS column classifier", () => {
+  const BASE = { isOption: false, pyramidPct: 7, posSizePct: 10, riskDollars: 500, equity: 400_000 };
+
+  it("options short-circuit to 'n/a' with reason='option'", () => {
+    const r = classifyPyramidScreener({ ...BASE, isOption: true });
+    expect(r.level).toBe("n/a");
+    expect(r.reason).toBe("option");
+  });
+
+  it("posSizePct ≥ 25% (Ceiling) blocks even when progress is fine", () => {
+    const r = classifyPyramidScreener({ ...BASE, posSizePct: 25.4, pyramidPct: 10 });
+    expect(r.level).toBe("blocked");
+    expect(r.reason).toBe("ceiling");
+    expect(r.detail).toMatch(/25\.4%/);
+  });
+
+  it("riskDollars > 0.50% × NAV (Budget) blocks", () => {
+    // 0.50% of 400K = $2000. Risk of $2500 breaches it.
+    const r = classifyPyramidScreener({ ...BASE, riskDollars: 2500 });
+    expect(r.level).toBe("blocked");
+    expect(r.reason).toBe("budget");
+    expect(r.detail).toMatch(/0\.63%.+0\.50%/);
+  });
+
+  it("pyramidPct < 0 blocks with reason='progress' (below last held buy)", () => {
+    const r = classifyPyramidScreener({ ...BASE, pyramidPct: -2 });
+    expect(r.level).toBe("blocked");
+    expect(r.reason).toBe("progress");
+  });
+
+  it("pyramidPct ≥ 5 → 'full' (no reason)", () => {
+    const r = classifyPyramidScreener({ ...BASE, pyramidPct: 5 });
+    expect(r.level).toBe("full");
+    expect(r.reason).toBeUndefined();
+  });
+
+  it("0 ≤ pyramidPct < 5 → 'prorated' with linear multiplier", () => {
+    const r = classifyPyramidScreener({ ...BASE, pyramidPct: 2.5 });
+    expect(r.level).toBe("prorated");
+    expect(r.multiplier).toBeCloseTo(0.5, 3);
+  });
+
+  it("ceiling wins over budget wins over progress (strongest-first ordering)", () => {
+    // All three would block; ceiling should be the surfaced reason.
+    const r = classifyPyramidScreener({
+      isOption: false,
+      pyramidPct: -3,     // progress-block
+      posSizePct: 30,     // ceiling-block
+      riskDollars: 5000,  // budget-block
+      equity: 400_000,
+    });
+    expect(r.reason).toBe("ceiling");
+  });
+
+  it("PYRAMID_SCREENER_DEFAULT_TOL_PCT is 0.50 (Normal-mode assumption)", () => {
+    // Documented in the comment: sizer uses live MCT mode, screener
+    // assumes Normal. Regression guard on the constant.
+    expect(PYRAMID_SCREENER_DEFAULT_TOL_PCT).toBe(0.5);
   });
 });
 

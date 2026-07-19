@@ -10,6 +10,7 @@ import { parseOptionTicker, daysUntilExpiration } from "@/lib/options";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { formatCurrency } from "@/lib/format";
 import { SELL_RULE_TIER_ORDER } from "@/lib/sell-rule";
+import { classifyPyramidScreener, type PyramidScreenerState } from "@/lib/pyramid-sizer";
 import { CaptureSnapshotButton } from "./capture-snapshot";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
@@ -917,7 +918,19 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                   else if (p.return_pct > -3) { retBg = "linear-gradient(135deg, #fbbf24, #f59e0b)"; retText = "#451a03"; }
                   else { retBg = "linear-gradient(135deg, #f87171, #ef4444)"; retText = "#fff"; }
 
-                  const pyramidReady = p.pyramid_pct >= 5;
+                  // Pyramid screener state (spectrum + cheap gates).
+                  // See @/lib/pyramid-sizer.classifyPyramidScreener for
+                  // the rules encoded here — Rule 6 (Ceiling) + Rule 3
+                  // (Budget, assumes Normal mode) + Rule 2 (Progress
+                  // full/prorated/blocked). Rule 1 (Location) needs live
+                  // 21 EMA + ATR and stays in the sizer itself.
+                  const pyramidState: PyramidScreenerState = classifyPyramidScreener({
+                    isOption: p.is_option,
+                    pyramidPct: p.pyramid_pct,
+                    posSizePct: p.pos_size_pct,
+                    riskDollars: p.risk_dollars,
+                    equity,
+                  });
 
                   // Tooltip "Current" mirrors the Current Risk $ cell value: the
                   // magnitude of projected_pl (total exposure — realized losses on
@@ -957,15 +970,52 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       </td>
                       <td className="px-2.5 py-2.5 text-center"
                           onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
-                          title="Right-click for actions (View in Journal · Open Position Sizer Pyramid)">
-                        {pyramidReady ? (
-                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
-                                style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff", minWidth: 40, textAlign: "center" }}>
-                            Ready
-                          </span>
-                        ) : (
-                          <span style={{ color: "var(--ink-4)", fontSize: 11 }}>—</span>
-                        )}
+                          data-testid="acs-pyramid-cell"
+                          title={(() => {
+                            if (pyramidState.level === "full") return `Rule 2 (Progress) satisfied — last held buy up ${pyramidState.profitPct.toFixed(1)}%. Rules 1/3/6 verified in the sizer.`;
+                            if (pyramidState.level === "prorated") return `Prorated: last held buy up ${pyramidState.profitPct.toFixed(1)}% (need 5% for full). Multiplier ${((pyramidState.multiplier ?? 0) * 100).toFixed(0)}%. Rules 1/3/6 verified in the sizer.`;
+                            if (pyramidState.level === "blocked") {
+                              if (pyramidState.reason === "ceiling") return `Blocked: position already at ${pyramidState.detail} — 25% NAV campaign ceiling.`;
+                              if (pyramidState.reason === "budget") return `Blocked: campaign risk ${pyramidState.detail} vs Normal-mode 0.50% budget. Sizer verifies against live MCT mode.`;
+                              if (pyramidState.reason === "progress") return `Blocked: current price ${pyramidState.detail} vs last held buy. Wait for recovery.`;
+                            }
+                            return "Right-click for actions (View in Journal · Open Position Sizer Pyramid)";
+                          })()}>
+                        {(() => {
+                          if (pyramidState.level === "full") {
+                            return (
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
+                                    data-testid="acs-pyramid-full"
+                                    style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff", minWidth: 56, textAlign: "center" }}>
+                                🔺 Full
+                              </span>
+                            );
+                          }
+                          if (pyramidState.level === "prorated") {
+                            return (
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold"
+                                    data-testid="acs-pyramid-prorated"
+                                    style={{ background: "linear-gradient(135deg, #fbbf24, #f59e0b)", color: "#451a03", minWidth: 56, textAlign: "center" }}>
+                                +{pyramidState.profitPct.toFixed(1)}%
+                              </span>
+                            );
+                          }
+                          if (pyramidState.level === "blocked") {
+                            const shortReason =
+                              pyramidState.reason === "ceiling" ? "Ceiling" :
+                              pyramidState.reason === "budget"  ? "Budget"  :
+                              "Below";
+                            return (
+                              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium"
+                                    data-testid={`acs-pyramid-blocked-${pyramidState.reason}`}
+                                    style={{ background: "var(--surface-2)", color: "var(--ink-3)", minWidth: 56, textAlign: "center", border: "1px solid var(--border)" }}>
+                                ⛔ {shortReason}
+                              </span>
+                            );
+                          }
+                          // n/a (options)
+                          return <span style={{ color: "var(--ink-4)", fontSize: 11 }}>—</span>;
+                        })()}
                       </td>
                       <td className="px-2.5 py-2.5 text-right">
                         <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-bold"

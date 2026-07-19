@@ -259,6 +259,109 @@ function evaluateCeiling(
   return { passed: true, maxTotalNotional, projectedNotional };
 }
 
+// ─────────────────────────────────────────────────────────────────
+// ACS Pyramid Screener
+//
+// Fast client-side classifier for the Active Campaign Summary's
+// Pyramid column. Uses only fields already on EnrichedPosition + the
+// portfolio equity — no priceLookup, no 21 EMA fetch. Result is a
+// SCREENER, not a verdict: Rule 1 (Location) can't be checked without
+// live 21 EMA, so the sizer remains the source of truth for a full
+// go/no-go decision. This helper tells the trader which campaigns
+// are worth even opening the sizer for.
+//
+// Gates evaluated here (matches the sizer where cheap):
+//   Rule 6 (Ceiling)  — pos_size_pct ≥ 25% NAV → blocked
+//   Rule 3 (Budget)   — risk_dollars ≥ 0.50% × NAV → blocked
+//                       (assumes Normal mode as the ACS default; the
+//                        sizer uses the live MCT mode. Under-reports
+//                        blocks when the trader is on Pilot 0.25%.)
+//   Rule 2 (Progress) — pyramid_pct spectrum (full / prorated / block)
+//
+// Ordering: option positions short-circuit to 'n/a'. Blocks are
+// checked strongest-first (Ceiling → Budget → Progress) so the
+// displayed reason is the most severe / permanent one.
+// ─────────────────────────────────────────────────────────────────
+
+export type PyramidScreenerLevel = "full" | "prorated" | "blocked" | "n/a";
+export type PyramidScreenerReason = "progress" | "ceiling" | "budget" | "option";
+
+export interface PyramidScreenerState {
+  level: PyramidScreenerLevel;
+  /** Profit % vs last held buy — same field as EnrichedPosition.pyramid_pct.
+   *  Included even on blocked/n_a so the UI can still surface the number. */
+  profitPct: number;
+  reason?: PyramidScreenerReason;
+  /** Short human-readable qualifier, e.g. "26.4% NAV" or "0.62% > 0.50%" —
+   *  drives the tooltip / chip subtext. */
+  detail?: string;
+  /** For prorated: 0-1 multiplier (profit%/5). Matches sizer Rule 2. */
+  multiplier?: number;
+}
+
+/** ACS default budget assumption. Normal mode (0.50%). The sizer uses
+ *  the live MCT-picked mode; the screener can't know that without an
+ *  extra fetch, so it under-reports Budget-blocks when the trader is
+ *  on Pilot (0.25%) and over-reports when they've upshifted to Max. */
+export const PYRAMID_SCREENER_DEFAULT_TOL_PCT = 0.5;
+
+export function classifyPyramidScreener(args: {
+  isOption: boolean;
+  pyramidPct: number;
+  posSizePct: number;
+  /** At-risk magnitude in $ (EnrichedPosition.risk_dollars, always ≥ 0). */
+  riskDollars: number;
+  equity: number;
+}): PyramidScreenerState {
+  const { isOption, pyramidPct, posSizePct, riskDollars, equity } = args;
+
+  if (isOption) {
+    return { level: "n/a", profitPct: 0, reason: "option" };
+  }
+
+  // Rule 6 — Ceiling. Position already at/above the campaign cap.
+  if (posSizePct >= PYRAMID_CAMPAIGN_CEILING_PCT) {
+    return {
+      level: "blocked",
+      profitPct: pyramidPct,
+      reason: "ceiling",
+      detail: `${posSizePct.toFixed(1)}% NAV`,
+    };
+  }
+
+  // Rule 3 — Budget. Assumes Normal mode; see comment above.
+  if (equity > 0) {
+    const budget = (equity * PYRAMID_SCREENER_DEFAULT_TOL_PCT) / 100;
+    if (riskDollars > budget && budget > 0) {
+      const riskPctNlv = (riskDollars / equity) * 100;
+      return {
+        level: "blocked",
+        profitPct: pyramidPct,
+        reason: "budget",
+        detail: `${riskPctNlv.toFixed(2)}% > ${PYRAMID_SCREENER_DEFAULT_TOL_PCT.toFixed(2)}%`,
+      };
+    }
+  }
+
+  // Rule 2 — Progress. pyramid_pct is (current - lastHeldBuy) / lastHeldBuy × 100.
+  if (pyramidPct < 0) {
+    return {
+      level: "blocked",
+      profitPct: pyramidPct,
+      reason: "progress",
+      detail: `${pyramidPct.toFixed(1)}%`,
+    };
+  }
+  if (pyramidPct >= PYRAMID_FULL_SIZE_TRIGGER_PCT) {
+    return { level: "full", profitPct: pyramidPct };
+  }
+  return {
+    level: "prorated",
+    profitPct: pyramidPct,
+    multiplier: pyramidPct / PYRAMID_FULL_SIZE_TRIGGER_PCT,
+  };
+}
+
 export function computePyramidSizing(input: PyramidSizerInputs): PyramidSizerResults {
   const { equity, entry, atrPct, ema21, keyLevel, tolPct, heldLots, currentPrice, lastHeldBuyPrice } = input;
 
