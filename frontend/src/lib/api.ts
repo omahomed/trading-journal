@@ -304,6 +304,14 @@ export interface SR8AnalyzedPosition {
   early_warn: boolean;
   fetch_failed: boolean;
   fetch_error: string;
+  // Migration 048 anchor fields (added 2026-07-18). activation_nlv is
+  // the fixed campaign NLV at SR8 activation; anchor_source distinguishes
+  // "activation" (fixed anchor drove target_dollars) from "live_fallback"
+  // (position pre-dates backfill / hasn't hit +50% cushion yet — live NLV
+  // used, badge accordingly). Null for legacy responses served during
+  // deploy handoff; frontends should treat null as live_fallback.
+  activation_nlv: number | null;
+  anchor_source: "activation" | "live_fallback" | null;
 }
 
 export interface SR8MonitorResponse {

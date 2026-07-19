@@ -69,6 +69,66 @@ function StateChip({ state }: { state: string }) {
   );
 }
 
+// AnchorChip — surfaces migration-048's activation anchor on the
+// calculator's output. Two states:
+//   activation    — the position's SR8 anchor trio is populated;
+//                   Quick/QS targets used the fixed activation NLV.
+//                   Green chip with the exact NLV + date + core.
+//   live_fallback — anchor fields are null; calc fell back to live NAV
+//                   (subject to the pre-2026-07-18 NAV-inflation bug).
+//                   Amber chip pointing operators to
+//                   scripts/sr8_activation_backfill.py.
+function AnchorChip({
+  anchorSource, activationNlv, activationDate, coreShares,
+}: {
+  anchorSource: "activation" | "live_fallback";
+  activationNlv: number | null;
+  activationDate: string | null;
+  coreShares: number | null;
+}) {
+  const anchored = anchorSource === "activation" && activationNlv != null;
+  if (anchored) {
+    const dateChunk = activationDate ? ` · ${activationDate}` : "";
+    const coreChunk = coreShares != null ? ` · core ${Math.round(coreShares)} sh` : "";
+    return (
+      <div
+        data-testid="sr8-trim-anchor-chip"
+        className="flex items-center gap-2 rounded-[10px] px-3 py-2 text-[11.5px]"
+        style={{
+          background: "color-mix(in oklab, var(--up) 12%, var(--surface))",
+          border: "1px solid color-mix(in oklab, var(--up) 30%, var(--border))",
+          color: "var(--up)",
+        }}
+      >
+        <span className="font-bold">🔒 Anchored</span>
+        <span style={{ color: "var(--ink-3)" }}>
+          Quick/QS targets computed from {formatCurrency(activationNlv as number, { decimals: 0 })}{dateChunk}{coreChunk}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div
+      data-testid="sr8-trim-fallback-chip"
+      className="flex items-center gap-2 rounded-[10px] px-3 py-2 text-[11.5px]"
+      style={{
+        background: "color-mix(in oklab, var(--warn) 10%, var(--surface))",
+        border: "1px solid color-mix(in oklab, var(--warn) 30%, var(--border))",
+        color: "#a87108",
+      }}
+    >
+      <span className="font-bold">⚠️ Live-NAV fallback</span>
+      <span style={{ color: "var(--ink-3)" }}>
+        This position pre-dates the backfill or hasn&apos;t crossed +50% cushion yet. Trim targets use live NAV — subject to the pre-2026-07-18 inflation bug. Run{" "}
+        <code style={{ background: "var(--surface-2)", padding: "1px 4px", borderRadius: 4, fontSize: "10.5px" }}>
+          scripts/sr8_activation_backfill.py
+        </code>
+        {" "}to anchor.
+      </span>
+    </div>
+  );
+}
+
 function CushionTierBadge({ tier }: { tier: SR7CushionTier }) {
   const tones: Record<SR7CushionTier, { bg: string; fg: string; text: string }> = {
     gt50: { bg: "color-mix(in oklab, #08a86b 12%, var(--surface))", fg: "#16a34a", text: ">50% cushion" },
@@ -153,6 +213,20 @@ export function SR8TrimCalculator({ positions, preselectedTradeId }: Props) {
         Computes recommended share count to sell when a sell rule fires on an SR8 position.
         Pure calculator — take the number to your broker.
       </div>
+
+      {/* Anchor-source chip — shows whether the selected position's
+          Quick/QS targets are anchored to activation-day NLV (the fix)
+          or fell back to live NAV (pre-2026-07-18 behavior, subject to
+          the NAV-inflation bug). Nothing rendered when there's no
+          computed result yet (empty selection / invalid input). */}
+      {result && position && (
+        <AnchorChip
+          anchorSource={result.anchorSource}
+          activationNlv={position.sr8_activation_nlv ?? null}
+          activationDate={position.sr8_activation_date ?? null}
+          coreShares={position.sr8_core_shares ?? null}
+        />
+      )}
 
       {/* ─── Inputs row ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

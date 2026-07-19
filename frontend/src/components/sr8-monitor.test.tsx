@@ -79,6 +79,11 @@ function makePosition(overrides: Partial<any> = {}) {
     early_warn: false,
     fetch_failed: false,
     fetch_error: "",
+    // Migration 048 anchor fields (defaults render the fallback chip
+    // in the AnchorCell — tests that want the "anchored" state
+    // override activation_nlv + anchor_source explicitly).
+    activation_nlv: null,
+    anchor_source: "live_fallback",
     ...overrides,
   };
 }
@@ -506,6 +511,38 @@ describe("Sr8Monitor — Action / Hold sections (Commit 3)", () => {
     const retryBtn = screen.getByTestId("sr8-retry-DELL") as HTMLButtonElement;
     expect(retryBtn.disabled).toBe(false);
     expect(retryBtn.textContent).toContain("Retry");
+  });
+
+  test("anchor cell: 'live' fallback chip when activation_nlv is null", async () => {
+    // Legacy or below-+50%-cushion positions have activation_nlv=null
+    // and anchor_source='live_fallback'. The Anchor column renders a
+    // muted "live" chip so operators see at a glance which rows are
+    // still on the pre-2026-07-18 target formula.
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({ ticker: "LGCY", activation_nlv: null, anchor_source: "live_fallback" }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    expect(await screen.findByTestId("sr8-anchor-fallback-LGCY")).toHaveTextContent(/live/i);
+  });
+
+  test("anchor cell: anchored chip shows MM/DD from b1_date when activation_nlv set", async () => {
+    mMonitor.mockResolvedValue(makeResponse({
+      positions: [
+        makePosition({
+          ticker: "DELL",
+          b1_date: "2026-04-06",  // b1 date; MM/DD → 04/06
+          activation_nlv: 702_924,
+          anchor_source: "activation",
+        }),
+      ],
+    }));
+    render(<Sr8Monitor navColor="#e5484d" />);
+    const chip = await screen.findByTestId("sr8-anchor-DELL");
+    expect(chip.textContent).toMatch(/04\/06/);
+    // Tooltip carries the full NLV so operators can read it on hover.
+    expect(chip.getAttribute("title") || "").toMatch(/\$702,924/);
   });
 
   test("ENTRY-tier row (defensive fallback) shows '/ building' in the % NLV column", async () => {

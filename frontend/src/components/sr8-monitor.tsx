@@ -153,7 +153,10 @@ const HOLD_NUMERIC_KEYS = new Set<keyof SR8AnalyzedPosition>([
 ]);
 type HoldSortKey =
   | "ticker" | "last_signal" | "current_pct_nlv" | "shares_held"
-  | "avg_price" | "current_price" | "unreal_dollars" | "unreal_pct";
+  | "avg_price" | "current_price" | "unreal_dollars" | "unreal_pct"
+  // "anchor" is a display-only column (activation date + NLV chip);
+  // not sortable — clicking the header no-ops (guarded in onSortHold).
+  | "anchor";
 
 export function Sr8Monitor({ navColor }: { navColor: string }) {
   const [nlv, setNlv] = useState<number>(DEFAULT_NLV);
@@ -360,7 +363,13 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
         // user-facing column label is "Signal" — see HoldSection header.)
         va = signalDisplay(a.current_tier).severity;
         vb = signalDisplay(b.current_tier).severity;
-      } else if (HOLD_NUMERIC_KEYS.has(sort.key)) {
+      } else if (sort.key === "anchor") {
+        // "anchor" is display-only (onSortHold guards this key), but keep
+        // a stable comparator here in case a caller ever routes past
+        // that guard.
+        va = String(a.activation_nlv ?? 0);
+        vb = String(b.activation_nlv ?? 0);
+      } else if (HOLD_NUMERIC_KEYS.has(sort.key as keyof SR8AnalyzedPosition)) {
         va = Number((a as unknown as Record<string, unknown>)[sort.key] ?? 0);
         vb = Number((b as unknown as Record<string, unknown>)[sort.key] ?? 0);
       } else {
@@ -376,9 +385,12 @@ export function Sr8Monitor({ navColor }: { navColor: string }) {
   }, [holds, sort]);
 
   const onSortHold = (key: HoldSortKey) => {
+    // "anchor" is display-only (activation-date chip). No stable sort
+    // semantic when half the rows are on live_fallback (no anchor).
+    if (key === "anchor") return;
     setSort(s => s.key === key
       ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
-      : { key, dir: HOLD_NUMERIC_KEYS.has(key) || key === "last_signal" ? "desc" : "asc" });
+      : { key, dir: HOLD_NUMERIC_KEYS.has(key as keyof SR8AnalyzedPosition) || key === "last_signal" ? "desc" : "asc" });
   };
 
   // Per-row Retry — triggers a backend refresh which re-runs the engine
@@ -783,6 +795,7 @@ function HoldSection({ holds, sort, onSort, navColor, rowLoading, onRetry }: {
                   ["ticker", "Ticker", "left"],
                   ["last_signal", "Signal", "left"],
                   ["current_pct_nlv", "% NLV / target", "right"],
+                  ["anchor", "Anchor", "right"],
                   ["shares_held", "Shares", "right"],
                   ["avg_price", "Avg", "right"],
                   ["current_price", "Price", "right"],
@@ -823,6 +836,50 @@ function HoldSection({ holds, sort, onSort, navColor, rowLoading, onRetry }: {
   );
 }
 
+// AnchorCell — surfaces the migration-048 activation anchor on each
+// hold row. When activation_nlv is set (backfill or live capture),
+// the cell shows a compact date chip with a tooltip carrying the
+// full NLV + derived Quick/QS target shares. When null (position
+// pre-dates the backfill, hasn't crossed +50% cushion yet, or the
+// row is a legacy shape), we render a muted "live" chip so the
+// operator sees at a glance which rows are still on the fallback.
+function AnchorCell({ p }: { p: SR8AnalyzedPosition }) {
+  const anchored = p.anchor_source === "activation" && p.activation_nlv != null;
+  if (!anchored) {
+    return (
+      <span
+        data-testid={`sr8-anchor-fallback-${p.ticker}`}
+        className="inline-block px-1.5 py-0.5 rounded text-[9.5px] font-semibold"
+        style={{ background: "var(--warn-soft)", color: "#a87108" }}
+        title="Live-NAV fallback: this position pre-dates the backfill or hasn't crossed +50% cushion yet. Quick/QS targets fall back to live NAV — subject to the pre-2026-07-18 inflation bug. Run scripts/sr8_activation_backfill.py to anchor."
+      >
+        live
+      </span>
+    );
+  }
+  // Compact activation date chip. Tooltip carries the full NLV and the
+  // derived Quick / Quicksand share targets so the trader sees "the
+  // ladder still has teeth" without opening the Trim Calculator.
+  const anchorNlv = p.activation_nlv as number;
+  const price = p.current_price ?? 0;
+  const qShs = price > 0 ? Math.round((anchorNlv * 0.10) / price) : 0;
+  const qsShs = price > 0 ? Math.round((anchorNlv * 0.05) / price) : 0;
+  const b1Iso = p.b1_date || "";
+  // b1_date is YYYY-MM-DD; render MM/DD for column density.
+  const shortDate = b1Iso.length >= 10 ? `${b1Iso.slice(5, 7)}/${b1Iso.slice(8, 10)}` : "—";
+  const nlvStr = `$${Math.round(anchorNlv).toLocaleString()}`;
+  return (
+    <span
+      data-testid={`sr8-anchor-${p.ticker}`}
+      className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold"
+      style={{ background: "color-mix(in oklab, var(--up) 10%, var(--surface-2))", color: "var(--up)", fontFamily: mono }}
+      title={`Anchored to ${nlvStr} on B1 date ${b1Iso}. Derived Quick target ${qShs} shs; Quicksand target ${qsShs} shs. See migration 048 / mors/monitor.py docstring.`}
+    >
+      {shortDate}
+    </span>
+  );
+}
+
 function HoldRow({ p, retrying, onRetry }: {
   p: SR8AnalyzedPosition;
   retrying: boolean;
@@ -853,6 +910,7 @@ function HoldRow({ p, retrying, onRetry }: {
           </span>
         </td>
         <td className="px-3 py-2.5 text-right" style={{ color: "var(--ink-4)", fontFamily: mono }}>—</td>
+        <td className="px-3 py-2.5 text-right"><AnchorCell p={p} /></td>
         <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
           {Math.round(p.shares_held).toLocaleString()}
         </td>
@@ -907,6 +965,7 @@ function HoldRow({ p, retrying, onRetry }: {
           / {isEntry ? "building" : `${p.tier_pct_nlv.toFixed(p.tier_pct_nlv >= 10 ? 0 : 2)}% tgt`}
         </span>
       </td>
+      <td className="px-3 py-2.5 text-right"><AnchorCell p={p} /></td>
       <td className="px-3 py-2.5 text-right" style={{ fontFamily: mono }}>
         {Math.round(p.shares_held).toLocaleString()}
       </td>

@@ -4535,6 +4535,11 @@ def _sr8_fetch_failed_row(pos: dict[str, Any], err_msg: str) -> dict[str, Any]:
         "early_warn": False,
         "fetch_failed": True,
         "fetch_error": err_msg[:200],
+        # Migration 048 anchor pass-through. Failed fetches surface the
+        # stored anchor if any (helps operators see WHY a position was
+        # anchored even when today's replay failed).
+        "activation_nlv": pos.get("activation_nlv"),
+        "anchor_source": "activation" if pos.get("activation_nlv") else "live_fallback",
     }
 
 
@@ -4602,6 +4607,16 @@ def _sr8_enrich(pos: dict[str, Any], r: dict[str, Any]) -> dict[str, Any]:
         "early_warn": bool(early_warn),
         "fetch_failed": False,
         "fetch_error": "",
+        # Migration 048 anchor: pass through so the frontend can render
+        # the "Anchored / Live-NAV fallback" chip on the SR8 Monitor
+        # + Trim Calculator. anchor_source is populated by analyze();
+        # activation_nlv came in via _sr8_load_db_positions (falls back
+        # to None when the row hasn't been backfilled / hasn't hit +50%).
+        "activation_nlv": (
+            float(r.get("activation_nlv"))
+            if r.get("activation_nlv") is not None else None
+        ),
+        "anchor_source": str(r.get("anchor_source") or "live_fallback"),
     }
 
 
