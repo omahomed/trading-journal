@@ -18,7 +18,7 @@ import { NumberFieldCell, ReadOnlyFieldCell } from "./mobile-form-fields";
  * Mobile Position Sizer — tab-switching shell + per-tab implementations.
  *
  * Tabs (mirrors desktop order):
- *   - volatility  → New Position Sizer (vol-sizer lib)
+ *   - volatility  → New Entry (vol-sizer lib)
  *   - scalein     → Scale In Sizer (inline math)
  *   - pyramid     → Pyramid Sizer (inline math)
  *   - trim        → Trim Sizer (inline math + LIFO walk)

@@ -195,7 +195,7 @@ async function fillVolTabInputs(opts: {
 }) {
   // Switch to the Volatility tab.
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+    fireEvent.click(screen.getByRole("button", { name: /New Entry/ }));
   });
 
   const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
@@ -248,7 +248,7 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
   test("legacy 4-tile UI is gone: no Tech Stop / 1x / 1.5x / 2x ATR scenario cards", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+      fireEvent.click(screen.getByRole("button", { name: /New Entry/ }));
     });
 
     expect(screen.queryByTestId("scenario-tech-stop")).not.toBeInTheDocument();
@@ -392,7 +392,7 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+      fireEvent.click(screen.getByRole("button", { name: /New Entry/ }));
     });
     const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
     await act(async () => { fireEvent.change(ticker, { target: { value: "DELL" } }); });
@@ -420,7 +420,7 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     } as any);
     render(<PositionSizer navColor="#6366f1" />);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /New Position Sizer/ }));
+      fireEvent.click(screen.getByRole("button", { name: /New Entry/ }));
     });
     const ticker = screen.getByPlaceholderText("XYZ") as HTMLInputElement;
     await act(async () => { fireEvent.change(ticker, { target: { value: "IPO" } }); });

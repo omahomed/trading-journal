@@ -9,7 +9,7 @@ import { SearchSelect } from "./search-select";
 type SizerTab = "volatility" | "scalein" | "pyramid" | "trim" | "options";
 
 const TABS: { key: SizerTab; label: string; icon: string }[] = [
-  { key: "volatility", label: "New Position Sizer", icon: "⚖️" },
+  { key: "volatility", label: "New Entry", icon: "⚖️" },
   { key: "scalein", label: "Scale In Sizer", icon: "📐" },
   { key: "pyramid", label: "Pyramid Sizer", icon: "🔺" },
   { key: "trim", label: "Trim (Sell Down)", icon: "✂️" },
@@ -674,13 +674,30 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         <h2 className="text-[18px] font-semibold flex items-center gap-2">
           {TABS.find(t => t.key === tab)?.icon} {TABS.find(t => t.key === tab)?.label}
         </h2>
-        <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
-          {tab === "volatility" && "Composite stop from the LOWER of (Entry − 1 ATR) or (Key Level − max(0.5 ATR, 1%)). Shares = Risk Budget ÷ Stop Distance, capped at 15% NLV (5% for young IPOs)."}
-          {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
-          {tab === "pyramid" && "Per-lot risk-accounted add sizing. Gated by 4 rules: location (≤ 21EMA + 1 ATR), progress (last buy up ≥ 5%), budget (mode% × NAV − Σ lot risks), and 25% NAV campaign ceiling."}
-          {tab === "trim" && "Calculate shares to sell to reach a desired weight, with LIFO P&L estimation."}
-          {tab === "options" && "Size option positions using risk budget. Premium = max risk."}
-        </div>
+        {tab === "volatility" ? (
+          // Principle statement for the risk-first sizing model — echoes
+          // the "Position Sizer" header's serif-italic + accent treatment.
+          // Formula documentation lives in "View Sizer Rules" below.
+          <div
+            className="mt-3 mb-1 text-center italic text-[16px] leading-relaxed"
+            style={{
+              fontFamily: "var(--font-fraunces), Georgia, serif",
+              color: "var(--ink-2)",
+              letterSpacing: "0.01em",
+            }}
+          >
+            Position weight is the output of the{" "}
+            <span style={{ color: navColor, fontWeight: 500 }}>stop</span>,
+            never the input of conviction.
+          </div>
+        ) : (
+          <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
+            {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
+            {tab === "pyramid" && "Per-lot risk-accounted add sizing. Gated by 4 rules: location (≤ 21EMA + 1 ATR), progress (last buy up ≥ 5%), budget (mode% × NAV − Σ lot risks), and 25% NAV campaign ceiling."}
+            {tab === "trim" && "Calculate shares to sell to reach a desired weight, with LIFO P&L estimation."}
+            {tab === "options" && "Size option positions using risk budget. Premium = max risk."}
+          </div>
+        )}
       </div>
 
       {/* Pyramid Rules Expander — six-rule composite model. */}

@@ -35,7 +35,7 @@ export const NAV: NavGroup[] = [
       { id: "logbuy", label: "Log Buy", href: "/log-buy" },
       { id: "logsell", label: "Log Sell", href: "/log-sell" },
       { id: "sizer", label: "Position Sizer", href: "/position-sizer" },
-      { id: "sizer:volatility", label: "New Position Sizer", parentPage: "sizer", tab: "volatility" },
+      { id: "sizer:volatility", label: "New Entry", parentPage: "sizer", tab: "volatility" },
       { id: "sizer:scalein", label: "Scale In Sizer", parentPage: "sizer", tab: "scalein" },
       { id: "sizer:pyramid", label: "Pyramid Sizer", parentPage: "sizer", tab: "pyramid" },
       { id: "sizer:trim", label: "Trim / Sell Down", parentPage: "sizer", tab: "trim" },
