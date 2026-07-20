@@ -1487,7 +1487,7 @@ function PyramidRulesExpander() {
           <li>Budget = Mode% × NAV; headroom = budget − Σ (held lots × max(0, entry − stop))</li>
           <li>Total notional ≤ 25% NAV (appreciation-inclusive)</li>
         </ol>
-        <p className="mt-2 mb-1"><strong className="text-m-text">Sizing:</strong> composite = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%)). Shares = min(headroom / dist, 5% NAV / entry) × progress mult.</p>
+        <p className="mt-2 mb-1"><strong className="text-m-text">Sizing:</strong> composite = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level). Shares = min(headroom / dist, 5% NAV / entry) × progress mult.</p>
         <p className="mt-2 text-[11px]"><strong className="text-m-text">Broker note:</strong> every fill needs a trailing stop set at 21 EMA − 0.5 ATR (rising only). The output card includes the exact stop price to place.</p>
       </div>
     </details>

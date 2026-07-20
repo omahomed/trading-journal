@@ -196,17 +196,17 @@ describe("computePyramidSizing — size math (rule 4)", () => {
       entry: 100,
       atrPct: 5,
       ema21: 95,
-      keyLevel: 95, // Key Level candidate = 95 − max(2.5, 1) = 92.5
+      keyLevel: 95, // Key Level candidate = 95 − max(0.5×5%×95, 1%×95) = 95 − 2.375 = 92.625
       tolPct: 0.5,
       currentPrice: 96, // ≤ ema21 + 1 ATR = 100  ✓
       lastHeldBuyPrice: 90, // up 6.67% → multiplier 1
       heldLots: [], // no existing risk
     });
-    // budget = 50K. stop = min(95, 92.5) = 92.5 → dist = 7.5
-    // risk_bound = floor(50_000 / 7.5) = 6666
+    // budget = 50K. stop = min(95, 92.625) = 92.625 → dist = 7.375
+    // risk_bound = floor(50_000 / 7.375) = 6779
     // notional_cap = floor(5% × 10M / 100) = 5000
     // → binding = notional_cap
-    expect(r.riskBoundShares).toBe(6666);
+    expect(r.riskBoundShares).toBe(6779);
     expect(r.notionalCapShares).toBe(5000);
     expect(r.finalShares).toBe(5000);
     expect(r.bind).toBe("notional_cap");
@@ -226,13 +226,14 @@ describe("computePyramidSizing — size math (rule 4)", () => {
       lastHeldBuyPrice: 90,
       heldLots: [],
     });
-    // budget = 1000, dist = 100 − min(95, 92 − 2.5) = 100 − 89.5 = 10.5
-    // risk_bound = floor(1000 / 10.5) = 95
+    // budget = 1000, dist = 100 − min(95, 92 − 2.3) = 100 − 89.7 = 10.3
+    // (buffer = max(0.5×5%×92, 92×1%) = max(2.3, 0.92) = 2.3, keyed to KL 92)
+    // risk_bound = floor(1000 / 10.3) = 97
     // notional_cap = floor(5% × 400K / 100) = 200
     // → risk-bound wins
-    expect(r.riskBoundShares).toBe(95);
+    expect(r.riskBoundShares).toBe(97);
     expect(r.notionalCapShares).toBe(200);
-    expect(r.finalShares).toBe(95);
+    expect(r.finalShares).toBe(97);
     expect(r.bind).toBe("risk");
   });
 
@@ -248,12 +249,13 @@ describe("computePyramidSizing — size math (rule 4)", () => {
       lastHeldBuyPrice: 100 / 1.025, // gives +2.5% → multiplier 0.5
       heldLots: [],
     });
-    // preProgress = min(risk_bound, notional_cap). At entry 100, atr 5%:
-    //   dist = 100 - min(95, 92-2.5) = 100-89.5 = 10.5
-    //   risk_bound = floor(1000/10.5) = 95; notional_cap = 200; preProgress = 95
-    //   × 0.5 = 47 (floored)
+    // preProgress = min(risk_bound, notional_cap). At entry 100, atr 5%, KL 92:
+    //   buffer = max(0.5×5%×92, 92×1%) = 2.3
+    //   dist = 100 - min(95, 92-2.3) = 100-89.7 = 10.3
+    //   risk_bound = floor(1000/10.3) = 97; notional_cap = 200; preProgress = 97
+    //   × 0.5 = 48 (floored)
     expect(r.progress.multiplier).toBeCloseTo(0.5, 2);
-    expect(r.finalShares).toBe(47);
+    expect(r.finalShares).toBe(48);
     expect(r.bind).toBe("progress");
   });
 });

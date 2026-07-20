@@ -13,12 +13,12 @@ import {
 
 // Reusable defaults: DELL-style "calm 4.5% ATR" name, NLV $400K, Normal
 // mode (0.50% risk budget = $2000). Key Level chosen to make the
-// composite land at ~$167.40 (structural stop wider than 1 ATR floor).
+// composite land at ~$167.51 (structural stop wider than 1 ATR floor).
 const DELL_BASE = {
   equity: 400_000,
   entry: 176.21,
   atrPct: 4.5,
-  keyLevel: 171.365, // yields keyLevelBuffer = 171.365 - 3.965 = 167.40
+  keyLevel: 171.365, // yields keyLevelBuffer = 171.365 − 3.856 = 167.51 (buffer = 0.5 × 4.5% × 171.365)
   tolPct: 0.5,
 };
 
@@ -29,21 +29,21 @@ const COHR_BASE = {
   equity: 400_000,
   entry: 246.53,
   atrPct: 9.6,
-  keyLevel: 240.0, // keyLevelBuffer = 240 - 11.83 = 228.17 > atrFloor 222.86 → ATR wins
+  keyLevel: 240.0, // keyLevelBuffer = 240 − 11.52 = 228.48 > atrFloor 222.86 → ATR wins
   tolPct: 0.5,
 };
 
 describe("computeCompositeStop", () => {
   it("picks the LOWEST of the two candidates (widest stop = most defensive)", () => {
     const c = computeCompositeStop({ entry: 176.21, atrPct: 4.5, keyLevel: 171.365 });
-    // atrFloor = 176.21 − 7.9295 = 168.28
-    // keyLevelBuffer = 171.365 − max(3.965, 1.76) = 171.365 − 3.965 = 167.40
-    // composite = min(168.28, 167.40) = 167.40 → key_level_buffer wins
+    // atrFloor = 176.21 − 7.9295 = 168.28  (still entry-based)
+    // keyLevelBuffer = 171.365 − max(3.856, 1.714) = 171.365 − 3.856 = 167.51
+    // composite = min(168.28, 167.51) = 167.51 → key_level_buffer wins
     expect(c.winner).toBe("key_level_buffer");
-    expect(c.price).toBeCloseTo(167.4, 2);
-    expect(c.distance).toBeCloseTo(8.81, 2);
+    expect(c.price).toBeCloseTo(167.51, 2);
+    expect(c.distance).toBeCloseTo(8.70, 2);
     expect(c.candidates.atrFloor).toBeCloseTo(168.28, 2);
-    expect(c.candidates.keyLevelBuffer).toBeCloseTo(167.4, 2);
+    expect(c.candidates.keyLevelBuffer).toBeCloseTo(167.51, 2);
   });
 
   it("falls back to the 1 ATR floor when Key Level candidate is tighter", () => {
@@ -58,15 +58,15 @@ describe("computeCompositeStop", () => {
 
   it("buffer basis: 0.5 ATR wins under high volatility (>= 2% ATR)", () => {
     const c = computeCompositeStop({ entry: 100, atrPct: 5, keyLevel: 95 });
-    // 0.5 ATR = 2.50; 1% of entry = 1.00 → 0.5 ATR wins
-    expect(c.candidates.bufferApplied).toBeCloseTo(2.5, 4);
+    // 0.5 ATR (KL-based) = 0.5 × 5% × 95 = 2.375; 1% of KL = 0.95 → 0.5 ATR wins
+    expect(c.candidates.bufferApplied).toBeCloseTo(2.375, 4);
     expect(c.candidates.bufferBasis).toBe("half_atr");
   });
 
   it("buffer basis: 1% floor wins under LOW volatility (< 2% ATR)", () => {
     const c = computeCompositeStop({ entry: 100, atrPct: 1.5, keyLevel: 95 });
-    // 0.5 ATR = 0.75; 1% of entry = 1.00 → 1% floor wins
-    expect(c.candidates.bufferApplied).toBeCloseTo(1.0, 4);
+    // 0.5 ATR (KL-based) = 0.5 × 1.5% × 95 = 0.7125; 1% of KL = 0.95 → 1% floor wins
+    expect(c.candidates.bufferApplied).toBeCloseTo(0.95, 4);
     expect(c.candidates.bufferBasis).toBe("one_percent");
   });
 
@@ -161,33 +161,36 @@ describe("computeVolatilitySizing — DELL scenario (calm 4.5% ATR)", () => {
     expect(results.riskBudget).toBe(2000);
   });
 
-  it("composite stop at $167.40 (Key Level candidate wins over 1 ATR floor $168.28)", () => {
+  it("composite stop at $167.51 (Key Level candidate wins over 1 ATR floor $168.28)", () => {
     expect(results.composite.winner).toBe("key_level_buffer");
-    expect(results.composite.price).toBeCloseTo(167.4, 2);
-    expect(results.composite.distance).toBeCloseTo(8.81, 2);
+    expect(results.composite.price).toBeCloseTo(167.51, 2);
+    expect(results.composite.distance).toBeCloseTo(8.70, 2);
   });
 
-  it("candidate shares = 2000 / 8.81 = 227", () => {
-    expect(results.candidateShares).toBe(227);
+  it("candidate shares = floor(2000 / 8.70) = 229", () => {
+    expect(results.candidateShares).toBe(229);
   });
 
   it("ceiling shares at 15% = floor(400K × 0.15 / 176.21) = 340", () => {
     expect(results.ceilingShares).toBe(340);
   });
 
-  it("final shares = 227 (risk-bound, not ceiling-bound)", () => {
-    expect(results.finalShares).toBe(227);
+  it("final shares = 229 (risk-bound, not ceiling-bound)", () => {
+    expect(results.finalShares).toBe(229);
     expect(results.bind).toBe("risk");
   });
 
   it("position notional ≈ $40K = 10% NLV", () => {
-    expect(results.positionCost).toBeCloseTo(227 * 176.21, 2);
+    expect(results.positionCost).toBeCloseTo(229 * 176.21, 2);
     expect(results.positionPct).toBeCloseTo(10, 0);
   });
 
-  it("realized risk = shares × distance ≈ $2000", () => {
-    expect(results.riskIfStopped).toBeCloseTo(2000, 0);
-    expect(results.riskPct).toBeCloseTo(0.5, 2);
+  it("realized risk = shares × distance ≈ $1992 (floor(2000/8.70) leaves $8 unused)", () => {
+    // Floor to whole shares undershoots the risk budget by
+    // distance × frac_shares_dropped ≈ 8.70 × 0.87 ≈ $7.57. Pin the
+    // exact realized-risk value so drift here surfaces immediately.
+    expect(results.riskIfStopped).toBeCloseTo(1992.46, 2);
+    expect(results.riskPct).toBeCloseTo(0.498, 3);
   });
 
   it("scale-out avg exit ≈ 1 ATR below entry ($168.28), matching risk budget", () => {

@@ -5,7 +5,7 @@
  *   Risk Budget ($)   = NLV × Mode%                       (Pilot 0.25 / Normal 0.50 / Offense 0.75)
  *   Composite Stop    = MIN of:
  *                        • Entry − 1 ATR21                (ATR floor — never sizes tighter than 1 ATR)
- *                        • Key Level − max(0.5 ATR, 1%)   (structural low or key MA the user types from the chart)
+ *                        • Key Level − max(0.5 ATR, 1%)   (buffer rebased to Key Level: 0.5 × ATR% × KL, or KL × 1%)
  *   Stop Distance ($) = Entry − Composite Stop
  *   Raw shares        = Risk Budget ÷ Stop Distance
  *   Final shares      = min(Raw, Ceiling × NLV ÷ Entry)
@@ -181,11 +181,15 @@ export function computeCompositeStop(args: {
   const atrFloor = entry - atrPerShare;
 
   // Buffer under Key Level scales with the name's volatility: max of
-  // half an ATR or 1% of entry. Under a hot 9.6% name, 0.5 ATR wins;
-  // under a calm 2% name, the 1% floor kicks in so we don't stop
-  // uselessly tight when the name barely moves.
-  const halfAtrBuffer = atrPerShare / 2;
-  const onePctBuffer = entry * 0.01;
+  // half an ATR or 1% of the KEY LEVEL. Both parts of the max are
+  // rebased to keyLevel — the buffer represents a margin BELOW that
+  // level (not below entry), so it should scale with the level's own
+  // price. Under a hot 9.6% name, 0.5 ATR wins; under a calm 2% name,
+  // the 1% floor kicks in so we don't stop uselessly tight when the
+  // name barely moves. The 1-ATR floor above stays entry-based —
+  // that's the ATR-derived stop from entry, a different concept.
+  const halfAtrBuffer = (keyLevel * atrPct) / 200;
+  const onePctBuffer = keyLevel * 0.01;
   const bufferApplied = Math.max(halfAtrBuffer, onePctBuffer);
   const bufferBasis: CompositeStop["candidates"]["bufferBasis"] =
     halfAtrBuffer >= onePctBuffer ? "half_atr" : "one_percent";

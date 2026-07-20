@@ -716,7 +716,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             </ol>
             <p className="mb-1"><strong>Sizing:</strong></p>
             <ul className="list-disc ml-4 mb-2">
-              <li>Composite stop = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%)) — same shape as the Volatility Sizer.</li>
+              <li>Composite stop = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level) — same shape as the Volatility Sizer.</li>
               <li>risk_bound_shares = headroom ÷ stop_distance</li>
               <li>notional_cap_shares = <strong>{PYRAMID_ADD_CAP_PCT}%</strong> NAV ÷ Entry (per-add cap)</li>
               <li>final_shares = min(risk_bound, notional_cap) × progress_multiplier, then clipped by the 25% ceiling.</li>
@@ -740,7 +740,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               <li><strong>Composite Stop</strong> = LOWEST of:
                 <ul className="list-disc ml-4">
                   <li>Entry − 1 ATR21 (the ATR floor — never sizes tighter than 1 ATR)</li>
-                  <li>Key Level − max(0.5 ATR, 1%) (structural low or key MA you typed from the chart)</li>
+                  <li>Key Level − max(0.5 ATR, 1%) of Key Level (structural low or key MA you typed from the chart)</li>
                 </ul>
               </li>
               <li><strong>Raw shares</strong> = Risk Budget ÷ (Entry − Composite Stop)</li>

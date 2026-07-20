@@ -388,13 +388,14 @@ describe("MobilePositionSizer — Volatility composite-stop model", () => {
     // values. Now the user only types Key Level (no auto-source).
     fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "171.365" } });
 
-    // atrPerShare = 176.21 × 4.5% = 7.929
+    // atrPerShare (entry-based, 1-ATR floor) = 176.21 × 4.5% = 7.929
     // atrFloor = 176.21 − 7.929 = 168.28
-    // keyLevel − max(0.5×7.929, 1.7621) = 171.365 − 3.965 = 167.40
-    // composite = min(168.28, 167.40) = 167.40 → distance 8.81
-    // raw = floor(2000/8.81) = 227; ceiling shares = 340; final = 227.
+    // buffer (KL-based) = max(0.5×4.5%×171.365, 171.365×1%) = max(3.856, 1.714) = 3.856
+    // keyLevelBuffer = 171.365 − 3.856 = 167.51
+    // composite = min(168.28, 167.51) = 167.51 → distance 8.70
+    // raw = floor(2000/8.70) = 229; ceiling shares = 340; final = 229.
     const sharesEl = await screen.findByTestId("audit-shares");
-    await waitFor(() => expect(sharesEl.textContent).toMatch(/227/), { timeout: 2000 });
+    await waitFor(() => expect(sharesEl.textContent).toMatch(/229/), { timeout: 2000 });
 
     expect(screen.getByTestId("bind-badge").textContent).toBe("Risk-bound");
     // Composite subtitle mentions Key Level winner.

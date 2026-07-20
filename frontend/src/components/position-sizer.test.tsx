@@ -260,7 +260,7 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     expect(screen.queryByText(/Overweight \(12\.5%\)/)).not.toBeInTheDocument();
   });
 
-  test("DELL canonical case → composite stop wins on Key Level, 227 shares, risk-bound", async () => {
+  test("DELL canonical case → composite stop wins on Key Level, 229 shares, risk-bound", async () => {
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => expect(indicator.textContent).toMatch(/Normal \(0\.50%\)/));
@@ -268,7 +268,7 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     await fillVolTabInputs({
       ticker: "DELL",
       entry: "176.21",
-      keyLevel: "171.365",   // yields composite = 167.40 (Key Level wins)
+      keyLevel: "171.365",   // yields composite = 167.51 (Key Level wins; buffer rebased to KL)
       atr: "4.5",
       equity: "400000",
     });
@@ -277,9 +277,9 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
       fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
     });
 
-    // Final shares 227 from the DELL example in the design conversation.
+    // Final shares 229 = floor(2000 / 8.70) with buffer rebased to Key Level.
     const finalShares = await screen.findByTestId("final-shares");
-    expect(finalShares.textContent).toMatch(/227/);
+    expect(finalShares.textContent).toMatch(/229/);
 
     // Bind badge = Risk-bound (Ceiling at 15% would be 340 shs).
     expect(screen.getByTestId("bind-badge").textContent).toBe("Risk-bound");
@@ -366,10 +366,10 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
 
     const stored = JSON.parse(localStorage.getItem("ps_prefill") || "{}");
     expect(stored.ticker).toBe("DELL");
-    expect(stored.shares).toBe(227);
+    expect(stored.shares).toBe(229);
     expect(stored.price).toBe(176.21);
     expect(stored.stopMode).toBe("price");
-    expect(stored.stop).toBeCloseTo(167.4, 1);   // composite stop
+    expect(stored.stop).toBeCloseTo(167.51, 1);   // composite stop (KL-based buffer)
     expect(stored.atrMultiplier).toBeUndefined();
     expect(stored.action).toBe("new");
   });
