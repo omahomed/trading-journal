@@ -117,8 +117,12 @@ export function MFactor({ navColor }: { navColor: string }) {
       {/* ═══ Key Metrics ═══ */}
       <div className="grid grid-cols-5 gap-3 mb-6">
         {[
-          { label: "NASDAQ", value: `${price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
-          { label: "REF HIGH", value: `${(data.reference_high || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: data.reference_high_date || "", gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)" },
+          { label: "NASDAQ", value: `${price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: data.data_as_of ? `As of ${data.data_as_of}` : "", gradient: "linear-gradient(135deg, #6366f1, #818cf8)" },
+          // Drawdown from Ref High is one of the correction-declaration
+          // conditions (paired with 50 SMA confirmed closure) — surface
+          // it alongside the level so the "how far are we" question is
+          // answered at a glance without hunting through cards.
+          { label: "REF HIGH", value: `${(data.reference_high || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `${((data.drawdown_pct ?? 0) >= 0 ? "+" : "")}${(data.drawdown_pct ?? 0).toFixed(2)}%${data.reference_high_date ? ` · ${data.reference_high_date}` : ""}`, gradient: "linear-gradient(135deg, #7c3aed, #a78bfa)" },
           { label: "21 EMA", value: `${(data.ema21 || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `${((price - (data.ema21 || 1)) / (data.ema21 || 1) * 100).toFixed(2)}%`, gradient: "linear-gradient(135deg, #10b981, #34d399)" },
           { label: "50 SMA", value: `${(data.sma50 || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `${((price - (data.sma50 || 1)) / (data.sma50 || 1) * 100).toFixed(2)}%`, gradient: "linear-gradient(135deg, #f97316, #fb923c)" },
           { label: "200 SMA", value: `${(data.sma200 || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `${((price - (data.sma200 || 1)) / (data.sma200 || 1) * 100).toFixed(2)}%`, gradient: "linear-gradient(135deg, #1e40af, #3b82f6)" },
