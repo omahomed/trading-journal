@@ -31,7 +31,7 @@ from functools import lru_cache
 
 import psycopg2
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from datetime import datetime, date
 import pandas as pd
 import jwt
@@ -66,7 +66,24 @@ limiter = Limiter(key_func=_rate_limit_key)
 
 app = FastAPI(title="MO Money API", version="1.0.0")
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# slowapi's default handler returns a bare 429 JSONResponse with no
+# CORS headers. FastAPI exception handlers short-circuit the middleware
+# chain, so CORSMiddleware never gets to attach Access-Control-Allow-Origin
+# on that response. The browser then blocks the response as a CORS
+# violation and reports "Failed to fetch" — the caller can't tell they
+# hit a rate limit vs a total network failure. Wrap the slowapi handler
+# with a shim that attaches our CORS headers (same helper _reject uses
+# for 401/403/500 short-circuits below).
+def _rate_limit_exceeded_handler_with_cors(request: Request, exc: RateLimitExceeded) -> Response:
+    response = _rate_limit_exceeded_handler(request, exc)
+    for k, v in _cors_headers_for(request).items():
+        response.headers[k] = v
+    return response
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler_with_cors)
 
 # CORS — allow React dev server + Vercel production
 app.add_middleware(

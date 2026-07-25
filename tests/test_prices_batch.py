@@ -214,3 +214,31 @@ def test_rate_limit_decorator(batch_stubs):
         assert last_status == 429
     finally:
         main.limiter.enabled = False
+
+
+def test_rate_limit_429_carries_cors_headers(batch_stubs):
+    """slowapi's default handler drops the origin-echo header, so before
+    the shim the browser converted every 429 into "Failed to fetch" with
+    no way for the caller to tell they'd hit a rate limit vs a genuine
+    network failure. Regression guard: trip the limit, then confirm the
+    429 response includes Access-Control-Allow-Origin for a matching
+    origin (motrading.net, which is baked into the CORS regex)."""
+    state, client = batch_stubs
+    main = state["main"]
+    state["behavior"]["X"] = "ok"
+    main.limiter.enabled = True
+    main.limiter.reset()
+    try:
+        # Burn through the limit with 10 calls.
+        for _ in range(10):
+            client.get("/api/prices/lookup-batch?tickers=X",
+                       headers={**_auth_headers(), "Origin": "https://motrading.net"})
+        # 11th call trips the limiter → 429.
+        r = client.get("/api/prices/lookup-batch?tickers=X",
+                       headers={**_auth_headers(), "Origin": "https://motrading.net"})
+        assert r.status_code == 429
+        assert r.headers.get("access-control-allow-origin") == "https://motrading.net", \
+            "429 responses must carry CORS headers so browsers surface the error " \
+            "instead of blocking it as a CORS violation (Failed to fetch)."
+    finally:
+        main.limiter.enabled = False
