@@ -797,6 +797,12 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               <li><strong>Risk-bound:</strong> the composite stop drives share count. Most trades in Normal / Pilot mode.</li>
               <li><strong>Ceiling-bound:</strong> the 15% (or 5%) cap drives share count. Reachable only in Offense mode on calm names — a market-timing discipline hiding inside a sizing formula.</li>
             </ul>
+            <p className="mb-1"><strong>Broker Stop (hard exit at Entry − 0.75× ATR21):</strong></p>
+            <ul className="list-disc ml-4 mb-2">
+              <li>Data-driven safety net — a backtest of prior entries found trades breaching −0.75× ATR21 from the entry price have shown ~0% win rate</li>
+              <li>Tighter than the composite (which is bound to ≥1 ATR) — this is a SEPARATE decision from sizing</li>
+              <li>Place at the broker immediately after fill so the position auto-exits if the platform is unavailable when the level breaks</li>
+            </ul>
             <p className="mb-1"><strong>Scale-Out Stops (3-leg ladder, B1 lots):</strong></p>
             <ul className="list-disc ml-4">
               <li>Legs at Entry − 0.5 / 1.0 / 1.5 ATR (shares split floor / floor / remainder)</li>
@@ -1150,6 +1156,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             <VolatilityResults
               ticker={ticker}
               entry={entry}
+              equity={equity}
               tolPct={SIZING_MODES[sizingMode].pct}
               modeName={SIZING_MODES_BASE[sizingMode].label}
               results={volResults}
@@ -1410,10 +1417,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 // composite winner subtitle, bind indicator, and a locked 0.5/1.0/1.5
 // ATR scale-out ladder. All math lives in @/lib/vol-sizer.
 function VolatilityResults({
-  ticker, entry, tolPct, modeName, results, onSendToLogBuy,
+  ticker, entry, equity, tolPct, modeName, results, onSendToLogBuy,
 }: {
   ticker: string;
   entry: number;
+  equity: number;
   tolPct: number;
   modeName: string;
   results: VolSizerResults;
@@ -1526,22 +1534,33 @@ function VolatilityResults({
         </div>
       </div>
 
-      {/* Scale-out ladder — locked 0.5/1.0/1.5 ATR. */}
-      <ScaleOutStopsCard
-        ladder={scaleOut}
-        atrPerShare={results.atrPerShare}
-        accent="#0ea5a4"
-        onSendLadder={(ladder) => {
-          onSendToLogBuy({
-            ticker,
-            shares: ladder.totalShares,
-            price: ladder.entry,
-            stopMode: "ladder",
-            ladderShares: [ladder.legs[0].shares, ladder.legs[1].shares, ladder.legs[2].shares],
-            action: "new",
-          });
-        }}
-      />
+      {/* Stops row — two tiles side by side matching the answer row.
+          Left: Broker Stop (hard safety-net, place at broker after fill).
+          Right: Scale-Out ladder (proactive 3-leg trim at 0.5/1.0/1.5 ATR). */}
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <BrokerStopCard
+          entry={entry}
+          atrPerShare={results.atrPerShare}
+          finalShares={results.finalShares}
+          equity={equity}
+          accent="#d97706"
+        />
+        <ScaleOutStopsCard
+          ladder={scaleOut}
+          atrPerShare={results.atrPerShare}
+          accent="#0ea5a4"
+          onSendLadder={(ladder) => {
+            onSendToLogBuy({
+              ticker,
+              shares: ladder.totalShares,
+              price: ladder.entry,
+              stopMode: "ladder",
+              ladderShares: [ladder.legs[0].shares, ladder.legs[1].shares, ladder.legs[2].shares],
+              action: "new",
+            });
+          }}
+        />
+      </div>
 
       {results.warnings.length > 0 && (
         <div className="mt-3">
@@ -1788,6 +1807,77 @@ function PyramidResults({
           in the API for future UI expansions (e.g. tooltip callouts). */}
       <div className="sr-only" aria-hidden>
         {location.ceilingPrice} {ceiling.maxTotalNotional}
+      </div>
+    </div>
+  );
+}
+
+// Hard-exit broker stop at Entry − 0.75 × ATR21. Data-driven safety net:
+// the user's own backtest of prior entries found trades that breached
+// −0.75× ATR21 from the entry price recovered ~0% of the time. Placed at
+// the broker immediately after fill so the position auto-exits if the
+// platform is unavailable when the level breaks.
+//
+// Tighter than the composite stop (which is bound to ≥1 ATR) — so it's
+// a SEPARATE decision from sizing. Sizing uses the composite; the broker
+// stop is where you actually park protection at the venue.
+const BROKER_STOP_ATR_MULT = 0.75;
+function BrokerStopCard({
+  entry, atrPerShare, finalShares, equity, accent,
+}: {
+  entry: number;
+  atrPerShare: number;
+  finalShares: number;
+  equity: number;
+  accent: string;
+}) {
+  const dist = BROKER_STOP_ATR_MULT * atrPerShare;
+  const price = entry - dist;
+  const distPct = entry > 0 ? (dist / entry) * 100 : 0;
+  const risk = finalShares * dist;
+  const riskPctNlv = equity > 0 ? (risk / equity) * 100 : 0;
+
+  return (
+    <div className="p-4 rounded-[12px] relative overflow-hidden"
+         data-testid="broker-stop"
+         style={{
+           border: "1px solid var(--border)",
+           borderLeft: `4px solid ${accent}`,
+           background: `color-mix(in oklab, ${accent} 4%, var(--surface))`,
+         }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+          Broker Stop
+        </div>
+        <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-2 py-0.5 rounded-[6px]"
+              style={{ background: `color-mix(in oklab, ${accent} 15%, transparent)`, color: accent }}>
+          Hard Exit · 0.75× ATR
+        </span>
+      </div>
+
+      <div className="text-[11px] mb-2" style={{ color: "var(--ink-4)" }}>
+        {finalShares} shs @ {formatCurrency(entry)} · ATR = {formatCurrency(atrPerShare)}/share
+      </div>
+
+      <div className="flex items-baseline gap-3">
+        <span className="text-[24px] font-semibold privacy-mask"
+              data-testid="broker-stop-price"
+              style={{ fontFamily: "var(--font-jetbrains), monospace", color: accent }}>
+          {formatCurrency(price)}
+        </span>
+        <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+          −{formatCurrency(dist)} · {distPct.toFixed(2)}% below entry
+        </span>
+      </div>
+
+      <div className="mt-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
+        Risk if hit: <strong style={{ color: accent }}>−{formatCurrency(risk, { decimals: 0 })}</strong>
+        <span style={{ color: "var(--ink-4)" }}> ({riskPctNlv.toFixed(2)}% NLV)</span>
+      </div>
+
+      <div className="mt-3 pt-2 text-[11px] leading-snug"
+           style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
+        Backtest of prior entries: trades breaching <strong style={{ color: "var(--ink-3)" }}>−0.75× ATR21</strong> from entry have shown ~0% win rate. Park this order at the broker immediately after fill.
       </div>
     </div>
   );

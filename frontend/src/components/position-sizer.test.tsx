@@ -455,4 +455,29 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     // Old locked-percent ladder is gone.
     expect(ladder.textContent).not.toMatch(/−3%|−5%|−7%/);
   });
+
+  test("Broker Stop tile renders at Entry − 0.75× ATR21 (data-driven hard exit)", async () => {
+    render(<PositionSizer navColor="#6366f1" />);
+    const indicator = await screen.findByTestId("sizer-mode-indicator");
+    await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
+
+    // DELL canonical: entry 176.21, ATR 4.5% → atrPerShare 7.9295
+    //   broker stop = 176.21 − 0.75 × 7.9295 = 170.26 (rounded to 2dp)
+    await fillVolTabInputs({
+      ticker: "DELL",
+      entry: "176.21",
+      keyLevel: "171.365",
+      atr: "4.5",
+      equity: "400000",
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Calculate Size/ }));
+    });
+
+    const broker = await screen.findByTestId("broker-stop");
+    expect(broker.textContent).toMatch(/Broker Stop/i);
+    expect(broker.textContent).toMatch(/Hard Exit · 0\.75× ATR/);
+    const price = await screen.findByTestId("broker-stop-price");
+    expect(price.textContent).toMatch(/\$170\.26/);
+  });
 });
