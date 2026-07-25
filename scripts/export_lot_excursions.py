@@ -52,6 +52,41 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+
+def _load_dotenv_if_present() -> None:
+    """Load repo-root .env into os.environ (skip anything already set).
+
+    Standalone parser — the project doesn't depend on python-dotenv and
+    the script needs to work from a bare `python3 scripts/…` invocation
+    without a wrapping `set -a; source .env` incantation. Without this,
+    db_layer.get_db_config() falls through to the localhost default and
+    the query hits an old dev DB that predates migration 016 →
+    "column s.instrument_type does not exist".
+
+    Skipped when DATABASE_URL is already set (Railway/CI/pre-exported
+    shell), or when .env is missing. Not a general-purpose parser —
+    just KEY=value lines, ignores # comments + blanks, strips
+    surrounding quotes so `DATABASE_URL="postgres://..."` works.
+    """
+    import os as _os
+    if _os.getenv("DATABASE_URL"):
+        return
+    env_path = REPO_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in _os.environ:
+            _os.environ[key] = val
+
+
+_load_dotenv_if_present()
+
 from api.lot_excursions import compute_all_lot_excursions  # noqa: E402
 
 
