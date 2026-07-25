@@ -991,6 +991,16 @@ export function MobilePositionSizer() {
             </div>
           )}
 
+          {/* Broker stop — hard exit at Entry − 0.75× ATR21 (data-driven). */}
+          {audit && audit.finalShares > 0 && (
+            <MobileBrokerStopCard
+              entry={entry}
+              atrPerShare={audit.atrPerShare}
+              finalShares={audit.finalShares}
+              equity={eq}
+            />
+          )}
+
           {/* Scale-out ladder. */}
           {audit && audit.finalShares > 0 && (
             <MobileScaleOutLadder ladder={audit.scaleOut} atrPerShare={audit.atrPerShare} />
@@ -2028,6 +2038,72 @@ function MiniMetric({
       {sub && (
         <div className="text-[10px] text-m-text-dim mt-0.5 font-m-num tabular-nums">{sub}</div>
       )}
+    </div>
+  );
+}
+
+// Mobile broker-stop tile — mirrors desktop's BrokerStopCard. Hard-exit
+// safety net at Entry − 0.75× ATR21 (user's backtest of prior entries
+// found breaches of this level had ~0% win rate). Amber accent to
+// signal "hard exit, place at broker immediately after fill."
+const MOBILE_BROKER_STOP_ATR_MULT = 0.75;
+const MOBILE_BROKER_STOP_ACCENT = "#d97706";
+function MobileBrokerStopCard({
+  entry, atrPerShare, finalShares, equity,
+}: {
+  entry: number;
+  atrPerShare: number;
+  finalShares: number;
+  equity: number;
+}) {
+  const dist = MOBILE_BROKER_STOP_ATR_MULT * atrPerShare;
+  const price = entry - dist;
+  const distPct = entry > 0 ? (dist / entry) * 100 : 0;
+  const risk = finalShares * dist;
+  const riskPctNlv = equity > 0 ? (risk / equity) * 100 : 0;
+  const accent = MOBILE_BROKER_STOP_ACCENT;
+
+  return (
+    <div
+      data-testid="broker-stop"
+      className="rounded-m-md border-[0.5px] border-m-border bg-m-surface px-[14px] py-[10px]"
+    >
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-m-text-dim">
+          Broker Stop
+        </div>
+        <span className="text-[9px] uppercase tracking-[0.08em] font-semibold px-1.5 py-0.5 rounded-[6px]"
+              style={{ background: `color-mix(in oklab, ${accent} 15%, transparent)`, color: accent }}>
+          Hard Exit · 0.75× ATR
+        </span>
+      </div>
+
+      <div className="text-[11px] mb-1.5 text-m-text-dim">
+        {finalShares} shs @ {formatCurrency(entry)} · ATR {formatCurrency(atrPerShare)}/sh
+      </div>
+
+      <div className="flex items-baseline gap-2.5">
+        <span
+          data-testid="broker-stop-price"
+          className="font-m-num text-[22px] font-medium tabular-nums"
+          style={{ color: accent }}
+        >
+          {formatCurrency(price)}
+        </span>
+        <span className="text-[11px] text-m-text-dim">
+          −{formatCurrency(dist)} · {distPct.toFixed(2)}% below entry
+        </span>
+      </div>
+
+      <div className="mt-1 text-[11px] text-m-text-muted">
+        Risk if hit: <strong style={{ color: accent }}>−{formatCurrency(risk, { decimals: 0 })}</strong>
+        <span className="text-m-text-dim"> ({riskPctNlv.toFixed(2)}% NLV)</span>
+      </div>
+
+      <div className="mt-1.5 pt-1.5 text-[11px] leading-snug text-m-text-dim"
+           style={{ borderTop: "1px dashed var(--m-border)" }}>
+        Backtest of prior entries: trades breaching <strong className="text-m-text-muted">−0.75× ATR21</strong> from entry have shown ~0% win rate. Park at broker immediately after fill.
+      </div>
     </div>
   );
 }

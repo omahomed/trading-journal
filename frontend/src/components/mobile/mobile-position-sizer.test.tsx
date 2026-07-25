@@ -465,6 +465,25 @@ describe("MobilePositionSizer — Volatility composite-stop model", () => {
     expect(ladder.textContent).toMatch(/−1\.50 ATR/);
     expect(ladder.textContent).not.toMatch(/−3%|−5%|−7%/);
   });
+
+  test("broker stop tile renders between Recommended and Scale-Out at Entry − 0.75× ATR21", async () => {
+    setApiMocks({ endNlv: 400_000, state: "UPTREND", price: 176.21, atrPct: 4.5 });
+    render(<MobilePositionSizer />);
+    await waitFor(() => expect(screen.getByText("$400,000")).toBeInTheDocument());
+
+    const ticker = screen.getByLabelText("Ticker symbol");
+    fireEvent.change(ticker, { target: { value: "DELL" } });
+    await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("4.5%")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Key level"), { target: { value: "171.365" } });
+
+    // 176.21 − 0.75 × (176.21 × 0.045) = 170.26 (rounded 2dp)
+    const broker = await screen.findByTestId("broker-stop");
+    expect(broker.textContent).toMatch(/Broker Stop/i);
+    expect(broker.textContent).toMatch(/Hard Exit · 0\.75× ATR/);
+    const price = await screen.findByTestId("broker-stop-price");
+    expect(price.textContent).toMatch(/\$170\.26/);
+  });
 });
 
 describe("MobilePositionSizer — Mode picker manual override", () => {
