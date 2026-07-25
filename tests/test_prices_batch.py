@@ -224,34 +224,38 @@ def test_rate_limit_decorator(batch_stubs):
         main.limiter.enabled = False
 
 
-def test_lookup_batch_nan_close_returns_error_status_not_500(batch_stubs):
-    """yfinance can return NaN as the last close (pre-market / stale bar).
-    Python's json refuses to serialize NaN → uncaught ValueError → 500 with
-    plain-text "Internal Server Error" AND no CORS headers, which the
-    browser reports as "Failed to fetch" with no diagnostic. Guard: NaN
-    closes get flagged as status='error' with price/atr_pct null."""
+def test_lookup_batch_nan_last_close_falls_back_to_prior_valid(batch_stubs):
+    """yfinance can return NaN for TODAY's close (pre-market / stale Yahoo
+    edge) while yesterday's close is fine. Before the fix, that NaN
+    poisoned JSON serialization → 500 without CORS → "Failed to fetch"
+    in the browser. Guard: walk back to the last non-NaN close and
+    return a usable price + status='ok'. Only reports error when EVERY
+    close is NaN (real data outage)."""
     state, client = batch_stubs
     state["behavior"]["NAN"] = "nan_close"
     r = _get(client, "NAN")
-    assert r.status_code == 200, f"NaN handling must not crash: {r.text[:200]}"
+    assert r.status_code == 200, f"NaN recovery must not crash: {r.text[:200]}"
     row = r.json()["results"][0]
     assert row["ticker"] == "NAN"
-    assert row["status"] == "error"
-    assert row["price"] is None
-    assert row["atr_pct"] is None
+    assert row["status"] == "ok"
+    # Fake DataFrame's second-to-last Close (rows=40 → index 38) is
+    # 100.5 + 38*0.1 = 104.3.
+    assert row["price"] == 104.3
 
 
-def test_lookup_single_nan_close_returns_503_with_cors(batch_stubs):
-    """Same NaN failure mode via the single-ticker /api/prices/lookup path.
-    Before the fix, this returned 500 without CORS headers (browser saw
-    "Failed to fetch"). After: 503 with a meaningful detail body + CORS
-    headers so the Position Sizer's error surface can render it."""
+def test_lookup_single_nan_last_close_falls_back_to_prior_valid(batch_stubs):
+    """Same graceful recovery via /api/prices/lookup — returns 200 with
+    yesterday's close instead of failing the whole request. CORS headers
+    are attached whether we return 200 or 503, so the browser gets a
+    real response either way."""
     state, client = batch_stubs
     state["behavior"]["NAN2"] = "nan_close"
     r = client.get("/api/prices/lookup?ticker=NAN2",
                    headers={**_auth_headers(), "Origin": "https://motrading.net"})
-    assert r.status_code == 503, r.text
-    assert "NaN" in r.text or "nan" in r.text.lower()
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ticker"] == "NAN2"
+    assert body["price"] == 104.3  # second-to-last close of the fake df
     assert r.headers.get("access-control-allow-origin") == "https://motrading.net"
 
 

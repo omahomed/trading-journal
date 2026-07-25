@@ -2895,15 +2895,18 @@ def price_lookup(request: Request, ticker: str = ""):
         if df.empty:
             raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}")
 
-        last_close = df["Close"].iloc[-1]
-        # yfinance can return NaN for the last bar during pre-market / on
-        # unstable Yahoo edges, and Python's json refuses to serialize NaN
-        # (raises "Out of range float values are not JSON compliant"). The
-        # batch endpoint / PriceProvider both explicitly drop NaN — mirror
-        # that here so a NaN close returns a clean 503 instead of an
-        # uncaught serialization crash post-return.
-        if pd.isna(last_close):
-            raise HTTPException(status_code=503, detail=f"Price for {t} is NaN (yfinance returned incomplete data)")
+        # Recover the most recent VALID close. yfinance regularly returns
+        # NaN for today's bar (pre-market, stale Yahoo edge, or provider
+        # hiccup) even when yesterday's bar is fine. Rather than 503-ing,
+        # walk backward to the last non-NaN close — for a research
+        # workflow, yesterday's close is a perfectly reasonable "current
+        # price" surrogate, and it beats making the user retry blindly.
+        # Only fail if EVERY close is NaN, which means the ticker has no
+        # usable data at all.
+        close_series = df["Close"].dropna()
+        if close_series.empty:
+            raise HTTPException(status_code=503, detail=f"Price for {t} has no valid closes (yfinance returned all-NaN)")
+        last_close = close_series.iloc[-1]
         price = float(last_close)
         if not math.isfinite(price) or price <= 0:
             raise HTTPException(status_code=503, detail=f"Price for {t} is invalid ({price})")
@@ -3085,10 +3088,16 @@ def _price_lookup_batch_impl(tickers: str) -> dict:
             })
             continue
 
-        last_close = df["Close"].iloc[-1]
-        # NaN close — same failure mode as /api/prices/lookup. Report as
-        # error rather than allow it to poison the JSON response.
-        if pd.isna(last_close) or not math.isfinite(float(last_close)) or float(last_close) <= 0:
+        # Recover last valid close (drops NaN bars) — same rationale as
+        # /api/prices/lookup. Only flag as error if EVERY close is NaN.
+        close_series = df["Close"].dropna()
+        if close_series.empty:
+            results.append({
+                "ticker": t, "price": None, "atr_pct": None, "status": "error",
+            })
+            continue
+        last_close = close_series.iloc[-1]
+        if not math.isfinite(float(last_close)) or float(last_close) <= 0:
             results.append({
                 "ticker": t, "price": None, "atr_pct": None, "status": "error",
             })
