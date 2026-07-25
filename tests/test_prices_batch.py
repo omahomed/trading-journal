@@ -69,6 +69,14 @@ def batch_stubs(monkeypatch):
             if b == "empty":  return pd.DataFrame()
             if b == "sparse": return _make_history_df(rows=10)
             if b == "error":  raise RuntimeError(f"yfinance simulated error for {self.t}")
+            if b == "nan_close":
+                # Simulate yfinance returning a NaN last close (real-world
+                # failure mode when Yahoo's edge serves pre-market bars).
+                # Before the sanitize-NaN fix, this crashed json serialization
+                # with "Out of range float values are not JSON compliant".
+                df = _make_history_df(rows=40)
+                df.iloc[-1, df.columns.get_loc("Close")] = float("nan")
+                return df
             return _make_history_df(rows=40)
 
     import yfinance as yf
@@ -214,6 +222,37 @@ def test_rate_limit_decorator(batch_stubs):
         assert last_status == 429
     finally:
         main.limiter.enabled = False
+
+
+def test_lookup_batch_nan_close_returns_error_status_not_500(batch_stubs):
+    """yfinance can return NaN as the last close (pre-market / stale bar).
+    Python's json refuses to serialize NaN → uncaught ValueError → 500 with
+    plain-text "Internal Server Error" AND no CORS headers, which the
+    browser reports as "Failed to fetch" with no diagnostic. Guard: NaN
+    closes get flagged as status='error' with price/atr_pct null."""
+    state, client = batch_stubs
+    state["behavior"]["NAN"] = "nan_close"
+    r = _get(client, "NAN")
+    assert r.status_code == 200, f"NaN handling must not crash: {r.text[:200]}"
+    row = r.json()["results"][0]
+    assert row["ticker"] == "NAN"
+    assert row["status"] == "error"
+    assert row["price"] is None
+    assert row["atr_pct"] is None
+
+
+def test_lookup_single_nan_close_returns_503_with_cors(batch_stubs):
+    """Same NaN failure mode via the single-ticker /api/prices/lookup path.
+    Before the fix, this returned 500 without CORS headers (browser saw
+    "Failed to fetch"). After: 503 with a meaningful detail body + CORS
+    headers so the Position Sizer's error surface can render it."""
+    state, client = batch_stubs
+    state["behavior"]["NAN2"] = "nan_close"
+    r = client.get("/api/prices/lookup?ticker=NAN2",
+                   headers={**_auth_headers(), "Origin": "https://motrading.net"})
+    assert r.status_code == 503, r.text
+    assert "NaN" in r.text or "nan" in r.text.lower()
+    assert r.headers.get("access-control-allow-origin") == "https://motrading.net"
 
 
 def test_rate_limit_429_carries_cors_headers(batch_stubs):

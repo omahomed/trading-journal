@@ -2895,7 +2895,18 @@ def price_lookup(request: Request, ticker: str = ""):
         if df.empty:
             raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}")
 
-        price = float(df["Close"].iloc[-1])
+        last_close = df["Close"].iloc[-1]
+        # yfinance can return NaN for the last bar during pre-market / on
+        # unstable Yahoo edges, and Python's json refuses to serialize NaN
+        # (raises "Out of range float values are not JSON compliant"). The
+        # batch endpoint / PriceProvider both explicitly drop NaN — mirror
+        # that here so a NaN close returns a clean 503 instead of an
+        # uncaught serialization crash post-return.
+        if pd.isna(last_close):
+            raise HTTPException(status_code=503, detail=f"Price for {t} is NaN (yfinance returned incomplete data)")
+        price = float(last_close)
+        if not math.isfinite(price) or price <= 0:
+            raise HTTPException(status_code=503, detail=f"Price for {t} is invalid ({price})")
 
         # ATR calculation — matches Streamlit: ATR% = SMA(TR,21) / SMA(Low,21) * 100.
         # When fewer than 21 bars are available we now return 0.0 instead of the
@@ -2909,23 +2920,31 @@ def price_lookup(request: Request, ticker: str = ""):
                 (df["High"] - df["Close"].shift(1)).abs(),
                 (df["Low"] - df["Close"].shift(1)).abs(),
             ], axis=1).max(axis=1)
-            sma_tr = float(tr.tail(21).mean())
-            sma_low = float(df["Low"].tail(21).mean())
-            atr_21 = sma_tr
-            if sma_low > 0:
-                atr_pct = (sma_tr / sma_low) * 100
+            sma_tr_raw = tr.tail(21).mean()
+            sma_low_raw = df["Low"].tail(21).mean()
+            # Guard NaN + non-finite so a bad bar doesn't poison the payload.
+            if pd.notna(sma_tr_raw) and math.isfinite(float(sma_tr_raw)):
+                atr_21 = float(sma_tr_raw)
+            if (pd.notna(sma_low_raw) and math.isfinite(float(sma_low_raw))
+                    and float(sma_low_raw) > 0 and atr_21 > 0):
+                atr_pct = (atr_21 / float(sma_low_raw)) * 100
 
         # 21 EMA + 50 SMA — canonical MA definitions used across MCT /
         # cascades / MO RS backtest. `ewm(span=21, adjust=False)` matches
         # the Streamlit / MCT engines exactly; `rolling(50).mean()` is
         # the standard 50-bar simple moving average. Both return null on
-        # sparse history so the frontend hides the cell.
+        # sparse history so the frontend hides the cell — also null on
+        # NaN so a bad bar doesn't take out the whole response.
         ema_21 = None
         sma_50 = None
         if len(df) >= 21:
-            ema_21 = float(df["Close"].ewm(span=21, adjust=False).mean().iloc[-1])
+            raw = df["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
+            if pd.notna(raw) and math.isfinite(float(raw)):
+                ema_21 = float(raw)
         if len(df) >= 50:
-            sma_50 = float(df["Close"].tail(50).mean())
+            raw = df["Close"].tail(50).mean()
+            if pd.notna(raw) and math.isfinite(float(raw)):
+                sma_50 = float(raw)
 
         result = {
             "ticker": t,
@@ -3066,7 +3085,15 @@ def _price_lookup_batch_impl(tickers: str) -> dict:
             })
             continue
 
-        price = float(df["Close"].iloc[-1])
+        last_close = df["Close"].iloc[-1]
+        # NaN close — same failure mode as /api/prices/lookup. Report as
+        # error rather than allow it to poison the JSON response.
+        if pd.isna(last_close) or not math.isfinite(float(last_close)) or float(last_close) <= 0:
+            results.append({
+                "ticker": t, "price": None, "atr_pct": None, "status": "error",
+            })
+            continue
+        price = float(last_close)
 
         if len(df) < 21:
             # Sparse history (recent IPO etc.). Surface last close but flag
@@ -3078,15 +3105,21 @@ def _price_lookup_batch_impl(tickers: str) -> dict:
             continue
 
         # Full ATR computation — identical formula to /api/prices/lookup.
+        # NaN-safe: bad bars produce 0 rather than a JSON-poison NaN.
         tr = pd.concat([
             df["High"] - df["Low"],
             (df["High"] - df["Close"].shift(1)).abs(),
             (df["Low"] - df["Close"].shift(1)).abs(),
         ], axis=1).max(axis=1)
-        sma_tr = float(tr.tail(21).mean())
-        sma_low = float(df["Low"].tail(21).mean())
-        atr_pct = (sma_tr / sma_low) * 100 if sma_low > 0 else 0.0
-        atr_21 = sma_tr
+        sma_tr_raw = tr.tail(21).mean()
+        sma_low_raw = df["Low"].tail(21).mean()
+        atr_21 = 0.0
+        atr_pct = 0.0
+        if pd.notna(sma_tr_raw) and math.isfinite(float(sma_tr_raw)):
+            atr_21 = float(sma_tr_raw)
+        if (pd.notna(sma_low_raw) and math.isfinite(float(sma_low_raw))
+                and float(sma_low_raw) > 0 and atr_21 > 0):
+            atr_pct = (atr_21 / float(sma_low_raw)) * 100
 
         payload = {
             "ticker": t,
