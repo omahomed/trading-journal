@@ -237,6 +237,13 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // paste into keyLevelStr. Null when the ticker has < 21 / < 50 bars.
   const [ema21, setEma21] = useState<number | null>(null);
   const [sma50, setSma50] = useState<number | null>(null);
+  // priceLookup can fail silently (rate limit, yfinance hiccup, auth
+  // expiry) — instead of swallowing the error, expose it so the user
+  // can retry. Empty string = no error.
+  const [priceLookupError, setPriceLookupError] = useState("");
+  // Tick counter — bumped by the Retry button to re-fire the price
+  // lookup useEffect without needing to re-type the ticker.
+  const [priceLookupRetryTick, setPriceLookupRetryTick] = useState(0);
   const [ticker, setTicker] = useState("");
   // selectedHolding is shared by Scale-In / Pyramid / Trim tabs. The
   // legacy Volatility "Audit Active Position" mode also used it but
@@ -262,24 +269,49 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   // Pyramid config
   const [pyramidRules, setPyramidRules] = useState({ trigger_pct: 5, alloc_pct: 20 });
 
-  // Auto-fetch price + ATR + 21 EMA + 50 SMA when ticker changes (debounced)
+  // Auto-fetch price + ATR + 21 EMA + 50 SMA when ticker changes (debounced).
+  // Depends on priceLookupRetryTick too — bumping that re-fires without
+  // needing to retype the ticker (used by the inline Retry button below
+  // the ticker input on failure). Errors are surfaced via priceLookupError
+  // rather than swallowed so the user can see what went wrong.
   useEffect(() => {
-    if (!ticker || ticker.length < 1) return;
+    if (!ticker || ticker.length < 1) {
+      setPriceLookupError("");
+      return;
+    }
     const timeout = setTimeout(() => {
       setFetching(true);
+      setPriceLookupError("");
       api.priceLookup(ticker).then(data => {
         if (data && !("error" in data)) {
           setEntryPrice(String(data.price));
           setAtrPct(String(data.atr_pct));
           setEma21(data.ema_21);
           setSma50(data.sma_50);
+        } else {
+          // Backend returned a JSON body with an `error` field —
+          // surface the message so the user knows the fetch failed.
+          const msg = (data as { error?: string } | null)?.error || "Unknown error from price provider";
+          setPriceLookupError(msg);
         }
-      }).catch((err) => {
-        log.debug.devOnly("position-sizer", "priceLookup missing (expected)", err);
+      }).catch((err: unknown) => {
+        // Turn the thrown Error into a user-visible string. Rate-limit,
+        // yfinance 503, auth 401, network drop — all land here.
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        // Classify common cases into friendlier text; leave the raw
+        // message as a suffix so we can still diagnose from logs.
+        let friendly: string;
+        if (/429/.test(rawMsg)) friendly = "Rate limit hit — wait a minute";
+        else if (/503/.test(rawMsg)) friendly = "Price provider unavailable — try again";
+        else if (/401/.test(rawMsg)) friendly = "Auth expired — refresh the page";
+        else if (/Failed to fetch|NetworkError/i.test(rawMsg)) friendly = "Network issue — check connection";
+        else friendly = "Price lookup failed";
+        setPriceLookupError(`${friendly} · ${rawMsg}`);
+        log.debug.devOnly("position-sizer", "priceLookup failed", err);
       }).finally(() => setFetching(false));
     }, 600);
     return () => clearTimeout(timeout);
-  }, [ticker]);
+  }, [ticker, priceLookupRetryTick]);
 
   useEffect(() => {
     Promise.all([
@@ -791,6 +823,32 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
                 </div>
               )}
             </div>
+            {/* Inline error surface — previously the priceLookup failure
+                was swallowed silently, leaving the user to guess why the
+                Entry Price and MA cells weren't populating. Now the
+                actual error message + a Retry link surface below the
+                input so the failure is visible + recoverable. */}
+            {priceLookupError && (
+              <div
+                className="mt-2 flex items-center gap-2 text-[12px]"
+                style={{ color: "#e5484d" }}
+                data-testid="price-lookup-error"
+              >
+                <span>⚠ {priceLookupError}</span>
+                <button
+                  type="button"
+                  onClick={() => setPriceLookupRetryTick(t => t + 1)}
+                  className="px-2 py-0.5 rounded text-[11px] font-semibold cursor-pointer transition-colors"
+                  style={{
+                    background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
+                    color: "#e5484d",
+                    border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
+                  }}
+                >
+                  ↻ Retry
+                </button>
+              </div>
+            )}
           </Field>
         )}
 
