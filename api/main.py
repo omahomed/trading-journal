@@ -2726,6 +2726,41 @@ def trade_details(trade_id: str, portfolio: str = "CanSlim"):
     return _df_to_records(df)
 
 
+@app.get("/api/trades/{trade_id}/lot-excursions")
+def trade_lot_excursions(trade_id: str, portfolio: str = "CanSlim"):
+    """Per-lot MAE/MFE for one campaign — B1, A1, A2, … each measured
+    from its own fill_price + fill_date.
+
+    Reads (equity only; options return empty). Calls into
+    api/lot_excursions which reuses the compute_excursions_from_frame
+    math from migration 046's reconciler — same numbers as the
+    campaign-level MAE, sliced per lot.
+
+    Cost: one yfinance download per campaign (shared across lots).
+    Sidecar-only surface today; the CSV export path uses the same helper
+    via scripts/export_lot_excursions.py.
+
+    Response: `{"lots": [ {trx_id, fill_date, fill_price, shares,
+    mae_pct, mfe_pct, days_to_mae, days_to_mfe, atr21_at_fill_pct,
+    mae_atr_multiple, mfe_atr_multiple, min_low, min_low_date,
+    max_high, max_high_date, days_held, error}, … ]}`.
+    Empty `lots` when the campaign is options-only or not visible under
+    RLS.
+    """
+    from api.lot_excursions import compute_all_lot_excursions
+    try:
+        rows = compute_all_lot_excursions(
+            portfolio=portfolio,
+            trade_id=trade_id,
+            include_closed=True,
+            sleep=0.0,  # single-campaign path — no cross-campaign burst to throttle
+        )
+    except Exception as exc:
+        logging.exception("lot-excursions compute failed for %s: %s", trade_id, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to compute lot excursions: {exc}") from exc
+    return {"lots": rows}
+
+
 @app.get("/api/trades/open/details")
 def trades_open_details(portfolio: str = "CanSlim"):
     """Get all transactions for open trades (for stop loss, pyramid info)

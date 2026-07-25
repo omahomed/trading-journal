@@ -1592,6 +1592,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
           <TradeOverviewSidecar
             trade={trade}
             details={details}
+            portfolio={getActivePortfolio()}
             onClose={() => setOverviewTradeId(null)}
           />
         );

@@ -291,6 +291,39 @@ Helper scripts:
 MCP tools are session-scoped; nothing about these workflows runs from cron.
 The operator triggers each sync interactively.
 
+## Per-lot MAE research export (standing)
+
+When the user says "export lot excursions" (or "run the lot excursion
+export" / similar), run:
+
+```
+python scripts/export_lot_excursions.py
+```
+
+from repo root. Writes `output/lot_excursions_YYYY-MM-DD.csv` — one row
+per BUY lot (B1, A1, A2, …) across every equity campaign, each anchored
+to its own fill_price + fill_date with MAE / MFE / days-to-* / ATR21%
+at fill / min-low + max-high anchors. Companion to the campaign-level
+`scripts/backfill_mae_mfe.py`.
+
+Purpose: raw data for calibrating a broker-stop ATR multiple for
+A-series lots — same study that produced the 0.75× ATR21 finding for
+B1 entries. Not a workflow display; the CSV goes into an offline
+analysis session.
+
+Optional flags: `--portfolio "LTG"`, `--since 2026-01-01`,
+`--closed-only`, `--open-only`, `--out custom_path.csv`. yfinance is
+called once per campaign regardless of lot count (shared bar window,
+sliced per lot).
+
+Print the summary line the script emits at completion — row count +
+per-trx-id breakdown — so the operator sees what landed without
+opening the file.
+
+The CR right-click sidecar's per-lot MAE table hits the same math via
+`GET /api/trades/{trade_id}/lot-excursions`; display + export never
+diverge because both call `api/lot_excursions.py:compute_all_lot_excursions`.
+
 ## Backtest default rule set (active on every backtest):
 - **Mode = `terminate`**: weekly GD ends the campaign, no re-entry. "Hold winners, exit clean."
 - **Sizing = NLV-anchored**: every trim/refill is sized to (NAV + realized P&L) × 20% × cascade_frac.

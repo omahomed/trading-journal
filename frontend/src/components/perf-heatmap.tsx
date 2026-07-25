@@ -244,6 +244,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
           <TradeOverviewSidecar
             trade={trade}
             details={allDetails}
+            portfolio={getActivePortfolio()}
             onClose={() => setSelectedTrade(null)}
           />
         );

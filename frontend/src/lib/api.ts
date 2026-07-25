@@ -575,6 +575,44 @@ export interface TradeDetail {
   [key: string]: any;
 }
 
+// Per-lot excursion row from /api/trades/{trade_id}/lot-excursions.
+// One row per BUY (B1, A1, A2, …). Each anchored to its own
+// fill_price + fill_date. Same shape as scripts/export_lot_excursions.py
+// so display + export never diverge. `error` is null on success or a
+// short string ("no_bars", "no_bars_in_window", "bad_lot",
+// "compute_failed", "compute_exception") when a specific lot couldn't
+// be computed — the others still populate.
+export interface LotExcursion {
+  trade_id: string;
+  portfolio_name: string | null;
+  portfolio_id: number | null;
+  ticker: string;
+  status: string;
+  closed_date: string | null;
+  trx_id: string;
+  fill_date: string;
+  fill_price: number | null;
+  shares: number | null;
+  window_end_date: string;
+  days_held: number | null;
+  mae_pct: number | null;
+  mfe_pct: number | null;
+  days_to_mae: number | null;
+  days_to_mfe: number | null;
+  atr21_at_fill_pct: number | null;
+  mae_atr_multiple: number | null;
+  mfe_atr_multiple: number | null;
+  min_low: number | null;
+  min_low_date: string | null;
+  max_high: number | null;
+  max_high_date: string | null;
+  realized_pl: number | null;
+  error: string | null;
+}
+export interface LotExcursionsResponse {
+  lots: LotExcursion[];
+}
+
 // One persisted BUY × SELL pairing from the lot_closures table (migration
 // 017). Returned alongside details by /api/trades/open/details and
 // /api/trades/recent so the trade-journal frontend can render per-row
@@ -718,6 +756,15 @@ export const api = {
 
   tradeDetails: (tradeId: string, portfolio = getActivePortfolio()) =>
     fetchJSON<TradeDetail[]>(`/api/trades/details/${tradeId}?portfolio=${portfolio}`),
+
+  // Per-lot MAE/MFE for a single campaign. Each lot (B1, A1, A2, …) is
+  // measured from ITS OWN fill_price + fill_date through the campaign's
+  // close (or today for open campaigns). Answers the "was this add-on
+  // well-timed?" question the campaign-level MAE (anchored to B1) can't.
+  // Same math as scripts/export_lot_excursions.py so display and export
+  // never diverge. See api/lot_excursions.py.
+  lotExcursions: (tradeId: string, portfolio = getActivePortfolio()) =>
+    fetchJSON<LotExcursionsResponse>(`/api/trades/${tradeId}/lot-excursions?portfolio=${portfolio}`),
 
   tradesOpenDetails: (portfolio = getActivePortfolio()) =>
     fetchJSON<TradeDetailsBundle>(`/api/trades/open/details?portfolio=${portfolio}`),

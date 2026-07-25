@@ -6,6 +6,8 @@
 //   - Header: ticker, trade_id, status, P&L, close button
 //   - Flight Deck grid: Entry / Exit / P&L / Return / R-Multiple
 //   - Transaction Trail: date / action / shares / price / value / rule
+//   - Per-Lot Excursion: MAE/MFE for each BUY lot (equity only, lazy-
+//     loaded on mount via /api/trades/{trade_id}/lot-excursions)
 //   - Notes: Entry (buy_notes) + Exit (sell_notes) when present
 //
 // Callers pass the trade summary + full details list (the component
@@ -13,7 +15,9 @@
 // the standard is-option predicate — multiplier folded into value,
 // unit label flipped to "Contracts".
 
-import type { TradePosition, TradeDetail } from "@/lib/api";
+import { useEffect, useState } from "react";
+import type { TradePosition, TradeDetail, LotExcursion } from "@/lib/api";
+import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 
 const mono = "var(--font-jetbrains), monospace";
@@ -22,11 +26,123 @@ function pctColor(v: number): string {
   return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)";
 }
 
-export function TradeOverviewSidecar({ trade, details, onClose }: {
+// Per-lot MAE/MFE table. Highlights the worst MAE in red (deepest
+// drawdown among the campaign's lots) — visual anchor for "which
+// add-on tested you the most?" Rows sorted trx_id-natural (B1 < A1 <
+// A2). Error rows collapse to a single "—" placeholder cell so a bad
+// lot doesn't hide the healthy ones.
+function LotExcursionTable({ rows }: { rows: LotExcursion[] }) {
+  const sorted = [...rows].sort((a, b) => (a.trx_id || "").localeCompare(b.trx_id || ""));
+  // Worst MAE = most negative pct across success rows. Used to red-
+  // highlight the one lot that took the deepest hit from its fill.
+  const worstMae = sorted.reduce<number | null>((min, r) => {
+    if (r.error !== null || r.mae_pct == null) return min;
+    return min === null || r.mae_pct < min ? r.mae_pct : min;
+  }, null);
+
+  return (
+    <div className="rounded-[8px] overflow-hidden" data-testid="lot-excursion-table"
+         style={{ border: "1px solid var(--border)" }}>
+      <table className="w-full text-[10px]" style={{ borderCollapse: "collapse" }}>
+        <thead><tr>
+          {["Lot", "Fill Date", "Fill $", "MAE %", "× ATR", "MFE %", "Days Held"].map(h => (
+            <th key={h} className="text-left px-2.5 py-1.5 text-[9px] uppercase font-semibold"
+                style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+              {h}
+            </th>
+          ))}
+        </tr></thead>
+        <tbody>{sorted.map((r) => {
+          const isB = (r.trx_id || "").toUpperCase().startsWith("B");
+          const rowKey = `${r.trade_id}-${r.trx_id}`;
+          if (r.error !== null) {
+            return (
+              <tr key={rowKey} style={{ borderBottom: "1px solid var(--border)" }}
+                  data-testid={`lot-excursion-row-${r.trx_id}`}>
+                <td className="px-2.5 py-1.5 font-semibold" style={{ fontFamily: mono, color: isB ? "var(--ink)" : "var(--ink-3)" }}>
+                  {r.trx_id}
+                </td>
+                <td className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--ink-4)" }} colSpan={6}>
+                  {r.fill_date ?? "—"} · {r.error}
+                </td>
+              </tr>
+            );
+          }
+          const isWorstMae = worstMae != null && r.mae_pct === worstMae && r.mae_pct < 0;
+          return (
+            <tr key={rowKey} style={{ borderBottom: "1px solid var(--border)" }}
+                data-testid={`lot-excursion-row-${r.trx_id}`}>
+              <td className="px-2.5 py-1.5 font-semibold"
+                  style={{ fontFamily: mono, color: isB ? "var(--ink)" : "var(--ink-3)" }}>
+                {r.trx_id}
+              </td>
+              <td className="px-2.5 py-1.5 text-[10px]"
+                  style={{ fontFamily: mono, color: "var(--ink-4)" }}>
+                {r.fill_date}
+              </td>
+              <td className="px-2.5 py-1.5 privacy-mask"
+                  style={{ fontFamily: mono }}>
+                {r.fill_price != null ? formatCurrency(r.fill_price) : "—"}
+              </td>
+              <td className="px-2.5 py-1.5"
+                  style={{
+                    fontFamily: mono,
+                    color: isWorstMae ? "#e5484d" : (r.mae_pct != null && r.mae_pct < 0 ? "#e5484d" : "var(--ink-3)"),
+                    fontWeight: isWorstMae ? 700 : 400,
+                  }}>
+                {r.mae_pct != null ? `${r.mae_pct.toFixed(2)}%` : "—"}
+              </td>
+              <td className="px-2.5 py-1.5"
+                  style={{ fontFamily: mono, color: "var(--ink-4)" }}>
+                {r.mae_atr_multiple != null ? `${r.mae_atr_multiple.toFixed(2)}×` : "—"}
+              </td>
+              <td className="px-2.5 py-1.5"
+                  style={{
+                    fontFamily: mono,
+                    color: r.mfe_pct != null && r.mfe_pct > 0 ? "#08a86b" : "var(--ink-3)",
+                  }}>
+                {r.mfe_pct != null ? `+${r.mfe_pct.toFixed(2)}%` : "—"}
+              </td>
+              <td className="px-2.5 py-1.5"
+                  style={{ fontFamily: mono, color: "var(--ink-4)" }}>
+                {r.days_held ?? "—"}
+              </td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+    </div>
+  );
+}
+
+export function TradeOverviewSidecar({ trade, details, onClose, portfolio }: {
   trade: TradePosition;
   details: TradeDetail[];
   onClose: () => void;
+  // Portfolio for the per-lot excursions fetch. Optional — falls
+  // back to getActivePortfolio() inside the api client when omitted.
+  portfolio?: string;
 }) {
+  // Per-lot MAE/MFE — fetched on mount, cheap (one yfinance call per
+  // campaign, shared across lots). Options campaigns skip the fetch
+  // entirely — the API would return empty lots (upstream STOCK-only
+  // filter) but no reason to burn a request just to hide the result.
+  const [lotExcursions, setLotExcursions] = useState<LotExcursion[] | null>(null);
+  const [lotExcursionsErr, setLotExcursionsErr] = useState<string | null>(null);
+  const skipLotExcursions = String((trade as { instrument_type?: string }).instrument_type || "").toUpperCase() === "OPTION"
+    || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
+  useEffect(() => {
+    if (skipLotExcursions) return;
+    let cancelled = false;
+    setLotExcursions(null);
+    setLotExcursionsErr(null);
+    api.lotExcursions(trade.trade_id, portfolio)
+      .then(resp => { if (!cancelled) setLotExcursions(resp.lots || []); })
+      .catch(err => {
+        if (!cancelled) setLotExcursionsErr(err?.message || "Failed to load per-lot excursion");
+      });
+    return () => { cancelled = true; };
+  }, [trade.trade_id, portfolio, skipLotExcursions]);
   const txns = details
     .filter(d => d.trade_id === trade.trade_id)
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
@@ -194,6 +310,41 @@ export function TradeOverviewSidecar({ trade, details, onClose }: {
                   })}</tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Per-Lot Excursion — MAE/MFE anchored to EACH lot's own
+              fill. Answers "was this add-on well-timed?" the way the
+              campaign-level MAE (anchored to B1) can't. Hidden for
+              options campaigns (server returns empty lots). Loading
+              state is silent; error state is a discreet one-liner. */}
+          {!isOption && (
+            <div>
+              <div className="text-[12px] font-semibold mb-2">
+                Per-Lot Excursion
+                <span className="ml-2 text-[10px] font-normal" style={{ color: "var(--ink-4)" }}>
+                  MAE / MFE per BUY, anchored to that lot's own fill
+                </span>
+              </div>
+              {lotExcursionsErr ? (
+                <div className="text-[11px] px-3 py-2 rounded-[8px]"
+                     style={{ color: "var(--ink-4)", background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  {lotExcursionsErr}
+                </div>
+              ) : lotExcursions === null ? (
+                <div className="text-[11px] px-3 py-2 rounded-[8px]"
+                     style={{ color: "var(--ink-4)", background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  Loading …
+                </div>
+              ) : lotExcursions.length === 0 ? (
+                <div className="text-[11px] px-3 py-2 rounded-[8px]"
+                     style={{ color: "var(--ink-4)", background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  No per-lot excursion data (options-only campaign or no
+                  qualifying BUYs).
+                </div>
+              ) : (
+                <LotExcursionTable rows={lotExcursions} />
+              )}
             </div>
           )}
 
