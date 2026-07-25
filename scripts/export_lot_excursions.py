@@ -99,13 +99,24 @@ log = logging.getLogger("export_lot_excursions")
 
 # Column order for the CSV. Locked so multiple runs are diffable and
 # downstream analysis can hard-code column positions.
+#
+# P&L note (a real gotcha for downstream analysis): `realized_pl` is
+# PER-LOT — sum of lot_closures rows where buy_trx_id = this lot's
+# trx_id. NULL when the lot has no closures yet (still fully open in
+# an open campaign). `campaign_realized_pl` is the campaign total
+# (trades_summary.realized_pl) — same value across every lot of the
+# same campaign; kept for cross-check convenience. Pre-fix, "realized_pl"
+# carried the campaign total on every row, which read as if per-lot
+# but wasn't; that's why the two columns are now explicit.
 CSV_COLUMNS = [
     "portfolio_name", "trade_id", "ticker", "status", "closed_date",
-    "trx_id", "fill_date", "fill_price", "shares",
+    "trx_id", "fill_date", "fill_price", "shares", "shares_closed",
     "window_end_date", "days_held",
     "mae_pct", "mae_atr_multiple", "min_low", "min_low_date", "days_to_mae",
     "mfe_pct", "mfe_atr_multiple", "max_high", "max_high_date", "days_to_mfe",
-    "atr21_at_fill_pct", "realized_pl", "error",
+    "atr21_at_fill_pct",
+    "realized_pl", "campaign_realized_pl",
+    "error",
 ]
 
 

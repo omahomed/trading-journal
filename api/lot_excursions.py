@@ -97,7 +97,22 @@ def fetch_campaign_lots(
             s.ticker,
             s.status,
             s.closed_date,
-            s.realized_pl,
+            s.realized_pl AS campaign_realized_pl,
+            -- Per-LOT realized P&L. Sums the lot_closures rows where
+            -- THIS buy is the closed side. NULL when no closures
+            -- reference this lot (still fully open) — a real signal:
+            -- distinguishes "closed at $0" from "not closed yet".
+            -- Campaign total lives in campaign_realized_pl above.
+            (SELECT SUM(lc.realized_pl) FROM lot_closures lc
+              WHERE lc.trade_id = s.trade_id
+                AND lc.portfolio_id = s.portfolio_id
+                AND lc.buy_trx_id = b.trx_id
+            ) AS realized_pl,
+            (SELECT SUM(lc.shares) FROM lot_closures lc
+              WHERE lc.trade_id = s.trade_id
+                AND lc.portfolio_id = s.portfolio_id
+                AND lc.buy_trx_id = b.trx_id
+            ) AS shares_closed,
             b.trx_id,
             b.date AS fill_date,
             b.amount AS fill_price,
@@ -344,34 +359,45 @@ def _compute_one_lot(
 
 def _base_row(lot: dict, window_end_date: date) -> dict:
     """Skeleton output row — populated fields set to None so consumers
-    can serialize without KeyError even on error rows."""
+    can serialize without KeyError even on error rows.
+
+    Two P&L fields carry different signals:
+      * realized_pl          — per-LOT (SUM of lot_closures rows where
+                               buy_trx_id = this lot). NULL when the lot
+                               has no closures yet (still fully open).
+      * campaign_realized_pl — campaign total (trades_summary.realized_pl).
+                               Same value on every row of the same campaign;
+                               kept for cross-check convenience.
+    """
     fill_date = _as_date(lot["fill_date"])
     return {
-        "trade_id":           lot.get("trade_id"),
-        "portfolio_name":     lot.get("portfolio_name"),
-        "portfolio_id":       lot.get("portfolio_id"),
-        "ticker":             lot.get("ticker"),
-        "status":             lot.get("status"),
-        "closed_date":        _iso(lot.get("closed_date")),
-        "trx_id":             lot.get("trx_id"),
-        "fill_date":          fill_date.isoformat() if fill_date else None,
-        "fill_price":         float(lot["fill_price"]) if lot.get("fill_price") else None,
-        "shares":             float(lot["shares"]) if lot.get("shares") else None,
-        "window_end_date":    window_end_date.isoformat(),
-        "days_held":          None,
-        "mae_pct":            None,
-        "mfe_pct":            None,
-        "days_to_mae":        None,
-        "days_to_mfe":        None,
-        "atr21_at_fill_pct":  None,
-        "mae_atr_multiple":   None,
-        "mfe_atr_multiple":   None,
-        "min_low":            None,
-        "min_low_date":       None,
-        "max_high":           None,
-        "max_high_date":      None,
-        "realized_pl":        float(lot["realized_pl"]) if lot.get("realized_pl") else None,
-        "error":              None,
+        "trade_id":              lot.get("trade_id"),
+        "portfolio_name":        lot.get("portfolio_name"),
+        "portfolio_id":          lot.get("portfolio_id"),
+        "ticker":                lot.get("ticker"),
+        "status":                lot.get("status"),
+        "closed_date":           _iso(lot.get("closed_date")),
+        "trx_id":                lot.get("trx_id"),
+        "fill_date":             fill_date.isoformat() if fill_date else None,
+        "fill_price":            float(lot["fill_price"]) if lot.get("fill_price") else None,
+        "shares":                float(lot["shares"]) if lot.get("shares") else None,
+        "shares_closed":         float(lot["shares_closed"]) if lot.get("shares_closed") else None,
+        "window_end_date":       window_end_date.isoformat(),
+        "days_held":             None,
+        "mae_pct":               None,
+        "mfe_pct":               None,
+        "days_to_mae":           None,
+        "days_to_mfe":           None,
+        "atr21_at_fill_pct":     None,
+        "mae_atr_multiple":      None,
+        "mfe_atr_multiple":      None,
+        "min_low":               None,
+        "min_low_date":          None,
+        "max_high":              None,
+        "max_high_date":         None,
+        "realized_pl":           float(lot["realized_pl"]) if lot.get("realized_pl") is not None else None,
+        "campaign_realized_pl":  float(lot["campaign_realized_pl"]) if lot.get("campaign_realized_pl") is not None else None,
+        "error":                 None,
     }
 
 

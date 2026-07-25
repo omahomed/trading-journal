@@ -55,7 +55,12 @@ def _lot(**kwargs) -> dict:
         "ticker":                   "DELL",
         "status":                   "OPEN",
         "closed_date":              None,
+        # Per-LOT P&L (from lot_closures SUM by buy_trx_id) vs the
+        # campaign-wide total (trades_summary.realized_pl). Distinct
+        # signals; both flow through _base_row.
         "realized_pl":              None,
+        "campaign_realized_pl":     None,
+        "shares_closed":            None,
         "trx_id":                   "B1",
         "fill_date":                date(2026, 1, 10),
         "fill_price":               100.0,
@@ -274,10 +279,47 @@ class TestBaseRow:
         existing even on error rows. Lock the schema."""
         row = lot_excursions._base_row(_lot(), date(2026, 1, 20))
         for key in ["trade_id", "portfolio_name", "ticker", "trx_id",
-                    "fill_date", "fill_price", "shares", "status",
-                    "closed_date", "window_end_date", "days_held",
+                    "fill_date", "fill_price", "shares", "shares_closed",
+                    "status", "closed_date", "window_end_date", "days_held",
                     "mae_pct", "mfe_pct", "days_to_mae", "days_to_mfe",
                     "atr21_at_fill_pct", "mae_atr_multiple",
                     "mfe_atr_multiple", "min_low", "min_low_date",
-                    "max_high", "max_high_date", "realized_pl", "error"]:
+                    "max_high", "max_high_date",
+                    "realized_pl", "campaign_realized_pl", "error"]:
             assert key in row, f"missing key: {key}"
+
+    def test_per_lot_realized_pl_is_distinct_from_campaign_total(self):
+        """Regression guard for the 'realized_pl smeared campaign total
+        onto every lot' bug the downstream Claude analyst flagged. The
+        two fields must NOT be the same value plumbing — realized_pl is
+        the per-lot number from lot_closures, campaign_realized_pl is
+        the summary total. If a future refactor accidentally reads the
+        wrong column, this test catches it before another export goes
+        out with duplicated numbers.
+        """
+        # SNDK-style multi-lot: B1 closed at +$40k, A1 closed at +$28k,
+        # campaign total = $68k. A11/A12/A13 all showing $68k on the
+        # export was the flagged bug.
+        b1 = _lot(trx_id="B1", realized_pl=40000.0, campaign_realized_pl=68000.0)
+        a1 = _lot(trx_id="A1", realized_pl=28000.0, campaign_realized_pl=68000.0)
+
+        b1_row = lot_excursions._base_row(b1, date(2026, 1, 20))
+        a1_row = lot_excursions._base_row(a1, date(2026, 1, 20))
+
+        # Per-lot P&L differs; campaign total matches on both rows.
+        assert b1_row["realized_pl"] == 40000.0
+        assert a1_row["realized_pl"] == 28000.0
+        assert b1_row["realized_pl"] != a1_row["realized_pl"], \
+            "per-lot P&L must not collapse to campaign total"
+        assert b1_row["campaign_realized_pl"] == 68000.0
+        assert a1_row["campaign_realized_pl"] == 68000.0
+
+    def test_open_lot_realized_pl_is_null_not_zero(self):
+        """A still-open lot has no closures → realized_pl is NULL.
+        Distinguishes 'not closed yet' from 'closed at $0'. Analysts
+        filtering `realized_pl != 0` would get wrong buckets if we
+        collapsed the two cases."""
+        open_lot = _lot(trx_id="B1", realized_pl=None, campaign_realized_pl=None)
+        row = lot_excursions._base_row(open_lot, date(2026, 1, 20))
+        assert row["realized_pl"] is None
+        assert row["campaign_realized_pl"] is None

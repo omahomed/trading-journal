@@ -593,6 +593,7 @@ export interface LotExcursion {
   fill_date: string;
   fill_price: number | null;
   shares: number | null;
+  shares_closed: number | null;
   window_end_date: string;
   days_held: number | null;
   mae_pct: number | null;
@@ -606,7 +607,12 @@ export interface LotExcursion {
   min_low_date: string | null;
   max_high: number | null;
   max_high_date: string | null;
+  // Per-lot realized P&L — SUM of lot_closures.realized_pl where the
+  // BUY side is this lot. NULL when the lot has no closures yet.
   realized_pl: number | null;
+  // Campaign total (trades_summary.realized_pl). Same on every lot
+  // of the same campaign; kept for cross-check convenience.
+  campaign_realized_pl: number | null;
   error: string | null;
 }
 export interface LotExcursionsResponse {
