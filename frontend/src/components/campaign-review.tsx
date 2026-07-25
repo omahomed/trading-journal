@@ -817,16 +817,20 @@ export function CampaignReview({ navColor }: { navColor: string }) {
     };
   }, [sorted]);
 
-  // Rule-level rollup for the Setup Performance expander. Computed
-  // over the FILTERED set so date presets etc. cascade — "which setups
-  // are working THIS MONTH" is a legitimate question and the answer
-  // needs to respect the same date lens as the ledger below.
+  // Rule-level rollup for the Setup Performance expander.
+  //
+  // Design decision (2026-07-25): SP is INDEPENDENT of ledger filters.
+  // Sources from `rows` (unfiltered), not `sorted`. Previously it
+  // cascaded with everything, which made a Rank=Winners filter make
+  // every rule read 100% win. Independent SP means the aggregate is
+  // stable — one canonical "here's how each setup performs across
+  // your tagged book" view regardless of what you've narrowed the
+  // ledger to. Click a rule to filter the ledger; the ledger reacts,
+  // SP doesn't.
   //
   // Cutoff: trades opened before 2026-01-01 are excluded — the rule/setup
   // tagging system landed in Jan 2026, so anything opened prior carries
   // legacy "History" tags that would pollute the setup-performance signal.
-  // The ledger table still shows those trades (unaffected); only this
-  // aggregate is cutoff-scoped.
   const SETUP_CUTOFF = "2026-01-01";
   const setupRollup = useMemo(() => {
     type Bucket = {
@@ -839,7 +843,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       worst_pnl: number;
     };
     const buckets = new Map<string, Bucket>();
-    for (const r of sorted) {
+    for (const r of rows) {
       if (r.open_date < SETUP_CUTOFF) continue;
       const key = r.rule.trim() || "(untagged)";
       const b = buckets.get(key) || {
@@ -861,7 +865,15 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         win_rate: (b.winners + b.losers) > 0 ? b.winners / (b.winners + b.losers) : null,
       }))
       .sort((a, b) => b.total_pnl - a.total_pnl);
-  }, [sorted]);
+  }, [rows]);
+
+  // Count of ledger rows that would be excluded by the SP cutoff.
+  // Surfaced in the SP header so users know why SP counts differ from
+  // ledger counts when they filter to a rule with pre-2026 history.
+  const preCutoffLedgerRows = useMemo(
+    () => sorted.filter(r => r.open_date < SETUP_CUTOFF).length,
+    [sorted],
+  );
 
   // Count of untagged CLOSED trades in the full row set (ignores
   // current filters — the point of the chip is "what needs tagging
@@ -1135,10 +1147,13 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             Setup Performance
             <span className="text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
-              · {setupRollup.length} rule{setupRollup.length === 1 ? "" : "s"} · opened ≥ {SETUP_CUTOFF}
+              · {setupRollup.length} rule{setupRollup.length === 1 ? "" : "s"} · opened ≥ {SETUP_CUTOFF} · independent of ledger filters
               {setupRollup.length > 0 && setupRollup[0].total_pnl > 0 && (
                 <> · best: <b style={{ color: "var(--ink-3)" }}>{setupRollup[0].rule}</b>{" "}
                 <span style={{ color: "#08a86b" }}>{formatCurrency(setupRollup[0].total_pnl, { decimals: 0 })}</span></>
+              )}
+              {preCutoffLedgerRows > 0 && (
+                <> · <span style={{ color: "#d97706" }}>{preCutoffLedgerRows} pre-cutoff trade{preCutoffLedgerRows === 1 ? "" : "s"} in ledger not counted</span></>
               )}
             </span>
             <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>▾</span>
