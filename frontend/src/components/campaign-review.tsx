@@ -121,6 +121,11 @@ type ColKey =
 type DateRangeKey = "all" | "week" | "month" | "ytd" | "custom";
 
 type InstrumentKey = "all" | "stocks" | "options";
+// Rank filter — direction + percentile buckets. Percentiles are
+// relative to the OTHERWISE-FILTERED set (so "Top 10%" with Ticker=NVDA
+// gives the top 10% of NVDA trades), not the global population.
+// "all" is the no-op default.
+type RankKey = "all" | "winners" | "losers" | "top_10" | "top_25" | "bottom_10" | "bottom_25";
 
 interface Filters {
   q: string;
@@ -128,6 +133,7 @@ interface Filters {
   tickers: string[];       // empty = no filter; multi-chip
   rule: string;            // rule or "all"
   pl: "all" | "realized" | "unrealized";
+  rank: RankKey;           // direction / percentile bucket over total_pnl
   instrument: InstrumentKey;  // "all" | "stocks" | "options"
   lesson: string;          // "all" | "none" | category name
   // Numeric Return-% thresholds. Empty string = no filter. Set to "0"
@@ -144,7 +150,7 @@ interface Filters {
   to: string;              // YYYY-MM-DD (custom range)
 }
 const EMPTY_FILTERS: Filters = {
-  q: "", status: [], tickers: [], rule: "all", pl: "all",
+  q: "", status: [], tickers: [], rule: "all", pl: "all", rank: "all",
   instrument: "stocks", lesson: "all",
   b_min_pct: "", a_min_pct: "",
   dateRange: "all", from: "", to: "",
@@ -668,7 +674,10 @@ export function CampaignReview({ navColor }: { navColor: string }) {
   );
 
   const filtered = useMemo(() => {
-    return rows.filter(r => {
+    // Pass 1: apply every filter EXCEPT rank. Rank's percentile buckets
+    // need the otherwise-filtered set as their reference population
+    // (Top 10% of NVDA trades ≠ Top 10% of all trades where I picked NVDA).
+    const pass1 = rows.filter(r => {
       const q = filters.q.trim().toLowerCase();
       if (q) {
         const haystack = [r.ticker, r.trade_id, r.rule].map(v => v.toLowerCase());
@@ -717,6 +726,25 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       if (!dateFilterPasses(d, filters)) return false;
       return true;
     });
+
+    // Pass 2: rank filter. Winners / losers gate on total_pnl sign
+    // (includes unrealized so open positions with mark-to-market gain
+    // count as winners). Percentile buckets sort pass1 by total_pnl
+    // and slice — ceil() so "Top 10% of 7" yields the single best
+    // trade rather than 0 rows.
+    if (filters.rank === "all") return pass1;
+    if (filters.rank === "winners") return pass1.filter(r => r.total_pnl > 0);
+    if (filters.rank === "losers") return pass1.filter(r => r.total_pnl < 0);
+    const pct = (filters.rank === "top_10" || filters.rank === "bottom_10") ? 0.10 : 0.25;
+    const isTop = filters.rank === "top_10" || filters.rank === "top_25";
+    const n = pass1.length;
+    if (n === 0) return pass1;
+    const takeCount = Math.max(1, Math.ceil(n * pct));
+    const rankedSorted = [...pass1].sort((a, b) =>
+      isTop ? (b.total_pnl - a.total_pnl) : (a.total_pnl - b.total_pnl),
+    );
+    const keep = new Set(rankedSorted.slice(0, takeCount).map(r => r.trade_id));
+    return pass1.filter(r => keep.has(r.trade_id));
   }, [rows, filters]);
 
   const sorted = useMemo(() => {
@@ -787,6 +815,56 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       campaignsWithAdds,
     };
   }, [sorted]);
+
+  // Rule-level rollup for the Setup Performance expander. Computed
+  // over the FILTERED set so date presets etc. cascade — "which setups
+  // are working THIS MONTH" is a legitimate question and the answer
+  // needs to respect the same date lens as the ledger below. Trades
+  // without a rule tag are grouped under "(untagged)" so nothing is
+  // silently dropped from totals.
+  const setupRollup = useMemo(() => {
+    type Bucket = {
+      rule: string;
+      trades: number;
+      winners: number;
+      losers: number;
+      total_pnl: number;
+      best_pnl: number;
+      worst_pnl: number;
+    };
+    const buckets = new Map<string, Bucket>();
+    for (const r of sorted) {
+      const key = r.rule.trim() || "(untagged)";
+      const b = buckets.get(key) || {
+        rule: key, trades: 0, winners: 0, losers: 0,
+        total_pnl: 0, best_pnl: -Infinity, worst_pnl: Infinity,
+      };
+      b.trades += 1;
+      if (r.total_pnl > 0) b.winners += 1;
+      else if (r.total_pnl < 0) b.losers += 1;
+      b.total_pnl += r.total_pnl;
+      if (r.total_pnl > b.best_pnl) b.best_pnl = r.total_pnl;
+      if (r.total_pnl < b.worst_pnl) b.worst_pnl = r.total_pnl;
+      buckets.set(key, b);
+    }
+    return Array.from(buckets.values())
+      .map(b => ({
+        ...b,
+        avg_pnl: b.trades > 0 ? b.total_pnl / b.trades : 0,
+        win_rate: (b.winners + b.losers) > 0 ? b.winners / (b.winners + b.losers) : null,
+      }))
+      .sort((a, b) => b.total_pnl - a.total_pnl);
+  }, [sorted]);
+
+  // Count of untagged CLOSED trades in the full row set (ignores
+  // current filters — the point of the chip is "what needs tagging
+  // in your book overall", not "what needs tagging inside the view
+  // I've already narrowed to"). Ignores open trades since lesson
+  // tagging is post-mortem semantics.
+  const untaggedClosedCount = useMemo(
+    () => rows.filter(r => r.status === "Closed" && r.lesson_category.trim() === "").length,
+    [rows],
+  );
 
   // Distinct add-on lot count across the filtered set (walks details
   // once). Kept separate from kpis to avoid re-computing when the
@@ -867,7 +945,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
 
   const filtersDirty = useMemo(() => (
     !!filters.q || filters.status.length > 0 || filters.tickers.length > 0
-    || filters.rule !== "all" || filters.pl !== "all"
+    || filters.rule !== "all" || filters.pl !== "all" || filters.rank !== "all"
     || filters.instrument !== "stocks" || filters.lesson !== "all"
     || !!filters.b_min_pct || !!filters.a_min_pct
     || filters.dateRange !== "all" || !!filters.from || !!filters.to
@@ -972,6 +1050,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
           ))}
         </div>
       ) : (
+        <>
         <div className="grid grid-cols-5 gap-[14px]">
           <KPITile
             label="Trades"
@@ -1012,6 +1091,126 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             gradient={kpis.totalPnl >= 0 ? TILE_GRADIENTS.orange : TILE_GRADIENTS.red}
           />
         </div>
+
+        {/* Quick-actions chip row — one-click filters for common
+            questions. Only renders when there's something worth
+            surfacing (e.g. no chip when everything is tagged). */}
+        {untaggedClosedCount > 0 && (
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => setFilters(f => ({ ...f, lesson: "none", status: ["Closed"] }))}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold cursor-pointer transition-all hover:brightness-95"
+              style={{
+                background: "color-mix(in oklab, #d97706 10%, var(--surface))",
+                color: "#d97706",
+                border: "1px solid color-mix(in oklab, #d97706 30%, var(--border))",
+              }}
+              data-testid="cr-untagged-chip"
+              title="Click to filter to untagged closed trades"
+            >
+              🎓 {untaggedClosedCount} untagged closed trade{untaggedClosedCount === 1 ? "" : "s"}
+              <span style={{ opacity: 0.7 }}>→</span>
+            </button>
+          </div>
+        )}
+        </>
+      )}
+
+      {/* Setup Performance expander — rule-level rollup over the
+          filtered set. Closed by default so daily use isn't cluttered.
+          Click a rule row to filter the ledger below to that rule. */}
+      {sorted.length > 0 && (
+        <details className="mt-5 rounded-[14px] overflow-hidden"
+                 style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <summary className="px-[18px] py-[12px] flex items-center gap-2 cursor-pointer text-[13px] font-semibold list-none"
+                   style={{ borderBottom: "1px solid transparent" }}>
+            <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+            Setup Performance
+            <span className="text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
+              · {setupRollup.length} rule{setupRollup.length === 1 ? "" : "s"} in view
+              {setupRollup.length > 0 && setupRollup[0].total_pnl > 0 && (
+                <> · best: <b style={{ color: "var(--ink-3)" }}>{setupRollup[0].rule}</b>{" "}
+                <span style={{ color: "#08a86b" }}>{formatCurrency(setupRollup[0].total_pnl, { decimals: 0 })}</span></>
+              )}
+            </span>
+            <span className="ml-auto text-[11px]" style={{ color: "var(--ink-4)" }}>▾</span>
+          </summary>
+          <div className="overflow-x-auto" style={{ borderTop: "1px solid var(--border)" }}>
+            <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--surface-2)" }}>
+                  {[
+                    { l: "Rule", align: "left" },
+                    { l: "Trades", align: "right" },
+                    { l: "Win %", align: "right" },
+                    { l: "Avg $", align: "right" },
+                    { l: "Total $", align: "right" },
+                    { l: "Best", align: "right" },
+                    { l: "Worst", align: "right" },
+                  ].map(c => (
+                    <th key={c.l}
+                        className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.04em]"
+                        style={{
+                          color: "var(--ink-4)",
+                          borderBottom: "1px solid var(--border)",
+                          textAlign: c.align as "left" | "right",
+                          whiteSpace: "nowrap",
+                        }}>
+                      {c.l}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {setupRollup.map(b => {
+                  const isSelected = filters.rule === b.rule;
+                  const clickable = b.rule !== "(untagged)";
+                  return (
+                    <tr
+                      key={b.rule}
+                      onClick={() => {
+                        if (!clickable) return;
+                        // Toggle: click again to clear the filter.
+                        setFilters(f => ({ ...f, rule: isSelected ? "all" : b.rule }));
+                      }}
+                      className={clickable ? "cursor-pointer" : ""}
+                      style={{
+                        borderBottom: "1px solid var(--border)",
+                        background: isSelected ? "color-mix(in oklab, " + navColor + " 8%, transparent)" : "transparent",
+                      }}
+                      onMouseEnter={e => { if (clickable && !isSelected) e.currentTarget.style.background = "var(--bg-2)"; }}
+                      onMouseLeave={e => { if (clickable && !isSelected) e.currentTarget.style.background = "transparent"; }}
+                      title={clickable ? (isSelected ? "Click to clear rule filter" : `Click to filter ledger to "${b.rule}"`) : undefined}
+                    >
+                      <td className="px-3 py-2 font-medium">
+                        {b.rule === "(untagged)"
+                          ? <span style={{ color: "var(--ink-4)", fontStyle: "italic" }}>{b.rule}</span>
+                          : <span style={{ color: "var(--ink-2)" }}>{b.rule}</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{b.trades}</td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: b.win_rate == null ? "var(--ink-4)" : b.win_rate >= 0.5 ? "#08a86b" : "#d97706" }}>
+                        {b.win_rate == null ? "—" : `${(b.win_rate * 100).toFixed(0)}%`}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: b.avg_pnl > 0 ? "#08a86b" : b.avg_pnl < 0 ? "#e5484d" : "var(--ink-3)" }}>
+                        {formatCurrency(b.avg_pnl, { decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: b.total_pnl > 0 ? "#08a86b" : b.total_pnl < 0 ? "#e5484d" : "var(--ink-3)" }}>
+                        {formatCurrency(b.total_pnl, { decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: "#08a86b" }}>
+                        {formatCurrency(b.best_pnl, { decimals: 0 })}
+                      </td>
+                      <td className="px-3 py-2 text-right" style={{ fontFamily: mono, color: b.worst_pnl < 0 ? "#e5484d" : "var(--ink-3)" }}>
+                        {formatCurrency(b.worst_pnl, { decimals: 0 })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
 
       {/* Card: Trade Ledger */}
@@ -1026,129 +1225,157 @@ export function CampaignReview({ navColor }: { navColor: string }) {
           </span>
         </div>
 
-        {/* Filter toolbar */}
-        <div className="px-[18px] py-[14px] flex flex-wrap items-end gap-[12px_14px]"
+        {/* Filter toolbar — grouped into three logical rows so the eye
+            has a fighting chance:
+              Row 1: wide inputs (Search + Ticker chips)
+              Row 2: data-scope segments (P&L / Instrument / Date)
+              Row 3: attribute dropdowns + return-% thresholds + reset
+            Each row is its own flex container so the wrap boundaries
+            are predictable regardless of viewport width. */}
+        <div className="px-[18px] py-[14px] flex flex-col gap-[12px]"
              style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
-          <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
-            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
-            <div className="relative">
-              <input type="text" value={filters.q}
-                     onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
-                     placeholder="Ticker, trade ID, or rule…"
-                     className="w-full h-[34px] pl-9 pr-8 rounded-[10px] text-[12px]"
-                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: "var(--ink-4)" }}>⌕</span>
-              {filters.q && (
-                <button type="button" onClick={() => setFilters(f => ({ ...f, q: "" }))}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-[12px]"
-                        style={{ color: "var(--ink-4)" }}>✕</button>
-              )}
-            </div>
-          </div>
 
-          <SegmentedControl label="P&L"
-            value={filters.pl}
-            onChange={v => setFilters(f => ({ ...f, pl: v as Filters["pl"] }))}
-            options={[{ v: "all", l: "All" }, { v: "realized", l: "Realized" }, { v: "unrealized", l: "Unrealized" }]}
-            testId="filter-pl"
-          />
-
-          <SegmentedControl label="Instrument"
-            value={filters.instrument}
-            onChange={v => setFilters(f => ({ ...f, instrument: v as InstrumentKey }))}
-            options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
-            testId="filter-instrument"
-          />
-
-          <StatusMultiSelect
-            value={filters.status}
-            onChange={next => setFilters(f => ({ ...f, status: next }))}
-          />
-
-          <TickerMultiSelect
-            value={filters.tickers}
-            onChange={next => setFilters(f => ({ ...f, tickers: next }))}
-            tickers={tickerOptions}
-            navColor={navColor}
-          />
-
-          <FilterSelect label="Rule"
-            value={filters.rule}
-            onChange={v => setFilters(f => ({ ...f, rule: v }))}
-            options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
-          />
-
-          <FilterSelect label="Lesson"
-            value={filters.lesson}
-            onChange={v => setFilters(f => ({ ...f, lesson: v }))}
-            options={[
-              { v: "all", l: "All lessons" },
-              { v: "none", l: "— untagged" },
-              ...LESSON_CATEGORIES.map(c => ({ v: c, l: c })),
-            ]}
-          />
-
-          {/* Per-series Return % min thresholds. Empty input = no
-              filter. Type "0" to slice positives only; type "50"
-              for ">= 50%". Negative numbers work too (e.g. "-20"
-              to surface trades with B% <= -20%? Actually no — this
-              is a MIN, so "-20" means ">= -20%"). For a max bound,
-              add later if asked. */}
-          <div className="flex flex-col gap-1">
-            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>B % Min</span>
-            <input type="number" inputMode="decimal" step="1" value={filters.b_min_pct}
-                   onChange={e => setFilters(f => ({ ...f, b_min_pct: e.target.value }))}
-                   placeholder="≥ %"
-                   className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
-                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>A % Min</span>
-            <input type="number" inputMode="decimal" step="1" value={filters.a_min_pct}
-                   onChange={e => setFilters(f => ({ ...f, a_min_pct: e.target.value }))}
-                   placeholder="≥ %"
-                   className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
-                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
-          </div>
-
-          <SegmentedControl label="Date"
-            value={filters.dateRange}
-            onChange={v => setFilters(f => ({ ...f, dateRange: v as DateRangeKey }))}
-            options={[
-              { v: "all", l: "All" },
-              { v: "week", l: "Week" },
-              { v: "month", l: "Month" },
-              { v: "ytd", l: "YTD" },
-              { v: "custom", l: "Custom" },
-            ]}
-            testId="filter-date-range"
-          />
-          {filters.dateRange === "custom" && (
-            <div className="flex flex-col gap-1">
-              <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Range</span>
-              <div className="flex gap-1 items-center">
-                <input type="date" value={filters.from}
-                       onChange={e => setFilters(f => ({ ...f, from: e.target.value }))}
-                       className="h-[34px] px-2 rounded-[10px] text-[12px]"
-                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
-                <span style={{ color: "var(--ink-4)" }}>–</span>
-                <input type="date" value={filters.to}
-                       onChange={e => setFilters(f => ({ ...f, to: e.target.value }))}
-                       className="h-[34px] px-2 rounded-[10px] text-[12px]"
-                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+          {/* Row 1 — wide inputs */}
+          <div className="flex flex-wrap items-end gap-[12px_14px]">
+            <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
+              <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
+              <div className="relative">
+                <input type="text" value={filters.q}
+                       onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
+                       placeholder="Ticker, trade ID, or rule…"
+                       className="w-full h-[34px] pl-9 pr-8 rounded-[10px] text-[12px]"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[12px]" style={{ color: "var(--ink-4)" }}>⌕</span>
+                {filters.q && (
+                  <button type="button" onClick={() => setFilters(f => ({ ...f, q: "" }))}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-[12px]"
+                          style={{ color: "var(--ink-4)" }}>✕</button>
+                )}
               </div>
             </div>
-          )}
 
-          <div className="ml-auto flex items-end gap-3">
-            <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{sorted.length} of {rows.length}</span>
-            {filtersDirty && (
-              <button type="button" onClick={resetFilters}
-                      className="h-[34px] px-3 rounded-[10px] text-[11px] font-medium"
-                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
-                ✕ Reset
-              </button>
+            <TickerMultiSelect
+              value={filters.tickers}
+              onChange={next => setFilters(f => ({ ...f, tickers: next }))}
+              tickers={tickerOptions}
+              navColor={navColor}
+            />
+          </div>
+
+          {/* Row 2 — data-scope segments (what P&L, what instrument, what timeframe) */}
+          <div className="flex flex-wrap items-end gap-[12px_14px]">
+            <SegmentedControl label="P&L"
+              value={filters.pl}
+              onChange={v => setFilters(f => ({ ...f, pl: v as Filters["pl"] }))}
+              options={[{ v: "all", l: "All" }, { v: "realized", l: "Realized" }, { v: "unrealized", l: "Unrealized" }]}
+              testId="filter-pl"
+            />
+
+            <SegmentedControl label="Instrument"
+              value={filters.instrument}
+              onChange={v => setFilters(f => ({ ...f, instrument: v as InstrumentKey }))}
+              options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
+              testId="filter-instrument"
+            />
+
+            <SegmentedControl label="Date"
+              value={filters.dateRange}
+              onChange={v => setFilters(f => ({ ...f, dateRange: v as DateRangeKey }))}
+              options={[
+                { v: "all", l: "All" },
+                { v: "week", l: "Week" },
+                { v: "month", l: "Month" },
+                { v: "ytd", l: "YTD" },
+                { v: "custom", l: "Custom" },
+              ]}
+              testId="filter-date-range"
+            />
+            {filters.dateRange === "custom" && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Range</span>
+                <div className="flex gap-1 items-center">
+                  <input type="date" value={filters.from}
+                         onChange={e => setFilters(f => ({ ...f, from: e.target.value }))}
+                         className="h-[34px] px-2 rounded-[10px] text-[12px]"
+                         style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+                  <span style={{ color: "var(--ink-4)" }}>–</span>
+                  <input type="date" value={filters.to}
+                         onChange={e => setFilters(f => ({ ...f, to: e.target.value }))}
+                         className="h-[34px] px-2 rounded-[10px] text-[12px]"
+                         style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+                </div>
+              </div>
             )}
+          </div>
+
+          {/* Row 3 — attribute dropdowns + numeric thresholds + reset */}
+          <div className="flex flex-wrap items-end gap-[12px_14px]">
+            <StatusMultiSelect
+              value={filters.status}
+              onChange={next => setFilters(f => ({ ...f, status: next }))}
+            />
+
+            <FilterSelect label="Rule"
+              value={filters.rule}
+              onChange={v => setFilters(f => ({ ...f, rule: v }))}
+              options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
+            />
+
+            <FilterSelect label="Lesson"
+              value={filters.lesson}
+              onChange={v => setFilters(f => ({ ...f, lesson: v }))}
+              options={[
+                { v: "all", l: "All lessons" },
+                { v: "none", l: "— untagged" },
+                ...LESSON_CATEGORIES.map(c => ({ v: c, l: c })),
+              ]}
+            />
+
+            <FilterSelect label="Rank"
+              value={filters.rank}
+              onChange={v => setFilters(f => ({ ...f, rank: v as RankKey }))}
+              options={[
+                { v: "all", l: "All ranks" },
+                { v: "winners", l: "Winners only" },
+                { v: "losers", l: "Losers only" },
+                { v: "top_10", l: "Top 10% by P&L" },
+                { v: "top_25", l: "Top 25% by P&L" },
+                { v: "bottom_10", l: "Bottom 10% by P&L" },
+                { v: "bottom_25", l: "Bottom 25% by P&L" },
+              ]}
+            />
+
+            {/* Per-series Return % min thresholds. Empty input = no
+                filter. Type "0" to slice positives only; type "50"
+                for ">= 50%". Trades with a null series % (no lots in
+                that series) fail the filter when it's active. */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>B % Min</span>
+              <input type="number" inputMode="decimal" step="1" value={filters.b_min_pct}
+                     onChange={e => setFilters(f => ({ ...f, b_min_pct: e.target.value }))}
+                     placeholder="≥ %"
+                     className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>A % Min</span>
+              <input type="number" inputMode="decimal" step="1" value={filters.a_min_pct}
+                     onChange={e => setFilters(f => ({ ...f, a_min_pct: e.target.value }))}
+                     placeholder="≥ %"
+                     className="h-[34px] px-2.5 rounded-[10px] text-[12px] w-[80px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: mono }} />
+            </div>
+
+            <div className="ml-auto flex items-end gap-3">
+              <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{sorted.length} of {rows.length}</span>
+              {filtersDirty && (
+                <button type="button" onClick={resetFilters}
+                        className="h-[34px] px-3 rounded-[10px] text-[11px] font-medium"
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-3)" }}>
+                  ✕ Reset
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
