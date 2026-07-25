@@ -121,11 +121,11 @@ type ColKey =
 type DateRangeKey = "all" | "week" | "month" | "ytd" | "custom";
 
 type InstrumentKey = "all" | "stocks" | "options";
-// Rank filter — direction + percentile buckets. Percentiles are
-// relative to the OTHERWISE-FILTERED set (so "Top 10%" with Ticker=NVDA
-// gives the top 10% of NVDA trades), not the global population.
-// "all" is the no-op default.
-type RankKey = "all" | "winners" | "losers" | "top_10" | "top_25" | "bottom_10" | "bottom_25";
+// Rank filter — direction + absolute Top/Bottom N buckets. N is a
+// fixed count (5/10/20), not a percentile — much easier to reason
+// about ("show me my 10 biggest wins") than a %. Top/Bottom sort by
+// total_pnl; ties broken by trade_id for determinism. "all" no-ops.
+type RankKey = "all" | "winners" | "losers" | "top_5" | "top_10" | "top_20" | "bottom_5" | "bottom_10" | "bottom_20";
 
 interface Filters {
   q: string;
@@ -729,17 +729,18 @@ export function CampaignReview({ navColor }: { navColor: string }) {
 
     // Pass 2: rank filter. Winners / losers gate on total_pnl sign
     // (includes unrealized so open positions with mark-to-market gain
-    // count as winners). Percentile buckets sort pass1 by total_pnl
-    // and slice — ceil() so "Top 10% of 7" yields the single best
-    // trade rather than 0 rows.
+    // count as winners). Top/Bottom N buckets sort pass1 by total_pnl
+    // and slice — capped at pass1.length so "Top 20" with 7 trades
+    // returns all 7 (no wraparound / no error).
     if (filters.rank === "all") return pass1;
     if (filters.rank === "winners") return pass1.filter(r => r.total_pnl > 0);
     if (filters.rank === "losers") return pass1.filter(r => r.total_pnl < 0);
-    const pct = (filters.rank === "top_10" || filters.rank === "bottom_10") ? 0.10 : 0.25;
-    const isTop = filters.rank === "top_10" || filters.rank === "top_25";
     const n = pass1.length;
     if (n === 0) return pass1;
-    const takeCount = Math.max(1, Math.ceil(n * pct));
+    const takeCount = filters.rank === "top_5" || filters.rank === "bottom_5" ? 5
+      : filters.rank === "top_10" || filters.rank === "bottom_10" ? 10
+      : 20;  // top_20 / bottom_20
+    const isTop = filters.rank === "top_5" || filters.rank === "top_10" || filters.rank === "top_20";
     const rankedSorted = [...pass1].sort((a, b) =>
       isTop ? (b.total_pnl - a.total_pnl) : (a.total_pnl - b.total_pnl),
     );
@@ -819,9 +820,14 @@ export function CampaignReview({ navColor }: { navColor: string }) {
   // Rule-level rollup for the Setup Performance expander. Computed
   // over the FILTERED set so date presets etc. cascade — "which setups
   // are working THIS MONTH" is a legitimate question and the answer
-  // needs to respect the same date lens as the ledger below. Trades
-  // without a rule tag are grouped under "(untagged)" so nothing is
-  // silently dropped from totals.
+  // needs to respect the same date lens as the ledger below.
+  //
+  // Cutoff: trades opened before 2026-01-01 are excluded — the rule/setup
+  // tagging system landed in Jan 2026, so anything opened prior carries
+  // legacy "History" tags that would pollute the setup-performance signal.
+  // The ledger table still shows those trades (unaffected); only this
+  // aggregate is cutoff-scoped.
+  const SETUP_CUTOFF = "2026-01-01";
   const setupRollup = useMemo(() => {
     type Bucket = {
       rule: string;
@@ -834,6 +840,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
     };
     const buckets = new Map<string, Bucket>();
     for (const r of sorted) {
+      if (r.open_date < SETUP_CUTOFF) continue;
       const key = r.rule.trim() || "(untagged)";
       const b = buckets.get(key) || {
         rule: key, trades: 0, winners: 0, losers: 0,
@@ -1128,7 +1135,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
             Setup Performance
             <span className="text-[12px] font-normal" style={{ color: "var(--ink-4)" }}>
-              · {setupRollup.length} rule{setupRollup.length === 1 ? "" : "s"} in view
+              · {setupRollup.length} rule{setupRollup.length === 1 ? "" : "s"} · opened ≥ {SETUP_CUTOFF}
               {setupRollup.length > 0 && setupRollup[0].total_pnl > 0 && (
                 <> · best: <b style={{ color: "var(--ink-3)" }}>{setupRollup[0].rule}</b>{" "}
                 <span style={{ color: "#08a86b" }}>{formatCurrency(setupRollup[0].total_pnl, { decimals: 0 })}</span></>
@@ -1225,19 +1232,20 @@ export function CampaignReview({ navColor }: { navColor: string }) {
           </span>
         </div>
 
-        {/* Filter toolbar — grouped into three logical rows so the eye
-            has a fighting chance:
-              Row 1: wide inputs (Search + Ticker chips)
-              Row 2: data-scope segments (P&L / Instrument / Date)
-              Row 3: attribute dropdowns + return-% thresholds + reset
-            Each row is its own flex container so the wrap boundaries
-            are predictable regardless of viewport width. */}
+        {/* Filter toolbar — collapsed to two rows so the eye doesn't
+            traverse three near-empty bands:
+              Row 1 (text-heavy): Search grows to fill · Tickers · Rule · Lesson · Rank
+              Row 2 (compact controls): Status · P&L · Instrument · Date (+ custom range) · B% · A% · counter+reset
+            Row 1's controls sit AFTER a flex-grow Search so the row
+            fills width regardless of how many chips the user has in
+            Tickers. */}
         <div className="px-[18px] py-[14px] flex flex-col gap-[12px]"
              style={{ background: "var(--bg-2)", borderBottom: "1px solid var(--border)" }}>
 
-          {/* Row 1 — wide inputs */}
+          {/* Row 1 — text / high-cardinality dropdowns. Search takes the
+              remaining horizontal slack via flex-1. */}
           <div className="flex flex-wrap items-end gap-[12px_14px]">
-            <div className="flex flex-col gap-1" style={{ flex: "1 1 220px", minWidth: 200 }}>
+            <div className="flex flex-col gap-1 flex-1" style={{ minWidth: 240 }}>
               <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Search</span>
               <div className="relative">
                 <input type="text" value={filters.q}
@@ -1260,10 +1268,47 @@ export function CampaignReview({ navColor }: { navColor: string }) {
               tickers={tickerOptions}
               navColor={navColor}
             />
+
+            <FilterSelect label="Rule"
+              value={filters.rule}
+              onChange={v => setFilters(f => ({ ...f, rule: v }))}
+              options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
+            />
+
+            <FilterSelect label="Lesson"
+              value={filters.lesson}
+              onChange={v => setFilters(f => ({ ...f, lesson: v }))}
+              options={[
+                { v: "all", l: "All lessons" },
+                { v: "none", l: "— untagged" },
+                ...LESSON_CATEGORIES.map(c => ({ v: c, l: c })),
+              ]}
+            />
+
+            <FilterSelect label="Rank"
+              value={filters.rank}
+              onChange={v => setFilters(f => ({ ...f, rank: v as RankKey }))}
+              options={[
+                { v: "all", l: "All ranks" },
+                { v: "winners", l: "Winners only" },
+                { v: "losers", l: "Losers only" },
+                { v: "top_5", l: "Top 5 by P&L" },
+                { v: "top_10", l: "Top 10 by P&L" },
+                { v: "top_20", l: "Top 20 by P&L" },
+                { v: "bottom_5", l: "Bottom 5 by P&L" },
+                { v: "bottom_10", l: "Bottom 10 by P&L" },
+                { v: "bottom_20", l: "Bottom 20 by P&L" },
+              ]}
+            />
           </div>
 
-          {/* Row 2 — data-scope segments (what P&L, what instrument, what timeframe) */}
+          {/* Row 2 — compact segments + numeric + counter/reset (right-anchored). */}
           <div className="flex flex-wrap items-end gap-[12px_14px]">
+            <StatusMultiSelect
+              value={filters.status}
+              onChange={next => setFilters(f => ({ ...f, status: next }))}
+            />
+
             <SegmentedControl label="P&L"
               value={filters.pl}
               onChange={v => setFilters(f => ({ ...f, pl: v as Filters["pl"] }))}
@@ -1306,49 +1351,9 @@ export function CampaignReview({ navColor }: { navColor: string }) {
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Row 3 — attribute dropdowns + numeric thresholds + reset */}
-          <div className="flex flex-wrap items-end gap-[12px_14px]">
-            <StatusMultiSelect
-              value={filters.status}
-              onChange={next => setFilters(f => ({ ...f, status: next }))}
-            />
-
-            <FilterSelect label="Rule"
-              value={filters.rule}
-              onChange={v => setFilters(f => ({ ...f, rule: v }))}
-              options={[{ v: "all", l: "All rules" }, ...ruleOptions.map(r => ({ v: r, l: r }))]}
-            />
-
-            <FilterSelect label="Lesson"
-              value={filters.lesson}
-              onChange={v => setFilters(f => ({ ...f, lesson: v }))}
-              options={[
-                { v: "all", l: "All lessons" },
-                { v: "none", l: "— untagged" },
-                ...LESSON_CATEGORIES.map(c => ({ v: c, l: c })),
-              ]}
-            />
-
-            <FilterSelect label="Rank"
-              value={filters.rank}
-              onChange={v => setFilters(f => ({ ...f, rank: v as RankKey }))}
-              options={[
-                { v: "all", l: "All ranks" },
-                { v: "winners", l: "Winners only" },
-                { v: "losers", l: "Losers only" },
-                { v: "top_10", l: "Top 10% by P&L" },
-                { v: "top_25", l: "Top 25% by P&L" },
-                { v: "bottom_10", l: "Bottom 10% by P&L" },
-                { v: "bottom_25", l: "Bottom 25% by P&L" },
-              ]}
-            />
 
             {/* Per-series Return % min thresholds. Empty input = no
-                filter. Type "0" to slice positives only; type "50"
-                for ">= 50%". Trades with a null series % (no lots in
-                that series) fail the filter when it's active. */}
+                filter. Type "0" for positives only, "50" for ">= 50%". */}
             <div className="flex flex-col gap-1">
               <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>B % Min</span>
               <input type="number" inputMode="decimal" step="1" value={filters.b_min_pct}
