@@ -414,20 +414,27 @@ def compute_all_lot_excursions(
     if not lots:
         return []
 
-    # Group by campaign, preserving fetch_campaign_lots ordering.
-    grouped: dict[str, list[dict]] = {}
+    # Group by (portfolio_id, trade_id) tuple — trade_id ALONE is not
+    # unique across portfolios (a "202603-001" exists in every portfolio
+    # that opened its first March 2026 campaign). Grouping by trade_id
+    # alone would glue different-portfolio campaigns together and
+    # smear each campaign's closed_date / exit prices across lots that
+    # don't belong to it → nonsensical windows (fill_date after
+    # window_end_date) and spurious "no_bars_in_window" errors.
+    grouped: dict[tuple, list[dict]] = {}
     for lot in lots:
-        grouped.setdefault(lot["trade_id"], []).append(lot)
+        key = (lot.get("portfolio_id"), lot["trade_id"])
+        grouped.setdefault(key, []).append(lot)
 
     import time as _time
     out: list[dict] = []
-    for i, (_tid, campaign_lots) in enumerate(grouped.items()):
+    for i, (key, campaign_lots) in enumerate(grouped.items()):
         if i > 0 and sleep > 0:
             _time.sleep(sleep)
         try:
             rows = compute_lot_excursions_for_campaign(campaign_lots)
         except Exception as exc:
-            log.exception("compute failed for %s: %s", _tid, exc)
+            log.exception("compute failed for %s: %s", key, exc)
             rows = [_error_row(lot, "compute_exception", date.today()) for lot in campaign_lots]
         out.extend(rows)
     return out
