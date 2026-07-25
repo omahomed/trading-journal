@@ -2869,16 +2869,24 @@ def price_lookup(request: Request, ticker: str = ""):
     ticker has fewer than 21 / 50 bars available, respectively — the
     frontend then hides the affected read-only display cell.
     """
-    if not ticker.strip():
-        raise HTTPException(status_code=400, detail="No ticker provided")
-    import yfinance as yf
-
-    t = ticker.strip().upper()
-    cached = _atr_cache.get(t)
-    if cached is not None and (time.time() - cached[0]) < _ATR_CACHE_TTL_S:
-        return cached[1]
-
+    # Outer try/except catches ANYTHING (including import errors, the
+    # slowapi limiter, or an ill-formed cached result) and converts to
+    # a 503 with a diagnostic body. Prevents Starlette from returning
+    # its blank "Internal Server Error" 500 which strips all context
+    # AND drops CORS headers (browser then shows "Failed to fetch"
+    # with no clue what actually crashed). Traceback is logged to
+    # stderr so Railway logs + Sentry both catch it.
+    import traceback
     try:
+        if not ticker.strip():
+            raise HTTPException(status_code=400, detail="No ticker provided")
+        import yfinance as yf
+
+        t = ticker.strip().upper()
+        cached = _atr_cache.get(t)
+        if cached is not None and (time.time() - cached[0]) < _ATR_CACHE_TTL_S:
+            return cached[1]
+
         stock = yf.Ticker(t)
         # 90d gives ~62 trading days — 50 SMA has ~12 bars of warmup
         # headroom past its window, so the last value is a proper
@@ -2932,7 +2940,13 @@ def price_lookup(request: Request, ticker: str = ""):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Price data unavailable for {t}: {e}")
+        tb = traceback.format_exc()
+        print(f"[price_lookup] CRASH for ticker={ticker!r}: {e.__class__.__name__}: {e}\n{tb}",
+              file=sys.stderr, flush=True)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Price lookup failed for {ticker!r}: {e.__class__.__name__}: {e}",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2976,6 +2990,27 @@ def price_lookup_batch(request: Request, tickers: str = ""):
     a `status` field. Rate-limit slot usage is 1 per call regardless of
     ticker count, so this is preferable to fan-out from the client.
     """
+    # Same bulletproofing as price_lookup — see the comment there for
+    # rationale. Any uncaught error surfaces as a 503 with diagnostic
+    # body instead of Starlette's blank 500 (which strips CORS and
+    # leaves the browser showing "Failed to fetch" with no clue).
+    import traceback
+    try:
+        return _price_lookup_batch_impl(tickers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[price_lookup_batch] CRASH for tickers={tickers!r}: "
+              f"{e.__class__.__name__}: {e}\n{tb}",
+              file=sys.stderr, flush=True)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Batch price lookup failed: {e.__class__.__name__}: {e}",
+        )
+
+
+def _price_lookup_batch_impl(tickers: str) -> dict:
     if not tickers.strip():
         raise HTTPException(status_code=400, detail="No tickers provided")
     import yfinance as yf
