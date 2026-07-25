@@ -564,7 +564,13 @@ def load_details(portfolio_name, trade_id=None):
                     d.instrument_type AS "Instrument_Type",
                     d.multiplier AS "Multiplier",
                     d.match_method AS "Match_Method",
-                    d.stop_ladder AS "Stop_Ladder"
+                    d.stop_ladder AS "Stop_Ladder",
+                    -- Migration 049: §2 Window-rule exemption reason
+                    -- ('sr8_rebuild' | 'fresh_base' | NULL). Populated
+                    -- only on add-on BUYs beyond +15% from B1 where
+                    -- the trader ticked the exempt override. NULL for
+                    -- every non-exempt row (99% of the table today).
+                    d.add_exempt_reason AS "Add_Exempt_Reason"
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
                 WHERE p.name = %s
@@ -1498,6 +1504,16 @@ def _save_detail_row_in_txn(cur, portfolio_id, row_dict):
         ladder = row_dict.get('Stop_Ladder')
         insert_cols += ["stop_ladder"]
         insert_vals += [json.dumps(ladder) if ladder is not None else None]
+    # Migration 049: Pyramid §2 Window rule exempt-reason capture.
+    # Only add-on BUYs (A-series) beyond +15% from B1 declare a reason
+    # ('sr8_rebuild' or 'fresh_base'). B1s / non-exempt adds / SELLs
+    # omit the key and the column lands NULL. CHECK constraint on the
+    # column enforces the enum server-side; caller is responsible for
+    # not sending garbage. Post-30-adds review filters by this field.
+    if 'Add_Exempt_Reason' in row_dict:
+        reason = row_dict.get('Add_Exempt_Reason')
+        insert_cols += ["add_exempt_reason"]
+        insert_vals += [reason if reason else None]
     placeholders = ", ".join(["%s"] * len(insert_vals))
     insert_query = (
         f"INSERT INTO trades_details ({', '.join(insert_cols)}) "

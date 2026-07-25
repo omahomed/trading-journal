@@ -8,6 +8,7 @@ import {
   PYRAMID_FULL_SIZE_TRIGGER_PCT,
   PYRAMID_LOCATION_ATR_MULTIPLE,
   PYRAMID_SCREENER_DEFAULT_TOL_PCT,
+  PYRAMID_WINDOW_MAX_PCT,
   type PyramidSizerInputs,
 } from "./pyramid-sizer";
 
@@ -317,6 +318,148 @@ describe("computePyramidSizing — ceiling gate (rule 6)", () => {
   });
 });
 
+describe("computePyramidSizing — §2 window gate (rule 2, v6 addition)", () => {
+  // Extends HAPPY: B1 @ $150, so the window ceiling is $150 × 1.15 = $172.50.
+  it("passes when current price is inside the +15% window", () => {
+    // Add at $170 (13.3% above B1 $150) — inside the window.
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 170,
+      currentPrice: 170,
+      lastHeldBuyPrice: 168,  // keep progress positive
+    });
+    expect(r.window.passed).toBe(true);
+    expect(r.window.vsB1Pct).toBeCloseTo(13.333, 2);
+    expect(r.window.ceilingPrice).toBeCloseTo(172.5, 2);
+  });
+
+  it("blocks at-level adds beyond +15% with no exemption", () => {
+    // Add at $180 (20% above B1 $150) — beyond the window.
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 180,
+      currentPrice: 180,
+      // Loosen budget so window is the ONLY block.
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "B1" }],
+      // Neutralize other gates so bind cleanly attributes to window.
+      ema21: 179,      // location passes
+      keyLevel: 179,   // composite/stop stays sensible
+      lastHeldBuyPrice: 179,  // progress prorates high (barely positive)
+    });
+    expect(r.window.passed).toBe(false);
+    expect(r.window.reason).toMatch(/Beyond \+15% window/);
+    expect(r.window.vsB1Pct).toBeCloseTo(20, 2);
+    expect(r.blocked).toBe(true);
+    expect(r.finalShares).toBe(0);
+    // bind='window' — the UI uses this to show the exemption picker,
+    // not a generic "blocked" state.
+    expect(r.bind).toBe("window");
+  });
+
+  it("exemptReason='sr8_rebuild' bypasses the window block", () => {
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 180,
+      currentPrice: 180,
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "B1" }],
+      ema21: 179,
+      keyLevel: 179,
+      lastHeldBuyPrice: 179,
+      exemptReason: "sr8_rebuild",
+    });
+    expect(r.window.passed).toBe(true);
+    expect(r.window.exemptReason).toBe("sr8_rebuild");
+    expect(r.blocked).toBe(false);
+    expect(r.finalShares).toBeGreaterThan(0);
+  });
+
+  it("exemptReason='fresh_base' bypasses the window block", () => {
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 180,
+      currentPrice: 180,
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "B1" }],
+      ema21: 179,
+      keyLevel: 179,
+      lastHeldBuyPrice: 179,
+      exemptReason: "fresh_base",
+    });
+    expect(r.window.passed).toBe(true);
+    expect(r.window.exemptReason).toBe("fresh_base");
+    expect(r.blocked).toBe(false);
+    expect(r.finalShares).toBeGreaterThan(0);
+  });
+
+  it("b1Price falls back to heldLots[0].entry when not passed explicitly", () => {
+    // No b1Price in input; heldLots[0] is B1 @ $150. Window ceiling = $172.50.
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 175,
+      currentPrice: 175,
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "B1" }],
+      ema21: 174,
+      keyLevel: 174,
+      lastHeldBuyPrice: 174,
+    });
+    // 175 vs 150 = +16.67% — beyond +15%.
+    expect(r.window.b1Price).toBe(150);
+    expect(r.window.passed).toBe(false);
+  });
+
+  it("explicit b1Price wins over heldLots[0].entry", () => {
+    // Same held lot ($150), but caller says B1 was actually $140
+    // (e.g. lot_closures already netted the original B1 to 0 shares
+    // and the caller has the historical fill from another source).
+    // Window ceiling = $140 × 1.15 = $161. Price $170 → beyond window.
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 170,
+      currentPrice: 170,
+      b1Price: 140,
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "A1" }],
+      ema21: 169,
+      keyLevel: 169,
+      lastHeldBuyPrice: 169,
+    });
+    expect(r.window.b1Price).toBe(140);
+    expect(r.window.passed).toBe(false);
+    expect(r.window.vsB1Pct).toBeCloseTo(21.43, 1);
+  });
+
+  it("no B1 available (fresh campaign, empty heldLots) → window passes", () => {
+    const r = computePyramidSizing({
+      ...HAPPY,
+      heldLots: [],
+      lastHeldBuyPrice: 0,
+    });
+    expect(r.window.passed).toBe(true);
+    expect(Number.isNaN(r.window.vsB1Pct)).toBe(true);
+  });
+
+  it("bind stays 'blocked' (not 'window') when other gates also blocked", () => {
+    // Beyond window AND progress fails (below last held buy). Bind
+    // should be generic 'blocked' — user's first fix is the deeper
+    // problem, not the exemption.
+    const r = computePyramidSizing({
+      ...HAPPY,
+      entry: 180,
+      currentPrice: 180,
+      heldLots: [{ shares: 10, entry: 150, stopLoss: 149, label: "B1" }],
+      ema21: 179,
+      keyLevel: 179,
+      lastHeldBuyPrice: 190,  // below-last-buy → progress fails
+    });
+    expect(r.window.passed).toBe(false);
+    expect(r.progress.passed).toBe(false);
+    expect(r.bind).toBe("blocked");
+  });
+
+  it("PYRAMID_WINDOW_MAX_PCT constant is 15", () => {
+    // Regression guard on the +15% policy.
+    expect(PYRAMID_WINDOW_MAX_PCT).toBe(15);
+  });
+});
+
 describe("classifyPyramidScreener — ACS column classifier", () => {
   const BASE = { isOption: false, pyramidPct: 7, posSizePct: 10, riskDollars: 500, equity: 400_000 };
 
@@ -375,6 +518,50 @@ describe("classifyPyramidScreener — ACS column classifier", () => {
     // Documented in the comment: sizer uses live MCT mode, screener
     // assumes Normal. Regression guard on the constant.
     expect(PYRAMID_SCREENER_DEFAULT_TOL_PCT).toBe(0.5);
+  });
+
+  it("currentVsB1Pct > +15% blocks with reason='window'", () => {
+    const r = classifyPyramidScreener({ ...BASE, currentVsB1Pct: 18.3 });
+    expect(r.level).toBe("blocked");
+    expect(r.reason).toBe("window");
+    expect(r.detail).toMatch(/\+18\.3% > \+15%/);
+  });
+
+  it("currentVsB1Pct exactly at +15% does NOT block (equality is inside window)", () => {
+    const r = classifyPyramidScreener({ ...BASE, currentVsB1Pct: 15 });
+    expect(r.reason).not.toBe("window");
+  });
+
+  it("currentVsB1Pct null / undefined skips the window check entirely", () => {
+    // Backward-compat: pre-v6 ACS callers didn't pass the field.
+    const nullish = classifyPyramidScreener({ ...BASE });
+    const explicit = classifyPyramidScreener({ ...BASE, currentVsB1Pct: null });
+    expect(nullish.reason).not.toBe("window");
+    expect(explicit.reason).not.toBe("window");
+  });
+
+  it("window fires AFTER ceiling in priority ordering (ceiling still wins)", () => {
+    // Position is beyond window AND at ceiling. Ceiling wins because
+    // it's the more permanent block — window can be exempted, ceiling
+    // requires trimming first.
+    const r = classifyPyramidScreener({
+      ...BASE,
+      posSizePct: 26,
+      currentVsB1Pct: 22,
+    });
+    expect(r.reason).toBe("ceiling");
+  });
+
+  it("window fires BEFORE budget/progress when they'd otherwise block", () => {
+    // Position is beyond window AND budget-blocked. Window is more
+    // informative for the trader ("beyond +15% — need SR8/fresh_base
+    // exemption") than "0.63% > 0.50%".
+    const r = classifyPyramidScreener({
+      ...BASE,
+      riskDollars: 2500,     // would trigger budget
+      currentVsB1Pct: 22,     // window
+    });
+    expect(r.reason).toBe("window");
   });
 });
 

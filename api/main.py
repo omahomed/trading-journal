@@ -2514,6 +2514,7 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Instrument_Type": "instrument_type", "Multiplier": "multiplier",
         "Match_Method": "match_method",
         "Stop_Ladder": "stop_ladder",
+        "Add_Exempt_Reason": "add_exempt_reason",
         "Strategy": "strategy",
         "B1_Entry_Price": "b1_entry_price",
         "B1_Max_Return_Pct": "b1_max_return_pct",
@@ -6111,6 +6112,25 @@ def log_buy(request: Request, body: dict):
         # _save_detail_row_in_txn.
         if stop_ladder is not None:
             detail_row["Stop_Ladder"] = stop_ladder
+        # Migration 049: §2 Window rule exempt-reason capture. Only add-on
+        # BUYs (scale-in) beyond +15% from B1 pass this — the sizer / Log
+        # Buy UI blocks or warns and requires the trader to pick a reason.
+        # Server-side: validate against the enum and refuse silently-wrong
+        # values instead of letting the DB CHECK constraint fail late.
+        raw_reason = body.get("add_exempt_reason")
+        if raw_reason:
+            reason = str(raw_reason).strip().lower()
+            if reason not in ("sr8_rebuild", "fresh_base"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"add_exempt_reason must be 'sr8_rebuild' or 'fresh_base', got {raw_reason!r}",
+                )
+            if action_type != "scalein":
+                raise HTTPException(
+                    status_code=422,
+                    detail="add_exempt_reason only applies to scale-in adds (A-series). Omit on new-campaign buys.",
+                )
+            detail_row["Add_Exempt_Reason"] = reason
         detail_id, trx_id = _save_detail_with_unique_trx_id(
             portfolio, trade_id, trx_prefix, detail_row, given_trx_id=client_trx_id,
         )

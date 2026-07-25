@@ -1,21 +1,28 @@
 /**
  * Pyramid Sizer — per-lot risk-accounted sizing for pyramid adds.
  *
- * Six-rule model (2026-07-18 redesign):
+ * Seven-rule model (2026-07-25 v6: added §2 WINDOW):
  *   1. LOCATION  price ≤ 21EMA + 1×ATR$/share   else block ("extended")
- *   2. PROGRESS  last held buy up ≥5% for full size; 0–5% prorated;
+ *   2. WINDOW    current_price ≤ b1_price × 1.15  else block
+ *                UNLESS exemptReason is 'sr8_rebuild' or 'fresh_base'.
+ *                Rejects at-level add tranches beyond +15% from B1. Both
+ *                exemptions are USER-DECLARED at commit time; the sizer
+ *                just honors the declaration (no auto-classify).
+ *                Post-30-adds review checkpoint drives from persisted
+ *                declarations (trades_details.add_exempt_reason).
+ *   3. PROGRESS  last held buy up ≥5% for full size; 0–5% prorated;
  *                below last buy = block
- *   3. BUDGET    campaign_budget = mode% × NAV
+ *   4. BUDGET    campaign_budget = mode% × NAV
  *                campaign_risk   = Σ lot.shares × max(0, lot.entry − lot.stop)
  *                headroom        = budget − campaign_risk   ≤ 0 = block
- *   4. SIZE      composite       = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%))
+ *   5. SIZE      composite       = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%))
  *                risk_bound      = floor(headroom ÷ stop_dist)
  *                notional_cap    = floor(5% × NAV ÷ Entry)   ← per-add cap
  *                final_shares    = floor(min(risk_bound, notional_cap) × progress_mult)
- *   5. STOP      composite as above; trails 21 EMA − 0.5 ATR after entry
+ *   6. STOP      composite as above; trails 21 EMA − 0.5 ATR after entry
  *                (rising only). Handled at broker per pinned callout —
  *                this module only emits the initial composite.
- *   6. CEILING   (existing + final) × current_price ≤ 25% × NAV
+ *   7. CEILING   (existing + final) × current_price ≤ 25% × NAV
  *                else clip final_shares down; if ≤ 0, block
  *
  * Composite stop uses the same MIN-of-two candidates the Volatility
@@ -39,6 +46,10 @@ export interface PyramidLotInput {
   label?: string;
 }
 
+/** §2 Window rule exemption. Both are USER-DECLARED at commit time
+ *  (not auto-classified) — the sizer just honors the declaration. */
+export type AddExemptReason = "sr8_rebuild" | "fresh_base";
+
 export interface PyramidSizerInputs {
   equity: number;            // NAV
   entry: number;             // Entry price for the new add
@@ -47,11 +58,20 @@ export interface PyramidSizerInputs {
   keyLevel: number;          // User-typed anchor for the new add's composite
   tolPct: number;            // Sizing mode risk % (Pilot 0.25 / Normal 0.50 / …)
   heldLots: PyramidLotInput[];
-  /** Current price on the ticker (rule 1 gate + rule 6 appreciation). */
+  /** Current price on the ticker (rule 1 gate + rule 7 appreciation). */
   currentPrice: number;
-  /** Price of the last held BUY row (rule 2). NaN / 0 means "no prior
-   *  buy" — a fresh campaign; rule 2 is treated as PASS in that case. */
+  /** Price of the last held BUY row (rule 3). NaN / 0 means "no prior
+   *  buy" — a fresh campaign; rule 3 is treated as PASS in that case. */
   lastHeldBuyPrice: number;
+  /** B1 fill price — the initial buy that anchors the §2 window.
+   *  0 / undefined = no B1 known (fresh campaign) → window rule is
+   *  treated as PASS (nothing to compare against). Typically taken
+   *  from heldLots[0].entry when heldLots are ordered by fill_date. */
+  b1Price?: number;
+  /** User-declared exemption from the §2 window. When set, the sizer
+   *  bypasses the window gate and stamps the reason on the persisted
+   *  add row so the post-30-adds review can filter by declaration. */
+  exemptReason?: AddExemptReason;
 }
 
 export type PyramidBind =
@@ -59,6 +79,7 @@ export type PyramidBind =
   | "notional_cap"  // per-add 5% cap binds
   | "progress"      // prorated multiplier clips final shares
   | "ceiling"       // 25% NAV cap clips
+  | "window"        // §2 window blocks (price > B1 × 1.15, no exemption)
   | "blocked";      // one or more gates blocked; final_shares = 0
 
 export interface LotRiskView {
@@ -93,6 +114,19 @@ export interface ProgressResult extends GateResult {
   lastHeldBuyPrice: number;
 }
 
+export interface WindowResult extends GateResult {
+  /** (current_price − b1_price) / b1_price × 100. NaN when no B1 known
+   *  (fresh campaign). Positive = above B1; negative = below B1. */
+  vsB1Pct: number;
+  /** b1_price × 1.15 — the max price at which an at-level add is
+   *  allowed without an exemption. */
+  ceilingPrice: number;
+  b1Price: number;
+  /** Set when the trader declared an exemption. When present, the
+   *  gate passes even if vsB1Pct > 15. */
+  exemptReason?: AddExemptReason;
+}
+
 export interface BudgetResult extends GateResult {
   budgetDollars: number;
   campaignRisk: number;
@@ -107,6 +141,7 @@ export interface CeilingResult extends GateResult {
 
 export interface PyramidSizerResults {
   location: LocationResult;
+  window: WindowResult;
   progress: ProgressResult;
   budget: BudgetResult;
   ceiling: CeilingResult;
@@ -164,6 +199,12 @@ export const PYRAMID_FULL_SIZE_TRIGGER_PCT = 5;
 /** Rule 1 extension bound: how far above the 21 EMA (in ATR units)
  *  we tolerate before blocking. */
 export const PYRAMID_LOCATION_ATR_MULTIPLE = 1;
+/** §2 Window rule: max % above B1 for an at-level add before the gate
+ *  fires. Two named exemptions ('sr8_rebuild', 'fresh_base') bypass it;
+ *  see AddExemptReason. Post-30-adds review checkpoint per the pyramid-v6
+ *  spec — this constant may move once we have the exemption-outcome data.
+ */
+export const PYRAMID_WINDOW_MAX_PCT = 15;
 
 function evaluateLocation(price: number, ema21: number, atrPerShare: number): LocationResult {
   const ceilingPrice = ema21 + PYRAMID_LOCATION_ATR_MULTIPLE * atrPerShare;
@@ -183,6 +224,43 @@ function evaluateLocation(price: number, ema21: number, atrPerShare: number): Lo
     };
   }
   return { passed: true, ceilingPrice };
+}
+
+function evaluateWindow(
+  currentPrice: number,
+  b1Price: number | undefined,
+  exemptReason: AddExemptReason | undefined,
+): WindowResult {
+  if (!(b1Price && b1Price > 0)) {
+    // No B1 known (fresh campaign, or heldLots empty). Nothing to
+    // compare against — window rule is a PASS. Belt-and-suspenders
+    // parity with evaluateProgress's fresh-campaign fallthrough.
+    return {
+      passed: true,
+      vsB1Pct: Number.NaN,
+      ceilingPrice: 0,
+      b1Price: b1Price ?? 0,
+      exemptReason,
+    };
+  }
+  const ceilingPrice = b1Price * (1 + PYRAMID_WINDOW_MAX_PCT / 100);
+  const vsB1Pct = ((currentPrice - b1Price) / b1Price) * 100;
+  if (vsB1Pct <= PYRAMID_WINDOW_MAX_PCT) {
+    return { passed: true, vsB1Pct, ceilingPrice, b1Price, exemptReason };
+  }
+  // Above window. Exempt-reason bypasses; the reason gets persisted
+  // on the add row for the 30-add review.
+  if (exemptReason) {
+    return { passed: true, vsB1Pct, ceilingPrice, b1Price, exemptReason };
+  }
+  return {
+    passed: false,
+    reason: `Beyond +${PYRAMID_WINDOW_MAX_PCT}% window (currently +${vsB1Pct.toFixed(1)}% vs B1 $${b1Price.toFixed(2)}). Rule 2 blocks at-level adds; declare 'sr8_rebuild' or 'fresh_base' to override.`,
+    vsB1Pct,
+    ceilingPrice,
+    b1Price,
+    exemptReason,
+  };
 }
 
 function evaluateProgress(price: number, lastHeldBuyPrice: number): ProgressResult {
@@ -284,7 +362,7 @@ function evaluateCeiling(
 // ─────────────────────────────────────────────────────────────────
 
 export type PyramidScreenerLevel = "full" | "prorated" | "blocked" | "n/a";
-export type PyramidScreenerReason = "progress" | "ceiling" | "budget" | "option";
+export type PyramidScreenerReason = "progress" | "ceiling" | "budget" | "option" | "window";
 
 export interface PyramidScreenerState {
   level: PyramidScreenerLevel;
@@ -312,14 +390,19 @@ export function classifyPyramidScreener(args: {
   /** At-risk magnitude in $ (EnrichedPosition.risk_dollars, always ≥ 0). */
   riskDollars: number;
   equity: number;
+  /** Current price / B1 fill price, as a percent above B1. e.g. 18.3
+   *  means the position is +18.3% above the B1 fill. Optional — omitted
+   *  callers skip the §2 window check (backward-compat with the ACS
+   *  path pre-v6). Null (fresh campaign / no B1 known) → skip. */
+  currentVsB1Pct?: number | null;
 }): PyramidScreenerState {
-  const { isOption, pyramidPct, posSizePct, riskDollars, equity } = args;
+  const { isOption, pyramidPct, posSizePct, riskDollars, equity, currentVsB1Pct } = args;
 
   if (isOption) {
     return { level: "n/a", profitPct: 0, reason: "option" };
   }
 
-  // Rule 6 — Ceiling. Position already at/above the campaign cap.
+  // Rule 7 — Ceiling. Position already at/above the campaign cap.
   if (posSizePct >= PYRAMID_CAMPAIGN_CEILING_PCT) {
     return {
       level: "blocked",
@@ -329,7 +412,21 @@ export function classifyPyramidScreener(args: {
     };
   }
 
-  // Rule 3 — Budget. Assumes Normal mode; see comment above.
+  // Rule 2 — Window. Position beyond +15% from B1. Screener always
+  // blocks regardless of any prior exempt declaration (per the
+  // "ACS stays honest" decision — the screener flags the current
+  // at-level state; exemption decisions happen inside the sizer).
+  // Skipped when currentVsB1Pct is null/undefined (no B1 to compare).
+  if (currentVsB1Pct != null && currentVsB1Pct > PYRAMID_WINDOW_MAX_PCT) {
+    return {
+      level: "blocked",
+      profitPct: pyramidPct,
+      reason: "window",
+      detail: `+${currentVsB1Pct.toFixed(1)}% > +${PYRAMID_WINDOW_MAX_PCT}%`,
+    };
+  }
+
+  // Rule 4 — Budget. Assumes Normal mode; see comment above.
   if (equity > 0) {
     const budget = (equity * PYRAMID_SCREENER_DEFAULT_TOL_PCT) / 100;
     if (riskDollars > budget && budget > 0) {
@@ -363,7 +460,7 @@ export function classifyPyramidScreener(args: {
 }
 
 export function computePyramidSizing(input: PyramidSizerInputs): PyramidSizerResults {
-  const { equity, entry, atrPct, ema21, keyLevel, tolPct, heldLots, currentPrice, lastHeldBuyPrice } = input;
+  const { equity, entry, atrPct, ema21, keyLevel, tolPct, heldLots, currentPrice, lastHeldBuyPrice, b1Price, exemptReason } = input;
 
   if (!(equity > 0)) throw new PyramidSizerError("equity must be > 0");
   if (!(entry > 0)) throw new PyramidSizerError("entry must be > 0");
@@ -383,11 +480,19 @@ export function computePyramidSizing(input: PyramidSizerInputs): PyramidSizerRes
 
   // Gates.
   const location = evaluateLocation(currentPrice, ema21, atrPerShare);
+  // §2 Window: b1Price falls back to the first held lot's entry when
+  // the caller didn't pass one explicitly (heldLots convention:
+  // ordered by fill_date, so heldLots[0] is B1). Explicit b1Price
+  // wins to support scenarios where the caller has better data
+  // (e.g. lot_closures already netted B1 shares to 0).
+  const effectiveB1Price = b1Price ?? (heldLots.length > 0 ? heldLots[0].entry : undefined);
+  const windowGate = evaluateWindow(currentPrice, effectiveB1Price, exemptReason);
   const progress = evaluateProgress(currentPrice, lastHeldBuyPrice);
   const budget = evaluateBudget(equity, tolPct, heldLots);
 
   const blockReasons: string[] = [];
   if (!location.passed && location.reason) blockReasons.push(location.reason);
+  if (!windowGate.passed && windowGate.reason) blockReasons.push(windowGate.reason);
   if (!progress.passed && progress.reason) blockReasons.push(progress.reason);
   if (!budget.passed && budget.reason) blockReasons.push(budget.reason);
 
@@ -426,10 +531,17 @@ export function computePyramidSizing(input: PyramidSizerInputs): PyramidSizerRes
     finalShares = Math.max(0, ceilingClippedShares);
   }
 
-  // Bind indicator (only meaningful when not blocked).
+  // Bind indicator. When the ONLY reason a block fired is the §2
+  // window (all other gates passed), surface bind='window' so the UI
+  // can render the specific exemption-picker affordance rather than a
+  // generic "blocked" state. If multiple gates blocked at once, fall
+  // through to the generic 'blocked' — the user's first fix isn't
+  // "declare an exemption," it's fix the other gate.
   let bind: PyramidBind;
   if (blocked || finalShares === 0) {
-    bind = "blocked";
+    const onlyWindowBlocked = !windowGate.passed
+      && location.passed && progress.passed && budget.passed;
+    bind = onlyWindowBlocked ? "window" : "blocked";
   } else if (finalShares < progressCappedShares) {
     bind = "ceiling";
   } else if (progress.multiplier < 1 && progressCappedShares < preProgressShares) {
@@ -451,6 +563,7 @@ export function computePyramidSizing(input: PyramidSizerInputs): PyramidSizerRes
 
   return {
     location,
+    window: windowGate,
     progress,
     budget,
     ceiling,

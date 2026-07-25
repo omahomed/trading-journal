@@ -935,6 +935,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     posSizePct: p.pos_size_pct,
                     riskDollars: p.risk_dollars,
                     equity,
+                    // §2 Window rule (Pyramid v6). b1_return_pct is
+                    // already (current - b1) / b1 × 100 (positions.ts).
+                    // Screener always shows the block regardless of any
+                    // prior exempt declaration — ACS stays honest about
+                    // the current at-level state; exemption decisions
+                    // happen inside the sizer.
+                    currentVsB1Pct: p.b1_return_pct,
                   });
 
                   // Tooltip "Current" mirrors the Current Risk $ cell value: the
@@ -977,11 +984,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
                           data-testid="acs-pyramid-cell"
                           title={(() => {
-                            if (pyramidState.level === "full") return `Rule 2 (Progress) satisfied — last held buy up ${pyramidState.profitPct.toFixed(1)}%. Rules 1/3/6 verified in the sizer.`;
-                            if (pyramidState.level === "prorated") return `Prorated: last held buy up ${pyramidState.profitPct.toFixed(1)}% (need 5% for full). Multiplier ${((pyramidState.multiplier ?? 0) * 100).toFixed(0)}%. Rules 1/3/6 verified in the sizer.`;
+                            if (pyramidState.level === "full") return `Rule 3 (Progress) satisfied — last held buy up ${pyramidState.profitPct.toFixed(1)}%. Rules 1/2/4/7 verified in the sizer.`;
+                            if (pyramidState.level === "prorated") return `Prorated: last held buy up ${pyramidState.profitPct.toFixed(1)}% (need 5% for full). Multiplier ${((pyramidState.multiplier ?? 0) * 100).toFixed(0)}%. Rules 1/2/4/7 verified in the sizer.`;
                             if (pyramidState.level === "blocked") {
                               if (pyramidState.reason === "ceiling") return `Blocked: position already at ${pyramidState.detail} — 25% NAV campaign ceiling.`;
-                              if (pyramidState.reason === "budget") return `Blocked: campaign risk ${pyramidState.detail} vs Normal-mode 0.50% budget. Sizer verifies against live MCT mode.`;
+                              if (pyramidState.reason === "window")  return `Rule 2 blocked: position ${pyramidState.detail} above B1. No at-level adds beyond +15% — open the sizer + declare SR8-rebuild or fresh-base to override.`;
+                              if (pyramidState.reason === "budget")  return `Blocked: campaign risk ${pyramidState.detail} vs Normal-mode 0.50% budget. Sizer verifies against live MCT mode.`;
                               if (pyramidState.reason === "progress") return `Blocked: current price ${pyramidState.detail} vs last held buy. Wait for recovery.`;
                             }
                             return "Right-click for actions (View in Journal · Open Position Sizer Pyramid)";
@@ -1008,6 +1016,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           if (pyramidState.level === "blocked") {
                             const shortReason =
                               pyramidState.reason === "ceiling" ? "Ceiling" :
+                              pyramidState.reason === "window"  ? "Window"  :
                               pyramidState.reason === "budget"  ? "Budget"  :
                               "Below";
                             return (

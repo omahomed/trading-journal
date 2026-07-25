@@ -190,6 +190,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     ladderShares?: [number, number, number];
     trade_id?: string;
     action?: string;
+    // §2 Window exemption — declared in Pyramid Sizer, plumbed through
+    // Log Buy's prefill so the sizer + persisted lot never disagree.
+    add_exempt_reason?: "sr8_rebuild" | "fresh_base";
   }) => {
     localStorage.setItem("ps_prefill", JSON.stringify(data));
     if (onNavigate) onNavigate("logbuy");
@@ -268,6 +271,13 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
   // Pyramid config
   const [pyramidRules, setPyramidRules] = useState({ trigger_pct: 5, alloc_pct: 20 });
+  // §2 Window rule exemption. Persisted with the add via Log Buy;
+  // cleared on every holding switch so a previous campaign's exemption
+  // can't silently apply to the new one.
+  const [pyramidExemptReason, setPyramidExemptReason] = useState<"sr8_rebuild" | "fresh_base" | "">("");
+  useEffect(() => {
+    setPyramidExemptReason("");
+  }, [selectedHolding]);
 
   // Auto-fetch price + ATR + 21 EMA + 50 SMA when ticker changes (debounced).
   // Depends on priceLookupRetryTick too — bumping that re-fires without
@@ -562,12 +572,18 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         heldLots,
         currentPrice: entry, // Position Sizer uses `entry` as current
         lastHeldBuyPrice,
+        // §2 Window: heldLots[0] is B1 (LIFO date-ascending), so the
+        // sizer's fallback to heldLots[0].entry picks up B1 price
+        // automatically — no explicit b1Price needed. exemptReason
+        // is honored only when set; blank ("") is treated as "not
+        // exempt" by the sizer via the undefined check.
+        exemptReason: pyramidExemptReason || undefined,
       });
     } catch (err) {
       log.error("position-sizer", "pyramid-sizer compute failed", err);
       return null;
     }
-  }, [calculated, tab, holdingData, holdingInventory, entry, atr, equity, ema21, keyLevel, sizingMode]);
+  }, [calculated, tab, holdingData, holdingInventory, entry, atr, equity, ema21, keyLevel, sizingMode, pyramidExemptReason]);
 
   // ━━━ Trim Results ━━━
   const trimResults = useMemo(() => {
@@ -1240,6 +1256,8 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               modeName={SIZING_MODES_BASE[sizingMode].label}
               ema21={ema21}
               results={pyramidResults}
+              exemptReason={pyramidExemptReason}
+              onExemptReasonChange={setPyramidExemptReason}
               onSendToLogBuy={(args) => sendToLogBuy(args)}
             />
           )}
@@ -1607,7 +1625,7 @@ function VolatilityResults({
 // knows to place the trailing stop at the broker immediately after
 // the add fills. All math lives in @/lib/pyramid-sizer.
 function PyramidResults({
-  ticker, tradeId, entry, tolPct, modeName, ema21, results, onSendToLogBuy,
+  ticker, tradeId, entry, tolPct, modeName, ema21, results, exemptReason, onExemptReasonChange, onSendToLogBuy,
 }: {
   ticker: string;
   tradeId?: string;
@@ -1616,15 +1634,18 @@ function PyramidResults({
   modeName: string;
   ema21: number | null;
   results: PyramidSizerResults;
-  onSendToLogBuy: (args: { ticker: string; shares: number; price: number; trade_id?: string; action: string }) => void;
+  exemptReason: "sr8_rebuild" | "fresh_base" | "";
+  onExemptReasonChange: (r: "sr8_rebuild" | "fresh_base" | "") => void;
+  onSendToLogBuy: (args: { ticker: string; shares: number; price: number; trade_id?: string; action: string; add_exempt_reason?: "sr8_rebuild" | "fresh_base" }) => void;
 }) {
-  const { composite, budget, progress, location, ceiling } = results;
+  const { composite, budget, progress, location, ceiling, window: windowGate } = results;
   const bindLabel = (() => {
     switch (results.bind) {
       case "risk":         return `risk budget (${tolPct.toFixed(2)}%)`;
       case "notional_cap": return `per-add cap (${PYRAMID_ADD_CAP_PCT}% NAV)`;
       case "progress":     return `progress multiplier (${(progress.multiplier * 100).toFixed(0)}%)`;
       case "ceiling":      return `campaign ceiling (${PYRAMID_CAMPAIGN_CEILING_PCT}% NAV)`;
+      case "window":       return `§2 window (+15% above B1)`;
       case "blocked":      return "blocked";
     }
   })();
@@ -1667,6 +1688,61 @@ function PyramidResults({
           </Banner>
         </div>
       )}
+
+      {/* §2 Window exempt-picker — shown whenever the position is
+          beyond +15% from B1 (window gate failed OR exemption already
+          declared). Toggling a reason bypasses the window gate and
+          stamps the reason on the persisted add so the post-30-adds
+          review can filter by declaration. */}
+      {!windowGate.passed || windowGate.exemptReason ? (
+        <div className="mb-3 p-4 rounded-[12px]"
+             data-testid="pyramid-window-picker"
+             style={{
+               border: "1px solid color-mix(in oklab, #d97706 30%, var(--border))",
+               background: "color-mix(in oklab, #d97706 8%, var(--surface))",
+             }}>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-[11px] uppercase tracking-[0.10em] font-semibold" style={{ color: "#d97706" }}>
+              §2 Window — beyond +15% from B1
+            </div>
+            <span className="text-[11px]" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>
+              +{windowGate.vsB1Pct.toFixed(1)}% vs B1 {formatCurrency(windowGate.b1Price)}
+            </span>
+          </div>
+          <div className="text-[12px] mb-2" style={{ color: "var(--ink-3)" }}>
+            Rule 2 blocks at-level add tranches beyond +15% above the initial B1 fill.
+            Two named exemptions bypass the gate — pick one to size the add.
+            Selected reason is persisted on the add row for the 30-adds review.
+          </div>
+          <div className="flex flex-col gap-1.5" data-testid="pyramid-window-reasons">
+            {([
+              { key: "", label: "None (block the add)", desc: "Do not override — respect the +15% window." },
+              { key: "sr8_rebuild", label: "SR8 rebuild (RS-governed)", desc: "Re-adding after an SR8 fire; RS setup drives the rebuild." },
+              { key: "fresh_base", label: "Fresh-base breakout (§3 structural)", desc: "Breakout from a qualifying new base — treated like a fresh entry." },
+            ] as const).map((opt) => {
+              const selected = exemptReason === opt.key;
+              return (
+                <label key={opt.key || "none"}
+                       data-testid={`pyramid-window-reason-${opt.key || "none"}`}
+                       className="flex items-start gap-2 px-2.5 py-1.5 rounded-[8px] cursor-pointer"
+                       style={{
+                         background: selected ? "color-mix(in oklab, #d97706 15%, var(--surface))" : "transparent",
+                         border: `1px solid ${selected ? "color-mix(in oklab, #d97706 40%, var(--border))" : "transparent"}`,
+                       }}>
+                  <input type="radio" name="pyramid-window-reason"
+                         checked={selected}
+                         onChange={() => onExemptReasonChange(opt.key)}
+                         className="mt-0.5" />
+                  <span className="flex flex-col">
+                    <span className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>{opt.label}</span>
+                    <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{opt.desc}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {/* THE ANSWER — two side-by-side tiles. */}
       <div className="grid grid-cols-2 gap-3 mb-3" data-testid="pyramid-answer">
@@ -1802,10 +1878,12 @@ function PyramidResults({
                     price: entry,
                     trade_id: tradeId,
                     action: "scale_in",
+                    add_exempt_reason: exemptReason || undefined,
                   })}
                   className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-            📝 Send to Log Buy — {ticker || "—"} (+{results.finalShares} shs @ {formatCurrency(entry)})
+            📝 Send to Log Buy — {ticker || "—"} (+{results.finalShares} shs @ {formatCurrency(entry)}
+            {exemptReason ? `, exempt: ${exemptReason === "sr8_rebuild" ? "SR8" : "Fresh"}` : ""})
           </button>
         </div>
       )}

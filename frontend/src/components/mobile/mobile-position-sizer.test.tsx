@@ -754,17 +754,21 @@ describe("MobilePositionSizer — Pyramid math (composite-stop model)", () => {
   });
 
   test("happy path: profitable name with Key Level anchor → answer card + broker callout", async () => {
-    // Fixture: NAV $400K, DELL-ish. 100sh @ 150 stopped at 148 (small
+    // Fixture: NAV $400K, DELL-ish. 100sh @ 160 stopped at 158 (small
     // per-lot risk), adding at 180. Key Level = 175, ATR 4.5%. Tight
     // stops → positive headroom → sizer produces a real add.
+    //
+    // B1=$160, add=$180 → +12.5% from B1 (inside the §2 window's +15%
+    // ceiling). Bumping B1 from $150 → $160 dodges the v6 window gate
+    // that would otherwise block a fixture designed pre-v6.
     setApiMocks({
       endNlv: 400_000,
       state: "UPTREND",
       price: 180,
       atrPct: 4.5,
-      holdings: [holdingFixture({ trade_id: "T1", ticker: "DELL", shares: 100, avg_entry: 150 })],
+      holdings: [holdingFixture({ trade_id: "T1", ticker: "DELL", shares: 100, avg_entry: 160 })],
       details: [
-        detailFixture({ trade_id: "T1", ticker: "DELL", shares: 100, amount: 150, stop_loss: 148, trx_id: "B1" }),
+        detailFixture({ trade_id: "T1", ticker: "DELL", shares: 100, amount: 160, stop_loss: 158, trx_id: "B1" }),
       ],
     });
     vi.mocked(api.priceLookup).mockResolvedValue({

@@ -61,6 +61,7 @@ def _lot(**kwargs) -> dict:
         "realized_pl":              None,
         "campaign_realized_pl":     None,
         "shares_closed":            None,
+        "add_exempt_reason":        None,
         "trx_id":                   "B1",
         "fill_date":                date(2026, 1, 10),
         "fill_price":               100.0,
@@ -280,6 +281,7 @@ class TestBaseRow:
         row = lot_excursions._base_row(_lot(), date(2026, 1, 20))
         for key in ["trade_id", "portfolio_name", "ticker", "trx_id",
                     "fill_date", "fill_price", "shares", "shares_closed",
+                    "add_exempt_reason",
                     "status", "closed_date", "window_end_date", "days_held",
                     "mae_pct", "mfe_pct", "days_to_mae", "days_to_mfe",
                     "atr21_at_fill_pct", "mae_atr_multiple",
@@ -287,6 +289,19 @@ class TestBaseRow:
                     "max_high", "max_high_date",
                     "realized_pl", "campaign_realized_pl", "error"]:
             assert key in row, f"missing key: {key}"
+
+    def test_add_exempt_reason_flows_through_base_row(self):
+        """Migration 049: §2 Window exempt-reason ('sr8_rebuild' /
+        'fresh_base') is carried verbatim from the SQL lot row into
+        the output base row so the CSV export can bucket by declared
+        override for the 30-add review."""
+        lot = _lot(trx_id="A5", add_exempt_reason="sr8_rebuild")
+        row = lot_excursions._base_row(lot, date(2026, 1, 20))
+        assert row["add_exempt_reason"] == "sr8_rebuild"
+
+        lot_none = _lot(trx_id="B1")  # default is None
+        row_none = lot_excursions._base_row(lot_none, date(2026, 1, 20))
+        assert row_none["add_exempt_reason"] is None
 
     def test_per_lot_realized_pl_is_distinct_from_campaign_total(self):
         """Regression guard for the 'realized_pl smeared campaign total

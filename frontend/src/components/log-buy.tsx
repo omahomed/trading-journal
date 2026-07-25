@@ -157,6 +157,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [confluenceQuery, setConfluenceQuery] = useState("");
   const [confluenceDropdownOpen, setConfluenceDropdownOpen] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState("");
+  // §2 Window rule exemption (Pyramid v6). Only meaningful when the
+  // scale-in is beyond +15% from B1. Prefilled by the Position Sizer's
+  // handoff when the trader picked a reason there; otherwise the user
+  // ticks a reason inline before submitting. Empty string = "no
+  // exemption declared" (POST body omits the field; sizer/DB treat
+  // as not-exempt).
+  const [addExemptReason, setAddExemptReason] = useState<"sr8_rebuild" | "fresh_base" | "">("");
   // Strategy tagging (Migration 019). Defaults to CanSlim — matches the DB
   // column DEFAULT and the user's primary strategy. On scale-in we render
   // the field read-only and prefill from the parent campaign so the strategy
@@ -334,6 +341,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setSelectedCampaign(data.trade_id);
       } else {
         setActionType("new");
+      }
+      // §2 Window rule (Migration 049). Sizer's Pyramid tab hands off
+      // the trader-declared exemption reason ('sr8_rebuild' /
+      // 'fresh_base') when the scale-in is beyond +15% from B1. Trust
+      // the sizer's picker — Log Buy still shows its own reason
+      // controls, but they arrive pre-selected.
+      if (data.add_exempt_reason === "sr8_rebuild" || data.add_exempt_reason === "fresh_base") {
+        setAddExemptReason(data.add_exempt_reason);
       }
     } catch { /* ignore */ }
   }, []);
@@ -542,6 +557,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
       if (da !== db) return da.localeCompare(db);
       return (String(a.action).toUpperCase() === "BUY" ? 0 : 1) - (String(b.action).toUpperCase() === "BUY" ? 0 : 1);
     });
+    // §2 Window rule (Pyramid v6): anchor for the +15% gate is the
+    // FIRST BUY chronologically (B1's fill price). We compute it here
+    // rather than reading trades_summary.b1_entry_price so the check
+    // works even when Migration 036's field is stale/absent (older
+    // rows). Falls back to avg_entry when there are no BUYs (defensive
+    // — shouldn't happen for a live campaign).
+    const firstBuy = sorted.find(d => String(d.action).toUpperCase() === "BUY");
+    const b1Price = firstBuy ? parseFloat(String(firstBuy.amount || 0)) : avgEntry;
+    const currentVsB1Pct = b1Price > 0 ? ((livePrice - b1Price) / b1Price) * 100 : 0;
     const inv: { qty: number; price: number; stop: number }[] = [];
     for (const tx of sorted) {
       const action = String(tx.action || "").toUpperCase();
@@ -631,6 +655,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
       newTotalShares, newAvgCost, newValue, newPosPct,
       stopRule, minStop, riskFreeAdd, combinedStop, combinedRisk, combinedRiskPct,
       addShares, addPrice,
+      b1Price, currentVsB1Pct,
     };
   }, [actionType, selectedCamp, allDetails, campPrice, equity, sharesNum, priceNum, stopPrice]);
 
@@ -743,6 +768,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
             { pct: 7, shares: ladderShares[2] },
           ],
         };
+      }
+      // §2 Window rule exempt-reason. Only sent on scale-in submits
+      // where the user (or the sizer's handoff) picked a reason.
+      // Backend validates the enum + refuses on non-scalein action_type.
+      if (actionType === "scalein" && addExemptReason) {
+        body.add_exempt_reason = addExemptReason;
       }
 
       const result = await api.logBuy(body);
@@ -1292,6 +1323,50 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     </div>
                   </div>
                 </div>
+
+                {/* §2 Window warning + exempt-reason picker. Only shown
+                    when the scale-in is beyond +15% above B1 (rule 2
+                    of the Pyramid v6 model). Warning, not a block —
+                    Log Buy is the manual override path — but persists
+                    the declared reason so the 30-add review can
+                    audit the calls. When the user got here via the
+                    Position Sizer's picker, the reason is prefilled. */}
+                {scaleIn.b1Price > 0 && scaleIn.currentVsB1Pct > 15 && (
+                  <div className="px-3 py-3 rounded-[10px]"
+                       data-testid="logbuy-window-picker"
+                       style={{
+                         background: "color-mix(in oklab, #d97706 10%, var(--surface))",
+                         border: "1px solid color-mix(in oklab, #d97706 30%, var(--border))",
+                       }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-[11px] uppercase tracking-[0.08em] font-semibold" style={{ color: "#d97706" }}>
+                        §2 Window — beyond +15% from B1
+                      </div>
+                      <span className="text-[11px]" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-3)" }}>
+                        +{scaleIn.currentVsB1Pct.toFixed(1)}% vs B1 {formatCurrency(scaleIn.b1Price)}
+                      </span>
+                    </div>
+                    <div className="text-[11px] mb-2" style={{ color: "var(--ink-3)" }}>
+                      Rule 2 blocks at-level adds past +15% above B1. Two named exemptions bypass — pick one to persist the declaration. Post-30-adds review filters by this field.
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      {([
+                        { key: "", label: "None (no exemption declared)" },
+                        { key: "sr8_rebuild", label: "SR8 rebuild (RS-governed)" },
+                        { key: "fresh_base", label: "Fresh-base breakout (§3 structural)" },
+                      ] as const).map((opt) => (
+                        <label key={opt.key || "none"}
+                               data-testid={`logbuy-window-reason-${opt.key || "none"}`}
+                               className="flex items-center gap-2 text-[12px] cursor-pointer">
+                          <input type="radio" name="logbuy-window-reason"
+                                 checked={addExemptReason === opt.key}
+                                 onChange={() => setAddExemptReason(opt.key)} />
+                          <span style={{ color: "var(--ink-2)" }}>{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Divider */}
                 <div style={{ borderTop: "1px solid var(--border)" }} />

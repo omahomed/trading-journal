@@ -94,6 +94,32 @@ trigger NOT NULL-violates and aborts the migration that fired it. See
 for the canonical pattern. `migrations/run.py` also `SET LOCAL`s the founder
 UUID per migration as defense in depth.
 
+## Pyramid Sizer v6 rules (2026-07-25)
+
+Seven-rule model. Rule 2 (WINDOW) is the v6 addition — earlier docs
+mention six rules; that snapshot is stale. Codified in
+[frontend/src/lib/pyramid-sizer.ts](frontend/src/lib/pyramid-sizer.ts).
+
+  1. **LOCATION** — price ≤ 21EMA + 1× ATR/share; else "extended" block.
+  2. **WINDOW** — current_price ≤ B1 × 1.15. **Exempt** only when the
+     trader declares `sr8_rebuild` (RS-governed rebuild after SR8 fire)
+     or `fresh_base` (§3 structural breakout from a qualifying new base).
+     Declarations persist to `trades_details.add_exempt_reason` (migration
+     049) and flow through `scripts/export_lot_excursions.py` so the
+     post-30-adds review can bucket exemption outcomes.
+  3. **PROGRESS** — last held buy up ≥5% = full; 0–5% prorated; <0% blocked.
+  4. **BUDGET** — headroom = mode% × NAV − Σ per-lot risk. ≤0 blocks.
+  5. **SIZE** — composite = MIN(Entry−1 ATR, KeyLevel−max(0.5 ATR, 1%)).
+  6. **STOP** — composite; trails 21 EMA − 0.5 ATR (rising only).
+  7. **CEILING** — (existing + add) × current_price ≤ 25% NAV.
+
+**Both exemptions are USER-DECLARED at commit time, not auto-classified.**
+Structural-breakout + RS-rebuild judgments mis-classify at the edges;
+a false-positive silently lets an unqualified add through the gate.
+The sizer + Log Buy surface the picker; ACS shows the "Window" block
+in the Pyramid column so the trader knows before opening the sizer.
+Constant lives at `PYRAMID_WINDOW_MAX_PCT` — review after 30 v6-era adds.
+
 ## Backtest workflow (standing)
 
 When the user says "run a backtest" (or similar phrasing — "backtest X",

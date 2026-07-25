@@ -594,6 +594,9 @@ export interface LotExcursion {
   fill_price: number | null;
   shares: number | null;
   shares_closed: number | null;
+  // Migration 049: §2 Window rule exemption tag. NULL for non-exempt
+  // adds; 'sr8_rebuild' / 'fresh_base' when declared.
+  add_exempt_reason: "sr8_rebuild" | "fresh_base" | null;
   window_end_date: string;
   days_held: number | null;
   mae_pct: number | null;

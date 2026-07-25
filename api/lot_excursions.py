@@ -117,6 +117,12 @@ def fetch_campaign_lots(
             b.date AS fill_date,
             b.amount AS fill_price,
             b.shares,
+            -- Migration 049: §2 Window rule exemption tag. NULL for
+            -- non-exempt or pre-v6 adds; 'sr8_rebuild' / 'fresh_base'
+            -- when the trader declared an override in the sizer /
+            -- Log Buy. Post-30-adds review filters this column to
+            -- bucket outcomes by declaration.
+            b.add_exempt_reason,
             -- Same-day SELL prices scoped to THIS lot's date. NULL when
             -- no sell landed on the same day (the common case for a
             -- clean add-on). Same MIN/MAX pattern as fetch_candidates
@@ -382,6 +388,7 @@ def _base_row(lot: dict, window_end_date: date) -> dict:
         "fill_price":            float(lot["fill_price"]) if lot.get("fill_price") else None,
         "shares":                float(lot["shares"]) if lot.get("shares") else None,
         "shares_closed":         float(lot["shares_closed"]) if lot.get("shares_closed") else None,
+        "add_exempt_reason":     lot.get("add_exempt_reason"),
         "window_end_date":       window_end_date.isoformat(),
         "days_held":             None,
         "mae_pct":               None,

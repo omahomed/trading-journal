@@ -111,6 +111,10 @@ log = logging.getLogger("export_lot_excursions")
 CSV_COLUMNS = [
     "portfolio_name", "trade_id", "ticker", "status", "closed_date",
     "trx_id", "fill_date", "fill_price", "shares", "shares_closed",
+    # Migration 049: §2 Window exempt-reason tag ('sr8_rebuild' /
+    # 'fresh_base' / NULL). Filters the 30-add review by declared
+    # override reason vs. plain (non-exempt) adds.
+    "add_exempt_reason",
     "window_end_date", "days_held",
     "mae_pct", "mae_atr_multiple", "min_low", "min_low_date", "days_to_mae",
     "mfe_pct", "mfe_atr_multiple", "max_high", "max_high_date", "days_to_mfe",
