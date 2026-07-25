@@ -629,17 +629,25 @@ def write_campaigns(
     portfolio_name: str,
     campaigns: list[Campaign],
     strategy: str,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[tuple[str, str]]]:
     """Insert summary + detail rows for each campaign. Returns
-    (summary_count, detail_count). Cash transactions for BUY/SELL are
-    emitted automatically here too (no DB trigger fires for this
-    script's connection).
+    (summary_count, detail_count, written_trades). Cash transactions for
+    BUY/SELL are emitted automatically here too (no DB trigger fires for
+    this script's connection).
+
+    `written_trades` is a list of (trade_id, ticker) tuples for every
+    campaign inserted — the caller uses this to invoke
+    `_recompute_summary_matching` post-commit so `lot_closures` gets
+    populated. Historically this step was skipped, leaving 39 pre-2026-07-25
+    trades with a summary but no closure ledger; the recompute fixes it
+    going forward.
 
     All INSERTs carry user_id explicitly — see _resolve_portfolio for
     why the column's DEFAULT can't be relied on.
     """
     summary_count = 0
     detail_count = 0
+    written_trades: list[tuple[str, str]] = []
 
     # Per-month seq counters cached so we don't re-query for every
     # campaign in the same month.
@@ -692,6 +700,7 @@ def write_campaigns(
             tuple(summary_vals),
         )
         summary_count += 1
+        written_trades.append((trade_id, camp.ticker))
 
         # Insert detail rows. trx_id per camp: B1, A1, A2, ..., S1, S2, ...
         b_count = 0
@@ -741,7 +750,7 @@ def write_campaigns(
                      tx.action.lower(), detail_id),
                 )
 
-    return summary_count, detail_count
+    return summary_count, detail_count, written_trades
 
 
 def write_cash_rows(
@@ -930,7 +939,7 @@ def run_import(args: argparse.Namespace) -> int:
             if args.reset_cash_ledger:
                 reset_count = reset_cash_ledger(cur, portfolio_id, user_id)
 
-            s_count, d_count = write_campaigns(
+            s_count, d_count, written_trades = write_campaigns(
                 cur, portfolio_id, user_id, args.portfolio,
                 equity_campaigns + option_campaigns,
                 args.strategy,
@@ -945,6 +954,34 @@ def run_import(args: argparse.Namespace) -> int:
             else:
                 conn.rollback()
                 log.info("Dry-run: rolled back all writes")
+
+    # Populate lot_closures for every trade written. Runs OUTSIDE the
+    # outer transaction so the recompute's fresh connection sees the
+    # committed details. Only fires on --commit — dry-run rolled back
+    # every insert, so there's nothing to recompute. Failures are logged
+    # loudly but don't abort — the summary is the high-stakes write,
+    # and lot_closures can be healed later via
+    # `scratchpad/backfill_lot_closures.py`.
+    if args.commit and written_trades:
+        try:
+            from api.main import _recompute_summary_matching  # deferred: heavy import
+            import db_layer as _db_layer  # for tenant context
+            _db_layer.current_user_id.set(user_id)
+        except Exception as e:
+            log.error("lot_closures recompute setup failed (%s) — "
+                      "run scratchpad/backfill_lot_closures.py to heal.", e)
+        else:
+            recompute_ok = 0
+            recompute_fail = 0
+            for trade_id, ticker in written_trades:
+                try:
+                    _recompute_summary_matching(args.portfolio, trade_id, ticker)
+                    recompute_ok += 1
+                except Exception as e:
+                    recompute_fail += 1
+                    log.warning("[lot_closures] recompute failed for %s %s: %s",
+                                trade_id, ticker, e)
+            log.info("Recomputed lot_closures: %d ok, %d failed", recompute_ok, recompute_fail)
 
     print_report(
         csv_path=csv_path, portfolio=args.portfolio, since=since,
