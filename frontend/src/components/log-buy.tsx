@@ -192,7 +192,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // 0.0 for tickers with <21 bars (the "ATR unavailable" sentinel). The pills
   // disable in that case and the user falls back to Price or Percentage.
   const [atrPct, setAtrPct] = useState(0);
-  const [atrMultiplier, setAtrMultiplier] = useState<1 | 1.5 | 2>(1.5);
+  // Default 0.75× = the broker-stop multiplier the Position Sizer
+  // hands off (Entry − 0.75× ATR21). Manual overrides are 1× or 1.5×.
+  // The old 2× pill was removed 2026-07-25 as unused.
+  const [atrMultiplier, setAtrMultiplier] = useState<0.75 | 1 | 1.5>(0.75);
   // For options the stop-loss field is hidden by default — premium-based
   // stops don't follow the < 8% stock convention, and 50% is a placeholder
   // not a meaningful default. The user can reveal it via "Show stop loss".
@@ -314,7 +317,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         // because currentSum already matches total.
         setStopMode("ladder");
         setLadderShares([Number(data.ladderShares[0]) || 0, Number(data.ladderShares[1]) || 0, Number(data.ladderShares[2]) || 0]);
-      } else if (data.stopMode === "atr" && (data.atrMultiplier === 1 || data.atrMultiplier === 1.5 || data.atrMultiplier === 2)) {
+      } else if (data.stopMode === "atr" && (data.atrMultiplier === 0.75 || data.atrMultiplier === 1 || data.atrMultiplier === 1.5)) {
         setStopMode("atr");
         setAtrMultiplier(data.atrMultiplier);
       } else if (data.stopMode === "price" && typeof data.stop === "number") {
@@ -348,7 +351,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
     if (!pendingAtrDefault || !atrResolved) return;
     if (atrPct > 0) {
       setStopMode("atr");
-      setAtrMultiplier(1.5);
+      setAtrMultiplier(0.75);
     }
     // else: leave stopMode at "pct" with slPct="5.0" — current behavior.
     setPendingAtrDefault(false);
@@ -1054,7 +1057,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       </div>
                     ) : stopMode === "atr" ? (
                       <div className="flex gap-2 mt-1" data-testid="logbuy-atr-pills">
-                        {([1, 1.5, 2] as const).map(m => {
+                        {([0.75, 1, 1.5] as const).map(m => {
                           const selected = atrMultiplier === m;
                           const disabled = atrPct === 0;
                           return (

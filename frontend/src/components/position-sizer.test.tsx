@@ -339,11 +339,11 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     expect(screen.getByTestId("bind-badge").textContent).toBe("Ceiling-bound");
   });
 
-  test("Send to Log Buy emits price payload with the resolved composite stop", async () => {
-    // Under the new model, the sizer always sends a resolved dollar
-    // stop (composite.price) with stopMode='price'. The old ATR-mode
-    // handoff is retired — Log Buy no longer needs to recompute a stop
-    // from its own ATR lookup because the composite is already fixed.
+  test("Send to Log Buy emits ATR-mode payload at 0.75× (broker stop is the persisted stop)", async () => {
+    // The composite (1 ATR) is a math intermediate that drove finalShares
+    // but doesn't persist. What lands in trades_summary.stop_loss is the
+    // broker stop at 0.75× ATR21. Handoff ships ATR mode (not a resolved
+    // dollar) so Log Buy recomputes if the user edits the entry price.
     render(<PositionSizer navColor="#6366f1" />);
     const indicator = await screen.findByTestId("sizer-mode-indicator");
     await waitFor(() => expect(indicator.textContent).toMatch(/Normal/));
@@ -368,9 +368,10 @@ describe("PositionSizer — Volatility Sizer composite-stop model", () => {
     expect(stored.ticker).toBe("DELL");
     expect(stored.shares).toBe(229);
     expect(stored.price).toBe(176.21);
-    expect(stored.stopMode).toBe("price");
-    expect(stored.stop).toBeCloseTo(167.51, 1);   // composite stop (KL-based buffer)
-    expect(stored.atrMultiplier).toBeUndefined();
+    expect(stored.stopMode).toBe("atr");
+    expect(stored.atrMultiplier).toBe(0.75);
+    // No resolved dollar stop — Log Buy recomputes from atrPct.
+    expect(stored.stop).toBeUndefined();
     expect(stored.action).toBe("new");
   });
 

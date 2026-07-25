@@ -499,11 +499,12 @@ describe("LogBuy — strategy dropdown", () => {
 // ─────────────────────────────────────────────────────────────────────
 // ATR stop-loss mode — third option alongside Price Level / Percentage.
 // Captures atr_pct from /api/prices/lookup, renders multiplier pills
-// (1× / 1.5× / 2×, default 1.5×), disables pills when atrPct=0, hides
-// the radio entirely on option tickers, and resolves the stop inline
-// at submit. Importer prefill without explicit stop fields defaults
-// to ATR when atrPct > 0; falls through to pct/5.0 when ATR is
-// unavailable (existing behavior, no regression).
+// (0.75× / 1× / 1.5×, default 0.75×), disables pills when atrPct=0,
+// hides the radio entirely on option tickers, and resolves the stop
+// inline at submit. Importer prefill without explicit stop fields
+// defaults to ATR at 0.75× (the broker-stop multiplier the Position
+// Sizer hands off) when atrPct > 0; falls through to pct/5.0 when ATR
+// is unavailable. The old 2× pill was removed 2026-07-25 as unused.
 // ─────────────────────────────────────────────────────────────────────
 
 
@@ -535,7 +536,7 @@ describe("LogBuy — ATR stop-loss mode", () => {
     });
   });
 
-  test("multiplier pills 1× / 1.5× / 2× render with default selection 1.5×", async () => {
+  test("multiplier pills 0.75× / 1× / 1.5× render with default selection 0.75×", async () => {
     mockPriceLookup(180, 2.0);
     render(<LogBuy navColor="#6366f1" />);
     await screen.findByTestId("logbuy-sizing-mode-indicator");
@@ -553,12 +554,13 @@ describe("LogBuy — ATR stop-loss mode", () => {
     const pills = await screen.findByTestId("logbuy-atr-pills");
     const buttons = pills.querySelectorAll("button");
     expect(buttons).toHaveLength(3);
-    expect(buttons[0].textContent).toContain("1×");
-    expect(buttons[1].textContent).toContain("1.5×");
-    expect(buttons[2].textContent).toContain("2×");
-    // Default = 1.5× → aria-pressed=true on middle pill.
-    expect(buttons[0].getAttribute("aria-pressed")).toBe("false");
-    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0].textContent).toContain("0.75×");
+    expect(buttons[1].textContent).toContain("1×");
+    expect(buttons[2].textContent).toContain("1.5×");
+    // Default = 0.75× (broker-stop multiplier) → aria-pressed=true on
+    // the first pill.
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[1].getAttribute("aria-pressed")).toBe("false");
     expect(buttons[2].getAttribute("aria-pressed")).toBe("false");
   });
 
@@ -610,7 +612,7 @@ describe("LogBuy — ATR stop-loss mode", () => {
     await selectBuyRule(FIRST_RULE);
     fillByLabel("Shares to Add", "50");
 
-    // Pick ATR mode at default 1.5×. Expected stop_loss = 100 × (1 − 1.5 × 2/100) = 97.
+    // Pick ATR mode at default 0.75×. Expected stop_loss = 100 × (1 − 0.75 × 2/100) = 98.50.
     await act(async () => {
       fireEvent.click(screen.getByText(/ATR \(×\)/));
     });
@@ -621,7 +623,8 @@ describe("LogBuy — ATR stop-loss mode", () => {
 
     await waitFor(() => expect(api.logBuy).toHaveBeenCalled());
     const body = vi.mocked(api.logBuy).mock.calls[0][0] as Record<string, unknown>;
-    expect(body.stop_loss).toBeCloseTo(97, 4);
+    // 100 × (1 − 0.75 × 2/100) = 98.50
+    expect(body.stop_loss).toBeCloseTo(98.5, 4);
   });
 
   test("selecting ATR radio flips stopMode and replaces the slPct input with the pills", async () => {
@@ -648,21 +651,22 @@ describe("LogBuy — ATR stop-loss mode", () => {
     expect(screen.getByText("ATR Multiplier")).toBeInTheDocument();
   });
 
-  test("Sizer handoff with {stopMode:'atr', atrMultiplier:1.5} sets Log Buy to ATR mode + 1.5× pill", async () => {
+  test("Sizer handoff with {stopMode:'atr', atrMultiplier:0.75} sets Log Buy to ATR mode + 0.75× pill (broker stop)", async () => {
     mockPriceLookup(180, 2.0);
     localStorage.setItem("ps_prefill", JSON.stringify({
       ticker: STOCK_TICKER, shares: 50, price: 180,
-      stopMode: "atr", atrMultiplier: 1.5, action: "new",
+      stopMode: "atr", atrMultiplier: 0.75, action: "new",
     }));
     render(<LogBuy navColor="#6366f1" />);
     await screen.findByTestId("logbuy-sizing-mode-indicator");
     await waitFor(() => expect(api.priceLookup).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
 
-    // ATR pills should be rendered (mode flipped) with 1.5× selected.
+    // ATR pills should be rendered (mode flipped) with 0.75× (first pill) selected.
     const pills = await screen.findByTestId("logbuy-atr-pills");
     const buttons = pills.querySelectorAll("button");
-    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0].textContent).toContain("0.75×");
   });
 
   test("Sizer handoff with stopMode:'price' + resolved stop sets Log Buy to price mode (ride-along bugfix #1)", async () => {
@@ -712,7 +716,7 @@ describe("LogBuy — ATR stop-loss mode", () => {
     expect(input.value).toBe("5.0");
   });
 
-  test("importer prefill with no stop + atrPct > 0 defaults to ATR mode at 1.5×", async () => {
+  test("importer prefill with no stop + atrPct > 0 defaults to ATR mode at 0.75× (broker stop)", async () => {
     mockPriceLookup(180, 2.5);
     localStorage.setItem("ps_prefill", JSON.stringify({
       ticker: STOCK_TICKER, shares: 50, price: 180, action: "new",
@@ -725,7 +729,8 @@ describe("LogBuy — ATR stop-loss mode", () => {
     // debounce so the effect chain has time to complete.
     const pills = await screen.findByTestId("logbuy-atr-pills", {}, { timeout: 3000 });
     const buttons = pills.querySelectorAll("button");
-    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[0].textContent).toContain("0.75×");
   });
 
   test("ATR-unavailable explanatory line renders when atrPct = 0", async () => {
@@ -788,11 +793,12 @@ describe("LogBuy — ATR stop-loss mode", () => {
 // ATR UI polish (post-deployment review):
 //   - Live Sizer panel now carries an informational ATR row between
 //     Account Equity and Risk $; subtle metadata styling.
-//   - Multiplier pills under ATR mode render all three (1× / 1.5× / 2×)
-//     regardless of which is selected, with the selected pill clearly
-//     distinguished by inverted color/border (background = ink-1,
-//     color = surface). Inactive pills are outlined (background = bg,
-//     border = border). The 1.5× pill is the default selection.
+//   - Multiplier pills under ATR mode render all three (0.75× / 1× /
+//     1.5×) regardless of which is selected, with the selected pill
+//     clearly distinguished by inverted color/border (background =
+//     ink-1, color = surface). Inactive pills are outlined (background
+//     = bg, border = border). The 0.75× pill is the default selection
+//     (the broker-stop multiplier). Old 2× pill removed 2026-07-25.
 // ─────────────────────────────────────────────────────────────────────
 
 
@@ -867,25 +873,24 @@ describe("LogBuy — ATR Live Sizer info row + pill rendering", () => {
     const buttons = pills.querySelectorAll("button");
 
     // All three pills present in the DOM. Earlier production screenshot
-    // raised concern that the 1.5× pill was missing visually; this
-    // assertion locks in that all three are rendered, with 1.5× as the
-    // middle button.
+    // raised concern that pills could visually collapse; this assertion
+    // locks in that all three (0.75× / 1× / 1.5×) are rendered.
     expect(buttons).toHaveLength(3);
-    expect(buttons[0].textContent).toContain("1×");
-    expect(buttons[1].textContent).toContain("1.5×");
-    expect(buttons[2].textContent).toContain("2×");
+    expect(buttons[0].textContent).toContain("0.75×");
+    expect(buttons[1].textContent).toContain("1×");
+    expect(buttons[2].textContent).toContain("1.5×");
 
-    // Visual distinction: selected pill (index 1 = 1.5× default) gets
-    // background = var(--ink-1) (filled) and color = var(--surface)
-    // (inverted text). Inactive pills get background = var(--bg) with
-    // border-only treatment. aria-pressed exposes the selection state
-    // for screen readers and tests.
-    expect(buttons[0].getAttribute("aria-pressed")).toBe("false");
-    expect(buttons[1].getAttribute("aria-pressed")).toBe("true");
+    // Visual distinction: selected pill (index 0 = 0.75× broker-stop
+    // default) gets background = var(--ink-1) (filled) and color =
+    // var(--surface) (inverted text). Inactive pills get background =
+    // var(--bg) with border-only treatment. aria-pressed exposes the
+    // selection state for screen readers and tests.
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[1].getAttribute("aria-pressed")).toBe("false");
     expect(buttons[2].getAttribute("aria-pressed")).toBe("false");
 
-    const selectedStyle = (buttons[1] as HTMLButtonElement).style;
-    const inactiveStyle = (buttons[0] as HTMLButtonElement).style;
+    const selectedStyle = (buttons[0] as HTMLButtonElement).style;
+    const inactiveStyle = (buttons[1] as HTMLButtonElement).style;
     // Selected uses ink-1 background; inactive uses bg. These resolve
     // through CSS vars at render time — we just assert the inline-style
     // strings differ, proving the two states render with different

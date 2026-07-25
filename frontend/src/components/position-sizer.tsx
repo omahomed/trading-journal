@@ -186,7 +186,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     price: number;
     stop?: number;
     stopMode?: "price" | "atr" | "ladder";
-    atrMultiplier?: 1 | 1.5 | 2;
+    atrMultiplier?: 0.75 | 1 | 1.5;
     ladderShares?: [number, number, number];
     trade_id?: string;
     action?: string;
@@ -797,10 +797,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
               <li><strong>Risk-bound:</strong> the composite stop drives share count. Most trades in Normal / Pilot mode.</li>
               <li><strong>Ceiling-bound:</strong> the 15% (or 5%) cap drives share count. Reachable only in Offense mode on calm names — a market-timing discipline hiding inside a sizing formula.</li>
             </ul>
-            <p className="mb-1"><strong>Broker Stop (hard exit at Entry − 0.75× ATR21):</strong></p>
+            <p className="mb-1"><strong>Broker Stop (hard exit at Entry − 0.75× ATR21) — this IS your stop loss:</strong></p>
             <ul className="list-disc ml-4 mb-2">
               <li>Data-driven safety net — a backtest of prior entries found trades breaching −0.75× ATR21 from the entry price have shown ~0% win rate</li>
-              <li>Tighter than the composite (which is bound to ≥1 ATR) — this is a SEPARATE decision from sizing</li>
+              <li>The composite (1 ATR) is math scaffolding — used ONLY to compute share count. Nothing downstream reads it</li>
+              <li>What lands in <code>trades_summary.stop_loss</code> = broker stop. Send-to-Log-Buy prefills the Stop Loss field with 0.75× ATR by default (manual override: 1× or 1.5×)</li>
               <li>Place at the broker immediately after fill so the position auto-exits if the platform is unavailable when the level breaks</li>
             </ul>
             <p className="mb-1"><strong>Scale-Out Stops (3-leg ladder, B1 lots):</strong></p>
@@ -1431,7 +1432,7 @@ function VolatilityResults({
     price: number;
     stop?: number;
     stopMode?: "price" | "atr" | "ladder";
-    atrMultiplier?: 1 | 1.5 | 2;
+    atrMultiplier?: 0.75 | 1 | 1.5;
     ladderShares?: [number, number, number];
     action: string;
   }) => void;
@@ -1486,12 +1487,13 @@ function VolatilityResults({
             {results.finalShares} <span className="text-[14px] font-normal" style={{ color: "var(--ink-4)" }}>shs</span>
           </div>
           <div className="text-[12px] mt-2" style={{ color: "var(--ink-4)" }}>
-            Composite stop: <strong style={{ color: "#3b82f6" }}>{formatCurrency(composite.price)}</strong>{" "}
+            Sizing anchor: <strong style={{ color: "#3b82f6" }}>{formatCurrency(composite.price)}</strong>{" "}
             · <strong style={{ color: "var(--ink-3)" }}>{composite.distancePct.toFixed(2)}%</strong> below entry ·{" "}
             <strong style={{ color: "var(--ink-3)" }}>{composite.atrFraction.toFixed(2)}× ATR</strong>
           </div>
           <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
-            Winner: <strong style={{ color: "var(--ink-3)" }}>{compositeSubtitle}</strong>
+            Winner: <strong style={{ color: "var(--ink-3)" }}>{compositeSubtitle}</strong>{" "}
+            <span style={{ color: "var(--ink-4)" }}>· math scaffolding for share count; broker stop is what persists</span>
           </div>
           <div className="mt-3 pt-2 text-[11px]"
                style={{ borderTop: "1px dashed var(--border)", color: "var(--ink-4)" }}>
@@ -1572,21 +1574,26 @@ function VolatilityResults({
 
       <div className="mt-4">
         <button onClick={() => {
-                  // Send with the resolved composite stop as a dollar
-                  // price. Log Buy consumes stopMode='price' to skip
-                  // its default pct-mode ATR recomputation.
+                  // Send with the BROKER STOP as an ATR-mode multiplier
+                  // (0.75× ATR21). The composite (1 ATR) is a sizing
+                  // math intermediate — it drove finalShares but doesn't
+                  // persist. What lands in trades_summary.stop_loss is
+                  // the 0.75× ATR level, which is what the user parks
+                  // at the broker. ATR mode (not resolved dollar price)
+                  // so Log Buy recomputes the stop if the user edits
+                  // the entry price before saving.
                   onSendToLogBuy({
                     ticker,
                     shares: results.finalShares,
                     price: entry,
-                    stop: composite.price,
-                    stopMode: "price",
+                    stopMode: "atr",
+                    atrMultiplier: BROKER_STOP_ATR_MULT as 0.75,
                     action: "new",
                   });
                 }}
                 className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-          📝 Send to Log Buy — {ticker || "—"} ({results.finalShares} shs @ {formatCurrency(entry)})
+          📝 Send to Log Buy — {ticker || "—"} ({results.finalShares} shs @ {formatCurrency(entry)}, stop {formatCurrency(entry - BROKER_STOP_ATR_MULT * results.atrPerShare)})
         </button>
       </div>
     </div>
