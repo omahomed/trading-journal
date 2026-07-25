@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { api, getActivePortfolio, type TradePosition, type TradeDetail, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { TradeOverviewSidecar } from "./trade-overview-sidecar";
 
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function heatColor(val: number, zMin: number, zMax: number): string {
@@ -232,149 +233,19 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
         </div>
       </div>
 
-      {/* Slide-over panel */}
+      {/* Slide-over panel — extracted to a shared component (2026-07-25)
+          so Campaign Review's right-click context menu can render the
+          same drill-in. */}
       {selectedTrade && (() => {
         const allCampaigns = [...openTrades, ...trades];
         const trade = allCampaigns.find(t => t.trade_id === selectedTrade);
         if (!trade) return null;
-        const txns = allDetails.filter(d => d.trade_id === selectedTrade).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-        const buys = txns.filter(d => String(d.action).toUpperCase() === "BUY");
-        const sells = txns.filter(d => String(d.action).toUpperCase() === "SELL");
-        const pl = parseFloat(String(trade.realized_pl || 0));
-        const ret = parseFloat(String(trade.return_pct || 0));
-        const rb = parseFloat(String(trade.risk_budget || 0));
-        const rMult = rb > 0 ? pl / rb : null;
-        const isOpen = (trade.status || "").toUpperCase() === "OPEN";
-        // Group 8 — Migration 016 option formatting. Notional = shares ×
-        // price × 100; unit label is "Contracts" not "Shares". Mirrors the
-        // canonical pattern at trade-journal.tsx:1095.
-        const isOption = String((trade as any).instrument_type || "").toUpperCase() === "OPTION"
-          || /^\S+\s+\d{6}\s+\$[0-9.]+(C|P)$/.test(String(trade.ticker || ""));
-        const multiplier = isOption
-          ? Math.max(parseFloat(String((trade as any).multiplier || 0)) || 100, 1)
-          : 1;
-        const unitLabel = isOption ? "Contracts" : "Shares";
-        const avgEntry = parseFloat(String(trade.avg_entry || 0)) || (buys.length > 0 ? buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)) * parseFloat(String(d.amount || 0)), 0) / buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0) : 0);
-        const avgExit = parseFloat(String(trade.avg_exit || 0)) || (sells.length > 0 ? sells.reduce((a, d) => a + parseFloat(String(d.shares || 0)) * parseFloat(String(d.amount || 0)), 0) / sells.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0) : 0);
-        const totalShares = trade.shares || buys.reduce((a, d) => a + parseFloat(String(d.shares || 0)), 0);
-        const mono = "var(--font-jetbrains), monospace";
-
         return (
-          <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setSelectedTrade(null)}>
-            {/* Backdrop */}
-            <div className="absolute inset-0" style={{ background: "rgba(0,0,0,0.3)" }} />
-            {/* Panel */}
-            <div className="relative w-[480px] h-full overflow-y-auto" style={{ background: "var(--surface)", boxShadow: "-4px 0 20px rgba(0,0,0,0.1)", animation: "slide-in-right 0.2s ease-out" }}
-                 onClick={e => e.stopPropagation()}>
-              {/* Header */}
-              <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4" style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-                <div>
-                  <div className="text-[18px] font-bold" style={{ fontFamily: mono }}>{trade.ticker}</div>
-                  <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>{trade.trade_id} · {trade.status}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[20px] font-extrabold privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>
-                    {formatCurrency(pl, { showSign: true, decimals: 0 })}
-                  </div>
-                  <button onClick={() => setSelectedTrade(null)} className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>Close ×</button>
-                </div>
-              </div>
-
-              <div className="p-6 flex flex-col gap-5">
-                {/* Flight Deck — clean layout */}
-                <div>
-                  <div className="flex items-baseline justify-between mb-4">
-                    <div>
-                      <div className="text-[12px] font-medium" style={{ color: "var(--ink-3)" }}>{trade.rule || ""}</div>
-                      <div className="text-[12px] font-medium" style={{ color: "var(--ink-3)" }}>
-                        {String(trade.open_date || "").slice(0, 10)} → {String(trade.closed_date || "").slice(0, 10) || (isOpen ? "Active" : "—")}
-                        {' · '}{totalShares} {unitLabel.toLowerCase()}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-5 gap-4 py-3" style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
-                    <div>
-                      <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Entry</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono }}>{avgEntry > 0 ? formatCurrency(avgEntry) : "—"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Exit</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: isOpen ? "#08a86b" : "var(--ink)" }}>{avgExit > 0 ? formatCurrency(avgExit) : isOpen ? "Active" : "—"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>P&L</div>
-                      <div className="text-[15px] font-bold mt-0.5 privacy-mask" style={{ fontFamily: mono, color: pctColor(pl) }}>{formatCurrency(pl, { showSign: true, decimals: 0 })}</div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>Return</div>
-                      <div className="text-[15px] font-bold mt-0.5" style={{ fontFamily: mono, color: pctColor(ret || (avgExit - avgEntry)) }}>
-                        {ret !== 0 ? `${ret >= 0 ? "+" : ""}${ret.toFixed(1)}%` : avgEntry > 0 && avgExit > 0 ? `${(((avgExit - avgEntry) / avgEntry) * 100).toFixed(1)}%` : "—"}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[9px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>R-Multiple</div>
-                      <div className="text-[15px] font-bold mt-0.5" style={{ fontFamily: mono }}>{rMult != null ? `${rMult.toFixed(2)}R` : "—"}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Transaction Trail */}
-                {txns.length > 0 && (
-                  <div>
-                    <div className="text-[12px] font-semibold mb-2">Transaction Trail — {buys.length} buy(s) · {sells.length} sell(s)</div>
-                    <div className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-                      <table className="w-full text-[10px]" style={{ borderCollapse: "collapse" }}>
-                        <thead><tr>
-                          {["Date", "Action", unitLabel, "Price", "Value", "Rule"].map(h => (
-                            <th key={h} className="text-left px-2.5 py-1.5 text-[9px] uppercase font-semibold"
-                                style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
-                          ))}
-                        </tr></thead>
-                        <tbody>{txns.map((tx, j) => {
-                          const isSell = String(tx.action).toUpperCase() === "SELL";
-                          const shs = parseFloat(String(tx.shares || 0));
-                          const px = parseFloat(String(tx.amount || 0));
-                          return (
-                            <tr key={j} style={{ borderBottom: "1px solid var(--border)" }}>
-                              <td className="px-2.5 py-1.5" style={{ fontFamily: mono, color: "var(--ink-4)", fontSize: 9 }}>{String(tx.date || "").slice(0, 16)}</td>
-                              <td className="px-2.5 py-1.5">
-                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold"
-                                      style={{ background: `color-mix(in oklab, ${isSell ? "#e5484d" : "#08a86b"} 12%, var(--surface))`, color: isSell ? "#e5484d" : "#08a86b" }}>
-                                  {tx.action}
-                                </span>
-                              </td>
-                              <td className="px-2.5 py-1.5" style={{ fontFamily: mono, color: isSell ? "#e5484d" : "var(--ink)" }}>{isSell ? -shs : shs}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(px)}</td>
-                              <td className="px-2.5 py-1.5 privacy-mask" style={{ fontFamily: mono }}>{formatCurrency(shs * px * multiplier, { decimals: 0 })}</td>
-                              <td className="px-2.5 py-1.5 text-[9px]" style={{ color: "var(--ink-3)" }}>{tx.rule || ""}</td>
-                            </tr>
-                          );
-                        })}</tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Notes */}
-                {(trade.buy_notes || (trade as any).sell_notes) && (
-                  <div>
-                    <div className="text-[12px] font-semibold mb-2">Notes</div>
-                    {trade.buy_notes && (
-                      <div className="p-3 rounded-[8px] mb-2 text-[11px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                        <span className="font-semibold" style={{ color: "var(--ink-4)" }}>Entry:</span> {trade.buy_notes}
-                      </div>
-                    )}
-                    {(trade as any).sell_notes && (
-                      <div className="p-3 rounded-[8px] text-[11px]" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
-                        <span className="font-semibold" style={{ color: "var(--ink-4)" }}>Exit:</span> {(trade as any).sell_notes}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <TradeOverviewSidecar
+            trade={trade}
+            details={allDetails}
+            onClose={() => setSelectedTrade(null)}
+          />
         );
       })()}
     </div>

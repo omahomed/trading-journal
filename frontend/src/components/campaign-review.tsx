@@ -23,6 +23,7 @@
 //     and merged by trade_id
 
 import { Fragment, useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   api,
   getActivePortfolio,
@@ -35,6 +36,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 import { KPITile, TILE_GRADIENTS, SegmentedControl } from "./campaign-detail";
+import { TradeOverviewSidecar } from "./trade-overview-sidecar";
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -89,6 +91,11 @@ interface TradeRow {
   lesson_category: string;
   lesson_note: string;
   multiplier: number;
+  // Instrument classification snapshot — drives the Instrument filter
+  // and any downstream option-specific rendering. Derived from
+  // instrument_type + ticker shape at row-build time so the filter
+  // predicate is a cheap boolean check.
+  is_option: boolean;
   // Migration 046 — excursion metrics passed through from the summary
   // row. Nullable + optional; the daily reconciler stamps them on
   // OPEN equity positions, closed rows keep the last-observed values.
@@ -113,12 +120,15 @@ type ColKey =
 // Custom pairs with the from/to inputs which only render when picked.
 type DateRangeKey = "all" | "week" | "month" | "ytd" | "custom";
 
+type InstrumentKey = "all" | "stocks" | "options";
+
 interface Filters {
   q: string;
   status: SeriesStatus[];  // empty = no filter
   tickers: string[];       // empty = no filter; multi-chip
   rule: string;            // rule or "all"
   pl: "all" | "realized" | "unrealized";
+  instrument: InstrumentKey;  // "all" | "stocks" | "options"
   lesson: string;          // "all" | "none" | category name
   // Numeric Return-% thresholds. Empty string = no filter. Set to "0"
   // to slice "positive only", or any number for ">= X%". Trades with
@@ -134,7 +144,8 @@ interface Filters {
   to: string;              // YYYY-MM-DD (custom range)
 }
 const EMPTY_FILTERS: Filters = {
-  q: "", status: [], tickers: [], rule: "all", pl: "all", lesson: "all",
+  q: "", status: [], tickers: [], rule: "all", pl: "all",
+  instrument: "stocks", lesson: "all",
   b_min_pct: "", a_min_pct: "",
   dateRange: "all", from: "", to: "",
 };
@@ -348,6 +359,7 @@ function computeTradeRows(
       lesson_category: "",
       lesson_note: "",
       multiplier,
+      is_option: isOption(trade),
       mae_pct:  toNumOrNull((trade as { mae_pct?: number | null }).mae_pct),
       mfe_pct:  toNumOrNull((trade as { mfe_pct?: number | null }).mfe_pct),
       atr21_entry_pct: toNumOrNull((trade as { atr21_entry_pct?: number | null }).atr21_entry_pct),
@@ -548,6 +560,12 @@ export function CampaignReview({ navColor }: { navColor: string }) {
   const [sort, setSort] = useState<{ key: ColKey; dir: "asc" | "desc" }>({ key: "open_date", dir: "desc" });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savingLessonId, setSavingLessonId] = useState<string | null>(null);
+  // Right-click context menu — cursor-anchored. Mirrors the ACS pattern:
+  // right-click on a row opens the menu; clicking anywhere else closes.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: TradeRow } | null>(null);
+  // Sidecar overview — same shared component PHM uses. Null = closed.
+  const [overviewTradeId, setOverviewTradeId] = useState<string | null>(null);
+  const router = useRouter();
 
   const loadAll = useCallback(async (forRefresh: boolean) => {
     const portfolio = getActivePortfolio();
@@ -592,12 +610,34 @@ export function CampaignReview({ navColor }: { navColor: string }) {
 
   useEffect(() => { loadAll(false); }, [loadAll]);
 
-  // Options have no meaningful B-vs-A story in this workflow — they
-  // rarely receive scale-ins, and when they do the multiplier mixes
-  // weirdly with the per-series ROI math. Hard-exclude them so the
-  // page stays focused on stock-campaign attribution.
+  // Context menu close — click anywhere OR press Esc.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [ctxMenu]);
+
+  // Sidecar close — Esc dismisses. Backdrop click is handled by the
+  // sidecar component itself.
+  useEffect(() => {
+    if (!overviewTradeId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOverviewTradeId(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overviewTradeId]);
+
+  // Both open + closed trades feed the row set. Options + stocks flow
+  // through the same math (multiplier folded into cost basis and
+  // unrealized). Whether options are visible is controlled by the
+  // Instrument filter below — the default is "stocks" since the B-vs-A
+  // ROI framing is most meaningful for equity campaigns, but the user
+  // can flip to "all" or "options" to reconcile against portfolio-
+  // wide totals (e.g. Straight P&L vs Trades P&L cross-check).
   const allTrades = useMemo(
-    () => [...openTrades, ...closedTrades].filter(t => !isOption(t)),
+    () => [...openTrades, ...closedTrades],
     [openTrades, closedTrades],
   );
   const rows = useMemo(
@@ -637,6 +677,11 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       if (filters.status.length > 0 && !filters.status.includes(r.status)) return false;
       if (filters.tickers.length > 0 && !filters.tickers.includes(r.ticker)) return false;
       if (filters.rule !== "all" && r.rule !== filters.rule) return false;
+      // Instrument filter — default is "stocks" (equity-only, matches
+      // the page's original intent). "all" = drop the gate entirely;
+      // "options" narrows to option contracts.
+      if (filters.instrument === "stocks" && r.is_option) return false;
+      if (filters.instrument === "options" && !r.is_option) return false;
       // P&L scope. realized = has any closed shares; unrealized = has
       // any remaining lot. A purely open trade with no closures shows
       // up under unrealized only; a fully closed campaign under
@@ -822,7 +867,8 @@ export function CampaignReview({ navColor }: { navColor: string }) {
 
   const filtersDirty = useMemo(() => (
     !!filters.q || filters.status.length > 0 || filters.tickers.length > 0
-    || filters.rule !== "all" || filters.pl !== "all" || filters.lesson !== "all"
+    || filters.rule !== "all" || filters.pl !== "all"
+    || filters.instrument !== "stocks" || filters.lesson !== "all"
     || !!filters.b_min_pct || !!filters.a_min_pct
     || filters.dateRange !== "all" || !!filters.from || !!filters.to
   ), [filters]);
@@ -892,7 +938,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             Campaign <em className="italic" style={{ color: navColor }}>Review</em>
           </h1>
           <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-            Per-campaign performance with entry-vs-add series split and post-mortem lesson tagging · options excluded
+            Per-campaign performance with entry-vs-add series split and post-mortem lesson tagging
             {lastUpdatedLabel ? ` · as of ${lastUpdatedLabel}` : ""}
           </div>
         </div>
@@ -1005,6 +1051,13 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             onChange={v => setFilters(f => ({ ...f, pl: v as Filters["pl"] }))}
             options={[{ v: "all", l: "All" }, { v: "realized", l: "Realized" }, { v: "unrealized", l: "Unrealized" }]}
             testId="filter-pl"
+          />
+
+          <SegmentedControl label="Instrument"
+            value={filters.instrument}
+            onChange={v => setFilters(f => ({ ...f, instrument: v as InstrumentKey }))}
+            options={[{ v: "all", l: "All" }, { v: "stocks", l: "Stocks" }, { v: "options", l: "Options" }]}
+            testId="filter-instrument"
           />
 
           <StatusMultiSelect
@@ -1166,6 +1219,10 @@ export function CampaignReview({ navColor }: { navColor: string }) {
                     row={r}
                     expanded={expandedId === r.trade_id}
                     onToggleExpand={() => setExpandedId(expandedId === r.trade_id ? null : r.trade_id)}
+                    onContextMenu={e => {
+                      e.preventDefault();
+                      setCtxMenu({ x: e.clientX, y: e.clientY, row: r });
+                    }}
                   />
                   {expandedId === r.trade_id && (
                     <tr style={{ background: "var(--bg-2)" }}>
@@ -1229,14 +1286,78 @@ export function CampaignReview({ navColor }: { navColor: string }) {
           </table>
         </div>
       </div>
+
+      {/* Right-click context menu — cursor-anchored. Two actions:
+          overview (opens the shared sidecar) + view in trade journal
+          (deep-links via ?trade_id=). Menu itself dismisses on any
+          window click or Esc — handled by the effect at top. */}
+      {ctxMenu && (
+        <div className="fixed z-50 rounded-[10px] py-1.5 min-w-[200px] overflow-hidden"
+             style={{
+               left: ctxMenu.x,
+               top: ctxMenu.y,
+               background: "var(--surface)",
+               border: "1px solid var(--border)",
+               boxShadow: "0 8px 24px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08)",
+             }}
+             data-testid="cr-context-menu"
+             onClick={e => e.stopPropagation()}>
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] font-semibold"
+               style={{ color: "var(--ink-4)" }}>
+            {ctxMenu.row.ticker} · {ctxMenu.row.trade_id}
+          </div>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+            style={{ color: "var(--ink)" }}
+            data-testid="cr-ctx-overview"
+            onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            onClick={() => { setOverviewTradeId(ctxMenu.row.trade_id); setCtxMenu(null); }}
+          >
+            <span style={{ color: "var(--ink-4)" }}>&#x1F50D;</span> Overview
+          </button>
+          <button
+            type="button"
+            className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+            style={{ color: "var(--ink)" }}
+            data-testid="cr-ctx-journal"
+            onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            onClick={() => {
+              router.push(`/trade-journal?trade_id=${encodeURIComponent(ctxMenu.row.trade_id)}`);
+              setCtxMenu(null);
+            }}
+          >
+            <span style={{ color: "var(--ink-4)" }}>&#x1F4CB;</span> View in Trade Journal
+          </button>
+        </div>
+      )}
+
+      {/* Sidecar mount — shared component. Renders when overviewTradeId
+          is set; nothing when null. Sourced trade + details are looked
+          up from state; if the row disappears while the sidecar is open
+          (unlikely — refresh would need to strip it), we quietly bail. */}
+      {overviewTradeId && (() => {
+        const trade = [...openTrades, ...closedTrades].find(t => t.trade_id === overviewTradeId);
+        if (!trade) return null;
+        return (
+          <TradeOverviewSidecar
+            trade={trade}
+            details={details}
+            onClose={() => setOverviewTradeId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
 
-function CampaignReviewRow({ row: r, expanded, onToggleExpand }: {
+function CampaignReviewRow({ row: r, expanded, onToggleExpand, onContextMenu }: {
   row: TradeRow;
   expanded: boolean;
   onToggleExpand: () => void;
+  onContextMenu: (e: React.MouseEvent<HTMLTableRowElement>) => void;
 }) {
   const statusBg = r.status === "Open"
     ? "color-mix(in oklab, #08a86b 14%, var(--surface))"
@@ -1266,6 +1387,7 @@ function CampaignReviewRow({ row: r, expanded, onToggleExpand }: {
 
   return (
     <tr onClick={onToggleExpand}
+        onContextMenu={onContextMenu}
         className="cursor-pointer"
         style={{
           borderBottom: "1px solid var(--border)",
