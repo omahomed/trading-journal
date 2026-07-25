@@ -2859,7 +2859,7 @@ _ATR_CACHE_TTL_S = 300
 
 
 @app.get("/api/prices/lookup")
-@limiter.limit("30/minute")
+@limiter.limit("120/minute")
 def price_lookup(request: Request, ticker: str = ""):
     """Get live price + ATR + 21 EMA + 50 SMA for a single ticker.
     Used by Position Sizer and Log Buy.
@@ -2967,7 +2967,7 @@ _BATCH_MAX_TICKERS = 50
 
 
 @app.get("/api/prices/lookup-batch")
-@limiter.limit("10/minute")
+@limiter.limit("60/minute")
 def price_lookup_batch(request: Request, tickers: str = ""):
     """Batch live price + ATR for a comma-separated ticker list.
 
@@ -3106,7 +3106,7 @@ def chart_ohlcv(request: Request, ticker: str, start: str = "", end: str = "", p
 
 
 @app.get("/api/prices/batch")
-@limiter.limit("10/minute")
+@limiter.limit("60/minute")
 def batch_prices(request: Request, tickers: str = "", portfolio: str = "",
                  date: str = ""):
     """Get prices for a comma-separated list of tickers.

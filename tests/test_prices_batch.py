@@ -199,8 +199,8 @@ def test_cache_short_circuits_yfinance(batch_stubs):
 
 
 def test_rate_limit_decorator(batch_stubs):
-    """11th call within a minute returns 429. Re-enables the limiter
-    (the fixture disabled it for everyone else)."""
+    """61st call within a minute returns 429 (limit is 60/min).
+    Re-enables the limiter (the fixture disabled it for everyone else)."""
     state, client = batch_stubs
     main = state["main"]
     state["behavior"]["X"] = "ok"
@@ -209,7 +209,7 @@ def test_rate_limit_decorator(batch_stubs):
     main.limiter.reset()
     try:
         last_status = None
-        for i in range(11):
+        for i in range(61):
             last_status = _get(client, "X").status_code
         assert last_status == 429
     finally:
@@ -229,11 +229,11 @@ def test_rate_limit_429_carries_cors_headers(batch_stubs):
     main.limiter.enabled = True
     main.limiter.reset()
     try:
-        # Burn through the limit with 10 calls.
-        for _ in range(10):
+        # Burn through the 60/min limit.
+        for _ in range(60):
             client.get("/api/prices/lookup-batch?tickers=X",
                        headers={**_auth_headers(), "Origin": "https://motrading.net"})
-        # 11th call trips the limiter → 429.
+        # 61st call trips the limiter → 429.
         r = client.get("/api/prices/lookup-batch?tickers=X",
                        headers={**_auth_headers(), "Origin": "https://motrading.net"})
         assert r.status_code == 429
