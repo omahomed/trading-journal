@@ -18,6 +18,8 @@ import { log } from "@/lib/log";
 import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import { TagPicker } from "./tag-picker";
 import { DailyThoughts } from "./daily-thoughts";
+import { TradingChecklist } from "./trading-checklist";
+import { CollapsibleSection } from "./collapsible-section";
 import { SnapshotGallery } from "./snapshot-gallery";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
@@ -420,9 +422,9 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
       <div className="flex-1 min-w-0 lg:pl-7">
         <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
           <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-            Daily <em className="italic" style={{ color: navColor }}>Report</em>
+            Daily <em className="italic" style={{ color: navColor }}>Routine</em>
           </h1>
-          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{portfolio} · End-of-day debrief</div>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{portfolio} · Today&apos;s workflow + end-of-day debrief</div>
           {/* Phase 7 — TagPicker. entityId is null until the journal row
               exists (i.e., the day was logged via Daily Routine); the
               picker handles the disabled state. */}
@@ -434,21 +436,20 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           />
         </div>
 
+        {/* Phase 2 merger: Trading Checklist section at the top. Renders
+            regardless of NLV / journal-entry state — the checklist is the
+            first thing you interact with each day. */}
+        <div className="mb-5">
+          <TradingChecklist navColor={navColor} />
+        </div>
+
         {history.length === 0 && (
-          <div className="border-[1.5px] border-dashed rounded-[14px] p-16 text-center"
+          <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
                style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-            <div className="w-14 h-14 rounded-[16px] flex items-center justify-center mx-auto mb-[18px] text-2xl"
-                 style={{ background: `color-mix(in oklab, ${navColor} 12%, transparent)`, color: navColor }}>
-              ✦
-            </div>
-            <h2 className="text-[22px] font-normal italic m-0 mb-1.5"
-                style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-              No report yet
-            </h2>
-            <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed"
+            <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed m-0"
                style={{ color: "var(--ink-3)" }}>
-              Fill out the <strong>Daily Routine</strong> first — your end-of-day NLV,
-              scorecard, and journal entries feed this report.
+              Tick the <strong>Equity routine</strong> checklist item above and log NLV
+              to populate today&apos;s metrics + market notes.
             </p>
           </div>
         )}
@@ -657,47 +658,59 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
               </div>
             </div>
 
-            {/* Section 3: Trade Activity */}
-            <div className="grid grid-cols-2 gap-4 mb-5">
-              <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Positions Opened</div>
-                <div className="p-4">
-                  {dayBuys.length > 0 ? dayBuys.map((b, i) => (
-                    <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayBuys.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{b.ticker}</span>
-                      <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-                        {b.shares} shs @ {formatCurrency(parseFloat(String(b.amount || 0)))} · {b.rule}
-                      </span>
+            {/* Section 3: Trade Activity — collapsible per Phase 2 merger
+                (auto-open when 3 or fewer rows; user toggle otherwise). */}
+            {(() => {
+              const closedRows = dayClosed.length > 0 ? dayClosed.length : daySells.length;
+              return (
+                <div className="grid grid-cols-2 gap-4 mb-5">
+                  <CollapsibleSection
+                    title="Positions Opened"
+                    meta={dayBuys.length === 0 ? "none" : `${dayBuys.length}`}
+                    defaultOpen={dayBuys.length <= 3}
+                    testId="daily-routine-positions-opened">
+                    <div className="p-4">
+                      {dayBuys.length > 0 ? dayBuys.map((b, i) => (
+                        <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayBuys.length - 1 ? "1px solid var(--border)" : "none" }}>
+                          <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{b.ticker}</span>
+                          <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+                            {b.shares} shs @ {formatCurrency(parseFloat(String(b.amount || 0)))} · {b.rule}
+                          </span>
+                        </div>
+                      )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No new positions opened.</div>}
                     </div>
-                  )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No new positions opened.</div>}
-                </div>
-              </div>
+                  </CollapsibleSection>
 
-              <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Positions Closed</div>
-                <div className="p-4">
-                  {dayClosed.length > 0 ? dayClosed.map((s, i) => {
-                    const pl = parseFloat(String(s.realized_pl || 0));
-                    const ret = parseFloat(String(s.return_pct || 0));
-                    return (
-                      <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayClosed.length - 1 ? "1px solid var(--border)" : "none" }}>
-                        <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
-                        <span className="text-[11px]" style={{ color: pctColor(pl) }}>
-                          P&L: {formatCurrency(pl, { showSign: true })} ({ret >= 0 ? "+" : ""}{ret.toFixed(2)}%) · {s.sell_rule || ""}
-                        </span>
-                      </div>
-                    );
-                  }) : daySells.length > 0 ? daySells.map((s, i) => (
-                    <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < daySells.length - 1 ? "1px solid var(--border)" : "none" }}>
-                      <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
-                      <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-                        Sold {s.shares} shs @ {formatCurrency(parseFloat(String(s.amount || 0)))}
-                      </span>
+                  <CollapsibleSection
+                    title="Positions Closed"
+                    meta={closedRows === 0 ? "none" : `${closedRows}`}
+                    defaultOpen={closedRows <= 3}
+                    testId="daily-routine-positions-closed">
+                    <div className="p-4">
+                      {dayClosed.length > 0 ? dayClosed.map((s, i) => {
+                        const pl = parseFloat(String(s.realized_pl || 0));
+                        const ret = parseFloat(String(s.return_pct || 0));
+                        return (
+                          <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayClosed.length - 1 ? "1px solid var(--border)" : "none" }}>
+                            <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
+                            <span className="text-[11px]" style={{ color: pctColor(pl) }}>
+                              P&L: {formatCurrency(pl, { showSign: true })} ({ret >= 0 ? "+" : ""}{ret.toFixed(2)}%) · {s.sell_rule || ""}
+                            </span>
+                          </div>
+                        );
+                      }) : daySells.length > 0 ? daySells.map((s, i) => (
+                        <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < daySells.length - 1 ? "1px solid var(--border)" : "none" }}>
+                          <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
+                          <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+                            Sold {s.shares} shs @ {formatCurrency(parseFloat(String(s.amount || 0)))}
+                          </span>
+                        </div>
+                      )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}
                     </div>
-                  )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}
+                  </CollapsibleSection>
                 </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Section 4: Daily Review */}
             {(() => {
@@ -816,11 +829,17 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
 
             {/* ── Daily Recap (renamed from "Daily Thoughts" in Phase 7) ──
                 Same markdown editor + content as before. Backs the
-                `lowlights` column. Explicit Save button; no auto-save. */}
-            <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-                <span className="text-[13px] font-semibold">Daily Recap</span>
+                `lowlights` column. Explicit Save button; no auto-save.
+                Phase 2 merger: wrapped in CollapsibleSection with a
+                word-count meta and default-collapsed on long recaps so
+                the merged Daily Routine stays scannable. */}
+            <div className="mt-6">
+            <CollapsibleSection
+              title="Daily Recap"
+              meta={recap.trim() ? `${recap.trim().split(/\s+/).length} words` : "empty · markdown"}
+              defaultOpen={!recap || recap.length < 500}
+              testId="daily-routine-recap">
+              <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid var(--border)" }}>
                 <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>markdown supported</span>
                 <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
                   {([["edit", "Edit"], ["preview", "Preview"]] as const).map(([val, label]) => (
@@ -874,6 +893,7 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                   )}
                 </div>
               </div>
+            </CollapsibleSection>
             </div>
 
             {/* ── Daily Captures (Phase 7) ──

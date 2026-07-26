@@ -31,6 +31,7 @@ import { TAG_PALETTE, type TagTone } from "@/lib/tag-palette";
 import { MobileImageUpload, type ImageUploadRow } from "./mobile-image-upload";
 import { MobileEditSheet } from "./mobile-edit-sheet";
 import { MobileTextareaEditor } from "./mobile-textarea-editor";
+import { MobileTradingChecklist } from "./mobile-trading-checklist";
 
 /**
  * Mobile Daily Report — Phase 2 T2-4 (core).
@@ -55,7 +56,7 @@ import { MobileTextareaEditor } from "./mobile-textarea-editor";
  *     NASDAQ) showing Daily % + YTD %.
  */
 
-type Props = { initialDate?: string };
+type Props = { initialDate?: string; navColor?: string };
 
 type EodRow = {
   id?: number;
@@ -276,7 +277,7 @@ function chainPct(rows: number[]): number {
 
 // ── Main component ─────────────────────────────────────────────────
 
-export function MobileDailyRoutine({ initialDate }: Props) {
+export function MobileDailyRoutine({ initialDate, navColor = "#f59f00" }: Props) {
   const router = useRouter();
   const { activePortfolio } = usePortfolio();
   const portfolio = activePortfolio?.name ?? getActivePortfolio();
@@ -397,31 +398,36 @@ export function MobileDailyRoutine({ initialDate }: Props) {
   // it. The header chevron does the same for consistency.
   const goToJournalList = () => router.push("/daily-journal");
 
-  if (loading) {
-    return <LoadingSkeleton date={date} portfolio={portfolio} onBack={goToJournalList} />;
-  }
-
-  if (!journalRow) {
-    return <DisabledState date={date} portfolio={portfolio} onBack={goToJournalList} />;
-  }
+  // Phase 2 merger: MobileTradingChecklist always renders at the top,
+  // regardless of loading / disabled / loaded state below. The checklist
+  // is the first thing the user interacts with each day; it doesn't
+  // depend on the journal entry existing yet.
+  const body = loading
+    ? <LoadingSkeleton date={date} portfolio={portfolio} onBack={goToJournalList} />
+    : !journalRow
+      ? <DisabledState date={date} portfolio={portfolio} onBack={goToJournalList} />
+      : <LoadedReport
+          date={date}
+          portfolio={portfolio}
+          journalRow={journalRow}
+          prevDayRow={prevDayRow}
+          history={history}
+          captures={captures}
+          setCaptures={setCaptures}
+          eodSnapshots={eodSnapshots}
+          tagAssignments={tagAssignments}
+          setTagAssignments={setTagAssignments}
+          availableTags={availableTags}
+          tradesDetails={tradesDetails}
+          tradesClosed={tradesClosed}
+          onBack={goToJournalList}
+        />;
 
   return (
-    <LoadedReport
-      date={date}
-      portfolio={portfolio}
-      journalRow={journalRow}
-      prevDayRow={prevDayRow}
-      history={history}
-      captures={captures}
-      setCaptures={setCaptures}
-      eodSnapshots={eodSnapshots}
-      tagAssignments={tagAssignments}
-      setTagAssignments={setTagAssignments}
-      availableTags={availableTags}
-      tradesDetails={tradesDetails}
-      tradesClosed={tradesClosed}
-      onBack={goToJournalList}
-    />
+    <>
+      <MobileTradingChecklist navColor={navColor} />
+      {body}
+    </>
   );
 }
 

@@ -11,6 +11,6 @@ type Props = { initialDate?: string };
 export default function DailyRoutineClient({ initialDate }: Props) {
   const isMobile = useIsMobile();
   const navColor = getGroupForHref(usePathname())?.color || "#f59f00";
-  if (isMobile) return <MobileDailyRoutine initialDate={initialDate} />;
+  if (isMobile) return <MobileDailyRoutine initialDate={initialDate} navColor={navColor} />;
   return <DailyRoutine navColor={navColor} initialDate={initialDate} />;
 }
