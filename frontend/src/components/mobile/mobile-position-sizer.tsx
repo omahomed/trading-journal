@@ -543,7 +543,7 @@ export function MobilePositionSizer() {
     return avg > 0 ? avg : Number(selectedHolding.avg_entry ?? 0) || 0;
   }, [selectedHolding, holdingInventory]);
 
-  // Pyramid audit — delegates to computePyramidSizing (six-rule model,
+  // Pyramid audit — delegates to computePyramidSizing (v6 seven-rule model,
   // 2026-07-18). Requires Key Level input + 21 EMA from priceLookup.
   const pyramid: PyramidSizerResults | null = useMemo(() => {
     if (activeTab !== "pyramid") return null;
@@ -1478,7 +1478,7 @@ function ScaleInResultBlock({
 }
 
 
-// ── Pyramid rules expander (six-rule composite model, 2026-07-18) ──
+// ── Pyramid rules expander (v6 seven-rule model; §2 Window added 2026-07-25) ──
 
 function PyramidRulesExpander() {
   return (
@@ -1490,14 +1490,16 @@ function PyramidRulesExpander() {
         View Pyramid Rules
       </summary>
       <div className="mt-2 pb-1 text-[12px] leading-relaxed text-m-text-dim">
-        <p className="mb-1"><strong className="text-m-text">Four gates + sizing:</strong></p>
+        <p className="mb-1"><strong className="text-m-text">Seven rules:</strong></p>
         <ol className="ml-4 flex list-decimal flex-col gap-0.5">
-          <li>Price ≤ 21 EMA + 1 × ATR (else extended → no add)</li>
-          <li>Last held buy up ≥ 5% for full size; 0–5% prorated; below → no add</li>
+          <li>Location: price ≤ 21 EMA + 1 × ATR (else extended → no add)</li>
+          <li>Window (v6): price ≤ B1 × 1.15 — no adds beyond +15% above B1 unless declared <strong className="text-m-text">SR8 rebuild</strong> or <strong className="text-m-text">fresh-base breakout</strong></li>
+          <li>Progress: last held buy up ≥ 5% for full size; 0–5% prorated; below → no add</li>
           <li>Budget = Mode% × NAV; headroom = budget − Σ (held lots × max(0, entry − stop))</li>
-          <li>Total notional ≤ 25% NAV (appreciation-inclusive)</li>
+          <li>Size: composite = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%)); shares = min(headroom / dist, 5% NAV / entry) × progress mult</li>
+          <li>Stop: trails 21 EMA − 0.5 ATR after entry (rising only) — set at broker</li>
+          <li>Ceiling: total notional ≤ 25% NAV (appreciation-inclusive)</li>
         </ol>
-        <p className="mt-2 mb-1"><strong className="text-m-text">Sizing:</strong> composite = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level). Shares = min(headroom / dist, 5% NAV / entry) × progress mult.</p>
         <p className="mt-2 text-[11px]"><strong className="text-m-text">Broker note:</strong> every fill needs a trailing stop set at 21 EMA − 0.5 ATR (rising only). The output card includes the exact stop price to place.</p>
       </div>
     </details>

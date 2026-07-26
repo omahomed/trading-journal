@@ -709,7 +709,7 @@ describe("MobilePositionSizer — Pyramid mount fetch", () => {
     expect(api.config).toHaveBeenCalledWith("pyramid_rules");
   });
 
-  test("renders the six-rule expander even when config fetch rejects (rules no longer config-driven)", async () => {
+  test("renders the seven-rule expander even when config fetch rejects (rules no longer config-driven)", async () => {
     // Post-2026-07-18: pyramid rules are constants in @/lib/pyramid-sizer.
     // The config fetch stays for backward-compat with any consumer, but
     // it no longer influences the expander copy.
@@ -719,18 +719,18 @@ describe("MobilePositionSizer — Pyramid mount fetch", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
     fireEvent.click(await screen.findByTestId("pyramid-rules-summary"));
-    expect(await screen.findByText(/Total notional ≤ 25% NAV/)).toBeInTheDocument();
+    expect(await screen.findByText(/Ceiling: total notional ≤ 25% NAV/)).toBeInTheDocument();
   });
 });
 
-describe("MobilePositionSizer — Pyramid Rules expander (six-rule composite model)", () => {
+describe("MobilePositionSizer — Pyramid Rules expander (v6 seven-rule model)", () => {
   beforeEach(() => {
     withPortfolio();
     resetApiMocks();
     setApiMocks();
   });
 
-  test("renders the four-gate summary in the expander", async () => {
+  test("renders the seven-rule summary in the expander (v6 adds §2 Window)", async () => {
     render(<MobilePositionSizer />);
     await waitFor(() => expect(api.tradesOpenDetails).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("tab", { name: /Pyramid/ }));
@@ -739,11 +739,18 @@ describe("MobilePositionSizer — Pyramid Rules expander (six-rule composite mod
     expect(summary).toHaveTextContent(/View Pyramid Rules/);
 
     fireEvent.click(summary);
-    // Four gates: location / progress / budget / ceiling.
-    expect(await screen.findByText(/Price ≤ 21 EMA/)).toBeInTheDocument();
-    expect(screen.getByText(/Last held buy up ≥ 5%/)).toBeInTheDocument();
+    // Seven rules: location / window / progress / budget / size / stop / ceiling.
+    expect(await screen.findByText(/Location: price ≤ 21 EMA/)).toBeInTheDocument();
+    expect(screen.getByText(/Window \(v6\)/)).toBeInTheDocument();
+    // Both v6 exemption tokens land in the expander so the trader
+    // can discover them without leaving the sizer.
+    expect(screen.getByText(/SR8 rebuild/)).toBeInTheDocument();
+    expect(screen.getByText(/fresh-base breakout/)).toBeInTheDocument();
+    expect(screen.getByText(/Progress: last held buy up ≥ 5%/)).toBeInTheDocument();
     expect(screen.getByText(/Budget = Mode/)).toBeInTheDocument();
-    expect(screen.getByText(/Total notional ≤ 25% NAV/)).toBeInTheDocument();
+    expect(screen.getByText(/Size: composite/)).toBeInTheDocument();
+    expect(screen.getByText(/Stop: trails 21 EMA/)).toBeInTheDocument();
+    expect(screen.getByText(/Ceiling: total notional ≤ 25% NAV/)).toBeInTheDocument();
   });
 });
 

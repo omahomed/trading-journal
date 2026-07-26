@@ -33,8 +33,11 @@ const HAPPY: PyramidSizerInputs = {
 describe("computePyramidSizing — happy path", () => {
   const r = computePyramidSizing(HAPPY);
 
-  it("evaluates all four gates", () => {
+  it("evaluates all five audit gates (location + window + progress + budget + ceiling)", () => {
+    // Size/Stop rules are computed but expose as `composite` +
+    // `atrPerShare` rather than a separate GateResult.
     expect(r.location).toBeDefined();
+    expect(r.window).toBeDefined();
     expect(r.progress).toBeDefined();
     expect(r.budget).toBeDefined();
     expect(r.ceiling).toBeDefined();

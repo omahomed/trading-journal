@@ -542,7 +542,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, holdingData, ma, buf, entry, equity, targetSize, sizingMode]);
 
   // ━━━ Pyramid Results ━━━
-  // Delegates to computePyramidSizing (six-rule model): rules 1-6 with
+  // Delegates to computePyramidSizing (v6 seven-rule model): rules 1-7 with
   // per-lot risk accounting sourced from InventoryLot.stopLoss. The
   // legacy percent-of-shares model was retired 2026-07-18. See
   // @/lib/pyramid-sizer for the full formula.
@@ -741,34 +741,45 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         ) : (
           <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
             {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
-            {tab === "pyramid" && "Per-lot risk-accounted add sizing. Gated by 4 rules: location (≤ 21EMA + 1 ATR), progress (last buy up ≥ 5%), budget (mode% × NAV − Σ lot risks), and 25% NAV campaign ceiling."}
+            {tab === "pyramid" && "Per-lot risk-accounted add sizing (v6). Gated by 7 rules: location (≤ 21EMA + 1 ATR), window (≤ +15% above B1, exempt via SR8-rebuild or fresh-base), progress (last buy up ≥ 5%), budget (mode% × NAV − Σ lot risks), size math (composite stop), trailing stop, 25% NAV campaign ceiling."}
             {tab === "trim" && "Calculate shares to sell to reach a desired weight, with LIFO P&L estimation."}
             {tab === "options" && "Size option positions using risk budget. Premium = max risk."}
           </div>
         )}
       </div>
 
-      {/* Pyramid Rules Expander — six-rule composite model. */}
+      {/* Pyramid Rules Expander — v6 seven-rule model (2026-07-25). */}
       {tab === "pyramid" && (
         <details className="mb-4 rounded-[10px] overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
           <summary className="px-4 py-2.5 text-[12px] font-semibold cursor-pointer" style={{ color: "var(--ink-3)" }}>
             View Pyramid Rules
           </summary>
           <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            <p className="mb-1"><strong>Four gates + sizing math (evaluated in order):</strong></p>
+            <p className="mb-1"><strong>Seven rules (evaluated in order):</strong></p>
             <ol className="list-decimal ml-4 mb-2 flex flex-col gap-0.5">
               <li><strong>Location:</strong> current price ≤ 21 EMA + 1 × ATR$/share. Extended above the line → no add.</li>
+              <li>
+                <strong>Window (v6, added 2026-07-25):</strong> current price ≤ B1 fill × 1.15. No at-level adds beyond +15% above B1 &mdash;
+                past that, drawdown asymmetry from the entry-study data doesn't support the add. Two named exemptions bypass the gate:
+                <ul className="list-disc ml-4 mt-0.5">
+                  <li><strong>SR8 rebuild</strong> — RS-governed rebuild after an SR8 fire.</li>
+                  <li><strong>Fresh-base breakout</strong> — §3 structural breakout from a qualifying new base (treated like a fresh entry).</li>
+                </ul>
+                Both are declared, never inferred. The reason persists on <code>trades_details.add_exempt_reason</code>; the 30-add review buckets outcomes by declaration.
+              </li>
               <li><strong>Progress:</strong> last held BUY up ≥ <strong>{PYRAMID_FULL_SIZE_TRIGGER_PCT}%</strong> for full-size multiplier; 0–{PYRAMID_FULL_SIZE_TRIGGER_PCT}% prorated; below last buy → no add.</li>
               <li><strong>Budget:</strong> campaign budget = Mode% × NAV (Pilot 0.25 / Normal 0.50 / Offense 0.75 / Max 1.00). Campaign risk = Σ (held shares × max(0, entry − stop)). Headroom = budget − risk. Zero headroom → no add.</li>
+              <li>
+                <strong>Size:</strong> composite stop = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level) — same shape as the Volatility Sizer.
+                <ul className="list-disc ml-4 mt-0.5">
+                  <li>risk_bound_shares = headroom ÷ stop_distance</li>
+                  <li>notional_cap_shares = <strong>{PYRAMID_ADD_CAP_PCT}%</strong> NAV ÷ Entry (per-add cap)</li>
+                  <li>final_shares = min(risk_bound, notional_cap) × progress_multiplier, then clipped by the 25% ceiling.</li>
+                </ul>
+              </li>
+              <li><strong>Stop:</strong> trails 21 EMA − 0.5 ATR after entry (rising only). Handled at broker per the pinned callout; this module only emits the initial composite.</li>
               <li><strong>Ceiling:</strong> (existing + new) × current price ≤ <strong>{PYRAMID_CAMPAIGN_CEILING_PCT}%</strong> NAV. Beyond that, appreciation is telling you to trim, not add.</li>
             </ol>
-            <p className="mb-1"><strong>Sizing:</strong></p>
-            <ul className="list-disc ml-4 mb-2">
-              <li>Composite stop = MIN(Entry − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level) — same shape as the Volatility Sizer.</li>
-              <li>risk_bound_shares = headroom ÷ stop_distance</li>
-              <li>notional_cap_shares = <strong>{PYRAMID_ADD_CAP_PCT}%</strong> NAV ÷ Entry (per-add cap)</li>
-              <li>final_shares = min(risk_bound, notional_cap) × progress_multiplier, then clipped by the 25% ceiling.</li>
-            </ul>
             <p className="mb-1"><strong>Per-lot risk accounting:</strong> each held BUY row's stored stop_loss drives its risk contribution. A lot with stop ≥ its cost basis reads as risk-free and releases full headroom for new adds. Trailing stops on winners auto-compound the budget.</p>
             <p className="mb-1"><strong>Broker setup:</strong> every filled add carries its own trailing stop (21 EMA − 0.5 ATR, rising only). The output card includes a pinned callout with the exact stop price to set at your broker — the sizer's per-lot accounting only stays honest if the trailing stops are actually placed.</p>
           </div>
@@ -1246,7 +1257,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             </>
           )}
 
-          {/* ── PYRAMID SIZER (six-rule composite model) ── */}
+          {/* ── PYRAMID SIZER (v6 seven-rule model) ── */}
           {tab === "pyramid" && pyramidResults && (
             <PyramidResults
               ticker={holdingData?.ticker || ""}
@@ -1618,7 +1629,7 @@ function VolatilityResults({
   );
 }
 
-// ── Pyramid Sizer output (six-rule composite model, 2026-07-18) ──
+// ── Pyramid Sizer output (v6 seven-rule model; §2 Window added 2026-07-25) ──
 // Two-tile answer card (matching the Volatility redesign) + a held-
 // lots table showing the per-lot risk contributions that drive the
 // budget gate, + a prominent broker-setup callout so the trader
