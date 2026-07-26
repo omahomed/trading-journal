@@ -80,7 +80,6 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState("");
   const [snapshots, setSnapshots] = useState<SnapItem[]>([]);
-  const [eodOpen, setEodOpen] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   // "recap" backs the existing lowlights markdown column (renamed from
   // "Daily Thoughts" to "Daily Recap" in Phase 7 — content + behavior
@@ -498,21 +497,6 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           </div>
         )}
 
-        {/* Phase 2 merger: Trading Checklist section. Renders regardless
-            of NLV / journal-entry state — always today's items, never
-            tied to the date picker's selected date. Wrapped in
-            SectionExpander for visual consistency with Daily Thoughts. */}
-        <SectionExpander
-          title="Checklist"
-          defaultExpanded={true}
-          localStorageKey="mo-daily-routine-checklist-expanded"
-          showDot
-          headerCaption={() => "same-day undo only"}>
-          <div className="p-4">
-            <TradingChecklist navColor={navColor} />
-          </div>
-        </SectionExpander>
-
         {history.length === 0 && (
           <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
                style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
@@ -742,7 +726,28 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                 </div>
               );
             })()}
+          </>
+        )}
 
+        {/* Phase 2 merger: Trading Checklist section. Renders regardless
+            of NLV / journal-entry state — always today's items, never
+            tied to the date picker's selected date. Sits between the
+            "what happened so far" sections (Positions) and the "what
+            I'm capturing about today" sections (Daily Review + notes),
+            per user request 2026-07-26. */}
+        <SectionExpander
+          title="Checklist"
+          defaultExpanded={true}
+          localStorageKey="mo-daily-routine-checklist-expanded"
+          showDot
+          headerCaption={() => "same-day undo only"}>
+          <div className="p-4">
+            <TradingChecklist navColor={navColor} />
+          </div>
+        </SectionExpander>
+
+        {day && (
+          <>
             {/* Section 4: Daily Review */}
             {(() => {
               const score = day.score || 0;
@@ -789,56 +794,6 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                       <div className="text-[12px]"><strong>Top Lesson:</strong> {topLesson}</div>
                     )}
                   </div>
-                </div>
-              );
-            })()}
-
-            {/* ── EOD Snapshots (collapsible) ──
-                Phase 7: section semantics unchanged but it no longer
-                accepts user uploads (those route to Daily Captures
-                below). Migration 032 moved historical eod_note rows out;
-                only auto-generated eod_dashboard / eod_campaign rows
-                render here. The legacy `eod_note` rows are filtered out
-                server-side by /api/snapshots/{day}. */}
-            {(() => {
-              const eodSnaps = snapshots.filter(s => (s.image_type || "").startsWith("eod_"));
-              if (eodSnaps.length === 0) return null;
-              return (
-                <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-                  <button onClick={() => setEodOpen(!eodOpen)}
-                          className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
-                          style={{ background: "var(--surface-2)" }}>
-                    <span className="text-[10px] transition-transform" style={{ transform: eodOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-                    <span className="text-[13px] font-semibold">End-of-Day Snapshots</span>
-                    <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{eodSnaps.length} captured · click to expand</span>
-                  </button>
-                  {eodOpen && (
-                    <div className="p-4 grid grid-cols-2 gap-3" style={{ animation: "slide-up 0.12s ease-out" }}>
-                      {eodSnaps.map((snap, idx) => (
-                        <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
-                          <div className="px-2.5 py-1.5 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
-                            <span className="text-[10px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
-                              {snap.image_type?.replace("eod_", "") || "Snapshot"}
-                            </span>
-                            {snap.uploaded_at && (
-                              <span className="text-[9px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                                {String(snap.uploaded_at).slice(11, 19)}
-                              </span>
-                            )}
-                          </div>
-                          {snap.view_url && (
-                            <button onClick={() => setLightbox(snap.view_url || null)}
-                                    className="block w-full p-0 border-0 cursor-zoom-in"
-                                    style={{ background: "transparent" }}>
-                              <img src={snap.view_url} alt={snap.image_type}
-                                   style={{ width: "100%", maxHeight: 220, objectFit: "contain", display: "block", background: "var(--bg-2)" }} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })()}
@@ -926,6 +881,51 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                 </div>
               </div>
             </SectionExpander>
+
+            {/* ── EOD Snapshots ──
+                Moved 2026-07-26 to sit right before Daily Captures per
+                user request. Phase 7: no user uploads (those route to
+                Daily Captures below); only auto-generated eod_dashboard
+                / eod_campaign rows render. Legacy `eod_note` rows are
+                filtered out server-side by /api/snapshots/{day}.
+                Converted to SectionExpander for consistent chrome. */}
+            {(() => {
+              const eodSnaps = snapshots.filter(s => (s.image_type || "").startsWith("eod_"));
+              if (eodSnaps.length === 0) return null;
+              return (
+                <SectionExpander
+                  title="End-of-Day Snapshots"
+                  defaultExpanded={false}
+                  localStorageKey="mo-daily-routine-eod-snapshots-expanded"
+                  showDot
+                  headerCaption={() => `${eodSnaps.length} captured`}>
+                  <div className="p-4 grid grid-cols-2 gap-3">
+                    {eodSnaps.map((snap, idx) => (
+                      <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                        <div className="px-2.5 py-1.5 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+                          <span className="text-[10px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
+                            {snap.image_type?.replace("eod_", "") || "Snapshot"}
+                          </span>
+                          {snap.uploaded_at && (
+                            <span className="text-[9px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                              {String(snap.uploaded_at).slice(11, 19)}
+                            </span>
+                          )}
+                        </div>
+                        {snap.view_url && (
+                          <button onClick={() => setLightbox(snap.view_url || null)}
+                                  className="block w-full p-0 border-0 cursor-zoom-in"
+                                  style={{ background: "transparent" }}>
+                            <img src={snap.view_url} alt={snap.image_type}
+                                 style={{ width: "100%", maxHeight: 220, objectFit: "contain", display: "block", background: "var(--bg-2)" }} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </SectionExpander>
+              );
+            })()}
 
             {/* ── Daily Captures (Phase 7) ──
                 Shared <SnapshotGallery> with entityType="daily_journal".
