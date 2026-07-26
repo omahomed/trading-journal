@@ -60,22 +60,7 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       // finally so a mid-capture throw doesn't leave the DOM styled.
       const styleTag = document.createElement("style");
       styleTag.setAttribute("data-capture-neutralizer", "");
-      // Two neutralizations, one static + one dynamic:
-      //
-      // Static (CSS class): sticky headers + max-h-* modal caps. These
-      // are safe to strip globally; nothing on the page depends on
-      // sticky for visual layout.
-      //
-      // Dynamic (per-element data attribute): overflow-hidden ONLY on
-      // wrappers that contain a <table>. html-to-image reads
-      // clientHeight (not scrollHeight) from the library source — for a
-      // wrapper with overflow-hidden + a scrollbar-wearing child, the
-      // clientHeight underreports and the tbody's last rows get clipped
-      // by the SVG viewport. Overriding those specific wrappers to
-      // overflow: visible unclips the tbody. Leaving overflow-hidden on
-      // non-table cards (KPI tiles etc.) keeps their rounded corners
-      // crisp — the previous "global overflow-hidden neutralization"
-      // pass flattened all corners as collateral damage.
+      // Sticky + max-h neutralization via a scoped class.
       styleTag.textContent = `
         .capturing-snapshot [class*="sticky"] {
           position: static !important;
@@ -84,25 +69,34 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         .capturing-snapshot [class*="max-h-"] {
           max-height: none !important;
         }
-        [data-capture-visible-overflow] {
-          overflow: visible !important;
-        }
       `;
       document.head.appendChild(styleTag);
       node.classList.add("capturing-snapshot");
 
-      // Tag every overflow-hidden ancestor of a <table> for the CSS
-      // override above. Store the elements so we can strip the attr
-      // in finally regardless of throw path.
-      const tableWrappers: Element[] = [];
+      // Aggressive per-element neutralization for table wrappers.
+      // Prior CSS-class approach relied on `getComputedStyle().overflow
+      // === "hidden"` — browser shorthand behavior varies, and the
+      // check missed real cases. Walk the DOM from every <table> up
+      // to `node`, forcibly set inline `overflow: visible !important`
+      // on every ancestor regardless of its current value. Non-table
+      // cards (KPI tiles) aren't touched, so their overflow-hidden
+      // stays intact for the decorative-gradient clip. Restore in
+      // finally by storing prior inline overflow + priority.
+      type OverflowSnapshot = { el: HTMLElement; value: string; priority: string };
+      const overflowSnapshots: OverflowSnapshot[] = [];
       const tables = node.querySelectorAll("table");
+      const seen = new Set<Element>();
       tables.forEach(table => {
-        let el: Element | null = table.parentElement;
+        let el: HTMLElement | null = table.parentElement;
         while (el && el !== node && el !== document.body) {
-          const overflow = getComputedStyle(el).overflow;
-          if (overflow === "hidden" && !el.hasAttribute("data-capture-visible-overflow")) {
-            el.setAttribute("data-capture-visible-overflow", "");
-            tableWrappers.push(el);
+          if (!seen.has(el)) {
+            seen.add(el);
+            overflowSnapshots.push({
+              el,
+              value: el.style.getPropertyValue("overflow"),
+              priority: el.style.getPropertyPriority("overflow"),
+            });
+            el.style.setProperty("overflow", "visible", "important");
           }
           el = el.parentElement;
         }
@@ -121,16 +115,27 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       const rawPixelRatio = 2;
       const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawPixelRatio;
       const pixelRatio = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawPixelRatio;
+      // Explicit height = scrollHeight so the SVG viewport is
+      // guaranteed tall enough to contain everything, even if the
+      // overflow neutralization above misses a corner case.
+      // clientHeight (the library's default) can underreport when
+      // scrollbars steal vertical space; scrollHeight is the ceiling.
+      // Width defaults to clientWidth — matches natural layout so we
+      // don't create a phantom horizontal scrollbar in the capture.
       let blob: Blob | null = null;
       try {
         blob = await toBlob(node, {
           backgroundColor: bg,
           pixelRatio,
           cacheBust: true,
+          height: node.scrollHeight,
         });
       } finally {
         node.classList.remove("capturing-snapshot");
-        tableWrappers.forEach(el => el.removeAttribute("data-capture-visible-overflow"));
+        overflowSnapshots.forEach(({ el, value, priority }) => {
+          if (value) el.style.setProperty("overflow", value, priority);
+          else el.style.removeProperty("overflow");
+        });
         styleTag.remove();
       }
       if (!blob) {
