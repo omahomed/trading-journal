@@ -19,7 +19,7 @@ import { NotesRail, type NotesRailHandle } from "./notes-rail";
 import { TagPicker } from "./tag-picker";
 import { DailyThoughts } from "./daily-thoughts";
 import { TradingChecklist } from "./trading-checklist";
-import { CollapsibleSection } from "./collapsible-section";
+import { SectionExpander } from "./section-expander";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES, todayInChicago } from "@/lib/routine-autotick";
 import { SnapshotGallery } from "./snapshot-gallery";
 
@@ -500,10 +500,18 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
 
         {/* Phase 2 merger: Trading Checklist section. Renders regardless
             of NLV / journal-entry state — always today's items, never
-            tied to the date picker's selected date. */}
-        <div className="mb-5">
-          <TradingChecklist navColor={navColor} />
-        </div>
+            tied to the date picker's selected date. Wrapped in
+            SectionExpander for visual consistency with Daily Thoughts. */}
+        <SectionExpander
+          title="Checklist"
+          defaultExpanded={true}
+          localStorageKey="mo-daily-routine-checklist-expanded"
+          showDot
+          headerCaption={() => "same-day undo only"}>
+          <div className="p-4">
+            <TradingChecklist navColor={navColor} />
+          </div>
+        </SectionExpander>
 
         {history.length === 0 && (
           <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
@@ -677,17 +685,20 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
               </div>
             </div>
 
-            {/* Section 3: Trade Activity — collapsible per Phase 2 merger
-                (auto-open when 3 or fewer rows; user toggle otherwise). */}
+            {/* Section 3: Trade Activity — SectionExpander per row so the
+                cards share styling with Daily Thoughts. Grid stays 2-col
+                so the two expanders sit side-by-side; each collapses
+                independently. */}
             {(() => {
               const closedRows = dayClosed.length > 0 ? dayClosed.length : daySells.length;
               return (
-                <div className="grid grid-cols-2 gap-4 mb-5">
-                  <CollapsibleSection
+                <div className="grid grid-cols-2 gap-4">
+                  <SectionExpander
                     title="Positions Opened"
-                    meta={dayBuys.length === 0 ? "none" : `${dayBuys.length}`}
-                    defaultOpen={dayBuys.length <= 3}
-                    testId="daily-routine-positions-opened">
+                    defaultExpanded={dayBuys.length > 0 && dayBuys.length <= 3}
+                    localStorageKey="mo-daily-routine-positions-opened-expanded"
+                    showDot
+                    headerCaption={() => dayBuys.length === 0 ? "none" : `${dayBuys.length}`}>
                     <div className="p-4">
                       {dayBuys.length > 0 ? dayBuys.map((b, i) => (
                         <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayBuys.length - 1 ? "1px solid var(--border)" : "none" }}>
@@ -698,13 +709,14 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                         </div>
                       )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No new positions opened.</div>}
                     </div>
-                  </CollapsibleSection>
+                  </SectionExpander>
 
-                  <CollapsibleSection
+                  <SectionExpander
                     title="Positions Closed"
-                    meta={closedRows === 0 ? "none" : `${closedRows}`}
-                    defaultOpen={closedRows <= 3}
-                    testId="daily-routine-positions-closed">
+                    defaultExpanded={closedRows > 0 && closedRows <= 3}
+                    localStorageKey="mo-daily-routine-positions-closed-expanded"
+                    showDot
+                    headerCaption={() => closedRows === 0 ? "none" : `${closedRows}`}>
                     <div className="p-4">
                       {dayClosed.length > 0 ? dayClosed.map((s, i) => {
                         const pl = parseFloat(String(s.realized_pl || 0));
@@ -726,7 +738,7 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                         </div>
                       )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}
                     </div>
-                  </CollapsibleSection>
+                  </SectionExpander>
                 </div>
               );
             })()}
@@ -849,15 +861,16 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
             {/* ── Daily Recap (renamed from "Daily Thoughts" in Phase 7) ──
                 Same markdown editor + content as before. Backs the
                 `lowlights` column. Explicit Save button; no auto-save.
-                Phase 2 merger: wrapped in CollapsibleSection with a
-                word-count meta and default-collapsed on long recaps so
-                the merged Daily Routine stays scannable. */}
-            <div className="mt-6">
-            <CollapsibleSection
+                Phase 2 merger: wrapped in SectionExpander for consistent
+                collapse styling with Daily Thoughts / Positions cards. */}
+            <SectionExpander
               title="Daily Recap"
-              meta={recap.trim() ? `${recap.trim().split(/\s+/).length} words` : "empty · markdown"}
-              defaultOpen={!recap || recap.length < 500}
-              testId="daily-routine-recap">
+              defaultExpanded={!recap || recap.length < 500}
+              localStorageKey="mo-daily-routine-recap-expanded"
+              showDot
+              headerCaption={() => recap.trim()
+                ? `${recap.trim().split(/\s+/).length} words`
+                : "empty · markdown"}>
               <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid var(--border)" }}>
                 <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>markdown supported</span>
                 <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
@@ -912,8 +925,7 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                   )}
                 </div>
               </div>
-            </CollapsibleSection>
-            </div>
+            </SectionExpander>
 
             {/* ── Daily Captures (Phase 7) ──
                 Shared <SnapshotGallery> with entityType="daily_journal".
@@ -922,13 +934,14 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                 window paste handler cooperates with the DailyThoughts
                 editor via the [data-thoughts-editor] check, so pastes
                 inside the editor route inline; pastes outside route
-                here. */}
-            <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-                <span className="text-[13px] font-semibold">Daily Captures</span>
-                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>screenshots, charts, anything visual from today</span>
-              </div>
+                here. Wrapped in SectionExpander for consistent collapse
+                styling with the other Phase 2 merger sections. */}
+            <SectionExpander
+              title="Daily Captures"
+              defaultExpanded={false}
+              localStorageKey="mo-daily-routine-captures-expanded"
+              showDot
+              headerCaption={() => "screenshots, charts, anything visual"}>
               <SnapshotGallery
                 entityType="daily_journal"
                 entityId={dayJournalId}
@@ -939,7 +952,7 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
                 dropZoneAriaLabel="Upload capture"
                 lightboxAriaLabel="Capture preview"
               />
-            </div>
+            </SectionExpander>
           </>
         )}
 

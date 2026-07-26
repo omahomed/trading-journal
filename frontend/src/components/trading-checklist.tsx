@@ -151,27 +151,13 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
     }
   }, [load]);
 
+  // No internal header — the merged Daily Routine wraps this component
+  // in a SectionExpander that provides the collapse chrome, title, and
+  // caption. Refresh happens automatically on mount + after each tick /
+  // untick, so no manual Refresh button is needed.
+
   return (
     <div data-testid="trading-checklist-root">
-      {/* Section header — compact style to fit inside the merged Daily
-          Routine page. (The standalone page + big italic title were
-          retired when /trading-checklist redirected to /daily-routine.) */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-          <span className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
-            Checklist
-          </span>
-          <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
-            same-day undo only
-          </span>
-        </div>
-        <button type="button" onClick={() => void load(false)} disabled={refreshing}
-                className="px-2.5 py-1 rounded-[8px] text-[11px] flex items-center gap-1 transition-colors"
-                style={{ background: "transparent", color: refreshing ? "var(--ink-4)" : "var(--ink-3)" }}>
-          ⟳ {refreshing ? "…" : "Refresh"}
-        </button>
-      </div>
 
       {loadError && (
         <div className="mb-4 px-4 py-3 rounded-[10px] text-[13px]"
