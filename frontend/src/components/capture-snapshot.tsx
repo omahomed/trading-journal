@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { api, getActivePortfolio } from "@/lib/api";
+import { api, getActivePortfolio, fetchWithAuth, API_BASE } from "@/lib/api";
 
 interface Props {
   /** CSS selector or element to capture. If not provided, captures document.body. */
@@ -35,13 +35,12 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
     setBusy(true);
     setMsg(null);
     try {
-      // Swapped from html-to-image to modern-screenshot 2026-07-26
-      // after multiple ACS truncation bugs traced to html-to-image's
-      // clientHeight-based measurement + brittle DOM cloning. modern-
-      // screenshot is an actively-maintained fork of html-to-image
-      // with fixes for the exact class of layout-mismeasurement bugs
-      // we were hitting. Same conceptual API, different exports.
-      const { domToBlob } = await import("modern-screenshot");
+      // Server-side capture 2026-07-26. After many failed rounds of
+      // client-side capture (html-to-image, modern-screenshot) all
+      // truncating the ACS equity table, we switched to Playwright on
+      // the FastAPI backend. Frontend serializes the target's HTML +
+      // the app's public CSS bundle URLs; backend renders in real
+      // Chromium and returns a PNG.
       const node = targetSelector ? (document.querySelector(targetSelector) as HTMLElement | null) : document.body;
       if (!node) {
         setMsg({ ok: false, text: "Target not found" });
@@ -49,24 +48,55 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         return;
       }
 
-      const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
-
-      // Pixel-ratio downgrade guards against browser canvas ceilings:
-      // Chrome caps ~65k px per side, Safari ~16k. Drop to 1x when
-      // scaled long edge would breach 12k px (leaves headroom).
-      const captureWidth = node.scrollWidth;
-      const captureHeight = node.scrollHeight;
-      const SAFE_CANVAS_EDGE = 12000;
-      const rawScale = 2;
-      const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawScale;
-      const scale = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawScale;
-
-      const blob = await domToBlob(node, {
-        backgroundColor: bg,
-        scale,
+      // Collect the app's stylesheet URLs — Next.js CSS chunks are
+      // publicly hosted on the deploy domain, so Playwright can fetch
+      // them without any auth cookie. Filter out same-origin styles
+      // that don't have an absolute URL yet (they wouldn't resolve on
+      // the backend either).
+      const stylesheetUrls: string[] = [];
+      document.querySelectorAll('link[rel="stylesheet"]').forEach((link) => {
+        const href = (link as HTMLLinkElement).href;
+        if (href && href.startsWith("http")) stylesheetUrls.push(href);
       });
-      if (!blob) {
-        setMsg({ ok: false, text: "Capture produced no image" });
+
+      // Bake inline <style> tags into the serialized HTML too — some
+      // frameworks inject critical CSS as inline blocks that aren't
+      // reachable via a URL. Prepend them to the payload html so the
+      // backend page includes them.
+      const inlineStyleTags: string[] = [];
+      document.querySelectorAll("style").forEach((s) => {
+        if (s.textContent) inlineStyleTags.push(`<style>${s.textContent}</style>`);
+      });
+
+      const rect = node.getBoundingClientRect();
+      const width = Math.max(Math.ceil(rect.width), 1280);
+      const height = Math.max(Math.ceil(node.scrollHeight), 720);
+      const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
+
+      const composedHtml = inlineStyleTags.join("\n") + "\n" + node.outerHTML;
+
+      const captureRes = await fetchWithAuth(`${API_BASE}/api/snapshots/capture-headless`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          html: composedHtml,
+          stylesheet_urls: stylesheetUrls,
+          width,
+          height,
+          background_color: bg,
+        }),
+      });
+
+      if (!captureRes.ok) {
+        const detail = await captureRes.text().catch(() => "");
+        setMsg({ ok: false, text: `Capture failed: ${captureRes.status} ${detail.slice(0, 100)}` });
+        setBusy(false);
+        return;
+      }
+
+      const blob = await captureRes.blob();
+      if (!blob || blob.size === 0) {
+        setMsg({ ok: false, text: "Capture produced empty image" });
         setBusy(false);
         return;
       }
