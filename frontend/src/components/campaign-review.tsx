@@ -149,12 +149,18 @@ interface Filters {
   dateRange: DateRangeKey;
   from: string;            // YYYY-MM-DD (custom range)
   to: string;              // YYYY-MM-DD (custom range)
+  // Which date the range filter operates on. "close" is the default
+  // (post-mortem framing — "trades closed in the last N"); open
+  // positions without a close_date drop out of a filtered view.
+  // "open" filters by open_date so open positions stay visible.
+  date_basis: "close" | "open";
 }
 const EMPTY_FILTERS: Filters = {
   q: "", status: [], tickers: [], rule: "all", pl: "all", rank: "all",
   instrument: "stocks", lesson: "all",
   b_min_pct: "", a_min_pct: "",
   dateRange: "all", from: "", to: "",
+  date_basis: "close",
 };
 
 const NUMERIC_KEYS = new Set<ColKey>([
@@ -719,11 +725,18 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         const cats = r.lesson_category.split("|").map(s => s.trim()).filter(Boolean);
         if (!cats.includes(filters.lesson)) return false;
       }
-      // Date-preset filter. Uses close_date when set (post-mortem
-      // semantics: "trades I closed in the last N"); falls back to
-      // open_date for open positions so they don't get dropped from
-      // presets. Custom pulls from filters.from / filters.to.
-      const d = (r.closed_date || r.open_date).slice(0, 10);
+      // Date-preset filter. `date_basis` picks which column the
+      // range applies to — "close" (default) matches the review
+      // framing; "open" filters on entry date and keeps open
+      // positions visible under a filtered view. When the chosen
+      // field is missing (basis="close" on an open position) and a
+      // filter is active, the row is excluded — the honest read is
+      // "this doesn't match a close-date filter because it hasn't
+      // closed yet".
+      const dateField = filters.date_basis === "open" ? r.open_date : r.closed_date;
+      const filterActive = filters.dateRange !== "all";
+      if (filterActive && !dateField) return false;
+      const d = (dateField || "").slice(0, 10);
       if (!dateFilterPasses(d, filters)) return false;
       return true;
     });
@@ -969,6 +982,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
     || filters.instrument !== "stocks" || filters.lesson !== "all"
     || !!filters.b_min_pct || !!filters.a_min_pct
     || filters.dateRange !== "all" || !!filters.from || !!filters.to
+    || filters.date_basis !== "close"
   ), [filters]);
   const resetFilters = () => setFilters(EMPTY_FILTERS);
 
@@ -1386,6 +1400,15 @@ export function CampaignReview({ navColor }: { navColor: string }) {
                 { v: "custom", l: "Custom" },
               ]}
               testId="filter-date-range"
+            />
+            <SegmentedControl label="Basis"
+              value={filters.date_basis}
+              onChange={v => setFilters(f => ({ ...f, date_basis: v as "close" | "open" }))}
+              options={[
+                { v: "close", l: "Close" },
+                { v: "open",  l: "Open"  },
+              ]}
+              testId="filter-date-basis"
             />
             {filters.dateRange === "custom" && (
               <div className="flex flex-col gap-1">
