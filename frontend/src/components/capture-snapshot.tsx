@@ -44,33 +44,63 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       }
 
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
-      // Fix for truncated ACS captures 2026-07-26. `html-to-image`
-      // reads the element's live `offsetWidth/offsetHeight`, but if
-      // the node lives inside an ancestor with `overflow: auto` (the
-      // desktop-shell content area) the below-fold content can render
-      // late and the lib may snapshot a shorter frame. Pass explicit
-      // width + height from `scrollWidth / scrollHeight` so it always
-      // captures the full extent regardless of the current scroll
-      // position.
-      //
-      // The pixel-ratio downgrade guards against browser canvas
-      // ceilings — Chrome caps at ~65k px per side, Safari at ~16k.
-      // A 20,000px-tall ACS at pixelRatio 2 would silently truncate on
-      // Safari. Drop to 1 when the capture would breach 12k px on the
-      // long edge (leaves headroom for the 2× multiplier below).
+
+      // ACS truncation fix 2026-07-26 (v2). html-to-image faithfully
+      // reproduces the DOM, which means it also reproduces:
+      //   * position: sticky on the table headers (offsets rows in
+      //     the raster)
+      //   * overflow-x: auto on the equity/options table wrappers
+      //     (the wrapper's rendered height ends up shorter than the
+      //     tbody, clipping the last row)
+      //   * max-h-*/overflow-y-auto on modal panels (usually inert
+      //     since modals aren't open during capture, but harmless to
+      //     defuse)
+      // Neutralize those three during capture via a scoped class +
+      // injected stylesheet. Applied before toBlob, removed in
+      // finally so a mid-capture throw doesn't leave the DOM styled.
+      const styleTag = document.createElement("style");
+      styleTag.setAttribute("data-capture-neutralizer", "");
+      styleTag.textContent = `
+        .capturing-snapshot [class*="sticky"] {
+          position: static !important;
+          top: auto !important;
+        }
+        .capturing-snapshot [class*="overflow-x-auto"],
+        .capturing-snapshot [class*="overflow-y-auto"],
+        .capturing-snapshot [class*="overflow-hidden"] {
+          overflow: visible !important;
+        }
+        .capturing-snapshot [class*="max-h-"] {
+          max-height: none !important;
+        }
+      `;
+      document.head.appendChild(styleTag);
+      node.classList.add("capturing-snapshot");
+      // One rAF so the browser applies the neutralized layout before
+      // html-to-image walks the DOM. Without this, the clone can
+      // snapshot the pre-neutralization frame on the first tick.
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+      // Pixel-ratio downgrade guards against browser canvas ceilings:
+      // Chrome caps ~65k px per side, Safari ~16k. Drop to 1x when
+      // scaled long edge would breach 12k px (leaves headroom).
       const captureWidth = node.scrollWidth;
       const captureHeight = node.scrollHeight;
       const SAFE_CANVAS_EDGE = 12000;
       const rawPixelRatio = 2;
       const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawPixelRatio;
       const pixelRatio = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawPixelRatio;
-      const blob = await toBlob(node, {
-        backgroundColor: bg,
-        pixelRatio,
-        cacheBust: true,
-        width: captureWidth,
-        height: captureHeight,
-      });
+      let blob: Blob | null = null;
+      try {
+        blob = await toBlob(node, {
+          backgroundColor: bg,
+          pixelRatio,
+          cacheBust: true,
+        });
+      } finally {
+        node.classList.remove("capturing-snapshot");
+        styleTag.remove();
+      }
       if (!blob) {
         setMsg({ ok: false, text: "Capture produced no image" });
         setBusy(false);
