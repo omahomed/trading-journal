@@ -60,19 +60,22 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       // finally so a mid-capture throw doesn't leave the DOM styled.
       const styleTag = document.createElement("style");
       styleTag.setAttribute("data-capture-neutralizer", "");
-      // Neutralize the two styles that break html-to-image's layout:
-      //   * position:sticky on <th> elements — sticky is rasterized at
-      //     its viewport-anchored pixel position, offsetting rows in
-      //     the canvas and clipping the bottom of the tbody against
-      //     the wrapper's overflow-hidden border-radius.
-      //   * max-h-* on any inert modal panels.
-      // Do NOT touch overflow-x-auto / overflow-y-auto / overflow-hidden:
-      //   * overflow-x-auto is defensive and doesn't kick in at normal
-      //     widths, so it's not the truncation source.
-      //   * overflow-hidden on outer card wrappers is intentional — it
-      //     clips children to the rounded corners. Neutralizing it
-      //     flattens the corner card look in the capture (observed on
-      //     the first v2 pass).
+      // Two neutralizations, one static + one dynamic:
+      //
+      // Static (CSS class): sticky headers + max-h-* modal caps. These
+      // are safe to strip globally; nothing on the page depends on
+      // sticky for visual layout.
+      //
+      // Dynamic (per-element data attribute): overflow-hidden ONLY on
+      // wrappers that contain a <table>. html-to-image reads
+      // clientHeight (not scrollHeight) from the library source — for a
+      // wrapper with overflow-hidden + a scrollbar-wearing child, the
+      // clientHeight underreports and the tbody's last rows get clipped
+      // by the SVG viewport. Overriding those specific wrappers to
+      // overflow: visible unclips the tbody. Leaving overflow-hidden on
+      // non-table cards (KPI tiles etc.) keeps their rounded corners
+      // crisp — the previous "global overflow-hidden neutralization"
+      // pass flattened all corners as collateral damage.
       styleTag.textContent = `
         .capturing-snapshot [class*="sticky"] {
           position: static !important;
@@ -81,9 +84,29 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         .capturing-snapshot [class*="max-h-"] {
           max-height: none !important;
         }
+        [data-capture-visible-overflow] {
+          overflow: visible !important;
+        }
       `;
       document.head.appendChild(styleTag);
       node.classList.add("capturing-snapshot");
+
+      // Tag every overflow-hidden ancestor of a <table> for the CSS
+      // override above. Store the elements so we can strip the attr
+      // in finally regardless of throw path.
+      const tableWrappers: Element[] = [];
+      const tables = node.querySelectorAll("table");
+      tables.forEach(table => {
+        let el: Element | null = table.parentElement;
+        while (el && el !== node && el !== document.body) {
+          const overflow = getComputedStyle(el).overflow;
+          if (overflow === "hidden" && !el.hasAttribute("data-capture-visible-overflow")) {
+            el.setAttribute("data-capture-visible-overflow", "");
+            tableWrappers.push(el);
+          }
+          el = el.parentElement;
+        }
+      });
       // One rAF so the browser applies the neutralized layout before
       // html-to-image walks the DOM. Without this, the clone can
       // snapshot the pre-neutralization frame on the first tick.
@@ -107,6 +130,7 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         });
       } finally {
         node.classList.remove("capturing-snapshot");
+        tableWrappers.forEach(el => el.removeAttribute("data-capture-visible-overflow"));
         styleTag.remove();
       }
       if (!blob) {
