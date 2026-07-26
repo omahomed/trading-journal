@@ -60,14 +60,18 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       // finally so a mid-capture throw doesn't leave the DOM styled.
       const styleTag = document.createElement("style");
       styleTag.setAttribute("data-capture-neutralizer", "");
+      // Only neutralize overflow-x-auto / overflow-y-auto here.
+      // overflow-hidden is intentionally left alone — outer card
+      // wrappers use it to clip children to the rounded border, and
+      // stripping it would flatten the corners in the capture (as
+      // observed on the first v2 pass).
       styleTag.textContent = `
         .capturing-snapshot [class*="sticky"] {
           position: static !important;
           top: auto !important;
         }
         .capturing-snapshot [class*="overflow-x-auto"],
-        .capturing-snapshot [class*="overflow-y-auto"],
-        .capturing-snapshot [class*="overflow-hidden"] {
+        .capturing-snapshot [class*="overflow-y-auto"] {
           overflow: visible !important;
         }
         .capturing-snapshot [class*="max-h-"] {
