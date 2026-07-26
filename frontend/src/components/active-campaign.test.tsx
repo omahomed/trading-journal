@@ -539,17 +539,23 @@ describe("ActiveCampaign — Glossary", () => {
     // Collapsed by default → click-to-expand hint present.
     expect(toggle.textContent).toMatch(/click to expand/);
     // Pyramid-state row copy is only visible when the panel is open.
-    expect(screen.queryByText(/Rule 2 satisfied/)).not.toBeInTheDocument();
+    // Rule 3 is Progress under v6 (added Window as Rule 2 on 2026-07-25).
+    expect(screen.queryByText(/Rule 3 \(Progress\) satisfied/)).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
 
     // Now open — column definitions render. "Trade Risk $" appears
     // multiple times (column header + glossary term), so assert on
     // unique glossary-only copy.
-    expect(await screen.findByText(/Rule 2 satisfied/)).toBeInTheDocument();
+    expect(await screen.findByText(/Rule 3 \(Progress\) satisfied/)).toBeInTheDocument();
     expect(screen.getByText(/Historical/i)).toBeInTheDocument();
     expect(screen.getByText(/Stop above entry/)).toBeInTheDocument();
     // Location gate is explicitly disclaimed as sizer-only.
     expect(screen.getByText(/Rule 1 \(Location:/)).toBeInTheDocument();
+    // v6 Window gate has its own chip + copy — regression guard so
+    // the §2 addition can't silently disappear from the glossary.
+    expect(screen.getByText(/Rule 2 \(v6/)).toBeInTheDocument();
+    expect(screen.getByText(/SR8 rebuild/)).toBeInTheDocument();
+    expect(screen.getByText(/fresh-base breakout/)).toBeInTheDocument();
   });
 });

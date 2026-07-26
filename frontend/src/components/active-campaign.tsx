@@ -1563,8 +1563,9 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       })()}
 
       {/* Glossary — collapsible reference for column meanings + the
-          Pyramid screener's four states. Same visual language as the
-          Risk Monitor block below so they read as sibling collapsibles. */}
+          Pyramid screener's five states. Same visual language as the
+          Risk Monitor block below so they read as sibling collapsibles.
+          (v6 2026-07-25: added the §2 Window chip.) */}
       <div className="mt-6 rounded-[14px] overflow-hidden"
            data-testid="acs-glossary"
            style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
@@ -1595,7 +1596,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", color: "#fff" }}>
                   🔺 Full
                 </span>
-                <span>Rule 2 satisfied: last held buy up ≥ 5% AND Ceiling + Budget clear. Sizer verifies Rule 1 (Location) before you log the buy.</span>
+                <span>Rule 3 (Progress) satisfied: last held buy up ≥ 5% AND Window + Ceiling + Budget clear. Sizer verifies Rule 1 (Location) + Rule 5 (Size math) before you log the buy.</span>
 
                 <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold text-center"
                       style={{ background: "linear-gradient(135deg, #fbbf24, #f59e0b)", color: "#451a03" }}>
@@ -1607,25 +1608,31 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
                   ⛔ Ceiling
                 </span>
-                <span>Position already at or above 25% NAV — the campaign cap. Trim before adding.</span>
+                <span>Rule 7 (Ceiling) — position already at or above 25% NAV, the campaign cap. Trim before adding.</span>
+
+                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
+                      style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
+                  ⛔ Window
+                </span>
+                <span>Rule 2 (v6, added 2026-07-25) — position more than +15% above the B1 fill. No at-level adds beyond the window. Two overrides exist: open the sizer and declare either <strong>SR8 rebuild</strong> (RS-governed) or <strong>fresh-base breakout</strong> (§3 structural). Reason is persisted for the 30-add review.</span>
 
                 <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
                       style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
                   ⛔ Budget
                 </span>
-                <span>Current risk-to-stops already exceeds the 0.50% × NAV budget (Normal mode assumed). Sizer verifies against your live MCT mode.</span>
+                <span>Rule 4 (Budget) — current risk-to-stops already exceeds the 0.50% × NAV budget (Normal mode assumed). Sizer verifies against your live MCT mode.</span>
 
                 <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-center"
                       style={{ background: "var(--surface-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}>
                   ⛔ Below
                 </span>
-                <span>Current price below last held buy. Wait for the recent add to work.</span>
+                <span>Rule 3 (Progress) — current price below the last held buy. Wait for the recent add to work.</span>
 
                 <span className="text-center" style={{ color: "var(--ink-4)" }}>—</span>
                 <span>Options — pyramid semantics don't apply.</span>
               </div>
               <div className="mt-2 text-[11px]" style={{ color: "var(--ink-4)" }}>
-                Rule 1 (Location: price ≤ 21 EMA + 1 × ATR) needs live 21 EMA per ticker and is <strong>not</strong> checked here — the Position Sizer verifies it before the buy fires. Right-click a row → Open Position Sizer Pyramid.
+                Rule 1 (Location: price ≤ 21 EMA + 1 × ATR) needs live 21 EMA per ticker and is <strong>not</strong> checked here — the Position Sizer verifies it before the buy fires. Right-click a row → Open Position Sizer Pyramid. The Window screener ALWAYS shows the block regardless of any prior exempt declaration — ACS surfaces the current at-level state; override decisions happen inside the sizer.
               </div>
             </div>
 
