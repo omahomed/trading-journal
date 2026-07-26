@@ -32,6 +32,7 @@ import { MobileImageUpload, type ImageUploadRow } from "./mobile-image-upload";
 import { MobileEditSheet } from "./mobile-edit-sheet";
 import { MobileTextareaEditor } from "./mobile-textarea-editor";
 import { MobileTradingChecklist } from "./mobile-trading-checklist";
+import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES, todayInChicago } from "@/lib/routine-autotick";
 
 /**
  * Mobile Daily Report — Phase 2 T2-4 (core).
@@ -184,6 +185,12 @@ function useFieldEditor({
         return;
       }
       onSaveSuccess(value);
+      // Autotick "Journal" on Recap or Thoughts save (not market_notes)
+      // and only when editing today's entry.
+      if ((field === "lowlights" || field === "daily_thoughts")
+          && date === todayInChicago()) {
+        void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
+      }
       try {
         window.localStorage.removeItem(draftKey);
       } catch {

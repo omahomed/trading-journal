@@ -10,6 +10,7 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { MobileScoreSelector } from "./mobile-score-selector";
 import { MobileToggleSwitch } from "./mobile-toggle-switch";
 import { NumberFieldCell, TextFieldCell } from "./mobile-form-fields";
+import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 
 /**
  * Mobile Daily Routine — Phase 2 Step 5. Ports the desktop multi-
@@ -562,6 +563,8 @@ export function MobileNLVEntry() {
         clearDraft(entryDate);
         setRestoredFromDraft(false);
         setLastAutosaveAt(null);
+        // Autotick "Equity routine" in the checklist — fire and forget.
+        void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.equityRoutine);
       } else {
         setSaveError({
           kind: "error",
