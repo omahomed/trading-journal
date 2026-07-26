@@ -35,7 +35,13 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
     setBusy(true);
     setMsg(null);
     try {
-      const { toBlob } = await import("html-to-image");
+      // Swapped from html-to-image to modern-screenshot 2026-07-26
+      // after multiple ACS truncation bugs traced to html-to-image's
+      // clientHeight-based measurement + brittle DOM cloning. modern-
+      // screenshot is an actively-maintained fork of html-to-image
+      // with fixes for the exact class of layout-mismeasurement bugs
+      // we were hitting. Same conceptual API, different exports.
+      const { domToBlob } = await import("modern-screenshot");
       const node = targetSelector ? (document.querySelector(targetSelector) as HTMLElement | null) : document.body;
       if (!node) {
         setMsg({ ok: false, text: "Target not found" });
@@ -45,119 +51,20 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
 
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
 
-      // ACS truncation fix 2026-07-26 (v2). html-to-image faithfully
-      // reproduces the DOM, which means it also reproduces:
-      //   * position: sticky on the table headers (offsets rows in
-      //     the raster)
-      //   * overflow-x: auto on the equity/options table wrappers
-      //     (the wrapper's rendered height ends up shorter than the
-      //     tbody, clipping the last row)
-      //   * max-h-*/overflow-y-auto on modal panels (usually inert
-      //     since modals aren't open during capture, but harmless to
-      //     defuse)
-      // Neutralize those three during capture via a scoped class +
-      // injected stylesheet. Applied before toBlob, removed in
-      // finally so a mid-capture throw doesn't leave the DOM styled.
-      const styleTag = document.createElement("style");
-      styleTag.setAttribute("data-capture-neutralizer", "");
-      // Sticky + max-h neutralization via a scoped class.
-      styleTag.textContent = `
-        .capturing-snapshot [class*="sticky"] {
-          position: static !important;
-          top: auto !important;
-        }
-        .capturing-snapshot [class*="max-h-"] {
-          max-height: none !important;
-        }
-      `;
-      document.head.appendChild(styleTag);
-      node.classList.add("capturing-snapshot");
-
-      // Aggressive per-element neutralization for table wrappers.
-      // Two overrides per ancestor:
-      //   * overflow: visible — so children don't get clipped by the
-      //     wrapper's box.
-      //   * min-height: <scrollHeight>px — so the wrapper's box GROWS
-      //     to include all children. Without this, html-to-image
-      //     copies the wrapper's original (clipped) computed height
-      //     into the clone. The clone then renders children with
-      //     overflow: visible but the wrapper is stuck at its old
-      //     short height, causing children to escape past the box
-      //     and paint OVER downstream sections like Glossary /
-      //     Risk Monitor. Observed in the v4 pass.
-      // Snapshot prior inline values for restore in finally.
-      type StyleSnapshot = {
-        el: HTMLElement;
-        overflow: string;
-        overflowPriority: string;
-        minHeight: string;
-        minHeightPriority: string;
-      };
-      const styleSnapshots: StyleSnapshot[] = [];
-      const tables = node.querySelectorAll("table");
-      const seen = new Set<Element>();
-      tables.forEach(table => {
-        let el: HTMLElement | null = table.parentElement;
-        while (el && el !== node && el !== document.body) {
-          if (!seen.has(el)) {
-            seen.add(el);
-            styleSnapshots.push({
-              el,
-              overflow: el.style.getPropertyValue("overflow"),
-              overflowPriority: el.style.getPropertyPriority("overflow"),
-              minHeight: el.style.getPropertyValue("min-height"),
-              minHeightPriority: el.style.getPropertyPriority("min-height"),
-            });
-            const naturalHeight = el.scrollHeight;
-            el.style.setProperty("overflow", "visible", "important");
-            el.style.setProperty("min-height", `${naturalHeight}px`, "important");
-          }
-          el = el.parentElement;
-        }
-      });
-      // Force a synchronous reflow so the min-height override lands
-      // in the wrapper's computed height BEFORE html-to-image reads it.
-      // Reading offsetHeight is the standard incantation.
-      void node.offsetHeight;
-      // One rAF so the browser applies the neutralized layout before
-      // html-to-image walks the DOM. Without this, the clone can
-      // snapshot the pre-neutralization frame on the first tick.
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-
       // Pixel-ratio downgrade guards against browser canvas ceilings:
       // Chrome caps ~65k px per side, Safari ~16k. Drop to 1x when
       // scaled long edge would breach 12k px (leaves headroom).
       const captureWidth = node.scrollWidth;
       const captureHeight = node.scrollHeight;
       const SAFE_CANVAS_EDGE = 12000;
-      const rawPixelRatio = 2;
-      const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawPixelRatio;
-      const pixelRatio = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawPixelRatio;
-      // Explicit height = scrollHeight so the SVG viewport is
-      // guaranteed tall enough to contain everything, even if the
-      // overflow neutralization above misses a corner case.
-      // clientHeight (the library's default) can underreport when
-      // scrollbars steal vertical space; scrollHeight is the ceiling.
-      // Width defaults to clientWidth — matches natural layout so we
-      // don't create a phantom horizontal scrollbar in the capture.
-      let blob: Blob | null = null;
-      try {
-        blob = await toBlob(node, {
-          backgroundColor: bg,
-          pixelRatio,
-          cacheBust: true,
-          height: node.scrollHeight,
-        });
-      } finally {
-        node.classList.remove("capturing-snapshot");
-        styleSnapshots.forEach(({ el, overflow, overflowPriority, minHeight, minHeightPriority }) => {
-          if (overflow) el.style.setProperty("overflow", overflow, overflowPriority);
-          else el.style.removeProperty("overflow");
-          if (minHeight) el.style.setProperty("min-height", minHeight, minHeightPriority);
-          else el.style.removeProperty("min-height");
-        });
-        styleTag.remove();
-      }
+      const rawScale = 2;
+      const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawScale;
+      const scale = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawScale;
+
+      const blob = await domToBlob(node, {
+        backgroundColor: bg,
+        scale,
+      });
       if (!blob) {
         setMsg({ ok: false, text: "Capture produced no image" });
         setBusy(false);
