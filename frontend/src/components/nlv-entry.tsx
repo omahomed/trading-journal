@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from "react";
 import { api } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { formatCurrency } from "@/lib/format";
-import { gradeColor } from "@/lib/grade-helpers";
 import { log } from "@/lib/log";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 
@@ -18,33 +17,9 @@ import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 // scoped, so each portfolio needs its own pull URL or filter).
 const IBKR_AUTOFILL_ENABLED = false;
 
-const REPORT_CATEGORIES = [
-  { key: "plan", label: "Followed plan" },
-  { key: "stops", label: "Respected stops" },
-  { key: "sized", label: "Sized correctly" },
-  { key: "fomo", label: "No FOMO entries" },
-];
-
-function letterGrade(total: number, max: number): string {
-  const pct = (total / max) * 100;
-  if (pct >= 100) return "A+";
-  if (pct >= 93) return "A";
-  if (pct >= 87) return "A-";
-  if (pct >= 83) return "B+";
-  if (pct >= 77) return "B";
-  if (pct >= 70) return "B-";
-  if (pct >= 67) return "C+";
-  if (pct >= 60) return "C";
-  if (pct >= 53) return "C-";
-  if (pct >= 47) return "D";
-  return "F";
-}
-function gradeToScore(g: string) {
-  return g.startsWith("A") ? 5 : g.startsWith("B") ? 4 : g.startsWith("C") ? 3 : g.startsWith("D") ? 2 : 1;
-}
-function scoreColor(v: number) {
-  return v >= 4 ? "#08a86b" : v >= 3 ? "#f59f00" : "#e5484d";
-}
+// Scorecard helpers (REPORT_CATEGORIES / letterGrade / gradeToScore /
+// scoreColor) moved to @/lib/scorecard when the Journal-item mini-form
+// took over capture. Deleted from here in the same trim.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Multi-portfolio card state. Each card mirrors the per-portfolio fields
@@ -303,8 +278,12 @@ export function NLVEntry({ navColor }: { navColor: string }) {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
   });
-  const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
-  const [gradeNotes, setGradeNotes] = useState("");
+  // Scorecard (plan/stops/sized/fomo + grade notes) was retired from
+  // this form 2026-07-26 when the ScorecardMiniForm on the Journal
+  // checklist item became the primary capture point. Both paths write
+  // to the same trading_journal fields (score, highlights, mistakes);
+  // removing the duplicate here prevents the two entry points from
+  // clobbering each other.
   const [forceOverwrite, setForceOverwrite] = useState(false);
   // Tracks whether the user has clicked Save yet. Combined with per-card
   // `touched` flags to gate the validation-summary banner — first paint
@@ -444,10 +423,6 @@ export function NLVEntry({ navColor }: { navColor: string }) {
 
   const hasErrors = validationSummary.length > 0;
 
-  const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
-  const grade = letterGrade(totalScore, REPORT_CATEGORIES.length * 5);
-  const overallScore = gradeToScore(grade);
-
   async function handleSave() {
     setSaving(true);
     setSaveOk("");
@@ -476,9 +451,11 @@ export function NLVEntry({ navColor }: { navColor: string }) {
         spy: parseFloat(spyClose) || 0,
         nasdaq: parseFloat(ndxClose) || 0,
         market_notes: marketNotes,
-        score: overallScore,
-        highlights: JSON.stringify(scores),
-        mistakes: gradeNotes,
+        // score / highlights / mistakes intentionally omitted — the
+        // Journal checklist item's ScorecardMiniForm owns those
+        // fields now. Backend PATCH keeps existing values when a
+        // key is missing from `shared`, so today's grade is
+        // preserved when NLV Entry saves after the mini-form.
         nlv_source: "manual",
         holdings_source: "manual",
       },
@@ -594,51 +571,9 @@ export function NLVEntry({ navColor }: { navColor: string }) {
         ))}
       </div>
 
-      {/* Report Card — shared */}
-      <div className="rounded-[14px] overflow-hidden mb-4" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-        <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#08a86b" }} />
-            <span className="text-[13px] font-semibold">Report Card</span>
-          </div>
-          <span className="text-[28px] font-semibold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor(grade), lineHeight: 1 }}>
-            {grade}
-          </span>
-        </div>
-        <div className="divide-y" style={{ borderColor: "var(--border)" }}>
-          {REPORT_CATEGORIES.map((cat) => (
-            <div key={cat.key} className="flex items-center justify-between px-4 py-3">
-              <span className="text-[12px] font-medium">{cat.label}</span>
-              <div className="flex items-center gap-2.5">
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  value={scores[cat.key]}
-                  onChange={(e) => setScores({ ...scores, [cat.key]: parseInt(e.target.value) })}
-                  className="w-[80px] h-1 rounded-full appearance-none cursor-pointer"
-                  style={{ accentColor: scoreColor(scores[cat.key]) }}
-                />
-                <span className="text-[11px] font-semibold w-[28px] text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: scoreColor(scores[cat.key]) }}>
-                  {scores[cat.key]}/5
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-          <Field label="Grade Notes">
-            <input
-              type="text"
-              value={gradeNotes}
-              onChange={(e) => setGradeNotes(e.target.value)}
-              placeholder="Optional..."
-              className={inputCls}
-              style={{ ...inputStyle, fontFamily: "inherit" }}
-            />
-          </Field>
-        </div>
-      </div>
+      {/* Report Card retired 2026-07-26 — captured via the
+          ScorecardMiniForm on the Daily Routine page's Journal
+          checklist item. */}
 
       {/* Submit area */}
       <label className="flex items-center gap-2 mb-4 cursor-pointer text-[12px]" style={{ color: "var(--ink-3)" }}>

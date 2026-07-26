@@ -436,15 +436,14 @@ describe("MobileNLVEntry — validation + submit", () => {
   });
 });
 
-describe("MobileNLVEntry — score chips + grade", () => {
-  test("changing a score chip updates the letter grade", async () => {
+describe("MobileNLVEntry — scorecard removed 2026-07-26", () => {
+  test("Report Card section is not rendered (moved to ScorecardMiniForm)", async () => {
     render(<MobileNLVEntry />);
-    await screen.findByTestId("report-grade");
-    const initialGrade = screen.getByTestId("report-grade").textContent;
-    // Default scores are all 5 → A+. Drop a chip to 1 → grade drops.
-    fireEvent.click(screen.getByTestId("score-chip-followed-plan-1"));
+    // Wait for the form to finish its initial fetch cycle.
     await waitFor(() =>
-      expect(screen.getByTestId("report-grade").textContent).not.toBe(initialGrade),
+      expect(screen.queryByRole("progressbar")).toBeNull(),
     );
+    expect(screen.queryByTestId("report-grade")).toBeNull();
+    expect(screen.queryByText(/Report Card/i)).toBeNull();
   });
 });
