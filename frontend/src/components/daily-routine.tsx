@@ -20,7 +20,9 @@ import { TagPicker } from "./tag-picker";
 import { DailyThoughts } from "./daily-thoughts";
 import { TradingChecklist } from "./trading-checklist";
 import { SectionExpander } from "./section-expander";
+import { ScorecardMiniForm } from "./scorecard-mini-form";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES, todayInChicago } from "@/lib/routine-autotick";
+import { SCORECARD_CATEGORIES } from "@/lib/scorecard";
 import { SnapshotGallery } from "./snapshot-gallery";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
@@ -123,6 +125,14 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
   const [marketNotesSaving, setMarketNotesSaving] = useState(false);
   const [marketNotesMsg, setMarketNotesMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // Phase 2 merger: scorecard mini-form open state + a reload counter
+  // used to remount TradingChecklist after autotick so the "Journal"
+  // row's ticked state reflects the save without needing a manual
+  // refresh. Also gates the fetch effect below via its dep array so
+  // history refetches after a save.
+  const [scorecardOpen, setScorecardOpen] = useState(false);
+  const [reloadCounter, setReloadCounter] = useState(0);
+
   // Auto-resize the textarea to fit its content (recap markdown editor).
   useEffect(() => {
     const ta = textareaRef.current;
@@ -177,7 +187,7 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
       }
       setLoading(false);
     });
-  }, [dateParam, portfolio]);
+  }, [dateParam, portfolio, reloadCounter]);
 
   // Load snapshots when selectedDate changes
   useEffect(() => {
@@ -742,19 +752,28 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           showDot
           headerCaption={() => "same-day undo only"}>
           <div className="p-4">
-            <TradingChecklist navColor={navColor} />
+            {/* key={reloadCounter} forces a remount after scorecard save
+                so TradingChecklist re-fetches items and the "Journal"
+                row reflects the auto-tick without a manual refresh. */}
+            <TradingChecklist key={reloadCounter} navColor={navColor} />
           </div>
         </SectionExpander>
 
         {day && (
           <>
-            {/* Section 4: Daily Review */}
+            {/* Section 4: Daily Scorecard (renamed from Daily Review
+                per Phase 2 merger). Captures via ScorecardMiniForm on
+                the Journal checklist item's flow; NLV Entry keeps its
+                own copy of the same fields until the multi-portfolio
+                form is trimmed in a follow-up. Empty state surfaces a
+                "Grade today" call-to-action; populated state renders
+                the grade + chips + notes with an Edit button. */}
             {(() => {
               const score = day.score || 0;
               const highlights = (day as any).highlights || "";
               const mistakes = (day as any).mistakes || "";
               const topLesson = (day as any).top_lesson || "";
-              if (!score && !highlights && !mistakes && !topLesson) return null;
+              const graded = !!(score || (highlights && highlights.startsWith("{")) || mistakes);
 
               let rc: Record<string, number> | null = null;
               try { if (highlights.startsWith("{")) rc = JSON.parse(highlights); } catch { /* */ }
@@ -763,38 +782,63 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
               const gradeColor = score >= 4 ? "#08a86b" : score >= 3 ? "#f59f00" : "#e5484d";
 
               return (
-                <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-                  <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Daily Review</div>
+                <SectionExpander
+                  title="Daily Scorecard"
+                  defaultExpanded={true}
+                  localStorageKey="mo-daily-routine-scorecard-expanded"
+                  showDot
+                  headerCaption={() => graded ? gradeLabel : "not graded"}>
                   <div className="p-4">
-                    {gradeLabel && (
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-[11px] font-semibold" style={{ color: "var(--ink-4)" }}>Grade:</span>
-                        <span className="text-[18px] font-bold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor }}>{gradeLabel}</span>
-                        {rc && (
-                          <div className="flex gap-2 ml-2">
-                            {[
-                              { k: "plan", l: "Plan" }, { k: "stops", l: "Stops" }, { k: "sized", l: "Sized" },
-                              { k: "fomo", l: "FOMO" },
-                            ].map(cat => rc![cat.k] != null ? (
-                              <span key={cat.k} className="text-[10px] px-1.5 py-0.5 rounded" style={{
-                                background: rc![cat.k] >= 4 ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : rc![cat.k] >= 3 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #e5484d 12%, var(--surface))",
-                                color: rc![cat.k] >= 4 ? "#16a34a" : rc![cat.k] >= 3 ? "#d97706" : "#dc2626",
-                              }}>
-                                {cat.l} {rc![cat.k]}/5
-                              </span>
-                            ) : null)}
+                    {graded ? (
+                      <>
+                        {gradeLabel && (
+                          <div className="flex items-center gap-3 mb-3 flex-wrap">
+                            <span className="text-[11px] font-semibold" style={{ color: "var(--ink-4)" }}>Grade:</span>
+                            <span className="text-[18px] font-bold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor }}>{gradeLabel}</span>
+                            {rc && (
+                              <div className="flex gap-2 ml-2">
+                                {SCORECARD_CATEGORIES.map(cat => rc![cat.key] != null ? (
+                                  <span key={cat.key} className="text-[10px] px-1.5 py-0.5 rounded" style={{
+                                    background: rc![cat.key] >= 4 ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : rc![cat.key] >= 3 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #e5484d 12%, var(--surface))",
+                                    color: rc![cat.key] >= 4 ? "#16a34a" : rc![cat.key] >= 3 ? "#d97706" : "#dc2626",
+                                  }}>
+                                    {cat.key === "plan" ? "Plan" : cat.key === "stops" ? "Stops" : cat.key === "sized" ? "Sized" : "FOMO"} {rc![cat.key]}/5
+                                  </span>
+                                ) : null)}
+                              </div>
+                            )}
+                            <button type="button"
+                                    onClick={() => setScorecardOpen(true)}
+                                    className="ml-auto text-[11px] px-2 py-1 rounded-[6px] transition-colors hover:brightness-95"
+                                    style={{ background: "var(--bg-2)", color: "var(--ink-3)", border: "1px solid var(--border)" }}
+                                    data-testid="scorecard-edit-button">
+                              ✎ Edit
+                            </button>
                           </div>
                         )}
+                        {mistakes && mistakes !== "nan" && (
+                          <div className="text-[12px] mb-1"><strong>Notes:</strong> {mistakes}</div>
+                        )}
+                        {topLesson && topLesson !== "nan" && (
+                          <div className="text-[12px]"><strong>Top Lesson:</strong> {topLesson}</div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-start gap-2">
+                        <span className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+                          Not graded yet. Tap to grade the day (Plan / Stops / Sized / FOMO).
+                        </span>
+                        <button type="button"
+                                onClick={() => setScorecardOpen(true)}
+                                className="px-3 py-1.5 rounded-[8px] text-[12px] font-semibold text-white transition-all"
+                                style={{ background: navColor }}
+                                data-testid="scorecard-grade-today-button">
+                          Grade today
+                        </button>
                       </div>
                     )}
-                    {mistakes && mistakes !== "nan" && (
-                      <div className="text-[12px] mb-1"><strong>Notes:</strong> {mistakes}</div>
-                    )}
-                    {topLesson && topLesson !== "nan" && (
-                      <div className="text-[12px]"><strong>Top Lesson:</strong> {topLesson}</div>
-                    )}
                   </div>
-                </div>
+                </SectionExpander>
               );
             })()}
 
@@ -955,6 +999,29 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
             </SectionExpander>
           </>
         )}
+
+        {/* Scorecard mini-form — triggered by "Grade today" empty
+            state or "Edit" chip inside Daily Scorecard section. On
+            successful save: bumps reloadCounter (re-fetches history +
+            remounts TradingChecklist), autoticks "Journal" when
+            editing today. */}
+        <ScorecardMiniForm
+          open={scorecardOpen}
+          portfolio={portfolio}
+          day={selectedDate}
+          initial={{
+            highlights: day ? ((day as any).highlights || null) : null,
+            mistakes: day ? ((day as any).mistakes || null) : null,
+          }}
+          onSaved={() => {
+            setScorecardOpen(false);
+            setReloadCounter(c => c + 1);
+            if (selectedDate === todayInChicago()) {
+              void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
+            }
+          }}
+          onClose={() => setScorecardOpen(false)}
+        />
 
         {/* Lightbox */}
         {lightbox && (
