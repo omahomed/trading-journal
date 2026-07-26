@@ -231,7 +231,7 @@ export function SnapshotGallery({
   // Phase 7's Daily Report, the parent page must scope its own
   // window-level paste handler to not double-fire when focus is inside
   // a ThoughtsEditor (the editor's local handler captures and prevents
-  // default). See daily-report-card.tsx for the parent-side guard.
+  // default). See daily-routine.tsx for the parent-side guard.
 
   useEffect(() => {
     if (entityId == null) return;

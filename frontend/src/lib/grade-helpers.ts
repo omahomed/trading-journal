@@ -6,7 +6,7 @@
 // VAL_GRADE behavior in db_layer._GRADE_TO_NUMERIC + _NUMERIC_BUCKETS;
 // both sides must stay in sync.
 //
-// NOTE: daily-report-card.tsx has a local variable named `gradeColor`
+// NOTE: daily-routine.tsx has a local variable named `gradeColor`
 // inside renderDailyReview() that resolves a numeric SCORE (1-5) to a
 // color — not a letter grade. Different concept, not consolidated here.
 

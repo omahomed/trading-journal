@@ -1,768 +1,945 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { api } from "@/lib/api";
-import { usePortfolio } from "@/lib/portfolio-context";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import {
+  api,
+  getActivePortfolio,
+  type JournalHistoryPoint,
+  type TradeDetail,
+  type TradePosition,
+  type NotesRailItem,
+  type NotesRailYtdStats,
+} from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
-import { gradeColor } from "@/lib/grade-helpers";
 import { log } from "@/lib/log";
+import { NotesRail, type NotesRailHandle } from "./notes-rail";
+import { TagPicker } from "./tag-picker";
+import { DailyThoughts } from "./daily-thoughts";
+import { TradingChecklist } from "./trading-checklist";
+import { CollapsibleSection } from "./collapsible-section";
+import { SnapshotGallery } from "./snapshot-gallery";
 
-// IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
-// "request error (1001) — statement could not be generated" intermittently,
-// so the auto-pull is more annoying than helpful. Manual entry only until
-// the upstream issue is resolved. Flip this back to true to re-enable the
-// effect + the warning banner. NB: the multi-portfolio redesign keeps the
-// per-card IBKR scaffolding so re-enabling drops in cleanly; the effect
-// would have to be retargeted per portfolio (the Flex Query is account-
-// scoped, so each portfolio needs its own pull URL or filter).
-const IBKR_AUTOFILL_ENABLED = false;
-
-const REPORT_CATEGORIES = [
-  { key: "plan", label: "Followed plan" },
-  { key: "stops", label: "Respected stops" },
-  { key: "sized", label: "Sized correctly" },
-  { key: "fomo", label: "No FOMO entries" },
-];
-
-function letterGrade(total: number, max: number): string {
-  const pct = (total / max) * 100;
-  if (pct >= 100) return "A+";
-  if (pct >= 93) return "A";
-  if (pct >= 87) return "A-";
-  if (pct >= 83) return "B+";
-  if (pct >= 77) return "B";
-  if (pct >= 70) return "B-";
-  if (pct >= 67) return "C+";
-  if (pct >= 60) return "C";
-  if (pct >= 53) return "C-";
-  if (pct >= 47) return "D";
-  return "F";
-}
-function gradeToScore(g: string) {
-  return g.startsWith("A") ? 5 : g.startsWith("B") ? 4 : g.startsWith("C") ? 3 : g.startsWith("D") ? 2 : 1;
-}
-function scoreColor(v: number) {
-  return v >= 4 ? "#08a86b" : v >= 3 ? "#f59f00" : "#e5484d";
+/** Convert GitHub-style alert blockquotes into styled callout divs.
+ *  Supports both two-line form:
+ *    > [!great]
+ *    > content
+ *  and single-line form:
+ *    > [!great] content
+ */
+function preprocessCallouts(md: string): string {
+  const pattern = /^> \[!(\w+)\][ \t]*(.*?)(?:\r?\n((?:> ?.*(?:\r?\n|$))+))?(?=\r?\n[^>]|\r?\n$|$)/gmi;
+  return md.replace(pattern, (_m, type: string, sameLine: string, body: string | undefined) => {
+    const parts: string[] = [];
+    if (sameLine && sameLine.trim()) parts.push(sameLine.trim());
+    if (body) {
+      const cleaned = body
+        .split(/\r?\n/)
+        .map(l => l.replace(/^> ?/, ""))
+        .join("\n")
+        .trim();
+      if (cleaned) parts.push(cleaned);
+    }
+    const content = parts.join("\n");
+    const t = type.toLowerCase();
+    return `<div class="callout callout-${t}">\n<div class="callout-title">${type.toUpperCase()}</div>\n\n${content}\n\n</div>\n`;
+  });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Multi-portfolio card state. Each card mirrors the per-portfolio fields
-// that previously lived as singletons on the component (portNlv, portHold,
-// etc.). end_nlv + total_holdings are required (0 valid, empty blocks save);
-// cash_change defaults to "0"; actions is auto-populated from per-portfolio
-// trade activity.
-// ─────────────────────────────────────────────────────────────────────────────
-type IbkrSource = "manual" | "ibkr_auto" | "ibkr_override";
+type SnapItem = { id?: number; image_type?: string; view_url?: string; uploaded_at?: string };
 
-interface PortfolioCardState {
-  name: string;
-  id: number;
-  end_nlv: string;
-  total_holdings: string;
-  cash_change: string;
-  actions: string;
-  prev_end_nlv: number;          // loaded from journalLatest(before=entryDate)
-  nlv_source: IbkrSource;
-  holdings_source: IbkrSource;
-  errors: { end_nlv?: string; total_holdings?: string };
-  // Per-field touched flags gate inline error rendering. A field is
-  // "touched" once the user has blurred it (or once a save is attempted,
-  // which marks all fields touched at once). Required-but-empty errors
-  // don't render until the user has had a chance to interact with the
-  // field — prevents the "every input shows red on mount" footgun.
-  touched: { end_nlv: boolean; total_holdings: boolean };
-}
+function pctColor(v: number) { return v > 0 ? "#08a86b" : v < 0 ? "#e5484d" : "var(--ink-3)"; }
 
-function emptyCard(p: { id: number; name: string }): PortfolioCardState {
-  return {
-    name: p.name,
-    id: p.id,
-    end_nlv: "",
-    total_holdings: "",
-    cash_change: "0",
-    actions: "",
-    prev_end_nlv: 0,
-    nlv_source: "manual",
-    holdings_source: "manual",
-    errors: {},
-    touched: { end_nlv: false, total_holdings: false },
+// Exported for unit testing (daily-routine.test.tsx). The rest of
+// the file continues to use this via the DailyRoutine component
+// below — the export is additive, no consumers outside the test.
+export function cycleBadge(state: string) {
+  const s = (state || "").toUpperCase();
+  const styles: Record<string, { bg: string; fg: string }> = {
+    POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
+    UPTREND: { bg: "#08a86b", fg: "#fff" },
+    "UPTREND UNDER PRESSURE": { bg: "#d97706", fg: "#fff" },
+    "RALLY MODE": { bg: "#f59f00", fg: "#000" },
+    CORRECTION: { bg: "#e5484d", fg: "#fff" },
   };
-}
-
-function validateCard(p: PortfolioCardState): PortfolioCardState["errors"] {
-  const errors: PortfolioCardState["errors"] = {};
-  if (p.end_nlv.trim() === "") errors.end_nlv = "Required";
-  else if (isNaN(parseFloat(p.end_nlv))) errors.end_nlv = "Must be a number";
-  if (p.total_holdings.trim() === "") errors.total_holdings = "Required";
-  else if (isNaN(parseFloat(p.total_holdings))) errors.total_holdings = "Must be a number";
-  return errors;
-}
-
-function deriveCardMetrics(p: PortfolioCardState) {
-  const nlv = parseFloat(p.end_nlv) || 0;
-  const hold = parseFloat(p.total_holdings) || 0;
-  const cash = parseFloat(p.cash_change) || 0;
-  // App convention: divisor is the post-deposit baseline. Matches
-  // daily-routine.tsx pre-redesign at line 258-259 and the journal importer's
-  // compute_derived per the snapshot-fix commits.
-  const adjustedBeg = p.prev_end_nlv + cash;
-  const daily_dollar_change = p.prev_end_nlv > 0 ? nlv - adjustedBeg : 0;
-  const daily_pct_change = adjustedBeg > 0 ? (daily_dollar_change / adjustedBeg) * 100 : 0;
-  const pct_invested = nlv > 0 ? (hold / nlv) * 100 : 0;
-  return { daily_dollar_change, daily_pct_change, pct_invested, nlv, cash };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Small presentational helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  const st = styles[s] || { bg: "#888", fg: "#fff" };
   return (
-    <div>
-      <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
-        {label}
-      </label>
-      {children}
-      {error && (
-        <p className="text-[11px] mt-1 font-medium" role="alert" style={{ color: "#dc2626" }}>
-          {error}
-        </p>
-      )}
-    </div>
+    <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: st.bg, color: st.fg }}>{state || "N/A"}</span>
   );
 }
 
-const inputCls = "w-full h-[38px] px-3 rounded-[10px] text-[13px] outline-none";
-const inputStyle: React.CSSProperties = {
-  background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)",
-  fontFamily: "var(--font-jetbrains), monospace",
-};
-const inputErrorStyle: React.CSSProperties = {
-  ...inputStyle,
-  border: "1px solid #dc2626",
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PortfolioCard — per-portfolio entry tile. Owns no fetch logic; receives
-// state + onChange from the parent component. Renders inline validation
-// errors via the Field wrapper.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function PortfolioCard({
-  card,
-  onChange,
-  accentColor,
-}: {
-  card: PortfolioCardState;
-  onChange: (patch: Partial<PortfolioCardState>) => void;
-  accentColor: string;
-}) {
-  const m = deriveCardMetrics(card);
-
-  // Live Portfolio Heat preview — fires once per card mount. The backend
-  // recomputes against the latest saved end_nlv, so this is
-  // "yesterday's-NLV heat with today's positions/prices." Good enough for
-  // a pre-save glance at risk exposure; the exact stamp still happens on
-  // save via _compute_portfolio_heat, which uses today's typed NLV.
-  const [previewHeat, setPreviewHeat] = useState<number | null>(null);
+export function DailyRoutine({ navColor, initialDate }: { navColor: string; initialDate?: string }) {
+  const dateParam = initialDate || "";
+  const portfolio = getActivePortfolio();
+  const [history, setHistory] = useState<JournalHistoryPoint[]>([]);
+  const [details, setDetails] = useState<TradeDetail[]>([]);
+  const [closedTrades, setClosedTrades] = useState<TradePosition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState("");
+  const [snapshots, setSnapshots] = useState<SnapItem[]>([]);
+  const [eodOpen, setEodOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+  // "recap" backs the existing lowlights markdown column (renamed from
+  // "Daily Thoughts" to "Daily Recap" in Phase 7 — content + behavior
+  // unchanged; rename only).
+  const [recap, setRecap] = useState("");
+  const [recapDirty, setRecapDirty] = useState(false);
+  // "dailyThoughts" backs the new daily_thoughts TEXT column (rich-text
+  // HTML edited via the shared <ThoughtsEditor>). Migration 031.
+  const [dailyThoughts, setDailyThoughts] = useState("");
+  const dailyThoughtsDirtyRef = useRef(false);
+  const [savingThoughts, setSavingThoughts] = useState(false);
+  const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [recapMode, setRecapMode] = useState<"edit" | "preview">(() => {
+    if (typeof window === "undefined") return "edit";
+    const v = window.localStorage.getItem("dailyReport.thoughtsMode");
+    return v === "preview" ? "preview" : "edit";
+  });
   useEffect(() => {
-    let cancelled = false;
-    api.portfolioHeatPreview(card.name)
-      .then(r => { if (!cancelled) setPreviewHeat(r.heat); })
-      .catch(err => log.error("daily-routine", `heat preview fetch failed for ${card.name}`, err));
-    return () => { cancelled = true; };
-  }, [card.name]);
+    if (typeof window !== "undefined") window.localStorage.setItem("dailyReport.thoughtsMode", recapMode);
+  }, [recapMode]);
+
+  // Phase 7 — NotesRail state. Mirrors the weekly-retro rail wiring.
+  const [railItems, setRailItems] = useState<NotesRailItem[]>([]);
+  // Phase 8 — imperative ref so TagBar can fire a rail refetch on
+  // successful tag mutations. The rail's refresh() delegates to the
+  // onRefresh prop wired below.
+  const railRef = useRef<NotesRailHandle>(null);
+  const [railYtdStats, setRailYtdStats] = useState<NotesRailYtdStats>({
+    total_weeks: 0, weeks_graded: 0, avg_grade: null, weeks_pinned: 0,
+  });
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // T2-4b — market_notes inline edit state. Desktop previously had a
+  // read-only Market Notes display; this adds a pencil → textarea +
+  // Save / Cancel affordance so users can edit from Daily Report
+  // without bouncing to Daily Routine. Save uses the same
+  // /api/journal/edit endpoint as the other field saves.
+  const [marketNotesEdit, setMarketNotesEdit] = useState(false);
+  const [marketNotesValue, setMarketNotesValue] = useState("");
+  const [marketNotesSaving, setMarketNotesSaving] = useState(false);
+  const [marketNotesMsg, setMarketNotesMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Auto-resize the textarea to fit its content (recap markdown editor).
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.max(200, ta.scrollHeight + 2) + "px";
+  }, [recap, recapMode]);
+
+  // Phase 7 — fetch the rail envelope.
+  const refreshRail = useCallback(async () => {
+    if (!portfolio) return;
+    try {
+      const res = await api.dailyJournalList(portfolio);
+      if ("error" in res) {
+        log.error("daily-routine", "rail fetch failed", res.error);
+        return;
+      }
+      setRailItems(res.days);
+      setRailYtdStats(res.ytd_stats);
+    } catch (err) {
+      log.error("daily-routine", "rail fetch threw", err);
+    }
+  }, [portfolio]);
+
+  useEffect(() => {
+    if (!portfolio) return;
+    refreshRail();
+  }, [portfolio, refreshRail]);
+
+  useEffect(() => {
+    Promise.all([
+      api.journalHistory(portfolio, 0).catch((err) => {
+        log.error("daily-routine", "journalHistory fetch failed", err);
+        return [];
+      }),
+      api.tradesRecent(portfolio, 500).catch((err) => {
+        log.error("daily-routine", "tradesRecent fetch failed", err);
+        return { details: [], lot_closures: [] };
+      }),
+      api.tradesClosed(portfolio, 500).catch((err) => {
+        log.error("daily-routine", "tradesClosed fetch failed", err);
+        return [];
+      }),
+    ]).then(([hist, det, closed]) => {
+      const h = (hist as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
+      setHistory(h);
+      setDetails(det.details);
+      setClosedTrades(closed as TradePosition[]);
+      if (h.length > 0) {
+        const match = dateParam && h.find(d => String(d.day).slice(0, 10) === dateParam);
+        setSelectedDate(match ? dateParam : String(h[0].day).slice(0, 10));
+      }
+      setLoading(false);
+    });
+  }, [dateParam, portfolio]);
+
+  // Load snapshots when selectedDate changes
+  useEffect(() => {
+    if (!selectedDate) {
+      setSnapshots([]); setRecap(""); setDailyThoughts("");
+      return;
+    }
+    api.listEodSnapshots(selectedDate, portfolio).then(res => {
+      if (Array.isArray(res)) setSnapshots(res as any);
+      else setSnapshots([]);
+    }).catch((err) => {
+      log.error("daily-routine", "listEodSnapshots fetch failed", err);
+      setSnapshots([]);
+    });
+    setThoughtsMsg(null);
+    setRecapDirty(false);
+    dailyThoughtsDirtyRef.current = false;
+  }, [selectedDate, portfolio]);
+
+  // Lazy-fill market_cycle for the selected day if the entry exists but
+  // the value is missing. Fires at most once per date per session.
+  const attemptedCycleFill = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedDate || history.length === 0) return;
+    const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
+    if (!entry) return;
+    if (entry.market_cycle) return;
+    if (attemptedCycleFill.current.has(selectedDate)) return;
+    attemptedCycleFill.current.add(selectedDate);
+    api.journalEdit({ portfolio, day: selectedDate })
+      .then(res => {
+        if (res.status !== "ok") return;
+        return api.journalHistory(portfolio, 0);
+      })
+      .then(fresh => {
+        if (!fresh) return;
+        const h = (fresh as JournalHistoryPoint[]).sort((a, b) => String(b.day).localeCompare(String(a.day)));
+        setHistory(h);
+      })
+      .catch(() => { /* ignore */ });
+  }, [selectedDate, history, portfolio]);
+
+  // Hydrate recap + dailyThoughts from the selected journal entry.
+  // lowlights → recap (existing markdown column); daily_thoughts → the
+  // new rich-text editor body (migration 031). Resetting the dirty
+  // flags here makes sure the debounced auto-save effect below doesn't
+  // immediately re-save on initial hydration.
+  useEffect(() => {
+    if (!selectedDate || history.length === 0) {
+      setRecap(""); setDailyThoughts("");
+      return;
+    }
+    const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
+    setRecap(entry?.lowlights || "");
+    setDailyThoughts(entry?.daily_thoughts || "");
+    setRecapDirty(false);
+    dailyThoughtsDirtyRef.current = false;
+  }, [selectedDate, history]);
+
+  // Auto-save dailyThoughts via debounced effect. Mirrors the weekly-
+  // retro pattern: dirtyRef gates the effect so the initial hydration
+  // doesn't trigger an empty-write race. The recap markdown still has
+  // its explicit Save button.
+  useEffect(() => {
+    if (!selectedDate) return;
+    if (!dailyThoughtsDirtyRef.current) return;
+    const handle = window.setTimeout(() => {
+      void api.journalEdit({
+        portfolio,
+        day: selectedDate,
+        daily_thoughts: dailyThoughts,
+      }).then(res => {
+        if (res.status === "ok") {
+          dailyThoughtsDirtyRef.current = false;
+          setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
+            ? ({ ...h, daily_thoughts: dailyThoughts } as any) : h));
+        }
+      }).catch(err => log.error("daily-routine", "daily_thoughts save failed", err));
+    }, 800);
+    return () => window.clearTimeout(handle);
+  }, [dailyThoughts, selectedDate, portfolio]);
+
+  const openMarketNotesEdit = () => {
+    const current = String((day as any)?.market_notes ?? "");
+    setMarketNotesValue(current);
+    setMarketNotesEdit(true);
+    setMarketNotesMsg(null);
+  };
+
+  const cancelMarketNotesEdit = () => {
+    setMarketNotesEdit(false);
+    setMarketNotesMsg(null);
+  };
+
+  const saveMarketNotes = async () => {
+    if (!selectedDate) return;
+    setMarketNotesSaving(true);
+    setMarketNotesMsg(null);
+    try {
+      const res = await api.journalEdit({
+        portfolio,
+        day: selectedDate,
+        market_notes: marketNotesValue,
+      });
+      if (res.status === "ok") {
+        setHistory((prev) =>
+          prev.map((h) =>
+            String(h.day).slice(0, 10) === selectedDate
+              ? ({ ...h, market_notes: marketNotesValue } as any)
+              : h,
+          ),
+        );
+        setMarketNotesMsg({ ok: true, text: "Saved" });
+        setMarketNotesEdit(false);
+      } else {
+        setMarketNotesMsg({ ok: false, text: res.detail || "Save failed" });
+      }
+    } catch (err: any) {
+      setMarketNotesMsg({ ok: false, text: err.message || "Save failed" });
+    }
+    setMarketNotesSaving(false);
+    setTimeout(() => setMarketNotesMsg(null), 3000);
+  };
+
+  const saveRecap = async () => {
+    if (!selectedDate) return;
+    setSavingThoughts(true);
+    setThoughtsMsg(null);
+    try {
+      const res = await api.journalEdit({
+        portfolio,
+        day: selectedDate,
+        lowlights: recap,
+      });
+      if (res.status === "ok") {
+        setThoughtsMsg({ ok: true, text: "Saved" });
+        setRecapDirty(false);
+        setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
+          ? ({ ...h, lowlights: recap } as any) : h));
+      } else {
+        setThoughtsMsg({ ok: false, text: res.detail || "Save failed" });
+      }
+    } catch (err: any) {
+      setThoughtsMsg({ ok: false, text: err.message || "Save failed" });
+    }
+    setSavingThoughts(false);
+    setTimeout(() => setThoughtsMsg(null), 3000);
+  };
+
+  // Close lightbox on Escape
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightbox(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
+
+  const day = useMemo(() => {
+    if (!selectedDate || history.length === 0) return null;
+    return history.find(h => String(h.day).slice(0, 10) === selectedDate) || null;
+  }, [history, selectedDate]);
+
+  // Phase 7 — id of the daily journal row for the selected day. Drives
+  // the TagPicker entityId, the DailyThoughts editor (inline image
+  // uploads need it), and the SnapshotGallery FK. May be null until
+  // history loads or for pre-migration rows without an id field; the
+  // child components handle the disabled state.
+  const dayJournalId = useMemo(() => {
+    const raw = (day as any)?.id;
+    if (raw == null) return null;
+    const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+    return isNaN(n) ? null : n;
+  }, [day]);
+
+  // Previous day for SPY/NDX daily change
+  const prevDay = useMemo(() => {
+    if (!selectedDate || history.length === 0) return null;
+    const sorted = [...history].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    const idx = sorted.findIndex(h => String(h.day).slice(0, 10) === selectedDate);
+    return idx > 0 ? sorted[idx - 1] : null;
+  }, [history, selectedDate]);
+
+  // YTD calculations
+  const ytdStats = useMemo(() => {
+    if (!selectedDate || history.length === 0) return { portYtd: 0, spyYtd: 0, ndxYtd: 0 };
+    const year = selectedDate.slice(0, 4);
+    const sorted = [...history].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    const ytd = sorted.filter(h => String(h.day).slice(0, 4) === year && String(h.day).slice(0, 10) <= selectedDate);
+    const portYtd = ytd.length > 0 ? (ytd.reduce((p, h) => p * (1 + (h.daily_pct_change || 0) / 100), 1) - 1) * 100 : 0;
+    const jan1 = ytd[0];
+    const curr = ytd[ytd.length - 1];
+    const spyYtd = jan1 && curr && jan1.spy > 0 ? ((curr.spy / jan1.spy) - 1) * 100 : 0;
+    const ndxYtd = jan1 && curr && jan1.nasdaq > 0 ? ((curr.nasdaq / jan1.nasdaq) - 1) * 100 : 0;
+    return { portYtd, spyYtd, ndxYtd };
+  }, [history, selectedDate]);
+
+  // Drawdown
+  const ddPct = useMemo(() => {
+    if (!selectedDate || history.length === 0) return 0;
+    const sorted = [...history].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    const upTo = sorted.filter(h => String(h.day).slice(0, 10) <= selectedDate);
+    if (upTo.length === 0) return 0;
+    const peak = Math.max(...upTo.map(h => h.end_nlv || 0));
+    const curr = upTo[upTo.length - 1].end_nlv || 0;
+    return peak > 0 ? ((curr - peak) / peak) * 100 : 0;
+  }, [history, selectedDate]);
+
+  // Trades on this day
+  const dayBuys = details.filter(d => String(d.date).slice(0, 10) === selectedDate && String(d.action).toUpperCase() === "BUY");
+  const daySells = details.filter(d => String(d.date).slice(0, 10) === selectedDate && String(d.action).toUpperCase() === "SELL");
+  const dayClosed = closedTrades.filter(t => String(t.closed_date).slice(0, 10) === selectedDate);
+
+  // Risk status
+  const riskMsg = ddPct >= -7.5 ? "GREEN LIGHT" : ddPct >= -12.5 ? "CAUTION" : ddPct >= -15 ? "MAX 30% INVESTED" : "GO TO CASH";
+  const riskColor = ddPct >= -7.5 ? "#08a86b" : ddPct >= -12.5 ? "#f59f00" : "#e5484d";
+
+  if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
+
+  const spyDailyPct = prevDay && prevDay.spy > 0 && day ? ((day.spy - prevDay.spy) / prevDay.spy) * 100 : 0;
+  const ndxDailyPct = prevDay && prevDay.nasdaq > 0 && day ? ((day.nasdaq - prevDay.nasdaq) / prevDay.nasdaq) * 100 : 0;
 
   return (
-    <div
-      className="rounded-[14px] overflow-hidden"
-      style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}
-      data-testid={`portfolio-card-${card.name}`}
-    >
-      <div className="flex items-center gap-2 px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: accentColor }} />
-        <span className="text-[13px] font-semibold">{card.name}</span>
-      </div>
-      <div className="p-4 flex flex-col gap-3">
-        <Field label="Closing NLV*" error={card.touched.end_nlv ? card.errors.end_nlv : undefined}>
-          <input
-            type="number"
-            value={card.end_nlv}
-            onChange={(e) => onChange({ end_nlv: e.target.value, errors: { ...card.errors, end_nlv: undefined } })}
-            onBlur={() => onChange({
-              touched: { ...card.touched, end_nlv: true },
-              errors: validateCard({ ...card }),
-            })}
-            step="100"
-            placeholder="0.00"
-            className={inputCls}
-            style={card.touched.end_nlv && card.errors.end_nlv ? inputErrorStyle : inputStyle}
-            aria-label={`Closing NLV for ${card.name}`}
-            data-testid={`nlv-input-${card.name}`}
+    <div className="flex" style={{ animation: "slide-up 0.18s ease-out", minHeight: "100%" }}>
+      {/* Phase 7 — NotesRail (left side). Mirrors the weekly-retro
+          mount. Pin toggles go through the polymorphic /api/pins/toggle
+          and refresh the rail on success. */}
+      <NotesRail
+        ref={railRef}
+        entityType="daily_journal"
+        items={railItems}
+        ytdStats={railYtdStats}
+        currentEntityKey={selectedDate || null}
+        onItemClick={(it) => setSelectedDate(it.key)}
+        onPinToggle={async (entityId, _currentlyPinned) => {
+          const res = await api.pinsToggle("daily_journal", entityId);
+          if ("error" in res) throw new Error(res.error);
+          await refreshRail();
+        }}
+        onRefresh={refreshRail}
+      />
+
+      <div className="flex-1 min-w-0 lg:pl-7">
+        <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
+          <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Daily <em className="italic" style={{ color: navColor }}>Routine</em>
+          </h1>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{portfolio} · Today&apos;s workflow + end-of-day debrief</div>
+          {/* Phase 7 — TagPicker. entityId is null until the journal row
+              exists (i.e., the day was logged via Daily Routine); the
+              picker handles the disabled state. */}
+          <TagPicker
+            entityType="daily_journal"
+            entityId={dayJournalId}
+            portfolio={portfolio}
+            onTagsChanged={() => railRef.current?.refresh()}
           />
-        </Field>
-        <Field label="Total Holdings*" error={card.touched.total_holdings ? card.errors.total_holdings : undefined}>
-          <input
-            type="number"
-            value={card.total_holdings}
-            onChange={(e) => onChange({ total_holdings: e.target.value, errors: { ...card.errors, total_holdings: undefined } })}
-            onBlur={() => onChange({
-              touched: { ...card.touched, total_holdings: true },
-              errors: validateCard({ ...card }),
-            })}
-            step="100"
-            placeholder="0.00"
-            className={inputCls}
-            style={card.touched.total_holdings && card.errors.total_holdings ? inputErrorStyle : inputStyle}
-            aria-label={`Total Holdings for ${card.name}`}
-            data-testid={`holdings-input-${card.name}`}
-          />
-        </Field>
-        <Field label="Cash +/-">
-          <input
-            type="number"
-            value={card.cash_change}
-            onChange={(e) => onChange({ cash_change: e.target.value })}
-            step="100"
-            className={inputCls}
-            style={inputStyle}
-            aria-label={`Cash flow for ${card.name}`}
-          />
-        </Field>
-        <Field label="Actions">
-          <input
-            type="text"
-            value={card.actions}
-            onChange={(e) => onChange({ actions: e.target.value })}
-            placeholder="BUY: NVDA"
-            className={inputCls}
-            style={{ ...inputStyle, fontFamily: "inherit" }}
-            aria-label={`Actions for ${card.name}`}
-          />
-        </Field>
-        {m.nlv > 0 && (
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            {[
-              { k: "Prev NLV", v: formatCurrency(card.prev_end_nlv, { decimals: 0 }) },
-              { k: "Daily $", v: formatCurrency(m.daily_dollar_change, { showSign: true, decimals: 0 }), c: m.daily_dollar_change >= 0 ? "#08a86b" : "#e5484d" },
-              { k: "Daily %", v: `${m.daily_pct_change >= 0 ? "+" : ""}${m.daily_pct_change.toFixed(2)}%`, c: m.daily_pct_change >= 0 ? "#08a86b" : "#e5484d" },
-              { k: "% Invested", v: `${m.pct_invested.toFixed(1)}%` },
-              // Portfolio Heat preview. Amber >20% (target ceiling), red >30%
-              // as an unmistakable "too hot to save without a look" nudge.
-              // Uses the current daily % swing threshold from Portfolio Heat.
-              { k: "Heat (auto)", v: previewHeat === null ? "…" : `${previewHeat.toFixed(2)}%`,
-                c: previewHeat === null ? undefined
-                   : previewHeat > 30 ? "#e5484d"
-                   : previewHeat > 20 ? "#f59f00"
-                   : "#08a86b" },
-            ].map((s) => (
-              <div
-                key={s.k}
-                className={`p-2 rounded-[8px] ${s.k === "Heat (auto)" ? "col-span-2" : ""}`}
-                style={{ border: "1px solid var(--border)" }}
-              >
-                <div className="text-[8px] uppercase tracking-[0.06em] font-semibold" style={{ color: "var(--ink-4)" }}>{s.k}</div>
-                <div
-                  className="text-[13px] font-semibold mt-0.5 privacy-mask"
-                  style={{ fontFamily: "var(--font-jetbrains), monospace", color: (s as { c?: string }).c || "var(--ink)" }}
-                >
-                  {s.v}
+        </div>
+
+        {/* Phase 2 merger: Trading Checklist section at the top. Renders
+            regardless of NLV / journal-entry state — the checklist is the
+            first thing you interact with each day. */}
+        <div className="mb-5">
+          <TradingChecklist navColor={navColor} />
+        </div>
+
+        {history.length === 0 && (
+          <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
+               style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+            <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed m-0"
+               style={{ color: "var(--ink-3)" }}>
+              Tick the <strong>Equity routine</strong> checklist item above and log NLV
+              to populate today&apos;s metrics + market notes.
+            </p>
+          </div>
+        )}
+
+        {/* Date selector */}
+        {history.length > 0 && (() => {
+          const days = history.map(h => String(h.day).slice(0, 10));
+          const minDay = days.length ? days[days.length - 1] : undefined;
+          const maxDay = days.length ? days[0] : undefined;
+          const hasData = !!selectedDate && days.includes(selectedDate);
+          const step = (delta: number) => {
+            if (!selectedDate || days.length === 0) return;
+            const sortedAsc = [...days].sort();
+            const idx = sortedAsc.indexOf(selectedDate);
+            if (idx === -1) return;
+            const next = sortedAsc[idx + delta];
+            if (next) setSelectedDate(next);
+          };
+          return (
+            <div className="mb-5 flex items-center gap-2">
+              <button onClick={() => step(-1)} disabled={!hasData || selectedDate === minDay}
+                      className="h-[38px] w-[38px] rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 disabled:opacity-40"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                      title="Previous day with data">‹</button>
+              <input type="date" value={selectedDate} min={minDay} max={maxDay}
+                     onChange={e => setSelectedDate(e.target.value)}
+                     className="h-[38px] px-3 rounded-[10px] text-[13px] w-[180px]"
+                     style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }} />
+              <button onClick={() => step(1)} disabled={!hasData || selectedDate === maxDay}
+                      className="h-[38px] w-[38px] rounded-[10px] text-[13px] font-semibold transition-all hover:brightness-110 disabled:opacity-40"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)" }}
+                      title="Next day with data">›</button>
+              {selectedDate && !hasData && (
+                <span className="text-[12px] ml-2" style={{ color: "var(--ink-4)" }}>No data for this date</span>
+              )}
+            </div>
+          );
+        })()}
+
+        {day && (
+          <>
+            {/* Header date */}
+            <div className="text-[16px] font-semibold mb-4">
+              {(() => {
+                const [y, m, d] = selectedDate.split("-").map(n => parseInt(n));
+                const dt = new Date(y, m - 1, d);
+                return dt.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+              })()}
+            </div>
+
+            {/* Section 1: Header Metrics */}
+            <div className="grid grid-cols-4 gap-3 mb-5">
+              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
+                <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(day.end_nlv || 0)}</div>
+              </div>
+              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Daily P&L</div>
+                <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(day.daily_pct_change || 0) }}>
+                  {formatCurrency(day.daily_dollar_change || 0, { showSign: true })}
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: pctColor(day.daily_pct_change || 0) }}>
+                  {(day.daily_pct_change || 0) >= 0 ? "+" : ""}{(day.daily_pct_change || 0).toFixed(2)}%
                 </div>
               </div>
-            ))}
+              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>MCT State</div>
+                {(day as any).market_cycle
+                  ? cycleBadge((day as any).market_cycle)
+                  : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
+              </div>
+              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Risk Status</div>
+                <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: riskColor, color: "#fff" }}>{riskMsg}</span>
+              </div>
+            </div>
+
+            {/* Section 2: Performance + Market Notes */}
+            <div className="grid grid-cols-2 gap-4 mb-5">
+              <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Performance Comparison</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["", "Daily", "YTD"].map(h => (
+                          <th key={h} className="text-left px-4 py-2 text-[10px] uppercase tracking-[0.06em] font-semibold"
+                              style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { label: "Portfolio", daily: (day.daily_pct_change || 0), ytd: ytdStats.portYtd },
+                        { label: "SPY", daily: spyDailyPct, ytd: ytdStats.spyYtd },
+                        { label: "NASDAQ", daily: ndxDailyPct, ytd: ytdStats.ndxYtd },
+                      ].map(r => (
+                        <tr key={r.label} style={{ borderBottom: "1px solid var(--border)" }}>
+                          <td className="px-4 py-2.5 font-semibold">{r.label}</td>
+                          <td className="px-4 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.daily) }}>{r.daily >= 0 ? "+" : ""}{r.daily.toFixed(2)}%</td>
+                          <td className="px-4 py-2.5" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(r.ytd) }}>{r.ytd >= 0 ? "+" : ""}{r.ytd.toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-2.5 text-[12px]" style={{ color: "var(--ink-3)" }}>
+                  <strong>Drawdown:</strong> {ddPct.toFixed(2)}% · <strong>Invested:</strong> {(day.pct_invested || 0).toFixed(0)}%
+                </div>
+              </div>
+
+              <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                <div
+                  className="flex items-center justify-between px-4 py-3 text-[13px] font-semibold"
+                  style={{ borderBottom: "1px solid var(--border)" }}
+                >
+                  <span>Market Notes</span>
+                  {!marketNotesEdit && (
+                    <button
+                      type="button"
+                      onClick={openMarketNotesEdit}
+                      aria-label="Edit market notes"
+                      data-testid="market-notes-edit-button"
+                      className="text-[11px] font-medium rounded-[6px] px-2 py-1"
+                      style={{
+                        background: "transparent",
+                        color: "var(--ink-3)",
+                        border: "1px solid var(--border)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
+                <div className="p-4">
+                  {marketNotesEdit ? (
+                    <div className="flex flex-col gap-2">
+                      <textarea
+                        value={marketNotesValue}
+                        onChange={(e) => setMarketNotesValue(e.target.value)}
+                        placeholder="One-line market summary — QQQ at 21EMA, strong open, etc."
+                        data-testid="market-notes-textarea"
+                        className="w-full px-3 py-2 rounded-[8px] text-[12px] outline-none resize-none"
+                        rows={3}
+                        style={{
+                          background: "var(--bg)",
+                          border: "1px solid var(--border)",
+                          color: "var(--ink)",
+                          fontFamily: "inherit",
+                          lineHeight: 1.5,
+                        }}
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={saveMarketNotes}
+                          disabled={marketNotesSaving}
+                          data-testid="market-notes-save-button"
+                          className="rounded-[6px] px-3 py-1.5 text-[11px] font-medium"
+                          style={{
+                            background: "#08a86b",
+                            color: "#fff",
+                            border: "none",
+                            cursor: marketNotesSaving ? "default" : "pointer",
+                            opacity: marketNotesSaving ? 0.6 : 1,
+                          }}
+                        >
+                          {marketNotesSaving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelMarketNotesEdit}
+                          disabled={marketNotesSaving}
+                          className="rounded-[6px] px-3 py-1.5 text-[11px]"
+                          style={{
+                            background: "transparent",
+                            color: "var(--ink-3)",
+                            border: "1px solid var(--border)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        {marketNotesMsg && (
+                          <span
+                            className="text-[11px] ml-1"
+                            style={{ color: marketNotesMsg.ok ? "#08a86b" : "#e5484d" }}
+                          >
+                            {marketNotesMsg.text}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (day as any).market_notes ? (
+                    <div className="px-3 py-2.5 rounded-[8px] text-[12px]" style={{ background: "color-mix(in oklab, #1e40af 10%, var(--surface))", color: "#3b82f6", border: "1px solid color-mix(in oklab, #1e40af 30%, var(--border))" }}>
+                      {(day as any).market_notes}
+                    </div>
+                  ) : (
+                    <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No market notes logged.</div>
+                  )}
+                  {!marketNotesEdit && (day as any).market_action && (
+                    <div className="mt-2 text-[12px]"><strong>Actions:</strong> {(day as any).market_action}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Section 3: Trade Activity — collapsible per Phase 2 merger
+                (auto-open when 3 or fewer rows; user toggle otherwise). */}
+            {(() => {
+              const closedRows = dayClosed.length > 0 ? dayClosed.length : daySells.length;
+              return (
+                <div className="grid grid-cols-2 gap-4 mb-5">
+                  <CollapsibleSection
+                    title="Positions Opened"
+                    meta={dayBuys.length === 0 ? "none" : `${dayBuys.length}`}
+                    defaultOpen={dayBuys.length <= 3}
+                    testId="daily-routine-positions-opened">
+                    <div className="p-4">
+                      {dayBuys.length > 0 ? dayBuys.map((b, i) => (
+                        <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayBuys.length - 1 ? "1px solid var(--border)" : "none" }}>
+                          <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{b.ticker}</span>
+                          <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+                            {b.shares} shs @ {formatCurrency(parseFloat(String(b.amount || 0)))} · {b.rule}
+                          </span>
+                        </div>
+                      )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No new positions opened.</div>}
+                    </div>
+                  </CollapsibleSection>
+
+                  <CollapsibleSection
+                    title="Positions Closed"
+                    meta={closedRows === 0 ? "none" : `${closedRows}`}
+                    defaultOpen={closedRows <= 3}
+                    testId="daily-routine-positions-closed">
+                    <div className="p-4">
+                      {dayClosed.length > 0 ? dayClosed.map((s, i) => {
+                        const pl = parseFloat(String(s.realized_pl || 0));
+                        const ret = parseFloat(String(s.return_pct || 0));
+                        return (
+                          <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < dayClosed.length - 1 ? "1px solid var(--border)" : "none" }}>
+                            <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
+                            <span className="text-[11px]" style={{ color: pctColor(pl) }}>
+                              P&L: {formatCurrency(pl, { showSign: true })} ({ret >= 0 ? "+" : ""}{ret.toFixed(2)}%) · {s.sell_rule || ""}
+                            </span>
+                          </div>
+                        );
+                      }) : daySells.length > 0 ? daySells.map((s, i) => (
+                        <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < daySells.length - 1 ? "1px solid var(--border)" : "none" }}>
+                          <span className="text-[13px] font-semibold" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{s.ticker}</span>
+                          <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+                            Sold {s.shares} shs @ {formatCurrency(parseFloat(String(s.amount || 0)))}
+                          </span>
+                        </div>
+                      )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}
+                    </div>
+                  </CollapsibleSection>
+                </div>
+              );
+            })()}
+
+            {/* Section 4: Daily Review */}
+            {(() => {
+              const score = day.score || 0;
+              const highlights = (day as any).highlights || "";
+              const mistakes = (day as any).mistakes || "";
+              const topLesson = (day as any).top_lesson || "";
+              if (!score && !highlights && !mistakes && !topLesson) return null;
+
+              let rc: Record<string, number> | null = null;
+              try { if (highlights.startsWith("{")) rc = JSON.parse(highlights); } catch { /* */ }
+
+              const gradeLabel = score >= 5 ? "A+" : score >= 4 ? "A" : score >= 3 ? "B" : score >= 2 ? "C" : score > 0 ? "D" : "";
+              const gradeColor = score >= 4 ? "#08a86b" : score >= 3 ? "#f59f00" : "#e5484d";
+
+              return (
+                <div className="rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                  <div className="px-4 py-3 text-[13px] font-semibold" style={{ borderBottom: "1px solid var(--border)" }}>Daily Review</div>
+                  <div className="p-4">
+                    {gradeLabel && (
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="text-[11px] font-semibold" style={{ color: "var(--ink-4)" }}>Grade:</span>
+                        <span className="text-[18px] font-bold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor }}>{gradeLabel}</span>
+                        {rc && (
+                          <div className="flex gap-2 ml-2">
+                            {[
+                              { k: "plan", l: "Plan" }, { k: "stops", l: "Stops" }, { k: "sized", l: "Sized" },
+                              { k: "fomo", l: "FOMO" },
+                            ].map(cat => rc![cat.k] != null ? (
+                              <span key={cat.k} className="text-[10px] px-1.5 py-0.5 rounded" style={{
+                                background: rc![cat.k] >= 4 ? "color-mix(in oklab, #08a86b 12%, var(--surface))" : rc![cat.k] >= 3 ? "color-mix(in oklab, #f59f00 10%, var(--surface))" : "color-mix(in oklab, #e5484d 12%, var(--surface))",
+                                color: rc![cat.k] >= 4 ? "#16a34a" : rc![cat.k] >= 3 ? "#d97706" : "#dc2626",
+                              }}>
+                                {cat.l} {rc![cat.k]}/5
+                              </span>
+                            ) : null)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {mistakes && mistakes !== "nan" && (
+                      <div className="text-[12px] mb-1"><strong>Notes:</strong> {mistakes}</div>
+                    )}
+                    {topLesson && topLesson !== "nan" && (
+                      <div className="text-[12px]"><strong>Top Lesson:</strong> {topLesson}</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── EOD Snapshots (collapsible) ──
+                Phase 7: section semantics unchanged but it no longer
+                accepts user uploads (those route to Daily Captures
+                below). Migration 032 moved historical eod_note rows out;
+                only auto-generated eod_dashboard / eod_campaign rows
+                render here. The legacy `eod_note` rows are filtered out
+                server-side by /api/snapshots/{day}. */}
+            {(() => {
+              const eodSnaps = snapshots.filter(s => (s.image_type || "").startsWith("eod_"));
+              if (eodSnaps.length === 0) return null;
+              return (
+                <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+                  <button onClick={() => setEodOpen(!eodOpen)}
+                          className="w-full flex items-center gap-2 px-[18px] py-3 text-left cursor-pointer transition-colors hover:brightness-95"
+                          style={{ background: "var(--surface-2)" }}>
+                    <span className="text-[10px] transition-transform" style={{ transform: eodOpen ? "rotate(90deg)" : "none", color: "var(--ink-4)" }}>▶</span>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                    <span className="text-[13px] font-semibold">End-of-Day Snapshots</span>
+                    <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>{eodSnaps.length} captured · click to expand</span>
+                  </button>
+                  {eodOpen && (
+                    <div className="p-4 grid grid-cols-2 gap-3" style={{ animation: "slide-up 0.12s ease-out" }}>
+                      {eodSnaps.map((snap, idx) => (
+                        <div key={snap.id ?? idx} className="rounded-[8px] overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--bg)" }}>
+                          <div className="px-2.5 py-1.5 flex items-center justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+                            <span className="text-[10px] uppercase font-semibold" style={{ color: "var(--ink-4)" }}>
+                              {snap.image_type?.replace("eod_", "") || "Snapshot"}
+                            </span>
+                            {snap.uploaded_at && (
+                              <span className="text-[9px]" style={{ color: "var(--ink-4)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                                {String(snap.uploaded_at).slice(11, 19)}
+                              </span>
+                            )}
+                          </div>
+                          {snap.view_url && (
+                            <button onClick={() => setLightbox(snap.view_url || null)}
+                                    className="block w-full p-0 border-0 cursor-zoom-in"
+                                    style={{ background: "transparent" }}>
+                              <img src={snap.view_url} alt={snap.image_type}
+                                   style={{ width: "100%", maxHeight: 220, objectFit: "contain", display: "block", background: "var(--bg-2)" }} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* ── Daily Thoughts (Phase 7 — rich-text editor) ──
+                Shared <ThoughtsEditor> via <DailyThoughts> wrapper. Auto-
+                saves via the debounced effect above when the dirty ref
+                flips. journalId enables inline image embed; when null
+                (e.g., pre-Daily-Routine days) the editor surfaces the
+                "save first" inline error on image paste/drop. */}
+            <div className="mt-6">
+              <DailyThoughts
+                value={dailyThoughts}
+                onChange={(next) => { dailyThoughtsDirtyRef.current = true; setDailyThoughts(next); }}
+                journalId={dayJournalId}
+                portfolio={portfolio}
+              />
+            </div>
+
+            {/* ── Daily Recap (renamed from "Daily Thoughts" in Phase 7) ──
+                Same markdown editor + content as before. Backs the
+                `lowlights` column. Explicit Save button; no auto-save.
+                Phase 2 merger: wrapped in CollapsibleSection with a
+                word-count meta and default-collapsed on long recaps so
+                the merged Daily Routine stays scannable. */}
+            <div className="mt-6">
+            <CollapsibleSection
+              title="Daily Recap"
+              meta={recap.trim() ? `${recap.trim().split(/\s+/).length} words` : "empty · markdown"}
+              defaultOpen={!recap || recap.length < 500}
+              testId="daily-routine-recap">
+              <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>markdown supported</span>
+                <div className="ml-auto flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                  {([["edit", "Edit"], ["preview", "Preview"]] as const).map(([val, label]) => (
+                    <button key={val} onClick={() => setRecapMode(val)}
+                            className="px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all"
+                            style={{
+                              background: recapMode === val ? "var(--surface)" : "transparent",
+                              color: recapMode === val ? "var(--ink)" : "var(--ink-4)",
+                              boxShadow: recapMode === val ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+                              border: "none", cursor: "pointer",
+                            }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="p-4 flex flex-col gap-4">
+                {recapMode === "edit" ? (
+                  <textarea
+                    ref={textareaRef}
+                    value={recap}
+                    onChange={e => { setRecap(e.target.value); setRecapDirty(true); }}
+                    placeholder="Summarize the day. What went well, what didn't, decisions made, observations…"
+                    className="w-full px-3.5 py-3 rounded-[10px] text-[13px] outline-none"
+                    style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.6, minHeight: 200, overflow: "hidden" }}
+                  />
+                ) : (
+                  <div className="px-5 py-4 rounded-[10px] prose-custom"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", lineHeight: 1.6, minHeight: 200 }}>
+                    {recap.trim() ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                        {preprocessCallouts(recap)}
+                      </ReactMarkdown>
+                    ) : (
+                      <div style={{ color: "var(--ink-4)", fontStyle: "italic" }}>Nothing written yet. Switch to Edit to start.</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Save row */}
+                <div className="flex items-center gap-3">
+                  <button onClick={saveRecap} disabled={savingThoughts || !recapDirty}
+                          className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                          style={{ background: navColor }}>
+                    {savingThoughts ? "Saving..." : "Save Recap"}
+                  </button>
+                  {thoughtsMsg && (
+                    <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
+                      {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </CollapsibleSection>
+            </div>
+
+            {/* ── Daily Captures (Phase 7) ──
+                Shared <SnapshotGallery> with entityType="daily_journal".
+                Replaces the pre-Phase-7 drag-drop zone that lived inside
+                the (now-renamed) Daily Recap section. The gallery's own
+                window paste handler cooperates with the DailyThoughts
+                editor via the [data-thoughts-editor] check, so pastes
+                inside the editor route inline; pastes outside route
+                here. */}
+            <div className="mt-6 rounded-[14px] overflow-hidden" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
+              <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                <span className="text-[13px] font-semibold">Daily Captures</span>
+                <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>screenshots, charts, anything visual from today</span>
+              </div>
+              <SnapshotGallery
+                entityType="daily_journal"
+                entityId={dayJournalId}
+                portfolio={portfolio}
+                disabledMessage="Save the journal entry first to add captures."
+                activeMessage="Paste a screenshot or drag an image here"
+                microcopy="Anything worth a second look — charts, alerts, news clips. PNG, JPEG, GIF, WEBP. Max 15MB."
+                dropZoneAriaLabel="Upload capture"
+                lightboxAriaLabel="Capture preview"
+              />
+            </div>
+          </>
+        )}
+
+        {/* Lightbox */}
+        {lightbox && (
+          <div onClick={() => setLightbox(null)}
+               className="fixed inset-0 z-50 flex items-center justify-center cursor-zoom-out"
+               style={{ background: "rgba(0,0,0,0.92)" }}>
+            <img src={lightbox} alt="full size"
+                 onClick={e => e.stopPropagation()}
+                 style={{ maxWidth: "99vw", maxHeight: "99vh", objectFit: "contain", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }} />
+            <button onClick={() => setLightbox(null)}
+                    className="fixed top-4 right-4 w-10 h-10 rounded-full text-white text-[20px] flex items-center justify-center"
+                    style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)" }}>
+              ✕
+            </button>
           </div>
         )}
       </div>
     </div>
   );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DailyRoutine — multi-portfolio entry view. One Market block + N portfolio
-// cards + one Report Card block. Saves via /api/journal/batch-edit
-// atomically across all portfolios.
-// ─────────────────────────────────────────────────────────────────────────────
-
-type SaveError =
-  | { kind: "conflict"; conflicting_portfolios: string[] }
-  | { kind: "error"; detail: string };
-
-export function DailyRoutine({ navColor }: { navColor: string }) {
-  const { portfolios } = usePortfolio();
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saveOk, setSaveOk] = useState<string>("");
-  const [saveError, setSaveError] = useState<SaveError | null>(null);
-
-  // Shared singletons.
-  const [spyClose, setSpyClose] = useState("");
-  const [ndxClose, setNdxClose] = useState("");
-  const [marketNotes, setMarketNotes] = useState("");
-  const [entryDate, setEntryDate] = useState(() => {
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
-  });
-  const [scores, setScores] = useState<Record<string, number>>({ plan: 5, stops: 5, sized: 5, fomo: 5 });
-  const [gradeNotes, setGradeNotes] = useState("");
-  const [forceOverwrite, setForceOverwrite] = useState(false);
-  // Tracks whether the user has clicked Save yet. Combined with per-card
-  // `touched` flags to gate the validation-summary banner — first paint
-  // shouldn't surface "fix N errors" before the user has interacted.
-  const [submitAttempted, setSubmitAttempted] = useState(false);
-
-  // Per-card state, derived from the portfolios context. Initialized empty
-  // and populated by the per-entryDate effect below.
-  const [cards, setCards] = useState<PortfolioCardState[]>([]);
-
-  // Shared IBKR loading flag (dormant while IBKR_AUTOFILL_ENABLED=false).
-  const [nlvLoading, setNlvLoading] = useState(true);
-  const [ibkrError, setIbkrError] = useState<string>("");
-
-  // Rebuild cards whenever the portfolio list or the entry date changes.
-  // We:
-  //   1. Build a fresh emptyCard() per portfolio
-  //   2. Concurrently fetch prior-day end_nlv per portfolio (drives Daily %
-  //      computation)
-  //   3. Concurrently fetch today's trade details per portfolio (drives the
-  //      Actions auto-fill string)
-  //   4. Fetch SPY/NDX close once (shared)
-  // The single Promise.all keeps the loading flag honest and lets failures
-  // degrade gracefully per portfolio (one failure doesn't tank the whole
-  // page).
-  useEffect(() => {
-    if (!portfolios.length) return;
-
-    let cancelled = false;
-    setLoading(true);
-    setSaveOk("");
-    setSaveError(null);
-    // A new date is a fresh validation context — clear the submit flag so
-    // the summary banner doesn't carry over from a prior save attempt on
-    // a different day.
-    setSubmitAttempted(false);
-
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    const isPastDate = entryDate < todayStr;
-
-    const pricesPromise = api.batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined).catch((err) => {
-      log.debug.devOnly("daily-routine", "batchPrices pre-fill missing (expected)", err);
-      return {} as Record<string, number>;
-    });
-
-    const perPortfolioPromises = portfolios.map((p) =>
-      Promise.all([
-        api.journalLatest(p.name, entryDate).catch((err) => {
-          log.debug.devOnly("daily-routine", `journalLatest pre-fill missing for ${p.name}`, err);
-          return { end_nlv: 0 };
-        }),
-        api.tradesRecent(p.name, 1000).catch((err) => {
-          log.debug.devOnly("daily-routine", `tradesRecent pre-fill missing for ${p.name}`, err);
-          return { details: [], lot_closures: [] };
-        }),
-      ]).then(([latest, trades]) => ({ p, latest, trades }))
-    );
-
-    Promise.all([pricesPromise, ...perPortfolioPromises]).then((results) => {
-      if (cancelled) return;
-
-      const prices = results[0] as Record<string, number>;
-      if (prices["SPY"]) setSpyClose(prices["SPY"].toFixed(2));
-      if (prices["^IXIC"]) setNdxClose(prices["^IXIC"].toFixed(2));
-
-      const built: PortfolioCardState[] = [];
-      for (let i = 1; i < results.length; i++) {
-        const { p, latest, trades } = results[i] as { p: { id: number; name: string }; latest: { end_nlv?: number }; trades: { details?: { date?: string; action?: string; ticker?: string }[] } };
-        const card = emptyCard(p);
-        card.prev_end_nlv = parseFloat(String(latest.end_nlv || 0)) || 0;
-        card.actions = buildActionsString(trades.details || [], entryDate);
-        built.push(card);
-      }
-      setCards(built);
-      setLoading(false);
-      setNlvLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [portfolios, entryDate]);
-
-  // IBKR auto-fill — dormant by config. Kept as a no-op skeleton so the
-  // surrounding UI machinery (warning banner, loading flag) stays consistent
-  // with the prior implementation if/when the flag flips back on.
-  useEffect(() => {
-    if (!IBKR_AUTOFILL_ENABLED) {
-      setNlvLoading(false);
-      setIbkrError("");
-      return;
-    }
-    // When re-enabled: fire api.ibkrNavForDate per portfolio, update each
-    // card's end_nlv + total_holdings + sources independently. Today's IBKR
-    // Flex Query is account-scoped (one user → one account), so this would
-    // need a per-portfolio account mapping or a switch to a portfolio-aware
-    // IBKR endpoint. Out of scope for the Phase B redesign.
-  }, [entryDate]);
-
-  // Rally prefix — same behavior as pre-redesign (shared across all
-  // portfolios since the prefix is market-state-driven, not portfolio-
-  // scoped).
-  useEffect(() => {
-    let cancelled = false;
-    api.rallyPrefix(entryDate).catch((err) => {
-      log.debug.devOnly("daily-routine", "rallyPrefix pre-fill missing (expected)", err);
-      return { prefix: "" };
-    }).then((rally) => {
-      if (cancelled) return;
-      const prefix = (rally as { prefix?: string }).prefix || "";
-      if (prefix) setMarketNotes(prefix);
-    });
-    return () => { cancelled = true; };
-  }, [entryDate]);
-
-  const updateCard = (name: string, patch: Partial<PortfolioCardState>) => {
-    setCards((prev) => prev.map((c) => (c.name === name ? { ...c, ...patch } : c)));
-    // Any input edit clears the save banners so the user sees their input
-    // was registered.
-    if (saveOk) setSaveOk("");
-    if (saveError) setSaveError(null);
-  };
-
-  // Aggregate validation across all cards. Memoized so the disabled-state
-  // calculation doesn't re-run validateCard on every render of children.
-  const validationSummary = useMemo(() => {
-    const errs: { name: string; field: string; message: string }[] = [];
-    for (const c of cards) {
-      const cardErrs = validateCard(c);
-      for (const [field, message] of Object.entries(cardErrs)) {
-        if (message) errs.push({ name: c.name, field, message });
-      }
-    }
-    return errs;
-  }, [cards]);
-
-  const hasErrors = validationSummary.length > 0;
-
-  const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
-  const grade = letterGrade(totalScore, REPORT_CATEGORIES.length * 5);
-  const overallScore = gradeToScore(grade);
-
-  async function handleSave() {
-    setSaving(true);
-    setSaveOk("");
-    setSaveError(null);
-    setSubmitAttempted(true);
-
-    // Defensive: re-run validation on submit even though the button is
-    // disabled when hasErrors. Mark all fields touched so any errors that
-    // were silent (user never blurred the field) light up the red borders
-    // and inline messages. Mirror errors back onto cards.
-    const validated = cards.map((c) => ({
-      ...c,
-      touched: { end_nlv: true, total_holdings: true },
-      errors: validateCard(c),
-    }));
-    setCards(validated);
-    const stillHasErrors = validated.some((c) => Object.keys(c.errors).length > 0);
-    if (stillHasErrors) {
-      setSaving(false);
-      return;
-    }
-
-    const payload = {
-      day: entryDate,
-      shared: {
-        spy: parseFloat(spyClose) || 0,
-        nasdaq: parseFloat(ndxClose) || 0,
-        market_notes: marketNotes,
-        score: overallScore,
-        highlights: JSON.stringify(scores),
-        mistakes: gradeNotes,
-        nlv_source: "manual",
-        holdings_source: "manual",
-      },
-      portfolios: validated.map((c) => {
-        const m = deriveCardMetrics(c);
-        return {
-          portfolio: c.name,
-          end_nlv: parseFloat(c.end_nlv),
-          total_holdings: parseFloat(c.total_holdings),
-          cash_change: parseFloat(c.cash_change) || 0,
-          actions: c.actions,
-          pct_invested: m.pct_invested,
-          daily_dollar_change: m.daily_dollar_change,
-          daily_pct_change: m.daily_pct_change,
-        };
-      }),
-      force_overwrite: forceOverwrite,
-    };
-
-    try {
-      const r = await api.journalBatchEdit(payload);
-      if (r.status === "exists") {
-        setSaveError({
-          kind: "conflict",
-          conflicting_portfolios: r.conflicting_portfolios || [],
-        });
-      } else if (r.status === "ok") {
-        setSaveOk(`Saved ${r.rows_written ?? validated.length} portfolios`);
-      } else {
-        // 422 validation (shouldn't reach here client-side; defensive), 404,
-        // 500 surface their detail.
-        setSaveError({
-          kind: "error",
-          detail: r.detail || `Save failed (${r.status})`,
-        });
-      }
-    } catch (e) {
-      setSaveError({
-        kind: "error",
-        detail: e instanceof Error ? e.message : String(e),
-      });
-    }
-    setSaving(false);
-  }
-
-  if (loading) {
-    return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
-  }
-
-  const cardAccents = ["#6366f1", "#08a86b", "#f59f00", "#a855f7", "#06b6d4"];
-
-  return (
-    <div style={{ animation: "slide-up 0.18s ease-out" }}>
-      <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          Daily <em className="italic" style={{ color: navColor }}>Routine</em>
-        </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-          Master Blotter · All Portfolios · End-of-Day
-        </div>
-      </div>
-
-      {ibkrError && !nlvLoading && (
-        <div className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]" role="alert" data-testid="ibkr-warning-banner"
-             style={{
-               background: "color-mix(in oklab, #f59f00 10%, var(--surface))",
-               color: "#b45309",
-               border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))",
-             }}>
-          ⚠ Could not auto-fill NLV from IBKR — please enter manually. Reason: {ibkrError}
-        </div>
-      )}
-
-      {/* Market — shared inputs */}
-      <div className="rounded-[14px] overflow-hidden mb-4" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-        <div className="flex items-center gap-2 px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
-          <span className="text-[13px] font-semibold">Market</span>
-        </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-          <Field label="Date">
-            <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className={inputCls} style={inputStyle} aria-label="Entry date" />
-          </Field>
-          <Field label="SPY Close">
-            <input type="number" value={spyClose} onChange={(e) => setSpyClose(e.target.value)} step="0.01" className={inputCls} style={inputStyle} />
-          </Field>
-          <Field label="Nasdaq Close">
-            <input type="number" value={ndxClose} onChange={(e) => setNdxClose(e.target.value)} step="0.01" className={inputCls} style={inputStyle} />
-          </Field>
-          <Field label="Market Notes">
-            <input type="text" value={marketNotes} onChange={(e) => setMarketNotes(e.target.value)}
-                   placeholder="Day 14 UPTREND: ..." className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
-          </Field>
-        </div>
-      </div>
-
-      {/* Portfolio cards — N side-by-side on desktop, stack on mobile */}
-      <div
-        className="grid gap-4 mb-4"
-        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}
-        data-testid="portfolio-grid"
-      >
-        {cards.map((card, i) => (
-          <PortfolioCard
-            key={card.name}
-            card={card}
-            onChange={(patch) => updateCard(card.name, patch)}
-            accentColor={cardAccents[i % cardAccents.length]}
-          />
-        ))}
-      </div>
-
-      {/* Report Card — shared */}
-      <div className="rounded-[14px] overflow-hidden mb-4" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
-        <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid var(--border)" }}>
-          <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full" style={{ background: "#08a86b" }} />
-            <span className="text-[13px] font-semibold">Report Card</span>
-          </div>
-          <span className="text-[28px] font-semibold" style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: gradeColor(grade), lineHeight: 1 }}>
-            {grade}
-          </span>
-        </div>
-        <div className="divide-y" style={{ borderColor: "var(--border)" }}>
-          {REPORT_CATEGORIES.map((cat) => (
-            <div key={cat.key} className="flex items-center justify-between px-4 py-3">
-              <span className="text-[12px] font-medium">{cat.label}</span>
-              <div className="flex items-center gap-2.5">
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  value={scores[cat.key]}
-                  onChange={(e) => setScores({ ...scores, [cat.key]: parseInt(e.target.value) })}
-                  className="w-[80px] h-1 rounded-full appearance-none cursor-pointer"
-                  style={{ accentColor: scoreColor(scores[cat.key]) }}
-                />
-                <span className="text-[11px] font-semibold w-[28px] text-right" style={{ fontFamily: "var(--font-jetbrains), monospace", color: scoreColor(scores[cat.key]) }}>
-                  {scores[cat.key]}/5
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-          <Field label="Grade Notes">
-            <input
-              type="text"
-              value={gradeNotes}
-              onChange={(e) => setGradeNotes(e.target.value)}
-              placeholder="Optional..."
-              className={inputCls}
-              style={{ ...inputStyle, fontFamily: "inherit" }}
-            />
-          </Field>
-        </div>
-      </div>
-
-      {/* Submit area */}
-      <label className="flex items-center gap-2 mb-4 cursor-pointer text-[12px]" style={{ color: "var(--ink-3)" }}>
-        <input
-          type="checkbox"
-          checked={forceOverwrite}
-          onChange={(e) => setForceOverwrite(e.target.checked)}
-          className="rounded"
-          data-testid="force-overwrite-checkbox"
-        />
-        Force Overwrite Existing Entry
-      </label>
-
-      {/* Validation summary — shown only after the user has interacted.
-          Two gates:
-            (a) submitAttempted: the user has clicked Save at least once
-            (b) any blurred-while-empty field exists
-          Either of these means the user has surfaced their intent to
-          fill out the form; we can confidently nag them about gaps.
-          Without these gates, the banner would appear on initial paint
-          before the user has typed anything — a hostile first impression. */}
-      {hasErrors && (submitAttempted || cards.some((c) =>
-        (c.touched.end_nlv && c.errors.end_nlv) ||
-        (c.touched.total_holdings && c.errors.total_holdings)
-      )) && (
-        <div
-          className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
-          role="alert"
-          data-testid="validation-summary"
-          style={{
-            background: "color-mix(in oklab, #f59f00 10%, var(--surface))",
-            color: "#b45309",
-            border: "1px solid color-mix(in oklab, #f59f00 30%, var(--border))",
-          }}
-        >
-          <div className="font-semibold mb-1">
-            Fix {validationSummary.length} {validationSummary.length === 1 ? "error" : "errors"} before saving:
-          </div>
-          <ul className="list-disc pl-5">
-            {validationSummary.map((e, idx) => (
-              <li key={`${e.name}-${e.field}-${idx}`}>
-                {e.name}: {e.field === "end_nlv" ? "Closing NLV" : "Total Holdings"} {e.message.toLowerCase()}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {saveError?.kind === "conflict" && (
-        <div
-          className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
-          role="alert"
-          data-testid="conflict-banner"
-          style={{
-            background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
-            color: "#dc2626",
-            border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
-          }}
-        >
-          Rows already exist for {saveError.conflicting_portfolios.join(", ")}. Check
-          <strong> Force Overwrite Existing Entry </strong> above to replace them.
-        </div>
-      )}
-
-      {saveError?.kind === "error" && (
-        <div
-          className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
-          role="alert"
-          data-testid="save-error-banner"
-          style={{
-            background: "color-mix(in oklab, #e5484d 10%, var(--surface))",
-            color: "#dc2626",
-            border: "1px solid color-mix(in oklab, #e5484d 30%, var(--border))",
-          }}
-        >
-          Error: {saveError.detail}
-        </div>
-      )}
-
-      {saveOk && (
-        <div
-          className="mb-4 text-[12px] font-medium px-4 py-2.5 rounded-[10px]"
-          role="status"
-          data-testid="save-ok-banner"
-          style={{
-            background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
-            color: "#16a34a",
-            border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))",
-          }}
-        >
-          {saveOk}
-        </div>
-      )}
-
-      <button
-        onClick={handleSave}
-        disabled={saving || hasErrors || cards.length === 0}
-        className="w-full h-[48px] rounded-[12px] text-[14px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
-        style={{ background: "#6366f1" }}
-        data-testid="save-button"
-      >
-        {saving ? "Saving..." : "Save Daily Routine"}
-      </button>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function buildActionsString(details: { date?: string; action?: string; ticker?: string }[], day: string): string {
-  const grouped: Record<string, string[]> = {};
-  for (const d of details) {
-    const dDate = String(d.date || "").slice(0, 10);
-    if (dDate !== day) continue;
-    const action = String(d.action || "").toUpperCase();
-    const ticker = String(d.ticker || "").trim();
-    if (!action || !ticker) continue;
-    if (!grouped[action]) grouped[action] = [];
-    if (!grouped[action].includes(ticker)) grouped[action].push(ticker);
-  }
-  const parts: string[] = [];
-  for (const label of ["SELL", "BUY"]) {
-    if (grouped[label]) parts.push(`${label}: ${grouped[label].join(", ")}`);
-  }
-  for (const label of Object.keys(grouped)) {
-    if (label !== "SELL" && label !== "BUY") parts.push(`${label}: ${grouped[label].join(", ")}`);
-  }
-  return parts.join(" | ");
 }
