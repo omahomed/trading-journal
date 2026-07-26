@@ -74,16 +74,26 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       node.classList.add("capturing-snapshot");
 
       // Aggressive per-element neutralization for table wrappers.
-      // Prior CSS-class approach relied on `getComputedStyle().overflow
-      // === "hidden"` — browser shorthand behavior varies, and the
-      // check missed real cases. Walk the DOM from every <table> up
-      // to `node`, forcibly set inline `overflow: visible !important`
-      // on every ancestor regardless of its current value. Non-table
-      // cards (KPI tiles) aren't touched, so their overflow-hidden
-      // stays intact for the decorative-gradient clip. Restore in
-      // finally by storing prior inline overflow + priority.
-      type OverflowSnapshot = { el: HTMLElement; value: string; priority: string };
-      const overflowSnapshots: OverflowSnapshot[] = [];
+      // Two overrides per ancestor:
+      //   * overflow: visible — so children don't get clipped by the
+      //     wrapper's box.
+      //   * min-height: <scrollHeight>px — so the wrapper's box GROWS
+      //     to include all children. Without this, html-to-image
+      //     copies the wrapper's original (clipped) computed height
+      //     into the clone. The clone then renders children with
+      //     overflow: visible but the wrapper is stuck at its old
+      //     short height, causing children to escape past the box
+      //     and paint OVER downstream sections like Glossary /
+      //     Risk Monitor. Observed in the v4 pass.
+      // Snapshot prior inline values for restore in finally.
+      type StyleSnapshot = {
+        el: HTMLElement;
+        overflow: string;
+        overflowPriority: string;
+        minHeight: string;
+        minHeightPriority: string;
+      };
+      const styleSnapshots: StyleSnapshot[] = [];
       const tables = node.querySelectorAll("table");
       const seen = new Set<Element>();
       tables.forEach(table => {
@@ -91,16 +101,24 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         while (el && el !== node && el !== document.body) {
           if (!seen.has(el)) {
             seen.add(el);
-            overflowSnapshots.push({
+            styleSnapshots.push({
               el,
-              value: el.style.getPropertyValue("overflow"),
-              priority: el.style.getPropertyPriority("overflow"),
+              overflow: el.style.getPropertyValue("overflow"),
+              overflowPriority: el.style.getPropertyPriority("overflow"),
+              minHeight: el.style.getPropertyValue("min-height"),
+              minHeightPriority: el.style.getPropertyPriority("min-height"),
             });
+            const naturalHeight = el.scrollHeight;
             el.style.setProperty("overflow", "visible", "important");
+            el.style.setProperty("min-height", `${naturalHeight}px`, "important");
           }
           el = el.parentElement;
         }
       });
+      // Force a synchronous reflow so the min-height override lands
+      // in the wrapper's computed height BEFORE html-to-image reads it.
+      // Reading offsetHeight is the standard incantation.
+      void node.offsetHeight;
       // One rAF so the browser applies the neutralized layout before
       // html-to-image walks the DOM. Without this, the clone can
       // snapshot the pre-neutralization frame on the first tick.
@@ -132,9 +150,11 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
         });
       } finally {
         node.classList.remove("capturing-snapshot");
-        overflowSnapshots.forEach(({ el, value, priority }) => {
-          if (value) el.style.setProperty("overflow", value, priority);
+        styleSnapshots.forEach(({ el, overflow, overflowPriority, minHeight, minHeightPriority }) => {
+          if (overflow) el.style.setProperty("overflow", overflow, overflowPriority);
           else el.style.removeProperty("overflow");
+          if (minHeight) el.style.setProperty("min-height", minHeight, minHeightPriority);
+          else el.style.removeProperty("min-height");
         });
         styleTag.remove();
       }
