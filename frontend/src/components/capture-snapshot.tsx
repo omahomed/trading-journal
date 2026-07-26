@@ -60,19 +60,23 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       // finally so a mid-capture throw doesn't leave the DOM styled.
       const styleTag = document.createElement("style");
       styleTag.setAttribute("data-capture-neutralizer", "");
-      // Only neutralize overflow-x-auto / overflow-y-auto here.
-      // overflow-hidden is intentionally left alone — outer card
-      // wrappers use it to clip children to the rounded border, and
-      // stripping it would flatten the corners in the capture (as
-      // observed on the first v2 pass).
+      // Neutralize the two styles that break html-to-image's layout:
+      //   * position:sticky on <th> elements — sticky is rasterized at
+      //     its viewport-anchored pixel position, offsetting rows in
+      //     the canvas and clipping the bottom of the tbody against
+      //     the wrapper's overflow-hidden border-radius.
+      //   * max-h-* on any inert modal panels.
+      // Do NOT touch overflow-x-auto / overflow-y-auto / overflow-hidden:
+      //   * overflow-x-auto is defensive and doesn't kick in at normal
+      //     widths, so it's not the truncation source.
+      //   * overflow-hidden on outer card wrappers is intentional — it
+      //     clips children to the rounded corners. Neutralizing it
+      //     flattens the corner card look in the capture (observed on
+      //     the first v2 pass).
       styleTag.textContent = `
         .capturing-snapshot [class*="sticky"] {
           position: static !important;
           top: auto !important;
-        }
-        .capturing-snapshot [class*="overflow-x-auto"],
-        .capturing-snapshot [class*="overflow-y-auto"] {
-          overflow: visible !important;
         }
         .capturing-snapshot [class*="max-h-"] {
           max-height: none !important;
