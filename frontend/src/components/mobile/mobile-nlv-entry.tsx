@@ -4,10 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Edit3 } from "lucide-react";
 import { api, type JournalEntry } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
-import { gradeColor } from "@/lib/grade-helpers";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
-import { MobileScoreSelector } from "./mobile-score-selector";
 import { MobileToggleSwitch } from "./mobile-toggle-switch";
 import { NumberFieldCell, TextFieldCell } from "./mobile-form-fields";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
@@ -39,44 +37,15 @@ import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 
 // ── Constants ─────────────────────────────────────────────────────
 
-const REPORT_CATEGORIES = [
-  { key: "plan", label: "Followed plan" },
-  { key: "stops", label: "Respected stops" },
-  { key: "sized", label: "Sized correctly" },
-  { key: "fomo", label: "No FOMO entries" },
-] as const;
+// REPORT_CATEGORIES / letterGrade / gradeToScore retired 2026-07-26
+// when the ScorecardMiniForm on Daily Routine's Journal checklist item
+// took over scorecard capture. Only NLV, holdings, cash change, actions
+// and market notes are captured here now.
 
 const DRAFT_KEY_PREFIX = "mo-daily-routine-draft-";
 const AUTOSAVE_DEBOUNCE_MS = 500;
 
-// ── Helpers (mirrored from desktop daily-routine.tsx) ─────────────
-
-function letterGrade(total: number, max: number): string {
-  const pct = (total / max) * 100;
-  if (pct >= 100) return "A+";
-  if (pct >= 93) return "A";
-  if (pct >= 87) return "A-";
-  if (pct >= 83) return "B+";
-  if (pct >= 77) return "B";
-  if (pct >= 70) return "B-";
-  if (pct >= 67) return "C+";
-  if (pct >= 60) return "C";
-  if (pct >= 53) return "C-";
-  if (pct >= 47) return "D";
-  return "F";
-}
-
-function gradeToScore(g: string) {
-  return g.startsWith("A")
-    ? 5
-    : g.startsWith("B")
-      ? 4
-      : g.startsWith("C")
-        ? 3
-        : g.startsWith("D")
-          ? 2
-          : 1;
-}
+// ── Helpers ──────────────────────────────────────────────────────
 
 function todayStr(): string {
   const n = new Date();
@@ -176,8 +145,6 @@ type DraftPayload = {
   spyClose: string;
   ndxClose: string;
   marketNotes: string;
-  scores: Record<string, number>;
-  gradeNotes: string;
   forceOverwrite: boolean;
   cards: Array<{
     name: string;
@@ -225,13 +192,6 @@ export function MobileNLVEntry() {
   const [spyClose, setSpyClose] = useState("");
   const [ndxClose, setNdxClose] = useState("");
   const [marketNotes, setMarketNotes] = useState("");
-  const [scores, setScores] = useState<Record<string, number>>({
-    plan: 5,
-    stops: 5,
-    sized: 5,
-    fomo: 5,
-  });
-  const [gradeNotes, setGradeNotes] = useState("");
   const [forceOverwrite, setForceOverwrite] = useState(false);
   const [cards, setCards] = useState<PortfolioCardState[]>([]);
 
@@ -267,8 +227,6 @@ export function MobileNLVEntry() {
     setSpyClose(draft.spyClose);
     setNdxClose(draft.ndxClose);
     setMarketNotes(draft.marketNotes);
-    setScores(draft.scores);
-    setGradeNotes(draft.gradeNotes);
     setForceOverwrite(draft.forceOverwrite);
     // Cards repopulate via the fetch effect (which seeds prev_end_nlv);
     // draft values for editable fields are merged in there.
@@ -395,19 +353,8 @@ export function MobileNLVEntry() {
           if (sharedSource.nasdaq) setNdxClose(String(sharedSource.nasdaq));
           const mn = (sharedSource as Record<string, unknown>).market_notes;
           if (typeof mn === "string" && mn) setMarketNotes(mn);
-          const gn = (sharedSource as Record<string, unknown>).mistakes;
-          if (typeof gn === "string" && gn) setGradeNotes(gn);
-          const highlights = (sharedSource as Record<string, unknown>).highlights;
-          if (typeof highlights === "string") {
-            try {
-              const parsed = JSON.parse(highlights);
-              if (parsed && typeof parsed === "object") {
-                setScores((prev) => ({ ...prev, ...(parsed as Record<string, number>) }));
-              }
-            } catch {
-              /* ignore malformed highlights */
-            }
-          }
+          // mistakes / highlights are no longer restored here — the
+          // Journal ScorecardMiniForm owns those fields.
         }
       }
 
@@ -453,8 +400,6 @@ export function MobileNLVEntry() {
         spyClose,
         ndxClose,
         marketNotes,
-        scores,
-        gradeNotes,
         forceOverwrite,
         cards: cards.map((c) => ({
           name: c.name,
@@ -470,7 +415,7 @@ export function MobileNLVEntry() {
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
-  }, [entryDate, spyClose, ndxClose, marketNotes, scores, gradeNotes, forceOverwrite, cards]);
+  }, [entryDate, spyClose, ndxClose, marketNotes, forceOverwrite, cards]);
 
   // Reset the autosave skip flag whenever entryDate changes — the new
   // date may have its own draft, and the next field-touch should
@@ -497,9 +442,6 @@ export function MobileNLVEntry() {
   }, [cards]);
   const hasErrors = validationSummary.length > 0;
 
-  const totalScore = Object.values(scores).reduce((a, b) => a + b, 0);
-  const grade = letterGrade(totalScore, REPORT_CATEGORIES.length * 5);
-  const overallScore = gradeToScore(grade);
   const isExistingEntry = preloadedPortfolios.length > 0;
 
   // ── Submit ─────────────────────────────────────────────────────
@@ -527,9 +469,10 @@ export function MobileNLVEntry() {
         spy: parseFloat(spyClose) || 0,
         nasdaq: parseFloat(ndxClose) || 0,
         market_notes: marketNotes,
-        score: overallScore,
-        highlights: JSON.stringify(scores),
-        mistakes: gradeNotes,
+        // score / highlights / mistakes omitted — captured via
+        // ScorecardMiniForm on Daily Routine. Missing keys leave
+        // existing values intact server-side, so today's grade
+        // survives an NLV Entry save.
         nlv_source: "manual",
         holdings_source: "manual",
       },
@@ -650,14 +593,9 @@ export function MobileNLVEntry() {
         </div>
       </section>
 
-      <ReportCardSection
-        grade={grade}
-        totalScore={totalScore}
-        scores={scores}
-        onScore={(k, v) => setScores((prev) => ({ ...prev, [k]: v }))}
-        gradeNotes={gradeNotes}
-        onGradeNotes={setGradeNotes}
-      />
+      {/* ReportCardSection removed 2026-07-26 — grade + Plan/Stops/
+          Sized/FOMO chips + notes captured via the ScorecardMiniForm
+          on Daily Routine's Journal checklist item. */}
 
       <MobileToggleSwitch
         id="dr-force-overwrite"
@@ -976,68 +914,6 @@ function DerivedTile({
         {value}
       </div>
     </div>
-  );
-}
-
-function ReportCardSection({
-  grade,
-  totalScore,
-  scores,
-  onScore,
-  gradeNotes,
-  onGradeNotes,
-}: {
-  grade: string;
-  totalScore: number;
-  scores: Record<string, number>;
-  onScore: (k: string, v: number) => void;
-  gradeNotes: string;
-  onGradeNotes: (v: string) => void;
-}) {
-  return (
-    <section className="rounded-m-lg border-[0.5px] border-m-border bg-m-surface px-4 pb-4 pt-3">
-      <div className="mb-3 flex flex-col items-center gap-0.5">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.10em] text-m-text-dim">
-          Report Card
-        </div>
-        <div
-          className="font-medium tabular-nums"
-          style={{
-            fontFamily: "var(--font-fraunces), Georgia, serif",
-            fontSize: 44,
-            lineHeight: 1,
-            color: gradeColor(grade),
-          }}
-          data-testid="report-grade"
-        >
-          {grade}
-        </div>
-        <div className="font-m-num text-[11px] tabular-nums text-m-text-dim">
-          {totalScore} / {REPORT_CATEGORIES.length * 5}
-        </div>
-      </div>
-      <div className="flex flex-col gap-3">
-        {REPORT_CATEGORIES.map((cat) => (
-          <MobileScoreSelector
-            key={cat.key}
-            label={cat.label}
-            value={scores[cat.key] ?? 5}
-            onChange={(v) => onScore(cat.key, v)}
-          />
-        ))}
-      </div>
-      <div className="mt-3">
-        <TextFieldCell
-          label="Grade Notes"
-          value={gradeNotes}
-          onChange={onGradeNotes}
-          ariaLabel="Grade notes"
-          placeholder="Optional…"
-          multiline
-          rows={2}
-        />
-      </div>
-    </section>
   );
 }
 
