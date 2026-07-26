@@ -43,11 +43,6 @@ vi.mock("@/lib/api", () => ({
   getActivePortfolio: () => "CanSlim",
 }));
 
-// Capture-snapshot calls fetchWithAuth which goes through next-auth.
-// Stub the whole component since it's not under test here.
-vi.mock("./capture-snapshot", () => ({
-  CaptureSnapshotButton: () => null,
-}));
 
 import { api } from "@/lib/api";
 import { Dashboard } from "./dashboard";

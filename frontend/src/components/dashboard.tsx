@@ -16,7 +16,6 @@ import {
   trailingClosedTrades,
   trailingClosedLosses,
 } from "@/lib/analytics-stats";
-import { CaptureSnapshotButton } from "./capture-snapshot";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
@@ -355,7 +354,6 @@ export function Dashboard({ navColor }: { navColor: string }) {
               )}
             </div>
           </div>
-          <CaptureSnapshotButton targetSelector="#dashboard-capture-root" snapshotType="dashboard" label="Capture EOD Snapshot" />
         </div>
       </div>
 

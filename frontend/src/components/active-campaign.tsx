@@ -11,7 +11,6 @@ import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions
 import { formatCurrency } from "@/lib/format";
 import { SELL_RULE_TIER_ORDER } from "@/lib/sell-rule";
 import { classifyPyramidScreener, type PyramidScreenerState } from "@/lib/pyramid-sizer";
-import { CaptureSnapshotButton } from "./capture-snapshot";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { SellRuleBadge } from "./sell-rule-badge";
@@ -848,7 +847,6 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </svg>
               {refetching ? "Refreshing…" : "Refresh"}
             </button>
-            <CaptureSnapshotButton targetSelector="#campaign-capture-root" snapshotType="campaign" label="Capture EOD Snapshot" />
           </div>
         </div>
       </div>

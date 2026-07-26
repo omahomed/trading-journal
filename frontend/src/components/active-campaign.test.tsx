@@ -71,9 +71,6 @@ vi.mock("@/lib/api", () => ({
   getActivePortfolio: () => "CanSlim",
 }));
 
-vi.mock("./capture-snapshot", () => ({
-  CaptureSnapshotButton: () => null,
-}));
 
 import { api } from "@/lib/api";
 import { ActiveCampaign } from "./active-campaign";
