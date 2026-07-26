@@ -11,3 +11,4 @@ anthropic
 PyJWT
 sentry-sdk[fastapi]
 slowapi
+playwright

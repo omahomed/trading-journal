@@ -23,7 +23,7 @@ sentry_sdk.init(
     send_default_pii=False,
 )
 
-from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException
+from fastapi import FastAPI, Query, Body, Request, Depends, HTTPException, Response
 import io
 import math
 import re
@@ -7635,6 +7635,113 @@ async def upload_image(
     except Exception as e:
         print(f"[upload_image] handler failed: {e}")
         return {"error": str(e)}
+
+
+@app.post("/api/snapshots/capture-headless")
+@limiter.limit("5/minute")
+async def capture_headless_snapshot(request: Request, body: dict = Body(...)):
+    """Server-side capture via headless Chromium (Playwright).
+
+    Frontend serializes the target DOM's outerHTML + the stylesheet URLs
+    the app is using, POSTs both here. Backend spins up a headless
+    Chromium page with the same viewport, injects the HTML + linked
+    stylesheets, waits for fonts, screenshots full-page, returns PNG bytes.
+
+    Why this exists: multiple attempts at client-side capture
+    (html-to-image, modern-screenshot) truncated the ACS equity table
+    when total content exceeded the viewport. The libraries measure the
+    clone's clientHeight and re-compute descendant dimensions in an
+    off-screen SVG foreignObject, both of which mis-align for our
+    overflow-hidden card wrappers around scrollable tables. Playwright
+    is a real browser laying out fresh HTML — the mismeasurement class
+    can't happen.
+
+    Body shape:
+      { html: string,
+        stylesheet_urls: [str, ...],  # absolute URLs to app CSS files
+        width: int,                    # viewport width in CSS px
+        height: int,                   # viewport height (start height; full
+                                       # page is captured regardless)
+        background_color?: str }
+
+    Response: raw image/png bytes.
+
+    Auth: standard JWT-bearer middleware — the caller must be logged in.
+    The user_id is unused by the endpoint itself (Playwright doesn't
+    need to be authenticated as the user; it only renders static HTML)
+    but the auth gate prevents unauthenticated abuse of the Chromium
+    resources.
+    """
+    html = body.get("html")
+    stylesheet_urls = body.get("stylesheet_urls") or []
+    width = int(body.get("width") or 1920)
+    height = int(body.get("height") or 1080)
+    background_color = body.get("background_color") or "#ffffff"
+
+    if not isinstance(html, str) or not html.strip():
+        raise HTTPException(status_code=400, detail="html body field is required")
+    if not isinstance(stylesheet_urls, list):
+        raise HTTPException(status_code=400, detail="stylesheet_urls must be an array")
+
+    # Compose a bare document. The frontend's <link rel="stylesheet">
+    # hrefs are pointed at the deployed app's CSS bundle URLs, which are
+    # public assets on Vercel — Playwright can fetch them cross-origin
+    # without auth. If a stylesheet is behind an auth wall (shouldn't
+    # be — Next.js CSS chunks are public), it silently fails to load and
+    # the capture renders unstyled. Fonts + inline styles bundled inside
+    # the app CSS load with the sheet.
+    style_links = "\n".join(
+        f'<link rel="stylesheet" href="{u}" crossorigin="anonymous">'
+        for u in stylesheet_urls
+        if isinstance(u, str) and u.startswith("http")
+    )
+    composed_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width={width}">
+{style_links}
+<style>
+  html, body {{ margin: 0; padding: 0; background: {background_color}; }}
+  * {{ box-sizing: border-box; }}
+</style>
+</head>
+<body>
+{html}
+</body>
+</html>"""
+
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="Playwright not installed on server. Rebuild the backend image.",
+        )
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            try:
+                context = await browser.new_context(viewport={"width": width, "height": height})
+                page = await context.new_page()
+                await page.set_content(composed_html, wait_until="networkidle", timeout=20_000)
+                # Give web fonts a chance to load before snapshotting; the
+                # `document.fonts.ready` promise resolves when all @font-face
+                # rules the page uses are done loading.
+                try:
+                    await page.evaluate("document.fonts && document.fonts.ready")
+                except Exception:
+                    pass
+                png_bytes = await page.screenshot(full_page=True, type="png")
+                return Response(content=png_bytes, media_type="image/png")
+            finally:
+                await browser.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[capture_headless_snapshot] handler failed: {e}")
+        raise HTTPException(status_code=500, detail=f"headless capture failed: {e}")
 
 
 @app.post("/api/snapshots/upload")
