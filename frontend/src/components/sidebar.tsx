@@ -311,11 +311,14 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
               </span>
             </div>
             <div className="pl-5 pr-1.5 pb-1">
-              {pinnedItems.map((item) => {
-                const itemGroup = getGroupForHref(item.href!);
-                const groupColor = itemGroup?.color || PIN_ACCENT;
-                return renderNavLink(item, groupColor, activePage === item.id, true, togglePin);
-              })}
+              {pinnedItems
+                .slice()
+                .sort((a, b) => a.label.localeCompare(b.label))
+                .map((item) => {
+                  const itemGroup = getGroupForHref(item.href!);
+                  const groupColor = itemGroup?.color || PIN_ACCENT;
+                  return renderNavLink(item, groupColor, activePage === item.id, true, togglePin);
+                })}
             </div>
           </div>
         )}
