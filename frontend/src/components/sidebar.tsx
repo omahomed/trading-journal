@@ -377,9 +377,13 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
                 <div className="grid transition-[grid-template-rows] duration-300 ease-out"
                      style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}>
                   <div className="min-h-0 overflow-hidden pl-5 pr-1.5 pb-1">
-                    {group.items.filter(item => !item.parentPage && item.href).map((item) =>
-                      renderNavLink(item, group.color, activePage === item.id, pinnedPaths.includes(item.href!), togglePin)
-                    )}
+                    {group.items
+                      .filter(item => !item.parentPage && item.href)
+                      .slice()
+                      .sort((a, b) => a.label.localeCompare(b.label))
+                      .map((item) =>
+                        renderNavLink(item, group.color, activePage === item.id, pinnedPaths.includes(item.href!), togglePin)
+                      )}
                   </div>
                 </div>
               )}
