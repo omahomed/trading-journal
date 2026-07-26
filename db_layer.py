@@ -589,7 +589,11 @@ def load_details(portfolio_name, trade_id=None):
                     d.stop_ladder AS "Stop_Ladder",
                     -- Migration 049: §2 Window-rule exemption reason
                     -- ('sr8_rebuild' | 'fresh_base' | NULL). NULL for
-                    -- every non-exempt row (99% of the table today).
+                    -- every non-exempt row -- virtually the whole
+                    -- table today; psycopg2 interprets any literal
+                    -- percent-sign in the query text as a placeholder
+                    -- character, so we say the word rather than
+                    -- print the number.
                     {add_exempt_reason_select}
                 FROM trades_details d
                 JOIN portfolios p ON d.portfolio_id = p.id
