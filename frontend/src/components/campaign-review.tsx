@@ -32,6 +32,7 @@ import {
   type LotClosure,
 } from "@/lib/api";
 import { walkLedger } from "@/lib/campaign-detail-walk";
+import { computeCampaignMetrics } from "@/lib/campaign-metrics";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
@@ -979,11 +980,21 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       "Total P&L", "Total Return %", "R",
       "MAE %", "MFE %", "MAE ATR", "MFE ATR", "ATR21 Entry %",
       "Buy Rule", "Sell Rule", "Lesson Categories", "Lesson Note",
+      // Campaign metrics suite (2026-07-25). Appended to END of the
+      // header so downstream analysis relying on column positions
+      // stays compatible. Math lives in @/lib/campaign-metrics.
+      "perfect_starter_usd", "b_capture", "campaign_efficiency",
+      "add_efficiency_pct", "deploy_ratio", "campaign_score", "sr1a_fire",
     ].join(",");
     const escape = (v: unknown) => {
       const s = v == null ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+    // Null-safe number formatter: renders NULL / undefined as an empty
+    // cell (spec: nulls are empty cells, never 0). Zero passes through
+    // as the formatted number.
+    const numOrEmpty = (v: number | null | undefined, dp: number) =>
+      v == null ? "" : v.toFixed(dp);
     const lines = sorted.map(r => {
       // Derive ATR multiples at export time so the CSV and the on-screen
       // secondary line stay in lockstep (single source: atr21_entry_pct).
@@ -991,6 +1002,17 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         ? Math.abs(r.mae_pct) / r.atr21_entry_pct : null;
       const mfeAtr = r.mfe_pct != null && r.atr21_entry_pct != null && r.atr21_entry_pct > 0
         ? r.mfe_pct / r.atr21_entry_pct : null;
+      // Campaign metrics (v1: deploy_ratio + campaign_score are
+      // unconditionally null — no stored sizer recommendation yet).
+      const metrics = computeCampaignMetrics({
+        b_initial_cost: r.b_initial_cost,
+        a_initial_cost: r.a_initial_cost,
+        a_pnl: r.a_pnl,
+        total_pnl: r.total_pnl,
+        b_return_pct: r.b_return_pct,
+        mfe_pct: r.mfe_pct,
+        mae_atr: maeAtr,
+      });
       return [
         r.trade_id, r.ticker, r.status, r.open_date, r.closed_date ?? "",
         r.b_initial_cost.toFixed(2),
@@ -1008,6 +1030,21 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         r.atr21_entry_pct?.toFixed(2) ?? "",
         r.rule, r.sell_rule,
         r.lesson_category, r.lesson_note,
+        // Campaign metrics. Rounding per spec:
+        //   perfect_starter_usd: 0dp   (dollars)
+        //   b_capture:           2dp   (ratio)
+        //   campaign_efficiency: 2dp   (ratio)
+        //   add_efficiency_pct:  1dp   (percent)
+        //   deploy_ratio:        2dp   (ratio — always null in v1)
+        //   campaign_score:      2dp   (ratio — always null in v1)
+        //   sr1a_fire:           bool  → "true" / "false" / ""
+        numOrEmpty(metrics.perfect_starter_usd, 0),
+        numOrEmpty(metrics.b_capture, 2),
+        numOrEmpty(metrics.campaign_efficiency, 2),
+        numOrEmpty(metrics.add_efficiency_pct, 1),
+        numOrEmpty(metrics.deploy_ratio, 2),
+        numOrEmpty(metrics.campaign_score, 2),
+        metrics.sr1a_fire == null ? "" : String(metrics.sr1a_fire),
       ].map(escape).join(",");
     });
     const csv = [header, ...lines].join("\n");
