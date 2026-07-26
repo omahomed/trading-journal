@@ -27,10 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
-try:
-    import tomllib  # Python 3.11+ stdlib
-except ImportError:
-    import tomli as tomllib  # 3.7-3.10 fallback (same API)
+import tomllib
 from pathlib import Path
 
 import psycopg2

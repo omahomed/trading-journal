@@ -12,4 +12,3 @@ PyJWT
 sentry-sdk[fastapi]
 slowapi
 playwright
-tomli
