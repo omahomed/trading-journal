@@ -11,7 +11,7 @@ import { usePortfolio } from "@/lib/portfolio-context";
 /**
  * Mobile Daily Journal — Phase 2 T2-1. Replaces the desktop 19-
  * column horizontal-scroll table with a chronological per-day
- * card stack. Read-only: tap a card → /daily-report?date=… (the
+ * card stack. Read-only: tap a card → /daily-routine?date=… (the
  * existing desktop detail view, which gets its own mobile-fit in
  * T2-4).
  *
@@ -209,7 +209,7 @@ export function MobileDailyJournal() {
   }, [filtered]);
 
   const handleTap = (day: string) => {
-    router.push(`/daily-report?date=${day}`);
+    router.push(`/daily-routine?date=${day}`);
   };
 
   if (loading) {
@@ -239,7 +239,7 @@ export function MobileDailyJournal() {
           filter={filter}
           portfolioName={activePortfolio?.name ?? "this portfolio"}
           hasAnyHistory={history.length > 0}
-          onSaveRoutine={() => router.push("/daily-routine")}
+          onSaveRoutine={() => router.push("/nlv-entry")}
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -325,7 +325,7 @@ function DailyNavRow({
       <button
         type="button"
         data-testid="daily-nav-daily-routine"
-        onClick={() => router.push("/daily-routine")}
+        onClick={() => router.push("/nlv-entry")}
         className="flex min-h-[44px] items-center gap-2 rounded-m-lg border-[0.5px] border-m-border bg-m-surface px-3 py-2.5 text-left text-[13px] font-medium text-m-text active:opacity-80"
       >
         <PenLine

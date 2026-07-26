@@ -57,14 +57,19 @@ const nextConfig: NextConfig = {
       );
     },
   },
-  // /market-cycle → /m-factor permanent redirect. The page was renamed
-  // from "Market Cycle Tracker" to "M Factor"; Next.js's `permanent: true`
-  // emits HTTP 308, the modern permanent-redirect status that's
-  // functionally interchangeable with 301 for browsers and SEO. The
-  // redirect preserves query strings (Next.js default behavior).
+  // Permanent redirects for renamed routes. Next.js's `permanent: true`
+  // emits HTTP 308, functionally interchangeable with 301 for browsers
+  // and SEO. Query strings are preserved (Next.js default behavior),
+  // so /daily-report?date=2026-07-24 lands on /daily-routine?date=2026-07-24.
   async redirects() {
     return [
-      { source: "/market-cycle", destination: "/m-factor", permanent: true },
+      // Market Cycle Tracker → M Factor
+      { source: "/market-cycle",     destination: "/m-factor",      permanent: true },
+      // Phase 2 Daily Routine merger (2026-07-26): Daily Report absorbed
+      // Trading Checklist and took over the /daily-routine URL; the
+      // former Daily Routine page (NLV entry only) moved to /nlv-entry.
+      { source: "/daily-report",     destination: "/daily-routine", permanent: true },
+      { source: "/trading-checklist", destination: "/daily-routine", permanent: true },
     ];
   },
 };

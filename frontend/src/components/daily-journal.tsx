@@ -301,7 +301,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td className="px-2.5 py-2 whitespace-nowrap" style={{ fontFamily: mono, fontSize: 10, color: "var(--ink-4)", cursor: "context-menu" }}
                             title="Right-click to open Daily Report"
-                            onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${dateKey}`); }}>
+                            onContextMenu={e => { e.preventDefault(); router.push(`/daily-routine?date=${dateKey}`); }}>
                           {dateKey}
                         </td>
                         <td className="px-2.5 py-2">
@@ -349,7 +349,7 @@ export function DailyJournal({ navColor }: { navColor: string }) {
                             <>
                               <td className="px-2.5 py-2 text-center" style={{ cursor: "context-menu" }}
                                   title="Right-click to open Daily Report"
-                                  onContextMenu={e => { e.preventDefault(); router.push(`/daily-report?date=${String(h.day).slice(0, 10)}`); }}>
+                                  onContextMenu={e => { e.preventDefault(); router.push(`/daily-routine?date=${String(h.day).slice(0, 10)}`); }}>
                                 {gradeLabel && (
                                   <span className="text-[11px] font-bold" style={{ color: scoreColor(score) }}>{gradeLabel}</span>
                                 )}

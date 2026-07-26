@@ -61,9 +61,8 @@ export const NAV: NavGroup[] = [
     id: "daily", label: "Daily Workflow", color: "#f59f00", softColor: "#fff4dd",
     items: [
       { id: "djournal", label: "Daily Journal", href: "/daily-journal" },
-      { id: "report", label: "Daily Report", href: "/daily-report" },
       { id: "routine", label: "Daily Routine", href: "/daily-routine" },
-      { id: "checklist", label: "Trading Checklist", href: "/trading-checklist" },
+      { id: "nlventry", label: "NLV Entry", href: "/nlv-entry" },
       { id: "retro", label: "Weekly Retro", href: "/weekly-retro" },
     ],
   },

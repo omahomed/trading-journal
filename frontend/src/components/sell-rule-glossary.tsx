@@ -9,7 +9,7 @@
 // is pure presentation: a list of RuleCards plus the structured
 // Rule Interaction Hierarchy table. Mechanics is rendered as GFM
 // markdown (the same renderer used by the Daily Recap section in
-// daily-report-card.tsx) so tables and bold work without ceremony.
+// daily-routine.tsx) so tables and bold work without ceremony.
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";

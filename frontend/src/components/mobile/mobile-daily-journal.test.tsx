@@ -173,13 +173,13 @@ describe("MobileDailyJournal — sticky month headers", () => {
 });
 
 describe("MobileDailyJournal — card tap navigation", () => {
-  test("tapping a card pushes to /daily-report?date=YYYY-MM-DD", async () => {
+  test("tapping a card pushes to /daily-routine?date=YYYY-MM-DD", async () => {
     const day = todayStr();
     vi.mocked(api.journalHistory).mockResolvedValue([entryFixture({ day })]);
     render(<MobileDailyJournal />);
     const card = await screen.findByTestId(`day-card-${day}`);
     fireEvent.click(card);
-    expect(pushMock).toHaveBeenCalledWith(`/daily-report?date=${day}`);
+    expect(pushMock).toHaveBeenCalledWith(`/daily-routine?date=${day}`);
   });
 });
 
@@ -319,7 +319,7 @@ describe("MobileDailyJournal — sub-row layout (4 items, no Heat)", () => {
 });
 
 describe("MobileDailyJournal — empty states", () => {
-  test("filter excludes all entries → placeholder + CTA link to /daily-routine", async () => {
+  test("filter excludes all entries → placeholder + CTA link to /nlv-entry", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       entryFixture({ day: daysAgo(45) }), // outside Week
     ]);
@@ -328,7 +328,7 @@ describe("MobileDailyJournal — empty states", () => {
     expect(empty).toHaveTextContent(/No entries for this week/);
     const cta = within(empty).getByRole("button", { name: /Save daily routine/ });
     fireEvent.click(cta);
-    expect(pushMock).toHaveBeenCalledWith("/daily-routine");
+    expect(pushMock).toHaveBeenCalledWith("/nlv-entry");
   });
 
   test("portfolio has 0 entries → 'No entries yet' empty state", async () => {
@@ -384,13 +384,13 @@ describe("MobileDailyJournal — T2-6 Daily nav row", () => {
     expect(pushMock).toHaveBeenCalledWith("/weekly-retro");
   });
 
-  test("Daily Routine button routes to /daily-routine", async () => {
+  test("Daily Routine button routes to /nlv-entry", async () => {
     vi.mocked(api.journalHistory).mockResolvedValue([
       entryFixture({ day: todayStr() }),
     ]);
     render(<MobileDailyJournal />);
     fireEvent.click(await screen.findByTestId("daily-nav-daily-routine"));
-    expect(pushMock).toHaveBeenCalledWith("/daily-routine");
+    expect(pushMock).toHaveBeenCalledWith("/nlv-entry");
   });
 
   test("nav row renders between entries-count subtitle and Week/Month/All filter pills", async () => {

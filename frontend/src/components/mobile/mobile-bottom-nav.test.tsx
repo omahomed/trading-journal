@@ -78,10 +78,11 @@ describe("MobileBottomNav — Daily tab active across daily-workflow routes", ()
     );
   });
 
-  test("Daily tab is active on /daily-report (queried date)", () => {
-    // The Daily Report detail view is reached via /daily-report?date=...
-    // — usePathname() returns just "/daily-report".
-    setPathname("/daily-report");
+  test("Daily tab is active on /nlv-entry", () => {
+    // /nlv-entry is the NLV Entry form (renamed from /daily-routine when
+    // the merged Daily Routine took over the /daily-routine URL). Still
+    // part of the daily-workflow surface.
+    setPathname("/nlv-entry");
     render(<MobileBottomNav />);
     expect(screen.getByRole("link", { name: "Daily" })).toHaveAttribute(
       "aria-current",

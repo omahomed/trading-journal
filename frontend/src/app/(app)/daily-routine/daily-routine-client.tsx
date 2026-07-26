@@ -6,9 +6,11 @@ import { MobileDailyRoutine } from "@/components/mobile/mobile-daily-routine";
 import { useIsMobile } from "@/lib/use-viewport";
 import { getGroupForHref } from "@/lib/nav";
 
-export default function DailyRoutineClient() {
+type Props = { initialDate?: string };
+
+export default function DailyRoutineClient({ initialDate }: Props) {
   const isMobile = useIsMobile();
-  const navColor = getGroupForHref(usePathname())?.color || "#6366f1";
-  if (isMobile) return <MobileDailyRoutine />;
-  return <DailyRoutine navColor={navColor} />;
+  const navColor = getGroupForHref(usePathname())?.color || "#f59f00";
+  if (isMobile) return <MobileDailyRoutine initialDate={initialDate} />;
+  return <DailyRoutine navColor={navColor} initialDate={initialDate} />;
 }
