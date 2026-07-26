@@ -44,10 +44,32 @@ export function CaptureSnapshotButton({ targetSelector, snapshotType, label, por
       }
 
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#fff";
+      // Fix for truncated ACS captures 2026-07-26. `html-to-image`
+      // reads the element's live `offsetWidth/offsetHeight`, but if
+      // the node lives inside an ancestor with `overflow: auto` (the
+      // desktop-shell content area) the below-fold content can render
+      // late and the lib may snapshot a shorter frame. Pass explicit
+      // width + height from `scrollWidth / scrollHeight` so it always
+      // captures the full extent regardless of the current scroll
+      // position.
+      //
+      // The pixel-ratio downgrade guards against browser canvas
+      // ceilings — Chrome caps at ~65k px per side, Safari at ~16k.
+      // A 20,000px-tall ACS at pixelRatio 2 would silently truncate on
+      // Safari. Drop to 1 when the capture would breach 12k px on the
+      // long edge (leaves headroom for the 2× multiplier below).
+      const captureWidth = node.scrollWidth;
+      const captureHeight = node.scrollHeight;
+      const SAFE_CANVAS_EDGE = 12000;
+      const rawPixelRatio = 2;
+      const scaledLongEdge = Math.max(captureWidth, captureHeight) * rawPixelRatio;
+      const pixelRatio = scaledLongEdge > SAFE_CANVAS_EDGE ? 1 : rawPixelRatio;
       const blob = await toBlob(node, {
         backgroundColor: bg,
-        pixelRatio: 2,
+        pixelRatio,
         cacheBust: true,
+        width: captureWidth,
+        height: captureHeight,
       });
       if (!blob) {
         setMsg({ ok: false, text: "Capture produced no image" });
