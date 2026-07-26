@@ -20,6 +20,7 @@ import { TagPicker } from "./tag-picker";
 import { DailyThoughts } from "./daily-thoughts";
 import { TradingChecklist } from "./trading-checklist";
 import { CollapsibleSection } from "./collapsible-section";
+import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES, todayInChicago } from "@/lib/routine-autotick";
 import { SnapshotGallery } from "./snapshot-gallery";
 
 /** Convert GitHub-style alert blockquotes into styled callout divs.
@@ -254,6 +255,12 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           dailyThoughtsDirtyRef.current = false;
           setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
             ? ({ ...h, daily_thoughts: dailyThoughts } as any) : h));
+          // Autotick "Journal" only when the entry being edited IS today
+          // — backfilling a past-date journal shouldn't count as "did
+          // today's journal."
+          if (selectedDate === todayInChicago()) {
+            void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
+          }
         }
       }).catch(err => log.error("daily-routine", "daily_thoughts save failed", err));
     }, 800);
@@ -317,6 +324,10 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
         setRecapDirty(false);
         setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
           ? ({ ...h, lowlights: recap } as any) : h));
+        // Autotick "Journal" only when the entry being edited IS today.
+        if (selectedDate === todayInChicago()) {
+          void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
+        }
       } else {
         setThoughtsMsg({ ok: false, text: res.detail || "Save failed" });
       }
@@ -436,25 +447,10 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           />
         </div>
 
-        {/* Phase 2 merger: Trading Checklist section at the top. Renders
-            regardless of NLV / journal-entry state — the checklist is the
-            first thing you interact with each day. */}
-        <div className="mb-5">
-          <TradingChecklist navColor={navColor} />
-        </div>
-
-        {history.length === 0 && (
-          <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
-               style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
-            <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed m-0"
-               style={{ color: "var(--ink-3)" }}>
-              Tick the <strong>Equity routine</strong> checklist item above and log NLV
-              to populate today&apos;s metrics + market notes.
-            </p>
-          </div>
-        )}
-
-        {/* Date selector */}
+        {/* Date selector — comes first (before Checklist) so the "which
+            day am I looking at" affordance is at the top, per user
+            request 2026-07-26. Only renders when there's history to
+            page through. */}
         {history.length > 0 && (() => {
           const days = history.map(h => String(h.day).slice(0, 10));
           const minDay = days.length ? days[days.length - 1] : undefined;
@@ -488,6 +484,24 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
             </div>
           );
         })()}
+
+        {/* Phase 2 merger: Trading Checklist section. Renders regardless
+            of NLV / journal-entry state — always today's items, never
+            tied to the date picker's selected date. */}
+        <div className="mb-5">
+          <TradingChecklist navColor={navColor} />
+        </div>
+
+        {history.length === 0 && (
+          <div className="border-[1.5px] border-dashed rounded-[14px] p-8 text-center mb-5"
+               style={{ borderColor: "var(--border)", background: "var(--surface)" }}>
+            <p className="text-[13px] max-w-[440px] mx-auto leading-relaxed m-0"
+               style={{ color: "var(--ink-3)" }}>
+              Tick the <strong>Equity routine</strong> checklist item above and log NLV
+              to populate today&apos;s metrics + market notes.
+            </p>
+          </div>
+        )}
 
         {day && (
           <>

@@ -6,6 +6,7 @@ import { usePortfolio } from "@/lib/portfolio-context";
 import { formatCurrency } from "@/lib/format";
 import { gradeColor } from "@/lib/grade-helpers";
 import { log } from "@/lib/log";
+import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 
 // IBKR Flex auto-fill is dormant: the upstream Flex Query has been returning
 // "request error (1001) — statement could not be generated" intermittently,
@@ -506,6 +507,9 @@ export function NLVEntry({ navColor }: { navColor: string }) {
         });
       } else if (r.status === "ok") {
         setSaveOk(`Saved ${r.rows_written ?? validated.length} portfolios`);
+        // Autotick "Equity routine" in the checklist — fire and forget,
+        // does not block the save's OK state.
+        void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.equityRoutine);
       } else {
         // 422 validation (shouldn't reach here client-side; defensive), 404,
         // 500 surface their detail.
@@ -533,7 +537,7 @@ export function NLVEntry({ navColor }: { navColor: string }) {
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-          Daily <em className="italic" style={{ color: navColor }}>Routine</em>
+          NLV <em className="italic" style={{ color: navColor }}>Entry</em>
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
           Master Blotter · All Portfolios · End-of-Day

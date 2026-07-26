@@ -152,23 +152,24 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
   }, [load]);
 
   return (
-    <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="trading-checklist-root">
-      {/* Page header */}
-      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
-           style={{ borderBottom: "1px solid var(--border)" }}>
-        <div>
-          <h1 className="font-normal text-[32px] tracking-tight m-0"
-              style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
-            Trading <em className="italic" style={{ color: navColor }}>Checklist</em>
-          </h1>
-          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
-            Daily · weekly · monthly · quarterly routine. Tick as you go; same-day undo only.
-          </div>
+    <div data-testid="trading-checklist-root">
+      {/* Section header — compact style to fit inside the merged Daily
+          Routine page. (The standalone page + big italic title were
+          retired when /trading-checklist redirected to /daily-routine.) */}
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+          <span className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+            Checklist
+          </span>
+          <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+            same-day undo only
+          </span>
         </div>
         <button type="button" onClick={() => void load(false)} disabled={refreshing}
-                className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors"
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: refreshing ? "var(--ink-4)" : "var(--ink-2)" }}>
-          ⟳ {refreshing ? "Refreshing…" : "Refresh"}
+                className="px-2.5 py-1 rounded-[8px] text-[11px] flex items-center gap-1 transition-colors"
+                style={{ background: "transparent", color: refreshing ? "var(--ink-4)" : "var(--ink-3)" }}>
+          ⟳ {refreshing ? "…" : "Refresh"}
         </button>
       </div>
 
