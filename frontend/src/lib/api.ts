@@ -1602,7 +1602,90 @@ export const api = {
     fetchWithAuth(`${API_BASE}/api/portfolios/${portfolioId}/cash-transactions/${txId}`, {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: string } | { error: string }>,
+
+  // Trading Checklist (Migration 050) — routine_items + routine_log
+  routineItemsList: () =>
+    fetchJSON<{ items: RoutineItem[] } | { error: string }>(`/api/routine/items`),
+
+  routineItemsCreate: (body: {
+    name: string;
+    frequency: RoutineFrequency;
+    slot?: RoutineSlot | null;
+    item_type?: RoutineItemType;
+    link?: string | null;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/routine/items`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ item: RoutineItem } | { error: string }>,
+
+  routineItemsUpdate: (itemId: number, body: {
+    name?: string;
+    frequency?: RoutineFrequency;
+    slot?: RoutineSlot | null;
+    link?: string | null;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/routine/items/${itemId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ item: RoutineItem } | { error: string }>,
+
+  routineItemsDelete: (itemId: number) =>
+    fetchWithAuth(`${API_BASE}/api/routine/items/${itemId}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ deleted: true } | { error: string }>,
+
+  routineItemsReorder: (order: Array<{ id: number; sort_order: number }>) =>
+    fetchWithAuth(`${API_BASE}/api/routine/items/reorder`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }),
+    }).then(r => r.json()) as Promise<{ updated: number } | { error: string }>,
+
+  routineLogTick: (itemId: number) =>
+    fetchWithAuth(`${API_BASE}/api/routine/log`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId }),
+    }).then(r => r.json()) as Promise<RoutineTickResult | { error: string }>,
+
+  // 409 on cross-day untick — caller inspects `res.status` (not body)
+  // so we return the raw Response for this endpoint.
+  routineLogUntick: (logId: number) =>
+    fetchWithAuth(`${API_BASE}/api/routine/log/${logId}`, { method: "DELETE" }),
 };
+
+// ── Trading Checklist types ──────────────────────────────────────
+
+export type RoutineFrequency = "daily" | "weekly" | "monthly" | "quarterly";
+export type RoutineSlot =
+  | "premarket"
+  | "intraday"
+  | "end_of_shift"
+  | "after_close"
+  | "weekend";
+export type RoutineItemType = "task" | "counter";
+
+export interface RoutineItem {
+  id: number;
+  name: string;
+  frequency: RoutineFrequency;
+  slot: RoutineSlot | null;
+  item_type: RoutineItemType;
+  link: string | null;
+  is_system: boolean;
+  sort_order: number;
+  last_run: string | null;
+  last_run_date: string | null;
+  overdue_days: number | null;
+  ticked_today: boolean;
+  todays_log_id: number | null;
+}
+
+export interface RoutineTickResult {
+  log_id: number;
+  completed_at: string;
+  completed_date_ct: string;
+  already_ticked: boolean;
+}
 
 // Live-derived NLV snapshot (cash + Σ positions at live price)
 export interface PortfolioNlv {

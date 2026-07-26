@@ -8042,6 +8042,171 @@ def list_daily_journals_rail_endpoint(request: Request, portfolio: str = Query("
     return db.list_daily_journals_rail(portfolio)
 
 
+# ============================================================================
+# Trading Checklist (Migration 050)
+# ============================================================================
+# Small user-scoped feature. All endpoints thin wrappers around db_layer
+# helpers; RLS handles tenant isolation via the auth middleware setting
+# app.user_id per request. Business errors return HTTP 200 with
+# {"error": ...} per the convention noted at line ~1944. 409 for the
+# cross-day untick (the one endpoint where the client needs a distinct
+# status to render differently).
+
+
+@app.get("/api/routine/items")
+@limiter.limit("120/minute")
+def routine_items_list(request: Request):
+    """List the caller's active routine items with derived last_run and
+    overdue_days. Provisions system items on first call for a new user."""
+    try:
+        items = db.list_routine_items()
+        return {"items": items}
+    except Exception as e:
+        print(f"[routine_items_list] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/routine/items")
+@limiter.limit("60/minute")
+def routine_items_create(request: Request, body: dict = Body(...)):
+    """Create a custom item. Body: {name, frequency, slot?, item_type?, link?}.
+    is_system is always false for user-created rows — the field isn't
+    honored from the body."""
+    body = body or {}
+    name = body.get("name")
+    frequency = body.get("frequency")
+    slot = body.get("slot")  # may be None
+    item_type = body.get("item_type") or "task"
+    link = body.get("link") or None
+    if not isinstance(name, str) or not name.strip():
+        return {"error": "name is required"}
+    if frequency not in ("daily", "weekly", "monthly", "quarterly"):
+        return {"error": "frequency must be daily|weekly|monthly|quarterly"}
+    try:
+        item = db.create_routine_item(name, frequency, slot, item_type, link)
+        return {"item": item}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"[routine_items_create] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.patch("/api/routine/items/{item_id}")
+@limiter.limit("60/minute")
+def routine_items_update(request: Request, item_id: int, body: dict = Body(...)):
+    """Patch a custom item. Only keys present in the body are applied —
+    absent keys leave the field alone. Passing `slot: null` clears the
+    slot; passing `link: ""` clears the link. 403 on system items."""
+    body = body or {}
+    kwargs: dict = {}
+    if "name" in body:
+        kwargs["name"] = body["name"]
+    if "frequency" in body:
+        kwargs["frequency"] = body["frequency"]
+    if "slot" in body:
+        kwargs["slot"] = body["slot"]
+    if "link" in body:
+        kwargs["link"] = body["link"]
+    try:
+        item = db.update_routine_item(item_id, **kwargs)
+        if item is None:
+            return {"error": "not_found"}
+        return {"item": item}
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="system items are not editable")
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"[routine_items_update] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.delete("/api/routine/items/{item_id}")
+@limiter.limit("60/minute")
+def routine_items_delete(request: Request, item_id: int):
+    """Soft-delete a custom item (active=false). 403 on system items,
+    which never disappear from the checklist. Log history is preserved
+    (routine_log has ON DELETE CASCADE but this is a soft-delete)."""
+    try:
+        outcome = db.delete_routine_item(item_id)
+        if outcome == "deleted":
+            return {"deleted": True}
+        if outcome == "not_found":
+            return {"error": "not_found"}
+        if outcome == "system":
+            raise HTTPException(status_code=403, detail="system items cannot be deleted")
+        return {"error": f"unexpected outcome: {outcome}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[routine_items_delete] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/routine/items/reorder")
+@limiter.limit("60/minute")
+def routine_items_reorder(request: Request, body: dict = Body(...)):
+    """Bulk sort_order update, custom items only. Body:
+    {order: [{id, sort_order}, ...]}. System items in the payload are
+    silently ignored on the server side."""
+    order = (body or {}).get("order")
+    if not isinstance(order, list):
+        return {"error": "order must be an array"}
+    try:
+        updated = db.reorder_routine_items(order)
+        return {"updated": updated}
+    except Exception as e:
+        print(f"[routine_items_reorder] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/routine/log")
+@limiter.limit("120/minute")
+def routine_log_tick(request: Request, body: dict = Body(...)):
+    """Tick an item — write-through, idempotent per (item, CT day). Body:
+    {item_id: int}. Returns {log_id, completed_at, completed_date_ct,
+    already_ticked}. `already_ticked=true` means the row existed already
+    (double-tap or a re-fetch after a prior tick)."""
+    try:
+        item_id = int((body or {}).get("item_id"))
+    except (TypeError, ValueError):
+        return {"error": "item_id must be an integer"}
+    try:
+        result = db.tick_routine_item(item_id)
+        return result
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"[routine_log_tick] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.delete("/api/routine/log/{log_id}")
+@limiter.limit("60/minute")
+def routine_log_untick(request: Request, log_id: int):
+    """Same-day-only untick. 409 when the tick happened on a prior CT
+    day — retroactive edits destroy the log's value as evidence. Client
+    should reflect the 409 by re-checking the box and surfacing a note."""
+    try:
+        outcome = db.untick_routine_log(log_id)
+        if outcome == "deleted":
+            return {"deleted": True}
+        if outcome == "not_found":
+            return {"error": "not_found"}
+        if outcome == "stale":
+            raise HTTPException(
+                status_code=409,
+                detail="log is older than today (America/Chicago) — undo not allowed",
+            )
+        return {"error": f"unexpected outcome: {outcome}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[routine_log_untick] handler failed: {e}")
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

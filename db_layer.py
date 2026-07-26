@@ -13,8 +13,9 @@ import threading
 import zlib
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, date
 from functools import wraps
+from zoneinfo import ZoneInfo
 import time
 from decimal import Decimal
 
@@ -6868,3 +6869,444 @@ def _format_daily_title(day) -> str:
         return f"{_MONTH_NAMES[m - 1]} {d}"
     except Exception:
         return str(day)[:10]
+
+
+# ============================================================================
+# routine_items + routine_log (Migration 050) — Trading Checklist
+# ============================================================================
+# Backing store for the Trading Checklist page. See migration 050 preamble
+# for the schema rationale. All queries below are RLS-scoped via
+# get_db_connection() setting app.user_id from the current context.
+#
+# System items are auto-provisioned on first read per user — no seed insert
+# in the migration itself. The partial unique index
+# (user_id, name) WHERE is_system=true makes provisioning idempotent under
+# ON CONFLICT DO NOTHING, so concurrent first-reads don't dupe.
+
+_ROUTINE_FREQUENCIES = ("daily", "weekly", "monthly", "quarterly")
+_ROUTINE_SLOTS = ("premarket", "intraday", "end_of_shift", "after_close", "weekend")
+_ROUTINE_ITEM_TYPES = ("task", "counter")
+_ROUTINE_URL_RE = re.compile(r"^https?://")
+
+# Overdue thresholds. 'daily' handled separately (weekday-elapsed, not
+# calendar days). None means the frequency has no cadence overdue check.
+_ROUTINE_OVERDUE_THRESHOLDS = {
+    "weekly": 7,
+    "monthly": 31,
+    "quarterly": 92,
+}
+
+# System items provisioned per user on first read. Editing this list is
+# the way to add / remove system items over time. The (name) is the
+# identity for ON CONFLICT — a rename is a delete + re-add for existing
+# users, which is fine because history is per-item-id.
+_ROUTINE_SYSTEM_ITEMS = [
+    # (name, frequency, slot, item_type, sort_order)
+    ("Equity routine — log NLV, day P&L, drawdown, heat",              "daily",  "after_close", "task",    10),
+    ("Risk levels — set tomorrow's triggers and decisions",             "daily",  "after_close", "task",    20),
+    ("Journal — chart read, macro, mindset, ratings",                   "daily",  "after_close", "task",    30),
+    ("Discretionary action taken today?",                               "daily",  "after_close", "counter", 40),
+    ("SR8 weekly pass — RS states, funnel decisions, core counts",      "weekly", "weekend",     "task",    10),
+    ("Cluster exposure review — breadth, RSP, NAAIM",                   "weekly", "weekend",     "task",    20),
+    ("Weekly recap",                                                    "weekly", "weekend",     "task",    30),
+]
+
+
+def _routine_today_ct() -> date:
+    """Current date in America/Chicago. Same-day-undo enforcement anchors
+    on this — logs stamped in one CT day become immutable at midnight CT
+    even if the caller's clock is in another zone."""
+    return datetime.now(ZoneInfo("America/Chicago")).date()
+
+
+def _routine_weekdays_after(start: date, end: date) -> int:
+    """Count weekdays (Mon-Fri) strictly after `start`, up to and including
+    `end`. Used for daily overdue: tick on Fri + today Mon → 1 weekday
+    elapsed (Mon), so not yet overdue. Tick Mon + today Wed → 2 elapsed
+    (Tue, Wed) → overdue by 1. Holidays are NOT skipped in Phase 1."""
+    if end <= start:
+        return 0
+    days = (end - start).days
+    weeks, remainder = divmod(days, 7)
+    weekdays = weeks * 5
+    start_wd = start.weekday()  # 0=Mon .. 6=Sun
+    for i in range(1, remainder + 1):
+        if (start_wd + i) % 7 < 5:
+            weekdays += 1
+    return weekdays
+
+
+def _routine_overdue_days(
+    frequency: str, item_type: str, last_run_date: date | None, today_ct: date
+) -> int | None:
+    """Days past cadence, or None if not overdue. Counter items never
+    overdue. Daily uses weekday-elapsed (Fri tick isn't overdue until
+    Tue); weekly/monthly/quarterly use calendar days past the threshold."""
+    if item_type == "counter":
+        return None
+    if frequency == "daily":
+        if last_run_date is None:
+            # Never ticked. Treat as due today, not overdue yet — item
+            # renders neutral on first appearance.
+            return None
+        elapsed_weekdays = _routine_weekdays_after(last_run_date, today_ct)
+        return elapsed_weekdays - 1 if elapsed_weekdays > 1 else None
+    threshold = _ROUTINE_OVERDUE_THRESHOLDS.get(frequency)
+    if threshold is None:
+        return None
+    if last_run_date is None:
+        return None
+    elapsed = (today_ct - last_run_date).days
+    return elapsed - threshold if elapsed > threshold else None
+
+
+def provision_routine_system_items() -> None:
+    """Idempotently ensure the current user has every seed system item.
+    Cheap enough to run on every list read — the partial unique index
+    (user_id, name) WHERE is_system=true short-circuits already-present
+    rows via ON CONFLICT DO NOTHING. RLS scopes writes to the caller."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            for name, frequency, slot, item_type, sort_order in _ROUTINE_SYSTEM_ITEMS:
+                cur.execute(
+                    "INSERT INTO routine_items "
+                    "(name, frequency, slot, item_type, is_system, sort_order) "
+                    "VALUES (%s, %s, %s, %s, true, %s) "
+                    "ON CONFLICT (user_id, name) WHERE is_system DO NOTHING",
+                    (name, frequency, slot, item_type, sort_order),
+                )
+            conn.commit()
+
+
+def list_routine_items() -> list[dict]:
+    """Return the caller's active routine items with derived last_run
+    (timestamp of most recent tick) and overdue_days (elapsed past
+    cadence, null when not overdue). Provisions system items on first
+    call. Sorted by (frequency, slot, sort_order, id) so the frontend
+    can group without re-sorting."""
+    provision_routine_system_items()
+    today_ct = _routine_today_ct()
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    ri.id, ri.name, ri.frequency, ri.slot, ri.item_type,
+                    ri.link, ri.is_system, ri.sort_order,
+                    ri.created_at, ri.updated_at,
+                    last_log.completed_at      AS last_run,
+                    last_log.completed_date_ct AS last_run_date,
+                    last_log.id                AS last_log_id,
+                    today_log.id               AS todays_log_id
+                FROM routine_items ri
+                LEFT JOIN LATERAL (
+                    SELECT id, completed_at, completed_date_ct
+                    FROM routine_log
+                    WHERE item_id = ri.id
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                ) last_log ON true
+                LEFT JOIN LATERAL (
+                    SELECT id
+                    FROM routine_log
+                    WHERE item_id = ri.id
+                      AND completed_date_ct = %s
+                    LIMIT 1
+                ) today_log ON true
+                WHERE ri.active = true
+                ORDER BY
+                    CASE ri.frequency
+                        WHEN 'daily'     THEN 1
+                        WHEN 'weekly'    THEN 2
+                        WHEN 'monthly'   THEN 3
+                        WHEN 'quarterly' THEN 4
+                        ELSE 5
+                    END,
+                    CASE ri.slot
+                        WHEN 'premarket'    THEN 1
+                        WHEN 'intraday'     THEN 2
+                        WHEN 'end_of_shift' THEN 3
+                        WHEN 'after_close'  THEN 4
+                        WHEN 'weekend'      THEN 5
+                        ELSE 6
+                    END,
+                    ri.sort_order, ri.id
+                """,
+                (today_ct,),
+            )
+            rows = cur.fetchall()
+    out = []
+    for r in rows:
+        last_date = r["last_run_date"]
+        overdue = _routine_overdue_days(r["frequency"], r["item_type"], last_date, today_ct)
+        out.append({
+            "id": r["id"],
+            "name": r["name"],
+            "frequency": r["frequency"],
+            "slot": r["slot"],
+            "item_type": r["item_type"],
+            "link": r["link"],
+            "is_system": r["is_system"],
+            "sort_order": r["sort_order"],
+            "last_run": r["last_run"].isoformat() if r["last_run"] else None,
+            "last_run_date": last_date.isoformat() if last_date else None,
+            "overdue_days": overdue,
+            "ticked_today": r["todays_log_id"] is not None,
+            "todays_log_id": r["todays_log_id"],
+        })
+    return out
+
+
+def _validate_routine_item_fields(
+    name: str | None,
+    frequency: str | None,
+    slot: str | None,
+    item_type: str | None,
+    link: str | None,
+) -> None:
+    """Defense-in-depth vs the DB CHECK constraints. Callers surface these
+    as ValueError → handler returns {"error": ...} at HTTP 200."""
+    if name is not None:
+        if not isinstance(name, str) or not (1 <= len(name.strip()) <= 120):
+            raise ValueError("name must be 1..120 chars")
+    if frequency is not None and frequency not in _ROUTINE_FREQUENCIES:
+        raise ValueError(f"frequency must be one of {_ROUTINE_FREQUENCIES}")
+    if slot is not None and slot not in _ROUTINE_SLOTS:
+        raise ValueError(f"slot must be one of {_ROUTINE_SLOTS} or null")
+    if item_type is not None and item_type not in _ROUTINE_ITEM_TYPES:
+        raise ValueError(f"item_type must be one of {_ROUTINE_ITEM_TYPES}")
+    if link:
+        if not _ROUTINE_URL_RE.match(link):
+            raise ValueError("link must start with http:// or https://")
+
+
+def create_routine_item(
+    name: str,
+    frequency: str,
+    slot: str | None,
+    item_type: str = "task",
+    link: str | None = None,
+) -> dict:
+    """Create a custom (is_system=false) routine item. Returns the new row
+    with derived fields matching list_routine_items() shape."""
+    _validate_routine_item_fields(name, frequency, slot, item_type, link)
+    name = name.strip()
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Place new item at the end of its bucket. MAX+10 keeps a gap
+            # for future manual reordering; ties fall through to ORDER BY id.
+            cur.execute(
+                """
+                SELECT COALESCE(MAX(sort_order), 0) + 10 AS next_order
+                FROM routine_items
+                WHERE frequency = %s
+                  AND (slot IS NOT DISTINCT FROM %s)
+                  AND active = true
+                """,
+                (frequency, slot),
+            )
+            next_order = cur.fetchone()["next_order"]
+            cur.execute(
+                """
+                INSERT INTO routine_items
+                    (name, frequency, slot, item_type, link, is_system, sort_order)
+                VALUES (%s, %s, %s, %s, %s, false, %s)
+                RETURNING id
+                """,
+                (name, frequency, slot, item_type, link, next_order),
+            )
+            new_id = cur.fetchone()["id"]
+            conn.commit()
+    # Refetch through list to keep the response shape consistent.
+    items = list_routine_items()
+    for it in items:
+        if it["id"] == new_id:
+            return it
+    raise RuntimeError("created row not visible via list — RLS mismatch?")
+
+
+_ROUTINE_UNSET = object()
+
+
+def update_routine_item(
+    item_id: int,
+    name=_ROUTINE_UNSET,
+    frequency=_ROUTINE_UNSET,
+    slot=_ROUTINE_UNSET,
+    link=_ROUTINE_UNSET,
+) -> dict | None:
+    """Patch a custom item's editable fields. Sentinel _ROUTINE_UNSET
+    distinguishes "not passed" (leave alone) from "passed as None"
+    (clear the field — slot/link can be nulled explicitly). Returns None
+    if item doesn't exist for the caller, raises PermissionError if
+    is_system. item_type is NOT editable post-create — flipping a task
+    to counter would invalidate the log history semantically."""
+    _validate_routine_item_fields(
+        name if name is not _ROUTINE_UNSET else None,
+        frequency if frequency is not _ROUTINE_UNSET else None,
+        slot if slot is not _ROUTINE_UNSET else None,
+        None,
+        link if link is not _ROUTINE_UNSET else None,
+    )
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, is_system FROM routine_items WHERE id = %s AND active = true",
+                (item_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row["is_system"]:
+                raise PermissionError("system items are not editable")
+            updates: list[str] = []
+            params: list = []
+            if name is not _ROUTINE_UNSET:
+                updates.append("name = %s")
+                params.append(name.strip() if isinstance(name, str) else name)
+            if frequency is not _ROUTINE_UNSET:
+                updates.append("frequency = %s")
+                params.append(frequency)
+            if slot is not _ROUTINE_UNSET:
+                updates.append("slot = %s")
+                params.append(slot)
+            if link is not _ROUTINE_UNSET:
+                updates.append("link = %s")
+                params.append(link if link else None)
+            if updates:
+                updates.append("updated_at = now()")
+                params.append(item_id)
+                cur.execute(
+                    f"UPDATE routine_items SET {', '.join(updates)} WHERE id = %s",
+                    tuple(params),
+                )
+                conn.commit()
+    items = list_routine_items()
+    for it in items:
+        if it["id"] == item_id:
+            return it
+    return None
+
+
+def delete_routine_item(item_id: int) -> str:
+    """Soft-delete via active=false. Returns 'deleted' | 'not_found' |
+    'system' (which the endpoint maps to 403)."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT is_system FROM routine_items WHERE id = %s AND active = true",
+                (item_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return "not_found"
+            if row["is_system"]:
+                return "system"
+            cur.execute(
+                "UPDATE routine_items SET active = false, updated_at = now() WHERE id = %s",
+                (item_id,),
+            )
+            conn.commit()
+            return "deleted"
+
+
+def reorder_routine_items(order: list[dict]) -> int:
+    """Bulk sort_order update, custom items only (server-filters is_system).
+    Payload: [{id: int, sort_order: int}, ...]. Returns count of rows
+    updated. System items in the payload are silently ignored."""
+    if not isinstance(order, list) or not order:
+        return 0
+    pairs: list[tuple[int, int]] = []
+    for entry in order:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            iid = int(entry.get("id"))
+            so = int(entry.get("sort_order"))
+        except (TypeError, ValueError):
+            continue
+        pairs.append((iid, so))
+    if not pairs:
+        return 0
+    updated = 0
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            for iid, so in pairs:
+                cur.execute(
+                    "UPDATE routine_items "
+                    "SET sort_order = %s, updated_at = now() "
+                    "WHERE id = %s AND is_system = false AND active = true",
+                    (so, iid),
+                )
+                updated += cur.rowcount
+            conn.commit()
+    return updated
+
+
+def tick_routine_item(item_id: int) -> dict:
+    """Idempotent same-day tick. Same-item + same CT day → returns the
+    existing log id (no duplicate row). Returns {log_id, completed_at,
+    already_ticked}. Raises ValueError if item doesn't exist for the caller."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id FROM routine_items WHERE id = %s AND active = true",
+                (item_id,),
+            )
+            if not cur.fetchone():
+                raise ValueError("item not found")
+            # Try to insert; the partial unique index on
+            # (item_id, completed_date_ct) makes double-taps a no-op.
+            cur.execute(
+                """
+                INSERT INTO routine_log (item_id) VALUES (%s)
+                ON CONFLICT (item_id, completed_date_ct) DO NOTHING
+                RETURNING id, completed_at, completed_date_ct
+                """,
+                (item_id,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                conn.commit()
+                return {
+                    "log_id": row["id"],
+                    "completed_at": row["completed_at"].isoformat(),
+                    "completed_date_ct": row["completed_date_ct"].isoformat(),
+                    "already_ticked": False,
+                }
+            # Conflict — surface the existing row instead of pretending we
+            # created something new.
+            today_ct = _routine_today_ct()
+            cur.execute(
+                "SELECT id, completed_at, completed_date_ct FROM routine_log "
+                "WHERE item_id = %s AND completed_date_ct = %s",
+                (item_id, today_ct),
+            )
+            existing = cur.fetchone()
+            return {
+                "log_id": existing["id"],
+                "completed_at": existing["completed_at"].isoformat(),
+                "completed_date_ct": existing["completed_date_ct"].isoformat(),
+                "already_ticked": True,
+            }
+
+
+def untick_routine_log(log_id: int) -> str:
+    """Same-day-only DELETE. Returns 'deleted' | 'not_found' | 'stale'
+    (which the endpoint maps to 409). Cross-day untick is rejected so the
+    log stays evidence, not a story."""
+    today_ct = _routine_today_ct()
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, completed_date_ct FROM routine_log WHERE id = %s",
+                (log_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return "not_found"
+            if row["completed_date_ct"] != today_ct:
+                return "stale"
+            cur.execute("DELETE FROM routine_log WHERE id = %s", (log_id,))
+            conn.commit()
+            return "deleted"
