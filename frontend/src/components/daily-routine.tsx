@@ -485,6 +485,19 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
           );
         })()}
 
+        {/* Human-readable date sits right below the picker, above the
+            Checklist. Renders on any valid selectedDate — decoupled from
+            `day` so it's visible even when the entry is missing. */}
+        {selectedDate && /^\d{4}-\d{2}-\d{2}$/.test(selectedDate) && (
+          <div className="text-[16px] font-semibold mb-4">
+            {(() => {
+              const [y, m, d] = selectedDate.split("-").map(n => parseInt(n));
+              const dt = new Date(y, m - 1, d);
+              return dt.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+            })()}
+          </div>
+        )}
+
         {/* Phase 2 merger: Trading Checklist section. Renders regardless
             of NLV / journal-entry state — always today's items, never
             tied to the date picker's selected date. */}
@@ -505,14 +518,6 @@ export function DailyRoutine({ navColor, initialDate }: { navColor: string; init
 
         {day && (
           <>
-            {/* Header date */}
-            <div className="text-[16px] font-semibold mb-4">
-              {(() => {
-                const [y, m, d] = selectedDate.split("-").map(n => parseInt(n));
-                const dt = new Date(y, m - 1, d);
-                return dt.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-              })()}
-            </div>
 
             {/* Section 1: Header Metrics */}
             <div className="grid grid-cols-4 gap-3 mb-5">
