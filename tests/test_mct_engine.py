@@ -725,3 +725,89 @@ def test_derive_state_2026_07_07_returns_uup_regression_guard():
     # The load-bearing assertions — the point of the test
     assert engine._derive_state(row.to_dict()) == "UPTREND UNDER PRESSURE"
     assert row["state"] == "UPTREND UNDER PRESSURE"
+
+
+# ---------------------------------------------------------------------------
+# Force-Correction override (migration 053) — user-declared CORRECTION seed
+# ---------------------------------------------------------------------------
+
+def test_force_correction_at_date_seeds_engine_state():
+    """When config.force_correction_at_date matches a bar and the systematic
+    depth threshold would NOT fire on that bar, the engine still declares
+    CORRECTION there — resetting step flags, rally state, and dropping
+    exposure. Subsequent bars run normal rally-hunt detection off the
+    forced anchor."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Series of flat-ish bars sitting above the 50 SMA — systematic
+    # gates would NEVER fire (no depth, no structure break).
+    closes = [110.0] * 8
+    lows = [109.0] * 8
+    highs = [111.0] * 8
+    df = _synthetic_history(
+        closes,
+        ema_21=[110.0] * 8,
+        sma_50=[100.0] * 8,          # close above 50 SMA — no structure break
+        sma_200=[95.0] * 8,
+        lows=lows, highs=highs,
+    )
+    # Reference high 111 keeps drawdown ~1%, well shy of the 10% depth gate.
+    force_date = df["trade_date"].iloc[3]
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=force_date,
+    ))
+    result = engine.run(df)
+
+    # CORRECTION_DECLARED fires exactly once, on the forced bar, with the
+    # user_override trigger stamped in meta.
+    declared = [s for s in result.signals if s.signal_type == "CORRECTION_DECLARED"]
+    assert len(declared) == 1, (
+        f"Expected exactly 1 CORRECTION_DECLARED (from override), got {len(declared)}"
+    )
+    assert declared[0].trade_date == force_date
+    assert declared[0].meta.get("trigger") == "user_override"
+
+    # State reset side-effects — step flags all False, rally state zeroed,
+    # correction_active True.
+    final = result.final_state
+    assert final["correction_active"] is True
+    assert final["correction_ever_declared"] is True
+    for s in range(8):
+        # step0/1 may re-fire on bars after the override if the synthetic
+        # closes happen to satisfy STEP_0 (they do — flat closes still
+        # count as "not lower than prev" in some engine paths). Skip step0/1
+        # asserts; the reset-at-force-bar itself is the invariant.
+        if s in (0, 1):
+            continue
+        assert final[f"step{s}_done"] is False, f"step{s}_done should be False after override reset"
+
+
+def test_force_correction_no_op_when_date_absent_from_history():
+    """If force_correction_at_date doesn't match any bar in the sliced
+    history (e.g., stale override anchor), the engine runs normally and
+    no user_override CORRECTION_DECLARED is emitted."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    closes = [110.0] * 5
+    df = _synthetic_history(closes, ema_21=[110.0] * 5,
+                            sma_50=[100.0] * 5, sma_200=[95.0] * 5)
+    # Pick a date not in the frame.
+    unmatched = date(1990, 1, 1)
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=unmatched,
+    ))
+    result = engine.run(df)
+    user_declared = [
+        s for s in result.signals
+        if s.signal_type == "CORRECTION_DECLARED"
+        and s.meta.get("trigger") == "user_override"
+    ]
+    assert user_declared == []

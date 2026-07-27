@@ -3546,39 +3546,60 @@ def rally_prefix(as_of_date: str = ""):
             except ValueError:
                 as_of = None
 
-        result = run_engine("^IXIC", as_of=as_of)
-        response = to_rally_prefix_response(result)
-        response = _project_rally_prefix_for_data_lag(response, as_of)
+        # Systematic run — always executed. `systematic_state` on the
+        # response reflects what the engine says without the override.
+        systematic_result = run_engine("^IXIC", as_of=as_of)
+        systematic_response = to_rally_prefix_response(systematic_result)
+        systematic_response = _project_rally_prefix_for_data_lag(systematic_response, as_of)
+        systematic_state = systematic_response.get("state")
 
-        # Overlay the manual CORRECTION override. Best-effort — a bug
-        # in the override path must not break the pill for the whole app.
+        # Override overlay. If active, check auto-clear first, then run the
+        # engine a SECOND time with force_correction_at_date pinned to the
+        # override's activated_date_ct so the returned state reflects a
+        # fresh correction cycle anchored on that date (STEP_0 detection,
+        # rally-day counting, ladder resets — the engine does it all).
+        # Best-effort — a bug in the override path must not break the pill
+        # for the whole app.
         try:
-            systematic = response.get("state")
             override = db.get_active_mct_override()
+            if override and systematic_state in ("POWERTREND", "UPTREND", "CORRECTION"):
+                # Recovered (POWERTREND/UPTREND) or rule caught up (CORRECTION)
+                # → auto-clear and fall through to the systematic response.
+                db.clear_mct_override(cleared_by="auto")
+                override = None
+
             if override:
-                # Auto-clear check first — POWERTREND / UPTREND means the
-                # market recovered; CORRECTION means the rule caught up.
-                # Anything else (UUP, RALLY MODE) leaves the override
-                # in place until user manually clears.
-                if systematic in ("POWERTREND", "UPTREND", "CORRECTION"):
-                    db.clear_mct_override(cleared_by="auto")
-                    override = None
-            response["systematic_state"] = systematic
-            if override:
-                response["state"] = "CORRECTION"
-                response["override"] = {
-                    "id": override["id"],
-                    "activated_date_ct": override["activated_date_ct"],
-                    "reason": override["reason"],
-                }
-            else:
-                response["override"] = None
+                override_date_iso = override["activated_date_ct"]
+                try:
+                    from datetime import datetime as _dt
+                    override_date = _dt.strptime(override_date_iso[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    override_date = None
+
+                if override_date is not None:
+                    overridden_result = run_engine(
+                        "^IXIC",
+                        as_of=as_of,
+                        force_correction_at_date=override_date,
+                    )
+                    overridden_response = to_rally_prefix_response(overridden_result)
+                    overridden_response = _project_rally_prefix_for_data_lag(overridden_response, as_of)
+                    overridden_response["systematic_state"] = systematic_state
+                    overridden_response["override"] = {
+                        "id": override["id"],
+                        "activated_date_ct": override["activated_date_ct"],
+                        "reason": override["reason"],
+                    }
+                    return overridden_response
+
+            systematic_response["systematic_state"] = systematic_state
+            systematic_response["override"] = None
+            return systematic_response
         except Exception as e:
             print(f"[rally_prefix] override overlay failed: {e}")
-            response.setdefault("systematic_state", response.get("state"))
-            response.setdefault("override", None)
-
-        return response
+            systematic_response.setdefault("systematic_state", systematic_state)
+            systematic_response.setdefault("override", None)
+            return systematic_response
     except Exception as e:
         return {"prefix": "", "error": str(e)}
 

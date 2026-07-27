@@ -134,6 +134,23 @@ class EngineConfig:
     # with seed 20,118.61).
     initial_ratchet_armed: bool = False
 
+    # Manual override — force a fresh CORRECTION declaration on this bar's
+    # date, regardless of whether the systematic depth + structure gates in
+    # _phase_declaration would fire. Powers the user "Force Correction"
+    # button (migration 053): the user is calling correction earlier than
+    # the 10% depth threshold, so the engine must treat the override date
+    # as if it declared correction there — resetting rally state, clearing
+    # step flags, dropping exposure. All bars after the override date go
+    # through normal rally-hunt detection (STEP_0 → FTD → ...) so the
+    # display shows "Day N since <override date>" and the ladder counts
+    # rally days from the declared boundary.
+    #
+    # None → no override (default). When set, the engine emits a
+    # CORRECTION_DECLARED signal on the matching bar with a distinct meta
+    # marker so the audit log can distinguish user-triggered from
+    # systematic declarations.
+    force_correction_at_date: Optional[date] = None
+
 
 @dataclass
 class SignalEvent:
@@ -354,6 +371,31 @@ class MCTEngine:
         # Phase 2: correction nullification
         self._phase_nullification(current, state, bar_signals)
 
+        # Phase 3a: manual override — user-declared CORRECTION on this
+        # bar's date. Runs BEFORE the systematic _phase_declaration so
+        # the override can seed the fresh correction cycle; the
+        # systematic path's `state["correction_active"]` short-circuit
+        # then skips its own declaration on this bar. Idempotent — same
+        # bar re-runs are a no-op because correction_active is now True.
+        force_date = self.config.force_correction_at_date
+        if (force_date is not None
+                and not state["correction_active"]
+                and current["trade_date"] == force_date):
+            self._declare_correction_now(
+                current, state, bar_signals,
+                reason=(
+                    f"User override — Force Correction activated on "
+                    f"{force_date.isoformat()}. Systematic depth "
+                    f"threshold ({int(CORRECTION_DRAWDOWN * 100)}% off "
+                    f"reference high) not required."
+                ),
+                meta={
+                    "trigger": "user_override",
+                    "override_date": force_date.isoformat(),
+                    "reference_high": state["reference_high"],
+                },
+            )
+
         # Phase 3: correction declaration
         self._phase_declaration(current, state, bar_signals)
 
@@ -561,6 +603,30 @@ class MCTEngine:
             return
 
         # Second consecutive bar with both gates passing → declare.
+        self._declare_correction_now(
+            current, state, bar_signals,
+            reason=(
+                f"Close {close:.2f} ≤ {threshold:.2f} "
+                f"({int(CORRECTION_DRAWDOWN * 100)}% from "
+                f"{state['reference_high']:.2f}) + close < 50 SMA "
+                f"{sma_50:.2f} confirmed (2 consecutive bars)"
+            ),
+            meta={
+                "reference_high": state["reference_high"], "threshold": threshold,
+                "close": close, "sma_50": sma_50,
+                "confirmation": "two_consecutive_bars_depth_and_structure",
+                "trigger": "systematic",
+            },
+        )
+
+    def _declare_correction_now(self, current, state, bar_signals, reason: str, meta: dict):
+        """Fire a CORRECTION_DECLARED at this bar and reset all rally-hunt
+        state. Extracted from _phase_declaration so the manual override
+        path (config.force_correction_at_date) can reuse the exact same
+        state transition without duplicating the reset block.
+
+        Assumes the caller has already gated on `not state["correction_active"]`
+        — this helper does the actual mutation."""
         before = state["exposure"]
         state["in_correction"] = True
         state["correction_active"] = True
@@ -599,14 +665,9 @@ class MCTEngine:
 
         bar_signals.append(self._signal(
             current, state, "CORRECTION_DECLARED",
-            f"Close {close:.2f} ≤ {threshold:.2f} "
-            f"({int(CORRECTION_DRAWDOWN * 100)}% from "
-            f"{state['reference_high']:.2f}) + close < 50 SMA "
-            f"{sma_50:.2f} confirmed (2 consecutive bars)",
+            reason,
             exposure_before=before, exposure_after=state["exposure"],
-            meta={"reference_high": state["reference_high"], "threshold": threshold,
-                  "close": close, "sma_50": sma_50,
-                  "confirmation": "two_consecutive_bars_depth_and_structure"},
+            meta=meta,
         ))
 
     # ------------------------------------------------------------------------

@@ -36,7 +36,10 @@ from api.market_data_repo import get_history, get_latest_date
 HISTORY_START = date(2010, 1, 1)
 
 
-def _default_config(initial_reference_high: Optional[float]) -> EngineConfig:
+def _default_config(
+    initial_reference_high: Optional[float],
+    force_correction_at_date: Optional[date] = None,
+) -> EngineConfig:
     return EngineConfig(
         initial_reference_high=initial_reference_high,
         initial_state="POWERTREND",
@@ -49,14 +52,24 @@ def _default_config(initial_reference_high: Optional[float]) -> EngineConfig:
         # value and intentionally kept ratchet_armed=False until first
         # nullification.
         initial_ratchet_armed=True,
+        force_correction_at_date=force_correction_at_date,
     )
 
 
-def run_engine(symbol: str = "^IXIC", as_of: Optional[date] = None) -> EngineResult:
+def run_engine(
+    symbol: str = "^IXIC",
+    as_of: Optional[date] = None,
+    force_correction_at_date: Optional[date] = None,
+) -> EngineResult:
     """Run the V11 engine over market_data history through `as_of` (or latest).
 
     Reads from market_data (no yfinance round-trip). Returns EngineResult.
     Empty result if market_data has no rows for `symbol`.
+
+    `force_correction_at_date` — when set, the engine forces a fresh
+    CORRECTION_DECLARED on the bar matching that date, regardless of the
+    systematic depth threshold. Powers the user Force Correction override
+    (migration 053); leave None for the systematic-only run.
     """
     if as_of is None:
         latest = get_latest_date(symbol)
@@ -69,7 +82,7 @@ def run_engine(symbol: str = "^IXIC", as_of: Optional[date] = None) -> EngineRes
         return EngineResult(bars=pd.DataFrame(), signals=[], final_state={})
 
     seed = float(history["high"].iloc[0])
-    return MCTEngine(_default_config(seed)).run(history)
+    return MCTEngine(_default_config(seed, force_correction_at_date)).run(history)
 
 
 # ============================================================================
