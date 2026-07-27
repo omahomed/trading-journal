@@ -500,18 +500,15 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="p-4 flex flex-col gap-1.5">
             {ladder.map((item: any) => {
               const achieved = item.achieved;
-              // Three-way visual under the sum-of-valid-steps model:
-              //   ✅ achieved  — contributes to exposure right now
-              //   🔒 latched event not yet earned this cycle (steps 0/1/8)
-              //   ○  live condition currently false (steps 2-7) — can flip
-              //      true on the next bar without any "previous step" gate
-              // We drop the old isNext ordinal chain because steps validate
-              // out of order under the live model — e.g. step 6 (21>50>200)
-              // can be true while step 4 (low>21 3 bars) is false, and the
-              // chain would mis-render step 5 as 🔒 locked when it's just
-              // a streak-day from validating.
-              const isEvent = item.step === 0 || item.step === 1 || item.step === 8;
-              const icon = achieved ? "✅" : isEvent ? "🔒" : "○";
+              // Two-way visual under the sum-of-valid-steps model: a step
+              // is either achieved (contributes to exposure right now) or
+              // it isn't. The event-vs-live distinction (steps 0/1/8 were
+              // latched one-time triggers; 2-7 were per-bar conditions)
+              // used to render 🔒 vs ○ respectively — accurate but
+              // visually inconsistent, and the trigger mechanism doesn't
+              // matter to the trader: end of day the step is locked or
+              // unlocked, that's it. One icon per state.
+              const icon = achieved ? "✅" : "🔒";
               // Contribution under the sum model: every step contributes 20,
               // step 8 (Power-Trend) contributes 40. Total ceiling = 200 when
               // all nine validate. Pinned in the frontend rather than read
