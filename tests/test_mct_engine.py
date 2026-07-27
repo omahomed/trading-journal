@@ -911,7 +911,8 @@ def test_force_correction_today_stays_correction_when_close_qualifies_neither():
 def test_force_correction_no_op_when_date_absent_from_history():
     """If force_correction_at_date doesn't match any bar in the sliced
     history (e.g., stale override anchor), the engine runs normally and
-    no user_override CORRECTION_DECLARED is emitted."""
+    no user_override CORRECTION_DECLARED is emitted. force_correction_applied
+    stays False so the endpoint can distinguish 'applied' from 'pending'."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     closes = [110.0] * 5
@@ -933,3 +934,57 @@ def test_force_correction_no_op_when_date_absent_from_history():
         and s.meta.get("trigger") == "user_override"
     ]
     assert user_declared == []
+    assert result.final_state["force_correction_applied"] is False
+
+
+def test_force_correction_applied_flag_true_when_date_matches():
+    """Sanity — when Phase 3a fires, the final_state.force_correction_applied
+    latch flips True. Endpoint reads this off final_state to decide whether
+    to surface `override` (applied) vs `override_pending` (declared but
+    engine didn't see the date, typical yfinance ingest lag)."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    closes = [110.0] * 6
+    df = _synthetic_history(closes, ema_21=[110.0] * 6,
+                            sma_50=[100.0] * 6, sma_200=[95.0] * 6)
+    force_date = df["trade_date"].iloc[3]
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=force_date,
+    ))
+    result = engine.run(df)
+    assert result.final_state["force_correction_applied"] is True
+
+
+def test_force_correction_pending_when_date_after_history_end():
+    """The concrete data-lag scenario: user forces correction on 2026-07-27,
+    but market_data only has bars through 2026-07-24 (yfinance hasn't
+    ingested Monday's bar yet). force_correction_applied must stay False
+    so the endpoint surfaces `override_pending`, not a fake `override`.
+    Otherwise the M Factor page would report a bogus RALLY MODE Day 1
+    anchored on a bar the engine never actually processed."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # History ends 2026-01-10; override targets 2026-01-15 (in the future
+    # relative to the slice).
+    closes = [110.0] * 6
+    df = _synthetic_history(closes, ema_21=[110.0] * 6,
+                            sma_50=[100.0] * 6, sma_200=[95.0] * 6,
+                            start=date(2026, 1, 5))
+    future_date = date(2026, 1, 15)  # past the last bar (2026-01-10)
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=future_date,
+    ))
+    result = engine.run(df)
+    assert result.final_state["force_correction_applied"] is False
+    assert all(
+        s.meta.get("trigger") != "user_override"
+        for s in result.signals if s.signal_type == "CORRECTION_DECLARED"
+    )

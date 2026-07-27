@@ -338,6 +338,16 @@ class MCTEngine:
             # fires when any subsequent bar's low undercuts anchor by ≥1%.
             "trend_anchor_idx": None,
             "trend_sign": 0,
+
+            # Force-Correction override latch (migration 053). Flips True
+            # the first bar Phase 3a fires. Endpoint reads this off
+            # final_state to distinguish "override applied" from
+            # "override declared but engine has no bar for that date yet"
+            # (typical: yfinance lag — user forces correction Monday
+            # morning but Monday's ^IXIC bar isn't ingested until the
+            # afternoon cron). Also guards against double-firing across
+            # bars (idempotency).
+            "force_correction_applied": False,
         }
 
     # ------------------------------------------------------------------------
@@ -380,6 +390,7 @@ class MCTEngine:
         force_date = self.config.force_correction_at_date
         if (force_date is not None
                 and not state["correction_active"]
+                and not state["force_correction_applied"]
                 and current["trade_date"] == force_date):
             self._declare_correction_now(
                 current, state, bar_signals,
@@ -395,6 +406,7 @@ class MCTEngine:
                     "reference_high": state["reference_high"],
                 },
             )
+            state["force_correction_applied"] = True
 
         # Phase 3: correction declaration
         self._phase_declaration(current, state, bar_signals)

@@ -28,6 +28,13 @@ export type RallyState = {
     activated_date_ct: string;
     reason: string;
   } | null;
+  // Declared but engine hasn't seen a matching bar yet (typical: yfinance
+  // lag). UI treats this as "systematic state is live; override waiting."
+  override_pending?: {
+    id: number;
+    activated_date_ct: string;
+    reason: string;
+  } | null;
 };
 
 const V11_STATES = ["POWERTREND", "UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE", "CORRECTION"] as const;
@@ -71,6 +78,7 @@ export function useRallyState(): RallyState | null {
                 ? (r.systematic_state as RallyV11State)
                 : undefined,
             override: r.override ?? null,
+            override_pending: r.override_pending ?? null,
           });
         }
       })

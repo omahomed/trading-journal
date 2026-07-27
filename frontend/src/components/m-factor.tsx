@@ -208,6 +208,40 @@ export function MFactor({ navColor }: { navColor: string }) {
             {overrideClearing ? "Clearing…" : "Clear Override"}
           </button>
         </div>
+      ) : data.override_pending ? (
+        <div className="rounded-[14px] p-4 mb-6 flex items-start gap-3"
+             style={{ background: "color-mix(in oklab, #6b7280 8%, var(--surface))", border: "1.5px dashed #6b7280" }}>
+          <span
+            className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider shrink-0 mt-0.5"
+            style={{ background: "#6b7280", color: "#fff", letterSpacing: "0.06em" }}
+            aria-label="Override pending market data"
+          >
+            Pending
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+              Override declared for {data.override_pending.activated_date_ct} · waiting for market data
+            </div>
+            <div className="text-[12px] mt-1" style={{ color: "var(--ink-2)" }}>
+              <strong>Reason:</strong> {data.override_pending.reason}
+            </div>
+            <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>
+              The NASDAQ bar for {data.override_pending.activated_date_ct} hasn&apos;t landed in market_data yet
+              (yfinance usually publishes later in the day). Refresh once the bar is available and the override will
+              take effect. State + metrics above still reflect the systematic rule until then.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void clearOverride()}
+            disabled={overrideClearing}
+            data-testid="mct-override-clear-pending"
+            className="shrink-0 h-[32px] px-3 rounded-[8px] text-[12px] font-semibold transition-colors disabled:opacity-50"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+          >
+            {overrideClearing ? "Clearing…" : "Clear"}
+          </button>
+        </div>
       ) : (
         <div className="rounded-[14px] p-4 mb-6 flex items-center justify-between gap-3"
              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>

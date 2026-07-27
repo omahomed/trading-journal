@@ -1300,8 +1300,18 @@ export const api = {
     // Manual CORRECTION override overlay (Migration 053). When `override`
     // is non-null, `state` reflects "CORRECTION" (override wins) and
     // `systematic_state` carries what the engine would have said.
+    // `override_pending` is populated when the user declared an override
+    // but the engine's market_data slice hasn't ingested the override
+    // date yet (yfinance lag). In that state `override` stays null and
+    // `state` reflects the systematic path — the UI shows a "waiting for
+    // ingest" affordance instead of the applied ribbon.
     systematic_state?: "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
     override?: {
+      id: number;
+      activated_date_ct: string;
+      reason: string;
+    } | null;
+    override_pending?: {
       id: number;
       activated_date_ct: string;
       reason: string;

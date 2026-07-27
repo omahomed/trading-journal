@@ -3582,23 +3582,45 @@ def rally_prefix(as_of_date: str = ""):
                         as_of=as_of,
                         force_correction_at_date=override_date,
                     )
-                    overridden_response = to_rally_prefix_response(overridden_result)
-                    overridden_response = _project_rally_prefix_for_data_lag(overridden_response, as_of)
-                    overridden_response["systematic_state"] = systematic_state
-                    overridden_response["override"] = {
+                    # Only surface the override as "applied" when the
+                    # engine's Phase 3a actually fired on a matching bar.
+                    # When market_data hasn't ingested the override date
+                    # yet (yfinance lag — typical morning-of scenario),
+                    # the flag stays False; we return the systematic
+                    # response with `override_pending` instead so the UI
+                    # doesn't lie about a fresh RALLY MODE Day 1 rooted
+                    # in a bar that doesn't exist.
+                    applied = bool(overridden_result.final_state.get("force_correction_applied", False))
+                    if applied:
+                        overridden_response = to_rally_prefix_response(overridden_result)
+                        overridden_response = _project_rally_prefix_for_data_lag(overridden_response, as_of)
+                        overridden_response["systematic_state"] = systematic_state
+                        overridden_response["override"] = {
+                            "id": override["id"],
+                            "activated_date_ct": override["activated_date_ct"],
+                            "reason": override["reason"],
+                        }
+                        overridden_response["override_pending"] = None
+                        return overridden_response
+                    # Fall through: engine didn't see the override date.
+                    systematic_response["systematic_state"] = systematic_state
+                    systematic_response["override"] = None
+                    systematic_response["override_pending"] = {
                         "id": override["id"],
                         "activated_date_ct": override["activated_date_ct"],
                         "reason": override["reason"],
                     }
-                    return overridden_response
+                    return systematic_response
 
             systematic_response["systematic_state"] = systematic_state
             systematic_response["override"] = None
+            systematic_response["override_pending"] = None
             return systematic_response
         except Exception as e:
             print(f"[rally_prefix] override overlay failed: {e}")
             systematic_response.setdefault("systematic_state", systematic_state)
             systematic_response.setdefault("override", None)
+            systematic_response.setdefault("override_pending", None)
             return systematic_response
     except Exception as e:
         return {"prefix": "", "error": str(e)}
