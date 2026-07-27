@@ -3546,6 +3546,20 @@ def rally_prefix(as_of_date: str = ""):
             except ValueError:
                 as_of = None
 
+        # Best-effort ingest before the engine reads. Without this the
+        # M Factor page's Refresh button re-runs the engine against
+        # stale market_data — the ingest only runs from journal-stamp
+        # helpers, which don't fire on a plain M Factor page load. The
+        # _last_business_day post-close gate inside update_if_needed
+        # short-circuits pre-close calls, so this is safe to invoke on
+        # every request. Errors are swallowed — a network hiccup on
+        # yfinance must not break the endpoint.
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception as e:
+            print(f"[rally_prefix] update_if_needed failed: {e}")
+
         # Systematic run — always executed. `systematic_state` on the
         # response reflects what the engine says without the override.
         systematic_result = run_engine("^IXIC", as_of=as_of)
