@@ -17,6 +17,17 @@ export type RallyState = {
   // since last confirmed break). Null on pre-first-arm dates or when
   // the ^IXIC bar for today hasn't been ingested yet.
   trend_count?: number | null;
+  // Manual CORRECTION override overlay (Migration 053). When non-null,
+  // `state` above reflects "CORRECTION" (override wins) and
+  // `systematic_state` carries what the engine would have said. Every
+  // MCT badge that consumes this hook should render the OVERRIDE chrome
+  // when `override` is non-null.
+  systematic_state?: RallyV11State;
+  override?: {
+    id: number;
+    activated_date_ct: string;
+    reason: string;
+  } | null;
 };
 
 const V11_STATES = ["POWERTREND", "UPTREND", "UPTREND UNDER PRESSURE", "RALLY MODE", "CORRECTION"] as const;
@@ -55,6 +66,11 @@ export function useRallyState(): RallyState | null {
             power_trend_on_since: r.power_trend_on_since,
             ftd_date: r.ftd_date,
             trend_count: r.trend_count,
+            systematic_state:
+              r.systematic_state && (V11_STATES as readonly string[]).includes(r.systematic_state)
+                ? (r.systematic_state as RallyV11State)
+                : undefined,
+            override: r.override ?? null,
           });
         }
       })

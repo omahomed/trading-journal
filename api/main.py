@@ -3521,6 +3521,19 @@ def rally_prefix(as_of_date: str = ""):
     is projected forward — day_num is bumped by the trading-day delta,
     prefix is rebuilt accordingly, and `day_num_projected: true` flags the
     synthesis. See _project_rally_prefix_for_data_lag for the exact rule.
+
+    Migration 053 — user-declared CORRECTION override merges in here.
+    The `state` field on the response reflects the ACTIVE display state
+    (override wins over systematic when active). The systematic engine
+    output is preserved under `systematic_state` so downstream analytics
+    can still see the raw signal. `override` object exposes the reason +
+    activated_date_ct so pills / banners can render the taxed chrome.
+
+    Auto-clear: when the systematic engine returns POWERTREND / UPTREND
+    (market recovered) OR CORRECTION (rule caught up), an active override
+    is cleared with cleared_by='auto' before the response is built. The
+    idea is that the override is a way to get to CORRECTION early — once
+    the rule agrees or the market has recovered, it becomes noise.
     """
     try:
         from datetime import date as _date, datetime as _dt
@@ -3535,9 +3548,99 @@ def rally_prefix(as_of_date: str = ""):
 
         result = run_engine("^IXIC", as_of=as_of)
         response = to_rally_prefix_response(result)
-        return _project_rally_prefix_for_data_lag(response, as_of)
+        response = _project_rally_prefix_for_data_lag(response, as_of)
+
+        # Overlay the manual CORRECTION override. Best-effort — a bug
+        # in the override path must not break the pill for the whole app.
+        try:
+            systematic = response.get("state")
+            override = db.get_active_mct_override()
+            if override:
+                # Auto-clear check first — POWERTREND / UPTREND means the
+                # market recovered; CORRECTION means the rule caught up.
+                # Anything else (UUP, RALLY MODE) leaves the override
+                # in place until user manually clears.
+                if systematic in ("POWERTREND", "UPTREND", "CORRECTION"):
+                    db.clear_mct_override(cleared_by="auto")
+                    override = None
+            response["systematic_state"] = systematic
+            if override:
+                response["state"] = "CORRECTION"
+                response["override"] = {
+                    "id": override["id"],
+                    "activated_date_ct": override["activated_date_ct"],
+                    "reason": override["reason"],
+                }
+            else:
+                response["override"] = None
+        except Exception as e:
+            print(f"[rally_prefix] override overlay failed: {e}")
+            response.setdefault("systematic_state", response.get("state"))
+            response.setdefault("override", None)
+
+        return response
     except Exception as e:
         return {"prefix": "", "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M Factor Override — manual CORRECTION declaration (Migration 053).
+# See db_layer.get_active_mct_override / activate_mct_override / clear_mct_override
+# for the storage layer. The rally-prefix endpoint above is the single read
+# surface — pills / banners / M Factor page all consume it via useRallyState.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/mct/override")
+def mct_override_get(request: Request):
+    """Return the caller's currently-active override, or {override: null}."""
+    try:
+        return {"override": db.get_active_mct_override()}
+    except Exception as e:
+        print(f"[mct_override_get] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/mct/override")
+@limiter.limit("10/minute")
+def mct_override_activate(request: Request, body: dict = Body(...)):
+    """Activate a manual CORRECTION override. Body: {reason: string}.
+    Fails with 400-shaped {error} on empty / too-short reasons or when
+    an override is already active (client should GET first)."""
+    reason = str((body or {}).get("reason") or "")
+    try:
+        override = db.activate_mct_override(reason)
+        return {"status": "ok", "override": override}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"[mct_override_activate] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.post("/api/mct/override/clear")
+@limiter.limit("30/minute")
+def mct_override_clear(request: Request):
+    """Manually clear the caller's active override (no-op if none active)."""
+    try:
+        n = db.clear_mct_override(cleared_by="user")
+        return {"status": "ok", "cleared": n}
+    except Exception as e:
+        print(f"[mct_override_clear] handler failed: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/mct/override/history")
+@limiter.limit("30/minute")
+def mct_override_history(request: Request, limit: int = 50):
+    """Return the caller's override history, newest first. Not yet
+    surfaced in the UI (v1 discipline loop is: activate → auto-clear →
+    review manually via SQL). Endpoint is here so the future quarterly-
+    review page can consume it without another API round-trip."""
+    try:
+        return {"history": db.list_mct_override_history(limit=limit)}
+    except Exception as e:
+        print(f"[mct_override_history] handler failed: {e}")
+        return {"error": str(e)}
 
 
 @lru_cache(maxsize=1)

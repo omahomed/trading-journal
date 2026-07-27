@@ -1297,7 +1297,38 @@ export const api = {
       severity?: string;
       confirms_paths?: Array<{ trigger: string; target: string }>;
     }>;
+    // Manual CORRECTION override overlay (Migration 053). When `override`
+    // is non-null, `state` reflects "CORRECTION" (override wins) and
+    // `systematic_state` carries what the engine would have said.
+    systematic_state?: "POWERTREND" | "UPTREND" | "UPTREND UNDER PRESSURE" | "RALLY MODE" | "CORRECTION";
+    override?: {
+      id: number;
+      activated_date_ct: string;
+      reason: string;
+    } | null;
   }>(`/api/market/rally-prefix${as_of_date ? `?as_of_date=${encodeURIComponent(as_of_date)}` : ""}`),
+
+  // M Factor manual CORRECTION override (Migration 053). See
+  // /api/mct/override endpoints. Reason must be ≥40 characters; server
+  // enforces + returns {error} on violation.
+  mctOverrideGet: () =>
+    fetchJSON<{ override: { id: number; activated_at: string; activated_date_ct: string; reason: string } | null } | { error: string }>(
+      `/api/mct/override`,
+    ),
+  mctOverrideActivate: (reason: string) =>
+    fetchWithAuth(`${API_BASE}/api/mct/override`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    }).then(r => r.json()) as Promise<
+      | { status: "ok"; override: { id: number; activated_at: string; activated_date_ct: string; reason: string } }
+      | { error: string }
+    >,
+  mctOverrideClear: () =>
+    fetchWithAuth(`${API_BASE}/api/mct/override/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }).then(r => r.json()) as Promise<{ status: "ok"; cleared: number } | { error: string }>,
 
   marketSignals: (days = 30, signal_type?: string) => {
     const params = new URLSearchParams({ days: String(days) });

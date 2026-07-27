@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { CycleTrackerMethodology } from "@/components/cycle-tracker-methodology";
+
+const OVERRIDE_REASON_MIN = 40;
 
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
@@ -28,6 +30,13 @@ function LockIcon({ size = 11 }: { size?: number }) {
 export function MFactor({ navColor }: { navColor: string }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Override modal state — controls the Force Correction dialog. Kept
+  // local (single-use surface); no shared state store needed.
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideSubmitting, setOverrideSubmitting] = useState(false);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [overrideClearing, setOverrideClearing] = useState(false);
 
   const loadData = () => {
     setLoading(true);
@@ -38,6 +47,47 @@ export function MFactor({ navColor }: { navColor: string }) {
   };
 
   useEffect(() => { loadData(); }, []);
+
+  const submitOverride = useCallback(async () => {
+    const trimmed = overrideReason.trim();
+    if (trimmed.length < OVERRIDE_REASON_MIN) {
+      setOverrideError(`Reason must be at least ${OVERRIDE_REASON_MIN} characters (currently ${trimmed.length}).`);
+      return;
+    }
+    setOverrideSubmitting(true);
+    setOverrideError(null);
+    try {
+      const res = await api.mctOverrideActivate(trimmed);
+      if ("error" in res) {
+        setOverrideError(res.error);
+      } else {
+        setOverrideModalOpen(false);
+        setOverrideReason("");
+        loadData();
+      }
+    } catch (e) {
+      setOverrideError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOverrideSubmitting(false);
+    }
+  }, [overrideReason]);
+
+  const clearOverride = useCallback(async () => {
+    setOverrideClearing(true);
+    try {
+      const res = await api.mctOverrideClear();
+      if ("error" in res) {
+        // Surface via alert — rare enough that a modal / inline strip
+        // isn't worth the chrome.
+        log.error("m-factor", "mctOverrideClear failed", res.error);
+      }
+      loadData();
+    } catch (e) {
+      log.error("m-factor", "mctOverrideClear threw", e);
+    } finally {
+      setOverrideClearing(false);
+    }
+  }, []);
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
   if (!data || data.error) return <div className="text-center py-16" style={{ color: "var(--ink-4)" }}>{data?.error || "Unable to compute cycle state."}</div>;
@@ -113,6 +163,144 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="text-[12px] mt-1 opacity-70">Trend Cycle started {data.trend_cycle_start_date}</div>
         )}
       </div>
+
+      {/* ═══ Manual CORRECTION Override (Migration 053) ═══
+          The systematic rule requires 2 closes < 50 SMA + ≥10% depth. When
+          authoritative external signals (IBD exposure to 0-20%, NAAIM
+          collapse, etc.) call correction before the depth threshold hits,
+          this card lets the user force the state early. Auto-clears when
+          the systematic rule reaches POWERTREND / UPTREND (recovered) or
+          CORRECTION (rule caught up). See api/main.py:rally_prefix. */}
+      {data.override ? (
+        <div className="rounded-[14px] p-4 mb-6 flex items-start gap-3"
+             style={{ background: "color-mix(in oklab, #f59f00 10%, var(--surface))", border: "1.5px solid #f59f00" }}>
+          <span
+            className="inline-flex items-center px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider shrink-0 mt-0.5"
+            style={{ background: "#f59f00", color: "#000", letterSpacing: "0.06em" }}
+            aria-label="Override active"
+          >
+            Override
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+              You forced CORRECTION on {data.override.activated_date_ct}
+              {data.systematic_state && data.systematic_state !== "CORRECTION" && (
+                <span className="text-[11px] font-medium ml-2" style={{ color: "var(--ink-3)" }}>
+                  · systematic rule says {data.systematic_state}
+                </span>
+              )}
+            </div>
+            <div className="text-[12px] mt-1" style={{ color: "var(--ink-2)" }}>
+              <strong>Reason:</strong> {data.override.reason}
+            </div>
+            <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>
+              Auto-clears when the rule reaches POWERTREND / UPTREND (recovered) or CORRECTION (rule caught up).
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void clearOverride()}
+            disabled={overrideClearing}
+            data-testid="mct-override-clear"
+            className="shrink-0 h-[32px] px-3 rounded-[8px] text-[12px] font-semibold transition-colors disabled:opacity-50"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+          >
+            {overrideClearing ? "Clearing…" : "Clear Override"}
+          </button>
+        </div>
+      ) : (
+        <div className="rounded-[14px] p-4 mb-6 flex items-center justify-between gap-3"
+             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+              Force CORRECTION
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
+              Use when external signals (IBD exposure 0-20%, NAAIM collapse) call correction before the 10% depth threshold hits. Requires a written reason; visible to every screen while active.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => { setOverrideError(null); setOverrideReason(""); setOverrideModalOpen(true); }}
+            data-testid="mct-override-open"
+            className="shrink-0 h-[36px] px-4 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110"
+            style={{ background: "#e5484d" }}
+          >
+            Force Correction
+          </button>
+        </div>
+      )}
+
+      {/* Override modal — plain textarea + character counter + submit.
+          Reason ≥ 40 chars gate matches the server CHECK; both client
+          and server show the same failure so a slow network can't
+          silently accept a shorter reason. Backdrop clicks close only
+          when NOT submitting to avoid mid-request abandonment. */}
+      {overrideModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4"
+          style={{ background: "rgba(0,0,0,0.45)" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Force CORRECTION override"
+          onClick={() => { if (!overrideSubmitting) setOverrideModalOpen(false); }}
+        >
+          <div
+            className="w-full max-w-[520px] rounded-[14px] p-5"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 20px 40px rgba(0,0,0,0.3)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-[16px] font-semibold mb-1" style={{ color: "var(--ink-1)" }}>
+              Force CORRECTION state
+            </div>
+            <div className="text-[12px] mb-4" style={{ color: "var(--ink-3)" }}>
+              This overrides the systematic rule until it catches up or the market recovers. Write down what you're seeing — you'll see this reason in every review.
+            </div>
+            <textarea
+              value={overrideReason}
+              onChange={(e) => { setOverrideReason(e.target.value); setOverrideError(null); }}
+              placeholder="e.g. IBD moved exposure to 0-20% + NAAIM collapsed 30 points this week + 2 distribution days back-to-back on ^IXIC."
+              data-testid="mct-override-reason"
+              className="w-full px-3 py-2.5 rounded-[10px] text-[13px] outline-none"
+              rows={5}
+              style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.5, resize: "vertical" }}
+            />
+            <div className="flex items-center justify-between mt-2">
+              <div className="text-[11px]" style={{
+                color: overrideReason.trim().length >= OVERRIDE_REASON_MIN ? "#16a34a" : "var(--ink-4)"
+              }}>
+                {overrideReason.trim().length} / {OVERRIDE_REASON_MIN} chars minimum
+              </div>
+              {overrideError && (
+                <div className="text-[11px] font-medium" style={{ color: "#e5484d" }}>
+                  {overrideError}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => { if (!overrideSubmitting) setOverrideModalOpen(false); }}
+                disabled={overrideSubmitting}
+                className="h-[36px] px-4 rounded-[10px] text-[12px] font-medium disabled:opacity-50"
+                style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--ink-2)" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitOverride()}
+                disabled={overrideSubmitting || overrideReason.trim().length < OVERRIDE_REASON_MIN}
+                data-testid="mct-override-submit"
+                className="h-[36px] px-4 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                style={{ background: "#e5484d" }}
+              >
+                {overrideSubmitting ? "Activating…" : "Activate Override"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ Key Metrics ═══ */}
       <div className="grid grid-cols-5 gap-3 mb-6">

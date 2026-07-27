@@ -40,12 +40,13 @@ export function TapeStatusPill() {
 
   const style = STATE_STYLE[data.state];
   const detail = formatDetail(data);
+  const overrideActive = !!data.override;
 
   return (
     <Link
       href="/m-factor"
       className="flex items-center gap-1.5 h-[30px] px-3 rounded-full text-xs font-medium bg-[var(--surface)] border border-[var(--border)] text-[var(--ink-2)] hover:bg-[#eef0f6] transition-colors"
-      title="Open M Factor"
+      title={overrideActive ? `Override active — ${data.override?.reason}` : "Open M Factor"}
     >
       <span
         className="w-1.5 h-1.5 rounded-full"
@@ -59,9 +60,30 @@ export function TapeStatusPill() {
         {style.label}
         {detail ? ` · ${detail}` : ""}
       </span>
+      {overrideActive && <OverrideBadge />}
       <TrendCountChip trendCount={data.trend_count} />
       {data.cap_at_100 && <LockIcon />}
     </Link>
+  );
+}
+
+// OVERRIDE chip — sits next to the state label whenever a manual
+// CORRECTION override is active. Orange so it stands out against every
+// systematic state color; short label so it fits inside the pill on
+// smaller viewports.
+function OverrideBadge() {
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider"
+      style={{
+        background: "#f59f00",
+        color: "#000",
+        letterSpacing: "0.06em",
+      }}
+      title="You forced this state — clear on the M Factor page"
+    >
+      Override
+    </span>
   );
 }
 

@@ -37,12 +37,13 @@ export function MobileTapePill() {
   // the byte-identical value.
   const isUup = data.state === "UPTREND UNDER PRESSURE";
   const displayLabel = isUup ? "Uptrend · Pressure" : data.state;
+  const overrideActive = !!data.override;
 
   return (
     <Link
       href="/m-factor"
       className="flex items-center gap-2 rounded-m-pill border-[0.5px] border-m-purple-border bg-m-purple-tint px-3.5 py-2 text-xs"
-      aria-label={`Cycle: ${data.state}${detail ? `, ${detail}` : ""}`}
+      aria-label={`Cycle: ${data.state}${detail ? `, ${detail}` : ""}${overrideActive ? ` — override active` : ""}`}
     >
       <span
         className="h-1.5 w-1.5 rounded-full bg-m-purple"
@@ -50,6 +51,14 @@ export function MobileTapePill() {
         style={isUup ? { backgroundColor: "var(--m-warn-deep)" } : undefined}
       />
       <span className="font-medium text-m-purple-text">{displayLabel}</span>
+      {overrideActive && (
+        <span
+          className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+          style={{ background: "#f59f00", color: "#000", letterSpacing: "0.06em" }}
+        >
+          Override
+        </span>
+      )}
       {detail && (
         <>
           <span className="text-m-text-faint">·</span>

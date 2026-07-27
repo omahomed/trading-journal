@@ -3052,6 +3052,116 @@ def save_journal_entry(journal_entry):
             return row_id
 
 
+_MCT_OVERRIDE_REASON_MIN = 40
+
+
+def get_active_mct_override() -> dict | None:
+    """Return the caller's currently-active MCT override, or None if
+    they don't have one. RLS scopes to the caller. Uses the partial
+    unique index `(user_id) WHERE cleared_at IS NULL` — at most one
+    row can match."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, activated_at, activated_date_ct, reason "
+                "  FROM mct_overrides "
+                " WHERE cleared_at IS NULL "
+                " LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": int(row["id"]),
+                "activated_at": row["activated_at"].isoformat(),
+                "activated_date_ct": row["activated_date_ct"].isoformat(),
+                "reason": row["reason"],
+            }
+
+
+def activate_mct_override(reason: str) -> dict:
+    """Insert a new active override. Raises ValueError if a reason is
+    too short (< 40 chars, matching the DB CHECK) or if the caller
+    already has an active override (partial unique index would fire).
+    Returns the freshly-inserted row shape matching get_active_mct_override."""
+    reason = (reason or "").strip()
+    if len(reason) < _MCT_OVERRIDE_REASON_MIN:
+        raise ValueError(
+            f"reason must be at least {_MCT_OVERRIDE_REASON_MIN} characters"
+        )
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Explicit pre-check surfaces a cleaner error than the
+            # partial-index unique violation (which the caller would
+            # otherwise see as an opaque IntegrityError).
+            cur.execute(
+                "SELECT id FROM mct_overrides WHERE cleared_at IS NULL LIMIT 1"
+            )
+            if cur.fetchone():
+                raise ValueError("an override is already active — clear it first")
+            cur.execute(
+                "INSERT INTO mct_overrides (reason) VALUES (%s) "
+                "RETURNING id, activated_at, activated_date_ct, reason",
+                (reason,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return {
+                "id": int(row["id"]),
+                "activated_at": row["activated_at"].isoformat(),
+                "activated_date_ct": row["activated_date_ct"].isoformat(),
+                "reason": row["reason"],
+            }
+
+
+def clear_mct_override(cleared_by: str = "user") -> int:
+    """Clear the caller's active override (if any). `cleared_by` records
+    provenance for later analysis — 'user' when the button was pressed,
+    'auto' when the systematic rule caught up on a rally-prefix read.
+    Returns the number of rows cleared (0 or 1)."""
+    if cleared_by not in ("user", "auto"):
+        raise ValueError("cleared_by must be 'user' or 'auto'")
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE mct_overrides "
+                "   SET cleared_at = now(), cleared_by = %s "
+                " WHERE cleared_at IS NULL",
+                (cleared_by,),
+            )
+            n = cur.rowcount
+            conn.commit()
+            return int(n)
+
+
+def list_mct_override_history(limit: int = 50) -> list[dict]:
+    """Return the caller's override history, newest first. Powers the
+    later quarterly-review surface (not wired to a page yet in v1)."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, activated_at, activated_date_ct, "
+                "       cleared_at, cleared_date_ct, cleared_by, reason "
+                "  FROM mct_overrides "
+                " ORDER BY activated_at DESC "
+                " LIMIT %s",
+                (int(limit),),
+            )
+            rows = cur.fetchall()
+    out: list[dict] = []
+    for r in rows:
+        out.append({
+            "id": int(r["id"]),
+            "activated_at": r["activated_at"].isoformat(),
+            "activated_date_ct": r["activated_date_ct"].isoformat(),
+            "cleared_at": r["cleared_at"].isoformat() if r["cleared_at"] else None,
+            "cleared_date_ct": r["cleared_date_ct"].isoformat() if r["cleared_date_ct"] else None,
+            "cleared_by": r["cleared_by"],
+            "reason": r["reason"],
+        })
+    return out
+
+
 def save_journal_game_plan(portfolio_name: str, day: str, game_plan: str) -> int:
     """Idempotent write of just the game_plan column for a single portfolio+day.
 
