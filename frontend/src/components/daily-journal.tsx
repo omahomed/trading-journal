@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -518,35 +519,59 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
           </div>
         )}
 
-        {day && (
-          <>
-
-            {/* Section 1: Header Metrics */}
-            <div className="grid grid-cols-4 gap-3 mb-5">
-              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
-                <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(day.end_nlv || 0)}</div>
-              </div>
-              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Daily P&L</div>
+        {/* Section 1: Header Metrics — always render. Each tile shows its
+            value when the day's journal row exists; falls back to a dim
+            "—" placeholder otherwise. The Net Liquidity tile carries the
+            single "Log NLV →" call-to-action chip since it's the anchor
+            field that unblocks the other three tiles once saved. */}
+        <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Net Liquidity</div>
+            {day ? (
+              <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace" }}>{formatCurrency(day.end_nlv || 0)}</div>
+            ) : (
+              <>
+                <div className="text-[20px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+                <Link href="/nlv-entry"
+                      data-testid="kpi-log-nlv-link"
+                      className="inline-flex items-center gap-1 mt-1 text-[11px] font-medium hover:underline"
+                      style={{ color: navColor }}>
+                  Log NLV →
+                </Link>
+              </>
+            )}
+          </div>
+          <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[10px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-4)" }}>Daily P&L</div>
+            {day ? (
+              <>
                 <div className="text-[20px] font-semibold mt-1 privacy-mask" style={{ fontFamily: "var(--font-jetbrains), monospace", color: pctColor(day.daily_pct_change || 0) }}>
                   {formatCurrency(day.daily_dollar_change || 0, { showSign: true })}
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: pctColor(day.daily_pct_change || 0) }}>
                   {(day.daily_pct_change || 0) >= 0 ? "+" : ""}{(day.daily_pct_change || 0).toFixed(2)}%
                 </div>
-              </div>
-              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>MCT State</div>
-                {(day as any).market_cycle
-                  ? cycleBadge((day as any).market_cycle)
-                  : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
-              </div>
-              <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
-                <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Risk Status</div>
-                <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: riskColor, color: "#fff" }}>{riskMsg}</span>
-              </div>
-            </div>
+              </>
+            ) : (
+              <div className="text-[20px] font-semibold mt-1" style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-4)" }}>—</div>
+            )}
+          </div>
+          <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>MCT State</div>
+            {day && (day as any).market_cycle
+              ? cycleBadge((day as any).market_cycle)
+              : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
+          </div>
+          <div className="p-4 rounded-[12px]" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[10px] uppercase tracking-[0.08em] font-semibold mb-2" style={{ color: "var(--ink-4)" }}>Risk Status</div>
+            {day
+              ? <span className="px-3 py-1 rounded-[6px] text-[12px] font-bold" style={{ background: riskColor, color: "#fff" }}>{riskMsg}</span>
+              : <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>—</span>}
+          </div>
+        </div>
+
+        {day && (
+          <>
 
             {/* Section 2: Performance + Market Notes */}
             <div className="grid grid-cols-2 gap-4 mb-5">
