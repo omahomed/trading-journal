@@ -758,8 +758,12 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
             # Phase 7 — id surfaces the daily journal row's PK so TagPicker,
             # NotesRail, and SnapshotGallery on the daily report have an
             # entity_id to bind to. daily_thoughts is the rich-text body
-            # for the new Daily Thoughts editor (migration 031).
-            "daily_thoughts"]
+            # for the new Daily Thoughts editor (migration 031). game_plan
+            # is the pre-commit intent captured on the Daily Journal shell
+            # (migration 052) — only rendered inside the shell page; Journal
+            # Log historical browse ignores it.
+            "daily_thoughts",
+            "game_plan"]
     available_cols = [c for c in cols if c in df.columns]
     return _df_to_records(df[available_cols])
 
@@ -1583,6 +1587,90 @@ def journal_edit(entry: dict):
         return {"status": "ok", "id": row_id}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Game Plan — pre-commit intent for the next trading day (migration 052).
+#
+# Model: the plan lives on day X's journal row and represents what the user
+# intends to do the NEXT trading day. Editable until the next trading day
+# starts, in America/Chicago; after that the row is read-only forever so
+# retrospective review is honest.
+#
+# Lock rule (weekdays only for v1 — market holidays ignored):
+#   Mon-Thu plan → editable through end of that day (locks at X+1 00:00 CT)
+#   Fri plan → editable through end of Sunday (locks at Mon 00:00 CT)
+#   Sat/Sun plan → editable through end of Sunday (unusual; if the user
+#                   somehow files one, treat as a Fri-like weekend plan)
+#
+# The dedicated endpoint below owns lock enforcement; /api/journal/edit
+# (used by Manage Logs and older paths) does NOT enforce the window and
+# will keep working for backfills / imports / retroactive corrections
+# through the operator-facing edit form.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CT_ZONE_NAME = "America/Chicago"
+
+
+def _game_plan_lock_date(day_iso: str) -> date:
+    """Return the calendar date (America/Chicago) at which day_iso's plan
+    becomes locked. Editable while today_ct < return value.
+
+    Weekend rule: for a Friday, the next trading day is Monday, so the
+    plan stays editable Sat + Sun and locks at Mon 00:00. For Sat/Sun
+    (unusual), the lock is also the following Monday. Pure function of
+    the calendar; market holidays are deliberately not modelled in v1.
+    """
+    y, m, d = [int(x) for x in day_iso[:10].split("-")]
+    from datetime import date as _date, timedelta
+    base = _date(y, m, d)
+    # weekday(): Mon=0 .. Sun=6
+    wd = base.weekday()
+    if wd <= 3:              # Mon-Thu → +1
+        return base + timedelta(days=1)
+    if wd == 4:              # Fri → Mon (+3)
+        return base + timedelta(days=3)
+    if wd == 5:              # Sat → Mon (+2)
+        return base + timedelta(days=2)
+    return base + timedelta(days=1)  # Sun → Mon
+
+
+def _today_ct() -> date:
+    """Current date in America/Chicago. Matches routine_log's day-key
+    convention so same-day semantics stay consistent across features."""
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo(_CT_ZONE_NAME)).date()
+
+
+@app.post("/api/journal/game-plan")
+def journal_game_plan(entry: dict = Body(...)):
+    """Save the game_plan text for a journal day. Enforces the editable
+    window (see module comment above). Body: {portfolio, day, game_plan}.
+    Returns {"status": "ok", "id": row_id} on success, {"error": "..."}
+    on validation / lock failure."""
+    try:
+        portfolio = str(entry.get("portfolio") or "").strip()
+        day = str(entry.get("day") or "").strip()[:10]
+        game_plan = str(entry.get("game_plan") or "")
+        if not portfolio:
+            return {"error": "portfolio is required"}
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+            return {"error": "day must be YYYY-MM-DD"}
+        lock_date = _game_plan_lock_date(day)
+        today = _today_ct()
+        if today >= lock_date:
+            return {
+                "error": "game plan is locked for this day",
+                "locked_at": lock_date.isoformat(),
+                "today_ct": today.isoformat(),
+            }
+        row_id = db.save_journal_game_plan(portfolio, day, game_plan)
+        return {"status": "ok", "id": row_id}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"[journal_game_plan] handler failed: {e}")
+        return {"error": str(e)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

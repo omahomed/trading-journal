@@ -509,6 +509,10 @@ export interface JournalHistoryPoint {
   // for NLV only. Marked optional so pre-043 DBs (whose SELECT drops the
   // column via the information_schema gate) don't break the TS narrowing.
   trend_count?: number | null;
+  // Game plan text (migration 052). Empty/null both render as "unwritten"
+  // on the Daily Journal shell; the historical Journal Log ignores this
+  // field. Optional for the migration window.
+  game_plan?: string | null;
   [key: string]: any;
 }
 
@@ -734,6 +738,19 @@ export const api = {
 
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
+
+  // Game plan write (migration 052). Server enforces the editable window
+  // (Mon-Thu → same day; Fri → through Sun; Sat/Sun → through Sun). A
+  // locked-day write returns `{error: "...locked..."}` — the client also
+  // gates the textarea client-side so this path is defense in depth.
+  journalGamePlanSave: (portfolio: string, day: string, gamePlan: string) =>
+    fetchWithAuth(`${API_BASE}/api/journal/game-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio, day, game_plan: gamePlan }),
+    }).then(r => r.json()) as Promise<
+      { status: "ok"; id: number } | { error: string; locked_at?: string; today_ct?: string }
+    >,
 
   // Live Portfolio Heat snapshot for the Daily Journal card. Uses latest
   // saved end_nlv as denominator; returns 0 with nlv_used=0 for portfolios

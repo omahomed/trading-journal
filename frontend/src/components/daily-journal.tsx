@@ -23,6 +23,7 @@ import { TradingChecklist } from "./trading-checklist";
 import { SectionExpander } from "./section-expander";
 import { ScorecardMiniForm } from "./scorecard-mini-form";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES, todayInChicago } from "@/lib/routine-autotick";
+import { isGamePlanEditable } from "@/lib/game-plan";
 import { SCORECARD_CATEGORIES } from "@/lib/scorecard";
 import { SnapshotGallery } from "./snapshot-gallery";
 
@@ -95,6 +96,14 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
   const dailyThoughtsDirtyRef = useRef(false);
   const [savingThoughts, setSavingThoughts] = useState(false);
   const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Game Plan (migration 052). Pre-commit intent for the next trading day.
+  // Explicit Save (no auto-save) so committing feels like an act. Editable
+  // window is enforced by isGamePlanEditable(selectedDate, todayInChicago());
+  // server-side rule matches — see api/main.py:_game_plan_lock_date.
+  const [gamePlan, setGamePlan] = useState("");
+  const [gamePlanDirty, setGamePlanDirty] = useState(false);
+  const [savingGamePlan, setSavingGamePlan] = useState(false);
+  const [gamePlanMsg, setGamePlanMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [recapMode, setRecapMode] = useState<"edit" | "preview">(() => {
     if (typeof window === "undefined") return "edit";
     const v = window.localStorage.getItem("dailyReport.thoughtsMode");
@@ -237,16 +246,68 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
   // flags here makes sure the debounced auto-save effect below doesn't
   // immediately re-save on initial hydration.
   useEffect(() => {
-    if (!selectedDate || history.length === 0) {
-      setRecap(""); setDailyThoughts("");
+    if (!selectedDate) {
+      setRecap(""); setDailyThoughts(""); setGamePlan("");
+      setGamePlanDirty(false); setGamePlanMsg(null);
+      return;
+    }
+    // Note: game_plan can exist on a row that has no NLV yet (created via
+    // /api/journal/game-plan before NLV Entry saves), so we don't gate on
+    // history.length here — history may not contain the row until the
+    // first reload post-save. For the initial no-history render, resetting
+    // to empty is correct; the reload post-save will hydrate the actual value.
+    if (history.length === 0) {
+      setRecap(""); setDailyThoughts(""); setGamePlan("");
+      setGamePlanDirty(false); setGamePlanMsg(null);
       return;
     }
     const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
     setRecap(entry?.lowlights || "");
     setDailyThoughts(entry?.daily_thoughts || "");
+    setGamePlan(entry?.game_plan || "");
+    setGamePlanDirty(false);
+    setGamePlanMsg(null);
     setRecapDirty(false);
     dailyThoughtsDirtyRef.current = false;
   }, [selectedDate, history]);
+
+  // Game Plan save — explicit button (no auto-save). On success we optimistically
+  // patch the local history row so the section immediately reflects the new
+  // value; also reloads the full row on the next visit / refresh.
+  const saveGamePlan = useCallback(async () => {
+    if (!selectedDate || !gamePlanDirty) return;
+    setSavingGamePlan(true);
+    setGamePlanMsg(null);
+    try {
+      const res = await api.journalGamePlanSave(portfolio, selectedDate, gamePlan);
+      if ("error" in res) {
+        setGamePlanMsg({ ok: false, text: res.error });
+      } else {
+        setGamePlanDirty(false);
+        setGamePlanMsg({ ok: true, text: "saved" });
+        setHistory(prev => {
+          const idx = prev.findIndex(h => String(h.day).slice(0, 10) === selectedDate);
+          if (idx >= 0) {
+            const copy = prev.slice();
+            copy[idx] = { ...copy[idx], game_plan: gamePlan } as any;
+            return copy;
+          }
+          // No prior history row → synthesize one so future renders find it
+          // instead of falling through to the empty state.
+          return [
+            ...prev,
+            { id: res.id, day: selectedDate, game_plan: gamePlan } as any,
+          ];
+        });
+        // Clear the transient "saved" chip after a moment.
+        window.setTimeout(() => setGamePlanMsg(null), 2000);
+      }
+    } catch (e) {
+      setGamePlanMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSavingGamePlan(false);
+    }
+  }, [gamePlan, gamePlanDirty, portfolio, selectedDate]);
 
   // Auto-save dailyThoughts via debounced effect. Mirrors the weekly-
   // retro pattern: dirtyRef gates the effect so the initial hydration
@@ -783,6 +844,83 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
             <TradingChecklist key={reloadCounter} navColor={navColor} />
           </div>
         </SectionExpander>
+
+        {/* Game Plan (migration 052) — pre-commit intent for the NEXT
+            trading day. Editable only during today's editable window
+            (Mon-Thu: that day; Fri: through Sun 23:59 CT). Once locked
+            the section renders read-only so retrospective review is
+            honest. Sits between Checklist and Daily Scorecard per user
+            spec 2026-07-26. */}
+        {(() => {
+          const editable = isGamePlanEditable(selectedDate, todayInChicago());
+          const trimmed = gamePlan.trim();
+          const wordCount = trimmed ? trimmed.split(/\s+/).length : 0;
+          const caption = editable
+            ? (trimmed ? `${wordCount} words · editable today` : "unwritten · editable today")
+            : (trimmed ? `${wordCount} words · locked` : "no plan · locked");
+          return (
+            <SectionExpander
+              title="Game Plan"
+              defaultExpanded={editable || !!trimmed}
+              localStorageKey="mo-daily-journal-game-plan-expanded"
+              showDot
+              headerCaption={() => caption}>
+              <div className="p-4 flex flex-col gap-3">
+                <div className="text-[11px]" style={{ color: "var(--ink-4)" }}>
+                  {editable
+                    ? "What am I doing tomorrow? Positions to watch, planned buys/trims — or \"no action, monitoring only.\" Locks at midnight CT before the next trading day."
+                    : (
+                      <span className="inline-flex items-center gap-1">
+                        <span aria-hidden>🔒</span>
+                        <span>Locked — window closed. This is what was committed at the time.</span>
+                      </span>
+                    )}
+                </div>
+                {editable ? (
+                  <>
+                    <textarea
+                      value={gamePlan}
+                      data-testid="game-plan-textarea"
+                      onChange={e => { setGamePlan(e.target.value); setGamePlanDirty(true); }}
+                      placeholder="e.g. Watching AMZN + NVDA for follow-through. No adds unless SPY reclaims 21EMA. If AXON breaks $850, trim 30%. Otherwise: hands off."
+                      className="w-full px-3.5 py-3 rounded-[10px] text-[13px] outline-none"
+                      style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", fontFamily: "inherit", lineHeight: 1.6, minHeight: 140 }}
+                    />
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void saveGamePlan()}
+                        disabled={savingGamePlan || !gamePlanDirty}
+                        data-testid="game-plan-save"
+                        className="h-[36px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                        style={{ background: navColor }}>
+                        {savingGamePlan ? "Saving..." : "Save Game Plan"}
+                      </button>
+                      {gamePlanMsg && (
+                        <span className="text-[12px] font-medium" style={{ color: gamePlanMsg.ok ? "#16a34a" : "#e5484d" }}>
+                          {gamePlanMsg.ok ? "✓" : "✗"} {gamePlanMsg.text}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div
+                    className="px-4 py-3 rounded-[10px] text-[13px] whitespace-pre-wrap"
+                    style={{
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      color: trimmed ? "var(--ink)" : "var(--ink-4)",
+                      fontStyle: trimmed ? "normal" : "italic",
+                      lineHeight: 1.6,
+                      minHeight: 60,
+                    }}>
+                    {trimmed || "No plan was set for this day."}
+                  </div>
+                )}
+              </div>
+            </SectionExpander>
+          );
+        })()}
 
         {day && (
           <>

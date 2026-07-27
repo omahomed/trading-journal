@@ -703,6 +703,18 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 except Exception:
                     has_daily_thoughts = False
                 daily_thoughts_select = 'j.daily_thoughts AS "daily_thoughts",\n                        ' if has_daily_thoughts else ''
+                # Migration 052 game_plan column. Same detection gate as the
+                # earlier optional columns above — pre-052 DBs won't have it,
+                # so we omit the SELECT clause rather than 500.
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'game_plan'"
+                    )
+                    has_game_plan = cur.fetchone() is not None
+                except Exception:
+                    has_game_plan = False
+                game_plan_select = 'j.game_plan AS "game_plan",\n                        ' if has_game_plan else ''
                 # j.id is required by the Phase 7 rail/tag/capture mounts in
                 # daily-report-card.tsx (TagPicker.entity_id, capture parent
                 # FK, NotesRail row id). Snake-case alias passes through
@@ -713,7 +725,7 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        {cycle_select}{day_num_select}{trend_count_select}{daily_thoughts_select}j.above_21ema AS "> 21e",
+                        {cycle_select}{day_num_select}{trend_count_select}{daily_thoughts_select}{game_plan_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
@@ -3037,6 +3049,61 @@ def save_journal_entry(journal_entry):
             # Clear cache so next load gets fresh data
             load_journal.clear()
 
+            return row_id
+
+
+def save_journal_game_plan(portfolio_name: str, day: str, game_plan: str) -> int:
+    """Idempotent write of just the game_plan column for a single portfolio+day.
+
+    Two-path upsert so a plan can be captured for a day whose full journal
+    row doesn't exist yet (typical: user opens Daily Journal in the morning
+    and writes the plan before NLV Entry saves). A fresh INSERT populates
+    only (portfolio_id, day, game_plan); the schema defaults handle the
+    other columns (all numerics default 0, text columns nullable). On
+    later NLV Entry save, save_journal_entry finds the row and UPDATEs
+    the metric columns — game_plan is untouched because save_journal_entry's
+    explicit column list doesn't include it, so the two writers can't
+    clobber each other.
+
+    Lock-window enforcement lives in api/main.py (POST /api/journal/game-plan)
+    since it needs America/Chicago clock and calendar. This function only
+    persists — retroactive corrections outside the window remain possible
+    for backfills / migrations that go directly through the helper.
+
+    Returns the row id. RLS scopes to the caller via get_db_connection.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            result = cur.fetchone()
+            if not result:
+                raise ValueError(f"Portfolio '{portfolio_name}' not found")
+            portfolio_id = result[0]
+
+            cur.execute(
+                "SELECT id FROM trading_journal "
+                " WHERE portfolio_id = %s AND day = %s AND deleted_at IS NULL",
+                (portfolio_id, day),
+            )
+            existing = cur.fetchone()
+            if existing:
+                cur.execute(
+                    "UPDATE trading_journal "
+                    "   SET game_plan = %s, updated_at = NOW() "
+                    " WHERE id = %s "
+                    " RETURNING id",
+                    (game_plan, existing[0]),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO trading_journal (portfolio_id, day, game_plan) "
+                    " VALUES (%s, %s, %s) "
+                    " RETURNING id",
+                    (portfolio_id, day, game_plan),
+                )
+            row_id = int(cur.fetchone()[0])
+            conn.commit()
+            load_journal.clear()
             return row_id
 
 
