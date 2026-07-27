@@ -115,6 +115,36 @@ describe("PortfolioHeat — batch lookup", () => {
     expect(banner).toHaveTextContent(/Could not load price data/);
   });
 
+  test("renders empty state instead of fake $100k when journal has no NLV", async () => {
+    // Historical bug: journalLatest returning {"error": "No journal data"}
+    // caused a silent `|| 100000` fallback in the render path, so the page
+    // showed EQUITY BASIS = $100,000 and weights summing to 200%+ against
+    // that fake basis. Trigger for the regression was migration 054 (LTG
+    // reset) which intentionally wipes trading_journal — every downstream
+    // consumer of end_nlv is now expected to bail rather than fake.
+    mockedJournalLatest.mockResolvedValue({ error: "No journal data" } as any);
+    render(<PortfolioHeat navColor="#6366f1" />);
+
+    // Empty state renders with the actionable Log-NLV CTA.
+    expect(await screen.findByText(/No NLV logged for CanSlim/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Log NLV/i })).toHaveAttribute("href", "/nlv-entry");
+
+    // Zero fake numbers on the page: no EQUITY BASIS tile, no heat table.
+    expect(screen.queryByText(/EQUITY BASIS/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$100,000/)).not.toBeInTheDocument();
+
+    // Belt-and-suspenders: the ATR batch fetch must NOT fire either — the
+    // page is bailing before it can compute anything against a missing NLV.
+    expect(mockedPriceLookupBatch).not.toHaveBeenCalled();
+  });
+
+  test("renders empty state when journalLatest rejects (network failure)", async () => {
+    mockedJournalLatest.mockRejectedValue(new Error("500 boom"));
+    render(<PortfolioHeat navColor="#6366f1" />);
+    expect(await screen.findByText(/No NLV logged for CanSlim/i)).toBeInTheDocument();
+    expect(mockedPriceLookupBatch).not.toHaveBeenCalled();
+  });
+
   test("non-ok summary in header subtitle when statuses are mixed", async () => {
     mockedPriceLookupBatch.mockResolvedValue({
       results: [

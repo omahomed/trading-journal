@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -54,7 +55,13 @@ type BatchFailure = "rate_limited" | "error" | null;
 
 export function PortfolioHeat({ navColor }: { navColor: string }) {
   const [positions, setPositions] = useState<TradePosition[]>([]);
-  const [equity, setEquity] = useState(0);
+  const [equity, setEquity] = useState<number | null>(null);
+  // null (initial) vs. false (fetch ran, no NLV available) — distinguishes
+  // "still loading" from "loaded and confirmed missing." The empty state
+  // renders only in the latter case so we don't flash it during the initial
+  // fetch. Historical fake $100k fallback (deleted) hid this state entirely.
+  const [nlvMissing, setNlvMissing] = useState(false);
+  const [activePortfolio, setActivePortfolio] = useState("");
   const [heatData, setHeatData] = useState<HeatRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
@@ -73,14 +80,21 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   const HEAT_THRESHOLD = 20; // default from app_config
 
   useEffect(() => {
+    const portfolio = getActivePortfolio();
+    setActivePortfolio(portfolio);
     Promise.all([
-      api.tradesOpen(getActivePortfolio()).catch((err) => {
+      api.tradesOpen(portfolio).catch((err) => {
         log.error("portfolio-heat", "tradesOpen fetch failed", err);
         return [];
       }),
-      api.journalLatest(getActivePortfolio()).catch((err) => {
+      // No silent NLV fallback — the earlier `|| 100000` default masked
+      // real empty-journal state (e.g. right after a portfolio reset that
+      // wipes trading_journal). Any failure or "no data" here surfaces as
+      // an actionable empty state so the page can't quietly render weights
+      // + heat against a fake equity basis.
+      api.journalLatest(portfolio).catch((err) => {
         log.error("portfolio-heat", "journalLatest fetch failed", err);
-        return { end_nlv: 100000 };
+        return null as unknown as { end_nlv?: number; error?: string };
       }),
     ]).then(([open, journal]) => {
       const openArr = open as TradePosition[];
@@ -89,7 +103,14 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
       // (table, manual-ATR grid, totals) reads `positions` already filtered.
       const stockPositions = openArr.filter(t => !isOptionRow(t));
       setPositions(stockPositions);
-      const eq = parseFloat(String((journal as any).end_nlv || 100000));
+
+      const rawNlv = (journal as any)?.end_nlv;
+      const eq = rawNlv != null ? parseFloat(String(rawNlv)) : NaN;
+      if (!Number.isFinite(eq) || eq <= 0) {
+        setNlvMissing(true);
+        setLoading(false);
+        return;
+      }
       setEquity(eq);
       setLoading(false);
 
@@ -167,13 +188,15 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   };
 
   const computeManualHeat = () => {
+    if (equity == null || equity <= 0) return;
+    const eq = equity;
     const results: HeatRow[] = positions.map(t => {
       const totalCost = parseFloat(String(t.total_cost || 0));
       const price = prices.get(t.ticker);
       const marketValue = price && t.shares
         ? Number(t.shares) * price
         : totalCost;
-      const weightPct = equity > 0 ? (marketValue / equity) * 100 : 0;
+      const weightPct = (marketValue / eq) * 100;
       const atrPct = parseFloat(manualAtr[t.ticker] || "5") || 5;
       return {
         ticker: t.ticker,
@@ -193,6 +216,39 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
+  }
+
+  // Empty state: no NLV logged for the active portfolio (or journalLatest
+  // failed). Bail hard — a page that shows "$100k equity basis" when the
+  // real number is unknown is worse than no page, because every derived
+  // number (weight %, heat contribution, total heat) is silently wrong.
+  if (nlvMissing) {
+    return (
+      <div style={{ animation: "slide-up 0.18s ease-out" }}>
+        <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
+          <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Portfolio <em className="italic" style={{ color: navColor }}>Heat</em>
+          </h1>
+        </div>
+        <div className="rounded-[14px] p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="text-[15px] font-medium mb-2" style={{ color: "var(--ink-1)" }}>
+            No NLV logged for {activePortfolio || "this portfolio"}
+          </div>
+          <div className="text-[13px] mb-4" style={{ color: "var(--ink-3)" }}>
+            Portfolio Heat needs today&apos;s NLV to compute weight % and
+            per-position heat contribution. Log one and this page will
+            populate on refresh.
+          </div>
+          <Link
+            href="/nlv-entry"
+            className="inline-flex items-center gap-1.5 h-[36px] px-4 rounded-[10px] text-[13px] font-medium"
+            style={{ background: navColor, color: "white" }}
+          >
+            Log NLV →
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   // Only "ok" rows contribute to totalHeat / avgVol. Other statuses
@@ -249,7 +305,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
       {/* Mode selector */}
       <div className="flex gap-2 mb-6">
-        <button onClick={() => { setMode("auto"); if (positions.length > 0) fetchATR(positions, equity); }}
+        <button onClick={() => { setMode("auto"); if (positions.length > 0 && equity != null) fetchATR(positions, equity); }}
                 className="h-[36px] px-4 rounded-[10px] text-[12px] font-semibold transition-all cursor-pointer"
                 style={{
                   background: mode === "auto" ? `color-mix(in oklab, ${navColor} 10%, transparent)` : "var(--bg)",
@@ -325,7 +381,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
             />
             <KPITile
               label="EQUITY BASIS"
-              value={formatCurrency(equity, { decimals: 0 })}
+              value={equity != null ? formatCurrency(equity, { decimals: 0 }) : "—"}
               sub=""
               gradient="linear-gradient(135deg, #1e40af, #3b82f6)"
             />
