@@ -58,7 +58,17 @@ def client(monkeypatch):
 
 
 def _row(day: str, end_nlv, **extras):
-    return {"day": pd.Timestamp(day), "end_nlv": end_nlv, **extras}
+    # beg_nlv + cash_change are what journal_history reads to build the
+    # adjusted_beg / daily_return / twr_curve chain. Default them to 0
+    # so tests don't have to specify every column just to hit the filter.
+    base = {
+        "day": pd.Timestamp(day),
+        "end_nlv": end_nlv,
+        "beg_nlv": end_nlv if end_nlv is not None else 0,
+        "cash_change": 0,
+    }
+    base.update(extras)
+    return base
 
 
 def test_latest_row_with_nlv_wins_over_newer_row_without_nlv(client):
@@ -138,3 +148,91 @@ def test_returns_error_when_journal_totally_empty(client):
     client.set_history([])  # type: ignore[attr-defined]
     body = client.get("/api/journal/latest?portfolio=CanSlim").json()
     assert body == {"error": "No journal data"}
+
+
+# ---------------------------------------------------------------------------
+# /api/journal/history — same NLV-bearing filter, applied to the list view
+# ---------------------------------------------------------------------------
+
+def test_history_hides_hollow_game_plan_rows(client):
+    """Regression: Journal Log shouldn't show a phantom row for today
+    when the only writer that touched today's journal was
+    save_journal_game_plan (draft auto-save with no NLV logged yet).
+    Backend filters at /api/journal/history so the frontend doesn't
+    have to re-implement the "is this a real logged day" check."""
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-25", 52450.0),
+        _row("2026-07-27", None),  # hollow Game Plan row
+    ])
+    body = client.get("/api/journal/history?portfolio=CanSlim&days=0").json()
+    assert isinstance(body, list)
+    days = [str(r["day"])[:10] for r in body]
+    assert "2026-07-27" not in days
+    assert "2026-07-25" in days
+
+
+def test_history_hides_zero_nlv_rows(client):
+    """Zero-NLV rows are also treated as unlogged — same rule as the
+    latest endpoint, so an accidental $0 save doesn't sneak into the
+    historical browse."""
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-25", 52450.0),
+        _row("2026-07-27", 0.0),
+    ])
+    body = client.get("/api/journal/history?portfolio=CanSlim&days=0").json()
+    days = [str(r["day"])[:10] for r in body]
+    assert "2026-07-27" not in days
+
+
+def test_history_returns_empty_when_no_row_has_nlv(client):
+    """All rows hollow (draft-only portfolio) → empty list, not a mix
+    of $0 rows the frontend has to guess-filter."""
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-25", None),
+        _row("2026-07-27", None),
+    ])
+    body = client.get("/api/journal/history?portfolio=CanSlim&days=0").json()
+    assert body == []
+
+
+# ---------------------------------------------------------------------------
+# /api/portfolio/heat-preview — same NLV-bearing filter
+# ---------------------------------------------------------------------------
+
+def test_heat_preview_walks_back_past_hollow_game_plan_row(client, monkeypatch):
+    """Regression: NLV Entry's heat tile was reading 0.00% because a
+    same-day hollow Game Plan row was picked as the "latest" and its
+    end_nlv=None became 0. Walk back to the last NLV-bearing row so the
+    preview matches the Portfolio Heat page — both endpoints agree on
+    what "current equity" means."""
+    import api.main as main
+    # Stub the heat computation so the test is deterministic and doesn't
+    # depend on yfinance. Assert the endpoint passed our real NLV through.
+    captured = {}
+    def fake_heat(portfolio, as_of, equity):
+        captured["equity"] = equity
+        return 12.34
+    monkeypatch.setattr(main, "_compute_portfolio_heat", fake_heat)
+
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-25", 52450.0),
+        _row("2026-07-27", None),  # hollow Game Plan row would blank preview
+    ])
+    body = client.get("/api/portfolio/heat-preview?portfolio=CanSlim").json()
+    assert body["nlv_used"] == 52450.0
+    assert body["heat"] == 12.34
+    assert captured["equity"] == 52450.0
+
+
+def test_heat_preview_returns_zero_when_no_row_has_nlv(client, monkeypatch):
+    """Truly-empty portfolio → 0/0 response. Belt-and-suspenders: the
+    heat computation must not be invoked (no basis to compute against)."""
+    import api.main as main
+    heat_called = []
+    monkeypatch.setattr(main, "_compute_portfolio_heat",
+                        lambda *a, **kw: (heat_called.append(1), 99.0)[1])
+
+    client.set_history([_row("2026-07-27", None)])  # type: ignore[attr-defined]
+    body = client.get("/api/portfolio/heat-preview?portfolio=CanSlim").json()
+    assert body == {"heat": 0.0, "nlv_used": 0.0, "portfolio": "CanSlim"}
+    assert heat_called == []

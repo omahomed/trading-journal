@@ -681,12 +681,16 @@ def mindset_traps(request: Request, portfolio: str = "CanSlim", weeks: int = 8):
 def portfolio_heat_preview(portfolio: str = "CanSlim"):
     """Live Portfolio Heat snapshot for the Daily Routine tile.
 
-    Recomputes _compute_portfolio_heat against the latest saved end_nlv so
-    the Daily Routine card can preview "what my risk looks like right now"
-    before the user finalises today's save. If the user hasn't saved a
-    journal row yet, returns 0 with nlv_used=0. If yfinance is offline,
-    _compute_portfolio_heat returns 0 (same silent-fail contract as the
-    stamp path).
+    Recomputes _compute_portfolio_heat against the latest KNOWN end_nlv
+    so the Daily Routine card can preview "what my risk looks like right
+    now" before the user finalises today's save. Walks back to the last
+    NLV-bearing row (same rule as /api/journal/latest) so a same-day
+    hollow row — e.g. a Game Plan auto-save that inserts (portfolio_id,
+    day, game_plan) with no NLV — doesn't blank out the tile.
+
+    Returns 0 with nlv_used=0 only when the portfolio has zero NLV
+    history at all. yfinance-offline still returns 0 via the silent-fail
+    contract inside _compute_portfolio_heat.
     """
     try:
         df = db.load_journal(portfolio)
@@ -694,6 +698,15 @@ def portfolio_heat_preview(portfolio: str = "CanSlim"):
             return {"heat": 0.0, "nlv_used": 0.0, "portfolio": portfolio}
         df = _normalize_journal(df)
         df["day"] = pd.to_datetime(df["day"], errors="coerce")
+        # NLV-bearing filter — matches journal_latest's contract so both
+        # endpoints agree on "what's the last real NLV." Without this
+        # filter, a hollow Game Plan row inserted for today gets picked as
+        # iloc[0] and its 0/NaN end_nlv silently zeros the preview.
+        if "end_nlv" in df.columns:
+            nlv_num = pd.to_numeric(df["end_nlv"], errors="coerce")
+            df = df[nlv_num.notna() & (nlv_num > 0)]
+        if df.empty:
+            return {"heat": 0.0, "nlv_used": 0.0, "portfolio": portfolio}
         df = df.sort_values("day", ascending=False)
         equity = float(df.iloc[0].get("end_nlv", 0) or 0)
         if equity <= 0:
@@ -707,13 +720,30 @@ def portfolio_heat_preview(portfolio: str = "CanSlim"):
 
 @app.get("/api/journal/history")
 def journal_history(portfolio: str = "CanSlim", days: int = 365):
-    """Get journal history for equity curve."""
+    """Get journal history for equity curve.
+
+    Filters to LOGGED days (rows with a real end_nlv). A hollow row —
+    created by save_journal_game_plan when the trader drafts a plan for
+    today before NLV Entry has run — is a Game Plan draft, not a
+    journaled day, and shouldn't inflate the Journal Log's entry count
+    or leave a $0-NLV row visible in the historical browse. The row
+    itself stays in the DB and gets promoted to a real logged day the
+    moment save_journal_entry lands NLV / metrics on it.
+    """
     df = db.load_journal(portfolio)
     if df.empty:
         return []
     df = _normalize_journal(df)
     df["day"] = pd.to_datetime(df["day"], errors="coerce")
     df = df.sort_values("day")
+
+    # Hollow-row filter — see docstring. Applies BEFORE _heal_recent_mct_stamps
+    # so the heal doesn't waste an engine replay on rows we're about to drop.
+    if "end_nlv" in df.columns:
+        nlv_num = pd.to_numeric(df["end_nlv"], errors="coerce")
+        df = df[nlv_num.notna() & (nlv_num > 0)]
+    if df.empty:
+        return []
 
     # Self-heal MCT badge fields for recent rows whose stamp is NULL because
     # they were saved before the engine had their bar (typical: today's
