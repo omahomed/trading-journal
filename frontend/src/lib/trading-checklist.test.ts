@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { RoutineItem } from "@/lib/api";
 import {
+  computeReorderSwap,
   countTodayDue,
   formatGroupLabel,
   formatShortDate,
@@ -203,5 +204,78 @@ describe("countTodayDue", () => {
     expect(counts).toEqual({
       premarket: 0, intraday: 0, end_of_shift: 0, after_close: 0, total: 0,
     });
+  });
+});
+
+describe("computeReorderSwap", () => {
+  // System items always occupy the top of a group (fixed sort_orders 10, 20,
+  // 30…); custom items follow (50, 60, 70…). The helper only touches custom
+  // rows within the same (frequency, slot) group.
+  const items: RoutineItem[] = [
+    makeItem({ id: 1, name: "Sys A", is_system: true,  sort_order: 10 }),
+    makeItem({ id: 2, name: "Sys B", is_system: true,  sort_order: 20 }),
+    makeItem({ id: 3, name: "Cust 1", is_system: false, sort_order: 50 }),
+    makeItem({ id: 4, name: "Cust 2", is_system: false, sort_order: 60 }),
+    makeItem({ id: 5, name: "Cust 3", is_system: false, sort_order: 70 }),
+    // Different group (weekly · weekend) — should never appear in a swap.
+    makeItem({ id: 6, name: "Weekly custom", is_system: false, frequency: "weekly", slot: "weekend", sort_order: 10 }),
+  ];
+
+  it("moves middle custom up by swapping sort_order with prior custom sibling", () => {
+    const swap = computeReorderSwap(items, 4, "up");
+    expect(swap).toEqual([
+      { id: 4, sort_order: 50 },
+      { id: 3, sort_order: 60 },
+    ]);
+  });
+
+  it("moves middle custom down by swapping sort_order with next custom sibling", () => {
+    const swap = computeReorderSwap(items, 4, "down");
+    expect(swap).toEqual([
+      { id: 4, sort_order: 70 },
+      { id: 5, sort_order: 60 },
+    ]);
+  });
+
+  it("top custom cannot move up → null", () => {
+    expect(computeReorderSwap(items, 3, "up")).toBeNull();
+  });
+
+  it("bottom custom cannot move down → null", () => {
+    expect(computeReorderSwap(items, 5, "down")).toBeNull();
+  });
+
+  it("system item → null (never movable)", () => {
+    expect(computeReorderSwap(items, 1, "up")).toBeNull();
+    expect(computeReorderSwap(items, 2, "down")).toBeNull();
+  });
+
+  it("unknown id → null", () => {
+    expect(computeReorderSwap(items, 999, "up")).toBeNull();
+  });
+
+  it("does not cross group boundaries (weekly custom stays isolated)", () => {
+    // id=6 is the only custom item in weekly·weekend → both directions null.
+    expect(computeReorderSwap(items, 6, "up")).toBeNull();
+    expect(computeReorderSwap(items, 6, "down")).toBeNull();
+  });
+
+  it("tie in sort_order → nudges target so display order actually changes", () => {
+    const tied: RoutineItem[] = [
+      makeItem({ id: 1, is_system: false, sort_order: 50 }),
+      makeItem({ id: 2, is_system: false, sort_order: 50 }),
+    ];
+    // Down move on id=1: target lands ahead of id=2 by nudge +1.
+    const down = computeReorderSwap(tied, 1, "down");
+    expect(down).toEqual([
+      { id: 1, sort_order: 51 },
+      { id: 2, sort_order: 50 },
+    ]);
+    // Up move on id=2: symmetric — target nudged below by -1.
+    const up = computeReorderSwap(tied, 2, "up");
+    expect(up).toEqual([
+      { id: 2, sort_order: 49 },
+      { id: 1, sort_order: 50 },
+    ]);
   });
 });

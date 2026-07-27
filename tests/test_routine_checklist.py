@@ -143,15 +143,19 @@ class TestOverdueDaysPeriodic:
 class TestSystemItemsSeed:
     """The seed list is code-owned — a rename lands via git, not migration."""
 
-    def test_seed_has_seven_items(self):
+    def test_seed_has_six_items(self):
         from db_layer import _ROUTINE_SYSTEM_ITEMS
-        assert len(_ROUTINE_SYSTEM_ITEMS) == 7
+        assert len(_ROUTINE_SYSTEM_ITEMS) == 6
 
-    def test_seed_includes_discretionary_counter(self):
+    def test_seed_has_no_counter_items(self):
+        # The "Discretionary action taken today?" counter was retired in
+        # migration 051 — the Daily Report Card scorecard covers rule-break
+        # tracking. If a new counter seed ever lands, revisit the checklist
+        # UX so the counter affordance is discoverable outside the ticked
+        # incident state.
         from db_layer import _ROUTINE_SYSTEM_ITEMS
         counter_items = [i for i in _ROUTINE_SYSTEM_ITEMS if i[3] == "counter"]
-        assert len(counter_items) == 1
-        assert "Discretionary action" in counter_items[0][0]
+        assert counter_items == []
 
     def test_seed_daily_items_all_after_close(self):
         # If a new daily seed lands in a different slot, it's probably an

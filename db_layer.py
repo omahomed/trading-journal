@@ -6905,7 +6905,6 @@ _ROUTINE_SYSTEM_ITEMS = [
     ("Equity routine — log NLV, day P&L, drawdown, heat",              "daily",  "after_close", "task",    10),
     ("Risk levels — set tomorrow's triggers and decisions",             "daily",  "after_close", "task",    20),
     ("Journal — chart read, macro, mindset, ratings",                   "daily",  "after_close", "task",    30),
-    ("Discretionary action taken today?",                               "daily",  "after_close", "counter", 40),
     ("SR8 weekly pass — RS states, funnel decisions, core counts",      "weekly", "weekend",     "task",    10),
     ("Cluster exposure review — breadth, RSP, NAAIM",                   "weekly", "weekend",     "task",    20),
     ("Weekly recap",                                                    "weekly", "weekend",     "task",    30),

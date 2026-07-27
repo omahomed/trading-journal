@@ -21,6 +21,7 @@ import {
   SLOT_LABELS,
   FREQUENCY_ORDER,
   SLOT_ORDER,
+  computeReorderSwap,
   groupRoutineItems,
   itemStatusChip,
 } from "@/lib/trading-checklist";
@@ -151,6 +152,26 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
     }
   }, [load]);
 
+  const onReorder = useCallback(async (item: RoutineItem, direction: "up" | "down") => {
+    if (!items) return;
+    const swap = computeReorderSwap(items, item.id, direction);
+    if (!swap) return;
+    setBusyId(item.id);
+    setRowError(null);
+    try {
+      const res = await api.routineItemsReorder(swap);
+      if ("error" in res) {
+        setRowError({ id: item.id, msg: res.error });
+      } else {
+        await load(true);
+      }
+    } catch (err) {
+      setRowError({ id: item.id, msg: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusyId(null);
+    }
+  }, [items, load]);
+
   // No internal header — the merged Daily Routine wraps this component
   // in a SectionExpander that provides the collapse chrome, title, and
   // caption. Refresh happens automatically on mount + after each tick /
@@ -248,23 +269,36 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
                 <span style={{ color: "var(--ink-4)" }}>{g.items.length} item{g.items.length === 1 ? "" : "s"}</span>
               </div>
               <div>
-                {g.items.map((item, idx) => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    isLast={idx === g.items.length - 1}
-                    isBusy={busyId === item.id}
-                    isEditing={editingId === item.id}
-                    onTick={() => void onTick(item)}
-                    onUntick={() => void onUntick(item)}
-                    onEditStart={() => setEditingId(item.id)}
-                    onEditCancel={() => setEditingId(null)}
-                    onEditSaved={async () => { setEditingId(null); await load(true); }}
-                    onDelete={() => void onDelete(item)}
-                    rowError={rowError?.id === item.id ? rowError.msg : null}
-                    navColor={navColor}
-                  />
-                ))}
+                {g.items.map((item, idx) => {
+                  // Reorder edges — computed over CUSTOM siblings only so
+                  // the first/last custom item in the group correctly
+                  // disables the up/down affordance the user can act on.
+                  const customSiblings = g.items.filter(it => !it.is_system);
+                  const customIdx = customSiblings.findIndex(it => it.id === item.id);
+                  const canMoveUp = !item.is_system && customIdx > 0;
+                  const canMoveDown = !item.is_system && customIdx >= 0 && customIdx < customSiblings.length - 1;
+                  return (
+                    <ItemRow
+                      key={item.id}
+                      item={item}
+                      isLast={idx === g.items.length - 1}
+                      isBusy={busyId === item.id}
+                      isEditing={editingId === item.id}
+                      canMoveUp={canMoveUp}
+                      canMoveDown={canMoveDown}
+                      onTick={() => void onTick(item)}
+                      onUntick={() => void onUntick(item)}
+                      onEditStart={() => setEditingId(item.id)}
+                      onEditCancel={() => setEditingId(null)}
+                      onEditSaved={async () => { setEditingId(null); await load(true); }}
+                      onDelete={() => void onDelete(item)}
+                      onMoveUp={() => void onReorder(item, "up")}
+                      onMoveDown={() => void onReorder(item, "down")}
+                      rowError={rowError?.id === item.id ? rowError.msg : null}
+                      navColor={navColor}
+                    />
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -281,16 +315,20 @@ function ItemRow(props: {
   isLast: boolean;
   isBusy: boolean;
   isEditing: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   onTick: () => void;
   onUntick: () => void;
   onEditStart: () => void;
   onEditCancel: () => void;
   onEditSaved: () => Promise<void>;
   onDelete: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   rowError: string | null;
   navColor: string;
 }) {
-  const { item, isLast, isBusy, isEditing, onTick, onUntick, onEditStart, onEditCancel, onEditSaved, onDelete, rowError, navColor } = props;
+  const { item, isLast, isBusy, isEditing, canMoveUp, canMoveDown, onTick, onUntick, onEditStart, onEditCancel, onEditSaved, onDelete, onMoveUp, onMoveDown, rowError, navColor } = props;
   const isTask = item.item_type === "task";
   const checked = isTask && item.ticked_today;
   const chip = itemStatusChip(item);
@@ -378,9 +416,25 @@ function ItemRow(props: {
         </div>
       )}
 
-      {/* Edit / delete for custom items only */}
+      {/* Reorder / edit / delete for custom items only */}
       {!isEditing && !item.is_system && (
         <div className="shrink-0 flex items-center gap-1">
+          <button type="button" onClick={onMoveUp} disabled={isBusy || !canMoveUp}
+                  aria-label="Move up"
+                  data-testid={`routine-move-up-${item.id}`}
+                  className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
+                  style={{ color: "var(--ink-4)" }}
+                  title="Move up">
+            ▲
+          </button>
+          <button type="button" onClick={onMoveDown} disabled={isBusy || !canMoveDown}
+                  aria-label="Move down"
+                  data-testid={`routine-move-down-${item.id}`}
+                  className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
+                  style={{ color: "var(--ink-4)" }}
+                  title="Move down">
+            ▼
+          </button>
           <button type="button" onClick={onEditStart} disabled={isBusy}
                   aria-label="Edit"
                   className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors"

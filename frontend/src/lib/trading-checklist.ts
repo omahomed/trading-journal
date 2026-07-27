@@ -143,6 +143,47 @@ export interface TodayCounts {
   total: number;
 }
 
+/** Compute the two-row sort_order swap needed to nudge a custom item
+ *  up or down among its custom siblings inside the same (frequency, slot)
+ *  group. Returns null when the move isn't possible (item is a system row,
+ *  already at the edge of the group, or not in the list). System items
+ *  never participate — the backend ignores them regardless, but the UI
+ *  hides the buttons up-front so the affordance matches reality.
+ *
+ *  Tie-break for equal sort_order: nudge the target by ±1 so the swap
+ *  produces an actual reordering rather than a no-op. Server ordering is
+ *  (frequency, slot, sort_order, id) — a bare equal-value swap would keep
+ *  display order pinned to the id tiebreaker. */
+export function computeReorderSwap(
+  allItems: RoutineItem[],
+  itemId: number,
+  direction: "up" | "down",
+): Array<{ id: number; sort_order: number }> | null {
+  const target = allItems.find((it) => it.id === itemId);
+  if (!target || target.is_system) return null;
+  const siblings = allItems.filter(
+    (it) =>
+      !it.is_system &&
+      it.frequency === target.frequency &&
+      it.slot === target.slot,
+  );
+  const idx = siblings.findIndex((it) => it.id === itemId);
+  if (idx < 0) return null;
+  const swapWith = direction === "up" ? siblings[idx - 1] : siblings[idx + 1];
+  if (!swapWith) return null;
+  if (target.sort_order === swapWith.sort_order) {
+    const delta = direction === "up" ? -1 : 1;
+    return [
+      { id: target.id, sort_order: swapWith.sort_order + delta },
+      { id: swapWith.id, sort_order: swapWith.sort_order },
+    ];
+  }
+  return [
+    { id: target.id, sort_order: swapWith.sort_order },
+    { id: swapWith.id, sort_order: target.sort_order },
+  ];
+}
+
 export function countTodayDue(items: RoutineItem[]): TodayCounts {
   const counts: TodayCounts = {
     premarket: 0,
