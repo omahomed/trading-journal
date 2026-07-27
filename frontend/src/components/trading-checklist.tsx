@@ -14,7 +14,7 @@
 // Optimistic UI is intentionally avoided in v1 — a checkbox that lies
 // after a network error would defeat the point of an evidence log.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type RoutineFrequency, type RoutineItem, type RoutineSlot } from "@/lib/api";
 import {
   FREQUENCY_LABELS,
@@ -36,6 +36,8 @@ type AddFormState = {
 
 const EMPTY_FORM: AddFormState = { name: "", frequency: "daily", slot: "after_close", link: "" };
 
+const DELETE_ARM_TIMEOUT_MS = 3000;
+
 export function TradingChecklist({ navColor }: { navColor: string }) {
   const [items, setItems] = useState<RoutineItem[] | null>(null);
   const [loadError, setLoadError] = useState<string>("");
@@ -46,6 +48,16 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
   const [addSubmitting, setAddSubmitting] = useState(false);
   const [addError, setAddError] = useState<string>("");
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Two-click inline delete confirm (mirrors image-gallery.tsx). One item
+  // armed at a time; a click on a different item swaps the arming. Timer
+  // auto-clears the armed state so a stray click doesn't leave the row in
+  // a confirm state indefinitely.
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current);
+  }, []);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
@@ -134,8 +146,7 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
     }
   }, [addForm, load]);
 
-  const onDelete = useCallback(async (item: RoutineItem) => {
-    if (!confirm(`Remove "${item.name}"? Custom items are soft-deleted; log history is preserved.`)) return;
+  const commitDelete = useCallback(async (item: RoutineItem) => {
     setBusyId(item.id);
     setRowError(null);
     try {
@@ -151,6 +162,30 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
       setBusyId(null);
     }
   }, [load]);
+
+  const armDelete = useCallback((id: number) => {
+    setPendingDeleteId(id);
+    if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current);
+    pendingDeleteTimer.current = setTimeout(() => {
+      setPendingDeleteId(null);
+      pendingDeleteTimer.current = null;
+    }, DELETE_ARM_TIMEOUT_MS);
+  }, []);
+
+  const onDeleteClick = useCallback((item: RoutineItem) => {
+    if (pendingDeleteId === item.id) {
+      // Second click — commit.
+      if (pendingDeleteTimer.current) {
+        clearTimeout(pendingDeleteTimer.current);
+        pendingDeleteTimer.current = null;
+      }
+      setPendingDeleteId(null);
+      void commitDelete(item);
+    } else {
+      // First click, or arm swap from another row.
+      armDelete(item.id);
+    }
+  }, [pendingDeleteId, armDelete, commitDelete]);
 
   const onReorder = useCallback(async (item: RoutineItem, direction: "up" | "down") => {
     if (!items) return;
@@ -286,12 +321,13 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
                       isEditing={editingId === item.id}
                       canMoveUp={canMoveUp}
                       canMoveDown={canMoveDown}
+                      isPendingDelete={pendingDeleteId === item.id}
                       onTick={() => void onTick(item)}
                       onUntick={() => void onUntick(item)}
                       onEditStart={() => setEditingId(item.id)}
                       onEditCancel={() => setEditingId(null)}
                       onEditSaved={async () => { setEditingId(null); await load(true); }}
-                      onDelete={() => void onDelete(item)}
+                      onDelete={() => onDeleteClick(item)}
                       onMoveUp={() => void onReorder(item, "up")}
                       onMoveDown={() => void onReorder(item, "down")}
                       rowError={rowError?.id === item.id ? rowError.msg : null}
@@ -317,6 +353,7 @@ function ItemRow(props: {
   isEditing: boolean;
   canMoveUp: boolean;
   canMoveDown: boolean;
+  isPendingDelete: boolean;
   onTick: () => void;
   onUntick: () => void;
   onEditStart: () => void;
@@ -328,7 +365,11 @@ function ItemRow(props: {
   rowError: string | null;
   navColor: string;
 }) {
-  const { item, isLast, isBusy, isEditing, canMoveUp, canMoveDown, onTick, onUntick, onEditStart, onEditCancel, onEditSaved, onDelete, onMoveUp, onMoveDown, rowError, navColor } = props;
+  const { item, isLast, isBusy, isEditing, canMoveUp, canMoveDown, isPendingDelete, onTick, onUntick, onEditStart, onEditCancel, onEditSaved, onDelete, onMoveUp, onMoveDown, rowError, navColor } = props;
+  // Reorder affordance only appears when the group has ≥2 custom items —
+  // a solo custom row would otherwise show two dimmed ghost buttons the
+  // user can't act on, which read as broken.
+  const showReorder = canMoveUp || canMoveDown;
   const isTask = item.item_type === "task";
   const checked = isTask && item.ticked_today;
   const chip = itemStatusChip(item);
@@ -396,8 +437,9 @@ function ItemRow(props: {
         )}
       </div>
 
-      {/* Status chip */}
-      {!isEditing && (
+      {/* Status chip — omitted entirely for "never" so a bare dash doesn't
+          read as another action button next to ▲▼✎×. */}
+      {!isEditing && chip.kind !== "never" && (
         <div className="shrink-0 text-[12px]">
           {chip.kind === "overdue" ? (
             <span className="px-2 py-1 rounded-[6px] font-semibold"
@@ -408,10 +450,8 @@ function ItemRow(props: {
             <span style={{ color: "var(--ink-4)" }}>{chip.text}</span>
           ) : chip.kind === "today" ? (
             <span style={{ color: navColor }}>{chip.text}</span>
-          ) : chip.kind === "last_run" ? (
-            <span style={{ color: "var(--ink-3)" }}>{chip.text}</span>
           ) : (
-            <span style={{ color: "var(--ink-4)" }}>{chip.text}</span>
+            <span style={{ color: "var(--ink-3)" }}>{chip.text}</span>
           )}
         </div>
       )}
@@ -419,22 +459,26 @@ function ItemRow(props: {
       {/* Reorder / edit / delete for custom items only */}
       {!isEditing && !item.is_system && (
         <div className="shrink-0 flex items-center gap-1">
-          <button type="button" onClick={onMoveUp} disabled={isBusy || !canMoveUp}
-                  aria-label="Move up"
-                  data-testid={`routine-move-up-${item.id}`}
-                  className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
-                  style={{ color: "var(--ink-4)" }}
-                  title="Move up">
-            ▲
-          </button>
-          <button type="button" onClick={onMoveDown} disabled={isBusy || !canMoveDown}
-                  aria-label="Move down"
-                  data-testid={`routine-move-down-${item.id}`}
-                  className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
-                  style={{ color: "var(--ink-4)" }}
-                  title="Move down">
-            ▼
-          </button>
+          {showReorder && (
+            <>
+              <button type="button" onClick={onMoveUp} disabled={isBusy || !canMoveUp}
+                      aria-label="Move up"
+                      data-testid={`routine-move-up-${item.id}`}
+                      className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
+                      style={{ color: "var(--ink-4)" }}
+                      title="Move up">
+                ▲
+              </button>
+              <button type="button" onClick={onMoveDown} disabled={isBusy || !canMoveDown}
+                      aria-label="Move down"
+                      data-testid={`routine-move-down-${item.id}`}
+                      className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors disabled:opacity-30"
+                      style={{ color: "var(--ink-4)" }}
+                      title="Move down">
+                ▼
+              </button>
+            </>
+          )}
           <button type="button" onClick={onEditStart} disabled={isBusy}
                   aria-label="Edit"
                   className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors"
@@ -442,13 +486,28 @@ function ItemRow(props: {
                   title="Edit">
             ✎
           </button>
-          <button type="button" onClick={onDelete} disabled={isBusy}
-                  aria-label="Delete"
-                  className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors"
-                  style={{ color: "var(--ink-4)" }}
-                  title="Delete">
-            ×
-          </button>
+          {isPendingDelete ? (
+            <button type="button" onClick={onDelete} disabled={isBusy}
+                    aria-label="Confirm delete"
+                    data-testid={`routine-delete-confirm-${item.id}`}
+                    className="h-[28px] px-2 rounded-[6px] flex items-center justify-center text-[11px] font-semibold transition-colors"
+                    style={{
+                      background: "color-mix(in oklab, #e5484d 14%, var(--bg-2))",
+                      color: "#e5484d",
+                    }}
+                    title="Click again to remove">
+              Delete?
+            </button>
+          ) : (
+            <button type="button" onClick={onDelete} disabled={isBusy}
+                    aria-label="Delete"
+                    data-testid={`routine-delete-${item.id}`}
+                    className="w-[28px] h-[28px] rounded-[6px] flex items-center justify-center text-[13px] transition-colors"
+                    style={{ color: "var(--ink-4)" }}
+                    title="Delete">
+              ×
+            </button>
+          )}
         </div>
       )}
     </div>
