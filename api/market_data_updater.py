@@ -240,8 +240,34 @@ def _upsert_rows(symbol: str, df: pd.DataFrame, conn) -> int:
     return len(rows)
 
 
-def _last_business_day(today: Optional[date] = None) -> date:
-    d = today or date.today()
+def _last_business_day(now_utc: Optional[datetime] = None) -> date:
+    """Return the most recent trading day whose bar is SETTLED (post-close).
+
+    The M Factor engine only operates on settled daily bars — an intraday
+    fetch produces an early-morning snapshot whose close / high / low is
+    wildly wrong vs. the real end-of-day (e.g., 2026-07-27 morning bar
+    ingested at 8:45 AM CT showed a stale +0.73% close vs. the real
+    -0.18% end-of-day 6+ hours later). All engine reads (STEP_0 pink-day
+    gate, VIOLATION_21EMA, drawdown vs ref_high) are close-based, so a
+    stale intraday bar produces wrong state.
+
+    Time-of-day gate: NASDAQ closes 4 PM ET = 20:00 UTC (EDT) / 21:00 UTC
+    (EST). We require ≥ 22:00 UTC to consider today "settled" — that's
+    ~1 hour after close in EDT / immediately after close in EST, giving
+    yfinance time to publish the daily bar without racing the intraday
+    snapshot. Before that threshold on a weekday, today is treated as
+    still open and the target rolls back to the previous weekday, so
+    update_if_needed no-ops instead of fetching intraday data.
+
+    Weekend fall-through is unchanged: Sat/Sun always roll back to
+    Friday regardless of time.
+    """
+    now = now_utc or datetime.utcnow()
+    d = now.date()
+    # Today weekday but still intraday → roll back one day (which the
+    # weekend loop below then normalizes to Friday for Mon-morning calls).
+    if d.weekday() < 5 and now.hour < 22:
+        d -= timedelta(days=1)
     while d.weekday() >= 5:  # Sat=5, Sun=6
         d -= timedelta(days=1)
     return d
