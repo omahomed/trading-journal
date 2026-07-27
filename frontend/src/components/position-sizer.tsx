@@ -350,7 +350,14 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
         return { value: { trigger_pct: 5, alloc_pct: 20 } };
       }),
     ]).then(([j, open, details, rally, pyrCfg]) => {
-      setEquity(parseFloat(String((j as any).end_nlv || 100000)));
+      // No silent NLV fallback — the earlier `|| 100000` default seeded
+      // the Account Equity input with a fake $100k when the journal was
+      // empty (e.g. right after a portfolio reset). Seed 0 instead so
+      // the input renders empty and forces the trader to type the real
+      // NLV before the sizer produces any recommendation.
+      const rawNlv = (j as any)?.end_nlv;
+      const parsedNlv = rawNlv != null ? parseFloat(String(rawNlv)) : 0;
+      setEquity(Number.isFinite(parsedNlv) && parsedNlv > 0 ? parsedNlv : 0);
       setOpenTrades(open as TradePosition[]);
       setAllDetails(details.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;

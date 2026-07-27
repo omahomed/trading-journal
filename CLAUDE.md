@@ -97,6 +97,59 @@ trigger NOT NULL-violates and aborts the migration that fired it. See
 for the canonical pattern. `migrations/run.py` also `SET LOCAL`s the founder
 UUID per migration as defense in depth.
 
+## No silent-default guard on money fields (standing rule)
+
+**Never** silently default a financial value (NLV / equity / cash / price /
+share count) to a hardcoded number when the real value is missing or
+unresolved. `end_nlv || 100000`, `price || 100`, `shares || 1` — all
+banned. Two failure modes this rule exists to prevent:
+
+  * **Display drift** — a page renders "$100,000 Equity Basis" when the
+    real number is unknown, and every derived percentage on the page is
+    silently wrong (the 2026-07-27 Portfolio Heat bug: weights summed to
+    212% against a fake $100k basis).
+  * **Trade sizing against fake basis** — Log Buy / Position Sizer
+    prefilling equity from a fallback lets the 25% pos-size cap
+    silently pass for legitimately oversized trades.
+
+**Correct patterns:**
+  * **Display pages** (Portfolio Heat, Trade Journal cards): bail to an
+    empty state with an actionable CTA. Render `—` for the field, not a
+    guess.
+  * **Forms with a manual override** (Position Sizer): seed 0 / empty
+    string so the input is visibly unfilled. The user types the real
+    value; math shows 0% until they do.
+  * **Forms without a manual override** (Log Buy): seed 0 and add an
+    explicit `equity <= 0` blocker to `validate()`. The submit is
+    refused with an actionable message ("log an NLV first"), not
+    completed against a fake basis.
+  * **Prefer backend-side "last known good"** over frontend re-fetching:
+    `journal_latest` filters to rows where `end_nlv IS NOT NULL AND > 0`
+    so a same-day checklist-only row doesn't blank out consumers.
+
+## Migration audit checklist (standing)
+
+Any migration that DELETEs from or wipes tenant-scoped tables
+(`trading_journal`, `trades_summary`, `trades_details`, `portfolios`,
+`cash_transactions`) requires a downstream-consumers audit before
+merge:
+
+  1. Grep the frontend for the endpoint every wiped table feeds:
+     ```
+     rg 'journalLatest|tradesOpen|tradesOpenDetails|listStrategies|batchPrices' frontend/src/
+     ```
+  2. For each caller, verify empty-response handling — no silent
+     `|| <magic number>` fallbacks (see the "No silent-default guard"
+     rule above). Empty state must render actionable, not fake.
+  3. Same-day rebuild path — if the migration is meant to be re-runnable
+     or reversible, confirm nothing downstream caches the pre-migration
+     row set (React Query stale windows, service workers, LocalStorage).
+
+Migration 054 (LTG reset) shipped without step 2 and the downstream
+Portfolio Heat / Log Buy / Position Sizer / Trade Journal pages
+silently rendered against fake $100k for the day between deploy and
+first NLV log. Add this audit step to every future reset migration.
+
 ## Pyramid Sizer v6 rules (2026-07-25)
 
 Seven-rule model. Rule 2 (WINDOW) is the v6 addition — earlier docs

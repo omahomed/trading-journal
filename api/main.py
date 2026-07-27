@@ -337,15 +337,24 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # ============================================================
 @app.get("/api/journal/latest")
 def journal_latest(portfolio: str = "CanSlim", before: str = ""):
-    """Get the most recent journal entry (NLV, daily change, etc.).
+    """Get the most recent journal entry with a real NLV (last-known NLV).
 
-    `before` (YYYY-MM-DD, optional): when set, returns the latest entry
-    strictly before that date. Used by the Daily Routine form so editing a
-    past date pulls the correct *prior* day's NLV as the baseline for the
-    Daily % calculation — without this, editing yesterday's entry would
-    diff against yesterday's own prior-saved value (typically the
-    estimated NLV the user is trying to overwrite), producing a meaningless
-    delta.
+    Returns the latest row whose `end_nlv > 0`, not just the latest row.
+    Every downstream consumer (Portfolio Heat, Position Sizer, Log Buy,
+    Trade Journal, NLV Entry baseline) wants "what's the last real NLV
+    for this account" — a same-day row saved from Daily Journal with just
+    checklist/notes and no NLV logged yet should not blank out the
+    Portfolio Heat page. Filtering NLV-bearing rows here keeps every
+    caller's math correct without asking each frontend to search
+    backward on its own.
+
+    `before` (YYYY-MM-DD, optional): when set, returns the latest
+    NLV-bearing entry strictly before that date. Used by the NLV Entry
+    form so editing a past date pulls the correct *prior* NLV as the
+    baseline for the Daily % calculation — without this, editing
+    yesterday's entry would diff against yesterday's own prior-saved
+    value (typically the estimated NLV the user is trying to overwrite),
+    producing a meaningless delta.
     """
     df = db.load_journal(portfolio)
     if df.empty:
@@ -356,6 +365,13 @@ def journal_latest(portfolio: str = "CanSlim", before: str = ""):
         cutoff = pd.to_datetime(str(before).strip()[:10], errors="coerce")
         if pd.notna(cutoff):
             df = df[df["day"] < cutoff]
+    # Only rows with a REAL NLV count as "latest available." A same-day
+    # row saved without an NLV (checklist / notes only) has end_nlv NaN
+    # after _normalize_journal; excluding those lets journal_latest walk
+    # back to the last true NLV baseline.
+    if "end_nlv" in df.columns:
+        nlv_num = pd.to_numeric(df["end_nlv"], errors="coerce")
+        df = df[nlv_num.notna() & (nlv_num > 0)]
     if df.empty:
         return {"error": "No journal data"}
     df = df.sort_values("day", ascending=False)

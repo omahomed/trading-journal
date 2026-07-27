@@ -589,14 +589,20 @@ export function TradeJournal({ navColor }: { navColor: string }) {
       }),
       api.journalLatest(getActivePortfolio()).catch((err) => {
         log.error("trade-journal", "journalLatest fetch failed", err);
-        return { end_nlv: 100000 };
+        return null as unknown as { end_nlv?: number };
       }),
     ]);
     const openArr = open as TradePosition[];
     setOpenTrades(openArr);
     setOpenDetails(openDet.details);
     setOpenClosures(openDet.lot_closures);
-    setEquity(parseFloat(String((journal as any).end_nlv || 100000)));
+    // No silent NLV fallback — POS SIZE % on each trade card is a share
+    // of NLV, so a fake $100k basis would silently mis-report every card.
+    // Seed 0 → posSizePct renders as 0% (via the equity>0 guard at :1648)
+    // until real NLV lands, matching the "no fake numbers" contract.
+    const rawNlv = (journal as any)?.end_nlv;
+    const parsedNlv = rawNlv != null ? parseFloat(String(rawNlv)) : 0;
+    setEquity(Number.isFinite(parsedNlv) && parsedNlv > 0 ? parsedNlv : 0);
     setOpenLoaded(true);
 
     // Live prices for open trades — fire-and-forget so it doesn't block the

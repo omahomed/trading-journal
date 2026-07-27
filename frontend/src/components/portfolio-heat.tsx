@@ -218,10 +218,12 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
     return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
   }
 
-  // Empty state: no NLV logged for the active portfolio (or journalLatest
-  // failed). Bail hard — a page that shows "$100k equity basis" when the
-  // real number is unknown is worse than no page, because every derived
-  // number (weight %, heat contribution, total heat) is silently wrong.
+  // Empty state fires ONLY when the portfolio has zero NLV history at
+  // all — journal_latest already walks back to the last row with a real
+  // end_nlv, so a same-day row with just checklist/notes doesn't blank
+  // out the page. Bail hard here because every derived number (weight %,
+  // heat contribution, total heat) requires a real equity basis; showing
+  // "$100k" as a silent default was strictly worse than no page.
   if (nlvMissing) {
     return (
       <div style={{ animation: "slide-up 0.18s ease-out" }}>
@@ -232,10 +234,10 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
         </div>
         <div className="rounded-[14px] p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
           <div className="text-[15px] font-medium mb-2" style={{ color: "var(--ink-1)" }}>
-            No NLV logged for {activePortfolio || "this portfolio"}
+            No NLV history for {activePortfolio || "this portfolio"}
           </div>
           <div className="text-[13px] mb-4" style={{ color: "var(--ink-3)" }}>
-            Portfolio Heat needs today&apos;s NLV to compute weight % and
+            Portfolio Heat needs a logged NLV to compute weight % and
             per-position heat contribution. Log one and this page will
             populate on refresh.
           </div>

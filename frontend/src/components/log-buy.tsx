@@ -245,7 +245,17 @@ export function LogBuy({ navColor }: { navColor: string }) {
         return [] as Strategy[];
       }),
     ]).then(([j, open, rally, det, strats]) => {
-      setEquity(parseFloat(String(j.end_nlv || 100000)));
+      // No silent NLV fallback — the earlier `|| 100000` default meant a
+      // missing journal entry (e.g. right after a portfolio reset that
+      // wipes trading_journal) prefilled a fake $100k basis. Sizing math
+      // downstream (posSizePct, riskBudget, ladder totals) then compared
+      // against fake NLV, and the 25% cap check silently passed for
+      // legitimately oversized trades. Seed 0 instead — the read-only
+      // "Account Equity" display renders $0, submit is blocked by the
+      // equity guard in validate(), and the trader logs an NLV first.
+      const rawNlv = (j as any)?.end_nlv;
+      const parsedNlv = rawNlv != null ? parseFloat(String(rawNlv)) : 0;
+      setEquity(Number.isFinite(parsedNlv) && parsedNlv > 0 ? parsedNlv : 0);
       setOpenTrades(open as TradePosition[]);
       setAllDetails(det.details);
       const stateStr = (rally as { state?: string } | null)?.state ?? null;
@@ -668,6 +678,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
     if (!strategy.trim()) e.push("Strategy is required");
     if (sharesNum <= 0) e.push("Shares must be > 0");
     if (priceNum <= 0) e.push("Price must be > 0");
+    // Equity guard — the 25% posSizePct cap silently passes when equity
+    // is 0 (guarded ratios return 0), so without this a trade against
+    // missing NLV would submit as if sizing were fine.
+    if (equity <= 0) e.push("Account Equity is $0 — log an NLV before submitting so position size is validated");
     // Stop-related checks skip when the user has opted into no-stop
     // (showStopLoss=false, only possible for options). The < 8%
     // recommendation is additionally suppressed for any option ticker

@@ -122,11 +122,13 @@ describe("PortfolioHeat — batch lookup", () => {
     // that fake basis. Trigger for the regression was migration 054 (LTG
     // reset) which intentionally wipes trading_journal — every downstream
     // consumer of end_nlv is now expected to bail rather than fake.
+    // Backend also now walks back to the last row with a real end_nlv so
+    // a same-day checklist-only entry doesn't fire this state.
     mockedJournalLatest.mockResolvedValue({ error: "No journal data" } as any);
     render(<PortfolioHeat navColor="#6366f1" />);
 
     // Empty state renders with the actionable Log-NLV CTA.
-    expect(await screen.findByText(/No NLV logged for CanSlim/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No NLV history for CanSlim/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Log NLV/i })).toHaveAttribute("href", "/nlv-entry");
 
     // Zero fake numbers on the page: no EQUITY BASIS tile, no heat table.
@@ -141,7 +143,7 @@ describe("PortfolioHeat — batch lookup", () => {
   test("renders empty state when journalLatest rejects (network failure)", async () => {
     mockedJournalLatest.mockRejectedValue(new Error("500 boom"));
     render(<PortfolioHeat navColor="#6366f1" />);
-    expect(await screen.findByText(/No NLV logged for CanSlim/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No NLV history for CanSlim/i)).toBeInTheDocument();
     expect(mockedPriceLookupBatch).not.toHaveBeenCalled();
   });
 
