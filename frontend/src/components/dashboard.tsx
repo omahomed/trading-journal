@@ -338,7 +338,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
               </span>
               {/* "As of [date]" badge — clarifies the dashboard reflects
                   the most recent SAVED journal entry, which may lag today
-                  if Daily Routine hasn't been submitted yet. Hidden when
+                  if NLV Entry hasn't been submitted yet. Hidden when
                   the journal is empty (the empty-state copy below
                   carries the same signal more loudly). */}
               {metrics?.as_of_date && (

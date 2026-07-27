@@ -60,16 +60,24 @@ const nextConfig: NextConfig = {
   // Permanent redirects for renamed routes. Next.js's `permanent: true`
   // emits HTTP 308, functionally interchangeable with 301 for browsers
   // and SEO. Query strings are preserved (Next.js default behavior),
-  // so /daily-report?date=2026-07-24 lands on /daily-routine?date=2026-07-24.
+  // so /daily-report?date=2026-07-24 lands on /daily-journal?date=2026-07-24.
   async redirects() {
     return [
       // Market Cycle Tracker → M Factor
-      { source: "/market-cycle",     destination: "/m-factor",      permanent: true },
+      { source: "/market-cycle",      destination: "/m-factor",     permanent: true },
       // Phase 2 Daily Routine merger (2026-07-26): Daily Report absorbed
       // Trading Checklist and took over the /daily-routine URL; the
       // former Daily Routine page (NLV entry only) moved to /nlv-entry.
-      { source: "/daily-report",     destination: "/daily-routine", permanent: true },
-      { source: "/trading-checklist", destination: "/daily-routine", permanent: true },
+      //
+      // Renamed again 2026-07-26 evening: "Daily Routine" (shell) →
+      // "Daily Journal"; previous "Daily Journal" (historical browse) →
+      // "Journal Log". The /daily-routine URL redirects to the new
+      // /daily-journal shell; historical /daily-report chain now lands
+      // there too. No redirect from the old /daily-journal browse — the
+      // URL is being reused for the shell, and user is aware of the swap.
+      { source: "/daily-report",      destination: "/daily-journal", permanent: true },
+      { source: "/trading-checklist", destination: "/daily-journal", permanent: true },
+      { source: "/daily-routine",     destination: "/daily-journal", permanent: true },
     ];
   },
 };

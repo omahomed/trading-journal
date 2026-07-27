@@ -116,7 +116,7 @@ export function RealizedEquity({ navColor }: { navColor: string }) {
   //   - Days the realized series has but the journal doesn't → carry the
   //     last benchmark values. This happens when a close lands on a day
   //     the user hasn't journaled yet (e.g. mid-day today, before the
-  //     Daily Routine save) — without the union, the chart's rightmost
+  //     NLV Entry save) — without the union, the chart's rightmost
   //     point would lag behind the summary's `total_realized_pl`.
   //
   // SPY/Nasdaq cumulative % values are rebased so they start at 0% on the

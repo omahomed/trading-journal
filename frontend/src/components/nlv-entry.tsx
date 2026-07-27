@@ -79,7 +79,7 @@ function deriveCardMetrics(p: PortfolioCardState) {
   const hold = parseFloat(p.total_holdings) || 0;
   const cash = parseFloat(p.cash_change) || 0;
   // App convention: divisor is the post-deposit baseline. Matches
-  // daily-routine.tsx pre-redesign at line 258-259 and the journal importer's
+  // daily-journal.tsx pre-redesign and the journal importer's
   // compute_derived per the snapshot-fix commits.
   const adjustedBeg = p.prev_end_nlv + cash;
   const daily_dollar_change = p.prev_end_nlv > 0 ? nlv - adjustedBeg : 0;
@@ -145,7 +145,7 @@ function PortfolioCard({
     let cancelled = false;
     api.portfolioHeatPreview(card.name)
       .then(r => { if (!cancelled) setPreviewHeat(r.heat); })
-      .catch(err => log.error("daily-routine", `heat preview fetch failed for ${card.name}`, err));
+      .catch(err => log.error("daily-journal", `heat preview fetch failed for ${card.name}`, err));
     return () => { cancelled = true; };
   }, [card.name]);
 
@@ -326,18 +326,18 @@ export function NLVEntry({ navColor }: { navColor: string }) {
     const isPastDate = entryDate < todayStr;
 
     const pricesPromise = api.batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined).catch((err) => {
-      log.debug.devOnly("daily-routine", "batchPrices pre-fill missing (expected)", err);
+      log.debug.devOnly("daily-journal", "batchPrices pre-fill missing (expected)", err);
       return {} as Record<string, number>;
     });
 
     const perPortfolioPromises = portfolios.map((p) =>
       Promise.all([
         api.journalLatest(p.name, entryDate).catch((err) => {
-          log.debug.devOnly("daily-routine", `journalLatest pre-fill missing for ${p.name}`, err);
+          log.debug.devOnly("daily-journal", `journalLatest pre-fill missing for ${p.name}`, err);
           return { end_nlv: 0 };
         }),
         api.tradesRecent(p.name, 1000).catch((err) => {
-          log.debug.devOnly("daily-routine", `tradesRecent pre-fill missing for ${p.name}`, err);
+          log.debug.devOnly("daily-journal", `tradesRecent pre-fill missing for ${p.name}`, err);
           return { details: [], lot_closures: [] };
         }),
       ]).then(([latest, trades]) => ({ p, latest, trades }))
@@ -390,7 +390,7 @@ export function NLVEntry({ navColor }: { navColor: string }) {
   useEffect(() => {
     let cancelled = false;
     api.rallyPrefix(entryDate).catch((err) => {
-      log.debug.devOnly("daily-routine", "rallyPrefix pre-fill missing (expected)", err);
+      log.debug.devOnly("daily-journal", "rallyPrefix pre-fill missing (expected)", err);
       return { prefix: "" };
     }).then((rally) => {
       if (cancelled) return;
@@ -572,7 +572,7 @@ export function NLVEntry({ navColor }: { navColor: string }) {
       </div>
 
       {/* Report Card retired 2026-07-26 — captured via the
-          ScorecardMiniForm on the Daily Routine page's Journal
+          ScorecardMiniForm on the Daily Journal page's Journal
           checklist item. */}
 
       {/* Submit area */}
@@ -675,7 +675,7 @@ export function NLVEntry({ navColor }: { navColor: string }) {
         style={{ background: "#6366f1" }}
         data-testid="save-button"
       >
-        {saving ? "Saving..." : "Save Daily Routine"}
+        {saving ? "Saving..." : "Save NLV Entry"}
       </button>
     </div>
   );

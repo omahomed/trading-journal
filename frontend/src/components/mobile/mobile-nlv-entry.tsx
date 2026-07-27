@@ -11,8 +11,8 @@ import { NumberFieldCell, TextFieldCell } from "./mobile-form-fields";
 import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
 
 /**
- * Mobile Daily Routine — Phase 2 Step 5. Ports the desktop multi-
- * portfolio EOD save (daily-routine.tsx) to a touch-friendly layout
+ * Mobile NLV Entry — Phase 2 Step 5. Ports the desktop multi-
+ * portfolio EOD save (nlv-entry.tsx) to a touch-friendly layout
  * with three UX wins over the desktop flow:
  *
  *   1. Pre-load existing entry — single `journalLatest(name, day+1)`
@@ -21,27 +21,31 @@ import { autoTickByPrefix, SYSTEM_ITEM_PREFIXES } from "@/lib/routine-autotick";
  *      a "Editing existing entry" banner, and auto-enable Force
  *      Overwrite. Eliminates the desktop conflict-then-re-fill loop.
  *
- *   2. localStorage autosave — 500ms-debounced writes keyed per-date
- *      (`mo-daily-routine-draft-{YYYY-MM-DD}`). Restored on mount
- *      before fetches resolve so the user's most recent intent always
- *      wins over backend defaults. Cleared on save success; preserved
- *      on save failure so transient errors don't lose data.
+ *   2. localStorage autosave — 500ms-debounced writes keyed per-date.
+ *      Draft key prefix stays `mo-daily-routine-draft-` (historical name
+ *      from before the Daily Routine → Daily Journal rename) so in-
+ *      flight drafts survive the deploy. Restored on mount before
+ *      fetches resolve so the user's most recent intent always wins
+ *      over backend defaults. Cleared on save success; preserved on
+ *      save failure so transient errors don't lose data.
  *
  *   3. MobileScoreSelector chip rows — replaces the desktop range
  *      slider (touch-hostile on small viewports) with a 1-5 tap-
  *      target chip group, tier-tinted for at-a-glance score reading.
  *
- * Math + payload shape mirror desktop daily-routine.tsx field-for-
- * field. Desktop file is intentionally untouched.
+ * Math + payload shape mirror desktop nlv-entry.tsx field-for-field.
+ * Desktop file is intentionally untouched.
  */
 
 // ── Constants ─────────────────────────────────────────────────────
 
 // REPORT_CATEGORIES / letterGrade / gradeToScore retired 2026-07-26
-// when the ScorecardMiniForm on Daily Routine's Journal checklist item
+// when the ScorecardMiniForm on Daily Journal's Journal checklist item
 // took over scorecard capture. Only NLV, holdings, cash change, actions
 // and market notes are captured here now.
 
+// Historical draft-key prefix — see file-level comment. Do NOT rename
+// without a migration; existing users have live drafts under this key.
 const DRAFT_KEY_PREFIX = "mo-daily-routine-draft-";
 const AUTOSAVE_DEBOUNCE_MS = 500;
 
@@ -257,11 +261,11 @@ export function MobileNLVEntry() {
     const perPortfolioPromises = portfolios.map((p) =>
       Promise.all([
         api.journalLatest(p.name, beforeNext).catch((err) => {
-          log.debug.devOnly?.("mobile-daily-routine", `journalLatest fetch failed for ${p.name}`, err);
+          log.debug.devOnly?.("mobile-daily-journal", `journalLatest fetch failed for ${p.name}`, err);
           return null as JournalEntry | null;
         }),
         api.tradesRecent(p.name, 1000).catch((err) => {
-          log.debug.devOnly?.("mobile-daily-routine", `tradesRecent fetch failed for ${p.name}`, err);
+          log.debug.devOnly?.("mobile-daily-journal", `tradesRecent fetch failed for ${p.name}`, err);
           return { details: [], lot_closures: [] };
         }),
       ]).then(([latest, trades]) => ({ p, latest, trades })),
@@ -270,7 +274,7 @@ export function MobileNLVEntry() {
     const pricesPromise = api
       .batchPrices(["SPY", "^IXIC"], undefined, isPastDate ? entryDate : undefined)
       .catch((err) => {
-        log.debug.devOnly?.("mobile-daily-routine", "batchPrices pre-fill missing (expected)", err);
+        log.debug.devOnly?.("mobile-daily-journal", "batchPrices pre-fill missing (expected)", err);
         return {} as Record<string, number>;
       });
 
@@ -373,7 +377,7 @@ export function MobileNLVEntry() {
     api
       .rallyPrefix(entryDate)
       .catch((err) => {
-        log.debug.devOnly?.("mobile-daily-routine", "rallyPrefix pre-fill missing (expected)", err);
+        log.debug.devOnly?.("mobile-daily-journal", "rallyPrefix pre-fill missing (expected)", err);
         return { prefix: "" };
       })
       .then((rally) => {
@@ -470,7 +474,7 @@ export function MobileNLVEntry() {
         nasdaq: parseFloat(ndxClose) || 0,
         market_notes: marketNotes,
         // score / highlights / mistakes omitted — captured via
-        // ScorecardMiniForm on Daily Routine. Missing keys leave
+        // ScorecardMiniForm on Daily Journal. Missing keys leave
         // existing values intact server-side, so today's grade
         // survives an NLV Entry save.
         nlv_source: "manual",
@@ -595,7 +599,7 @@ export function MobileNLVEntry() {
 
       {/* ReportCardSection removed 2026-07-26 — grade + Plan/Stops/
           Sized/FOMO chips + notes captured via the ScorecardMiniForm
-          on Daily Routine's Journal checklist item. */}
+          on Daily Journal's Journal checklist item. */}
 
       <MobileToggleSwitch
         id="dr-force-overwrite"

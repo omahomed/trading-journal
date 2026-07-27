@@ -2,7 +2,7 @@
 // FOMO), letter grade derived from the % of max possible score.
 //
 // Used by NLV Entry (legacy capture point) and the ScorecardMiniForm
-// on Daily Routine (new capture point per Phase 2 merger). Sourcing
+// on Daily Journal (new capture point per Phase 2 merger). Sourcing
 // both call sites from here prevents drift on the grade thresholds.
 
 export interface ScorecardCategory {

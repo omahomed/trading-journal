@@ -98,7 +98,7 @@ describe("MoreClient — T2-6 mobile Daily section removed", () => {
   test("Daily section header no longer renders", () => {
     render(<MoreClient />);
     // The mobile More previously rendered a section titled "Daily"
-    // containing Daily Routine / Daily Journal / Daily Report / Weekly
+    // containing Daily Journal / Journal Log / Daily Report / Weekly
     // Retro. T2-6 removes that section entirely.
     expect(screen.queryByText("Daily")).not.toBeInTheDocument();
   });
@@ -106,14 +106,14 @@ describe("MoreClient — T2-6 mobile Daily section removed", () => {
   test("Daily Workflow destinations are not reachable from mobile More menu", () => {
     render(<MoreClient />);
     // The bottom-nav Daily tab + the quick-link card row on
-    // /daily-journal own these destinations now. Verify by link role +
+    // /journal-log own these destinations now. Verify by link role +
     // accessible name so we don't false-positive on other components
     // that happen to mention these words.
     expect(
-      screen.queryByRole("link", { name: "Daily Routine" }),
+      screen.queryByRole("link", { name: "Daily Journal" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: "Daily Journal" }),
+      screen.queryByRole("link", { name: "Journal Log" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "Daily Report" }),

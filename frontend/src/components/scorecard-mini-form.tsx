@@ -7,7 +7,7 @@
 // `trading_journal.mistakes` (notes textarea) — same shape NLV Entry
 // writes today, so both call sites remain compatible.
 //
-// Auto-tick: on save success, the caller (Daily Routine) auto-ticks the
+// Auto-tick: on save success, the caller (Daily Journal) auto-ticks the
 // "Journal" routine item. Handled outside this component so the modal
 // stays focused on capture; the caller owns refetches too.
 
@@ -29,10 +29,10 @@ type ScoresMap = Record<ScorecardCategory["key"], number>;
 export interface ScorecardMiniFormProps {
   /** Whether the modal is visible. Parent owns this state. */
   open: boolean;
-  /** Portfolio to write to (the active portfolio on Daily Routine). */
+  /** Portfolio to write to (the active portfolio on Daily Journal). */
   portfolio: string;
   /** Day the score applies to (YYYY-MM-DD, matches selectedDate on the
-   *  parent Daily Routine page). */
+   *  parent Daily Journal page). */
   day: string;
   /** Existing values to pre-fill the form. Null / undefined fields
    *  fall back to per-field defaults. */

@@ -76,11 +76,11 @@ describe("log", () => {
     const orig = process.env.NODE_ENV;
     (process.env as any).NODE_ENV = "development";
     try {
-      log.debug.devOnly("daily-routine", "pre-fill missing (expected)",
+      log.debug.devOnly("daily-journal", "pre-fill missing (expected)",
         { status: 404 });
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy).toHaveBeenCalledWith(
-        "[daily-routine] pre-fill missing (expected):",
+        "[daily-journal] pre-fill missing (expected):",
         { status: 404 },
       );
     } finally {
@@ -93,7 +93,7 @@ describe("log", () => {
     const orig = process.env.NODE_ENV;
     (process.env as any).NODE_ENV = "production";
     try {
-      log.debug.devOnly("daily-routine", "pre-fill missing (expected)",
+      log.debug.devOnly("daily-journal", "pre-fill missing (expected)",
         { status: 404 });
       expect(spy).not.toHaveBeenCalled();
     } finally {

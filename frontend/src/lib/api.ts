@@ -735,7 +735,7 @@ export const api = {
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
 
-  // Live Portfolio Heat snapshot for the Daily Routine card. Uses latest
+  // Live Portfolio Heat snapshot for the Daily Journal card. Uses latest
   // saved end_nlv as denominator; returns 0 with nlv_used=0 for portfolios
   // with no journal history yet.
   portfolioHeatPreview: (portfolio = getActivePortfolio()) =>
@@ -847,7 +847,7 @@ export const api = {
       body: JSON.stringify(entry),
     }).then(r => r.json()) as Promise<{ status: string; id?: number; detail?: string }>,
 
-  // Batch journal write — multi-portfolio atomic save for Daily Routine.
+  // Batch journal write — multi-portfolio atomic save for NLV Entry.
   // Backend returns structured JSON for every status (200/404/409/422/500),
   // so .then(r => r.json()) works uniformly. Caller branches on status.
   journalBatchEdit: (body: {
@@ -1185,7 +1185,7 @@ export const api = {
       body: JSON.stringify(body),
     }).then(r => r.json()) as Promise<RobinhoodImportCommit | { detail: string }>,
 
-  // IBKR — broker NAV pull for Daily Routine auto-fill. The endpoint always
+  // IBKR — broker NAV pull for NLV Entry auto-fill. The endpoint always
   // returns 200 OK; success/error is read from the body, never the HTTP code.
   ibkrNavForDate: (date: string) =>
     fetchJSON<
@@ -1246,7 +1246,7 @@ export const api = {
     );
   },
 
-  // Market — `as_of_date` is optional. Pass it on Daily Routine so the
+  // Market — `as_of_date` is optional. Pass it on NLV Entry so the
   // prefix reflects the routine's date rather than the latest ingested
   // market_data bar (which can lag by a trading day around market open /
   // overnight cron windows).

@@ -15,6 +15,7 @@
 // after a network error would defeat the point of an evidence log.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { api, type RoutineFrequency, type RoutineItem, type RoutineSlot } from "@/lib/api";
 import {
   FREQUENCY_LABELS,
@@ -35,6 +36,22 @@ type AddFormState = {
 };
 
 const EMPTY_FORM: AddFormState = { name: "", frequency: "daily", slot: "after_close", link: "" };
+
+// System items whose row name deep-links to a capture page. Match by
+// name-prefix (same coupling model as routine-autotick.ts). Kept small
+// on purpose — only system items that have a distinct standalone page
+// worth navigating to; items captured inline on the same shell (like
+// "Journal — ..." which opens the ScorecardMiniForm) intentionally
+// don't need an internal link.
+const SYSTEM_ITEM_INTERNAL_LINKS: ReadonlyArray<{ prefix: string; href: string }> = [
+  { prefix: "Equity routine", href: "/nlv-entry" },
+];
+
+function internalLinkForItem(item: RoutineItem): string | null {
+  if (!item.is_system) return null;
+  const match = SYSTEM_ITEM_INTERNAL_LINKS.find(l => item.name.startsWith(l.prefix));
+  return match?.href ?? null;
+}
 
 const DELETE_ARM_TIMEOUT_MS = 3000;
 
@@ -207,7 +224,7 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
     }
   }, [items, load]);
 
-  // No internal header — the merged Daily Routine wraps this component
+  // No internal header — the Daily Journal shell wraps this component
   // in a SectionExpander that provides the collapse chrome, title, and
   // caption. Refresh happens automatically on mount + after each tick /
   // untick, so no manual Refresh button is needed.
@@ -413,15 +430,34 @@ function ItemRow(props: {
           <EditRow item={item} onCancel={onEditCancel} onSaved={onEditSaved} navColor={navColor} />
         ) : (
           <div className="flex items-center gap-2">
-            {item.link ? (
-              <a href={item.link} target="_blank" rel="noopener noreferrer"
-                 className="text-[13px] hover:underline truncate"
-                 style={{ color: "var(--ink-1)" }}>
-                {item.name}
-              </a>
-            ) : (
-              <span className="text-[13px] truncate" style={{ color: "var(--ink-1)" }}>{item.name}</span>
-            )}
+            {(() => {
+              // Preference order:
+              //   1. Explicit external link on the item (custom items)
+              //   2. Internal deep-link for a known system item
+              //   3. Plain text
+              const internalHref = internalLinkForItem(item);
+              if (item.link) {
+                return (
+                  <a href={item.link} target="_blank" rel="noopener noreferrer"
+                     className="text-[13px] hover:underline truncate"
+                     style={{ color: "var(--ink-1)" }}>
+                    {item.name}
+                  </a>
+                );
+              }
+              if (internalHref) {
+                return (
+                  <Link href={internalHref}
+                        className="text-[13px] hover:underline truncate"
+                        style={{ color: "var(--ink-1)" }}>
+                    {item.name}
+                  </Link>
+                );
+              }
+              return (
+                <span className="text-[13px] truncate" style={{ color: "var(--ink-1)" }}>{item.name}</span>
+              );
+            })()}
             {item.is_system && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] uppercase tracking-[0.05em] shrink-0"
                     style={{ background: "var(--bg-2)", color: "var(--ink-4)" }}>system</span>

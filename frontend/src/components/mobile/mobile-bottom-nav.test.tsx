@@ -60,8 +60,8 @@ describe("MobileBottomNav — Daily tab active across daily-workflow routes", ()
     );
   });
 
-  test("Daily tab is active on /daily-routine", () => {
-    setPathname("/daily-routine");
+  test("Daily tab is active on /journal-log", () => {
+    setPathname("/journal-log");
     render(<MobileBottomNav />);
     expect(screen.getByRole("link", { name: "Daily" })).toHaveAttribute(
       "aria-current",
@@ -79,9 +79,8 @@ describe("MobileBottomNav — Daily tab active across daily-workflow routes", ()
   });
 
   test("Daily tab is active on /nlv-entry", () => {
-    // /nlv-entry is the NLV Entry form (renamed from /daily-routine when
-    // the merged Daily Routine took over the /daily-routine URL). Still
-    // part of the daily-workflow surface.
+    // /nlv-entry is the NLV Entry form — one input into the Daily
+    // Journal shell. Still part of the daily-workflow surface.
     setPathname("/nlv-entry");
     render(<MobileBottomNav />);
     expect(screen.getByRole("link", { name: "Daily" })).toHaveAttribute(

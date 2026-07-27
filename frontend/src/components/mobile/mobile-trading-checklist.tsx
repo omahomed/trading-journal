@@ -10,10 +10,23 @@
 // tickable — nothing is hidden, just visually deprioritized.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { api, type RoutineItem } from "@/lib/api";
 import { groupRoutineItems, itemStatusChip } from "@/lib/trading-checklist";
 import { MobilePageHeader } from "./mobile-page-header";
 import { log } from "@/lib/log";
+
+// Kept in sync with the desktop trading-checklist.tsx map. If a new
+// system item gets a canonical page, add the prefix here too.
+const SYSTEM_ITEM_INTERNAL_LINKS: ReadonlyArray<{ prefix: string; href: string }> = [
+  { prefix: "Equity routine", href: "/nlv-entry" },
+];
+
+function internalLinkForItem(item: RoutineItem): string | null {
+  if (!item.is_system) return null;
+  const match = SYSTEM_ITEM_INTERNAL_LINKS.find(l => item.name.startsWith(l.prefix));
+  return match?.href ?? null;
+}
 
 export function MobileTradingChecklist({ navColor }: { navColor: string }) {
   const [items, setItems] = useState<RoutineItem[] | null>(null);
@@ -248,7 +261,7 @@ function MobileItemRow(props: {
             )}
           </div>
         </div>
-        {item.link && (
+        {item.link ? (
           <a href={item.link} target="_blank" rel="noopener noreferrer"
              onClick={(e) => e.stopPropagation()}
              className="shrink-0 text-[13px] px-2 py-1 rounded-[6px]"
@@ -256,7 +269,15 @@ function MobileItemRow(props: {
              aria-label={`Open link for ${item.name}`}>
             ↗
           </a>
-        )}
+        ) : internalLinkForItem(item) ? (
+          <Link href={internalLinkForItem(item)!}
+                onClick={(e) => e.stopPropagation()}
+                className="shrink-0 text-[13px] px-2 py-1 rounded-[6px]"
+                style={{ color: "var(--ink-3)" }}
+                aria-label={`Open capture page for ${item.name}`}>
+            ↗
+          </Link>
+        ) : null}
       </button>
       {rowError && (
         <div className="pb-2 text-[11px]" style={{ color: "#e5484d" }}>{rowError}</div>

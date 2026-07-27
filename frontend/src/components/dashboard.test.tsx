@@ -192,7 +192,7 @@ describe("Dashboard — journal-as-source-of-truth refactor", () => {
   test("empty journal renders '—' placeholders + the help banner", async () => {
     // Brand-new portfolio: no journal entries yet. Dashboard must render
     // gracefully — every KPI shows "—" and a clear call-to-action banner
-    // sits above the strip pointing at Daily Routine.
+    // sits above the strip pointing at NLV Entry.
     mDash.mockResolvedValue({
       journal_available: false,
       as_of_date: null,

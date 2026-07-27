@@ -33,9 +33,9 @@ const ITEMS: readonly NavItem[] = [
     // The Daily tab is the conceptual home of the daily-workflow
     // surface, so it stays active when the user navigates to the
     // quick-link destinations (Weekly Retro, NLV Entry) and to the
-    // merged Daily Routine (which replaced Daily Report as the
-    // today-view; historical days queried as /daily-routine?date=...).
-    extraActivePrefixes: ["/daily-routine", "/nlv-entry", "/weekly-retro"],
+    // Journal Log historical browse (which /daily-journal?date=YYYY-MM-DD
+    // was extracted from as its own top-level destination).
+    extraActivePrefixes: ["/journal-log", "/nlv-entry", "/weekly-retro"],
   },
   { href: "/more", label: "More", Icon: Ellipsis },
 ] as const;
@@ -46,7 +46,7 @@ const ITEMS: readonly NavItem[] = [
  * only). Active item is the one whose `href` matches the current
  * pathname or is a strict prefix — plus any `extraActivePrefixes`
  * declared on the item (used by the Daily tab to span the daily-
- * workflow surface across /daily-journal, /daily-routine, /nlv-entry,
+ * workflow surface across /daily-journal, /journal-log, /nlv-entry,
  * and /weekly-retro).
  *
  * Cycle was dropped in Phase 2 Step 2 — the M Factor state now rides on

@@ -53,7 +53,10 @@ requirements.txt    - Python dependencies
 - Risk Manager - Drawdown tracking with 3 hard deck levels (7.5%, 12.5%, 15%)
 
 ### Daily Workflow
-- Daily Journal, Daily Report Card, Daily Routine, Weekly Retro
+- Daily Journal (write shell — checklist + KPIs + trades + notes + snapshots + scorecard + thoughts + recap)
+- Journal Log (historical browse — 19-column table of past journal entries)
+- NLV Entry (one-input NLV / holdings / cash-change capture)
+- Weekly Retro
 
 ## Risk Manager Details
 - `RESET_DATE = pd.Timestamp("2025-12-16")` appears in 3 places (Command Center, Risk Manager, Daily Report Card)

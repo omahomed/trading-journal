@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 1-5 chip-group score selector. Replaces the desktop daily-routine's
+ * 1-5 chip-group score selector. Replaces the desktop daily-journal's
  * range slider — sliders are touch-hostile on small viewports (small
  * thumb, hard to land precisely). Chips give a clean tap target
  * (≥44px) per score value with color tinting that mirrors the
@@ -11,7 +11,7 @@
  *   - 4-5 → green (good)
  *
  * Default tier mapping matches the desktop scoreColor helper at
- * daily-routine.tsx:44. Callers can override via the `tierFor` prop
+ * daily-journal.tsx (scoreColor helper). Callers can override via the `tierFor` prop
  * if the calling context wants a different palette mapping (none
  * does today; left in as a forward-compat hatch).
  */
