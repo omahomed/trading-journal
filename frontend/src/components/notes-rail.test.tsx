@@ -283,7 +283,7 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     expect(onItemClick.mock.calls[0][0].key).toBe("2026-05-04");
   });
 
-  test("header subtitle includes years span when items cross multiple years", () => {
+  test("header subtitle renders a year range when items cross multiple years", () => {
     const items = [
       item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
       item({ id: 11, key: "2025-12-29", year: 2025, month: 12 }),
@@ -292,12 +292,12 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
                      currentEntityKey={items[0].key}
                      onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
-    // 2026 - 2024 + 1 = 3 years
-    expect(screen.getByText(/3 years/)).toBeInTheDocument();
+    // Range spans earliest → latest year, formatted with an en-dash.
+    expect(screen.getByText(/2024\s*–\s*2026/)).toBeInTheDocument();
     expect(screen.getByText(/3 weeks/)).toBeInTheDocument();
   });
 
-  test("header subtitle renders '1 year' (singular) when items span one calendar year", () => {
+  test("header subtitle renders a single year when items span one calendar year", () => {
     const items = [
       item({ id: 10, key: "2026-05-11", year: 2026, month: 5 }),
       item({ id: 11, key: "2026-01-06", year: 2026, month: 1 }),
@@ -305,7 +305,8 @@ describe("NotesRail — Phase 6 left-rail navigator", () => {
     render(<NotesRail entityType="weekly_retro" items={items} ytdStats={EMPTY_STATS}
                      currentEntityKey={items[0].key}
                      onItemClick={vi.fn()} onPinToggle={vi.fn()} />);
-    expect(screen.getByText(/1 year(?!s)/)).toBeInTheDocument();
+    // Single-year range collapses to just the year.
+    expect(screen.getByText(/^\s*2026\s*$/)).toBeInTheDocument();
   });
 
   test("calendar jump-to-date button opens picker; selecting a date fires onItemClick with the right week", async () => {

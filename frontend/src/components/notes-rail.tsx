@@ -1121,12 +1121,18 @@ export const NotesRail = forwardRef<NotesRailHandle, NotesRailProps>(function No
 
   const currentYear = currentYearMonth?.year ?? new Date().getFullYear();
 
-  // Year span from earliest to latest item (inclusive). Drives the "·
-  // {N} years" subtitle suffix. 0 → suppress (single-year or empty).
-  const yearsSpanned = useMemo(() => {
-    if (items.length === 0) return 0;
+  // Year range from earliest to latest item, formatted as a subtitle
+  // suffix ("2024 – 2026" for multi-year, "2026" for single-year, "" for
+  // empty). Older UI showed "{N} years" which reads like elapsed time —
+  // for a journal spanning 2024 → 2026 that renders "3 years" (three
+  // distinct calendar years touched) and gets confused with "3 years
+  // of trading." A range is unambiguous.
+  const yearRangeLabel = useMemo(() => {
+    if (items.length === 0) return "";
     const years = items.map(it => it.year);
-    return Math.max(...years) - Math.min(...years) + 1;
+    const lo = Math.min(...years);
+    const hi = Math.max(...years);
+    return lo === hi ? `${lo}` : `${lo} – ${hi}`;
   }, [items]);
 
   // Jump to the entity covering a picked date. Snap semantics differ by
@@ -1229,11 +1235,11 @@ export const NotesRail = forwardRef<NotesRailHandle, NotesRailProps>(function No
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>
             {items.length} {entityType === "weekly_retro" ? "weeks" : "days"}
-            {yearsSpanned > 0 && (
+            {yearRangeLabel && (
               <>
                 <span style={{ color: "var(--ink-4)", margin: "0 4px" }}>·</span>
                 <span style={{ color: "var(--ink-3)" }}>
-                  {yearsSpanned} {yearsSpanned === 1 ? "year" : "years"}
+                  {yearRangeLabel}
                 </span>
               </>
             )}

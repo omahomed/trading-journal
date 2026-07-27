@@ -772,15 +772,17 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
                 </div>
               </div>
             </div>
+          </>
+        )}
 
-            {/* Section 3: Trade Activity — SectionExpander per row so the
-                cards share styling with Daily Thoughts. Grid stays 2-col
-                so the two expanders sit side-by-side; each collapses
-                independently. */}
-            {(() => {
-              const closedRows = dayClosed.length > 0 ? dayClosed.length : daySells.length;
-              return (
-                <div className="grid grid-cols-2 gap-4">
+        {/* Section 3: Trade Activity — always renders. Uses dayBuys /
+            daySells / dayClosed which are derived from the details + closed
+            trades queries, not from the journal row. So intraday trades
+            show up on today's page even before NLV Entry saves. */}
+        {(() => {
+          const closedRows = dayClosed.length > 0 ? dayClosed.length : daySells.length;
+          return (
+            <div className="grid grid-cols-2 gap-4 mb-5">
                   <SectionExpander
                     title="Positions Opened"
                     defaultExpanded={dayBuys.length > 0 && dayBuys.length <= 3}
@@ -827,11 +829,9 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
                       )) : <div className="text-[12px]" style={{ color: "var(--ink-4)" }}>No positions closed.</div>}
                     </div>
                   </SectionExpander>
-                </div>
-              );
-            })()}
-          </>
-        )}
+            </div>
+          );
+        })()}
 
         {/* Phase 2 merger: Trading Checklist section. Renders regardless
             of NLV / journal-entry state — always today's items, never
@@ -872,20 +872,21 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
           </div>
         )}
 
-        {day && (
-          <>
-            {/* Section 4: Daily Scorecard (renamed from Daily Review
-                per Phase 2 merger). Captures via ScorecardMiniForm on
-                the Journal checklist item's flow; NLV Entry keeps its
-                own copy of the same fields until the multi-portfolio
-                form is trimmed in a follow-up. Empty state surfaces a
-                "Grade today" call-to-action; populated state renders
-                the grade + chips + notes with an Edit button. */}
-            {(() => {
-              const score = day.score || 0;
-              const highlights = (day as any).highlights || "";
-              const mistakes = (day as any).mistakes || "";
-              const topLesson = (day as any).top_lesson || "";
+        {/* Section 4: Daily Scorecard (renamed from Daily Review per
+            Phase 2 merger). Captures via ScorecardMiniForm on the
+            Journal checklist item's flow; NLV Entry keeps its own copy
+            of the same fields until the multi-portfolio form is trimmed
+            in a follow-up. Empty state surfaces a "Grade today" call-
+            to-action; populated state renders the grade + chips + notes
+            with an Edit button.
+            Renders unconditionally — before the journal row exists,
+            everything falls through to the ungraded empty state which
+            is exactly what the day 1 experience wants. */}
+        {(() => {
+          const score = day?.score || 0;
+          const highlights = (day as any)?.highlights || "";
+          const mistakes = (day as any)?.mistakes || "";
+          const topLesson = (day as any)?.top_lesson || "";
               const graded = !!(score || (highlights && highlights.startsWith("{")) || mistakes);
 
               let rc: Record<string, number> | null = null;
@@ -1110,8 +1111,6 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
                 lightboxAriaLabel="Capture preview"
               />
             </SectionExpander>
-          </>
-        )}
 
         {/* Scorecard mini-form — triggered by "Grade today" empty
             state or "Edit" chip inside Daily Scorecard section. On
