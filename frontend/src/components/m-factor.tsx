@@ -183,7 +183,7 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="text-[15px] font-semibold mt-2">Trend Count: {trendCount > 0 ? `+${trendCount}` : trendCount}</div>
         )}
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
-        {data.ftd_date && <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date}</div>}
+        <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date || "—"}</div>
         {state === "POWERTREND" && data.power_trend_on_since && (
           <div className="text-[12px] mt-1 opacity-70">Power-Trend ON since {data.power_trend_on_since}</div>
         )}

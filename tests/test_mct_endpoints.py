@@ -323,6 +323,105 @@ def test_market_state_for_journal_excludes_market_window():
 
 
 # ---------------------------------------------------------------------------
+# _min_low_since_ref_high — drawdown-tile pair for reference_high
+# ---------------------------------------------------------------------------
+
+def test_min_low_since_ref_high_returns_lowest_low_after_peak_bar():
+    """Peak-to-trough: from the bar whose high matched ref_high forward,
+    return the lowest intraday low. The display drawdown pairs that trough
+    with the peak-high for a true max-drawdown reading."""
+    import pandas as pd
+    from api.mct_endpoint_adapter import _min_low_since_ref_high
+    bars = pd.DataFrame([
+        {"trade_date": "2026-01-01", "high": 100.0, "low": 98.0},
+        {"trade_date": "2026-01-02", "high": 110.0, "low": 105.0},  # peak
+        {"trade_date": "2026-01-03", "high": 108.0, "low": 95.0},   # deepest low
+        {"trade_date": "2026-01-04", "high": 106.0, "low": 100.0},
+    ])
+    assert _min_low_since_ref_high(bars, 110.0) == 95.0
+
+
+def test_min_low_since_ref_high_ignores_lows_before_the_peak():
+    """A lower low BEFORE the peak-high bar must not count — max drawdown
+    is peak-forward. Prior weakness isn't part of this cycle's drawdown."""
+    import pandas as pd
+    from api.mct_endpoint_adapter import _min_low_since_ref_high
+    bars = pd.DataFrame([
+        {"trade_date": "2026-01-01", "high": 90.0, "low": 80.0},   # low pre-peak
+        {"trade_date": "2026-01-02", "high": 110.0, "low": 105.0}, # peak
+        {"trade_date": "2026-01-03", "high": 108.0, "low": 100.0},
+    ])
+    assert _min_low_since_ref_high(bars, 110.0) == 100.0
+
+
+def test_min_low_since_ref_high_returns_none_when_ref_high_missing_from_bars():
+    """Belt-and-suspenders — if we can't locate the peak bar (shouldn't
+    happen post-ratchet), return None so the caller falls back to close."""
+    import pandas as pd
+    from api.mct_endpoint_adapter import _min_low_since_ref_high
+    bars = pd.DataFrame([{"trade_date": "2026-01-01", "high": 100.0, "low": 98.0}])
+    assert _min_low_since_ref_high(bars, 500.0) is None
+
+
+def test_min_low_since_ref_high_returns_none_when_ref_high_zero_or_none():
+    """Zero/None guard — no ref high means no drawdown pair."""
+    import pandas as pd
+    from api.mct_endpoint_adapter import _min_low_since_ref_high
+    bars = pd.DataFrame([{"trade_date": "2026-01-01", "high": 100.0, "low": 98.0}])
+    assert _min_low_since_ref_high(bars, 0.0) is None
+    assert _min_low_since_ref_high(bars, None) is None
+
+
+# ---------------------------------------------------------------------------
+# _latest_ftd_date — current-cycle gating
+# ---------------------------------------------------------------------------
+
+def test_latest_ftd_date_returns_none_when_last_ftd_is_before_current_cycle():
+    """After a fresh CORRECTION_DECLARED, the prior cycle's FTD must not
+    leak into the new cycle's display — the tile should read '—' until a
+    new FTD fires post-cycle-start."""
+    from datetime import date
+    from api.mct_endpoint_adapter import _latest_ftd_date
+    from api.mct_engine import SignalEvent
+    signals = [
+        SignalEvent(trade_date=date(2026, 1, 15), signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+    ]
+    # Cycle started 2026-03-01 (after the FTD)
+    assert _latest_ftd_date(signals, cycle_start=date(2026, 3, 1)) is None
+
+
+def test_latest_ftd_date_returns_ftd_when_within_current_cycle():
+    """FTD that fired at/after cycle_start belongs to this cycle."""
+    from datetime import date
+    from api.mct_endpoint_adapter import _latest_ftd_date
+    from api.mct_engine import SignalEvent
+    signals = [
+        SignalEvent(trade_date=date(2026, 3, 5), signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+    ]
+    assert _latest_ftd_date(signals, cycle_start=date(2026, 3, 1)) == "2026-03-05"
+
+
+def test_latest_ftd_date_without_cycle_start_returns_latest_ftd():
+    """Backwards-compat: no cycle_start arg → unfiltered latest FTD."""
+    from datetime import date
+    from api.mct_endpoint_adapter import _latest_ftd_date
+    from api.mct_engine import SignalEvent
+    signals = [
+        SignalEvent(trade_date=date(2026, 1, 15), signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+        SignalEvent(trade_date=date(2026, 4, 20), signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+    ]
+    assert _latest_ftd_date(signals) == "2026-04-20"
+
+
+# ---------------------------------------------------------------------------
 # Shared fixture — DB endpoint tests reuse a single engine run for speed.
 # ---------------------------------------------------------------------------
 

@@ -217,6 +217,28 @@ def _find_reference_high_date(bars: pd.DataFrame, ref_high: Optional[float]) -> 
     return _isodate(matches["trade_date"].iloc[-1])
 
 
+def _min_low_since_ref_high(bars: pd.DataFrame, ref_high: Optional[float]) -> Optional[float]:
+    """Lowest intraday low from the reference-high bar forward.
+
+    Pairs with reference_high (peak intraday high) to give a proper
+    peak-to-trough max drawdown for the display tile. Engine's
+    CORRECTION_DECLARED trigger is close-based and unaffected — this
+    is display-only, showing "worst intraday depth since the peak."
+    """
+    if not ref_high or bars.empty:
+        return None
+    matches = bars.index[
+        (bars["high"] >= ref_high - 0.01) & (bars["high"] <= ref_high + 0.01)
+    ]
+    if len(matches) == 0:
+        return None
+    start_idx = int(matches[-1])
+    window = bars.iloc[start_idx:]
+    if window.empty:
+        return None
+    return float(window["low"].min())
+
+
 def _power_trend_on_since(bars: pd.DataFrame) -> Optional[str]:
     """Walk backward from the last bar while power_trend is True; the first
     bar of that contiguous True run is the start date. None if not in PT."""
@@ -231,10 +253,25 @@ def _power_trend_on_since(bars: pd.DataFrame) -> Optional[str]:
     return _isodate(bars["trade_date"].iloc[i])
 
 
-def _latest_ftd_date(signals: list[SignalEvent]) -> Optional[str]:
+def _latest_ftd_date(
+    signals: list[SignalEvent],
+    cycle_start: Optional[date] = None,
+) -> Optional[str]:
+    """Latest STEP_1_FTD event, gated to the current rally cycle.
+
+    Without the cycle_start filter, the display would surface the PRIOR
+    cycle's FTD after a fresh correction is declared — misleading, since
+    the new cycle hasn't earned an FTD yet. When cycle_start is provided,
+    only FTDs at/after that date qualify; the tile shows "—" until the
+    new cycle actually confirms an FTD.
+    """
     for sig in reversed(signals):
-        if sig.signal_type == "STEP_1_FTD":
-            return _isodate(sig.trade_date)
+        if sig.signal_type != "STEP_1_FTD":
+            continue
+        sig_date = pd.Timestamp(sig.trade_date).date()
+        if cycle_start is not None and sig_date < cycle_start:
+            continue
+        return _isodate(sig.trade_date)
     return None
 
 
@@ -456,7 +493,12 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
     sma_200 = float(last["sma_200"]) if pd.notna(last["sma_200"]) else 0.0
 
     ref_high = float(state.get("reference_high") or 0.0)
-    drawdown = ((close - ref_high) / ref_high * 100) if ref_high > 0 else 0.0
+    # Max drawdown: peak intraday high → lowest intraday low since that peak.
+    # Falls back to close if we can't locate the ref_high bar (shouldn't happen
+    # in practice — the ratchet writes ref_high from an actual bar's high).
+    min_low = _min_low_since_ref_high(bars, ref_high)
+    trough = min_low if min_low is not None else close
+    drawdown = ((trough - ref_high) / ref_high * 100) if ref_high > 0 else 0.0
 
     avg_up = _avg_up_day_pct(bars)
     atr_p = _atr_pct(bars)
@@ -483,7 +525,7 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "stack_21_50": ema_21 > sma_50,
         "stack_50_200": sma_50 > sma_200,
         "entry_ladder": _entry_ladder(state, result.signals, cycle_start_date_obj),
-        "ftd_date": _latest_ftd_date(result.signals),
+        "ftd_date": _latest_ftd_date(result.signals, cycle_start_date_obj),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),
         # V11 surfaces consume cap_at_100 to render the "capped at 100%"
