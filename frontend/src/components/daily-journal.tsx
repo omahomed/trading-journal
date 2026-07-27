@@ -272,12 +272,18 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
     }
     const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
     setRecap(entry?.lowlights || "");
-    setDailyThoughts(entry?.daily_thoughts || "");
-    setGamePlan(entry?.game_plan || "");
-    gamePlanDirtyRef.current = false;
-    setGamePlanMsg(null);
-    setRecapDirty(false);
-    dailyThoughtsDirtyRef.current = false;
+    // Dirty-ref guard: if the user has an in-flight edit (typed but the
+    // debounced auto-save hasn't fired yet), do NOT overwrite the local
+    // state. Otherwise a concurrent history mutation (e.g. Game Plan
+    // auto-save synthesizing a partial row into `history`) blanks the
+    // parent value prop while the contentEditable DOM still holds the
+    // typed text — the empty-value branch then flips placeholderVisible
+    // true and the placeholder overlay stacks visibly on top of the
+    // retained DOM content.
+    if (!dailyThoughtsDirtyRef.current) setDailyThoughts(entry?.daily_thoughts || "");
+    if (!gamePlanDirtyRef.current) setGamePlan(entry?.game_plan || "");
+    if (!gamePlanDirtyRef.current) setGamePlanMsg(null);
+    if (!recapDirty) setRecapDirty(false);
   }, [selectedDate, history]);
 
   // Game Plan auto-save — mirrors the Daily Thoughts debounced pattern.
@@ -303,9 +309,20 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
             copy[idx] = { ...copy[idx], game_plan: gamePlan } as any;
             return copy;
           }
+          // No prior history row → synthesize one that carries CURRENT
+          // local state for the other free-text fields too. Otherwise the
+          // hydration effect above will find a row with only game_plan
+          // set and blank the user's in-flight Daily Thoughts / Daily
+          // Recap. Belt-and-suspenders with the dirty-ref guard.
           return [
             ...prev,
-            { id: res.id, day: selectedDate, game_plan: gamePlan } as any,
+            {
+              id: res.id,
+              day: selectedDate,
+              game_plan: gamePlan,
+              daily_thoughts: dailyThoughts,
+              lowlights: recap,
+            } as any,
           ];
         });
         window.setTimeout(() => setGamePlanMsg(null), 2000);
