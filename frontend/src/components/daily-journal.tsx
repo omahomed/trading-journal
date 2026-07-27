@@ -194,10 +194,14 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
       setHistory(h);
       setDetails(det.details);
       setClosedTrades(closed as TradePosition[]);
-      if (h.length > 0) {
-        const match = dateParam && h.find(d => String(d.day).slice(0, 10) === dateParam);
-        setSelectedDate(match ? dateParam : String(h[0].day).slice(0, 10));
-      }
+      // Default to today (America/Chicago) so opening Daily Journal lands
+      // on the editable Game Plan / checklist for the current session,
+      // not the most recent LOGGED day (which could be days back on
+      // weekends/holidays). Explicit ?date=YYYY-MM-DD in the URL still
+      // wins — sidebar clicks and back-nav from Journal Log both go
+      // through the query string. If today has no journal row yet, the
+      // page renders empty-state tiles + editable Game Plan; no error.
+      setSelectedDate(dateParam || todayInChicago());
       setLoading(false);
     });
   }, [dateParam, portfolio, reloadCounter]);
