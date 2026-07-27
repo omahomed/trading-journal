@@ -786,6 +786,128 @@ def test_force_correction_at_date_seeds_engine_state():
         assert final[f"step{s}_done"] is False, f"step{s}_done should be False after override reset"
 
 
+def test_force_correction_today_can_also_fire_step0_same_bar():
+    """The override date can BE a rally day on its own bar. Phase 3a
+    (force-declare) clears running_min_low, but phase 7 (rally-hunt)
+    runs on the SAME bar in-correction, sets running_min from the just-
+    declared bar's low, then evaluates the up_day / pink_rally_day
+    conditions against prev_close. If today closes above the prior
+    bar's close, STEP_0 fires today — cycle_start_idx = today's index.
+
+    This is the user-model invariant: declaring correction today does
+    not push the rally-hunt to start tomorrow; today itself can qualify
+    depending on how it closes."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # 5 flat bars (nothing above threshold) then a 6th bar that closes
+    # UP vs the 5th. Force-declare on the 6th bar. If the flow works
+    # correctly, that same bar should emit STEP_0_RALLY_DAY as an up_day.
+    closes = [110.0, 110.0, 110.0, 110.0, 110.0, 111.5]  # last bar closes up
+    lows =   [109.0, 109.0, 109.0, 109.0, 109.0, 110.0]
+    highs =  [111.0, 111.0, 111.0, 111.0, 111.0, 112.0]
+    df = _synthetic_history(
+        closes,
+        ema_21=[110.0] * 6,
+        sma_50=[100.0] * 6,
+        sma_200=[95.0] * 6,
+        lows=lows, highs=highs,
+    )
+    force_date = df["trade_date"].iloc[5]  # the up-close bar
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=112.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=force_date,
+    ))
+    result = engine.run(df)
+
+    # CORRECTION_DECLARED and STEP_0_RALLY_DAY should both land on force_date.
+    declared = [s for s in result.signals
+                if s.signal_type == "CORRECTION_DECLARED" and s.trade_date == force_date]
+    step0 = [s for s in result.signals
+             if s.signal_type == "STEP_0_RALLY_DAY" and s.trade_date == force_date]
+    assert len(declared) == 1, f"expected 1 CORRECTION_DECLARED on force_date, got {len(declared)}"
+    assert len(step0) == 1, (
+        f"expected STEP_0_RALLY_DAY on the same bar (up_day), got {len(step0)}"
+    )
+    # up_day trigger, not pink_rally_day — 111.5 > 110 is a proper up close.
+    assert step0[0].meta.get("trigger") == "up_day"
+
+
+def test_force_correction_today_pink_rally_day_same_bar():
+    """Pink rally day variant — override bar closes flat/down vs prior
+    but in the upper half of its intraday range. STEP_0 should still fire
+    same-bar with trigger='pink_rally_day'."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Prior bar close 110; force bar close 109.5 (down) BUT with low 108
+    # and high 110 → position_in_range = (109.5 - 108) / (110 - 108) = 0.75 > 0.5
+    closes = [110.0, 110.0, 110.0, 110.0, 110.0, 109.5]
+    lows =   [109.0, 109.0, 109.0, 109.0, 109.0, 108.0]
+    highs =  [111.0, 111.0, 111.0, 111.0, 111.0, 110.0]
+    df = _synthetic_history(
+        closes,
+        ema_21=[110.0] * 6,
+        sma_50=[100.0] * 6,
+        sma_200=[95.0] * 6,
+        lows=lows, highs=highs,
+    )
+    force_date = df["trade_date"].iloc[5]
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=force_date,
+    ))
+    result = engine.run(df)
+
+    step0 = [s for s in result.signals
+             if s.signal_type == "STEP_0_RALLY_DAY" and s.trade_date == force_date]
+    assert len(step0) == 1
+    assert step0[0].meta.get("trigger") == "pink_rally_day"
+
+
+def test_force_correction_today_stays_correction_when_close_qualifies_neither():
+    """When the override bar closes DOWN in the lower half of its range,
+    it's a continuation-down bar — neither up_day nor pink_rally_day. The
+    bar remains CORRECTION with step0_done=False. Rally-hunt continues
+    from the NEXT bar."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Prior close 110; force bar closes 109 in the LOWER half.
+    # position_in_range = (109 - 108) / (111 - 108) = 0.33 → not pink.
+    closes = [110.0, 110.0, 110.0, 110.0, 110.0, 109.0]
+    lows =   [109.0, 109.0, 109.0, 109.0, 109.0, 108.0]
+    highs =  [111.0, 111.0, 111.0, 111.0, 111.0, 111.0]
+    df = _synthetic_history(
+        closes,
+        ema_21=[110.0] * 6,
+        sma_50=[100.0] * 6,
+        sma_200=[95.0] * 6,
+        lows=lows, highs=highs,
+    )
+    force_date = df["trade_date"].iloc[5]
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=111.0,
+        initial_power_trend=False,
+        initial_exposure=100,
+        force_correction_at_date=force_date,
+    ))
+    result = engine.run(df)
+
+    step0 = [s for s in result.signals
+             if s.signal_type == "STEP_0_RALLY_DAY" and s.trade_date == force_date]
+    assert step0 == [], (
+        "continuation-down bar shouldn't fire STEP_0 on the override bar"
+    )
+    # State should still reflect an active correction with step0 not done.
+    assert result.final_state["correction_active"] is True
+    assert result.final_state["step0_done"] is False
+
+
 def test_force_correction_no_op_when_date_absent_from_history():
     """If force_correction_at_date doesn't match any bar in the sliced
     history (e.g., stale override anchor), the engine runs normally and
