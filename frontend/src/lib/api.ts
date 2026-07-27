@@ -1316,6 +1316,13 @@ export const api = {
       activated_date_ct: string;
       reason: string;
     } | null;
+    // ISO 8601 UTC timestamp of the last time the ^IXIC bar for
+    // `data_as_of` was written to market_data. Frontends contrast this
+    // with data_as_of to render "stale intraday snapshot" affordances —
+    // yfinance sometimes publishes an early-morning bar for the current
+    // session that then doesn't update again until the daily cron
+    // fires post-close.
+    data_ingested_at?: string | null;
   }>(`/api/market/rally-prefix${as_of_date ? `?as_of_date=${encodeURIComponent(as_of_date)}` : ""}`),
 
   // M Factor manual CORRECTION override (Migration 053). See

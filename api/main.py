@@ -3553,6 +3553,22 @@ def rally_prefix(as_of_date: str = ""):
         systematic_response = _project_rally_prefix_for_data_lag(systematic_response, as_of)
         systematic_state = systematic_response.get("state")
 
+        # Data freshness — surface WHEN the latest ^IXIC bar was written
+        # to market_data, not just its trade_date. yfinance sometimes
+        # publishes an early-morning intraday snapshot for the current
+        # session which then doesn't update again until the daily cron
+        # fires post-close (e.g., today's bar ingested at 8:45 AM CT
+        # showed a stale close vs. the real end-of-day 6 hours later).
+        # Attaching this to the response lets the M Factor subtitle
+        # render "Data as of 2026-07-27 · pulled 8:45 AM CT" so the
+        # operator can spot a mid-session snapshot at a glance.
+        try:
+            from api.market_data_repo import get_latest_bar_ingest_ts
+            systematic_response["data_ingested_at"] = get_latest_bar_ingest_ts("^IXIC")
+        except Exception as e:
+            print(f"[rally_prefix] data_ingested_at lookup failed: {e}")
+            systematic_response["data_ingested_at"] = None
+
         # Override overlay. If active, check auto-clear first, then run the
         # engine a SECOND time with force_correction_at_date pinned to the
         # override's activated_date_ct so the returned state reflects a
@@ -3595,6 +3611,7 @@ def rally_prefix(as_of_date: str = ""):
                         overridden_response = to_rally_prefix_response(overridden_result)
                         overridden_response = _project_rally_prefix_for_data_lag(overridden_response, as_of)
                         overridden_response["systematic_state"] = systematic_state
+                        overridden_response["data_ingested_at"] = systematic_response.get("data_ingested_at")
                         overridden_response["override"] = {
                             "id": override["id"],
                             "activated_date_ct": override["activated_date_ct"],

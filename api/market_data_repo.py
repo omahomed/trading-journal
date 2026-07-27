@@ -95,6 +95,31 @@ def get_latest_date(symbol: str) -> Optional[date]:
     return row[0] if row and row[0] is not None else None
 
 
+def get_latest_bar_ingest_ts(symbol: str) -> Optional[str]:
+    """Return the ISO 8601 UTC timestamp of when the most-recent bar for
+    `symbol` was last written to market_data (updated_at). Used by the
+    rally-prefix endpoint to surface data freshness — the caller (M Factor
+    page subtitle) contrasts trade_date with ingest_time so the operator
+    can tell if today's bar is an early-morning yfinance snapshot vs
+    end-of-day settled data. Returns None if the symbol has no bars."""
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT updated_at FROM market_data "
+            " WHERE symbol = %s "
+            " ORDER BY trade_date DESC "
+            " LIMIT 1",
+            (symbol,),
+        )
+        row = cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    ts = row[0]
+    # ISO with Z suffix so the frontend can new Date() it cleanly.
+    if getattr(ts, "tzinfo", None) is None:
+        return ts.isoformat() + "Z"
+    return ts.isoformat().replace("+00:00", "Z")
+
+
 def _rows_to_df(rows) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=list(_DF_COLUMNS))

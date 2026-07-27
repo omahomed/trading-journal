@@ -8,6 +8,30 @@ import { CycleTrackerMethodology } from "@/components/cycle-tracker-methodology"
 
 const OVERRIDE_REASON_MIN = 40;
 
+// Ingest-time formatter used in the subtitle. Renders a compact
+// "MMM D h:mmam CT" for same-day ingests and a full date for older
+// ones. Local viewer time zone (browser default). The point is that
+// the operator can see if today's bar is a stale morning snapshot
+// (e.g. pulled 8:45 AM CT before the intraday sell-off) vs settled
+// end-of-day data.
+function formatIngestTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).toLowerCase().replace(/\s+/g, "");
+  if (sameDay) return time;
+  const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${date} ${time}`;
+}
+
 const STATE_COLORS: Record<string, { bg: string; fg: string }> = {
   POWERTREND: { bg: "#8A2BE2", fg: "#fff" },
   UPTREND: { bg: "#08a86b", fg: "#fff" },
@@ -125,7 +149,14 @@ export function MFactor({ navColor }: { navColor: string }) {
           </h1>
           <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
             NASDAQ cycle analysis · Entry & exit ladder
-            {data.data_as_of && <span className="ml-2 opacity-70">· Data as of {data.data_as_of}</span>}
+            {data.data_as_of && (
+              <span className="ml-2 opacity-70">
+                · Data as of {data.data_as_of}
+                {data.data_ingested_at && (
+                  <> · pulled {formatIngestTime(data.data_ingested_at)}</>
+                )}
+              </span>
+            )}
           </div>
         </div>
         <button onClick={loadData} className="flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium"
