@@ -128,6 +128,135 @@ def test_mct_stamp_omits_override_when_none_active(monkeypatch):
     assert called_with["force_correction_at_date"] is None
 
 
+# ---------------------------------------------------------------------------
+# _heal_recent_mct_stamps — re-stamp when stored state is stale
+# ---------------------------------------------------------------------------
+
+def test_heal_restamps_stored_state_when_engine_state_differs(monkeypatch):
+    """Regression from the Force Correction override rollout:
+
+    When the override was declared, the M Factor page immediately
+    showed CORRECTION (its endpoint applies the override every call),
+    but today's trading_journal row was already stamped with the
+    systematic "UPTREND UNDER PRESSURE" from an earlier save. The
+    previous heal only re-stamped NULL rows, so a row already stamped
+    with the systematic state was skipped and stayed visibly wrong on
+    Journal Log — even after deploy landed the override plumbing.
+
+    The generalization: heal on NULL OR when the stored state differs
+    from what the engine currently produces. Same helper handles the
+    inverse case (override cleared → re-stamp back to systematic) and
+    any future engine-behavior change that flips a past date's class.
+    """
+    import api.main as main
+    import db_layer
+
+    # Override active — engine will report CORRECTION for today's bar.
+    monkeypatch.setattr(db_layer, "get_active_mct_override", lambda: {
+        "activated_date_ct": "2026-07-27",
+        "reason": "manual",
+    })
+
+    # Stub run_engine to return one bar (today) with CORRECTION state.
+    from api.mct_engine import EngineResult
+    engine_bars = pd.DataFrame([{
+        "trade_date": pd.Timestamp("2026-07-27"),
+        "state": "CORRECTION",
+        "cycle_start_idx": pd.NA,
+        "pt_on_idx": pd.NA,
+        "rally_active": False,
+    }])
+    monkeypatch.setattr(
+        "api.mct_endpoint_adapter.run_engine",
+        lambda symbol="^IXIC", as_of=None, force_correction_at_date=None:
+            EngineResult(bars=engine_bars, signals=[], final_state={}),
+    )
+    monkeypatch.setattr(
+        "api.mct_endpoint_adapter.to_rally_prefix_response",
+        lambda result: {"trend_count": None},
+    )
+    monkeypatch.setattr("api.market_data_updater.update_if_needed",
+                        lambda symbol="^IXIC": None)
+
+    # Capture the update — verify it fires with the engine's CORRECTION
+    # state, not the stored "UPTREND UNDER PRESSURE" state.
+    captured = {}
+    def fake_update(portfolio, day_str, state, day_num):
+        captured.update({"portfolio": portfolio, "day": day_str,
+                         "state": state, "day_num": day_num})
+        return 1
+    monkeypatch.setattr(db_layer, "update_journal_mct_state", fake_update)
+    monkeypatch.setattr(db_layer, "update_journal_trend_state",
+                        lambda *a, **kw: 1)
+
+    # Journal row already stamped with the systematic (stale) state.
+    df = pd.DataFrame([{
+        "day": pd.Timestamp("2026-07-27"),
+        "market_cycle": "UPTREND UNDER PRESSURE",
+        "mct_display_day_num": 81,
+        "trend_count": -33,
+    }])
+
+    main._heal_recent_mct_stamps("CanSlim", df)
+
+    # The heal must have re-stamped to CORRECTION even though the row
+    # was already non-NULL — the "stored != engine" branch is the point.
+    assert captured.get("state") == "CORRECTION"
+    assert captured.get("day") == "2026-07-27"
+    # CORRECTION rows get None day_num (no Rally Day counting during
+    # correction) — the frontend hides the "D{N}" suffix on NULL.
+    assert captured.get("day_num") is None
+
+
+def test_heal_does_not_restamp_when_stored_state_matches_engine(monkeypatch):
+    """Belt-and-suspenders — a fresh row where stored state already
+    matches the engine should be a no-op. Prevents the heal from
+    doing pointless writes (and audit log spam) on every history
+    fetch."""
+    import api.main as main
+    import db_layer
+
+    monkeypatch.setattr(db_layer, "get_active_mct_override", lambda: None)
+
+    from api.mct_engine import EngineResult
+    engine_bars = pd.DataFrame([{
+        "trade_date": pd.Timestamp("2026-07-27"),
+        "state": "UPTREND UNDER PRESSURE",
+        "cycle_start_idx": pd.NA,
+        "pt_on_idx": pd.NA,
+        "rally_active": False,
+    }])
+    monkeypatch.setattr(
+        "api.mct_endpoint_adapter.run_engine",
+        lambda symbol="^IXIC", as_of=None, force_correction_at_date=None:
+            EngineResult(bars=engine_bars, signals=[], final_state={}),
+    )
+    monkeypatch.setattr(
+        "api.mct_endpoint_adapter.to_rally_prefix_response",
+        lambda result: {"trend_count": -33},
+    )
+    monkeypatch.setattr("api.market_data_updater.update_if_needed",
+                        lambda symbol="^IXIC": None)
+
+    writes = []
+    monkeypatch.setattr(db_layer, "update_journal_mct_state",
+                        lambda *a, **kw: (writes.append(a), 1)[1])
+    monkeypatch.setattr(db_layer, "update_journal_trend_state",
+                        lambda *a, **kw: (writes.append(a), 1)[1])
+
+    df = pd.DataFrame([{
+        "day": pd.Timestamp("2026-07-27"),
+        "market_cycle": "UPTREND UNDER PRESSURE",
+        "mct_display_day_num": None,   # None matches CORRECTION rule + UUP
+        "trend_count": -33,
+    }])
+
+    main._heal_recent_mct_stamps("CanSlim", df)
+
+    # Zero writes — stored matches engine, nothing to do.
+    assert writes == []
+
+
 def test_trend_count_stamp_passes_override_date_to_engine(monkeypatch):
     """Trend count stamper (mirror of the MCT stamper) must apply the
     override too — otherwise Journal Log's Trend column reads the
