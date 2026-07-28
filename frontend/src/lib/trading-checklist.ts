@@ -90,7 +90,7 @@ export function formatGroupLabel(
  *  - counter → "log when it happens" (no cadence)
  *  - overdue → "N days" (danger token)
  *  - ticked_today (task) → "ticked today"
- *  - last_run present → "ran <MMM D>"
+ *  - last_run present → "Completed on <MM.DD.YY>"
  *  - never run → "—" */
 export type StatusChip =
   | { kind: "overdue"; text: string; days: number }
@@ -113,22 +113,23 @@ export function itemStatusChip(item: RoutineItem): StatusChip {
   if (item.last_run_date) {
     return {
       kind: "last_run",
-      text: `ran ${formatShortDate(item.last_run_date)}`,
+      text: `Completed on ${formatShortDate(item.last_run_date)}`,
       date: item.last_run_date,
     };
   }
   return { kind: "never", text: "—" };
 }
 
-/** "2026-07-25" → "25 Jul". Parses as UTC to avoid a client-TZ shift on
- *  dates that were computed server-side in America/Chicago. */
+/** "2026-07-25" → "07.25.26" (MM.DD.YY). Splits the ISO string manually
+ *  rather than parsing through Date to avoid a client-TZ shift on dates
+ *  computed server-side in America/Chicago. */
 export function formatShortDate(iso: string): string {
-  // iso is YYYY-MM-DD. Splitting avoids Date parsing which drags in the
-  // browser's TZ and can shift the day by one at boundaries.
   const [y, m, d] = iso.split("-").map(Number);
   if (!y || !m || !d) return iso;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${d} ${months[m - 1] ?? ""}`.trim();
+  const yy = String(y % 100).padStart(2, "0");
+  const mm = String(m).padStart(2, "0");
+  const dd = String(d).padStart(2, "0");
+  return `${mm}.${dd}.${yy}`;
 }
 
 /** Compact today-only summary — powers the mobile "Later today" collapsed

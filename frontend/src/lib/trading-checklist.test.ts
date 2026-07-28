@@ -122,10 +122,10 @@ describe("itemStatusChip", () => {
     expect(chip.text).toBe("ticked today");
   });
 
-  it("last_run_date but not ticked today → 'ran DD Mon'", () => {
+  it("last_run_date but not ticked today → 'Completed on MM.DD.YY'", () => {
     const chip = itemStatusChip(makeItem({ last_run_date: "2026-07-19" }));
     expect(chip.kind).toBe("last_run");
-    expect(chip.text).toBe("ran 19 Jul");
+    expect(chip.text).toBe("Completed on 07.19.26");
   });
 
   it("never ticked → em-dash", () => {
@@ -145,16 +145,16 @@ describe("itemStatusChip", () => {
 });
 
 describe("formatShortDate", () => {
-  it("YYYY-MM-DD → 'D MMM'", () => {
-    expect(formatShortDate("2026-07-25")).toBe("25 Jul");
-    expect(formatShortDate("2026-01-01")).toBe("1 Jan");
-    expect(formatShortDate("2026-12-31")).toBe("31 Dec");
+  it("YYYY-MM-DD → 'MM.DD.YY'", () => {
+    expect(formatShortDate("2026-07-25")).toBe("07.25.26");
+    expect(formatShortDate("2026-01-01")).toBe("01.01.26");
+    expect(formatShortDate("2026-12-31")).toBe("12.31.26");
   });
 
   it("no client-TZ shift at boundaries", () => {
     // A naive Date("2026-01-01") would produce different D depending on
     // client TZ. Splitting the string sidesteps that entirely.
-    expect(formatShortDate("2026-01-01")).toBe("1 Jan");
+    expect(formatShortDate("2026-01-01")).toBe("01.01.26");
   });
 
   it("malformed input returned as-is", () => {
