@@ -150,6 +150,27 @@ Portfolio Heat / Log Buy / Position Sizer / Trade Journal pages
 silently rendered against fake $100k for the day between deploy and
 first NLV log. Add this audit step to every future reset migration.
 
+**Engine-behavior overrides audit (same class of bug):** any change
+that alters what the MCT engine returns for a given date — a config
+knob, a mid-cycle override, a threshold flag — must be plumbed
+through EVERY engine reader, not just the one endpoint that
+motivated the change. Grep for callers before merging:
+
+```
+rg 'run_engine\(' api/ scripts/
+```
+
+Callers you need to touch: `/api/market/rally-prefix` (the M Factor
+page), `_compute_mct_state_with_day_num` (save-time badge stamper
+used by NLV Entry / journal_edit / journal_batch_edit),
+`_compute_trend_count` (mirror of the MCT stamper for trend_count),
+`_heal_recent_mct_stamps` (heals NULL badges on every
+/api/journal/history load — will silently CLOBBER an override on
+next Journal Log visit if not aware of it), plus any
+scripts/backfill_*.py sweep. The Force Correction override
+(migration 053) shipped touching only the first, and Journal Log's
+MCT badge diverged from M Factor until the plumbing was completed.
+
 ## Pyramid Sizer v6 rules (2026-07-25)
 
 Seven-rule model. Rule 2 (WINDOW) is the v6 addition — earlier docs
