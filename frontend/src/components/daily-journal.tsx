@@ -94,9 +94,20 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
   // "dailyThoughts" backs the new daily_thoughts TEXT column (rich-text
   // HTML edited via the shared <ThoughtsEditor>). Migration 031.
   const [dailyThoughts, setDailyThoughts] = useState("");
+  // dirtyRef gates the hydration effect (must be a ref to avoid stale-closure
+  // issues without re-running the effect). dirtyState drives the Save button
+  // disabled state (must be state to trigger re-render). Kept in sync via
+  // the ThoughtsEditor onChange and the saveDailyThoughts success branch.
   const dailyThoughtsDirtyRef = useRef(false);
+  const [dailyThoughtsDirty, setDailyThoughtsDirty] = useState(false);
+  // Daily Thoughts save state (the rich-text editor, migration 031).
   const [savingThoughts, setSavingThoughts] = useState(false);
   const [thoughtsMsg, setThoughtsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Daily Recap save state — split from thoughts on 2026-07-28 when
+  // Daily Thoughts got its own explicit Save button. Sharing the state
+  // would flash "Saved" on both buttons after either save.
+  const [savingRecap, setSavingRecap] = useState(false);
+  const [recapMsg, setRecapMsg] = useState<{ ok: boolean; text: string } | null>(null);
   // Game Plan (migration 052). Pre-commit intent for the next trading day.
   // Rich-text HTML captured via the shared ThoughtsEditor (same as Daily
   // Thoughts). Auto-saves via the debounced effect below when the dirty
@@ -220,8 +231,10 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
       setSnapshots([]);
     });
     setThoughtsMsg(null);
+    setRecapMsg(null);
     setRecapDirty(false);
     dailyThoughtsDirtyRef.current = false;
+    setDailyThoughtsDirty(false);
   }, [selectedDate, portfolio]);
 
   // Lazy-fill market_cycle for the selected day if the entry exists but
@@ -264,7 +277,10 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
     if (!selectedDate) {
       setRecap(""); setDailyThoughts(""); setGamePlan("");
       gamePlanDirtyRef.current = false;
+      dailyThoughtsDirtyRef.current = false;
+      setDailyThoughtsDirty(false);
       setGamePlanMsg(null);
+      setThoughtsMsg(null);
       return;
     }
     let cancelled = false;
@@ -273,12 +289,13 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
       // 404-shaped {"error": "No entry"} → clean slate for that day.
       const row = (entry && !("error" in entry)) ? (entry as any) : {};
       setRecap(row.lowlights || "");
-      // Dirty-ref guard — see prior placeholder-overlap incident: if
-      // the user typed but the debounced save hasn't fired yet, do NOT
-      // overwrite local state with the async fetch's result. Otherwise
-      // a mid-typing hydration (e.g. selectedDate re-renders) blanks
-      // the value prop while the contentEditable DOM still holds text.
-      if (!dailyThoughtsDirtyRef.current) setDailyThoughts(row.daily_thoughts || "");
+      // Dirty-ref guard — a mid-typing selectedDate re-render (or
+      // some other trigger that re-fires the effect) must NOT clobber
+      // the user's in-flight typing with the async fetch's stale value.
+      if (!dailyThoughtsDirtyRef.current) {
+        setDailyThoughts(row.daily_thoughts || "");
+        setDailyThoughtsDirty(false);
+      }
       if (!gamePlanDirtyRef.current) setGamePlan(row.game_plan || "");
       if (!gamePlanDirtyRef.current) setGamePlanMsg(null);
       if (!recapDirty) setRecapDirty(false);
@@ -336,34 +353,44 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
     return () => window.clearTimeout(handle);
   }, [gamePlan, selectedDate, portfolio]);
 
-  // Auto-save dailyThoughts via debounced effect. Mirrors the weekly-
-  // retro pattern: dirtyRef gates the effect so the initial hydration
-  // doesn't trigger an empty-write race. The recap markdown still has
-  // its explicit Save button.
-  useEffect(() => {
+  // Daily Thoughts save — explicit button, mirrors saveRecap. Removed the
+  // debounced auto-save (2026-07-28) after repeated content-loss incidents
+  // stemming from the 800ms window: type-then-navigate races, hydration
+  // effect / Game Plan save coordination, backend clobber from other
+  // write paths whose damage was hard to spot because the auto-save's
+  // "did it fire?" moment was invisible. Explicit Save = one write per
+  // user action, easy to reason about, matches Daily Recap's pattern.
+  const saveDailyThoughts = async () => {
     if (!selectedDate) return;
-    if (!dailyThoughtsDirtyRef.current) return;
-    const handle = window.setTimeout(() => {
-      void api.journalEdit({
+    setSavingThoughts(true);
+    setThoughtsMsg(null);
+    try {
+      const res = await api.journalEdit({
         portfolio,
         day: selectedDate,
         daily_thoughts: dailyThoughts,
-      }).then(res => {
-        if (res.status === "ok") {
-          dailyThoughtsDirtyRef.current = false;
-          setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
-            ? ({ ...h, daily_thoughts: dailyThoughts } as any) : h));
-          // Autotick "Journal" only when the entry being edited IS today
-          // — backfilling a past-date journal shouldn't count as "did
-          // today's journal."
-          if (selectedDate === todayInChicago()) {
-            void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
-          }
+      });
+      if (res.status === "ok") {
+        setThoughtsMsg({ ok: true, text: "Saved" });
+        dailyThoughtsDirtyRef.current = false;
+        setDailyThoughtsDirty(false);
+        setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
+          ? ({ ...h, daily_thoughts: dailyThoughts } as any) : h));
+        // Autotick "Journal" only when the entry being edited IS today —
+        // backfilling a past-date journal shouldn't count as "did today's
+        // journal."
+        if (selectedDate === todayInChicago()) {
+          void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
         }
-      }).catch(err => log.error("daily-journal", "daily_thoughts save failed", err));
-    }, 800);
-    return () => window.clearTimeout(handle);
-  }, [dailyThoughts, selectedDate, portfolio]);
+      } else {
+        setThoughtsMsg({ ok: false, text: res.detail || "Save failed" });
+      }
+    } catch (err: any) {
+      setThoughtsMsg({ ok: false, text: err.message || "Save failed" });
+    }
+    setSavingThoughts(false);
+    setTimeout(() => setThoughtsMsg(null), 3000);
+  };
 
   const openMarketNotesEdit = () => {
     const current = String((day as any)?.market_notes ?? "");
@@ -409,8 +436,8 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
 
   const saveRecap = async () => {
     if (!selectedDate) return;
-    setSavingThoughts(true);
-    setThoughtsMsg(null);
+    setSavingRecap(true);
+    setRecapMsg(null);
     try {
       const res = await api.journalEdit({
         portfolio,
@@ -418,7 +445,7 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
         lowlights: recap,
       });
       if (res.status === "ok") {
-        setThoughtsMsg({ ok: true, text: "Saved" });
+        setRecapMsg({ ok: true, text: "Saved" });
         setRecapDirty(false);
         setHistory(prev => prev.map(h => String(h.day).slice(0, 10) === selectedDate
           ? ({ ...h, lowlights: recap } as any) : h));
@@ -427,13 +454,13 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
           void autoTickByPrefix(SYSTEM_ITEM_PREFIXES.journal);
         }
       } else {
-        setThoughtsMsg({ ok: false, text: res.detail || "Save failed" });
+        setRecapMsg({ ok: false, text: res.detail || "Save failed" });
       }
     } catch (err: any) {
-      setThoughtsMsg({ ok: false, text: err.message || "Save failed" });
+      setRecapMsg({ ok: false, text: err.message || "Save failed" });
     }
-    setSavingThoughts(false);
-    setTimeout(() => setThoughtsMsg(null), 3000);
+    setSavingRecap(false);
+    setTimeout(() => setRecapMsg(null), 3000);
   };
 
   // Close lightbox on Escape
@@ -976,18 +1003,42 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
             })()}
 
             {/* ── Daily Thoughts (Phase 7 — rich-text editor) ──
-                Shared <ThoughtsEditor> via <DailyThoughts> wrapper. Auto-
-                saves via the debounced effect above when the dirty ref
-                flips. journalId enables inline image embed; when null
-                (e.g., pre-Daily-Routine days) the editor surfaces the
-                "save first" inline error on image paste/drop. */}
+                Shared <ThoughtsEditor> via <DailyThoughts> wrapper.
+                Explicit Save button (mirrors Daily Recap) — auto-save
+                removed 2026-07-28 after content-loss incidents from the
+                800ms-debounce coordination surface. journalId enables
+                inline image embed; when null (pre-NLV-Entry days) the
+                editor surfaces the "save first" inline error on image
+                paste/drop. */}
             <div className="mt-6">
               <DailyThoughts
                 value={dailyThoughts}
-                onChange={(next) => { dailyThoughtsDirtyRef.current = true; setDailyThoughts(next); }}
+                onChange={(next) => {
+                  dailyThoughtsDirtyRef.current = true;
+                  setDailyThoughtsDirty(true);
+                  setDailyThoughts(next);
+                }}
                 journalId={dayJournalId}
                 portfolio={portfolio}
               />
+              <div className="flex items-center gap-3 mt-3">
+                <button onClick={saveDailyThoughts}
+                        disabled={savingThoughts || !dailyThoughtsDirty}
+                        className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                        style={{ background: navColor }}>
+                  {savingThoughts ? "Saving..." : "Save Thoughts"}
+                </button>
+                {dailyThoughtsDirty && !savingThoughts && (
+                  <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+                    unsaved changes
+                  </span>
+                )}
+                {thoughtsMsg && (
+                  <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
+                    {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* ── Daily Recap (renamed from "Daily Thoughts" in Phase 7) ──
@@ -1045,14 +1096,14 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
 
                 {/* Save row */}
                 <div className="flex items-center gap-3">
-                  <button onClick={saveRecap} disabled={savingThoughts || !recapDirty}
+                  <button onClick={saveRecap} disabled={savingRecap || !recapDirty}
                           className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
                           style={{ background: navColor }}>
-                    {savingThoughts ? "Saving..." : "Save Recap"}
+                    {savingRecap ? "Saving..." : "Save Recap"}
                   </button>
-                  {thoughtsMsg && (
-                    <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
-                      {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
+                  {recapMsg && (
+                    <span className="text-[12px] font-medium" style={{ color: recapMsg.ok ? "#16a34a" : "#e5484d" }}>
+                      {recapMsg.ok ? "✓" : "✗"} {recapMsg.text}
                     </span>
                   )}
                 </div>
