@@ -739,6 +739,14 @@ export const api = {
   journalHistory: (portfolio = getActivePortfolio(), days = 365) =>
     fetchJSON<JournalHistoryPoint[]>(`/api/journal/history?portfolio=${portfolio}&days=${days}`),
 
+  // Unfiltered single-row fetch for the Daily Journal write shell —
+  // sees hollow rows that journalHistory filters out (see ARCHITECTURE.md
+  // §1 "trading_journal" and the /api/journal/entry docstring in api/main.py).
+  journalEntry: (portfolio = getActivePortfolio(), day = "") => {
+    const qs = new URLSearchParams({ portfolio, day });
+    return fetchJSON<JournalEntry & { error?: string }>(`/api/journal/entry?${qs.toString()}`);
+  },
+
   // Game plan write (migration 052). Server enforces the editable window
   // (Mon-Thu → same day; Fri → through Sun; Sat/Sun → through Sun). A
   // locked-day write returns `{error: "...locked..."}` — the client also

@@ -196,6 +196,73 @@ def test_history_returns_empty_when_no_row_has_nlv(client):
 
 
 # ---------------------------------------------------------------------------
+# /api/journal/entry — INVERSE contract: unfiltered single-row fetch for the
+# Daily Journal write shell. The other three endpoints filter to end_nlv>0
+# so hollow rows stay invisible to display consumers; this one must NOT
+# filter, because the write shell hydrates today's Game Plan / Daily
+# Thoughts from a row that may not have an NLV yet.
+# ---------------------------------------------------------------------------
+
+def test_entry_returns_hollow_row_that_history_hides(client):
+    """Regression from 2026-07-28: after journal_history started filtering
+    hollow rows for Journal Log's browse view, Daily Journal's write shell
+    (which shared the same endpoint) started blanking today's editors on
+    refresh — the row was there but the filtered response hid it. The
+    entry endpoint reads unfiltered so hydration works either way."""
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-25", 52450.0, daily_thoughts="<p>day 25 thoughts</p>"),
+        _row("2026-07-28", None, game_plan="<p>plan for today</p>",
+             daily_thoughts="<p>typed but no NLV yet</p>"),
+    ])
+    body = client.get(
+        "/api/journal/entry?portfolio=CanSlim&day=2026-07-28"
+    ).json()
+    assert body.get("day") == "2026-07-28"
+    assert body.get("daily_thoughts") == "<p>typed but no NLV yet</p>"
+    assert body.get("game_plan") == "<p>plan for today</p>"
+
+
+def test_entry_returns_error_when_day_missing():
+    """Belt-and-suspenders: no `day` param → clear error instead of a
+    surprise "give me the whole journal" behavior."""
+    from fastapi.testclient import TestClient
+    import api.main as main
+    # No DB patching here — endpoint should short-circuit on the missing
+    # arg before touching load_journal, so the real db.load_journal never
+    # fires. This test proves the guard runs first.
+    tc = TestClient(main.app, headers=_auth_headers())
+    body = tc.get("/api/journal/entry?portfolio=CanSlim").json()
+    assert body == {"error": "day required"}
+
+
+def test_entry_returns_error_when_no_row_for_day(client):
+    """Non-existent day → {"error": "No entry"}. Frontend treats this as
+    "clean slate" and initializes empty editors — the daily_journal
+    hydration effect ignores the error shape and starts fresh."""
+    client.set_history([_row("2026-07-25", 52450.0)])  # type: ignore[attr-defined]
+    body = client.get(
+        "/api/journal/entry?portfolio=CanSlim&day=2026-07-28"
+    ).json()
+    assert body == {"error": "No entry"}
+
+
+def test_entry_does_NOT_filter_zero_nlv_rows(client):
+    """journal_latest / journal_history filter end_nlv=0 as "unlogged."
+    journal_entry does NOT filter — Daily Journal must still see the
+    row to hydrate its editors from the game_plan / daily_thoughts
+    columns, even if end_nlv is 0 or null."""
+    client.set_history([  # type: ignore[attr-defined]
+        _row("2026-07-28", 0.0, game_plan="<p>drafted</p>"),
+    ])
+    body = client.get(
+        "/api/journal/entry?portfolio=CanSlim&day=2026-07-28"
+    ).json()
+    assert body.get("day") == "2026-07-28"
+    assert body.get("game_plan") == "<p>drafted</p>"
+    assert body.get("end_nlv") == 0.0
+
+
+# ---------------------------------------------------------------------------
 # /api/portfolio/heat-preview — same NLV-bearing filter
 # ---------------------------------------------------------------------------
 

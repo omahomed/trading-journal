@@ -335,6 +335,48 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # ============================================================
 # JOURNAL ENDPOINTS
 # ============================================================
+@app.get("/api/journal/entry")
+def journal_entry(portfolio: str = "CanSlim", day: str = ""):
+    """Get the raw journal row for a specific day, unfiltered.
+
+    Distinct from /api/journal/latest and /api/journal/history: those
+    both filter to end_nlv > 0 so hollow rows (created by Game Plan
+    auto-save before NLV Entry lands) stay invisible to display /
+    "logged day" consumers. But the Daily Journal WRITE SHELL needs
+    to see today's hollow row — its whole purpose is to let the user
+    draft Game Plan / Daily Thoughts / Recap BEFORE NLV is logged.
+
+    This endpoint returns the row as-is (or {"error": "No entry"} when
+    no row exists). Consumers: the daily-journal.tsx hydration effect,
+    which reads game_plan / daily_thoughts / lowlights for the
+    selected date. It intentionally does NOT trigger the MCT heal
+    (that path lives on /api/journal/history) — hydration reads
+    should not have write side effects.
+    """
+    if not day:
+        return {"error": "day required"}
+    df = db.load_journal(portfolio)
+    if df.empty:
+        return {"error": "No entry"}
+    df = _normalize_journal(df)
+    df["day"] = pd.to_datetime(df["day"], errors="coerce")
+    target = pd.to_datetime(str(day).strip()[:10], errors="coerce")
+    if pd.isna(target):
+        return {"error": "invalid day"}
+    matches = df[df["day"] == target]
+    if matches.empty:
+        return {"error": "No entry"}
+    row = matches.iloc[0].to_dict()
+    for k, v in row.items():
+        if isinstance(v, pd.Timestamp):
+            row[k] = v.strftime("%Y-%m-%d")
+        elif pd.isna(v):
+            row[k] = None
+        elif hasattr(v, 'item'):  # numpy types
+            row[k] = v.item()
+    return row
+
+
 @app.get("/api/journal/latest")
 def journal_latest(portfolio: str = "CanSlim", before: str = ""):
     """Get the most recent journal entry with a real NLV (last-known NLV).

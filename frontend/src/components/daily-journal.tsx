@@ -247,11 +247,19 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
       .catch(() => { /* ignore */ });
   }, [selectedDate, history, portfolio]);
 
-  // Hydrate recap + dailyThoughts from the selected journal entry.
-  // lowlights → recap (existing markdown column); daily_thoughts → the
-  // new rich-text editor body (migration 031). Resetting the dirty
-  // flags here makes sure the debounced auto-save effect below doesn't
-  // immediately re-save on initial hydration.
+  // Hydrate recap + dailyThoughts + gamePlan from the selected day's
+  // journal row. Fetches via /api/journal/entry (unfiltered) rather
+  // than reading from `history` (which is filtered to end_nlv>0 for
+  // Journal Log's browse view). The write shell MUST see today's row
+  // even when NLV hasn't been logged yet — that's the whole point of
+  // being able to draft Game Plan / Daily Thoughts before NLV Entry.
+  //
+  // Historical bug (2026-07-28): daily_thoughts appeared to save but
+  // vanished on refresh because the hydration effect reads
+  // `history.find(...) → undefined` when today has no NLV, then
+  // defaults dailyThoughts to "". The DB row was there; the write
+  // shell couldn't see it. Moving to a targeted fetch fixes it
+  // without touching the Journal Log filter.
   useEffect(() => {
     if (!selectedDate) {
       setRecap(""); setDailyThoughts(""); setGamePlan("");
@@ -259,32 +267,26 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
       setGamePlanMsg(null);
       return;
     }
-    // Note: game_plan can exist on a row that has no NLV yet (created via
-    // /api/journal/game-plan before NLV Entry saves), so we don't gate on
-    // history.length here — history may not contain the row until the
-    // first reload post-save. For the initial no-history render, resetting
-    // to empty is correct; the reload post-save will hydrate the actual value.
-    if (history.length === 0) {
-      setRecap(""); setDailyThoughts(""); setGamePlan("");
-      gamePlanDirtyRef.current = false;
-      setGamePlanMsg(null);
-      return;
-    }
-    const entry = history.find(h => String(h.day).slice(0, 10) === selectedDate) as any;
-    setRecap(entry?.lowlights || "");
-    // Dirty-ref guard: if the user has an in-flight edit (typed but the
-    // debounced auto-save hasn't fired yet), do NOT overwrite the local
-    // state. Otherwise a concurrent history mutation (e.g. Game Plan
-    // auto-save synthesizing a partial row into `history`) blanks the
-    // parent value prop while the contentEditable DOM still holds the
-    // typed text — the empty-value branch then flips placeholderVisible
-    // true and the placeholder overlay stacks visibly on top of the
-    // retained DOM content.
-    if (!dailyThoughtsDirtyRef.current) setDailyThoughts(entry?.daily_thoughts || "");
-    if (!gamePlanDirtyRef.current) setGamePlan(entry?.game_plan || "");
-    if (!gamePlanDirtyRef.current) setGamePlanMsg(null);
-    if (!recapDirty) setRecapDirty(false);
-  }, [selectedDate, history]);
+    let cancelled = false;
+    void api.journalEntry(portfolio, selectedDate).then(entry => {
+      if (cancelled) return;
+      // 404-shaped {"error": "No entry"} → clean slate for that day.
+      const row = (entry && !("error" in entry)) ? (entry as any) : {};
+      setRecap(row.lowlights || "");
+      // Dirty-ref guard — see prior placeholder-overlap incident: if
+      // the user typed but the debounced save hasn't fired yet, do NOT
+      // overwrite local state with the async fetch's result. Otherwise
+      // a mid-typing hydration (e.g. selectedDate re-renders) blanks
+      // the value prop while the contentEditable DOM still holds text.
+      if (!dailyThoughtsDirtyRef.current) setDailyThoughts(row.daily_thoughts || "");
+      if (!gamePlanDirtyRef.current) setGamePlan(row.game_plan || "");
+      if (!gamePlanDirtyRef.current) setGamePlanMsg(null);
+      if (!recapDirty) setRecapDirty(false);
+    }).catch(err => {
+      log.error("daily-journal", "journalEntry fetch failed", err);
+    });
+    return () => { cancelled = true; };
+  }, [selectedDate, portfolio]);
 
   // Game Plan auto-save — mirrors the Daily Thoughts debounced pattern.
   // The dirtyRef gate skips the hydration re-render. Server enforces the
