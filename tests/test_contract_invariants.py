@@ -1,0 +1,332 @@
+"""Contract tests — the "these things must agree" invariants across the
+load-bearing surfaces catalogued in ARCHITECTURE.md.
+
+These aren't implementation tests. They lock the cross-endpoint /
+cross-page contracts so a change to one path that silently breaks a
+downstream reader FAILS LOUDLY at CI time instead of shipping.
+
+Every test here is motivated by an actual regression we shipped —
+the specific bug is documented in the docstring. Adding new
+invariants here is cheaper than debugging class-of-bug regressions.
+"""
+from __future__ import annotations
+
+import re
+from datetime import date
+from pathlib import Path
+
+import jwt
+import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
+
+import db_layer
+
+
+_TEST_SECRET = "test-secret-not-for-prod"
+_TEST_USER_ID = "test-user"
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _auth_headers() -> dict[str, str]:
+    token = jwt.encode({"sub": _TEST_USER_ID}, _TEST_SECRET, algorithm="HS256")
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ============================================================================
+# Invariant #1 — MCT stamper and /api/market/rally-prefix agree on state
+# ============================================================================
+#
+# Motivating regression (2026-07-27): the Force Correction override was
+# wired into /api/market/rally-prefix, so M Factor banner showed CORRECTION.
+# But _compute_mct_state_with_day_num (called from journal saves) did NOT
+# apply the override — so trading_journal.market_cycle stamped
+# "UPTREND UNDER PRESSURE" and Journal Log's MCT State column diverged
+# from what the user saw on M Factor for the same day.
+#
+# These tests would have failed at the moment that divergence was
+# introduced — before deploy.
+
+
+def _fake_engine_result(state_name="UPTREND UNDER PRESSURE"):
+    """One-bar EngineResult that both readers can extract state from.
+
+    Default baseline is UUP (not POWERTREND) so the rally_prefix
+    auto-clear check ('if override and systematic in {PT, UP, CORR}:
+    clear') doesn't fire during override tests. The realistic scenario
+    for override use is: systematic engine says UUP or RALLY MODE (the
+    market weakened but hasn't crossed the 10% threshold), user
+    declares CORRECTION. Testing against POWERTREND baseline would
+    exercise the auto-clear path, not the overlay path we want to lock.
+    """
+    from api.mct_engine import EngineResult
+
+    # Build final_state consistent with _state_name's derivation rules.
+    # See api/mct_endpoint_adapter.py::_state_name for the branch order.
+    final_state = {
+        "power_trend": False,
+        "step4_done": False,
+        "step4_ever_fired": False,
+        "correction_active": False,
+        "in_correction": False,
+        "rally_active": False,
+        "step0_done": False,
+        "reference_high": 110.0,
+        "exposure": 100,
+        "cap_at_100": False,
+    }
+    if state_name == "POWERTREND":
+        final_state["power_trend"] = True
+    elif state_name == "UPTREND":
+        final_state["step4_done"] = True
+    elif state_name == "UPTREND UNDER PRESSURE":
+        # step4 fired before, cleared by a mid-cycle break; no active correction.
+        final_state["step4_ever_fired"] = True
+    elif state_name == "CORRECTION":
+        final_state["in_correction"] = True
+        final_state["correction_active"] = True
+
+    bars = pd.DataFrame([{
+        "trade_date": pd.Timestamp("2026-07-27"),
+        "state": state_name,
+        "cycle_start_idx": pd.NA,
+        "pt_on_idx": pd.NA,
+        "rally_active": False,
+        "close": 100.0, "open": 100.0, "high": 101.0, "low": 99.0,
+        "ema_8": 100.0, "ema_21": 100.0, "sma_50": 100.0, "sma_200": 100.0,
+    }])
+    return EngineResult(bars=bars, signals=[], final_state=final_state)
+
+
+@pytest.fixture
+def patched_engine(monkeypatch):
+    """Stub run_engine + market data updater so the tests are deterministic.
+    The fixture returns a mutable dict the test writes `state` into; both
+    the stamper AND rally_prefix will see whatever state the test picks."""
+    import api.main as main
+    from api.mct_engine import EngineResult
+
+    state = {"state_name": "POWERTREND"}
+
+    def fake_run_engine(symbol="^IXIC", as_of=None, force_correction_at_date=None):
+        return _fake_engine_result(state["state_name"])
+
+    monkeypatch.setattr("api.mct_endpoint_adapter.run_engine", fake_run_engine)
+    monkeypatch.setattr("api.main.run_engine", fake_run_engine, raising=False)
+    monkeypatch.setattr("api.market_data_updater.update_if_needed",
+                        lambda symbol="^IXIC": None)
+    monkeypatch.setattr(main, "_project_rally_prefix_for_data_lag",
+                        lambda response, requested_as_of: response)
+
+    # No active override for the baseline tests; individual tests override.
+    monkeypatch.setattr(db_layer, "get_active_mct_override", lambda: None)
+    return state
+
+
+def test_stamper_and_endpoint_agree_when_no_override(patched_engine):
+    """Baseline — same state name flows through both paths when no
+    override is active. Uses UUP as the state (matches the realistic
+    scenario where an override would later be declared)."""
+    import api.main as main
+    patched_engine["state_name"] = "UPTREND UNDER PRESSURE"
+    stamper_state, _ = main._compute_mct_state_with_day_num("2026-07-27")
+    endpoint = main.rally_prefix(as_of_date="2026-07-27")
+    assert stamper_state == endpoint["state"] == "UPTREND UNDER PRESSURE"
+
+
+def test_stamper_and_endpoint_agree_when_override_active(patched_engine, monkeypatch):
+    """The regression case — with an active override, BOTH paths must
+    reach the same state. The stamper must call run_engine with the
+    override date; rally_prefix's overlay logic must produce the
+    matching state string.
+
+    Fake run_engine returns CORRECTION when called with the override
+    date (simulating what the real engine's Phase 3a hook does on
+    force_correction_at_date). Both readers should see CORRECTION."""
+    import api.main as main
+
+    # `id` must be present — rally_prefix's overlay branch reads it when
+    # building the response, and KeyError there falls through the outer
+    # try/except to the systematic response (silent failure that masks
+    # the very invariant this test wants to lock).
+    monkeypatch.setattr(db_layer, "get_active_mct_override", lambda: {
+        "id": 1,
+        "activated_date_ct": "2026-07-27",
+        "reason": "manual — pre-IBD 10% threshold",
+    })
+
+    # When rally_prefix runs the SECOND engine call (the override overlay),
+    # our stub sees force_correction_at_date=date(2026,7,27) and can flip
+    # the returned state — mimicking the real Phase 3a. When the stamper
+    # runs (from _current_override_date()), same date arg, same flip.
+    #
+    # Systematic baseline is UUP (not POWERTREND/UPTREND/CORRECTION) so
+    # the rally_prefix auto-clear check doesn't short-circuit the overlay
+    # — matches the realistic scenario where an override is declared
+    # (market weakened, hasn't crossed the systematic threshold yet).
+    def flip_on_override(symbol="^IXIC", as_of=None, force_correction_at_date=None):
+        if force_correction_at_date == date(2026, 7, 27):
+            r = _fake_engine_result("CORRECTION")
+            # rally_prefix's overlay checks force_correction_applied.
+            r.final_state["force_correction_applied"] = True
+            return r
+        return _fake_engine_result("UPTREND UNDER PRESSURE")
+    monkeypatch.setattr("api.mct_endpoint_adapter.run_engine", flip_on_override)
+
+    stamper_state, _ = main._compute_mct_state_with_day_num("2026-07-27")
+    endpoint = main.rally_prefix(as_of_date="2026-07-27")
+    assert stamper_state == endpoint["state"] == "CORRECTION", (
+        f"stamper={stamper_state!r}, endpoint={endpoint['state']!r} — "
+        "if these ever disagree, Journal Log's MCT badge diverges from "
+        "the M Factor page for the same day"
+    )
+
+
+# ============================================================================
+# Invariant #2 — journal_latest and heat-preview return the same NLV
+# ============================================================================
+#
+# Motivating regression: NLV Entry's heat tile read 0.00% because
+# heat-preview picked a hollow row while journal_latest correctly walked
+# back past it. The two endpoints must ALWAYS agree on what "current NLV"
+# means, or the same portfolio shows different equity basis on different
+# pages simultaneously.
+
+
+@pytest.fixture
+def journal_client(monkeypatch):
+    """Patch db.load_journal so tests can inject arbitrary journal history
+    without touching Postgres. Mirrors the fixture pattern in
+    test_journal_latest_nlv_filter.py."""
+    monkeypatch.setenv("AUTH_SECRET", _TEST_SECRET)
+    import api.main as main
+    monkeypatch.setattr(main, "AUTH_SECRET", _TEST_SECRET)
+
+    state = {"journal_df": pd.DataFrame()}
+    monkeypatch.setattr(db_layer, "load_journal",
+                        lambda *a, **kw: state["journal_df"])
+    monkeypatch.setattr(main, "_normalize_journal", lambda df: df)
+    # Neutralize the heat computation so tests focus on NLV plumbing.
+    monkeypatch.setattr(main, "_compute_portfolio_heat",
+                        lambda *a, **kw: 0.0)
+
+    tc = TestClient(main.app, headers=_auth_headers())
+
+    def set_history(rows: list[dict]):
+        state["journal_df"] = pd.DataFrame(rows)
+    tc.set_history = set_history  # type: ignore[attr-defined]
+    return tc
+
+
+def _journal_row(day: str, end_nlv):
+    return {
+        "day": pd.Timestamp(day),
+        "end_nlv": end_nlv,
+        "beg_nlv": end_nlv if end_nlv is not None else 0,
+        "cash_change": 0,
+    }
+
+
+def test_journal_latest_end_nlv_equals_heat_preview_nlv_used(journal_client):
+    """The invariant: journal_latest.end_nlv == heat_preview.nlv_used.
+    A hollow row for today must not divert one endpoint from the other."""
+    journal_client.set_history([  # type: ignore[attr-defined]
+        _journal_row("2026-07-25", 52450.0),
+        _journal_row("2026-07-27", None),  # hollow Game Plan row for today
+    ])
+    latest = journal_client.get("/api/journal/latest?portfolio=CanSlim").json()
+    preview = journal_client.get("/api/portfolio/heat-preview?portfolio=CanSlim").json()
+    assert latest["end_nlv"] == preview["nlv_used"] == 52450.0, (
+        f"latest={latest.get('end_nlv')!r}, preview={preview.get('nlv_used')!r} — "
+        "when these disagree, Portfolio Heat and NLV Entry show different "
+        "equity basis for the same portfolio"
+    )
+
+
+def test_journal_latest_and_heat_preview_agree_when_only_hollow_rows(journal_client):
+    """Zero NLV history → both endpoints signal empty in their own shape,
+    but must AGREE on "no valid NLV." journal_latest returns
+    {error: "No journal data"}; heat_preview returns {nlv_used: 0.0}.
+    Both signal the same empty state."""
+    journal_client.set_history([  # type: ignore[attr-defined]
+        _journal_row("2026-07-25", None),
+        _journal_row("2026-07-27", None),
+    ])
+    latest = journal_client.get("/api/journal/latest?portfolio=CanSlim").json()
+    preview = journal_client.get("/api/portfolio/heat-preview?portfolio=CanSlim").json()
+    assert latest.get("error") == "No journal data"
+    assert preview["nlv_used"] == 0.0
+    assert "end_nlv" not in latest  # empty-history shape
+
+
+# ============================================================================
+# Invariant #3 — Static audit: MCT stamp/heal path uses _current_override_date
+# ============================================================================
+#
+# Motivating regression: the Force Correction override arg was added to
+# run_engine, but three of its callers (the two stampers + the heal) were
+# not updated. The result: M Factor showed the override, everything else
+# used the systematic engine, and Journal Log silently rendered wrong.
+#
+# This test greps api/main.py to enforce that every stamp/heal call site
+# for run_engine wires the override through. Not exhaustive across all
+# callers (backfill scripts intentionally use systematic-only) — scoped
+# to the three functions the ARCHITECTURE.md map lists as user-facing.
+
+
+_STAMP_HEAL_FUNCTIONS = [
+    "_compute_mct_state_with_day_num",
+    "_compute_trend_count",
+    "_heal_recent_mct_stamps",
+]
+
+
+def _extract_function_body(source: str, name: str) -> str:
+    """Slice out a function's body from source text so we can assert
+    on its contents. Uses `def <name>` as start and the next top-level
+    `def ` / `@app.` as end. Sloppy but sufficient for a grep-audit."""
+    lines = source.splitlines()
+    start_idx = next(
+        (i for i, ln in enumerate(lines)
+         if ln.startswith(f"def {name}(") or ln.startswith(f"def {name}:")),
+        None,
+    )
+    if start_idx is None:
+        raise AssertionError(f"function {name!r} not found in api/main.py")
+    end_idx = len(lines)
+    for i in range(start_idx + 1, len(lines)):
+        ln = lines[i]
+        # Top-level def or decorator ends the function.
+        if ln.startswith("def ") or ln.startswith("@app."):
+            end_idx = i
+            break
+    return "\n".join(lines[start_idx:end_idx])
+
+
+def test_every_stamp_heal_function_wires_override_into_run_engine():
+    """Every MCT stamp / heal function that calls run_engine must also
+    thread _current_override_date() through as force_correction_at_date.
+    A missing wire silently reverts the user's override on the next
+    save/heal."""
+    source = (_REPO_ROOT / "api" / "main.py").read_text()
+    failures = []
+    for fn in _STAMP_HEAL_FUNCTIONS:
+        body = _extract_function_body(source, fn)
+        # Must call run_engine at least once.
+        if "run_engine(" not in body:
+            failures.append(f"{fn}: no run_engine( call found — grep this test")
+            continue
+        # Must reference _current_override_date somewhere in the body so
+        # the override can plumb through. Not a perfect check (someone
+        # could reference then not pass it) but catches the actual
+        # regression class — "forgot to add it entirely."
+        if "_current_override_date" not in body:
+            failures.append(
+                f"{fn}: calls run_engine but never references "
+                "_current_override_date() — override will silently be dropped"
+            )
+    assert not failures, (
+        "\n".join(failures) + "\n\nSee ARCHITECTURE.md §2 (MCT Engine) for the "
+        "override plumbing contract."
+    )

@@ -259,16 +259,23 @@ here is **cheaper** than debugging class-of-bug regressions.
   — journal_latest, journal_history, heat-preview all apply the same NLV filter
 - [tests/test_mct_override_stamp_plumbing.py](tests/test_mct_override_stamp_plumbing.py)
   — every engine reader applies the override + heal re-stamps stale rows
+- [tests/test_contract_invariants.py](tests/test_contract_invariants.py) — 5
+  cross-endpoint invariants:
+  1. `_compute_mct_state_with_day_num(D).state == rally_prefix(as_of=D).state`
+     for the same override state (the exact regression from 2026-07-27)
+  2. `journal_latest.end_nlv == heat_preview.nlv_used` for mixed portfolios
+  3. Static audit — every stamp/heal function that calls `run_engine` also
+     references `_current_override_date()` (grep-based, catches the "forgot
+     to wire the override" regression class)
 
-**Missing / worth adding** (rough priority):
+**Missing / worth adding**:
 
-1. `_compute_mct_state_with_day_num(D)` state == `rally_prefix(as_of=D)` state
-   (given same override) — catches "stampers and endpoint drift" the moment it happens
-2. `journalLatest().end_nlv == portfolioHeatPreview().nlv_used` for a portfolio
-   with a mix of hollow + logged rows
-3. Static grep test: every `run_engine(` call site accepts `force_correction_at_date`
-4. Every page in the "trading_journal frontend consumers" list reads NLV from
-   `journalLatest` — no parallel `load_journal` fetches
+- Every page in the "trading_journal frontend consumers" list reads NLV from
+  `journalLatest` — no parallel `load_journal` fetches (frontend grep test)
+- `rally_prefix` overlay auto-clear check should be tested — the branch fires
+  when `systematic_state ∈ {POWERTREND, UPTREND, CORRECTION}`, and hard-to-spot
+  test-setup bugs (missing `id` on the override mock) can silently mask
+  divergence via the swallowing try/except at [api/main.py:3773](api/main.py#L3773)
 
 ---
 
