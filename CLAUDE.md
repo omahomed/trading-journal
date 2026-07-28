@@ -1,5 +1,14 @@
 # Trading Journal Application
 
+## Read first: coupling map
+
+**Before writing code that touches shared surfaces** (`trading_journal` table,
+MCT engine, `journal_latest` / `journal_history` / `rally-prefix` endpoints,
+`portfolios` FK, `market_data`, `getActivePortfolio()`), consult
+[ARCHITECTURE.md](ARCHITECTURE.md). It lists writers, readers, and
+"if you touch X, check Y" patterns. Most cascading bugs this codebase
+has shipped came from missing one of those consumers.
+
 ## Overview
 Streamlit-based trading journal for tracking CANSLIM and leveraged ETF strategies. Deployed on Streamlit Cloud with PostgreSQL (Supabase) and Cloudflare R2 for image storage. Falls back to CSV locally.
 
