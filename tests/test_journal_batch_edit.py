@@ -69,9 +69,14 @@ class _FakeCursor:
 
         # trading_journal existence + snapshot fields read. Mirrors the
         # endpoint's SELECT, which reads trend_count (migration 043) as the
-        # 7th column (existing_row[6]) for snapshot preservation.
+        # 7th column (existing_row[6]) for snapshot preservation, plus the
+        # free-text fields (daily_thoughts, lowlights, top_lesson) +
+        # above_21ema at [7]-[10] so an UPDATE from NLV Entry preserves
+        # what other paths wrote instead of clobbering with defaults.
         if ("SELECT id, portfolio_heat, spy_atr, nasdaq_atr,"
-                " market_cycle, mct_display_day_num, trend_count FROM trading_journal" in sql_norm):
+                " market_cycle, mct_display_day_num, trend_count,"
+                " daily_thoughts, lowlights, top_lesson, above_21ema"
+                " FROM trading_journal" in sql_norm):
             pid, day = params
             for r in self.state["journal_rows"]:
                 if r["portfolio_id"] == pid and r["day"] == day:
@@ -83,6 +88,10 @@ class _FakeCursor:
                         r.get("market_cycle", ""),
                         r.get("mct_display_day_num"),
                         r.get("trend_count"),
+                        r.get("daily_thoughts", ""),
+                        r.get("lowlights", ""),
+                        r.get("top_lesson", ""),
+                        r.get("above_21ema", 0),
                     )
                     return
             self._last_returned = None

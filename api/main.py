@@ -2048,11 +2048,17 @@ def journal_batch_edit(body: dict = Body(...)):
                     beg_nlv = float(prev_row[0]) if prev_row else 0.0
 
                     # Existence check for snapshot gating + UPDATE-vs-INSERT
-                    # branch. Reads the snapshot fields so preserved values
-                    # don't get recomputed against today's data.
+                    # branch. Reads snapshot fields so preserved values
+                    # don't get recomputed against today's data, AND reads
+                    # the free-text fields (daily_thoughts, lowlights,
+                    # top_lesson) + above_21ema so an UPDATE from NLV
+                    # Entry doesn't blank content written by other paths
+                    # (Daily Journal shell writes daily_thoughts + recap;
+                    # NLV Entry doesn't own those, so it must preserve).
                     cur.execute(
                         "SELECT id, portfolio_heat, spy_atr, nasdaq_atr, "
-                        "       market_cycle, mct_display_day_num, trend_count "
+                        "       market_cycle, mct_display_day_num, trend_count, "
+                        "       daily_thoughts, lowlights, top_lesson, above_21ema "
                         "  FROM trading_journal "
                         " WHERE portfolio_id = %s AND day = %s "
                         "   AND deleted_at IS NULL",
@@ -2092,16 +2098,28 @@ def journal_batch_edit(body: dict = Body(...)):
                         portfolio_heat = _compute_portfolio_heat(
                             name, day_str, end_nlv)
 
-                    # Defaults for fields not surfaced by the batch shape
-                    # but still part of the schema. Match save_journal_entry's
-                    # defaults so the row looks identical to a Daily-Routine-
-                    # saved single-portfolio row.
+                    # Defaults for fields not surfaced by the batch shape.
+                    # status_val + market_window are transient / recomputed
+                    # every save, so the plain default is correct.
                     status_val = "U"
                     market_window = "Open"
-                    above_21ema = 0
-                    lowlights = ""
-                    top_lesson = ""
-                    daily_thoughts = ""
+                    # For fields owned by OTHER save paths (Daily Journal
+                    # shell writes daily_thoughts + lowlights; the Journal
+                    # checklist item writes top_lesson; above_21ema is
+                    # legacy), preserve the existing value on UPDATE and
+                    # only fall back to the empty default on a fresh
+                    # INSERT. Otherwise NLV Entry silently clobbers text
+                    # the user wrote elsewhere on the same day.
+                    if existing_row_present:
+                        daily_thoughts = existing_row[7] or ""
+                        lowlights = existing_row[8] or ""
+                        top_lesson = existing_row[9] or ""
+                        above_21ema = existing_row[10] or 0
+                    else:
+                        above_21ema = 0
+                        lowlights = ""
+                        top_lesson = ""
+                        daily_thoughts = ""
 
                     if existing_row_present:
                         cur.execute(_BATCH_EDIT_UPDATE_SQL, (

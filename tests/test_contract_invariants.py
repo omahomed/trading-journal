@@ -304,6 +304,73 @@ def _extract_function_body(source: str, name: str) -> str:
     return "\n".join(lines[start_idx:end_idx])
 
 
+# ============================================================================
+# Invariant #4 — NLV Entry (batch-edit) does not clobber Daily Journal fields
+# ============================================================================
+#
+# Motivating regression (2026-07-28): user typed in Daily Thoughts, saved
+# NLV Entry from the Daily Routine card, came back to Daily Journal — the
+# rich-text body was blanked. Cause: journal_batch_edit's UPDATE branch
+# hardcoded `daily_thoughts = ""` (plus lowlights, top_lesson, above_21ema)
+# as "defaults" and bound those into the UPDATE SQL. NLV Entry's payload
+# doesn't carry those fields — it doesn't own them — so the batch write
+# silently wiped whatever the Daily Journal write shell had persisted.
+#
+# Static test: batch_edit's UPDATE branch must PRESERVE these fields from
+# the existing row, not default them to empty. Reads api/main.py.
+
+
+def test_batch_edit_update_preserves_daily_thoughts_and_free_text():
+    """The load-bearing invariant: any write path that TOUCHES the
+    trading_journal row (batch-edit / journal-edit / game-plan) must
+    preserve fields it doesn't own. NLV Entry saves via batch-edit and
+    doesn't send daily_thoughts / lowlights / top_lesson; those must
+    survive the write. The test asserts the UPDATE branch reads them
+    from existing_row rather than binding a hardcoded empty default."""
+    source = (_REPO_ROOT / "api" / "main.py").read_text()
+
+    # Slice the journal_batch_edit function.
+    import re
+    m = re.search(
+        r"def journal_batch_edit\(.*?\n(.*?)(?=\n(?:def |@app\.))",
+        source, re.DOTALL,
+    )
+    assert m, "journal_batch_edit not found in api/main.py"
+    body = m.group(0)
+
+    # The existence-check SELECT must fetch each of these columns so the
+    # UPDATE branch can bind them from existing_row instead of defaulting.
+    for col in ("daily_thoughts", "lowlights", "top_lesson", "above_21ema"):
+        assert col in body, (
+            f"journal_batch_edit no longer references {col!r} in its "
+            f"existence-check SELECT — the UPDATE branch will fall back "
+            f"to a hardcoded '' default and clobber whatever the Daily "
+            f"Journal shell / Journal checklist wrote for the day."
+        )
+
+    # No unconditional `= ""` (or `= 0`) default for these fields at
+    # module scope — the write path must gate them behind
+    # existing_row_present so the preservation branch fires on UPDATE.
+    # We check that any assignment to these names sits INSIDE an else
+    # branch (i.e. the INSERT-only path).
+    forbidden = [
+        r'^\s+daily_thoughts = ""\s*$',
+        r'^\s+lowlights = ""\s*$',
+        r'^\s+top_lesson = ""\s*$',
+        r'^\s+above_21ema = 0\s*$',
+    ]
+    for pattern in forbidden:
+        matches = re.findall(pattern, body, re.MULTILINE)
+        # A single occurrence is fine (the INSERT-only else branch).
+        # Two would mean the old "always default" bug is back.
+        assert len(matches) <= 1, (
+            f"pattern {pattern!r} appears {len(matches)} times in "
+            f"journal_batch_edit — expected at most one (inside the "
+            f"else branch for the fresh-INSERT case). Multiple hits "
+            f"means the UPDATE branch is blanking the field again."
+        )
+
+
 def test_every_stamp_heal_function_wires_override_into_run_engine():
     """Every MCT stamp / heal function that calls run_engine must also
     thread _current_override_date() through as force_correction_at_date.

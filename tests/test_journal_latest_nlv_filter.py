@@ -222,16 +222,12 @@ def test_entry_returns_hollow_row_that_history_hides(client):
     assert body.get("game_plan") == "<p>plan for today</p>"
 
 
-def test_entry_returns_error_when_day_missing():
+def test_entry_returns_error_when_day_missing(client):
     """Belt-and-suspenders: no `day` param → clear error instead of a
-    surprise "give me the whole journal" behavior."""
-    from fastapi.testclient import TestClient
-    import api.main as main
-    # No DB patching here — endpoint should short-circuit on the missing
-    # arg before touching load_journal, so the real db.load_journal never
-    # fires. This test proves the guard runs first.
-    tc = TestClient(main.app, headers=_auth_headers())
-    body = tc.get("/api/journal/entry?portfolio=CanSlim").json()
+    surprise "give me the whole journal" behavior. Uses the shared
+    fixture (which stubs AUTH_SECRET); the guard runs regardless of
+    load_journal state since it checks the arg first."""
+    body = client.get("/api/journal/entry?portfolio=CanSlim").json()
     assert body == {"error": "day required"}
 
 
