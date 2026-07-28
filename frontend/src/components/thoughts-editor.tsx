@@ -84,6 +84,11 @@ export interface ThoughtsEditorProps {
   toolbarAriaLabel: string;
   /** Copy in the "save first" inline error when entityId is null. */
   noEntityErrorMessage: string;
+  /** Optional footer slot rendered INSIDE the SectionExpander body,
+   *  below the editor. Used by Daily Thoughts for its explicit Save
+   *  button + status. Weekly Retro leaves this undefined (still uses
+   *  its own save flow at the parent level). */
+  footer?: React.ReactNode;
 }
 
 // =============================================================================
@@ -388,6 +393,7 @@ export function ThoughtsEditor({
   ariaLabel,
   toolbarAriaLabel,
   noEntityErrorMessage,
+  footer,
 }: ThoughtsEditorProps) {
   // Register DOMPurify hooks on first component construction. Idempotent.
   ensureSanitizerHooks();
@@ -1347,6 +1353,19 @@ export function ThoughtsEditor({
             activeIndex={lightboxImage ? 0 : null}
             onClose={() => setLightboxImage(null)}
           />
+          {/* Optional footer slot — consumers pass Save button / status /
+              other actions here so they render INSIDE the SectionExpander
+              body, visually part of the editor's box (matches Daily
+              Recap's Save button placement). Border-top + padding provide
+              visual separation from the editor content above. */}
+          {footer && (
+            <div
+              className="px-4 py-3 flex items-center gap-3"
+              style={{ borderTop: "1px solid var(--border)" }}
+            >
+              {footer}
+            </div>
+          )}
     </SectionExpander>
   );
 }

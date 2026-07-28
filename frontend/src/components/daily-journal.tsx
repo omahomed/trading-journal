@@ -1020,25 +1020,27 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
                 }}
                 journalId={dayJournalId}
                 portfolio={portfolio}
+                footer={(
+                  <>
+                    <button onClick={saveDailyThoughts}
+                            disabled={savingThoughts || !dailyThoughtsDirty}
+                            className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
+                            style={{ background: navColor }}>
+                      {savingThoughts ? "Saving..." : "Save Thoughts"}
+                    </button>
+                    {dailyThoughtsDirty && !savingThoughts && (
+                      <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
+                        unsaved changes
+                      </span>
+                    )}
+                    {thoughtsMsg && (
+                      <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
+                        {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
+                      </span>
+                    )}
+                  </>
+                )}
               />
-              <div className="flex items-center gap-3 mt-3">
-                <button onClick={saveDailyThoughts}
-                        disabled={savingThoughts || !dailyThoughtsDirty}
-                        className="h-[38px] px-5 rounded-[10px] text-[12px] font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50"
-                        style={{ background: navColor }}>
-                  {savingThoughts ? "Saving..." : "Save Thoughts"}
-                </button>
-                {dailyThoughtsDirty && !savingThoughts && (
-                  <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-                    unsaved changes
-                  </span>
-                )}
-                {thoughtsMsg && (
-                  <span className="text-[12px] font-medium" style={{ color: thoughtsMsg.ok ? "#16a34a" : "#e5484d" }}>
-                    {thoughtsMsg.ok ? "✓" : "✗"} {thoughtsMsg.text}
-                  </span>
-                )}
-              </div>
             </div>
 
             {/* ── Daily Recap (renamed from "Daily Thoughts" in Phase 7) ──

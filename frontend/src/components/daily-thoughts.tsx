@@ -6,6 +6,7 @@
 // inline image embed, etc.) — only the title, expanded caption,
 // storage key, and upload endpoint (via entityType) differ.
 
+import type { ReactNode } from "react";
 import { ThoughtsEditor } from "./thoughts-editor";
 
 export interface DailyThoughtsProps {
@@ -17,6 +18,10 @@ export interface DailyThoughtsProps {
   journalId?: number | null;
   /** Portfolio name forwarded to the upload endpoint. */
   portfolio?: string;
+  /** Optional footer node — parent passes Save button + status here so
+   *  it renders INSIDE the SectionExpander body (mirrors Daily Recap
+   *  where the button lives inside the editor's chrome, not below it). */
+  footer?: ReactNode;
 }
 
 export function DailyThoughts({
@@ -24,6 +29,7 @@ export function DailyThoughts({
   onChange,
   journalId = null,
   portfolio = "",
+  footer,
 }: DailyThoughtsProps) {
   return (
     <ThoughtsEditor
@@ -40,6 +46,7 @@ export function DailyThoughts({
       ariaLabel="Daily Thoughts"
       toolbarAriaLabel="Daily Thoughts formatting"
       noEntityErrorMessage="Save the journal entry first to embed images."
+      footer={footer}
     />
   );
 }
