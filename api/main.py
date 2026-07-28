@@ -1214,6 +1214,38 @@ def _compute_cycle_state(as_of_date: str = "") -> str:
         return ""
 
 
+def _current_override_date():
+    """Read-only lookup of the active MCT Force Correction override date.
+
+    Returns a `datetime.date` when an override is active, else None. Every
+    engine reader that stamps state (journal save, MCT heal, trend count
+    heal) must pass this through to run_engine's `force_correction_at_date`
+    so the stamped state matches what /api/market/rally-prefix (and the M
+    Factor page) displays. Without this, a manual CORRECTION declared via
+    the override UI shows on M Factor but Journal Log / trading_journal
+    rows keep stamping the systematic "UPTREND UNDER PRESSURE" state,
+    silently diverging.
+
+    Read-only by design — auto-clear logic (recovered → clear) lives in
+    /api/market/rally-prefix so there's a single writer. If this helper
+    also cleared, a Daily Journal save mid-day could race the M Factor
+    page and clear the override at an unexpected moment.
+
+    Best-effort — if the DB lookup fails or the date is malformed, we
+    return None and the stamp path falls back to the systematic engine
+    (same behavior as before the override existed).
+    """
+    try:
+        override = db.get_active_mct_override()
+        if not override:
+            return None
+        from datetime import datetime as _dt
+        return _dt.strptime(override["activated_date_ct"][:10], "%Y-%m-%d").date()
+    except Exception as e:
+        print(f"[_current_override_date] lookup failed: {e}")
+        return None
+
+
 def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | None]:
     """Compute (state_name, display_day_num) for a given date, snapshot-style.
 
@@ -1260,7 +1292,10 @@ def _compute_mct_state_with_day_num(as_of_date: str = "") -> tuple[str, int | No
         except Exception:
             pass
 
-        result = run_engine("^IXIC", as_of=as_of)
+        # Apply Force Correction override — see _current_override_date().
+        # Every stamp path must run the SAME engine the M Factor page runs.
+        result = run_engine("^IXIC", as_of=as_of,
+                            force_correction_at_date=_current_override_date())
         if result.bars.empty:
             return ("", None)
 
@@ -1336,7 +1371,11 @@ def _compute_trend_count(as_of_date: str = "") -> int | None:
         except Exception:
             pass
 
-        result = run_engine("^IXIC", as_of=as_of)
+        # Apply Force Correction override so trend_count stamps agree
+        # with the M Factor banner (which resets trend to Rally Day 1
+        # after a manual CORRECTION_DECLARED).
+        result = run_engine("^IXIC", as_of=as_of,
+                            force_correction_at_date=_current_override_date())
         if result.bars.empty:
             return None
 
@@ -1403,7 +1442,15 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
             update_if_needed("^IXIC")
         except Exception:
             pass
-        result = run_engine("^IXIC")
+        # Apply Force Correction override so the heal-stamped state
+        # matches what /api/market/rally-prefix (and M Factor) show.
+        # Without this, a manual CORRECTION shown on M Factor gets
+        # silently reverted to the systematic state on every Journal
+        # Log load (heal writes systematic state back onto today's row).
+        result = run_engine(
+            "^IXIC",
+            force_correction_at_date=_current_override_date(),
+        )
         if result.bars.empty:
             return
         bars = result.bars.copy()
