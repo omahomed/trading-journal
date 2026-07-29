@@ -1,53 +1,98 @@
+#!/usr/bin/env python3
 """
-stock_scraper.py
-Purpose:
-- Download historical stock price data (Open, High, Low, Close, Volume) for multiple tickers
-- Save each ticker's cleaned data as a CSV in the 'output/' directory
-- Override existing files with new data
+stock_scraper2 — multi-ticker OHLCV downloader.
+
+Downloads historical Open/High/Low/Close/Volume for one or more tickers
+via yfinance and writes each to output/{TICKER}_price_data.csv (existing
+files are overwritten).
+
+Usage:
+    python3 stock_scraper2 AAPL MSFT NVDA
+    python3 stock_scraper2 ^GSPC --start 2000-01-01
+    python3 stock_scraper2 TSLA --output-dir /tmp/tsla-runs
+
+Companion to the standing "scrape tickers" prompt in CLAUDE.md — the
+operator says the phrase, Claude asks for symbols, then invokes this
+script with them.
 """
-import yfinance as yf
-import pandas as pd
+from __future__ import annotations
+
+import argparse
 import os
+import sys
 
-# === Configuration ===
-tickers = ["^IXIC"]  # Add any tickers here
-start_date = "1975-01-01"
-end_date = pd.Timestamp.today().strftime("%Y-%m-%d")
-output_dir = "output"
+import pandas as pd
+import yfinance as yf
 
-# Create output directory if it doesn't exist
-os.makedirs(output_dir, exist_ok=True)
 
-# === Download and save each ticker ===
-for symbol in tickers:
-    print(f"📥 Fetching data for {symbol}...")
-    
-    # Download historical data using yfinance
-    df = yf.download(symbol, start=start_date, end=end_date, progress=False)
-    
-    if df.empty:
-        print(f"⚠️  No data for {symbol}. Skipping.")
-        continue
-    
-    # Keep essential columns
+DEFAULT_START = "1975-01-01"
+DEFAULT_OUTPUT_DIR = "output"
+
+
+def fetch_and_save(symbol: str, start: str, end: str, output_dir: str) -> tuple[bool, str]:
+    """Return (ok, message). One row per ticker in the summary line."""
+    try:
+        df = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=False)
+    except Exception as exc:
+        return False, f"{symbol}: fetch failed ({exc})"
+
+    if df is None or df.empty:
+        return False, f"{symbol}: no data returned"
+
+    # yfinance sometimes returns a multi-level column index even for a
+    # single ticker; flatten so the ["Open", "High", ...] selector works.
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    missing = [c for c in ("Open", "High", "Low", "Close", "Volume") if c not in df.columns]
+    if missing:
+        return False, f"{symbol}: yfinance response missing columns {missing}"
+
     df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-    
-    # Reset index to expose 'Date' as a column
     df.reset_index(inplace=True)
     df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-    
-    # Clean filename for symbols like ^GSPC
-    safe_symbol = symbol.replace("^", "")
-    
-    # Define output path
-    output_path = os.path.join(output_dir, f"{safe_symbol}_price_data.csv")
-    
-    # Check if file exists and notify about override
-    if os.path.exists(output_path):
-        print(f"🔄 Overriding existing file: {output_path}")
-    
-    # Save to CSV (this automatically overwrites existing files)
-    df.to_csv(output_path, index=False)
-    print(f"✅ Saved: {output_path} ({len(df)} records)")
 
-print(f"\n🎉 All data saved to '{output_dir}/' directory")
+    # Clean filename for symbols like ^GSPC — filesystems + humans both
+    # find plain alphanumerics friendlier.
+    safe_symbol = symbol.replace("^", "").replace("/", "_")
+    output_path = os.path.join(output_dir, f"{safe_symbol}_price_data.csv")
+    overrode = os.path.exists(output_path)
+
+    df.to_csv(output_path, index=False)
+    action = "overwrote" if overrode else "saved"
+    return True, f"{symbol}: {action} {output_path} ({len(df):,} rows)"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("tickers", nargs="+", help="One or more tickers (e.g., AAPL MSFT ^GSPC)")
+    parser.add_argument("--start", default=DEFAULT_START,
+                        help=f"Start date YYYY-MM-DD (default: {DEFAULT_START})")
+    parser.add_argument("--end", default=None,
+                        help="End date YYYY-MM-DD (default: today)")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR,
+                        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})")
+    args = parser.parse_args()
+
+    end_date = args.end or pd.Timestamp.today().strftime("%Y-%m-%d")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    print(f"Fetching {len(args.tickers)} ticker(s) from {args.start} to {end_date}")
+    print(f"Output dir: {args.output_dir}")
+    print("-" * 60)
+
+    results = []
+    for symbol in args.tickers:
+        ok, msg = fetch_and_save(symbol.upper(), args.start, end_date, args.output_dir)
+        marker = "OK " if ok else "ERR"
+        print(f"  {marker}  {msg}")
+        results.append((ok, symbol, msg))
+
+    print("-" * 60)
+    successes = sum(1 for ok, _, _ in results if ok)
+    print(f"Done. {successes}/{len(results)} succeeded.")
+    return 0 if successes == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

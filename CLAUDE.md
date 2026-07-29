@@ -403,6 +403,36 @@ Helper scripts:
 MCP tools are session-scoped; nothing about these workflows runs from cron.
 The operator triggers each sync interactively.
 
+## Scrape tickers workflow (standing)
+
+When the user says **"scrape tickers"** (or similar — "scrape prices",
+"pull historical data", "download OHLCV"), do NOT assume symbols.
+Ask **one question**:
+
+  1. Which tickers?
+
+Accept them in any form (space-separated, comma-separated, one per
+line, with or without carets for indices). Normalize to uppercase +
+strip. Then run from repo root:
+
+```
+python3 stock_scraper2 SYM1 SYM2 SYM3 ...
+```
+
+The script writes each ticker to `output/{TICKER}_price_data.csv`
+(overwriting if the file exists). Full history back to 1975-01-01
+by default; override with `--start YYYY-MM-DD` if the user asks.
+Indices like `^GSPC` become `GSPC_price_data.csv` (the `^` is
+stripped from the filename only, not the fetch symbol).
+
+Print the script's summary line at completion — one row per ticker
+with save path + row count, plus the "N/M succeeded" total — so the
+operator sees what landed without opening the folder.
+
+**No auto-commit** — the `output/` CSVs are the operator's scratch
+data and typically untracked; if the user asks to commit specific
+files after a run, add them explicitly by path.
+
 ## Per-lot MAE research export (standing)
 
 When the user says "export lot excursions" (or "run the lot excursion
