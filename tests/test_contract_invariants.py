@@ -305,6 +305,70 @@ def _extract_function_body(source: str, name: str) -> str:
 
 
 # ============================================================================
+# Invariant #4c — no stray percent chars in load_summary's SELECT template
+# ============================================================================
+#
+# Regression 2026-07-29: an SR14 rollout comment inside the load_summary
+# f-string SQL template contained a literal "10%)" — psycopg2 parses
+# every "%" in a query as a format directive (even inside "-- SQL
+# comments"). Any occurrence of "%" not followed by "s" or another "%"
+# raises IndexError on cur.execute, and load_summary silently returned
+# an empty DataFrame. ACS then rendered "0 open positions" for a
+# portfolio with 7 open positions.
+#
+# Static test: scan load_summary's SELECT template for stray "%" chars.
+# Same grep-based discipline as the migration-audit rules in CLAUDE.md;
+# faster to catch here than to debug an "empty positions" incident.
+
+
+def test_load_summary_select_template_has_no_stray_percent_chars():
+    """psycopg2 raises IndexError on any '%' not followed by 's' or
+    another '%' (in SELECT templates, including inside `-- comments`).
+    The template lives inside a Python f-string, so it's easy to
+    accidentally paste a comment that contains a natural-language
+    percent sign. This test catches that class before it ships."""
+    import re
+    src = (_REPO_ROOT / "db_layer.py").read_text()
+    lines = src.splitlines()
+
+    in_template = False
+    start_line = 0
+    template_lines: list[str] = []
+    for i, line in enumerate(lines, start=1):
+        if 'query = f"""' in line and not in_template:
+            in_template = True
+            start_line = i
+            continue
+        if in_template:
+            # Closing triple-quote ends the template.
+            if '"""' in line:
+                in_template = False
+                break
+            template_lines.append(line)
+
+    assert template_lines, (
+        "load_summary's SELECT f-string template not found — the parser "
+        "assumed a 'query = f\"\"\"' opener followed by a '\"\"\"' closer. "
+        "Update this test's slicing if load_summary was restructured."
+    )
+
+    strays: list[tuple[int, str]] = []
+    for i, line in enumerate(template_lines):
+        for m in re.finditer(r'%(?!s)(?!%)', line):
+            snippet = line[max(0, m.start() - 15): m.start() + 15]
+            strays.append((start_line + 1 + i, snippet))
+
+    assert not strays, (
+        "Stray '%' chars found in load_summary's SELECT template. "
+        "psycopg2 will raise IndexError on cur.execute and load_summary "
+        "will silently return empty. Rephrase to avoid percent chars "
+        "(e.g. 'pct' or 'percent') or hoist the comment to a Python # "
+        "line above the f-string.\n\nOffending lines:\n"
+        + "\n".join(f"  line {ln}: ...{snip}..." for ln, snip in strays)
+    )
+
+
+# ============================================================================
 # Invariant #4a — SR14 tier flips ONLY when broker_stop_price is set
 # ============================================================================
 #

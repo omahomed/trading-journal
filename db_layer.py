@@ -389,6 +389,26 @@ def load_summary(portfolio_name, status=None):
                 'NULL::numeric AS "Sr8_Activation_Nlv",\n                    '
                 'NULL::numeric AS "Sr8_Core_Shares",\n                    '
             )
+            # Migration-tolerance for migration 055 — broker_stop_price
+            # (SR14 two-stop flag). Same detection pattern as sr8_activation.
+            # NEVER put percent characters in SQL comments inside this
+            # f-string — psycopg2 treats every % as a format directive
+            # (even in `-- comments`) and any stray occurrence raises
+            # IndexError on cur.execute. Regression 2026-07-29.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'broker_stop_price'"
+                )
+                has_broker_stop = cur.fetchone() is not None
+            except Exception:
+                has_broker_stop = False
+            broker_stop_select = (
+                's.broker_stop_price AS "Broker_Stop_Price",\n                    '
+                if has_broker_stop else
+                'NULL::numeric AS "Broker_Stop_Price",\n                    '
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -408,12 +428,7 @@ def load_summary(portfolio_name, status=None):
                     s.amount AS "Amount",
                     s.value AS "Value",
                     s.stop_loss AS "Stop_Loss",
-                    -- Migration 055: two-stop model flag. NULL = single-stop
-                    -- (classic SR1 territory when B1 return < 10%); NUMERIC
-                    -- > 0 = physical broker stop parked at −0.75× ATR21,
-                    -- sell-rule classifier promotes tier to SR14.
-                    s.broker_stop_price AS "Broker_Stop_Price",
-                    s.rule AS "Rule",
+                    {broker_stop_select}s.rule AS "Rule",
                     -- Migration 047: full ordered buy-rule confluence array.
                     -- rules[0] mirrors s.rule (primary); rules[1..] are
                     -- confluence tags for display / future analytics.
