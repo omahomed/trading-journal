@@ -305,6 +305,71 @@ def _extract_function_body(source: str, name: str) -> str:
 
 
 # ============================================================================
+# Invariant #4d — _normalize_trades renames every load_summary PascalCase alias
+# ============================================================================
+#
+# Regression 2026-07-29 evening: added Broker_Stop_Price to load_summary's
+# SELECT but forgot the corresponding rename entry in _normalize_trades.
+# The API returned the column as "Broker_Stop_Price" (PascalCase) while
+# every frontend consumer reads "broker_stop_price" (snake_case) — every
+# read got undefined and the SR14 tier silently downgraded to SR1 for
+# every position that had a broker stop set.
+#
+# Static test: any AS "Foo_Bar" alias in load_summary's SELECT must have
+# a matching "Foo_Bar": "foo_bar" entry in _normalize_trades. Grep-based;
+# same discipline as the other contract tests here.
+
+
+def test_normalize_trades_covers_every_load_summary_alias():
+    """Every AS "Xxx_Yyy" column alias emitted by load_summary must have
+    a rename entry in _normalize_trades. A missing entry leaves the
+    column PascalCase in the JSON response; every snake_case frontend
+    read then returns undefined and the feature that column powers
+    silently regresses (SR14 → SR1 was the motivating incident)."""
+    import re
+    db_layer_src = (_REPO_ROOT / "db_layer.py").read_text()
+    api_main_src = (_REPO_ROOT / "api" / "main.py").read_text()
+
+    # Slice load_summary out and grab every `AS "Xxx"` alias in the
+    # SELECT block. Also pick up aliases from the sr8_activation /
+    # mae_mfe / manual_price / broker_stop fragments defined above it.
+    fn_start = db_layer_src.index("def load_summary(")
+    # End at the next top-level `def ` after load_summary.
+    fn_end_m = re.search(r"\n(?=def )", db_layer_src[fn_start + 4:])
+    fn_body = (db_layer_src[fn_start:fn_start + 4 + fn_end_m.start()]
+               if fn_end_m else db_layer_src[fn_start:])
+
+    aliases = set(re.findall(r'AS "([A-Z][A-Za-z0-9_]*)"', fn_body))
+    # Some aliases are computed/aggregate fields not backed by a
+    # trades_summary column (e.g. Buy_Rule via correlated subquery).
+    # Every frontend consumer reads those too via snake_case, so they
+    # STILL need rename entries — no exclusions.
+
+    # Extract _normalize_trades's rename dict.
+    norm_start = api_main_src.index("def _normalize_trades(")
+    norm_end_m = re.search(r"\n(?=def )", api_main_src[norm_start + 4:])
+    norm_body = (api_main_src[norm_start:norm_start + 4 + norm_end_m.start()]
+                 if norm_end_m else api_main_src[norm_start:])
+    rename_keys = set(re.findall(r'"([A-Z][A-Za-z0-9_]*)":\s*"[a-z]', norm_body))
+
+    missing = aliases - rename_keys
+    # Ignore a small allow-list of aliases that intentionally aren't
+    # renamed because they're consumed elsewhere in PascalCase or
+    # discarded by a downstream call. Currently empty — add here with a
+    # comment if a future column has a legit reason to skip normalization.
+    ALLOW = set()  # type: set[str]
+    missing -= ALLOW
+
+    assert not missing, (
+        "load_summary emits these PascalCase aliases without a matching "
+        "rename in _normalize_trades — the columns will round-trip through "
+        "the API in PascalCase and every snake_case frontend read will get "
+        "undefined. Add each to the rename dict in api/main.py::"
+        "_normalize_trades:\n\n  " + "\n  ".join(sorted(missing))
+    )
+
+
+# ============================================================================
 # Invariant #4c — no stray percent chars in load_summary's SELECT template
 # ============================================================================
 #

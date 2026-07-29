@@ -2799,6 +2799,21 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Sr8_Activation_Date": "sr8_activation_date",
         "Sr8_Activation_Nlv": "sr8_activation_nlv",
         "Sr8_Core_Shares": "sr8_core_shares",
+        # Migration 055 — SR14 two-stop flag. load_summary emits the
+        # PascalCase alias; every downstream consumer (positions.ts,
+        # sell-rule classifier, ACS badge) reads the snake_case name.
+        # Without this line the column round-trips as "Broker_Stop_Price"
+        # in the JSON response and every frontend read is undefined →
+        # tier silently downgrades to SR1.
+        "Broker_Stop_Price": "broker_stop_price",
+        # Backfill: three older aliases load_summary has been emitting
+        # for a while without matching entries here. Frontend readers
+        # (positions.ts::manual_price, ...) had been getting undefined
+        # for these; the contract test that caught Broker_Stop_Price
+        # surfaced them too. Add all three so the whole class is closed.
+        "Buy_Rule": "buy_rule",
+        "Manual_Price": "manual_price",
+        "Manual_Price_Set_At": "manual_price_set_at",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     # Also handle already-lowercase columns (from DB mode)
