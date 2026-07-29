@@ -7,11 +7,19 @@ type SellRuleBadgeProps = {
 
 // Tone matches the existing inline-style pill convention used by the
 // former Risk Status cell in active-campaign.tsx (color-mix tints over
-// surface). sr1 = warn red, sr11 = amber, sr8 = green.
+// surface). sr1 = warn red, sr14 = blue (physical stop parked but still
+// in the exposed <10% window), sr11 = amber (BE stop), sr8 = green (big
+// cushion). Blue for SR14 conveys "have physical protection but not
+// yet earned the BE step-up" — distinct hue from the red/amber/green
+// severity ladder so the eye can spot it at a glance in a mixed table.
 const TONES: Record<SellRuleTier, { bg: string; fg: string }> = {
   sr1: {
     bg: "color-mix(in oklab, #e5484d 14%, var(--surface))",
     fg: "#dc2626",
+  },
+  sr14: {
+    bg: "color-mix(in oklab, #3b82f6 14%, var(--surface))",
+    fg: "#1d4ed8",
   },
   sr11: {
     bg: "color-mix(in oklab, #f59f00 12%, var(--surface))",

@@ -54,6 +54,41 @@ NLV lands and promotes them.
 - Migration 054 (LTG reset) wiped rows → frontends fell back to fake $100k
 - Game Plan hollow rows leaked into Journal Log + heat-preview
 - Save-time MCT stampers ignored override → Journal Log stamp diverged from M Factor
+- NLV Entry (batch-edit) clobbered daily_thoughts / lowlights / top_lesson
+  with hardcoded `""` defaults on UPDATE (fixed by extending the existence-
+  check SELECT + gating on existing_row_present, mirroring how the snapshot
+  fields already behaved)
+
+**Migration 055 addition — `trades_summary.broker_stop_price`**:
+
+New nullable NUMERIC column that flags the SR14 two-stop model. Presence
+of the column value (> 0) promotes the ACS Sell Rule tier from SR1 → SR14
+in the <10% B1-return window; NULL means classic single-stop model.
+
+Writers:
+- `POST /api/trades/buy` — accepts `broker_stop_price` in the body on
+  new-campaign buys (scale-ins inherit from B1's row)
+- `PUT /api/trades/update-broker-stop` — dedicated backfill endpoint,
+  called from Trade Journal + ACS right-click. Validates > 0 AND < avg_entry.
+- `PUT /api/trades/edit-transaction` — the summary recompute preserves the
+  field on the existing-row branch so a per-detail edit doesn't wipe the flag
+
+Readers:
+- `frontend/src/lib/positions.ts::computeEnrichedPositions` — reads and
+  surfaces on the enriched position
+- `frontend/src/lib/sell-rule.ts::classifySellRuleTier` — <10% branch
+  checks presence and returns SR14 vs SR1
+- `SellRuleBadge` component — renders the SR14 blue pill
+
+Edit surfaces (all three call the same shared `BrokerStopEditor` modal):
+- Log Buy: optional field at entry, pre-filled by Position Sizer's send-off
+- Trade Journal: right-click menu → "Set broker stop..." on OPEN cards
+- ACS: right-click menu → "Set broker stop..." on any open row
+
+**Trade Manager is intentionally NOT wired** — the ACS right-click + Trade
+Journal menu cover backfill from the two primary surfaces the operator
+lives in. If Trade Manager gains a "campaign fields" section later, add
+the same modal there via the shared component.
 
 ---
 

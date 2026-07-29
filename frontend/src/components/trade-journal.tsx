@@ -11,6 +11,7 @@ import { lotClosuresToLifoRows, type LifoRow } from "@/lib/lifo-closures";
 import { InteractiveChart } from "./interactive-chart";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
+import { BrokerStopEditor } from "./broker-stop-editor";
 import { SearchSelect } from "./search-select";
 import { ImageGallery, type ImageGalleryItem } from "./image-gallery";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
@@ -462,6 +463,9 @@ export function TradeJournal({ navColor }: { navColor: string }) {
   // where `category` is a pipe-separated tag list.
   const [lessons, setLessons] = useState<Record<string, { note: string; category: string }>>({});
   const [tjCtxMenu, setTjCtxMenu] = useState<{ x: number; y: number; trade: TradePosition } | null>(null);
+  // Migration 055 — Broker Stop editor modal, opened from the TJ right-
+  // click menu on any open trade. Same shared component used by ACS.
+  const [brokerStopTrade, setBrokerStopTrade] = useState<TradePosition | null>(null);
   const coarsePointer = useCoarsePointer();
   // Lookup keyed by name so the card pill can grab a strategy's color
   // in O(1). When a trade references a strategy that's been deleted
@@ -2001,7 +2005,63 @@ export function TradeJournal({ navColor }: { navColor: string }) {
               onPick={(name) => setTradeStrategyOptimistic(tjCtxMenu.trade.trade_id, name)}
             />
           )}
+          {/* Migration 055 — broker_stop_price backfill for open trades.
+              Only shown on OPEN campaigns; hidden on CLOSED where the
+              flag is historical bookkeeping. Same modal as ACS uses. */}
+          {String(tjCtxMenu.trade.status || "").toUpperCase() === "OPEN" && (
+            <>
+              <div className="my-1 mx-3 h-px" style={{ background: "var(--border)" }} />
+              <button
+                className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                style={{ color: "var(--ink)" }}
+                data-testid="tj-ctx-broker-stop"
+                onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                onClick={e => {
+                  e.stopPropagation();
+                  setBrokerStopTrade(tjCtxMenu.trade);
+                  setTjCtxMenu(null);
+                }}
+              >
+                <span style={{ color: "var(--ink-4)" }}>&#x1F6E1;&#xFE0F;</span>
+                {(tjCtxMenu.trade as any).broker_stop_price
+                  ? "Edit broker stop..."
+                  : "Set broker stop..."}
+              </button>
+            </>
+          )}
         </div>
+      )}
+
+      {/* Broker Stop editor modal — mounted at the page level so it
+          doesn't inherit the card's overflow-hidden clip. On save the
+          full trade list re-fetches so the badge tier updates on-page. */}
+      {brokerStopTrade && (
+        <BrokerStopEditor
+          position={{
+            trade_id: brokerStopTrade.trade_id,
+            ticker: brokerStopTrade.ticker || "",
+            shares: parseFloat(String(brokerStopTrade.shares || 0)) || 0,
+            avg_entry: parseFloat(String(brokerStopTrade.avg_entry || 0)) || 0,
+            current_price: livePrices[brokerStopTrade.ticker || ""] || undefined,
+            broker_stop_price: (() => {
+              const raw = (brokerStopTrade as any).broker_stop_price;
+              if (raw == null) return null;
+              const n = parseFloat(String(raw));
+              return Number.isFinite(n) && n > 0 ? n : null;
+            })(),
+          }}
+          portfolio={getActivePortfolio()}
+          onClose={() => setBrokerStopTrade(null)}
+          onSaved={() => {
+            setBrokerStopTrade(null);
+            // Re-fetch open trades so the updated broker_stop_price
+            // flows back into the card display + downstream SR14 badges.
+            void api.tradesOpen(getActivePortfolio())
+              .then(fresh => setOpenTrades(fresh as TradePosition[]))
+              .catch(err => log.error("trade-journal", "refetch after broker-stop save failed", err));
+          }}
+        />
       )}
 
       {/* Closed-trade edit modal — opens from the Edit button in any

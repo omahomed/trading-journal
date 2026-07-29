@@ -54,6 +54,13 @@ export interface EnrichedPosition {
   // tier derives from max(b1_return_pct, b1_max_return_pct) — see
   // computeEnrichedPositions. NULL pre-backfill; falls back to current.
   b1_max_return_pct: number | null;
+  // Migration 055 — physical broker stop price parked at −0.75× ATR21 from
+  // B1 fill. Presence promotes tier from SR1 → SR14 in the <10% B1-return
+  // window; null means single-stop campaign (classic SR1). Surfaced so
+  // tooltips + edit modals + right-click quick-tag can render/mutate it.
+  // Optional so pre-migration test fixtures don't have to spell it out;
+  // matches the same discipline as mae_pct / sr8_activation_* fields.
+  broker_stop_price?: number | null;
   sell_rule_tier: SellRuleTier | null;
   // Migration 046 — excursion metrics passed through from the summary
   // row. Optional + nullable so pre-migration fixtures / legacy DBs
@@ -180,7 +187,16 @@ export function computeEnrichedPositions(
     const effectiveMax = b1ReturnPct !== null && b1MaxStored !== null
       ? Math.max(b1ReturnPct, b1MaxStored)
       : (b1ReturnPct ?? b1MaxStored);
-    const sellRuleTier = classifySellRuleTier(effectiveMax);
+    // Migration 055 — broker_stop_price is the SR14 two-stop flag.
+    // Presence of a positive value promotes tier from SR1 → SR14 while
+    // B1 return < 10%. Backend returns the column as-is; parseFloat is
+    // enough since NULL becomes NaN which classifier reads as "no
+    // broker stop set."
+    const brokerStopRaw = (trade as any).broker_stop_price;
+    const brokerStopPrice = brokerStopRaw != null
+      ? parseFloat(String(brokerStopRaw))
+      : null;
+    const sellRuleTier = classifySellRuleTier(effectiveMax, brokerStopPrice);
 
     return {
       trade_id: trade.trade_id,
@@ -227,6 +243,11 @@ export function computeEnrichedPositions(
       strategy: trade.strategy ?? null,
       b1_return_pct: b1ReturnPct,
       b1_max_return_pct: b1MaxStored,
+      // Migration 055 — surfaced for tooltips + edit UI. NaN normalized
+      // to null so the type stays "number | null" not "number | NaN".
+      broker_stop_price: (brokerStopPrice != null && Number.isFinite(brokerStopPrice))
+        ? brokerStopPrice
+        : null,
       sell_rule_tier: sellRuleTier,
       mae_pct:          _passThroughNum((trade as any).mae_pct),
       mfe_pct:          _passThroughNum((trade as any).mfe_pct),

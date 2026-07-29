@@ -208,6 +208,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // not a meaningful default. The user can reveal it via "Show stop loss".
   // Reset to true for stocks via the ticker-keyed effect below.
   const [showStopLoss, setShowStopLoss] = useState(true);
+  // Migration 055 — optional broker_stop_price for the two-stop model
+  // (SR14). Stored as a string so the input can be empty ("nothing set")
+  // vs "0" (which we treat as null). Position Sizer prefills this via
+  // the send-to-log-buy handoff when the two-stop model was used; the
+  // user can also enter it manually or leave blank for single-stop.
+  const [brokerStopPrice, setBrokerStopPrice] = useState("");
   const [notes, setNotes] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -359,6 +365,12 @@ export function LogBuy({ navColor }: { navColor: string }) {
       // controls, but they arrive pre-selected.
       if (data.add_exempt_reason === "sr8_rebuild" || data.add_exempt_reason === "fresh_base") {
         setAddExemptReason(data.add_exempt_reason);
+      }
+      // Migration 055 — Position Sizer's two-stop send passes the
+      // resolved 0.75× ATR dollar level. Prefill the Broker Stop input
+      // so the SR14 flag rides along with this trade automatically.
+      if (typeof data.broker_stop_price === "number" && data.broker_stop_price > 0) {
+        setBrokerStopPrice(String(data.broker_stop_price.toFixed(2)));
       }
     } catch { /* ignore */ }
   }, []);
@@ -689,6 +701,19 @@ export function LogBuy({ navColor }: { navColor: string }) {
     // doesn't translate to premium-based stops.
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
+    // Migration 055 — broker_stop_price (SR14) validation. Must be
+    // BELOW entry (otherwise fires immediately) AND above the composite
+    // stop (otherwise it's redundant — the deeper stop catches first).
+    if (actionType === "new" && brokerStopPrice.trim()) {
+      const bsp = parseFloat(brokerStopPrice);
+      if (!Number.isFinite(bsp) || bsp <= 0) {
+        e.push("Broker stop price must be > 0");
+      } else if (priceNum > 0 && bsp >= priceNum) {
+        e.push(`Broker stop ${formatCurrency(bsp)} must be below entry ${formatCurrency(priceNum)}`);
+      } else if (showStopLoss && stopPrice > 0 && bsp <= stopPrice) {
+        w.push(`Broker stop ${formatCurrency(bsp)} sits at or below the composite stop ${formatCurrency(stopPrice)} — the composite catches first, so SR14 will never fire. Verify this is intended.`);
+      }
+    }
     // Ladder mode: sum(leg shares) must equal total shares. Backend
     // will 422 otherwise; we block at the UI layer so the user sees an
     // inline error instead of a submit round-trip.
@@ -767,6 +792,13 @@ export function LogBuy({ navColor }: { navColor: string }) {
         // both trades_details (this transaction) and trades_summary
         // (denormalized from B1 on new campaigns).
         rules: [rule, ...confluenceRules].filter(Boolean),
+        // Migration 055 — SR14 two-stop flag. Only sent for new-campaign
+        // buys (scale-ins inherit from the parent's B1 write). Empty
+        // string / 0 / negative → backend stores NULL and the position
+        // stays in classic SR1 territory when B1 return < 10%.
+        broker_stop_price: actionType === "new"
+          ? (parseFloat(brokerStopPrice) || null)
+          : undefined,
         strategy,
         notes,
         date: date,
@@ -825,6 +857,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
         setOverrideSizeCap(false);
+        setBrokerStopPrice("");  // Migration 055 — fresh trade = fresh SR14 opt-in
 
         // Refresh server-derived state so a same-page second submit reads
         // fresh data. Without this, openTrades + allDetails stay at the
@@ -1165,6 +1198,34 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       style={{ color: "var(--ink-4)", background: "transparent", border: "none", padding: 0 }}>
                 Show stop loss
               </button>
+            )}
+
+            {/* Broker Stop (migration 055 — SR14 two-stop model). Only
+                shown on new-campaign buys; scale-ins inherit from B1.
+                Optional field — leave blank for single-stop (SR1). */}
+            {actionType === "new" && (
+              <Field label="Broker Stop (0.75× ATR) — optional">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={brokerStopPrice}
+                    onChange={e => setBrokerStopPrice(e.target.value)}
+                    step="0.01"
+                    placeholder="Leave blank for single-stop model"
+                    className={inputCls}
+                    style={inputStyle}
+                  />
+                  {brokerStopPrice.trim() && parseFloat(brokerStopPrice) > 0 && priceNum > 0 && (
+                    <span className="text-[11px] whitespace-nowrap"
+                          style={{ color: "var(--ink-4)" }}>
+                      {(((priceNum - parseFloat(brokerStopPrice)) / priceNum) * 100).toFixed(2)}% below entry
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] mt-1" style={{ color: "var(--ink-4)" }}>
+                  Physical order parked at the broker. Presence flags the position as SR14 in ACS. Position Sizer prefills this when the two-stop model is used.
+                </div>
+              </Field>
             )}
 
             {/* Notes */}

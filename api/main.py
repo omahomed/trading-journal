@@ -6317,6 +6317,21 @@ def log_buy(request: Request, body: dict):
         shares = float(body.get("shares") or 0)
         price = float(body.get("price") or 0)
         stop_loss = float(body.get("stop_loss") or 0)
+        # Migration 055: broker_stop_price (SR14 two-stop model). Optional;
+        # None or absent → single-stop campaign. Zero is treated as None
+        # so the frontend can send an empty input without meaning "the
+        # broker stop is at $0" (nonsensical for a long).
+        broker_stop_raw = body.get("broker_stop_price")
+        try:
+            broker_stop_price = (
+                float(broker_stop_raw)
+                if broker_stop_raw not in (None, "", 0, 0.0)
+                else None
+            )
+        except (TypeError, ValueError):
+            broker_stop_price = None
+        if broker_stop_price is not None and broker_stop_price <= 0:
+            broker_stop_price = None
         rule = body.get("rule", "")
         # Migration 047: buy-rule confluence. Body may supply `rules`
         # (ordered array, primary first) instead of / in addition to
@@ -6455,6 +6470,10 @@ def log_buy(request: Request, body: dict):
                 "Risk_Budget": compute_trade_risk(new_buy_df, multiplier),
                 "Instrument_Type": instrument_type, "Multiplier": multiplier,
                 "Strategy": strategy,
+                # Migration 055 — SR14 two-stop flag. None on single-stop
+                # campaigns; save_summary_row's set-clause builder honors
+                # explicit None as "SET broker_stop_price = NULL".
+                "Broker_Stop_Price": broker_stop_price,
             }
         else:
             # Scale-in: load existing summary and update
@@ -7492,6 +7511,11 @@ def _recompute_summary_matching(
                                       ("sell_notes", "Sell_Notes"),
                                       ("risk_budget", "Risk_Budget"),
                                       ("stop_loss", "Stop_Loss"),
+                                      # Migration 055 — SR14 flag survives
+                                      # every LIFO recompute. Same discipline
+                                      # as stop_loss: user-entered metadata,
+                                      # not derivable from the lot walk.
+                                      ("broker_stop_price", "Broker_Stop_Price"),
                                       ("notes", "Notes")):
                     val = existing_row.get(snake)
                     if pd.notna(val):
@@ -7840,6 +7864,87 @@ def update_trade_stops(body: dict):
         import traceback
         print(f"[update_trade_stops] handler failed: {e}")
         return {"error": str(e), "trace": traceback.format_exc()}
+
+
+@app.put("/api/trades/update-broker-stop")
+def update_broker_stop_price(body: dict):
+    """Set or clear the broker_stop_price on an existing campaign.
+
+    Two-stop model flag (migration 055). Small dedicated endpoint so
+    Trade Manager / Trade Journal / ACS right-click all backfill a
+    forgotten SR14 tag without going through the heavy update_trade_stops
+    flow (which also touches per-lot stop_loss + BE detection).
+
+    Body: {portfolio, trade_id, broker_stop_price: number | null}
+    Passing 0, null, or omitting the field clears the flag → position
+    drops back to SR1 tier while B1 return < 10%.
+    """
+    try:
+        portfolio = body.get("portfolio", "CanSlim")
+        trade_id = str(body.get("trade_id") or "").strip()
+        if not trade_id:
+            return {"error": "trade_id is required"}
+        raw = body.get("broker_stop_price")
+        try:
+            price = (
+                float(raw)
+                if raw not in (None, "", 0, 0.0)
+                else None
+            )
+        except (TypeError, ValueError):
+            price = None
+        if price is not None and price <= 0:
+            price = None
+
+        # Sanity: block a broker stop set ABOVE current avg entry — a
+        # broker stop at or above your fill price would trigger immediately
+        # and can't be what the user meant. Frontend also checks, but the
+        # backend enforces regardless.
+        df_s = db.load_summary(portfolio)
+        if df_s is None or df_s.empty:
+            return {"error": "No trades found"}
+        df_s = _normalize_trades(df_s)
+        match = df_s[df_s["trade_id"] == trade_id]
+        if match.empty:
+            return {"error": f"Trade {trade_id} not found"}
+        avg_entry = float(match.iloc[0].get("avg_entry", 0) or 0)
+        if price is not None and avg_entry > 0 and price >= avg_entry:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"broker_stop_price ({price}) must be BELOW avg_entry "
+                    f"({avg_entry}) — a stop at or above fill fires "
+                    "immediately."
+                ),
+            )
+
+        # save_summary_row does an UPSERT; passing None sets the column to
+        # NULL (explicit-None handling in _build_summary_update_set_clauses).
+        summary_row = {
+            "Trade_ID": trade_id,
+            "Ticker": str(match.iloc[0].get("ticker") or ""),
+            "Broker_Stop_Price": price,
+        }
+        db.save_summary_row(portfolio, summary_row)
+        db.load_summary.clear()
+
+        prior = match.iloc[0].get("broker_stop_price")
+        prior_str = "NULL" if pd.isna(prior) or prior is None else str(float(prior))
+        new_str = "NULL" if price is None else str(price)
+        try:
+            db.log_audit(portfolio, "UPDATE_BROKER_STOP", trade_id,
+                         str(match.iloc[0].get("ticker") or ""),
+                         f"broker_stop_price: {prior_str} → {new_str}")
+        except Exception as e:
+            # Audit is best-effort — never block the write on it.
+            print(f"[update_broker_stop_price] audit log failed: {e}")
+        return {"status": "ok", "trade_id": trade_id,
+                "broker_stop_price": price}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[update_broker_stop_price] handler failed: {e}")
+        return {"error": str(e)}
 
 
 @app.put("/api/trades/update-ladder")

@@ -14,6 +14,7 @@ import { classifyPyramidScreener, type PyramidScreenerState } from "@/lib/pyrami
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { SellRuleBadge } from "./sell-rule-badge";
+import { BrokerStopEditor } from "./broker-stop-editor";
 import { SR8TrimCalculator } from "./sr8-trim-calculator";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
@@ -191,6 +192,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // SR8 Trim modal — null = closed. Pre-selects this trade_id in the
   // calculator. Modal closes on backdrop click, X button, or Esc.
   const [sr8TrimModalTradeId, setSr8TrimModalTradeId] = useState<string | null>(null);
+  // Migration 055 — Broker Stop editor modal. Opened via right-click
+  // "Set broker stop..." action; wraps a simple numeric input + save/
+  // clear buttons that call api.updateBrokerStop. Closes and refreshes
+  // the campaign list on success so the SR14 badge appears immediately.
+  const [brokerStopModalPos, setBrokerStopModalPos] = useState<EnrichedPosition | null>(null);
   // Phase 2 — list of active strategies for the right-click "Set strategy"
   // submenu. Loaded once on mount; refresh after a successful retag is
   // unnecessary because the source of truth (trades_summary.strategy) is
@@ -1368,7 +1374,40 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <span style={{ color: "var(--ink-4)" }}>&#x2702;&#xFE0F;</span> Calculate SR8 Trim
             </button>
           )}
+          {/* Migration 055 — Set/edit/clear broker_stop_price (SR14 flag).
+              Available on every open position regardless of tier, since
+              the user may want to backfill a forgotten flag OR clear one
+              that no longer applies. The Sell Rule column reads
+              broker_stop_price to show SR14 vs SR1 for <10% campaigns;
+              at +10%+ the BE stop replaces broker stop and this field
+              becomes stale bookkeeping the classifier ignores. */}
+          <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                  style={{ color: "var(--ink)" }}
+                  data-testid="ctx-broker-stop"
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  onClick={e => { e.stopPropagation(); setBrokerStopModalPos(ctxMenu.position); setCtxMenu(null); }}>
+            <span style={{ color: "var(--ink-4)" }}>&#x1F6E1;&#xFE0F;</span>
+            {ctxMenu.position.broker_stop_price
+              ? `Edit broker stop (${formatCurrency(ctxMenu.position.broker_stop_price)})`
+              : "Set broker stop..."}
+          </button>
         </div>
+      )}
+
+      {/* Broker Stop editor modal (migration 055). Simple numeric input +
+          save / clear buttons. On success, force-reloads the campaign
+          list so the SR14 badge updates immediately. */}
+      {brokerStopModalPos && (
+        <BrokerStopEditor
+          position={brokerStopModalPos}
+          portfolio={activePortfolio?.name || getActivePortfolio()}
+          onClose={() => setBrokerStopModalPos(null)}
+          onSaved={() => {
+            setBrokerStopModalPos(null);
+            void loadData({ force: true });
+          }}
+        />
       )}
 
       {/* SR8 Trim modal. Renders the shared SR8TrimCalculator with the

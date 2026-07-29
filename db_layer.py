@@ -408,6 +408,11 @@ def load_summary(portfolio_name, status=None):
                     s.amount AS "Amount",
                     s.value AS "Value",
                     s.stop_loss AS "Stop_Loss",
+                    -- Migration 055: two-stop model flag. NULL = single-stop
+                    -- (classic SR1 territory when B1 return < 10%); NUMERIC
+                    -- > 0 = physical broker stop parked at −0.75× ATR21,
+                    -- sell-rule classifier promotes tier to SR14.
+                    s.broker_stop_price AS "Broker_Stop_Price",
                     s.rule AS "Rule",
                     -- Migration 047: full ordered buy-rule confluence array.
                     -- rules[0] mirrors s.rule (primary); rules[1..] are
@@ -1103,6 +1108,8 @@ _TRADES_SUMMARY_UPDATE_COLUMNS = {
     "Sell_Rule":       "sell_rule",
     "Notes":           "notes",
     "Stop_Loss":       "stop_loss",
+    # Migration 055 — two-stop model. See load_summary SELECT comment.
+    "Broker_Stop_Price": "broker_stop_price",
     "Rule":            "rule",
     "Buy_Notes":       "buy_notes",
     "Sell_Notes":      "sell_notes",
@@ -1123,6 +1130,9 @@ _TRADES_SUMMARY_UPDATE_COLUMNS = {
 # still UPDATE successfully via the existing try/except retry pattern.
 _TRADES_SUMMARY_LEGACY_EXCLUDED = frozenset((
     "Grade", "Instrument_Type", "Multiplier", "Strategy", "Rules",
+    # Migration 055 — DBs pre-055 don't have the column; retry drops it
+    # from the SET clause on a "column does not exist" error.
+    "Broker_Stop_Price",
 ))
 
 
@@ -1388,6 +1398,19 @@ def save_summary_row(portfolio_name, row_dict):
                     if update_strategy:
                         insert_cols.append("strategy")
                         insert_vals.append(strategy_val)
+                    # Migration 055 — broker_stop_price. Only append when
+                    # the caller supplied a value (KeyError-safe: None is
+                    # a valid "explicit NULL" but only if the key exists).
+                    # Legacy DBs without the column fall through the outer
+                    # try/except retry path which doesn't include this.
+                    if 'Broker_Stop_Price' in row_dict:
+                        bsp_raw = row_dict.get('Broker_Stop_Price')
+                        try:
+                            bsp_val = float(bsp_raw) if bsp_raw not in (None, "", 0) else None
+                        except (TypeError, ValueError):
+                            bsp_val = None
+                        insert_cols.append("broker_stop_price")
+                        insert_vals.append(bsp_val)
                     placeholders = ", ".join(["%s"] * len(insert_vals))
                     insert_query = (
                         f"INSERT INTO trades_summary ({', '.join(insert_cols)}) "

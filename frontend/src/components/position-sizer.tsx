@@ -193,6 +193,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     // §2 Window exemption — declared in Pyramid Sizer, plumbed through
     // Log Buy's prefill so the sizer + persisted lot never disagree.
     add_exempt_reason?: "sr8_rebuild" | "fresh_base";
+    // Migration 055 — SR14 two-stop flag. Resolved dollar price of the
+    // 0.75× ATR broker stop at the time of handoff, so Log Buy can
+    // prefill its Broker Stop input regardless of stopMode. Presence
+    // flags the position as SR14 in ACS post-submit.
+    broker_stop_price?: number;
   }) => {
     localStorage.setItem("ps_prefill", JSON.stringify(data));
     if (onNavigate) onNavigate("logbuy");
@@ -1471,6 +1476,10 @@ function VolatilityResults({
     atrMultiplier?: 0.75 | 1 | 1.5;
     ladderShares?: [number, number, number];
     action: string;
+    // Migration 055 — resolved 0.75× ATR broker stop dollar level.
+    // Sent from the Broker Stop send-off so Log Buy prefills its
+    // Broker Stop input and the SR14 flag lands on the campaign.
+    broker_stop_price?: number;
   }) => void;
 }) {
   const { composite, scaleOut } = results;
@@ -1625,6 +1634,15 @@ function VolatilityResults({
                     stopMode: "atr",
                     atrMultiplier: BROKER_STOP_ATR_MULT as 0.75,
                     action: "new",
+                    // Migration 055 — resolved 0.75× ATR dollar level.
+                    // Log Buy prefills its Broker Stop input from this,
+                    // so the SR14 flag lands on trades_summary alongside
+                    // the write. If this callsite is missing the field,
+                    // the position goes in as classic SR1.
+                    broker_stop_price: Math.max(
+                      0,
+                      entry - BROKER_STOP_ATR_MULT * results.atrPerShare,
+                    ),
                   });
                 }}
                 className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"

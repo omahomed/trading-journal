@@ -820,6 +820,29 @@ export const api = {
       current_price?: number;
     }>,
 
+  // Migration 055 — set or clear broker_stop_price on a campaign.
+  // Small dedicated endpoint so Trade Manager / Trade Journal / ACS
+  // right-click all backfill the SR14 flag without going through
+  // update-stops (which also touches per-lot stop_loss + BE detection).
+  // Pass broker_stop_price: null (or 0) to clear the flag → tier drops
+  // back to SR1 while B1 return < 10%.
+  updateBrokerStop: (body: {
+    portfolio?: string;
+    trade_id: string;
+    broker_stop_price: number | null;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/trades/update-broker-stop`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{
+      status?: string;
+      error?: string;
+      trade_id?: string;
+      broker_stop_price?: number | null;
+      detail?: string;
+    }>,
+
   updateTradeLadder: (body: {
     portfolio?: string;
     trade_id: string;

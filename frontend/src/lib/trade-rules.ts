@@ -222,20 +222,6 @@ export const SELL_RULES: readonly SellRule[] = [
     ].join("\n"),
   },
   {
-    code: "sr14",
-    description: "0.75× ATR Stop",
-    oneLiner:
-      "First-line broker stop at −0.75× ATR21 from B1 fill. Backtest premise: trades breaching this line intraday post-fill show ~0% win rate. Distinct from SR1 (capital-protection floor) so the two populations can be analyzed separately later.",
-    mechanics: [
-      "- Trigger: intraday low crosses B1 fill − (0.75 × ATR21 at fill)",
-      "- Parked at the broker immediately after fill (physical order, not mental)",
-      "- Sits alongside SR1: SR1 = capital-protection floor sized to the deepest planned exit; SR14 = early-bailout technical stop that fires first if the -0.75× ATR line is breached intraday",
-      "- The composite/sizing stop (Key Level − 0.5 ATR or Entry − 1 ATR, whichever is deeper) stays the 'thesis' exit and drives share-count math on Position Sizer — the two-stop model is intentional and documented in the sizer's Broker Stop panel",
-      "- Tag the sell with SR14 so later analysis buckets 'broker-stop-fired' vs 'thesis-exit-fired' separately — win rate + realized-P&L distribution should differ meaningfully if the backtest premise holds",
-      "- Rename or replace this rule if the coefficient is retuned (0.5×, 1×, etc.) — a new coefficient is a philosophy change worth its own row",
-    ].join("\n"),
-  },
-  {
     code: "sr13",
     description: "Change of Character",
     oneLiner:
@@ -248,6 +234,20 @@ export const SELL_RULES: readonly SellRule[] = [
       "  - **Scary gap down**: unexplained or significant gap down at the open",
       "- **Action**: Full exit of the entire position, including any SR8 core. A true character change voids the SR8 premise (the stock is no longer a leader with strong fundamentals).",
       "- **Bar for triggering must be high**: Market-wide scares (Iran war, circuit breaker, generic selloff) are SR3 events, not SR13 events. SR13 requires a stock-specific structural break.",
+    ].join("\n"),
+  },
+  {
+    code: "sr14",
+    description: "0.75× ATR Stop",
+    oneLiner:
+      "First-line broker stop at −0.75× ATR21 from B1 fill. Backtest premise: trades breaching this line intraday post-fill show ~0% win rate. Distinct from SR1 (capital-protection floor) so the two populations can be analyzed separately later.",
+    mechanics: [
+      "- Trigger: intraday low crosses B1 fill − (0.75 × ATR21 at fill)",
+      "- Parked at the broker immediately after fill (physical order, not mental)",
+      "- Sits alongside SR1: SR1 = capital-protection floor sized to the deepest planned exit; SR14 = early-bailout technical stop that fires first if the -0.75× ATR line is breached intraday",
+      "- The composite/sizing stop (Key Level − 0.5 ATR or Entry − 1 ATR, whichever is deeper) stays the 'thesis' exit and drives share-count math on Position Sizer — the two-stop model is intentional and documented in the sizer's Broker Stop panel",
+      "- Tag the sell with SR14 so later analysis buckets 'broker-stop-fired' vs 'thesis-exit-fired' separately — win rate + realized-P&L distribution should differ meaningfully if the backtest premise holds",
+      "- Rename or replace this rule if the coefficient is retuned (0.5×, 1×, etc.) — a new coefficient is a philosophy change worth its own row",
     ].join("\n"),
   },
 ] as const;
