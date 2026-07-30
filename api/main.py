@@ -1438,46 +1438,65 @@ def _compute_trend_count(as_of_date: str = "") -> int | None:
 
 
 def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
-    """Backfill NULL mct_display_day_num / market_cycle / trend_count on
+    """Backfill NULL market_cycle / mct_display_day_num / trend_count on
     recent journal rows.
 
-    The save-time stampers (_compute_mct_state_with_day_num and
-    _compute_trend_count) intentionally persist NULL when the engine has
-    no bar for the requested date — the common cause is "user logged
-    today's journal before market_data ingested today's bar." When the
-    bar lands later, those rows would stay NULL forever without an
-    explicit re-save. This helper runs once per /api/journal/history
-    call: it locates NULL rows in the last `lookback_days`, replays the
-    engine once to get every cached bar's state, and stamps any row
-    whose date now has a bar. In-memory df is patched so the response
-    reflects the fresh values without a second DB read.
+    STRICT NULL-ONLY. Never overwrites a stored non-NULL value, even if
+    the engine's output has drifted since (override activated / cleared,
+    rule tweak, market_data revision). The Daily Journal is a historical
+    audit trail — a stamp captured at save time is the truth of what the
+    engine reported at that moment, and it stays that way. If the user
+    wants to update a past stamp they re-save that row manually (explicit
+    action).
 
-    Bounded lookback (default 14 days) keeps this cheap on every page
-    load — older NULLs go through scripts/backfill_mct_state.py and
-    scripts/backfill_trend_count.py for a full historical sweep.
+    Historical incident (2026-07-29 → 30): a prior "re-stamp on stale"
+    variant of this helper silently overwrote 07-27 (CORRECTION under a
+    Force Correction override) and 07-28 (RALLY MODE Day 1 under same
+    override) after the override auto-cleared on 07-29. The MCT state
+    for those days flipped to the systematic UPTREND UNDER PRESSURE
+    reading — erasing the user's declared correction from the journal.
+    Reverted to NULL-only to restore immutability.
+
+    Legitimate reason NULL heal still exists: the save-time stampers
+    persist NULL when market_data has no bar for the requested date yet
+    (common: user saves today's journal before the post-close ingest
+    lands). When the bar shows up later, the NULL row gets filled here
+    — but only that; already-stamped rows are left alone.
+
+    Bounded lookback (default 14 days) keeps this cheap. Older NULLs go
+    through scripts/backfill_mct_state.py + scripts/backfill_trend_count.py
+    for a full historical sweep.
     """
     if df.empty or "mct_display_day_num" not in df.columns:
         return
 
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
-    recent = df[df["day"] >= cutoff]
-    if recent.empty:
+    trend_col = df.get("trend_count", pd.Series(dtype=object))
+    # Only NULL rows are candidates. This is the immutability guard —
+    # a row with any stamp is left alone forever.
+    needs_heal = df[
+        (df["day"] >= cutoff)
+        & (
+            df["mct_display_day_num"].isna()
+            | (df.get("market_cycle", pd.Series(dtype=object)).fillna("").astype(str) == "")
+            | trend_col.isna()
+        )
+    ]
+    if needs_heal.empty:
         return
 
     try:
-        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
-        # Refresh market_data first so the bar_index built below reflects
-        # today's bar — otherwise the per-row short-circuit `if as_of not in
-        # bar_index.index: continue` skips today and the heal never fires.
+        from api.mct_endpoint_adapter import run_engine
         try:
             from api.market_data_updater import update_if_needed
             update_if_needed("^IXIC")
         except Exception:
             pass
-        # Apply Force Correction override so the heal-stamped state
-        # matches what /api/market/rally-prefix (and M Factor) show.
-        override_date = _current_override_date()
-        result = run_engine("^IXIC", force_correction_at_date=override_date)
+        # Apply active override so a NULL-heal that fires DURING an
+        # active override stamps the override-aware state (matches what
+        # save-time would have stamped had market_data been available).
+        result = run_engine("^IXIC",
+                            force_correction_at_date=_current_override_date())
         if result.bars.empty:
             return
         bars = result.bars.copy()
@@ -1487,7 +1506,7 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
         print(f"[mct_heal] engine setup failed: {e}")
         return
 
-    for _, row in recent.iterrows():
+    for _, row in needs_heal.iterrows():
         day_value = row["day"]
         if pd.isna(day_value):
             continue
@@ -1496,73 +1515,25 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
             continue  # engine still doesn't have this bar — skip
         day_str = as_of.strftime("%Y-%m-%d")
 
-        # Compute the state THIS row SHOULD show right now — reads the
-        # engine's output for the bar directly. Same anchoring rules as
-        # _compute_mct_state_with_day_num (POWERTREND → pt_on_idx,
-        # UPTREND/RALLY MODE → cycle_start_idx, CORRECTION → None day num)
-        # so the two paths can't diverge; hoisting the computation into a
-        # shared helper isn't worth the cross-module churn.
-        engine_row = bar_index.loc[as_of]
-        engine_state = str(engine_row["state"])
-        cycle_start_idx = engine_row.get("cycle_start_idx")
-        pt_on_idx = engine_row.get("pt_on_idx")
-        rally_active = bool(engine_row.get("rally_active"))
-        orig_idx = int(bar_index.index.get_indexer([as_of])[0])
-        cycle_day = 0
-        if (rally_active and cycle_start_idx is not None
-                and not pd.isna(cycle_start_idx)):
-            cycle_day = orig_idx - int(cycle_start_idx) + 1
-        if engine_state == "POWERTREND" and pt_on_idx is not None and not pd.isna(pt_on_idx):
-            cycle_day = orig_idx - int(pt_on_idx) + 1
-        engine_day_num = cycle_day if engine_state != "CORRECTION" and cycle_day > 0 else None
-
-        # MCT state heal — re-stamp on NULL OR when the stored state is
-        # stale relative to the current engine. "Stale" fires on override
-        # activation (systematic UUP → overridden CORRECTION), override
-        # clear (overridden CORRECTION → systematic RALLY MODE), and any
-        # engine-behavior change that flips a past date's classification.
-        # Without this generalization, the heal skipped today's row after
-        # a Force Correction because the row already had a non-NULL
-        # (systematic) state stamped from an earlier save.
-        stored_state = str(row.get("market_cycle") or "").strip()
-        stored_day_num_raw = row.get("mct_display_day_num")
-        stored_day_num = (
-            None if pd.isna(stored_day_num_raw)
-            else int(stored_day_num_raw)
+        # MCT state heal — NULL only. Reads the engine's output for the
+        # bar (state name + day-num anchoring same as
+        # _compute_mct_state_with_day_num does at save time).
+        mct_null = (
+            pd.isna(row.get("mct_display_day_num"))
+            or not str(row.get("market_cycle") or "").strip()
         )
-        state_stale = (
-            not stored_state
-            or stored_state != engine_state
-            or stored_day_num != engine_day_num
-        )
-        if state_stale and engine_state:
-            try:
-                db.update_journal_mct_state(portfolio, day_str, engine_state, engine_day_num)
-                df.loc[df["day"] == day_value, "market_cycle"] = engine_state
-                df.loc[df["day"] == day_value, "mct_display_day_num"] = engine_day_num
-            except Exception as e:
-                print(f"[mct_heal] update_journal_mct_state failed for {day_str}: {e}")
+        if mct_null:
+            state, day_num = _compute_mct_state_with_day_num(day_str)
+            if state:
+                try:
+                    db.update_journal_mct_state(portfolio, day_str, state, day_num)
+                    df.loc[df["day"] == day_value, "market_cycle"] = state
+                    df.loc[df["day"] == day_value, "mct_display_day_num"] = day_num
+                except Exception as e:
+                    print(f"[mct_heal] update_journal_mct_state failed for {day_str}: {e}")
 
-        # Trend Count heal — same "NULL or stale" rule. Uses
-        # to_rally_prefix_response for the signed leg math so the value
-        # stamped matches exactly what the M Factor banner shows.
-        stored_trend_raw = row.get("trend_count")
-        try:
-            engine_trend = to_rally_prefix_response(result).get("trend_count")
-            # to_rally_prefix_response returns the count for the LAST bar
-            # of the engine run, which equals `as_of` iff this row is
-            # today's. For past rows we'd need a per-bar replay; punt on
-            # historical trend heal (rare — only fires when trend semantics
-            # change) and only heal the latest row's trend_count.
-            latest_bar_date = bar_index.index[-1]
-            if as_of != latest_bar_date:
-                engine_trend = None if pd.isna(stored_trend_raw) else int(stored_trend_raw)
-        except Exception:
-            engine_trend = None
-        stored_trend = None if pd.isna(stored_trend_raw) else int(stored_trend_raw)
-        trend_stale = engine_trend is not None and stored_trend != engine_trend
-        trend_null = pd.isna(stored_trend_raw)
-        if trend_null or trend_stale:
+        # Trend count heal — NULL only. Same discipline.
+        if pd.isna(row.get("trend_count")):
             trend_count = _compute_trend_count(day_str)
             if trend_count is not None:
                 try:
