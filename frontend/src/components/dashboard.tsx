@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
-import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail } from "@/lib/api";
+import { api, getActivePortfolio, type JournalEntry, type JournalHistoryPoint, type DashboardMetrics, type TradePosition, type TradeDetail, type ConcentrationResponse } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
@@ -76,6 +76,10 @@ export function Dashboard({ navColor }: { navColor: string }) {
   const [ecMaximized, setEcMaximized] = useState(false);
   const [showEvents, setShowEvents] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  // Concentration Pulse strip on the Discipline Pulse split (migration 056).
+  // Fetched alongside the rest so a single dashboard refresh updates all panels.
+  // Silent on error — the card just renders empty state.
+  const [concentration, setConcentration] = useState<ConcentrationResponse | null>(null);
 
   // Throttle + in-flight guards so the visibility/focus listener below
   // can't fire a 7-endpoint refetch storm on every window-focus event.
@@ -92,7 +96,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
     inFlightRef.current = true;
     try {
       const activeId = activePortfolio?.id;
-      const [lat, hist, open, closed, ev, dash, recent] = await Promise.all([
+      const [lat, hist, open, closed, ev, dash, recent, conc] = await Promise.all([
         api.journalLatest().catch((err) => { log.error("dashboard", "journal latest fetch failed", err); return null; }),
         api.journalHistory(getActivePortfolio(), 0).catch((err) => { log.error("dashboard", "journal history fetch failed", err); return []; }),
         api.tradesOpen().catch((err) => { log.error("dashboard", "open trades fetch failed", err); return []; }),
@@ -102,6 +106,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
           ? api.dashboardMetrics(activeId).catch((err) => { log.error("dashboard", "metrics fetch failed", err); return null; })
           : Promise.resolve(null),
         api.tradesRecent(getActivePortfolio(), 2000).catch((err) => { log.error("dashboard", "recent trades fetch failed", err); return { details: [], lot_closures: [] }; }),
+        api.concentration(getActivePortfolio()).catch((err) => { log.error("dashboard", "concentration fetch failed", err); return null; }),
       ]);
       // Guard: backend can return {error: "..."} at HTTP 200 when something
       // goes wrong server-side. Don't let that poison the render.
@@ -116,6 +121,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
       setClosedTrades(Array.isArray(closed) ? closed : []);
       setAllDetails((recent && (recent as any).details) || []);
       setEvents(Array.isArray(ev) ? ev : []);
+      setConcentration(conc && !("error" in (conc as any)) ? conc as ConcentrationResponse : null);
       setLoading(false);
       lastFetchAtRef.current = Date.now();
     } finally {
@@ -779,7 +785,8 @@ export function Dashboard({ navColor }: { navColor: string }) {
                 </div>
               </div>
 
-              {/* ━━━ PANEL 2 — Discipline Pulse ━━━ */}
+              {/* ━━━ PANEL 2 (split) — Discipline Pulse + Concentration Pulse ━━━ */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               <div className="rounded-[14px] overflow-hidden flex flex-col" style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)" }}>
                 <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
@@ -875,6 +882,69 @@ export function Dashboard({ navColor }: { navColor: string }) {
                     )}
                   </Link>
                 </div>
+              </div>
+
+              {/* ━━━ Concentration Pulse (migration 056 companion) ━━━ */}
+              <Link href="/concentration-risk" className="rounded-[14px] overflow-hidden flex flex-col transition-transform hover:scale-[1.005]"
+                    style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--card-shadow)", textDecoration: "none", color: "inherit" }}>
+                <div className="flex items-center gap-2 px-[18px] py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: navColor }} />
+                  <span className="text-[13px] font-semibold">Concentration Pulse</span>
+                  {concentration && concentration.unclassified.length > 0 && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                          style={{ background: "#e5484d", color: "white" }}>
+                      ⚠ {concentration.unclassified.length}
+                    </span>
+                  )}
+                  <span className="text-xs ml-auto" style={{ color: "var(--ink-4)" }}>
+                    open positions by MV
+                  </span>
+                </div>
+                <div className="flex-1 p-[18px] grid grid-cols-1 gap-2.5">
+                  {!concentration || concentration.positions.length === 0 ? (
+                    <div className="text-[12px] text-center py-6" style={{ color: "var(--ink-4)" }}>
+                      No open positions.
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
+                          Top Sectors
+                        </div>
+                        {concentration.sectors.slice(0, 3).map((s) => (
+                          <div key={s.name} className="flex items-center gap-2 mb-1">
+                            <div className="text-[11px] flex-1 truncate" style={{ color: "var(--ink-2)" }}>{s.name}</div>
+                            <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                              <div className="h-full rounded-full" style={{ width: `${Math.min(100, s.weight_pct)}%`, background: navColor }} />
+                            </div>
+                            <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink-1)" }}>
+                              {s.weight_pct.toFixed(0)}%
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {concentration.themes.length > 0 && (
+                        <div className="mt-1">
+                          <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>
+                            Top Themes
+                          </div>
+                          {concentration.themes.slice(0, 3).map((t) => (
+                            <div key={t.name} className="flex items-center gap-2 mb-1">
+                              <div className="text-[11px] flex-1 truncate" style={{ color: "var(--ink-2)" }}>{t.name}</div>
+                              <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(100, t.weight_pct)}%`, background: "#8b5cf6" }} />
+                              </div>
+                              <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink-1)" }}>
+                                {t.weight_pct.toFixed(0)}%
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </Link>
               </div>
             </div>
           );

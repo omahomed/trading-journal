@@ -67,6 +67,10 @@ vi.mock("@/lib/api", () => ({
       { name: "StockTalk", description: null, color: "#d97706", is_active: true, created_at: "2026-01-02" },
     ]),
     setTradeStrategy: vi.fn().mockResolvedValue({ ok: true }),
+    concentration: vi.fn().mockResolvedValue({
+      portfolio: "CanSlim", total_market_value: 0,
+      positions: [], sectors: [], themes: [], unclassified: [],
+    }),
   },
   getActivePortfolio: () => "CanSlim",
 }));

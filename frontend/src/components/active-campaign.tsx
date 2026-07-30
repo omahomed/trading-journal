@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle, type Strategy } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle, type Strategy, type ConcentrationResponse } from "@/lib/api";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { readCache, writeCache } from "@/lib/session-cache";
@@ -180,6 +180,18 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // primary attention target; the glossary is a reference the trader
   // opens when they need it.
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  // Concentration snapshot strip (migration 056). Fetched lazily after
+  // initial ACS render — the rollup query hits the same live prices ACS
+  // already loaded, so a separate call is a small extra round-trip.
+  // Kept out of the primary loadData so a taxonomy backend hiccup can't
+  // block the main table from rendering.
+  const [concentration, setConcentration] = useState<ConcentrationResponse | null>(null);
+  useEffect(() => {
+    if (!activePortfolio) return;
+    api.concentration(activePortfolio.name)
+      .then((r) => setConcentration(r))
+      .catch((e) => log.error("active-campaign", "concentration fetch failed", e));
+  }, [activePortfolio]);
 
   // Independent sort state for each section. No localStorage persistence —
   // resets to "Return % desc" on every mount per spec.
@@ -861,6 +873,54 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       <div className="grid grid-cols-7 gap-3 mb-6">
         {kpis.map(k => <KPITile key={k.label} {...k} />)}
       </div>
+
+      {/* Concentration snapshot (migration 056). No new columns on the
+          positions table — just a top-of-page rollup pill strip. Click
+          any bucket or the fix badge to jump to the Concentration Risk /
+          Sector Mapping pages respectively. */}
+      {concentration && concentration.positions.length > 0 && (() => {
+        const topSectors = concentration.sectors.slice(0, 4);
+        const topThemes = concentration.themes.slice(0, 4);
+        const unclassifiedCount = concentration.unclassified.length;
+        return (
+          <div className="mb-6 rounded-[12px] px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px]"
+               style={{ background: "var(--surface-2)", border: "1px solid var(--border)" }}>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                Sector
+              </span>
+              {topSectors.map((s) => (
+                <a key={s.name} href="/concentration-risk" className="px-2 py-0.5 rounded-md"
+                   style={{ background: "var(--surface)", color: "var(--ink-2)", textDecoration: "none" }}>
+                  {s.name} <span style={{ color: "var(--ink-4)" }}>{s.weight_pct.toFixed(0)}%</span>
+                </a>
+              ))}
+              {concentration.sectors.length > 4 && (
+                <span style={{ color: "var(--ink-4)" }}>+{concentration.sectors.length - 4}</span>
+              )}
+            </div>
+            {topThemes.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-[0.10em] font-semibold" style={{ color: "var(--ink-4)" }}>
+                  Theme
+                </span>
+                {topThemes.map((t) => (
+                  <a key={t.name} href="/concentration-risk" className="px-2 py-0.5 rounded-md"
+                     style={{ background: "var(--surface)", color: "var(--ink-2)", textDecoration: "none" }}>
+                    {t.name} <span style={{ color: "var(--ink-4)" }}>{t.weight_pct.toFixed(0)}%</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            {unclassifiedCount > 0 && (
+              <a href="/sector-mapping" className="ml-auto px-2.5 py-1 rounded-md font-semibold"
+                 style={{ background: "#e5484d", color: "white", textDecoration: "none" }}>
+                ⚠ {unclassifiedCount} unmapped — Fix
+              </a>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Equities Section ── */}
       {equities.length > 0 && (

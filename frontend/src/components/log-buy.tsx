@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type Strategy, type TickerTaxonomy } from "@/lib/api";
 import { uploadWithTimeout } from "@/lib/upload-with-timeout";
 import { UploadTracker, type UploadEntry, type UploadKind } from "./upload-tracker";
 import { StrategyChip } from "./strategy-chip";
@@ -147,6 +147,18 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const [ticker, setTicker] = useState("");
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [tradeId, setTradeId] = useState("");
+  // Ticker taxonomy (migration 056). Loaded once on mount; ticker-change
+  // effect just consults the in-memory list — cheap, no per-keystroke
+  // network. When ticker is unmapped and options → yfinance hint pre-fills
+  // the inline picker sector/theme; user overrides if wrong (SNDK, ETFs,
+  // spinoffs). Save is optional — the buy commits either way; unmapped
+  // tickers bubble up on the Sector Mapping page for later cleanup.
+  const [taxonomyList, setTaxonomyList] = useState<TickerTaxonomy[]>([]);
+  const [taxonomySector, setTaxonomySector] = useState("");
+  const [taxonomyTheme, setTaxonomyTheme] = useState("");
+  const [taxonomyHint, setTaxonomyHint] = useState<{ sector: string; industry: string } | null>(null);
+  const [savingTaxonomy, setSavingTaxonomy] = useState(false);
+  const [taxonomyMsg, setTaxonomyMsg] = useState<string>("");
   const [rule, setRule] = useState("");
   // Migration 047: buy-rule confluence — optional secondary rules that
   // fired alongside the primary. Rendered as chips below the primary
@@ -274,7 +286,79 @@ export function LogBuy({ navColor }: { navColor: string }) {
       setSizingMode(deriveAutoSizingMode(stateStr, exits).idx);
       setStrategies(strats);
     });
+    // Load the full taxonomy once; ticker-change effect below reads from
+    // this in-memory list. Cheap (one row per ticker the user has
+    // classified) and avoids per-keystroke network calls.
+    api.taxonomyList()
+      .then((res) => setTaxonomyList(res.mapped ?? []))
+      .catch((err) => log.error("log-buy", "taxonomyList fetch failed", err));
   }, []);
+
+  // Ticker-change effect: look up mapping locally; if unmapped, hit
+  // yfinance for a hint to pre-fill the inline picker. Skip options
+  // (space in ticker) — options inherit context from the underlying.
+  useEffect(() => {
+    const t = ticker.trim().toUpperCase();
+    // Reset any previous ticker's state whenever ticker changes.
+    setTaxonomyMsg("");
+    if (!t || t.includes(" ")) {
+      setTaxonomySector("");
+      setTaxonomyTheme("");
+      setTaxonomyHint(null);
+      return;
+    }
+    const existing = taxonomyList.find((r) => r.ticker === t);
+    if (existing) {
+      // Mapped ticker — pre-fill so save-as-is works, but user can
+      // still edit inline to reclassify from this page.
+      setTaxonomySector(existing.sector);
+      setTaxonomyTheme(existing.theme ?? "");
+      setTaxonomyHint(null);
+      return;
+    }
+    // Unmapped — clear + fire yfinance hint. It'll pre-fill the empty
+    // inputs when it lands; the user commits by clicking Save Mapping.
+    setTaxonomySector("");
+    setTaxonomyTheme("");
+    setTaxonomyHint(null);
+    let cancelled = false;
+    api.taxonomySuggest(t).then((s) => {
+      if (cancelled) return;
+      const hint = { sector: s.sector ?? "", industry: s.industry ?? "" };
+      setTaxonomyHint(hint);
+      setTaxonomySector((cur) => cur || hint.sector);
+      setTaxonomyTheme((cur) => cur || hint.industry);
+    }).catch(() => { /* silent — ETFs & unknown tickers just show empty */ });
+    return () => { cancelled = true; };
+  }, [ticker, taxonomyList]);
+
+  const saveTaxonomyInline = useCallback(async () => {
+    const t = ticker.trim().toUpperCase();
+    if (!t || !taxonomySector.trim()) {
+      setTaxonomyMsg("Sector is required");
+      return;
+    }
+    setSavingTaxonomy(true);
+    setTaxonomyMsg("");
+    try {
+      const res = await api.taxonomyUpsert(t, {
+        sector: taxonomySector.trim(),
+        theme: taxonomyTheme.trim() || undefined,
+      });
+      if ("error" in res) throw new Error(res.error);
+      setTaxonomyMsg("Saved");
+      // Update local list so subsequent renders show mapped state.
+      setTaxonomyList((prev) => {
+        const others = prev.filter((r) => r.ticker !== t);
+        return [...others, res.mapping].sort((a, b) => a.ticker.localeCompare(b.ticker));
+      });
+    } catch (e) {
+      log.error("log-buy", "taxonomy save failed", e);
+      setTaxonomyMsg(`Save failed: ${e}`);
+    } finally {
+      setSavingTaxonomy(false);
+    }
+  }, [ticker, taxonomySector, taxonomyTheme]);
 
   useEffect(() => {
     if (actionType === "new" && (!tradeId || tradeId.endsWith("-0XX"))) {
@@ -960,6 +1044,73 @@ export function LogBuy({ navColor }: { navColor: string }) {
                     <span>Stop default 50% of premium · all dollar fields below shown as notional</span>
                   </div>
                 )}
+                {/* Sector / Theme picker (migration 056). Skips options —
+                    they inherit context from the underlying. Only shown
+                    once a real ticker is typed. Mapped state = compact
+                    read-only label with edit-inline; unmapped = inline
+                    picker pre-filled from yfinance. */}
+                {!isOption && ticker.trim() && (() => {
+                  const t = ticker.trim().toUpperCase();
+                  const mapped = taxonomyList.find((r) => r.ticker === t);
+                  if (mapped) {
+                    return (
+                      <div className="text-[12px] px-3 py-2 rounded-[8px] flex items-center gap-2"
+                           style={{ background: "var(--surface-2)", color: "var(--ink-3)" }}>
+                        <span className="font-medium">Sector:</span>
+                        <span style={{ color: "var(--ink-1)" }}>{mapped.sector}</span>
+                        {mapped.theme && (<>
+                          <span style={{ color: "var(--ink-4)" }}>·</span>
+                          <span style={{ color: "var(--ink-1)" }}>{mapped.theme}</span>
+                        </>)}
+                        <a href="/sector-mapping" className="ml-auto text-[11px]"
+                           style={{ color: "var(--accent)" }}>Edit on Sector Mapping</a>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="p-3 rounded-[8px]"
+                         style={{ background: "color-mix(in oklab, #e5484d 6%, var(--surface))", border: "1px dashed #e5484d" }}>
+                      <div className="text-[12px] mb-2" style={{ color: "var(--ink-3)" }}>
+                        <span className="font-semibold" style={{ color: "#e5484d" }}>⚠ Unmapped ticker.</span>{" "}
+                        Classify now (optional — you can also fix later on Sector Mapping).
+                        {taxonomyHint && (taxonomyHint.sector || taxonomyHint.industry) && (
+                          <span className="ml-1" style={{ color: "var(--ink-4)" }}>
+                            (yfinance: {taxonomyHint.sector || "—"} / {taxonomyHint.industry || "—"})
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                        <input
+                          type="text" placeholder="Sector"
+                          value={taxonomySector}
+                          onChange={(e) => setTaxonomySector(e.target.value)}
+                          className={inputCls} style={inputStyle}
+                        />
+                        <input
+                          type="text" placeholder="Theme"
+                          value={taxonomyTheme}
+                          onChange={(e) => setTaxonomyTheme(e.target.value)}
+                          className={inputCls} style={inputStyle}
+                        />
+                        <button
+                          type="button" onClick={saveTaxonomyInline}
+                          disabled={savingTaxonomy || !taxonomySector.trim()}
+                          className="px-3 py-1.5 text-[12px] rounded-[6px] font-medium"
+                          style={{ background: "#e5484d", color: "white",
+                                   opacity: savingTaxonomy || !taxonomySector.trim() ? 0.5 : 1 }}
+                        >
+                          {savingTaxonomy ? "Saving…" : "Save Mapping"}
+                        </button>
+                      </div>
+                      {taxonomyMsg && (
+                        <div className="text-[11px] mt-1.5"
+                             style={{ color: taxonomyMsg === "Saved" ? "#08a86b" : "#e5484d" }}>
+                          {taxonomyMsg}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               <Field label="Select Existing Campaign">

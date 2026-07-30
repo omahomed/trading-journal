@@ -39,6 +39,10 @@ vi.mock("@/lib/api", () => ({
     dashboardMetrics: vi.fn(),
     tradesRecent: vi.fn(),
     batchPrices: vi.fn(),
+    concentration: vi.fn().mockResolvedValue({
+      portfolio: "CanSlim", total_market_value: 0,
+      positions: [], sectors: [], themes: [], unclassified: [],
+    }),
   },
   getActivePortfolio: () => "CanSlim",
 }));

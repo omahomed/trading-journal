@@ -43,6 +43,9 @@ vi.mock("@/lib/api", () => ({
     priceLookup: vi.fn(),
     logBuy: vi.fn(),
     listStrategies: vi.fn(),
+    taxonomyList: vi.fn(),
+    taxonomySuggest: vi.fn(),
+    taxonomyUpsert: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -71,6 +74,9 @@ function setupDefaults() {
   vi.mocked(api.tradesOpenDetails).mockResolvedValue({ details: [], lot_closures: [] });
   vi.mocked(api.nextTradeId).mockResolvedValue({ trade_id: "202604-001" } as any);
   vi.mocked(api.listStrategies).mockResolvedValue(SEED_STRATEGIES as any);
+  vi.mocked(api.taxonomyList).mockResolvedValue({ mapped: [], unmapped: [] } as any);
+  vi.mocked(api.taxonomySuggest).mockResolvedValue({} as any);
+  vi.mocked(api.taxonomyUpsert).mockResolvedValue({ status: "ok", mapping: {} as any });
 }
 
 
