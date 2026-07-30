@@ -291,12 +291,6 @@ class MCTEngine:
             "consec_low_above_50": 0,    # low > 50 SMA streak (Step 5)
             "consec_21_above_50": 0,     # 21 EMA > 50 SMA streak (Step 8 condition)
 
-            # Cycle-scoped counter — total (non-consecutive) closes below
-            # 50 SMA since the last CORRECTION_NULLIFIED. Used by the
-            # structure gate in _phase_declaration ("2 closes below 50").
-            # Reset in _phase_nullification when nullification fires.
-            "closes_below_50_cycle": 0,
-
             # Single-fire flags (reset when their underlying streak ends)
             "character_break_fired": False,
             "confirmed_break_fired": False,
@@ -555,9 +549,6 @@ class MCTEngine:
             state["step5_done"] = False
             state["step6_done"] = False
             state["step7_done"] = False
-            # Cycle-scoped below-50 counter resets — the next correction
-            # requires 2 fresh below-SMA closes in the new up-cycle.
-            state["closes_below_50_cycle"] = 0
             # Allow the next correction to be declared
             # (declaration gate is `not correction_active`, so this is automatic)
 
@@ -593,22 +584,30 @@ class MCTEngine:
             state["correction_pending"] = False
             return
 
-        # The rule, minimally:
-        #   1. Structure — at least 2 closes below the 50 SMA have
-        #      occurred in the current cycle (counter reset on
-        #      CORRECTION_NULLIFIED). Non-consecutive; just a count.
+        # The rule:
+        #   1. Structure — 2 closes below the 50 SMA. Tracked via the
+        #      engine's existing `consec_below_50` streak, which resets
+        #      to 0 whenever a close goes back above the SMA. So "close
+        #      below, close above, close below" resets to 1, not 2.
+        #      Streak update runs AFTER this phase, so on the current
+        #      bar the state carries yesterday's committed value —
+        #      `prior_streak >= 1 AND close_below_sma today` = 2+
+        #      consecutive including today.
         #   2. Depth — the current bar's intraday low is ≥ 10% below
         #      the reference high (low ≤ ref_high × 0.90).
-        # Both true → declare. That's it. No pending flag, no
-        # per-bar close-below-SMA re-check, no confirmation dance.
+        # Both true → declare. That's it.
         threshold = state["reference_high"] * (1.0 - CORRECTION_DRAWDOWN)
         low = float(current["low"])
+        close = float(current["close"])
+        sma_50 = float(current["sma_50"]) if pd.notna(current["sma_50"]) else None
+        close_below_sma = (sma_50 is not None) and (close < sma_50)
+        prior_streak = int(state.get("consec_below_50") or 0)
+        structure_gate = close_below_sma and prior_streak >= 1
         depth_gate = low <= threshold
-        structure_gate = int(state.get("closes_below_50_cycle") or 0) >= 2
 
-        # correction_pending retained as a field for saved-snapshot
-        # backward compat but no longer read. Zeroed on every call so
-        # replayed old states don't carry a stale flag forward.
+        # correction_pending retained on state for saved-snapshot backward
+        # compat but no longer read; zeroed on every call so replayed old
+        # states don't carry a stale flag forward.
         state["correction_pending"] = False
 
         if not (depth_gate and structure_gate):
@@ -619,15 +618,14 @@ class MCTEngine:
             reason=(
                 f"Low {low:.2f} ≤ {threshold:.2f} "
                 f"({int(CORRECTION_DRAWDOWN * 100)}% off "
-                f"{state['reference_high']:.2f}) + "
-                f"{state['closes_below_50_cycle']} closes below 50 SMA "
-                "in cycle"
+                f"{state['reference_high']:.2f}) + close {close:.2f} < "
+                f"50 SMA {sma_50:.2f} ({prior_streak + 1} closes below SMA)"
             ),
             meta={
                 "reference_high": state["reference_high"],
                 "threshold": threshold,
-                "low": low,
-                "closes_below_50_cycle": state["closes_below_50_cycle"],
+                "low": low, "close": close, "sma_50": sma_50,
+                "prior_below_50_streak": prior_streak,
                 "depth_source": "intraday_low",
                 "trigger": "systematic",
             },
@@ -780,9 +778,6 @@ class MCTEngine:
                     state["anchor_50_low"] = low
                     state["violation_50_fired"] = False
                 state["consec_below_50"] += 1
-                # Cycle-scoped total (non-consecutive) — used by the
-                # declaration's structure gate. Reset on nullification.
-                state["closes_below_50_cycle"] += 1
             else:
                 state["consec_below_50"] = 0
                 state["anchor_50_low"] = None

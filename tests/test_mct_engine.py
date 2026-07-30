@@ -651,19 +651,17 @@ def test_step4_ever_fired_clears_on_correction_declared():
 
 
 def test_declaration_fires_when_both_conditions_met():
-    """The rule, minimally stated: 2 closes below the 50 SMA in the
-    current cycle + intraday low ≤ 10% off the reference high. Both
-    true → CORRECTION_DECLARED. Nothing else — no consecutive
-    requirement, no per-bar close-below-SMA re-check, no pending
-    flag. Both conditions the user specified, and only those.
+    """The rule: 2 closes below the 50 SMA + intraday low ≤ 10% off
+    the reference high. Both true → CORRECTION_DECLARED. Structure
+    is tracked via `consec_below_50` (streak that naturally resets
+    when close pops back above SMA — see the reset test below).
 
-    Motivating scenario (NASDAQ 2026-07-29): 6 prior closes below
-    SMA50 already accumulated in the current cycle (structure long
-    since met). Today's intraday low crossed the depth threshold for
-    the first time. Declaration fires same-day."""
+    Motivating scenario (NASDAQ 2026-07-29): 6 prior consecutive
+    closes below SMA50; the intraday low first crossed the -10%
+    depth threshold today. Declaration fires same-day."""
     from api.mct_engine import MCTEngine, EngineConfig
 
-    closes = [91.0]        # value not read (declaration doesn't check today's close)
+    closes = [91.0]        # < SMA50 today (contributes to streak this bar)
     lows = [89.0]          # < threshold=90 → depth passes
     highs = [92.0]
     df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
@@ -673,21 +671,46 @@ def test_declaration_fires_when_both_conditions_met():
                                      initial_exposure=100,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    # Structure gate: cycle counter ≥ 2. Simulate 6 prior closes below
-    # SMA50 already accumulated (the 07-29 NASDAQ scenario).
-    state["closes_below_50_cycle"] = 6
+    # Prior streak from _phase_update_streaks (which runs AFTER this
+    # phase). Non-zero means yesterday closed below SMA — combined
+    # with today's close_below_sma that's 2+ consecutive.
+    state["consec_below_50"] = 5
 
     engine._phase_declaration(df.iloc[0], state, [])
     assert state["correction_active"] is True
 
 
-def test_declaration_stays_gated_when_only_one_prior_close_below_sma():
-    """Structure gate requires 2. With only 1 prior close below SMA in
-    the cycle, depth alone can't declare — needs one more close below
-    SMA in the cycle to arm."""
+def test_declaration_stays_gated_when_close_pops_back_above_sma():
+    """If today's close pops back above the SMA — even after a long
+    prior streak below — structure gate breaks for today. The engine's
+    _phase_update_streaks will zero consec_below_50 in the same bar's
+    later phase, but _phase_declaration reads today's close directly
+    to catch the same-bar reset."""
     from api.mct_engine import MCTEngine, EngineConfig
 
-    closes = [91.0]
+    closes = [97.0]        # ABOVE SMA50=95 — today's close breaks streak
+    lows = [89.0]          # depth would still pass
+    highs = [98.0]
+    df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
+                             sma_200=[80.0], lows=lows, highs=highs)
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    state["consec_below_50"] = 5   # long prior streak, but today closes above
+
+    engine._phase_declaration(df.iloc[0], state, [])
+    assert state["correction_active"] is False
+
+
+def test_declaration_stays_gated_when_only_one_prior_close_below_sma():
+    """Structure requires 2 consecutive including today. Prior streak
+    = 0 means yesterday closed above SMA; today's first-below-SMA
+    close only makes 1 consecutive → not enough."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    closes = [91.0]        # < SMA today (1st below), but no prior streak
     lows = [89.0]          # depth would pass
     highs = [92.0]
     df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
@@ -697,18 +720,19 @@ def test_declaration_stays_gated_when_only_one_prior_close_below_sma():
                                      initial_exposure=100,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    state["closes_below_50_cycle"] = 1   # only one so far
+    state["consec_below_50"] = 0   # yesterday was ABOVE SMA
 
     engine._phase_declaration(df.iloc[0], state, [])
     assert state["correction_active"] is False
 
 
 def test_declaration_stays_gated_when_depth_fails():
-    """Structure counter ≥ 2 but low stays above threshold → no
+    """Structure long met (5 prior consecutive below-SMA closes +
+    today closes below) but intraday low stays above threshold → no
     declaration. Both conditions have to hold."""
     from api.mct_engine import MCTEngine, EngineConfig
 
-    closes = [91.0]
+    closes = [91.0]        # < SMA — streak continues
     lows = [92.0]          # ABOVE threshold=90 — depth fails
     highs = [93.0]
     df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
@@ -718,36 +742,73 @@ def test_declaration_stays_gated_when_depth_fails():
                                      initial_exposure=100,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    state["closes_below_50_cycle"] = 6   # structure long met
+    state["consec_below_50"] = 5   # structure met
 
     engine._phase_declaration(df.iloc[0], state, [])
     assert state["correction_active"] is False
 
 
-def test_closes_below_50_cycle_counter_resets_on_nullification():
-    """After a CORRECTION_NULLIFIED, the cycle counter starts over.
-    The next correction needs 2 fresh below-SMA closes in the new
-    up-cycle before structure re-arms."""
+def test_structure_streak_reset_scenario_end_to_end():
+    """The exact scenario the user walked through:
+
+        Day 1: close below SMA          → streak = 1
+        Day 2: close ABOVE SMA          → RESET, streak = 0
+        Day 3: close below SMA (again)  → streak = 1 (only 1 consec)
+        Day 4: close below SMA (again)  → streak = 2 (arms structure)
+        Day 5+: depth crosses           → declare
+
+    Uses _phase_update_streaks between bars so the streak evolves
+    naturally (no state manipulation). Depth stays above threshold
+    for bars 1-4 so we can prove structure gates by itself; bar 5
+    crosses depth to confirm the full trigger fires."""
     from api.mct_engine import MCTEngine, EngineConfig
 
+    #        Day 1   Day 2   Day 3   Day 4   Day 5
+    closes = [91.0,  99.0,   91.0,   91.0,   91.0]   # bar 2 pops above
+    lows   = [92.0,  98.0,   92.0,   92.0,   89.0]   # only bar 5 crosses depth
+    highs  = [93.0,  100.0,  93.0,   93.0,   92.0]
+    sma_50 = [95.0]  * 5
+    ema_21 = [95.0]  * 5
+    df = _synthetic_history(closes, ema_21=ema_21, sma_50=sma_50,
+                             sma_200=[80.0] * 5, lows=lows, highs=highs)
     engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
                                      initial_power_trend=False,
                                      initial_exposure=100,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    state["closes_below_50_cycle"] = 5
-    state["correction_active"] = True    # simulate active correction
-    state["reference_high"] = 100.0
 
-    # A bar with close > reference_high triggers nullification.
-    df = _synthetic_history([105.0], ema_21=[95.0], sma_50=[95.0],
-                             sma_200=[80.0], lows=[104.0], highs=[106.0])
-    engine._phase_nullification(df.iloc[0], state, [])
+    # Day 1 — first close below. Neither declaration NOR depth possible.
+    engine._phase_declaration(df.iloc[0], state, [])
+    assert state["correction_active"] is False
+    engine._phase_update_streaks(df.iloc[0], None, state)
+    assert state["consec_below_50"] == 1
 
-    assert state["correction_active"] is False, "nullification should have fired"
-    assert state["closes_below_50_cycle"] == 0, (
-        "cycle counter must reset on CORRECTION_NULLIFIED — the next "
-        "correction has to earn its structure gate fresh."
+    # Day 2 — close above SMA. Streak resets. Would-be depth doesn't matter.
+    engine._phase_declaration(df.iloc[1], state, [])
+    assert state["correction_active"] is False
+    engine._phase_update_streaks(df.iloc[1], None, state)
+    assert state["consec_below_50"] == 0, "close above SMA must reset streak"
+
+    # Day 3 — close below again. First bar of a NEW streak, not enough.
+    engine._phase_declaration(df.iloc[2], state, [])
+    assert state["correction_active"] is False, (
+        "streak just started over on day 3 — one bar isn't enough even "
+        "if depth were met. The reset on day 2 wiped the earlier streak."
+    )
+    engine._phase_update_streaks(df.iloc[2], None, state)
+    assert state["consec_below_50"] == 1
+
+    # Day 4 — close below, streak = 2. Still no depth cross → no declare.
+    engine._phase_declaration(df.iloc[3], state, [])
+    assert state["correction_active"] is False, "depth still not met"
+    engine._phase_update_streaks(df.iloc[3], None, state)
+    assert state["consec_below_50"] == 2
+
+    # Day 5 — close below (streak already ≥ 2), AND depth crosses. Declare.
+    engine._phase_declaration(df.iloc[4], state, [])
+    assert state["correction_active"] is True, (
+        "structure (2+ consec closes below SMA, including today) + "
+        "depth (low ≤ threshold) both met on day 5 — must declare."
     )
 
 
