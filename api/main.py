@@ -2159,7 +2159,11 @@ def restamp_mct(payload: dict):
     if not state:
         return {"status": "no_bar", "detail": "engine has no bar for this date yet"}
     try:
-        db.update_journal_mct_state(portfolio, day_str, state, day_num)
+        # force=True — user explicitly asked to overwrite. The DB-layer
+        # immutability guard (default force=False) would otherwise refuse
+        # to overwrite an already-stamped row. This endpoint is the ONE
+        # legitimate "please re-stamp" path.
+        db.update_journal_mct_state(portfolio, day_str, state, day_num, force=True)
         return {"status": "ok", "market_cycle": state, "mct_display_day_num": day_num}
     except Exception as e:
         return {"status": "error", "detail": str(e)}

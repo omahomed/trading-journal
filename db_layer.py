@@ -3255,14 +3255,33 @@ def save_journal_game_plan(portfolio_name: str, day: str, game_plan: str) -> int
             return row_id
 
 
-def update_journal_mct_state(portfolio_name: str, day: str, market_cycle: str | None, mct_display_day_num: int | None) -> int:
+def update_journal_mct_state(
+    portfolio_name: str,
+    day: str,
+    market_cycle: str | None,
+    mct_display_day_num: int | None,
+    *,
+    force: bool = False,
+) -> int:
     """Targeted UPDATE for just the MCT badge fields on a single journal row.
 
     save_journal_entry rewrites every column, which clobbers NLV and notes
     when called with a partial dict. The lazy-heal path in
     api/main._heal_recent_mct_stamps only wants to touch the two MCT fields,
-    so it goes through here instead. Returns the row id, or 0 if no matching
-    row exists. RLS still applies via the standard get_db_connection path.
+    so it goes through here instead.
+
+    NULL-ONLY BY DEFAULT (2026-07-30 immutability contract). The Daily
+    Journal MCT stamp is a historical audit trail — once captured at
+    save time it stays that way, regardless of any later engine drift
+    (override activated / cleared, rule tweak, market_data revision).
+    Callers that want to overwrite an already-stamped value must pass
+    force=True explicitly (only the user-triggered `restamp_mct`
+    endpoint does this).
+
+    Returns the row id when a row was actually updated (0 if the row
+    is protected because it already has a non-NULL stamp AND force is
+    False, or if no matching row exists). RLS applies via the standard
+    get_db_connection path.
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -3271,26 +3290,45 @@ def update_journal_mct_state(portfolio_name: str, day: str, market_cycle: str | 
             if not result:
                 return 0
             portfolio_id = result[0]
-            cur.execute(
-                "UPDATE trading_journal "
-                "   SET market_cycle = %s, mct_display_day_num = %s, updated_at = NOW() "
-                " WHERE portfolio_id = %s AND day = %s "
-                "   AND deleted_at IS NULL "
-                " RETURNING id",
-                (market_cycle, mct_display_day_num, portfolio_id, day),
-            )
+            # Immutability guard baked into the WHERE clause so it can't
+            # be forgotten at a callsite. force=True disables it.
+            if force:
+                cur.execute(
+                    "UPDATE trading_journal "
+                    "   SET market_cycle = %s, mct_display_day_num = %s, updated_at = NOW() "
+                    " WHERE portfolio_id = %s AND day = %s "
+                    "   AND deleted_at IS NULL "
+                    " RETURNING id",
+                    (market_cycle, mct_display_day_num, portfolio_id, day),
+                )
+            else:
+                cur.execute(
+                    "UPDATE trading_journal "
+                    "   SET market_cycle = %s, mct_display_day_num = %s, updated_at = NOW() "
+                    " WHERE portfolio_id = %s AND day = %s "
+                    "   AND deleted_at IS NULL "
+                    "   AND (market_cycle IS NULL OR market_cycle = '') "
+                    " RETURNING id",
+                    (market_cycle, mct_display_day_num, portfolio_id, day),
+                )
             row = cur.fetchone()
             conn.commit()
             load_journal.clear()
             return int(row[0]) if row else 0
 
 
-def update_journal_trend_state(portfolio_name: str, day: str, trend_count: int | None) -> int:
+def update_journal_trend_state(
+    portfolio_name: str,
+    day: str,
+    trend_count: int | None,
+    *,
+    force: bool = False,
+) -> int:
     """Targeted UPDATE for just the trend_count field on a single journal row.
 
-    Same rationale as update_journal_mct_state — save_journal_entry rewrites
-    every column and would clobber unrelated fields when the lazy-heal path
-    only cares about trend_count. Returns the row id or 0 if no matching row.
+    Same immutability contract as update_journal_mct_state — NULL-only by
+    default; pass force=True to overwrite an existing value (user-triggered
+    restamp only).
     """
     with get_db_connection() as conn:
         with conn.cursor() as cur:
@@ -3299,14 +3337,25 @@ def update_journal_trend_state(portfolio_name: str, day: str, trend_count: int |
             if not result:
                 return 0
             portfolio_id = result[0]
-            cur.execute(
-                "UPDATE trading_journal "
-                "   SET trend_count = %s, updated_at = NOW() "
-                " WHERE portfolio_id = %s AND day = %s "
-                "   AND deleted_at IS NULL "
-                " RETURNING id",
-                (trend_count, portfolio_id, day),
-            )
+            if force:
+                cur.execute(
+                    "UPDATE trading_journal "
+                    "   SET trend_count = %s, updated_at = NOW() "
+                    " WHERE portfolio_id = %s AND day = %s "
+                    "   AND deleted_at IS NULL "
+                    " RETURNING id",
+                    (trend_count, portfolio_id, day),
+                )
+            else:
+                cur.execute(
+                    "UPDATE trading_journal "
+                    "   SET trend_count = %s, updated_at = NOW() "
+                    " WHERE portfolio_id = %s AND day = %s "
+                    "   AND deleted_at IS NULL "
+                    "   AND trend_count IS NULL "
+                    " RETURNING id",
+                    (trend_count, portfolio_id, day),
+                )
             row = cur.fetchone()
             conn.commit()
             load_journal.clear()

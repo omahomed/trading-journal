@@ -251,6 +251,71 @@ def test_heal_fills_null_state_when_engine_has_the_bar(monkeypatch):
     assert captured_trend.get("trend") == -35
 
 
+# ---------------------------------------------------------------------------
+# DB-layer immutability guard — belt-and-suspenders
+# ---------------------------------------------------------------------------
+#
+# Even if a caller (or an old deployed version of the heal) tries to
+# overwrite a non-NULL MCT stamp, the DB write function itself refuses
+# unless force=True is passed explicitly. Only the user-triggered
+# restamp_mct endpoint uses force=True; every other caller defaults to
+# NULL-only.
+
+
+def test_update_journal_mct_state_default_signature_is_null_only():
+    """The write function's default (force=False) must not overwrite a
+    stamped value. Grep-based check on the SQL — the WHERE clause must
+    include a NULL-or-empty guard on market_cycle when force is False."""
+    import re
+    src = (_REPO_ROOT / "db_layer.py").read_text()
+    # Slice update_journal_mct_state body
+    m = re.search(
+        r"def update_journal_mct_state\(.*?\n(.*?)(?=\ndef )",
+        src, re.DOTALL,
+    )
+    assert m, "update_journal_mct_state not found in db_layer.py"
+    body = m.group(0)
+
+    # Signature must accept force kwarg with default False.
+    assert "force: bool = False" in body, (
+        "update_journal_mct_state no longer has the force kwarg — the "
+        "immutability guard depends on it. Default must be False."
+    )
+    # The default (non-force) SQL must have the NULL-or-empty guard.
+    assert "market_cycle IS NULL OR market_cycle = ''" in body, (
+        "the default (force=False) UPDATE SQL must include the NULL-or-"
+        "empty guard on market_cycle. Otherwise any caller can overwrite "
+        "a stamped row silently — the historical incident this test "
+        "exists to prevent."
+    )
+
+
+def test_update_journal_trend_state_default_signature_is_null_only():
+    """Mirror check for trend_count."""
+    import re
+    src = (_REPO_ROOT / "db_layer.py").read_text()
+    m = re.search(
+        r"def update_journal_trend_state\(.*?\n(.*?)(?=\ndef |\Z)",
+        src, re.DOTALL,
+    )
+    assert m, "update_journal_trend_state not found in db_layer.py"
+    body = m.group(0)
+
+    assert "force: bool = False" in body, (
+        "update_journal_trend_state must accept force kwarg (default False)"
+    )
+    assert "trend_count IS NULL" in body, (
+        "the default (force=False) UPDATE SQL must include a "
+        "trend_count IS NULL guard"
+    )
+
+
+# Ensure the repo-root path (imported at top of file via _REPO_ROOT) is
+# consistent with the pattern used by other contract tests.
+from pathlib import Path as _Path
+_REPO_ROOT = _Path(__file__).resolve().parent.parent
+
+
 def test_heal_leaves_partial_row_alone_when_only_trend_is_null(monkeypatch):
     """If MCT state is stamped but trend_count is NULL, heal fills
     ONLY the trend_count. Never touches the already-stamped MCT."""
