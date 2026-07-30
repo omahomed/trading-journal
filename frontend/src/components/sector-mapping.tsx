@@ -71,13 +71,24 @@ export function SectorMapping({ navColor }: Props) {
       saving: false,
     };
     setEdit(initial);
-    // Fire-and-forget yfinance suggestion. If it arrives while the picker
-    // is still open, show it inline; if the user has moved on, drop it.
+    // Fire-and-forget yfinance suggestion. When editing an existing
+    // mapping the user's values win — the hint only shows as reference.
+    // When creating a NEW mapping (no existing row), pre-fill the empty
+    // inputs so most tickers save with one click. sector ← yfinance
+    // sector; theme ← yfinance industry as a starter (SNDK's "Computer
+    // Hardware" you'll correct, but MU's "Semiconductors" saves as-is).
     try {
       const s = await api.taxonomySuggest(ticker);
       setEdit((cur) => {
         if (!cur || cur.ticker !== ticker) return cur;
-        return { ...cur, suggestion: { sector: s.sector ?? "", industry: s.industry ?? "" } };
+        const suggestion = { sector: s.sector ?? "", industry: s.industry ?? "" };
+        const prefill = !existing;
+        return {
+          ...cur,
+          suggestion,
+          sector: prefill && !cur.sector && suggestion.sector ? suggestion.sector : cur.sector,
+          theme:  prefill && !cur.theme  && suggestion.industry ? suggestion.industry : cur.theme,
+        };
       });
     } catch {
       // yfinance may not know this ticker (ETFs). Silent — not an error.
