@@ -154,6 +154,53 @@ def get_db_config():
         'password': os.getenv('DB_PASSWORD', '')
     }
 
+class _PooledTenantConnection:
+    """Wraps a psycopg2 connection so `SET app.user_id` + `SET ROLE app_runtime`
+    survive across commits when the underlying URL is Neon's transaction-mode
+    pooler.
+
+    Why: Neon's default DATABASE_URL points at pgbouncer in transaction mode.
+    A session-level SET (which is what `SET app.user_id = X` is) only lasts
+    for the transaction that ran it — at commit/rollback the pooler returns
+    the physical backend to the pool, and the next transaction on this Python
+    connection may land on a fresh backend where `current_setting('app.user_id')`
+    is empty. Any INSERT that leans on the RLS DEFAULT
+    `NULLIF(current_setting('app.user_id', true), '')::uuid` then NULL-violates
+    on user_id (see migration 003).
+
+    The pattern is intermittent by nature — it only fires when the pool
+    happens to hand out a different backend for the follow-up transaction.
+    Symptom looked like "same script, same context, one row commits, next
+    row NOT NULL-violates" (the ARM/NBIS split during the 2026-07-30 LTG
+    sync).
+
+    Fix: re-apply the SETs immediately after every commit()/rollback().
+    That runs the SETs on whatever physical backend the pool hands out for
+    the next transaction, so the caller's next query joins a transaction
+    that already has the tenant context set.
+    """
+    def __init__(self, conn, uid):
+        self._conn = conn
+        self._uid = uid
+        self._apply_session_vars()
+
+    def _apply_session_vars(self):
+        with self._conn.cursor() as cur:
+            cur.execute("SET app.user_id = %s", (self._uid,))
+            cur.execute("SET ROLE app_runtime")
+
+    def commit(self):
+        self._conn.commit()
+        self._apply_session_vars()
+
+    def rollback(self):
+        self._conn.rollback()
+        self._apply_session_vars()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 @contextmanager
 def get_db_connection(max_retries=3, retry_delay=1):
     """
@@ -165,27 +212,26 @@ def get_db_connection(max_retries=3, retry_delay=1):
         retry_delay: Seconds to wait between retries (default: 1, exponential backoff)
     """
     config = get_db_config()
-    conn = None
+    raw_conn = None
     last_error = None
 
     for attempt in range(max_retries):
         try:
             if 'dsn' in config:
-                conn = psycopg2.connect(config['dsn'])
+                raw_conn = psycopg2.connect(config['dsn'])
             else:
-                conn = psycopg2.connect(**config)
+                raw_conn = psycopg2.connect(**config)
 
-            # Apply tenant context to this connection before anything reads.
-            # SET (not SET LOCAL) is session-scoped, so it survives commits and
-            # rollbacks for the lifetime of the connection.
-            # Then SET ROLE app_runtime to drop BYPASSRLS so RLS actually
-            # enforces. Migrations run as neondb_owner and skip both SETs.
+            # Wrap in _PooledTenantConnection so `SET app.user_id` +
+            # `SET ROLE app_runtime` get re-applied after every commit/rollback.
+            # Transaction-mode pooling (Neon default) drops session GUCs at
+            # each commit; the wrapper re-runs the SETs on whatever backend
+            # the pool hands out next so the caller's next transaction still
+            # sees the tenant context. Migrations run without a uid and get
+            # the raw connection (they're intentionally BYPASSRLS-scoped as
+            # neondb_owner).
             uid = current_user_id.get()
-            if uid:
-                with conn.cursor() as _cur:
-                    _cur.execute("SET app.user_id = %s", (uid,))
-                    _cur.execute("SET ROLE app_runtime")
-                conn.commit()
+            conn = _PooledTenantConnection(raw_conn, uid) if uid else raw_conn
 
             yield conn
             return  # Success, exit retry loop
@@ -200,8 +246,8 @@ def get_db_connection(max_retries=3, retry_delay=1):
                 print(f"Database connection error after {max_retries} attempts: {e}")
                 raise
         finally:
-            if conn:
-                conn.close()
+            if raw_conn:
+                raw_conn.close()
 
 
 # ============================================
