@@ -406,7 +406,8 @@ def test_latest_ftd_date_returns_ftd_when_within_current_cycle():
 
 
 def test_latest_ftd_date_without_cycle_start_returns_latest_ftd():
-    """Backwards-compat: no cycle_start arg → unfiltered latest FTD."""
+    """Backwards-compat: no cycle_start arg AND no CORRECTION_DECLARED
+    in the signal log → unfiltered latest FTD."""
     from datetime import date
     from api.mct_endpoint_adapter import _latest_ftd_date
     from api.mct_engine import SignalEvent
@@ -419,6 +420,69 @@ def test_latest_ftd_date_without_cycle_start_returns_latest_ftd():
                     state_before="", state_after="", meta={}),
     ]
     assert _latest_ftd_date(signals) == "2026-04-20"
+
+
+def test_latest_ftd_date_returns_none_when_correction_declared_after_last_ftd():
+    """Regression 2026-07-30: when the engine is in a fresh CORRECTION
+    and the current cycle hasn't earned an FTD yet, the FTD field must
+    return None — not the previous cycle's stale FTD.
+
+    Walking the signal log backward: first CORRECTION_DECLARED encountered
+    is the current cycle's boundary. No STEP_1_FTD after that boundary
+    means no active FTD.
+
+    Historical bug: the cycle_start filter only kicked in when
+    rally_active. In CORRECTION rally_active is False, so cycle_start
+    was None and the filter degraded to 'latest FTD ever' — surfacing
+    the prior cycle's FTD (e.g. 2026-04-08 after the current
+    correction started 07-29)."""
+    from datetime import date
+    from api.mct_endpoint_adapter import _latest_ftd_date
+    from api.mct_engine import SignalEvent
+
+    signals = [
+        # Previous cycle: correction → FTD → nullified
+        SignalEvent(trade_date=date(2026, 3, 27), signal_type="CORRECTION_DECLARED",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+        SignalEvent(trade_date=date(2026, 4, 8),  signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+        SignalEvent(trade_date=date(2026, 4, 16), signal_type="CORRECTION_NULLIFIED",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+        # New correction — no FTD yet
+        SignalEvent(trade_date=date(2026, 7, 29), signal_type="CORRECTION_DECLARED",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+    ]
+
+    assert _latest_ftd_date(signals) is None, (
+        "walking backward from newest: hit CORRECTION_DECLARED (07-29) "
+        "before any STEP_1_FTD — the current cycle hasn't earned an FTD, "
+        "must return None. Old code returned the previous cycle's "
+        "2026-04-08 FTD which is stale."
+    )
+
+
+def test_latest_ftd_date_returns_ftd_when_it_falls_in_current_cycle():
+    """Companion to the above: an FTD that fires AFTER the most-recent
+    CORRECTION_DECLARED is valid — walking backward hits STEP_1_FTD
+    before CORRECTION_DECLARED, so it's returned."""
+    from datetime import date
+    from api.mct_endpoint_adapter import _latest_ftd_date
+    from api.mct_engine import SignalEvent
+
+    signals = [
+        SignalEvent(trade_date=date(2026, 3, 27), signal_type="CORRECTION_DECLARED",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+        SignalEvent(trade_date=date(2026, 4, 8),  signal_type="STEP_1_FTD",
+                    signal_label="", exposure_before=0, exposure_after=0,
+                    state_before="", state_after="", meta={}),
+    ]
+    # No newer CORRECTION_DECLARED after the FTD → FTD is current cycle's.
+    assert _latest_ftd_date(signals) == "2026-04-08"
 
 
 # ---------------------------------------------------------------------------

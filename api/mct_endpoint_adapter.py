@@ -257,15 +257,29 @@ def _latest_ftd_date(
     signals: list[SignalEvent],
     cycle_start: Optional[date] = None,
 ) -> Optional[str]:
-    """Latest STEP_1_FTD event, gated to the current rally cycle.
+    """Latest STEP_1_FTD in the CURRENT cycle. Walks the signal log
+    backward from newest; a CORRECTION_DECLARED encountered before a
+    STEP_1_FTD means the current cycle hasn't earned a follow-through
+    yet — return None. This is the "walked past the cycle boundary"
+    check.
 
-    Without the cycle_start filter, the display would surface the PRIOR
-    cycle's FTD after a fresh correction is declared — misleading, since
-    the new cycle hasn't earned an FTD yet. When cycle_start is provided,
-    only FTDs at/after that date qualify; the tile shows "—" until the
-    new cycle actually confirms an FTD.
+    Historical incident: without this walk-past-CORRECTION rule, when
+    the engine sits in a fresh CORRECTION with no rally attempt yet,
+    the FTD field surfaced the previous cycle's FTD (e.g. 2026-04-08
+    after the current cycle started 07-29). The `cycle_start` filter
+    only kicks in when rally_active, which is False in CORRECTION —
+    so under CORRECTION the filter was inert and the field degraded
+    to "latest FTD ever."
+
+    `cycle_start` remains as an extra safety filter for cases where
+    the signal log spans an old rally that pre-dates today's cycle
+    boundary.
     """
     for sig in reversed(signals):
+        if sig.signal_type == "CORRECTION_DECLARED":
+            # Walked past the boundary of the current cycle without
+            # seeing an FTD in it — no active FTD.
+            return None
         if sig.signal_type != "STEP_1_FTD":
             continue
         sig_date = pd.Timestamp(sig.trade_date).date()
