@@ -8762,6 +8762,239 @@ def routine_log_untick(request: Request, log_id: int):
         return {"error": str(e)}
 
 
+# ============================================================================
+# TICKER TAXONOMY + CONCENTRATION RISK (Migration 056)
+# ============================================================================
+# User-owned sector + theme mapping per ticker. yfinance is a *suggestion*
+# only; it mis-classifies (SNDK → Computer Hardware) and returns nothing for
+# ETFs. Every classification decision is the user's, captured on the Sector
+# Mapping page or during Log Buy.
+
+def _yf_taxonomy_hint(ticker: str) -> dict:
+    """Pull yfinance's sector/industry as a hint for the Log Buy picker.
+    Never authoritative — returns {} on any failure so the frontend just
+    falls back to blank inputs."""
+    ticker = str(ticker or "").strip().upper()
+    if not ticker or " " in ticker:  # skip options
+        return {}
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info or {}
+        return {
+            "sector": info.get("sector") or "",
+            "industry": info.get("industry") or "",
+            "sector_key": info.get("sectorKey") or "",
+            "industry_key": info.get("industryKey") or "",
+        }
+    except Exception as e:
+        print(f"[yf_taxonomy_hint] {ticker}: {e}")
+        return {}
+
+
+@app.get("/api/taxonomy")
+def taxonomy_list(request: Request):
+    """List every user-owned ticker mapping + the tickers still without
+    a mapping (drawn from every trades_summary the user has ever opened,
+    equities only — options ship with sector context in their underlying).
+
+    Response:
+      {
+        "mapped":   [{ticker, sector, theme, notes, created_at, updated_at}],
+        "unmapped": [ticker, ...]   -- alphabetized
+      }
+    """
+    try:
+        mapped = db.list_ticker_taxonomy()
+        traded = set(db.list_all_traded_tickers())
+        seen = {row["ticker"] for row in mapped}
+        unmapped = sorted(traded - seen)
+        return {"mapped": mapped, "unmapped": unmapped}
+    except Exception as e:
+        print(f"[taxonomy_list] handler failed: {e}")
+        return {"error": str(e), "mapped": [], "unmapped": []}
+
+
+@app.put("/api/taxonomy/{ticker}")
+def taxonomy_upsert(request: Request, ticker: str, body: dict = Body(...)):
+    """Upsert a mapping. Body: {sector: str (required), theme?: str, notes?: str}."""
+    try:
+        sector = str(body.get("sector") or "").strip()
+        if not sector:
+            raise HTTPException(status_code=422, detail="sector is required")
+        theme = body.get("theme")
+        notes = body.get("notes")
+        row = db.upsert_ticker_taxonomy(ticker, sector, theme, notes)
+        return {"status": "ok", "mapping": row}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        print(f"[taxonomy_upsert] {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/taxonomy/{ticker}")
+def taxonomy_delete(request: Request, ticker: str):
+    """Remove a mapping — ticker falls back to the Unmapped list."""
+    try:
+        removed = db.delete_ticker_taxonomy(ticker)
+        return {"status": "ok" if removed else "not_found"}
+    except Exception as e:
+        print(f"[taxonomy_delete] {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/taxonomy/suggest")
+def taxonomy_suggest(request: Request, ticker: str = ""):
+    """Non-binding suggestion from yfinance for the Log Buy / Mapping picker.
+    Returns {sector, industry, sector_key, industry_key} or {} on miss.
+    Empty response is a normal case (ETFs, private tickers, yfinance outage);
+    frontend should treat blank as 'nothing to suggest' not an error."""
+    return _yf_taxonomy_hint(ticker)
+
+
+def _concentration_positions_for(portfolio: str | None) -> list[dict]:
+    """Load open positions across the caller's portfolios (or one specific
+    portfolio) with enough state to compute market-value weights: ticker,
+    portfolio, shares, entry price, current price, instrument type,
+    multiplier. Uses the shared live-price + manual-overlay path so
+    Concentration always agrees with ACS / Portfolio Heat."""
+    positions: list[dict] = []
+    if portfolio:
+        port_names = [portfolio]
+    else:
+        # Aggregate across every portfolio the user owns.
+        port_names = [p["name"] for p in db.list_portfolios()]
+    frames = []
+    for pname in port_names:
+        try:
+            pdf = db.load_summary(pname)
+        except Exception as e:
+            print(f"[concentration] load_summary({pname}) failed: {e}")
+            continue
+        if pdf is None or pdf.empty:
+            continue
+        pdf = _normalize_trades(pdf)
+        if "status" in pdf.columns:
+            pdf = pdf[pdf["status"].astype(str).str.upper() == "OPEN"]
+        if pdf.empty:
+            continue
+        pdf = pdf.copy()
+        pdf["portfolio"] = pname
+        frames.append(pdf)
+    if not frames:
+        return []
+    df_s = pd.concat(frames, ignore_index=True)
+    # Fetch live prices for the union of tickers.
+    tickers = [str(t).upper() for t in df_s["ticker"].dropna().unique().tolist()]
+    price_map: dict[str, float] = {}
+    if tickers:
+        try:
+            # Portfolio arg lets manual_price overrides layer in; when we're
+            # aggregating across portfolios we skip the overlay (it's per-
+            # portfolio and the union is ambiguous).
+            price_map = _fetch_live_prices_with_manual_overlay(
+                tickers, portfolio or "",
+            )
+        except Exception as e:
+            print(f"[concentration] price fetch failed: {e}")
+    for _, row in df_s.iterrows():
+        ticker = str(row.get("ticker") or "").upper().strip()
+        if not ticker:
+            continue
+        shares = float(row.get("shares") or 0)
+        if shares <= 0:
+            continue
+        multiplier = float(row.get("multiplier") or 1) or 1.0
+        avg_entry = float(row.get("avg_entry") or 0)
+        current = float(price_map.get(ticker) or 0)
+        # Fallback: no live price → value at entry so the position still
+        # shows up in concentration rather than silently disappearing.
+        px = current if current > 0 else avg_entry
+        mv = shares * px * multiplier
+        positions.append({
+            "ticker": ticker,
+            "portfolio": row.get("portfolio") or portfolio or "",
+            "trade_id": row.get("trade_id"),
+            "shares": shares,
+            "avg_entry": avg_entry,
+            "current_price": current,
+            "multiplier": multiplier,
+            "market_value": mv,
+            "instrument_type": row.get("instrument_type") or "STOCK",
+        })
+    return positions
+
+
+@app.get("/api/concentration")
+def concentration(request: Request, portfolio: str = ""):
+    """Sector + theme rollup for open positions.
+
+    portfolio: empty → across all portfolios; otherwise scoped.
+
+    Response shape:
+      {
+        "portfolio": <str|null>,
+        "total_market_value": float,
+        "positions": [{ticker, portfolio, market_value, weight_pct,
+                       sector, theme}],
+        "sectors": [{name, market_value, weight_pct, positions: [ticker]}],
+        "themes":  [{name, market_value, weight_pct, positions: [ticker]}],
+        "unclassified": [{ticker, market_value, weight_pct}]
+      }
+
+    weight_pct is % of total open MV (not % of NLV). The frontend layers
+    NLV context (from /api/journal/latest) on top if it wants % of equity.
+    Keeps this endpoint pure — no journal join here.
+    """
+    try:
+        portfolio_arg = portfolio.strip() or None
+        positions = _concentration_positions_for(portfolio_arg)
+        # Merge taxonomy in.
+        tax = {row["ticker"]: row for row in db.list_ticker_taxonomy()}
+        total_mv = sum(p["market_value"] for p in positions) or 0.0
+        for p in positions:
+            t = tax.get(p["ticker"])
+            p["sector"] = t["sector"] if t else None
+            p["theme"] = t["theme"] if t else None
+            p["weight_pct"] = round(100 * p["market_value"] / total_mv, 2) if total_mv > 0 else 0
+
+        def _rollup(key: str):
+            buckets: dict[str, dict] = {}
+            for p in positions:
+                name = p.get(key)
+                if not name:
+                    continue
+                b = buckets.setdefault(name, {"name": name, "market_value": 0.0, "positions": []})
+                b["market_value"] += p["market_value"]
+                b["positions"].append(p["ticker"])
+            out = []
+            for b in buckets.values():
+                b["weight_pct"] = round(100 * b["market_value"] / total_mv, 2) if total_mv > 0 else 0
+                # Alpha-sort tickers inside a bucket for stable display.
+                b["positions"] = sorted(set(b["positions"]))
+                out.append(b)
+            return sorted(out, key=lambda x: x["market_value"], reverse=True)
+
+        unclassified = [
+            {"ticker": p["ticker"], "market_value": p["market_value"],
+             "weight_pct": p["weight_pct"]}
+            for p in positions if not p.get("sector")
+        ]
+        return {
+            "portfolio": portfolio_arg,
+            "total_market_value": round(total_mv, 2),
+            "positions": positions,
+            "sectors": _rollup("sector"),
+            "themes": _rollup("theme"),
+            "unclassified": sorted(unclassified, key=lambda x: x["market_value"], reverse=True),
+        }
+    except Exception as e:
+        print(f"[concentration] handler failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

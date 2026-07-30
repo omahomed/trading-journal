@@ -55,6 +55,8 @@ export const NAV: NavGroup[] = [
       { id: "heat", label: "Portfolio Heat", href: "/portfolio-heat" },
       { id: "riskmgr", label: "Risk Manager", href: "/risk-manager" },
       { id: "sr8mon", label: "SR8 Monitor", href: "/sr8-monitor" },
+      { id: "conc", label: "Concentration Risk", href: "/concentration-risk" },
+      { id: "sectormap", label: "Sector Mapping", href: "/sector-mapping" },
     ],
   },
   {

@@ -7619,3 +7619,86 @@ def untick_routine_log(log_id: int) -> str:
             cur.execute("DELETE FROM routine_log WHERE id = %s", (log_id,))
             conn.commit()
             return "deleted"
+
+
+# ============================================
+# TICKER TAXONOMY (Migration 056)
+# ============================================
+def list_ticker_taxonomy() -> list[dict]:
+    """Return every taxonomy row for the caller, sorted alphabetically by
+    ticker. RLS scopes to the current user automatically."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT ticker, sector, theme, notes, created_at, updated_at
+                FROM ticker_taxonomy
+                ORDER BY ticker
+                """
+            )
+            return list(cur.fetchall())
+
+
+def upsert_ticker_taxonomy(
+    ticker: str, sector: str, theme: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Insert or replace a ticker's mapping. Returns the row post-write.
+    Ticker is upper-cased. Empty theme/notes stored as NULL."""
+    ticker = str(ticker or "").strip().upper()
+    sector = str(sector or "").strip()
+    if not ticker or not sector:
+        raise ValueError("ticker and sector are required")
+    theme_val = str(theme).strip() if theme and str(theme).strip() else None
+    notes_val = str(notes).strip() if notes and str(notes).strip() else None
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO ticker_taxonomy (ticker, sector, theme, notes)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, ticker) DO UPDATE
+                    SET sector = EXCLUDED.sector,
+                        theme  = EXCLUDED.theme,
+                        notes  = EXCLUDED.notes
+                RETURNING ticker, sector, theme, notes, created_at, updated_at
+                """,
+                (ticker, sector, theme_val, notes_val),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+
+
+def delete_ticker_taxonomy(ticker: str) -> bool:
+    """Drop a mapping. Returns True if a row was removed."""
+    ticker = str(ticker or "").strip().upper()
+    if not ticker:
+        return False
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ticker_taxonomy WHERE ticker = %s",
+                (ticker,),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+
+def list_all_traded_tickers() -> list[str]:
+    """Every distinct equity ticker the caller has ever traded (any status,
+    any portfolio, excluding options — options have spaces in the ticker).
+    Feeds the Sector Mapping page's 'what needs classifying' set."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT UPPER(ticker) FROM trades_summary
+                WHERE deleted_at IS NULL
+                  AND ticker IS NOT NULL
+                  AND POSITION(' ' IN ticker) = 0
+                ORDER BY 1
+                """
+            )
+            return [r[0] for r in cur.fetchall() if r[0]]

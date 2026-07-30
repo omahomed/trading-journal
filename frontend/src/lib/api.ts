@@ -1747,7 +1747,86 @@ export const api = {
   // so we return the raw Response for this endpoint.
   routineLogUntick: (logId: number) =>
     fetchWithAuth(`${API_BASE}/api/routine/log/${logId}`, { method: "DELETE" }),
+
+  // ─── Ticker taxonomy + Concentration Risk (migration 056) ───
+  taxonomyList: () =>
+    fetchJSON<TaxonomyListResponse>("/api/taxonomy"),
+
+  taxonomyUpsert: (ticker: string, body: { sector: string; theme?: string; notes?: string }) =>
+    fetchWithAuth(`${API_BASE}/api/taxonomy/${encodeURIComponent(ticker)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ status: "ok"; mapping: TickerTaxonomy } | { error: string }>,
+
+  taxonomyDelete: (ticker: string) =>
+    fetchWithAuth(`${API_BASE}/api/taxonomy/${encodeURIComponent(ticker)}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: "ok" | "not_found" } | { error: string }>,
+
+  taxonomySuggest: (ticker: string) =>
+    fetchJSON<{ sector?: string; industry?: string; sector_key?: string; industry_key?: string }>(
+      `/api/taxonomy/suggest?ticker=${encodeURIComponent(ticker)}`,
+    ),
+
+  concentration: (portfolio = "") =>
+    fetchJSON<ConcentrationResponse>(
+      `/api/concentration${portfolio ? `?portfolio=${encodeURIComponent(portfolio)}` : ""}`,
+    ),
 };
+
+// ── Ticker taxonomy types ────────────────────────────────────────
+export interface TickerTaxonomy {
+  ticker: string;
+  sector: string;
+  theme: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaxonomyListResponse {
+  mapped: TickerTaxonomy[];
+  unmapped: string[];
+  error?: string;
+}
+
+export interface ConcentrationPosition {
+  ticker: string;
+  portfolio: string;
+  trade_id: string;
+  shares: number;
+  avg_entry: number;
+  current_price: number;
+  multiplier: number;
+  market_value: number;
+  instrument_type: string;
+  sector: string | null;
+  theme: string | null;
+  weight_pct: number;
+}
+
+export interface ConcentrationBucket {
+  name: string;
+  market_value: number;
+  weight_pct: number;
+  positions: string[];
+}
+
+export interface ConcentrationUnclassified {
+  ticker: string;
+  market_value: number;
+  weight_pct: number;
+}
+
+export interface ConcentrationResponse {
+  portfolio: string | null;
+  total_market_value: number;
+  positions: ConcentrationPosition[];
+  sectors: ConcentrationBucket[];
+  themes: ConcentrationBucket[];
+  unclassified: ConcentrationUnclassified[];
+}
 
 // ── Trading Checklist types ──────────────────────────────────────
 
