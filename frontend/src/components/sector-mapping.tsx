@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { api, type TickerTaxonomy } from "@/lib/api";
 import { log } from "@/lib/log";
+import { KPITile, TILE_GRADIENTS } from "./campaign-detail";
 
 interface Props {
   navColor: string;
@@ -20,8 +21,7 @@ interface EditState {
 }
 
 /** Draws its autocomplete vocabulary from the user's own prior values so
- * they build up a controlled set as they classify (Technology / Memory
- * shows up as a suggestion the moment they've used it once). */
+ * they build up a controlled set as they classify. */
 function useAutocomplete(rows: TickerTaxonomy[]): { sectors: string[]; themes: string[] } {
   return useMemo(() => {
     const sectors = new Set<string>();
@@ -41,12 +41,13 @@ export function SectorMapping({ navColor }: Props) {
   const [mapped, setMapped] = useState<TickerTaxonomy[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
   const { sectors: sectorSuggestions, themes: themeSuggestions } = useAutocomplete(mapped);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (opts?: { manual?: boolean }) => {
+    if (opts?.manual) setRefreshing(true); else setLoading(true);
     setLoadError(null);
     try {
       const res = await api.taxonomyList();
@@ -57,6 +58,7 @@ export function SectorMapping({ navColor }: Props) {
       setLoadError(String(e));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -71,12 +73,6 @@ export function SectorMapping({ navColor }: Props) {
       saving: false,
     };
     setEdit(initial);
-    // Fire-and-forget yfinance suggestion. When editing an existing
-    // mapping the user's values win — the hint only shows as reference.
-    // When creating a NEW mapping (no existing row), pre-fill the empty
-    // inputs so most tickers save with one click. sector ← yfinance
-    // sector; theme ← yfinance industry as a starter (SNDK's "Computer
-    // Hardware" you'll correct, but MU's "Semiconductors" saves as-is).
     try {
       const s = await api.taxonomySuggest(ticker);
       setEdit((cur) => {
@@ -91,7 +87,7 @@ export function SectorMapping({ navColor }: Props) {
         };
       });
     } catch {
-      // yfinance may not know this ticker (ETFs). Silent — not an error.
+      // yfinance may not know this ticker (ETFs) — silent.
     }
   }, []);
 
@@ -134,54 +130,100 @@ export function SectorMapping({ navColor }: Props) {
   }, [mapped]);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <header className="mb-6">
-        <div className="flex items-center gap-3">
-          <span className="w-2 h-6 rounded-sm" style={{ background: navColor }} />
-          <h1 className="text-2xl font-semibold" style={{ color: "var(--ink-1)" }}>Sector Mapping</h1>
+    <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      {/* Page header */}
+      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
+           style={{ borderBottom: "1px solid var(--border)" }}>
+        <div>
+          <h1 className="font-normal text-[32px] tracking-tight m-0"
+              style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Sector <em className="italic" style={{ color: navColor }}>Mapping</em>
+          </h1>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+            Your own sector + theme classification per ticker. Powers{" "}
+            <Link href="/concentration-risk" style={{ color: navColor }}>Concentration Risk</Link>{" "}
+            rollups · yfinance is a hint only
+          </div>
         </div>
-        <p className="mt-2 text-[13px]" style={{ color: "var(--ink-4)" }}>
-          Your own sector + theme classification per ticker. Powers{" "}
-          <Link href="/concentration-risk" style={{ color: navColor }}>Concentration Risk</Link>{" "}
-          rollups. yfinance shows up only as a hint — its taxonomy is unreliable for storage/memory,
-          spinoffs, and ETFs.
-        </p>
-      </header>
+        <div className="flex gap-2 shrink-0">
+          <button
+            type="button" onClick={() => refresh({ manual: true })} disabled={refreshing}
+            className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                     color: refreshing ? "var(--ink-4)" : "var(--ink-2)" }}
+          >
+            ⟳ {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
 
       {loadError && (
-        <div className="mb-4 p-3 rounded-lg text-[13px]" style={{ background: "#fee", color: "#c00", border: "1px solid #fbb" }}>
-          {loadError}
+        <div className="mb-4 px-4 py-3 rounded-[10px]"
+             style={{ background: "color-mix(in oklab, #e5484d 8%, var(--surface))",
+                      border: "1px solid var(--border)", color: "#e5484d" }}>
+          Failed to load: {loadError}
         </div>
       )}
 
+      {/* KPI strip */}
       {loading ? (
-        <div className="text-[13px]" style={{ color: "var(--ink-4)" }}>Loading…</div>
+        <div className="grid grid-cols-3 gap-[14px]">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="rounded-[14px] animate-pulse min-h-[108px]"
+                 style={{ background: "var(--bg-2)" }} />
+          ))}
+        </div>
       ) : (
         <>
+          <div className="grid grid-cols-3 gap-[14px]">
+            <KPITile
+              label="Tickers Classified"
+              value={String(mapped.length)}
+              sub={`${new Set(mapped.map(r => r.sector)).size} distinct sector${new Set(mapped.map(r => r.sector)).size === 1 ? "" : "s"}`}
+              gradient={TILE_GRADIENTS.indigo}
+            />
+            <KPITile
+              label="Themes"
+              value={String(new Set(mapped.filter(r => r.theme).map(r => r.theme)).size)}
+              sub={mapped.filter(r => r.theme).length + " ticker" + (mapped.filter(r => r.theme).length === 1 ? "" : "s") + " with a theme"}
+              gradient={TILE_GRADIENTS.blue}
+            />
+            <KPITile
+              label="Unmapped"
+              value={String(unmapped.length)}
+              sub={unmapped.length === 0 ? "everything classified" : "need attention"}
+              gradient={unmapped.length > 0 ? TILE_GRADIENTS.red : TILE_GRADIENTS.green}
+            />
+          </div>
+
           {/* ─── Unmapped section ─── */}
-          <section className="mb-8">
+          <section className="mt-6">
             <div className="flex items-center gap-2 mb-3">
-              <h2 className="text-[15px] font-semibold" style={{ color: unmapped.length > 0 ? "#e5484d" : "var(--ink-3)" }}>
+              <div className="text-[13px] font-semibold" style={{ color: unmapped.length > 0 ? "#e5484d" : "var(--ink-3)" }}>
                 {unmapped.length > 0 ? "⚠" : "✓"} Unmapped ({unmapped.length})
-              </h2>
+              </div>
               {unmapped.length > 0 && (
                 <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-                  Every ticker you&apos;ve traded that isn&apos;t yet classified.
+                  Every ticker you&apos;ve traded that isn&apos;t yet classified · click to open the editor
                 </span>
               )}
             </div>
             {unmapped.length === 0 ? (
-              <div className="text-[13px] p-4 rounded-lg text-center" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
+              <div className="text-[13px] p-4 rounded-[14px] text-center"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
                 Every ticker in your book is classified. Nice.
               </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="rounded-[14px] p-[18px] flex flex-wrap gap-2"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                            boxShadow: "var(--card-shadow)" }}>
                 {unmapped.map((t) => (
                   <button
                     key={t}
                     onClick={() => openEditor(t)}
-                    className="px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)]"
-                    style={{ background: "var(--surface)", border: "1px dashed #e5484d", color: "var(--ink-2)" }}
+                    className="px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors hover:brightness-95"
+                    style={{ background: "var(--surface-2)", border: "1px dashed #e5484d",
+                             color: "var(--ink-2)", fontFamily: "var(--font-jetbrains), monospace" }}
                   >
                     {t}
                   </button>
@@ -191,52 +233,58 @@ export function SectorMapping({ navColor }: Props) {
           </section>
 
           {/* ─── Mapped section ─── */}
-          <section>
+          <section className="mt-6">
             <div className="flex items-center gap-2 mb-3">
-              <h2 className="text-[15px] font-semibold" style={{ color: "var(--ink-2)" }}>
+              <div className="text-[13px] font-semibold" style={{ color: "var(--ink-2)" }}>
                 ✓ Mapped ({mapped.length})
-              </h2>
+              </div>
             </div>
             {mapped.length === 0 ? (
-              <div className="text-[13px] p-4 rounded-lg text-center" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
+              <div className="text-[13px] p-4 rounded-[14px] text-center"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
                 No mappings yet. Click an unmapped ticker above to start.
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-lg" style={{ border: "1px solid var(--border)" }}>
+              <div className="rounded-[14px] overflow-hidden"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                            boxShadow: "var(--card-shadow)" }}>
                 <table className="w-full text-[13px]">
                   <thead>
                     <tr style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
-                      <th className="px-3 py-2 text-left font-medium">Ticker</th>
-                      <th className="px-3 py-2 text-left font-medium">Sector</th>
-                      <th className="px-3 py-2 text-left font-medium">Theme</th>
-                      <th className="px-3 py-2 text-left font-medium">Notes</th>
-                      <th className="px-3 py-2 text-left font-medium">Updated</th>
-                      <th className="px-3 py-2"></th>
+                      <th className="px-3 py-2.5 text-left font-medium">Ticker</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Sector</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Theme</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Notes</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Updated</th>
+                      <th className="px-3 py-2.5"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {mapped.map((r) => (
                       <tr key={r.ticker} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td className="px-3 py-2 font-semibold" style={{ color: "var(--ink-1)" }}>{r.ticker}</td>
-                        <td className="px-3 py-2" style={{ color: "var(--ink-2)" }}>{r.sector}</td>
-                        <td className="px-3 py-2" style={{ color: "var(--ink-2)" }}>{r.theme || "—"}</td>
-                        <td className="px-3 py-2 max-w-xs truncate" style={{ color: "var(--ink-4)" }} title={r.notes || ""}>
+                        <td className="px-3 py-2.5 font-semibold"
+                            style={{ color: "var(--ink-1)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                          {r.ticker}
+                        </td>
+                        <td className="px-3 py-2.5" style={{ color: "var(--ink-2)" }}>{r.sector}</td>
+                        <td className="px-3 py-2.5" style={{ color: "var(--ink-2)" }}>{r.theme || "—"}</td>
+                        <td className="px-3 py-2.5 max-w-xs truncate" style={{ color: "var(--ink-4)" }} title={r.notes || ""}>
                           {r.notes || ""}
                         </td>
-                        <td className="px-3 py-2" style={{ color: "var(--ink-4)" }}>
+                        <td className="px-3 py-2.5" style={{ color: "var(--ink-4)" }}>
                           {new Date(r.updated_at).toLocaleDateString()}
                         </td>
-                        <td className="px-3 py-2 whitespace-nowrap text-right">
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right">
                           <button
                             onClick={() => openEditor(r.ticker, r)}
-                            className="text-[12px] px-2 py-1 rounded hover:bg-[var(--surface-2)]"
+                            className="text-[12px] px-2 py-1 rounded-[6px] hover:bg-[var(--surface-2)]"
                             style={{ color: navColor }}
                           >
                             Edit
                           </button>
                           <button
                             onClick={() => remove(r.ticker)}
-                            className="text-[12px] px-2 py-1 rounded hover:bg-[var(--surface-2)] ml-1"
+                            className="text-[12px] px-2 py-1 rounded-[6px] hover:bg-[var(--surface-2)] ml-1"
                             style={{ color: "var(--ink-4)" }}
                           >
                             Remove
@@ -259,15 +307,23 @@ export function SectorMapping({ navColor }: Props) {
           style={{ background: "rgba(0,0,0,0.4)" }}
           onClick={(e) => { if (e.target === e.currentTarget) setEdit(null); }}
         >
-          <div className="rounded-xl p-6 max-w-md w-full shadow-2xl" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+          <div className="rounded-[14px] p-6 max-w-md w-full"
+               style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                        boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div className="flex items-baseline justify-between mb-4">
-              <h3 className="text-lg font-semibold" style={{ color: "var(--ink-1)" }}>
-                {mappedByTicker.has(edit.ticker) ? "Edit" : "Classify"} {edit.ticker}
+              <h3 className="font-normal text-[22px] tracking-tight m-0"
+                  style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink-1)" }}>
+                {mappedByTicker.has(edit.ticker) ? "Edit" : "Classify"}{" "}
+                <em className="italic" style={{ color: navColor, fontFamily: "var(--font-jetbrains), monospace" }}>
+                  {edit.ticker}
+                </em>
               </h3>
-              <button onClick={() => setEdit(null)} className="text-[20px] leading-none" style={{ color: "var(--ink-4)" }}>×</button>
+              <button onClick={() => setEdit(null)} className="text-[24px] leading-none"
+                      style={{ color: "var(--ink-4)" }}>×</button>
             </div>
             {edit.suggestion && (edit.suggestion.sector || edit.suggestion.industry) && (
-              <div className="mb-4 p-2.5 rounded text-[12px]" style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
+              <div className="mb-4 p-2.5 rounded-[8px] text-[12px]"
+                   style={{ background: "var(--surface-2)", color: "var(--ink-4)" }}>
                 <span className="opacity-70">yfinance suggests:</span>{" "}
                 <span style={{ color: "var(--ink-3)" }}>
                   {edit.suggestion.sector || "—"} / {edit.suggestion.industry || "—"}
@@ -282,7 +338,7 @@ export function SectorMapping({ navColor }: Props) {
                 value={edit.sector}
                 onChange={(e) => setEdit({ ...edit, sector: e.target.value })}
                 placeholder="Technology"
-                className="w-full px-2.5 py-1.5 rounded text-[13px]"
+                className="w-full px-3 py-2 rounded-[8px] text-[13px]"
                 style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
                 autoFocus
               />
@@ -298,7 +354,7 @@ export function SectorMapping({ navColor }: Props) {
                 value={edit.theme}
                 onChange={(e) => setEdit({ ...edit, theme: e.target.value })}
                 placeholder="Memory, Semis, AI Infra, Leveraged Index…"
-                className="w-full px-2.5 py-1.5 rounded text-[13px]"
+                className="w-full px-3 py-2 rounded-[8px] text-[13px]"
                 style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
               />
               <datalist id="theme-suggestions">
@@ -313,7 +369,7 @@ export function SectorMapping({ navColor }: Props) {
                 onChange={(e) => setEdit({ ...edit, notes: e.target.value })}
                 rows={2}
                 placeholder="Optional — e.g. 'NAND competitor to MU, moves with memory cycle'"
-                className="w-full px-2.5 py-1.5 rounded text-[13px]"
+                className="w-full px-3 py-2 rounded-[8px] text-[13px]"
                 style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
               />
             </label>
@@ -325,15 +381,15 @@ export function SectorMapping({ navColor }: Props) {
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setEdit(null)}
-                className="px-3 py-1.5 rounded text-[13px]"
-                style={{ background: "var(--surface-2)", color: "var(--ink-2)" }}
+                className="px-3 py-2 rounded-[10px] text-[13px]"
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-2)" }}
               >
                 Cancel
               </button>
               <button
                 onClick={save}
                 disabled={edit.saving}
-                className="px-3 py-1.5 rounded text-[13px] font-medium"
+                className="px-3 py-2 rounded-[10px] text-[13px] font-medium"
                 style={{ background: navColor, color: "white", opacity: edit.saving ? 0.5 : 1 }}
               >
                 {edit.saving ? "Saving…" : "Save"}

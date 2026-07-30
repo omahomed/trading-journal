@@ -106,6 +106,58 @@ trigger NOT NULL-violates and aborts the migration that fired it. See
 for the canonical pattern. `migrations/run.py` also `SET LOCAL`s the founder
 UUID per migration as defense in depth.
 
+## Page theme — match Campaign Review (standing rule)
+
+Every full page under `frontend/src/app/(app)/*` must share the same
+look-and-feel. Campaign Review ([frontend/src/components/campaign-review.tsx](frontend/src/components/campaign-review.tsx))
+is the canonical reference — copy its patterns exactly rather than
+inventing a new visual language per page. Shipped a couple of pages
+(Concentration Risk, Sector Mapping) with `p-6 max-w-6xl`, `text-2xl
+font-semibold`, and `rounded-lg` before catching this — the pages read
+as coming from a different app. Don't repeat.
+
+**The pattern:**
+
+  * **Root:** `<div style={{ animation: "slide-up 0.18s ease-out" }}>`.
+    No `p-*`, no `max-w-*`, no `mx-auto` — the app layout owns page
+    padding + width.
+  * **Header:** flex row with a `border-bottom` separator (`mb-[22px]
+    pb-[14px] flex items-end justify-between gap-4`). Left side: the
+    Fraunces serif title (`font-normal text-[32px] tracking-tight m-0`,
+    `fontFamily: var(--font-fraunces), Georgia, serif`) with the last
+    word wrapped in `<em className="italic" style={{ color: navColor }}>`.
+    Subtitle `text-[13px] mt-1.5 color: var(--ink-3)`. Right side:
+    action buttons.
+  * **Action buttons:** `px-3 py-2 rounded-[10px] text-[13px]`, style
+    `{ background: var(--surface), border: 1px solid var(--border),
+    color: var(--ink-2) }`. Refresh button prefixed with `⟳`.
+  * **KPI tiles:** import `KPITile` + `TILE_GRADIENTS` from
+    `./campaign-detail`. Don't hand-roll KPI boxes — every page uses
+    the same tile. Grid is `gap-[14px]`.
+  * **Cards:** `rounded-[14px]` (not `rounded-lg` / `rounded-xl`),
+    style `{ background: var(--surface), border: 1px solid var(--border),
+    boxShadow: var(--card-shadow) }`.
+  * **Data font:** numeric values render in
+    `fontFamily: var(--font-jetbrains), monospace`. Ticker symbols too.
+  * **Section subheaders:** `text-[13px] font-semibold color:
+    var(--ink-2)` — no accent bars, no oversized H2s.
+  * **Error banner:** `px-4 py-3 rounded-[10px]` with `background:
+    color-mix(in oklab, #e5484d 8%, var(--surface))`, border
+    `var(--border)`, text `#e5484d`.
+  * **Navigation accent:** the sidebar group's `color` (passed as
+    `navColor` prop from `getGroupForHref(pathname)?.color`) is used
+    ONLY in the italicized title word and as the primary CTA color.
+    Don't reuse it as background fills — that overwhelms.
+
+**Modal dialogs** follow the same rules for radii + fonts. Title uses
+the same Fraunces + italic-last-word pattern (`text-[22px]` inside a
+modal, `text-[32px]` on the page). Close button in the top right;
+Cancel + primary action in the bottom right.
+
+**When in doubt, open Campaign Review side-by-side and match it.** A
+page that looks visually different from Campaign Review is a bug even
+if the content is correct.
+
 ## No silent-default guard on money fields (standing rule)
 
 **Never** silently default a financial value (NLV / equity / cash / price /
