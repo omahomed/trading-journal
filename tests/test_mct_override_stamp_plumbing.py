@@ -237,13 +237,18 @@ def test_heal_fills_null_state_when_engine_has_the_bar(monkeypatch):
     monkeypatch.setattr(main, "_compute_trend_count", lambda day_str: -35)
 
     # Row saved with NULL MCT stamps (typical when market_data hadn't
-    # caught up at save time).
+    # caught up at save time). Force object dtype on market_cycle
+    # column so None stays None — a single-dict construction lets
+    # pandas coerce to NaT/nan which the heal's string-emptiness
+    # check would misread as "stamped." Production data reads
+    # actual None from psycopg2 for NULL VARCHAR.
     df = pd.DataFrame([{
         "day": pd.Timestamp("2026-07-27"),
-        "market_cycle": None,          # NULL — heal fills
-        "mct_display_day_num": None,   # NULL — heal fills
-        "trend_count": None,           # NULL — heal fills
+        "market_cycle": None,
+        "mct_display_day_num": None,
+        "trend_count": None,
     }])
+    df["market_cycle"] = df["market_cycle"].astype(object)
 
     main._heal_recent_mct_stamps("CanSlim", df)
 
@@ -314,6 +319,71 @@ def test_update_journal_trend_state_default_signature_is_null_only():
 # consistent with the pattern used by other contract tests.
 from pathlib import Path as _Path
 _REPO_ROOT = _Path(__file__).resolve().parent.parent
+
+
+def test_heal_leaves_correction_row_alone_despite_null_day_num(monkeypatch):
+    """Regression 2026-07-30: CORRECTION rows have NULL mct_display_day_num
+    on purpose (no day count during correction). Previous heal filter
+    treated NULL day_num as "unstamped" and re-heal'd the row, patching
+    the in-memory df with the current systematic engine state (UPTREND
+    UNDER PRESSURE) even though the DB write itself was guarded.
+
+    Result: DB had CORRECTION, API returned UUP, frontend displayed
+    UUP — the write guard I added prevented DB corruption but the
+    in-memory clobber still made it look wrong to the user.
+
+    Fix locked here: needs_heal filter checks market_cycle emptiness
+    (authoritative "unstamped" signal), NOT day_num nullness."""
+    import api.main as main
+    import db_layer
+
+    monkeypatch.setattr(db_layer, "get_active_mct_override", lambda: None)
+
+    from api.mct_engine import EngineResult
+    engine_bars = pd.DataFrame([{
+        "trade_date": pd.Timestamp("2026-07-27"),
+        "state": "UPTREND UNDER PRESSURE",   # engine says something else
+        "cycle_start_idx": pd.NA,
+        "pt_on_idx": pd.NA,
+        "rally_active": False,
+    }])
+    monkeypatch.setattr(
+        "api.mct_endpoint_adapter.run_engine",
+        lambda symbol="^IXIC", as_of=None, force_correction_at_date=None:
+            EngineResult(bars=engine_bars, signals=[], final_state={}),
+    )
+    monkeypatch.setattr("api.market_data_updater.update_if_needed",
+                        lambda symbol="^IXIC": None)
+
+    mct_writes = []
+    monkeypatch.setattr(db_layer, "update_journal_mct_state",
+                        lambda *a, **kw: (mct_writes.append(a), 1)[1])
+    monkeypatch.setattr(db_layer, "update_journal_trend_state",
+                        lambda *a, **kw: 1)
+    monkeypatch.setattr(main, "_compute_trend_count", lambda day_str: -33)
+
+    # The problem row: CORRECTION stamped with NULL day_num (legitimate
+    # for CORRECTION), non-null trend. Under old buggy heal this would
+    # patch the in-memory df to UPTREND UNDER PRESSURE. Under the fix
+    # it's untouched.
+    df = pd.DataFrame([{
+        "day": pd.Timestamp("2026-07-27"),
+        "market_cycle": "CORRECTION",          # stamped
+        "mct_display_day_num": None,            # legitimately NULL
+        "trend_count": -33,                     # stamped
+    }])
+
+    main._heal_recent_mct_stamps("CanSlim", df)
+
+    assert mct_writes == [], (
+        "heal fired an MCT write on a CORRECTION row — filter no longer "
+        "respects that NULL day_num is legitimate for CORRECTION. Old "
+        "code silently corrupted the in-memory df with the engine's "
+        "current systematic state (UPTREND UNDER PRESSURE) despite the "
+        "DB write guard."
+    )
+    # Also verify the in-memory df wasn't patched.
+    assert df.iloc[0]["market_cycle"] == "CORRECTION"
 
 
 def test_heal_leaves_partial_row_alone_when_only_trend_is_null(monkeypatch):

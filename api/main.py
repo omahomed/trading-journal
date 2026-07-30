@@ -1474,13 +1474,19 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
     trend_col = df.get("trend_count", pd.Series(dtype=object))
     # Only NULL rows are candidates. This is the immutability guard —
     # a row with any stamp is left alone forever.
+    #
+    # IMPORTANT: `market_cycle` is the authoritative "is this row
+    # stamped?" signal. mct_display_day_num is intentionally NULL for
+    # CORRECTION rows (no day count during correction), so gating on
+    # its NULL-ness would fire the heal on every legitimate CORRECTION
+    # stamp and clobber it in memory even when the DB write is guarded.
+    # Only check market_cycle emptiness for the MCT branch; check
+    # trend_count NULL separately for the trend branch.
+    mct_missing = (df.get("market_cycle", pd.Series(dtype=object))
+                     .fillna("").astype(str) == "")
     needs_heal = df[
         (df["day"] >= cutoff)
-        & (
-            df["mct_display_day_num"].isna()
-            | (df.get("market_cycle", pd.Series(dtype=object)).fillna("").astype(str) == "")
-            | trend_col.isna()
-        )
+        & (mct_missing | trend_col.isna())
     ]
     if needs_heal.empty:
         return
@@ -1515,13 +1521,19 @@ def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int
             continue  # engine still doesn't have this bar — skip
         day_str = as_of.strftime("%Y-%m-%d")
 
-        # MCT state heal — NULL only. Reads the engine's output for the
-        # bar (state name + day-num anchoring same as
-        # _compute_mct_state_with_day_num does at save time).
-        mct_null = (
-            pd.isna(row.get("mct_display_day_num"))
-            or not str(row.get("market_cycle") or "").strip()
-        )
+        # MCT state heal — NULL only. Only market_cycle emptiness
+        # counts as "unstamped" (day_num is legitimately NULL on
+        # CORRECTION rows). See needs_heal comment above.
+        #
+        # pd.isna() handles ALL pandas' null flavors: None, NaN, and NaT.
+        # The NaT case matters because DataFrame.iterrows() silently
+        # coerces None values to NaT when the row Series is built from
+        # a frame that also contains a datetime column (i.e. always,
+        # since `day` is datetime). Without pd.isna a legitimate NULL
+        # row reads back as `NaT` → stringified as "NaT" → the raw
+        # emptiness check thinks it's stamped and skips the heal.
+        raw_mc = row.get("market_cycle")
+        mct_null = pd.isna(raw_mc) or str(raw_mc).strip() == ""
         if mct_null:
             state, day_num = _compute_mct_state_with_day_num(day_str)
             if state:
