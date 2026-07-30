@@ -584,56 +584,71 @@ class MCTEngine:
             state["correction_pending"] = False
             return
 
-        # Two-gate declaration: BOTH depth and structure must hold.
+        # Two-gate declaration. Reworked 2026-07-29 to separate structure
+        # confirmation from depth confirmation — the old 2-bar-both rule
+        # forced an extra day's delay even when structure had already been
+        # confirmed for weeks and only depth was fresh.
+        #
         #   depth     — INTRADAY LOW ≤ reference_high × (1 − CORRECTION_DRAWDOWN)
         #               (i.e. ≥ 10% off the running all-time high, measured
-        #               peak-to-trough on the bar's low). Switched from close
-        #               to low 2026-07-29 to match the M Factor page's max-
-        #               drawdown display (mct_endpoint_adapter._min_low_since_
-        #               ref_high) so trigger + display agree — a page reading
-        #               "down 10% from high" now corresponds to depth armed.
-        #   structure — confirmed 50 SMA close break: CLOSE < SMA50 on two
-        #               consecutive bars. Kept close-based on purpose: the
-        #               asymmetry (depth = low, structure = close) protects
-        #               against wick-and-recover days where low crosses -10%
-        #               intraday but close pops back above the 50 SMA — depth
-        #               arms but structure fails → no false CORRECTION.
-        # SMA50 is read off `current["sma_50"]` — same accessor the
-        # VIOLATION_21EMA / Streak / POWERTREND-OFF paths use; no separate
-        # recompute.
+        #               peak-to-trough on the bar's low). Uses low so the
+        #               display's max-drawdown reading and the engine's
+        #               trigger source are the same signal.
+        #   structure — CONFIRMED 50 SMA close break: close < SMA50 on
+        #               TWO consecutive bars (including today). Tracked via
+        #               `state["consec_below_50"]` — the phase runs before
+        #               the streak update, so `consec_below_50 >= 1` on
+        #               entry + `close < sma_50` today = 2 consecutive.
+        #
+        # Declaration = depth today AND confirmed structure through today.
+        # Structure confirmation is INDEPENDENT of depth — it can build up
+        # over weeks. On the day depth finally crosses, if structure is
+        # already confirmed, declare same-day. Prior rule silently added a
+        # one-day delay in this common case (weakness building for a while,
+        # depth arrives → old rule waited a day even though the "2-bar
+        # confirmation" for structure was long since satisfied).
+        #
+        # Asymmetric (low for depth, close for structure) is intentional:
+        # a wick-and-recover day where low crosses -10% intraday but close
+        # closes back above the 50 SMA fails the structure gate → no false
+        # CORRECTION on flush-and-recover days.
         threshold = state["reference_high"] * (1.0 - CORRECTION_DRAWDOWN)
         low = float(current["low"])
         close = float(current["close"])
         sma_50 = float(current["sma_50"]) if pd.notna(current["sma_50"]) else None
         depth_gate = low <= threshold
-        structure_gate = (sma_50 is not None) and (close < sma_50)
+        close_below_sma = (sma_50 is not None) and (close < sma_50)
+        # Prior streak from _phase_update_streaks (which runs AFTER this
+        # phase, so we see yesterday's committed value). ≥ 1 means
+        # yesterday was already below SMA; combined with today's
+        # close_below_sma that's ≥ 2 consecutive bars.
+        prior_streak = int(state.get("consec_below_50") or 0)
+        structure_confirmed = close_below_sma and prior_streak >= 1
 
-        if not (depth_gate and structure_gate):
-            # Either gate failed on this bar — drop the pending flag so the
-            # next confirmation has to start over from scratch.
-            state["correction_pending"] = False
+        # `correction_pending` retained as state field for backward
+        # compatibility with historical replay artifacts / snapshots
+        # but no longer read here — the streak counter carries the
+        # confirmation state now. Zeroing keeps saved states clean.
+        state["correction_pending"] = False
+
+        if not (depth_gate and structure_confirmed):
             return
 
-        if not state["correction_pending"]:
-            # First bar with both gates passing — arm pending and wait one
-            # more bar before declaring. No signal emitted here.
-            state["correction_pending"] = True
-            return
-
-        # Second consecutive bar with both gates passing → declare.
         self._declare_correction_now(
             current, state, bar_signals,
             reason=(
                 f"Low {low:.2f} ≤ {threshold:.2f} "
                 f"({int(CORRECTION_DRAWDOWN * 100)}% from "
                 f"{state['reference_high']:.2f}) + close {close:.2f} < "
-                f"50 SMA {sma_50:.2f} confirmed (2 consecutive bars)"
+                f"50 SMA {sma_50:.2f} (structure confirmed: "
+                f"{prior_streak + 1} consecutive closes < SMA50)"
             ),
             meta={
                 "reference_high": state["reference_high"], "threshold": threshold,
                 "low": low, "close": close, "sma_50": sma_50,
-                "confirmation": "two_consecutive_bars_depth_and_structure",
-                "depth_source": "intraday_low",  # switched 2026-07-29
+                "prior_below_50_streak": prior_streak,
+                "confirmation": "depth_today_plus_confirmed_structure",
+                "depth_source": "intraday_low",
                 "trigger": "systematic",
             },
         )
