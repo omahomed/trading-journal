@@ -646,6 +646,90 @@ def test_step4_ever_fired_clears_on_correction_declared():
 
 
 # ---------------------------------------------------------------------------
+# Depth gate uses intraday LOW, not close (2026-07-29 switch)
+# ---------------------------------------------------------------------------
+
+
+def test_declaration_depth_gate_uses_intraday_low_not_close():
+    """Regression / behavior lock: CORRECTION_DECLARED's depth gate reads
+    the bar's LOW against the 10%-off-ref-high threshold, not the close.
+    Matches the M Factor drawdown display (peak intraday high → lowest
+    intraday low). Without this the display could show '-10%' from high
+    while the systematic engine sits at UPTREND UNDER PRESSURE, waiting
+    for the CLOSE to cross too — exactly the divergence flagged 07-29.
+
+    Structure gate stays close-based on purpose (see _phase_declaration
+    docstring); asymmetric two-gate is safer than pure-intraday because
+    a wick-and-recover bar (low <-10% but close > 50 SMA) doesn't fire.
+    """
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Two bars where the LOW crosses -10% (below 90.0) but the CLOSE
+    # stays above 90.0. Structure gate is separately satisfied by
+    # close < 50 SMA on both bars.
+    #   ref_high=100 → threshold=90
+    #   bar 0: close=91 (above threshold), low=89 (below → depth arms)
+    #   bar 1: close=91 (above threshold), low=89 (below → depth confirms)
+    closes = [91.0, 91.0]
+    lows = [89.0, 89.0]
+    highs = [92.0, 92.0]
+    sma_50 = [95.0, 95.0]  # close(91) < SMA50(95) → structure passes both bars
+    ema_21 = [95.0, 95.0]
+    df = _synthetic_history(closes, ema_21=ema_21, sma_50=sma_50,
+                             sma_200=[80.0] * 2, lows=lows, highs=highs)
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    bar_signals: list = []
+    engine._phase_declaration(df.iloc[0], state, bar_signals)
+    assert state["correction_pending"] is True, (
+        "bar 0's low crossed threshold with close < SMA50 — depth+structure "
+        "should have armed the pending flag even though close stayed above "
+        "the threshold. Close-based depth would have missed this."
+    )
+    engine._phase_declaration(df.iloc[1], state, bar_signals)
+    assert state["correction_active"] is True, (
+        "bar 1 confirmed depth (low) + structure (close < SMA50) — engine "
+        "must fire CORRECTION_DECLARED on the second confirming bar."
+    )
+
+
+def test_declaration_stays_gated_on_wick_and_recover_day():
+    """The asymmetric two-gate design: intraday-low depth arms on a
+    wick-down day, but if the same bar's CLOSE recovers above 50 SMA,
+    the structure gate blocks declaration. Prevents a big-flush-that-
+    reverses day from being labeled CORRECTION."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    # Wick-and-recover: low crosses -10% but close rallies above SMA50.
+    closes = [97.0, 97.0]   # above SMA50=95, so structure FAILS
+    lows = [89.0, 89.0]     # below threshold=90, so depth would arm
+    highs = [98.0, 98.0]
+    sma_50 = [95.0, 95.0]
+    ema_21 = [95.0, 95.0]
+    df = _synthetic_history(closes, ema_21=ema_21, sma_50=sma_50,
+                             sma_200=[80.0] * 2, lows=lows, highs=highs)
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    engine._phase_declaration(df.iloc[0], state, [])
+    engine._phase_declaration(df.iloc[1], state, [])
+    assert state["correction_active"] is False, (
+        "structure gate (close < 50 SMA) must veto declaration when close "
+        "recovers above SMA50, even if intraday low crossed the depth line. "
+        "This is the wick-reversal protection the asymmetric gate provides."
+    )
+    assert state["correction_pending"] is False, (
+        "pending flag should also be False — both gates must pass on the "
+        "current bar to arm; structure failed."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Real-date anchor test — the 2026-07-07 regression guard
 # ---------------------------------------------------------------------------
 
