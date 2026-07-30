@@ -650,62 +650,20 @@ def test_step4_ever_fired_clears_on_correction_declared():
 # ---------------------------------------------------------------------------
 
 
-def test_declaration_depth_gate_uses_intraday_low_not_close():
-    """Regression / behavior lock: CORRECTION_DECLARED's depth gate reads
-    the bar's LOW against the 10%-off-ref-high threshold, not the close.
-    Matches the M Factor drawdown display (peak intraday high → lowest
-    intraday low). Without this the display could show '-10%' from high
-    while the systematic engine sits at UPTREND UNDER PRESSURE, waiting
-    for the CLOSE to cross too — exactly the divergence flagged 07-29.
-    """
+def test_declaration_fires_when_both_conditions_met():
+    """The rule, minimally stated: 2 closes below the 50 SMA in the
+    current cycle + intraday low ≤ 10% off the reference high. Both
+    true → CORRECTION_DECLARED. Nothing else — no consecutive
+    requirement, no per-bar close-below-SMA re-check, no pending
+    flag. Both conditions the user specified, and only those.
+
+    Motivating scenario (NASDAQ 2026-07-29): 6 prior closes below
+    SMA50 already accumulated in the current cycle (structure long
+    since met). Today's intraday low crossed the depth threshold for
+    the first time. Declaration fires same-day."""
     from api.mct_engine import MCTEngine, EngineConfig
 
-    # ref_high=100 → threshold=90. Two prior bars build the structure
-    # streak so this test focuses ONLY on the depth-source switch;
-    # depth-arriving-alone semantics is covered by the "long-confirmed
-    # structure, depth arrives" test below.
-    closes = [91.0, 91.0, 91.0]   # all < SMA50=95 → structure builds
-    lows = [92.0, 91.5, 89.0]     # bars 0-1 above threshold; bar 2 crosses
-    highs = [93.0, 92.5, 92.0]
-    sma_50 = [95.0, 95.0, 95.0]
-    ema_21 = [95.0, 95.0, 95.0]
-    df = _synthetic_history(closes, ema_21=ema_21, sma_50=sma_50,
-                             sma_200=[80.0] * 3, lows=lows, highs=highs)
-    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
-                                     initial_power_trend=False,
-                                     initial_exposure=100,
-                                     correction_ever_declared=True))
-    # Simulate the streak having built via two prior below-SMA closes so
-    # _phase_declaration on bar 2 sees consec_below_50=2 at entry.
-    state = engine._init_state()
-    state["consec_below_50"] = 2
-
-    # Bar 2: low 89 crosses threshold 90 → depth passes on intraday.
-    # Structure long-confirmed. Declaration should fire.
-    engine._phase_declaration(df.iloc[2], state, [])
-    assert state["correction_active"] is True, (
-        "bar 2's intraday low (89) crossed threshold (90) with structure "
-        "already confirmed — depth-uses-low rule must fire declaration here. "
-        "Old close-based depth would have missed this bar entirely because "
-        "close (91) stayed above threshold (90)."
-    )
-
-
-def test_declaration_fires_when_depth_arrives_and_structure_long_confirmed():
-    """The 2026-07-29 rework: structure and depth confirmations are
-    INDEPENDENT. Structure builds via consecutive closes below SMA50;
-    once confirmed (≥ 2 bars), it stays confirmed as long as closes
-    stay below. When depth then arrives on a fresh bar, declaration
-    fires SAME-DAY — no extra 2-bar depth confirmation needed.
-
-    Motivating case: NASDAQ 2026-07-22 through 2026-07-29 had 6
-    consecutive closes below SMA50; the intraday low first crossed
-    the -10% depth threshold on 07-29. Old rule required 07-30 to
-    confirm both gates — one extra day of delay for a correction the
-    market had structurally been building for weeks."""
-    from api.mct_engine import MCTEngine, EngineConfig
-
-    closes = [91.0]        # < SMA50=95 → structure would pass
+    closes = [91.0]        # value not read (declaration doesn't check today's close)
     lows = [89.0]          # < threshold=90 → depth passes
     highs = [92.0]
     df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
@@ -714,56 +672,23 @@ def test_declaration_fires_when_depth_arrives_and_structure_long_confirmed():
                                      initial_power_trend=False,
                                      initial_exposure=100,
                                      correction_ever_declared=True))
-    # Simulate 5 prior consecutive closes below SMA50 — the "structure
-    # long confirmed" case from the 07-29 NASDAQ scenario.
     state = engine._init_state()
-    state["consec_below_50"] = 5
+    # Structure gate: cycle counter ≥ 2. Simulate 6 prior closes below
+    # SMA50 already accumulated (the 07-29 NASDAQ scenario).
+    state["closes_below_50_cycle"] = 6
 
     engine._phase_declaration(df.iloc[0], state, [])
-    assert state["correction_active"] is True, (
-        "structure was already confirmed (5 prior consec below-SMA closes) "
-        "and today's depth passed — declaration must fire same-day. Old "
-        "pending-both rule silently forced an extra day."
-    )
+    assert state["correction_active"] is True
 
 
-def test_declaration_stays_gated_on_wick_and_recover_day():
-    """Asymmetric two-gate: intraday-low depth passes on a wick-down
-    day, but if the same bar's CLOSE recovers above 50 SMA, the
-    structure gate blocks declaration. Prevents a big-flush-that-
-    reverses day from being labeled CORRECTION."""
+def test_declaration_stays_gated_when_only_one_prior_close_below_sma():
+    """Structure gate requires 2. With only 1 prior close below SMA in
+    the cycle, depth alone can't declare — needs one more close below
+    SMA in the cycle to arm."""
     from api.mct_engine import MCTEngine, EngineConfig
 
-    closes = [97.0]        # ABOVE SMA50=95 — structure fails
-    lows = [89.0]          # below threshold=90 — depth would pass
-    highs = [98.0]
-    df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
-                             sma_200=[80.0], lows=lows, highs=highs)
-    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
-                                     initial_power_trend=False,
-                                     initial_exposure=100,
-                                     correction_ever_declared=True))
-    state = engine._init_state()
-    state["consec_below_50"] = 5   # would satisfy prior_streak check
-
-    engine._phase_declaration(df.iloc[0], state, [])
-    assert state["correction_active"] is False, (
-        "structure gate (close < 50 SMA) must veto declaration when close "
-        "recovers above SMA50, even if intraday low crossed the depth line. "
-        "Wick-reversal protection."
-    )
-
-
-def test_declaration_stays_gated_when_structure_only_one_bar_old():
-    """A fresh close-below-SMA + fresh depth on the SAME day must still
-    require one more confirming close-below-SMA before declaration.
-    That's the "2 consecutive closes below 50 SMA" invariant kicking
-    in — structure has to have been confirmed, not just crossed for
-    the first time today."""
-    from api.mct_engine import MCTEngine, EngineConfig
-
-    closes = [91.0]        # < SMA50=95, first below-SMA close (new streak)
-    lows = [89.0]          # crosses depth threshold
+    closes = [91.0]
+    lows = [89.0]          # depth would pass
     highs = [92.0]
     df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
                              sma_200=[80.0], lows=lows, highs=highs)
@@ -772,13 +697,57 @@ def test_declaration_stays_gated_when_structure_only_one_bar_old():
                                      initial_exposure=100,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    state["consec_below_50"] = 0   # yesterday was NOT below SMA
+    state["closes_below_50_cycle"] = 1   # only one so far
 
     engine._phase_declaration(df.iloc[0], state, [])
-    assert state["correction_active"] is False, (
-        "structure just crossed today for the first time — one bar isn't "
-        "confirmation. Declaration must wait for the second consecutive "
-        "close below SMA50 even if depth is already met."
+    assert state["correction_active"] is False
+
+
+def test_declaration_stays_gated_when_depth_fails():
+    """Structure counter ≥ 2 but low stays above threshold → no
+    declaration. Both conditions have to hold."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    closes = [91.0]
+    lows = [92.0]          # ABOVE threshold=90 — depth fails
+    highs = [93.0]
+    df = _synthetic_history(closes, ema_21=[95.0], sma_50=[95.0],
+                             sma_200=[80.0], lows=lows, highs=highs)
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    state["closes_below_50_cycle"] = 6   # structure long met
+
+    engine._phase_declaration(df.iloc[0], state, [])
+    assert state["correction_active"] is False
+
+
+def test_closes_below_50_cycle_counter_resets_on_nullification():
+    """After a CORRECTION_NULLIFIED, the cycle counter starts over.
+    The next correction needs 2 fresh below-SMA closes in the new
+    up-cycle before structure re-arms."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=100.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    state["closes_below_50_cycle"] = 5
+    state["correction_active"] = True    # simulate active correction
+    state["reference_high"] = 100.0
+
+    # A bar with close > reference_high triggers nullification.
+    df = _synthetic_history([105.0], ema_21=[95.0], sma_50=[95.0],
+                             sma_200=[80.0], lows=[104.0], highs=[106.0])
+    engine._phase_nullification(df.iloc[0], state, [])
+
+    assert state["correction_active"] is False, "nullification should have fired"
+    assert state["closes_below_50_cycle"] == 0, (
+        "cycle counter must reset on CORRECTION_NULLIFIED — the next "
+        "correction has to earn its structure gate fresh."
     )
 
 

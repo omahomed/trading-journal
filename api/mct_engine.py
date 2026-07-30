@@ -291,6 +291,12 @@ class MCTEngine:
             "consec_low_above_50": 0,    # low > 50 SMA streak (Step 5)
             "consec_21_above_50": 0,     # 21 EMA > 50 SMA streak (Step 8 condition)
 
+            # Cycle-scoped counter — total (non-consecutive) closes below
+            # 50 SMA since the last CORRECTION_NULLIFIED. Used by the
+            # structure gate in _phase_declaration ("2 closes below 50").
+            # Reset in _phase_nullification when nullification fires.
+            "closes_below_50_cycle": 0,
+
             # Single-fire flags (reset when their underlying streak ends)
             "character_break_fired": False,
             "confirmed_break_fired": False,
@@ -549,6 +555,9 @@ class MCTEngine:
             state["step5_done"] = False
             state["step6_done"] = False
             state["step7_done"] = False
+            # Cycle-scoped below-50 counter resets — the next correction
+            # requires 2 fresh below-SMA closes in the new up-cycle.
+            state["closes_below_50_cycle"] = 0
             # Allow the next correction to be declared
             # (declaration gate is `not correction_active`, so this is automatic)
 
@@ -584,70 +593,41 @@ class MCTEngine:
             state["correction_pending"] = False
             return
 
-        # Two-gate declaration. Reworked 2026-07-29 to separate structure
-        # confirmation from depth confirmation — the old 2-bar-both rule
-        # forced an extra day's delay even when structure had already been
-        # confirmed for weeks and only depth was fresh.
-        #
-        #   depth     — INTRADAY LOW ≤ reference_high × (1 − CORRECTION_DRAWDOWN)
-        #               (i.e. ≥ 10% off the running all-time high, measured
-        #               peak-to-trough on the bar's low). Uses low so the
-        #               display's max-drawdown reading and the engine's
-        #               trigger source are the same signal.
-        #   structure — CONFIRMED 50 SMA close break: close < SMA50 on
-        #               TWO consecutive bars (including today). Tracked via
-        #               `state["consec_below_50"]` — the phase runs before
-        #               the streak update, so `consec_below_50 >= 1` on
-        #               entry + `close < sma_50` today = 2 consecutive.
-        #
-        # Declaration = depth today AND confirmed structure through today.
-        # Structure confirmation is INDEPENDENT of depth — it can build up
-        # over weeks. On the day depth finally crosses, if structure is
-        # already confirmed, declare same-day. Prior rule silently added a
-        # one-day delay in this common case (weakness building for a while,
-        # depth arrives → old rule waited a day even though the "2-bar
-        # confirmation" for structure was long since satisfied).
-        #
-        # Asymmetric (low for depth, close for structure) is intentional:
-        # a wick-and-recover day where low crosses -10% intraday but close
-        # closes back above the 50 SMA fails the structure gate → no false
-        # CORRECTION on flush-and-recover days.
+        # The rule, minimally:
+        #   1. Structure — at least 2 closes below the 50 SMA have
+        #      occurred in the current cycle (counter reset on
+        #      CORRECTION_NULLIFIED). Non-consecutive; just a count.
+        #   2. Depth — the current bar's intraday low is ≥ 10% below
+        #      the reference high (low ≤ ref_high × 0.90).
+        # Both true → declare. That's it. No pending flag, no
+        # per-bar close-below-SMA re-check, no confirmation dance.
         threshold = state["reference_high"] * (1.0 - CORRECTION_DRAWDOWN)
         low = float(current["low"])
-        close = float(current["close"])
-        sma_50 = float(current["sma_50"]) if pd.notna(current["sma_50"]) else None
         depth_gate = low <= threshold
-        close_below_sma = (sma_50 is not None) and (close < sma_50)
-        # Prior streak from _phase_update_streaks (which runs AFTER this
-        # phase, so we see yesterday's committed value). ≥ 1 means
-        # yesterday was already below SMA; combined with today's
-        # close_below_sma that's ≥ 2 consecutive bars.
-        prior_streak = int(state.get("consec_below_50") or 0)
-        structure_confirmed = close_below_sma and prior_streak >= 1
+        structure_gate = int(state.get("closes_below_50_cycle") or 0) >= 2
 
-        # `correction_pending` retained as state field for backward
-        # compatibility with historical replay artifacts / snapshots
-        # but no longer read here — the streak counter carries the
-        # confirmation state now. Zeroing keeps saved states clean.
+        # correction_pending retained as a field for saved-snapshot
+        # backward compat but no longer read. Zeroed on every call so
+        # replayed old states don't carry a stale flag forward.
         state["correction_pending"] = False
 
-        if not (depth_gate and structure_confirmed):
+        if not (depth_gate and structure_gate):
             return
 
         self._declare_correction_now(
             current, state, bar_signals,
             reason=(
                 f"Low {low:.2f} ≤ {threshold:.2f} "
-                f"({int(CORRECTION_DRAWDOWN * 100)}% from "
-                f"{state['reference_high']:.2f}) + close {close:.2f} < "
-                f"50 SMA {sma_50:.2f} (structure confirmed: "
-                f"{prior_streak + 1} consecutive closes < SMA50)"
+                f"({int(CORRECTION_DRAWDOWN * 100)}% off "
+                f"{state['reference_high']:.2f}) + "
+                f"{state['closes_below_50_cycle']} closes below 50 SMA "
+                "in cycle"
             ),
             meta={
-                "reference_high": state["reference_high"], "threshold": threshold,
-                "low": low, "close": close, "sma_50": sma_50,
-                "prior_below_50_streak": prior_streak,
-                "confirmation": "depth_today_plus_confirmed_structure",
+                "reference_high": state["reference_high"],
+                "threshold": threshold,
+                "low": low,
+                "closes_below_50_cycle": state["closes_below_50_cycle"],
                 "depth_source": "intraday_low",
                 "trigger": "systematic",
             },
@@ -800,6 +780,9 @@ class MCTEngine:
                     state["anchor_50_low"] = low
                     state["violation_50_fired"] = False
                 state["consec_below_50"] += 1
+                # Cycle-scoped total (non-consecutive) — used by the
+                # declaration's structure gate. Reset on nullification.
+                state["closes_below_50_cycle"] += 1
             else:
                 state["consec_below_50"] = 0
                 state["anchor_50_low"] = None
