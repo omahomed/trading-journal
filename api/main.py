@@ -2960,16 +2960,21 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
         nlv_by_date: dict[str, float] = {}
         try:
             journal_df = db.load_journal(portfolio)
+            print(f"[campaigns_review] load_journal({portfolio}) → {len(journal_df)} rows, "
+                  f"cols={list(journal_df.columns)[:6] if not journal_df.empty else '(empty)'}")
             if not journal_df.empty:
                 journal_df = _normalize_journal(journal_df)
+                print(f"[campaigns_review] post-normalize cols={list(journal_df.columns)[:12]}")
                 journal_df["day"] = pd.to_datetime(journal_df["day"], errors="coerce")
                 nlv_num = pd.to_numeric(journal_df.get("end_nlv"), errors="coerce")
                 journal_df = journal_df[nlv_num.notna() & (nlv_num > 0)]
                 for _, jrow in journal_df.iterrows():
                     if pd.notna(jrow["day"]):
                         nlv_by_date[jrow["day"].date().isoformat()] = float(jrow["end_nlv"])
+            print(f"[campaigns_review] nlv_by_date built with {len(nlv_by_date)} entries")
         except Exception as e:
-            print(f"[campaigns_review] NLV lookup skipped: {e}")
+            import traceback
+            print(f"[campaigns_review] NLV lookup FAILED: {e}\n{traceback.format_exc()}")
 
         def _lookup_nlv_at_close(close_dt) -> float | None:
             """Walk back up to 7 calendar days to find the NLV on or before
