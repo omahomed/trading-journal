@@ -73,6 +73,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "cycle", label: "M Factor", href: "/m-factor" },
       { id: "rally", label: "Rally Context", href: "/rally-context" },
+      { id: "tcmeth", label: "Trend Cycle Methodology", href: "/trend-cycle-methodology" },
     ],
   },
   {
