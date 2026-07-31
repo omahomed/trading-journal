@@ -1773,6 +1773,26 @@ export const api = {
     fetchJSON<ConcentrationResponse>(
       `/api/concentration${portfolio ? `?portfolio=${encodeURIComponent(portfolio)}` : ""}`,
     ),
+
+  // Force-refresh SPY + NASDAQ closes for `day` across all portfolios.
+  // Overwrites any stored value diverging from yfinance's raw close beyond
+  // tolerance (SPY $0.10, NASDAQ $5). Idempotent — safe to re-run.
+  // Fixes the intraday-capture bug where NLV Entry saved during market
+  // hours stored intraday levels as the day's close. Manual "Fetch official
+  // close" button on NLV Entry + nightly backend cron both hit this.
+  refreshIndexCloses: (day: string) =>
+    fetchWithAuth(`${API_BASE}/api/journal/refresh-index-closes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day }),
+    }).then(r => r.json()) as Promise<{
+      day: string;
+      spy_official: number | null;
+      ixic_official: number | null;
+      updates: { portfolio: string; column: string; old: number; new: number; id: number }[];
+      unchanged: number;
+      error?: string;
+    }>,
 };
 
 // ── Ticker taxonomy types ────────────────────────────────────────

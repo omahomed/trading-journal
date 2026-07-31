@@ -192,6 +192,79 @@ async def _start_mae_mfe_reconcile():
 
 
 # ============================================================
+# INDEX-CLOSE RECONCILE (SPY + ^IXIC on trading_journal)
+# ============================================================
+# Fixes the intraday-capture bug where NLV Entry stored live/intraday SPY
+# and NASDAQ levels as the day's "close." The frontend's live-price
+# pre-fill was the source; the ~188 SPY + 4 NASDAQ historical bad rows
+# discovered on 2026-07-30 were the visible tail of it.
+#
+# This loop periodically overwrites yesterday's (and today's, if the
+# market is closed) spy + nasdaq columns with yfinance's raw close, across
+# all portfolios. Same helper the manual /api/journal/refresh-index-closes
+# endpoint uses. Idempotent — a clean run is a no-op.
+#
+# Cadence: startup + every 4 hours. Yesterday always gets corrected; today
+# only when local time is past 4:15pm ET (market closed + yfinance has the
+# finalized close). DISABLE_INDEX_CLOSE_RECONCILE=1 kills the loop.
+
+_INDEX_CLOSE_INTERVAL_S = 4 * 60 * 60      # 4 hours
+_INDEX_CLOSE_STARTUP_DELAY_S = 300         # 5 min after boot
+
+def _et_now():
+    """Current time in America/New_York (market timezone). Uses zoneinfo
+    stdlib — no pytz dep. Falls back to UTC-4 if zoneinfo isn't wired."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # UTC-4 approximation (EDT). Good enough for the "after close?" gate.
+        from datetime import timedelta as _td_local
+        return datetime.utcnow() - _td_local(hours=4)
+
+
+async def _index_close_reconcile_loop():
+    """Every 4 hours, ensure yesterday + (optionally) today have official
+    SPY/^IXIC closes on every trading_journal row. Runs the helper in a
+    thread so yfinance + DB work never blocks the event loop."""
+    await asyncio.sleep(_INDEX_CLOSE_STARTUP_DELAY_S)
+    while True:
+        try:
+            from datetime import date as _date_cls, timedelta as _td
+            today = _date_cls.today()
+            yesterday = today - _td(days=1)
+
+            # Always attempt yesterday — cheap and corrects any that were
+            # captured intraday the previous session.
+            res_y = await asyncio.to_thread(_ensure_official_index_closes, yesterday)
+            n_y = len(res_y.get("updates", []))
+            print(f"[index_close_reconcile] {yesterday}: {n_y} corrections "
+                  f"({res_y.get('unchanged', 0)} already correct)")
+
+            # Today only if it's past 4:15pm ET (market closed + finalized).
+            et = _et_now()
+            if et.hour > 16 or (et.hour == 16 and et.minute >= 15):
+                res_t = await asyncio.to_thread(_ensure_official_index_closes, today)
+                n_t = len(res_t.get("updates", []))
+                print(f"[index_close_reconcile] {today}: {n_t} corrections "
+                      f"({res_t.get('unchanged', 0)} already correct)")
+        except Exception as exc:
+            print(f"[index_close_reconcile] run failed: {exc}")
+        await asyncio.sleep(_INDEX_CLOSE_INTERVAL_S)
+
+
+@app.on_event("startup")
+async def _start_index_close_reconcile():
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("DISABLE_INDEX_CLOSE_RECONCILE"):
+        return
+    if not os.environ.get("DATABASE_URL"):
+        print("[index_close_reconcile] DATABASE_URL not set — scheduler disabled.")
+        return
+    asyncio.create_task(_index_close_reconcile_loop())
+    print("[index_close_reconcile] index-close reconcile scheduled (4h cadence).")
+
+
+# ============================================================
 # JWT AUTH MIDDLEWARE
 # ============================================================
 # next-auth on the frontend mints an HS256 JWT in the session callback using
@@ -3156,6 +3229,113 @@ def _fetch_historical_closes(tickers: list[str], target_date) -> dict[str, float
         except Exception:
             continue
     return out
+
+
+def _ensure_official_index_closes(target_date, day_ago_limit: int = 1) -> dict:
+    """Overwrite any trading_journal row's spy/nasdaq with yfinance's
+    official raw close for `target_date`, across ALL portfolios.
+
+    Fixes the intraday-capture bug that hit any row where NLV Entry was
+    submitted mid-session on the current trading day (batch_prices returned
+    live/intraday levels; those got stored as the day's "close"). The
+    canonical audit found ~188 SPY rows and 4 NASDAQ rows corrupted this way
+    all-time on CanSlim, plus scattered 457B rows.
+
+    Only rewrites rows whose stored value differs from the yfinance raw close
+    by more than a per-symbol tolerance (SPY $0.10, ^IXIC $5) — small
+    dividend-adjustment noise is left alone so a run doesn't churn rows for
+    no reason.
+
+    Args:
+        target_date: the trading day whose closes to enforce.
+        day_ago_limit: safety switch. If target_date is > day_ago_limit
+            trading days ago, we still write (used for the historical
+            backfill). Nightly cron path passes 1 and only touches
+            yesterday/today.
+
+    Returns: {
+      'day': str,
+      'spy_official': float | None,
+      'ixic_official': float | None,
+      'updates': [ {portfolio, column, old, new, id} ],
+      'unchanged': int,
+    }
+    """
+    day_iso = target_date.isoformat() if hasattr(target_date, "isoformat") else str(target_date)[:10]
+    prices = _fetch_historical_closes(["SPY", "^IXIC"], target_date)
+    spy_off = prices.get("SPY")
+    ixic_off = prices.get("^IXIC")
+    summary = {
+        "day": day_iso,
+        "spy_official": spy_off,
+        "ixic_official": ixic_off,
+        "updates": [],
+        "unchanged": 0,
+    }
+    if spy_off is None and ixic_off is None:
+        summary["error"] = "yfinance returned nothing for this date (weekend/holiday/data gap)"
+        return summary
+
+    with db.get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT tj.id, p.name, tj.spy, tj.nasdaq
+            FROM trading_journal tj JOIN portfolios p ON p.id = tj.portfolio_id
+            WHERE tj.day = %s
+        """, (day_iso,))
+        rows = cur.fetchall()
+        for row_id, port, spy_stored, ndx_stored in rows:
+            row_touched = False
+            # SPY guard
+            if spy_off is not None and spy_stored is not None:
+                spy_stored_f = float(spy_stored)
+                if abs(spy_stored_f - spy_off) > 0.10:
+                    cur.execute(
+                        "UPDATE trading_journal SET spy = %s WHERE id = %s",
+                        (spy_off, row_id),
+                    )
+                    summary["updates"].append({
+                        "portfolio": port, "column": "spy",
+                        "old": round(spy_stored_f, 2), "new": spy_off, "id": row_id,
+                    })
+                    row_touched = True
+            # NASDAQ guard
+            if ixic_off is not None and ndx_stored is not None:
+                ndx_stored_f = float(ndx_stored)
+                if abs(ndx_stored_f - ixic_off) > 5.0:
+                    cur.execute(
+                        "UPDATE trading_journal SET nasdaq = %s WHERE id = %s",
+                        (ixic_off, row_id),
+                    )
+                    summary["updates"].append({
+                        "portfolio": port, "column": "nasdaq",
+                        "old": round(ndx_stored_f, 2), "new": ixic_off, "id": row_id,
+                    })
+                    row_touched = True
+            if not row_touched:
+                summary["unchanged"] += 1
+        conn.commit()
+        cur.close()
+    return summary
+
+
+@app.post("/api/journal/refresh-index-closes")
+@limiter.limit("6/minute")
+def refresh_index_closes(request: Request, body: dict = Body(...)):
+    """Force-refresh a day's SPY + NASDAQ closes across all portfolios.
+
+    Body: {"day": "YYYY-MM-DD"}. Pulls yfinance's raw printed close and
+    overwrites any journal row whose stored value diverges beyond
+    tolerance. Idempotent — safe to run repeatedly.
+    """
+    day_str = str(body.get("day") or "").strip()[:10]
+    if not day_str:
+        raise HTTPException(status_code=422, detail="day (YYYY-MM-DD) is required")
+    try:
+        day_dt = pd.Timestamp(day_str).date()
+    except Exception:
+        raise HTTPException(status_code=422, detail=f"bad day: {day_str}")
+    return _ensure_official_index_closes(day_dt)
 
 
 # In-memory cache for /api/prices/lookup. Each entry is (timestamp, payload).

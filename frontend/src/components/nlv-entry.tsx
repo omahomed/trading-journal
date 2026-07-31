@@ -274,6 +274,11 @@ export function NLVEntry({ navColor }: { navColor: string }) {
   const [spyClose, setSpyClose] = useState("");
   const [ndxClose, setNdxClose] = useState("");
   const [marketNotes, setMarketNotes] = useState("");
+  // "Fetch official close" state — button on the header row that hits
+  // /api/journal/refresh-index-closes for the current entryDate. Fixes
+  // stored intraday captures without the user manually retyping.
+  const [refreshingIdx, setRefreshingIdx] = useState(false);
+  const [refreshIdxMsg, setRefreshIdxMsg] = useState<string>("");
   const [entryDate, setEntryDate] = useState(() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
@@ -553,6 +558,87 @@ export function NLVEntry({ navColor }: { navColor: string }) {
                    placeholder="Day 14 UPTREND: ..." className={inputCls} style={{ ...inputStyle, fontFamily: "inherit" }} />
           </Field>
         </div>
+
+        {/* Intraday-capture warning + "Fetch official close" button.
+            The SPY/NDX values pre-fill from a live batchPrices call. When
+            entryDate is today AND the market is still open, those are
+            INTRADAY values, not the day's close — persisting them silently
+            distorted the historical %-change series for months. This strip
+            makes the risk visible and gives a one-click fix. */}
+        {(() => {
+          const now = new Date();
+          const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const isToday = entryDate === todayStr;
+          // Rough US Eastern market-hours check. 9:30am-4:15pm ET.
+          const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+          const marketOpen = (et.getHours() > 9 || (et.getHours() === 9 && et.getMinutes() >= 30))
+                          && (et.getHours() < 16 || (et.getHours() === 16 && et.getMinutes() < 15));
+          const showWarning = isToday && marketOpen;
+          const runRefresh = async () => {
+            setRefreshingIdx(true);
+            setRefreshIdxMsg("");
+            try {
+              const res = await api.refreshIndexCloses(entryDate);
+              if (res.error) {
+                setRefreshIdxMsg(`Failed: ${res.error}`);
+              } else {
+                const changes = res.updates.length;
+                if (res.spy_official) setSpyClose(res.spy_official.toFixed(2));
+                if (res.ixic_official) setNdxClose(res.ixic_official.toFixed(2));
+                setRefreshIdxMsg(
+                  changes === 0
+                    ? "Already at official close."
+                    : `Corrected ${changes} row${changes === 1 ? "" : "s"} across portfolios.`,
+                );
+              }
+            } catch (e) {
+              setRefreshIdxMsg(`Failed: ${e}`);
+            } finally {
+              setRefreshingIdx(false);
+            }
+          };
+          if (!showWarning && !refreshIdxMsg) {
+            return (
+              <div className="px-4 pb-3 flex items-center justify-end gap-3 text-[12px]"
+                   style={{ color: "var(--ink-4)" }}>
+                <button type="button" onClick={runRefresh} disabled={refreshingIdx}
+                        className="underline hover:no-underline">
+                  {refreshingIdx ? "Fetching…" : "Fetch official close"}
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div className="mx-4 mb-4 px-3 py-2.5 rounded-[8px] flex items-start gap-2 text-[12px]"
+                 style={{ background: "color-mix(in oklab, #d97706 8%, var(--surface))",
+                          border: "1px solid color-mix(in oklab, #d97706 25%, var(--border))",
+                          color: "#92400e" }}>
+              <span className="text-[14px] leading-none pt-0.5">⚠</span>
+              <div className="flex-1">
+                {showWarning && (
+                  <div>
+                    <strong>Market is still open</strong> — the pre-filled SPY / Nasdaq values are
+                    intraday, not today&apos;s close. Save now if you want a mid-session snapshot;
+                    otherwise click <em>Fetch official close</em> after 4:15pm ET (or run the
+                    nightly backend job, which does the same thing).
+                  </div>
+                )}
+                {refreshIdxMsg && (
+                  <div className={showWarning ? "mt-1.5" : ""}
+                       style={{ color: refreshIdxMsg.startsWith("Failed") ? "#b23a2b" : "#0a8f5e" }}>
+                    {refreshIdxMsg}
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={runRefresh} disabled={refreshingIdx}
+                      className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-[6px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                               color: "var(--ink-2)" }}>
+                {refreshingIdx ? "Fetching…" : "Fetch official close"}
+              </button>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Portfolio cards — N side-by-side on desktop, stack on mobile */}
