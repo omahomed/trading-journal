@@ -407,6 +407,11 @@ export interface CampaignReviewRow {
   return_pct: number;
   initial_risk_dollars: number;
   r_multiple: number | null;
+  // NLV on the campaign's close date (walks back up to 7 days if the
+  // exact day has no NLV row). Powers the "% NLV" impact column next
+  // to R — impact_pct_nlv = total_pnl / nlv_at_close * 100.
+  // Null when no NLV was ever recorded around the close date.
+  nlv_at_close?: number | null;
   grade: number | null;
   lesson_note: string;
   lesson_category: string;

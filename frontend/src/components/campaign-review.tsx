@@ -104,6 +104,12 @@ interface TradeRow {
   mae_pct: number | null;
   mfe_pct: number | null;
   atr21_entry_pct: number | null;
+  // Impact % NLV = total_pnl / nlv_at_close × 100. Rendered next to
+  // R because both normalize P&L — R against initial risk (discipline
+  // metric), impact_pct_nlv against account size at exit (magnitude
+  // metric). A high-R trade sized tiny won't move the needle; a
+  // low-R trade sized big can.
+  impact_pct_nlv: number | null;
 }
 
 type ColKey =
@@ -111,7 +117,7 @@ type ColKey =
   | "b_pnl" | "b_return_pct"
   | "a_pnl" | "a_return_pct"
   | "total_pnl" | "total_return_pct"
-  | "r_multiple"
+  | "r_multiple" | "impact_pct_nlv"
   | "mae_pct" | "mfe_pct"
   | "rule" | "sell_rule";
 
@@ -167,7 +173,7 @@ const NUMERIC_KEYS = new Set<ColKey>([
   "b_pnl", "b_return_pct",
   "a_pnl", "a_return_pct",
   "total_pnl", "total_return_pct",
-  "r_multiple",
+  "r_multiple", "impact_pct_nlv",
   "mae_pct", "mfe_pct",
 ]);
 
@@ -345,6 +351,17 @@ function computeTradeRows(
       ? realizedPl / riskBudget
       : null;
 
+    // Impact % NLV = total_pnl / nlv_at_close × 100. Closed-only for
+    // the same reason as R (open trades have a moving realized number).
+    // Uses total_pnl (which for a closed campaign equals realized_pl),
+    // divided by the account's end_nlv on the campaign's close date
+    // (the backend walks back up to 7 days if the exact day has no NLV
+    // row). Null when nlv_at_close is missing or <= 0.
+    const nlvAtClose = toNumOrNull((trade as { nlv_at_close?: number | null }).nlv_at_close);
+    const impact_pct_nlv = status === "Closed" && nlvAtClose != null && nlvAtClose > 0
+      ? (total_pnl / nlvAtClose) * 100
+      : null;
+
     return {
       trade_id: trade.trade_id,
       ticker: String(trade.ticker || ""),
@@ -367,6 +384,7 @@ function computeTradeRows(
         ? String((trade as { sell_rule?: string }).sell_rule || "")
         : "",
       r_multiple,
+      impact_pct_nlv,
       // Lesson fields land empty here; the component merges from
       // api.getTradeLessons once that fetch resolves.
       lesson_category: "",
@@ -991,7 +1009,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
       "Trade ID", "Ticker", "Status", "Open", "Close",
       "B Cost", "B Realized", "B Unrealized", "B P&L", "B Return %",
       "A Cost", "A Realized", "A Unrealized", "A P&L", "A Return %",
-      "Total P&L", "Total Return %", "R",
+      "Total P&L", "Total Return %", "R", "% NLV",
       "MAE %", "MFE %", "MAE ATR", "MFE ATR", "ATR21 Entry %",
       "Buy Rule", "Sell Rule", "Lesson Categories", "Lesson Note",
       // Campaign metrics suite (2026-07-25). Appended to END of the
@@ -1037,6 +1055,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         r.a_pnl.toFixed(2), r.a_return_pct?.toFixed(2) ?? "",
         r.total_pnl.toFixed(2), r.total_return_pct?.toFixed(2) ?? "",
         r.r_multiple?.toFixed(2) ?? "",
+        r.impact_pct_nlv?.toFixed(2) ?? "",
         r.mae_pct?.toFixed(2) ?? "",
         r.mfe_pct?.toFixed(2) ?? "",
         maeAtr?.toFixed(2) ?? "",
@@ -1481,6 +1500,10 @@ export function CampaignReview({ navColor }: { navColor: string }) {
                     tip: "R-multiple = realized P&L / initial risk budget. Blank on OPEN campaigns (final realized isn't in yet) and on legacy rows without risk_budget populated.",
                   },
                   {
+                    k: "impact_pct_nlv", l: "% NLV", align: "right",
+                    tip: "Impact % NLV = total P&L / account NLV on the campaign's close date × 100. R tells you how many multiples of initial risk the trade produced (discipline); this tells you how much the trade actually moved the account (magnitude). Blank on OPEN campaigns and on closed campaigns where no NLV was recorded within a week of the close date.",
+                  },
+                  {
                     k: "mae_pct", l: "MAE %", align: "right",
                     tip: "Maximum Adverse Excursion. The worst % below your B1 entry price the trade ever printed on any daily bar after entry. Bar 0 (entry day) is skipped unless there was a same-day sell — the reversal-candle low often prints BEFORE your entry and doesn't reflect anything you actually held through. Sub-line shows the ratio to ATR21 at entry (how many typical daily ranges the drawdown covered).",
                   },
@@ -1693,6 +1716,18 @@ function CampaignReviewRow({ row: r, expanded, onToggleExpand, onContextMenu }: 
     : r.r_multiple >= -1 ? "#d97706"
     : "#e5484d";
 
+  // Impact % NLV color banding — magnitude-based, symmetric on both sides.
+  // ≥1% deep green (big pump), 0..1% green, -1..0 amber, <-1% red.
+  // Different scale than R because the natural range is different: a
+  // strong trade might be +0.5-2% of NLV; anything above 3% is a
+  // "move the account meaningfully" event.
+  const impactColor = r.impact_pct_nlv == null
+    ? "var(--ink-3)"
+    : r.impact_pct_nlv >= 1 ? "#08a86b"
+    : r.impact_pct_nlv >= 0 ? "#16a34a"
+    : r.impact_pct_nlv >= -1 ? "#d97706"
+    : "#e5484d";
+
   return (
     <tr onClick={onToggleExpand}
         onContextMenu={onContextMenu}
@@ -1726,6 +1761,11 @@ function CampaignReviewRow({ row: r, expanded, onToggleExpand, onContextMenu }: 
       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>{fmtPct(r.total_return_pct)}</td>
       <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: rColor }}>
         {r.r_multiple == null ? "—" : `${r.r_multiple >= 0 ? "+" : ""}${r.r_multiple.toFixed(2)}R`}
+      </td>
+      <td className="px-3 py-2 text-right font-semibold" style={{ fontFamily: mono, color: impactColor }}>
+        {r.impact_pct_nlv == null
+          ? <span style={{ color: "var(--ink-4)" }}>—</span>
+          : `${r.impact_pct_nlv >= 0 ? "+" : ""}${r.impact_pct_nlv.toFixed(2)}%`}
       </td>
       <td className="px-3 py-2 text-right" style={{ fontFamily: mono }}>
         {fmtExcursion(r.mae_pct, r.atr21_entry_pct, "adverse")}

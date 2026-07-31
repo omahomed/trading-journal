@@ -2953,6 +2953,41 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
 
         lessons = db.get_trade_lessons(portfolio) or {}
 
+        # Bulk-load {date_iso: end_nlv} for this portfolio so per-row
+        # nlv_at_close lookups are dict hits, not per-row DB queries.
+        # Only NLV-bearing rows count — same filter journal_latest uses so
+        # a same-day checklist-only row can't produce a fake $0 denominator.
+        nlv_by_date: dict[str, float] = {}
+        try:
+            journal_df = db.load_journal(portfolio)
+            if not journal_df.empty:
+                journal_df = _normalize_journal(journal_df)
+                journal_df["day"] = pd.to_datetime(journal_df["day"], errors="coerce")
+                nlv_num = pd.to_numeric(journal_df.get("end_nlv"), errors="coerce")
+                journal_df = journal_df[nlv_num.notna() & (nlv_num > 0)]
+                for _, jrow in journal_df.iterrows():
+                    if pd.notna(jrow["day"]):
+                        nlv_by_date[jrow["day"].date().isoformat()] = float(jrow["end_nlv"])
+        except Exception as e:
+            print(f"[campaigns_review] NLV lookup skipped: {e}")
+
+        def _lookup_nlv_at_close(close_dt) -> float | None:
+            """Walk back up to 7 calendar days to find the NLV on or before
+            close_dt. Handles the case where the trader closed on Friday
+            but only saved that day's NLV over the weekend."""
+            if close_dt is None or (isinstance(close_dt, float) and pd.isna(close_dt)):
+                return None
+            try:
+                d = close_dt.date() if hasattr(close_dt, "date") else pd.Timestamp(close_dt).date()
+            except Exception:
+                return None
+            from datetime import timedelta as _td
+            for delta in range(0, 8):
+                iso = (d - _td(days=delta)).isoformat()
+                if iso in nlv_by_date:
+                    return nlv_by_date[iso]
+            return None
+
         rows = []
         for _, r in closed.iterrows():
             tid = str(r.get("trade_id", ""))
@@ -3025,6 +3060,7 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
                 except (TypeError, ValueError):
                     return None
 
+            nlv_at_close = _lookup_nlv_at_close(closed_dt)
             rows.append({
                 "trade_id": tid,
                 "ticker": str(r.get("ticker", "")),
@@ -3034,6 +3070,10 @@ def campaigns_review(portfolio: str = "CanSlim", since: str = "2026-01-01"):
                 "return_pct": float(r.get("return_pct") or 0),
                 "initial_risk_dollars": initial_risk,
                 "r_multiple": r_multiple,
+                # NLV on the close date (walks back up to 7 days if the
+                # exact day has no NLV row). Enables the frontend to
+                # compute Impact % NLV = realized_pl / nlv_at_close.
+                "nlv_at_close": nlv_at_close,
                 "grade": grade_out,
                 "lesson_note": note,
                 "lesson_category": category,
