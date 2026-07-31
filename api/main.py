@@ -4323,14 +4323,42 @@ def save_trade_lesson(entry: dict):
         return {"status": "error", "detail": str(e)}
 
 
+# Git SHA baked in at Railway build time from the RAILWAY_GIT_COMMIT_SHA env
+# var Railway sets on every deploy. Also readable locally via git if the env
+# var is absent (dev). Surfacing on /api/health lets us tell from the outside
+# which commit Railway is actually serving — critical when a frontend deploy
+# lands ahead of the backend and the two disagree about response shape.
+def _resolve_build_sha() -> str:
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT_SHA")
+    if sha:
+        return sha[:12]
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)) + "/..",
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+_BUILD_SHA = _resolve_build_sha()
+
+
 @app.get("/api/health")
 def health():
-    """Health check."""
+    """Health check. Includes the git SHA the backend is currently serving so
+    a frontend/backend deploy mismatch can be diagnosed from the outside."""
     try:
         ok = db.test_connection()
-        return {"status": "ok" if ok else "db_error", "timestamp": datetime.now().isoformat()}
+        return {
+            "status": "ok" if ok else "db_error",
+            "timestamp": datetime.now().isoformat(),
+            "sha": _BUILD_SHA,
+        }
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {"status": "error", "detail": str(e), "sha": _BUILD_SHA}
 
 
 @app.get("/api/healthz")
