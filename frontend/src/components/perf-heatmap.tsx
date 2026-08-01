@@ -19,6 +19,44 @@ function heatColor(val: number, zMin: number, zMax: number): string {
   return `rgb(${lerp(255, 8, t).toFixed(0)}, ${lerp(255, 168, t).toFixed(0)}, ${lerp(255, 107, t).toFixed(0)})`;
 }
 
+// Date-range presets. "from" is an inclusive lower bound; "to" is always
+// today. Open trades pass the window filter unconditionally (they're active
+// contributors regardless of when opened); closed trades pass when their
+// closed_date >= from. Week convention: Monday as the first day (trading
+// week orientation).
+type DatePreset = "wtd" | "mtd" | "qtd" | "ytd";
+
+function computePresetRange(preset: DatePreset): { fromISO: string; label: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const d = now.getDate();
+  const day = now.getDay();              // 0=Sun..6=Sat
+  const mondayOffset = (day + 6) % 7;     // 0=Mon..6=Sun
+  let from: Date;
+  let label: string;
+  switch (preset) {
+    case "wtd":
+      from = new Date(y, m, d - mondayOffset);
+      label = "This Week";
+      break;
+    case "mtd":
+      from = new Date(y, m, 1);
+      label = "This Month";
+      break;
+    case "qtd":
+      from = new Date(y, Math.floor(m / 3) * 3, 1);
+      label = "This Quarter";
+      break;
+    case "ytd":
+    default:
+      from = new Date(y, 0, 1);
+      label = `${y} YTD`;
+  }
+  const fromISO = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, "0")}-${String(from.getDate()).padStart(2, "0")}`;
+  return { fromISO, label };
+}
+
 export function PerfHeatmap({ navColor }: { navColor: string }) {
   const [trades, setTrades] = useState<TradePosition[]>([]);
   const [openTrades, setOpenTrades] = useState<TradePosition[]>([]);
@@ -26,6 +64,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"all" | "open" | "closed">("all");
   const [metricMode, setMetricMode] = useState<"return" | "rmult" | "impact">("return");
+  const [datePreset, setDatePreset] = useState<DatePreset>("ytd");
   // Group 8: Stocks vs Options live on disjoint color scales. Default Stocks
   // (primary instrument, hides premium-on-premium outliers like AMD +196.7%).
   // Persisted because the filter is sticky — a user who works mostly in
@@ -69,13 +108,17 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
     });
   }, []);
 
+  const dateRange = useMemo(() => computePresetRange(datePreset), [datePreset]);
+
   const heatData = useMemo(() => {
-    // Combine and filter to 2026
+    // Date-preset window filter. Open trades pass unconditionally (they're
+    // active contributors right now regardless of when they opened); closed
+    // trades pass when their closed_date falls in [from, today].
     let all = [...openTrades, ...trades].filter(t => {
-      const od = String(t.open_date || "").slice(0, 4);
-      const cd = String(t.closed_date || "").slice(0, 4);
       const isOpen = (t.status || "").toUpperCase() === "OPEN";
-      return od === "2026" || cd === "2026" || isOpen;
+      if (isOpen) return true;
+      const cd = String(t.closed_date || "").slice(0, 10);
+      return cd >= dateRange.fromISO;
     });
 
     if (viewMode === "open") all = all.filter(t => (t.status || "").toUpperCase() === "OPEN");
@@ -115,7 +158,7 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
       const key = metricMode === "return" ? "retPct" : metricMode === "rmult" ? "rMult" : "impact";
       return (b as any)[key] - (a as any)[key];
     });
-  }, [trades, openTrades, journal, viewMode, metricMode, instrumentMode]);
+  }, [trades, openTrades, journal, viewMode, metricMode, instrumentMode, dateRange.fromISO]);
 
   if (loading) return <div className="animate-pulse"><div className="h-[90px] rounded-[14px]" style={{ background: "var(--bg-2)" }} /></div>;
 
@@ -152,17 +195,31 @@ export function PerfHeatmap({ navColor }: { navColor: string }) {
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Performance <em className="italic" style={{ color: navColor }}>Heat Map</em>
         </h1>
-        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{getActivePortfolio()} · 2026 trades</div>
+        <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>{getActivePortfolio()} · {dateRange.label} · {heatData.length} {heatData.length === 1 ? "trade" : "trades"}</div>
       </div>
 
       {/* Controls */}
       <div className="flex items-center gap-4 mb-5 flex-wrap">
         <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          {([
+            { key: "wtd" as const, label: "Week" },
+            { key: "mtd" as const, label: "Month" },
+            { key: "qtd" as const, label: "Quarter" },
+            { key: "ytd" as const, label: "YTD" },
+          ]).map(p => (
+            <button key={p.key} onClick={() => setDatePreset(p.key)}
+                    className="px-3 py-1 rounded-md text-[11px] font-medium transition-all"
+                    style={{ background: datePreset === p.key ? "var(--surface)" : "transparent", color: datePreset === p.key ? "var(--ink)" : "var(--ink-4)" }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex p-0.5 rounded-[8px] gap-0.5" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
           {(["all", "open", "closed"] as const).map(m => (
             <button key={m} onClick={() => setViewMode(m)}
                     className="px-3 py-1 rounded-md text-[11px] font-medium transition-all capitalize"
                     style={{ background: viewMode === m ? "var(--surface)" : "transparent", color: viewMode === m ? "var(--ink)" : "var(--ink-4)" }}>
-              {m === "all" ? "All 2026" : m === "open" ? "Open Only" : "Closed Only"}
+              {m === "all" ? "All" : m === "open" ? "Open Only" : "Closed Only"}
             </button>
           ))}
         </div>
