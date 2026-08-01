@@ -1311,6 +1311,11 @@ export const api = {
     drawdown_pct?: number;
     power_trend_on_since?: string | null;
     ftd_date?: string | null;
+    // Dual-index FTD confirmation source (from FTD_DUAL_INDEX_START forward):
+    // "ixic" | "spy" | "both" | "ixic_legacy" | null.
+    // Informational only — exposure is 40 for all values. Frontend suppresses
+    // the badge for "ixic_legacy" (pre-cutover FTDs never cross-checked SPY).
+    ftd_confirmed_by?: "ixic" | "spy" | "both" | "ixic_legacy" | null;
     reference_high?: number;
     reference_high_date?: string | null;
     cycle_start_date?: string | null;

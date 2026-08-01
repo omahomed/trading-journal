@@ -62,6 +62,14 @@ FTD_PCT_THRESHOLD = 0.01            # close % gain threshold to confirm an FTD
 FTD_WINDOW_START = 4                # earliest rally_count where FTD eligible
 FTD_WINDOW_END = 25                 # latest rally_count where FTD eligible
 
+# Dual-index FTD cutover. From this date forward, STEP_1_FTD requires
+# volume confirmation on IXIC OR SPY (both indexes must show close % gain
+# ≥ FTD_PCT_THRESHOLD AND volume > prior-day volume; either qualifies).
+# Bars strictly before this date use the legacy IXIC-price-only rule so
+# historical replays reproduce the pre-cutover signal log unchanged.
+# See EngineConfig.spy_confirmations for how SPY confirmation is piped in.
+FTD_DUAL_INDEX_START = date(2026, 7, 31)
+
 CONFIRMED_BREAK_BARS_BELOW_21 = 2   # consec closes below 21 EMA → Confirmed Break
 TRB_BARS_BELOW_21 = 3               # consec closes below 21 EMA → Trending Regime Break
 RECOVERY_BARS_LOW_ABOVE_21 = 3      # consec bars low > 21 EMA → Recovery
@@ -105,6 +113,17 @@ EXPOSURE_V10_FULL_INVALIDATION = 0
 EXPOSURE_STEP_8 = 200
 
 STATES = ("CORRECTION", "RALLY MODE", "UPTREND UNDER PRESSURE", "UPTREND", "POWERTREND")
+
+
+def _to_date(v) -> date:
+    """Normalize a bar's trade_date to a datetime.date.
+
+    Production reads from market_data where trade_date is already a date, but
+    unit tests seed DataFrames with pandas Timestamps. This helper keeps the
+    dual-index dict lookup (config.spy_confirmations[bar_date]) robust to
+    both — dict keys are always date objects.
+    """
+    return pd.Timestamp(v).date()
 
 CASCADE_SIGNAL_TYPES = frozenset({
     "VIOLATION_21EMA",
@@ -150,6 +169,20 @@ class EngineConfig:
     # marker so the audit log can distinguish user-triggered from
     # systematic declarations.
     force_correction_at_date: Optional[date] = None
+
+    # SPY-side FTD confirmations, precomputed by the adapter over the SPY
+    # history from FTD_DUAL_INDEX_START forward. Keyed by trade_date:
+    #   True   → SPY closed ≥ FTD_PCT_THRESHOLD AND volume > prev-day volume
+    #   False  → SPY bar exists but didn't confirm (either price or volume
+    #            leg failed)
+    #   MISSING key → SPY data not present in market_data for that date;
+    #            the engine refuses to fire STEP_1_FTD until SPY lands
+    #            (chosen over "fall back to IXIC-only" so a stale nightly
+    #            ingest doesn't silently produce a single-index FTD)
+    # Left empty ({}) for pre-cutover replays and unit tests that don't
+    # exercise the dual-index gate. The engine short-circuits on this dict
+    # only when the bar's date is on/after FTD_DUAL_INDEX_START.
+    spy_confirmations: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -941,25 +974,89 @@ class MCTEngine:
             state["rally_count"] = i - state["rally_day_idx"] + 1
 
         # ----- Step 1: Follow-Through Day -----
+        # Gate evolves at FTD_DUAL_INDEX_START (2026-07-31):
+        #   Pre-cutover  → legacy rule: IXIC close pct_gain ≥ FTD_PCT_THRESHOLD.
+        #   Post-cutover → dual-index rule: fires when EITHER
+        #                    (a) IXIC price ≥ threshold AND IXIC vol > prev, OR
+        #                    (b) SPY  price ≥ threshold AND SPY  vol > prev
+        #                  If SPY data is missing for this bar (adapter didn't
+        #                  find a market_data row), fire is REFUSED — the engine
+        #                  waits for SPY to land rather than falling back to
+        #                  IXIC-only. See EngineConfig.spy_confirmations and
+        #                  FTD_DUAL_INDEX_START for rationale.
+        # ftd_low ALWAYS anchors to IXIC's low on the firing bar regardless
+        # of which index confirmed. The POST_FTD_SOFT_FAIL check runs IXIC's
+        # close vs this anchor — keeping the soft-fail comparison purely
+        # IXIC-vs-IXIC even when SPY drove the confirmation.
         if (state["step0_done"] and not state["step1_done"]
                 and state["rally_count"] is not None
                 and FTD_WINDOW_START <= state["rally_count"] <= FTD_WINDOW_END
                 and prev is not None and prev_close > 0):
             pct_gain = (close - prev_close) / prev_close
-            if pct_gain >= FTD_PCT_THRESHOLD:
+            bar_date = _to_date(current["trade_date"])
+            dual_index_active = bar_date >= FTD_DUAL_INDEX_START
+
+            fires = False
+            confirmed_by: Optional[str] = None
+            ixic_confirms = False
+            spy_confirms: Optional[bool] = None
+
+            if not dual_index_active:
+                # Legacy rule: IXIC price only. Preserved verbatim so historical
+                # replays reproduce the pre-cutover signal log unchanged.
+                if pct_gain >= FTD_PCT_THRESHOLD:
+                    fires = True
+                    confirmed_by = "ixic_legacy"
+                    ixic_confirms = True
+            else:
+                spy_confirms = self.config.spy_confirmations.get(bar_date)
+                if spy_confirms is None:
+                    # SPY data missing → refuse to fire. Engine waits for the
+                    # nightly SPY ingest to land; the FTD will surface on the
+                    # next run once SPY row is in market_data for this bar.
+                    fires = False
+                else:
+                    prev_volume = (int(prev["volume"])
+                                   if prev is not None and pd.notna(prev.get("volume"))
+                                   else None)
+                    current_volume = (int(current["volume"])
+                                      if pd.notna(current.get("volume"))
+                                      else None)
+                    ixic_vol_up = (prev_volume is not None
+                                   and current_volume is not None
+                                   and current_volume > prev_volume)
+                    ixic_confirms = (pct_gain >= FTD_PCT_THRESHOLD and ixic_vol_up)
+                    if ixic_confirms and spy_confirms:
+                        fires = True
+                        confirmed_by = "both"
+                    elif ixic_confirms:
+                        fires = True
+                        confirmed_by = "ixic"
+                    elif spy_confirms:
+                        fires = True
+                        confirmed_by = "spy"
+
+            if fires:
                 state["step1_done"] = True
                 state["ftd_close"] = close
-                state["ftd_low"] = low
+                state["ftd_low"] = low   # always IXIC's low (state authority)
                 before = state["exposure"]
                 state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[1])
                 if arm_emit:
+                    label = f"FTD on Day {state['rally_count']}, close +{pct_gain*100:.2f}%"
+                    if dual_index_active and confirmed_by:
+                        label = label + f" [{confirmed_by}]"
                     bar_signals.append(self._signal(
                         current, state, "STEP_1_FTD",
-                        f"FTD on Day {state['rally_count']}, close +{pct_gain*100:.2f}%",
+                        label,
                         exposure_before=before, exposure_after=state["exposure"],
                         meta={"rally_count": state["rally_count"],
                               "pct_gain": pct_gain,
-                              "ftd_close": close, "ftd_low": low},
+                              "ftd_close": close, "ftd_low": low,
+                              "confirmed_by": confirmed_by,
+                              "ixic_confirms": bool(ixic_confirms),
+                              "spy_confirms": (None if spy_confirms is None
+                                               else bool(spy_confirms))},
                     ))
 
         # ----- Step 2: close > 21 EMA (can fire same bar as Step 1) -----

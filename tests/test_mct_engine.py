@@ -1155,3 +1155,221 @@ def test_force_correction_pending_when_date_after_history_end():
         s.meta.get("trigger") != "user_override"
         for s in result.signals if s.signal_type == "CORRECTION_DECLARED"
     )
+
+
+# ---------------------------------------------------------------------------
+# Dual-index FTD gate (FTD_DUAL_INDEX_START, SPY confirmation side-channel)
+# ---------------------------------------------------------------------------
+# The dual-index gate takes effect on bars whose trade_date >= 2026-07-31.
+# Bars before that date use the legacy IXIC-price-only rule so historical
+# replays reproduce pre-cutover signals unchanged.
+#
+# Tests drive _phase_rally_hunt directly with a pre-seeded state, mirroring
+# the pattern used by test_step4_ever_fired_persists_*. Full-engine replay
+# tests would need to also stand up CORRECTION_DECLARED first (rally-hunt
+# signal emissions gate on correction_active); testing the STEP_1 gate
+# in isolation keeps the assertions tight to the new logic.
+
+def _seed_pre_ftd_state(engine, rally_count: int = 4) -> dict:
+    """State right before the STEP_1 gate: rally active, STEP_0 done, day N.
+
+    ftd_low = None so state.get("ftd_low") is None (fresh rally, no prior
+    FTD anchor).
+    """
+    state = engine._init_state()
+    state["correction_active"] = True    # arms signal emission
+    state["in_correction"] = True
+    state["step0_done"] = True
+    state["rally_active"] = True
+    state["rally_day_idx"] = 0
+    state["rally_day_low"] = 99.0
+    state["running_min_low"] = 99.0
+    state["running_min_idx"] = 0
+    state["rally_count"] = rally_count
+    state["cycle_start_idx"] = 0
+    return state
+
+
+def _ftd_candidate_bar(trade_date: date, close: float = 101.5, low: float = 99.5,
+                        volume: int = 1_200_000):
+    """A bar with prev_close=100 → 1.5% gain (clears FTD_PCT_THRESHOLD=1%)."""
+    return pd.Series({
+        "trade_date": pd.Timestamp(trade_date),
+        "close": close, "low": low, "high": close + 0.5, "open": close - 0.2,
+        "volume": volume,
+        "ema_21": 98.0, "ema_8": 100.0, "sma_50": 95.0, "sma_200": 90.0,
+    })
+
+
+def _ftd_prev_bar(trade_date: date, close: float = 100.0, volume: int = 1_000_000):
+    return pd.Series({
+        "trade_date": pd.Timestamp(trade_date),
+        "close": close, "low": close - 1.0, "high": close + 1.0, "open": close,
+        "volume": volume,
+        "ema_21": 98.0, "ema_8": 100.0, "sma_50": 95.0, "sma_200": 90.0,
+    })
+
+
+def test_ftd_pre_cutover_fires_ixic_price_only_no_volume_required():
+    """Bars BEFORE FTD_DUAL_INDEX_START keep the legacy rule: fires on
+    IXIC close pct_gain >= 1%, no volume check, no SPY dependency."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=20))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 29), volume=5_000_000)
+    # Post-cutover would fail: current volume LESS than prev volume.
+    current = _ftd_candidate_bar(date(2026, 7, 30), close=101.5, volume=1_000_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    types = [s.signal_type for s in bar_signals]
+    assert "STEP_1_FTD" in types, "pre-cutover: price-only rule must fire"
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "ixic_legacy"
+
+
+def test_ftd_post_cutover_ixic_price_and_volume_fires():
+    """On/after cutover: IXIC price ≥1% AND vol > prev → fires,
+    confirmed_by='ixic' when SPY did NOT confirm that day."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): False},   # SPY present, didn't confirm
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_500_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "ixic"
+    assert ftd.meta.get("ixic_confirms") is True
+    assert ftd.meta.get("spy_confirms") is False
+
+
+def test_ftd_post_cutover_spy_only_fires_when_ixic_volume_flat():
+    """4/8/2026-style: IXIC price up ≥1% but volume DOWN vs prev; SPY
+    confirms → FTD fires with confirmed_by='spy'."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): True},
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=5_000_000)
+    # IXIC price up 1.5% BUT volume DOWN vs prev → IXIC gate fails
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_000_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "spy"
+    assert ftd.meta.get("ixic_confirms") is False
+    assert ftd.meta.get("spy_confirms") is True
+
+
+def test_ftd_post_cutover_both_confirm_marks_confirmed_by_both():
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): True},
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_500_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "both"
+
+
+def test_ftd_post_cutover_missing_spy_data_refuses_to_fire():
+    """SPY bar not in confirmations dict (adapter didn't find it in
+    market_data) → engine refuses to fire even if IXIC would confirm.
+
+    Design choice: "wait for SPY to land" beats "fall back to IXIC-only"
+    so a stale nightly ingest doesn't silently produce a single-index FTD.
+    """
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={},   # SPY missing for 2026-08-03
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_500_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    types = [s.signal_type for s in bar_signals]
+    assert "STEP_1_FTD" not in types, (
+        "SPY data missing must block STEP_1_FTD — no silent IXIC-only fallback"
+    )
+    assert state["step1_done"] is False
+
+
+def test_ftd_post_cutover_neither_confirms_no_fire():
+    """IXIC price up but no volume; SPY present but didn't confirm → no FTD."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): False},
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=5_000_000)
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_000_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    types = [s.signal_type for s in bar_signals]
+    assert "STEP_1_FTD" not in types
+
+
+def test_ftd_post_cutover_price_below_threshold_never_fires():
+    """Even with volume up on both indexes, IXIC price gain < 1% + SPY
+    confirmations False → no FTD (price threshold is the primary gate)."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): False},
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    # Only +0.3% gain — under threshold.
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=100.3, volume=1_500_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    types = [s.signal_type for s in bar_signals]
+    assert "STEP_1_FTD" not in types

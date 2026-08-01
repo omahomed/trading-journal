@@ -183,7 +183,28 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="text-[15px] font-semibold mt-2">Trend Count: {trendCount > 0 ? `+${trendCount}` : trendCount}</div>
         )}
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
-        <div className="text-[12px] mt-1 opacity-70">FTD: {data.ftd_date || "—"}</div>
+        <div className="text-[12px] mt-1 opacity-70 flex items-center gap-1.5">
+          <span>FTD: {data.ftd_date || "—"}</span>
+          {data.ftd_date && data.ftd_confirmed_by && data.ftd_confirmed_by !== "ixic_legacy" && (() => {
+            // Dual-index confirmation badge — informational only (exposure is
+            // 40 regardless of which index confirmed). Palette matches the
+            // divergence taxonomy: both = green, single = amber (one leg
+            // dissented, worth flagging without alarming). Pre-cutover FTDs
+            // (confirmed_by = "ixic_legacy") render no badge — the legacy
+            // rule didn't cross-check SPY, so labeling one is misleading.
+            const cb = data.ftd_confirmed_by;
+            const label = cb === "both" ? "IXIC ✓ / SPY ✓"
+                        : cb === "ixic" ? "IXIC vol only"
+                        : cb === "spy"  ? "SPY vol only" : cb;
+            const color = cb === "both" ? "#08a86b" : "#d97706";
+            return (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                    style={{ background: `color-mix(in oklab, ${color} 18%, transparent)`, color }}>
+                {label}
+              </span>
+            );
+          })()}
+        </div>
         {state === "POWERTREND" && data.power_trend_on_since && (
           <div className="text-[12px] mt-1 opacity-70">Power-Trend ON since {data.power_trend_on_since}</div>
         )}

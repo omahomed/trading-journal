@@ -22,6 +22,8 @@ from api.mct_engine import (
     EngineConfig,
     EngineResult,
     SignalEvent,
+    FTD_DUAL_INDEX_START,
+    FTD_PCT_THRESHOLD,
 )
 from api.market_data_repo import get_history, get_latest_date
 
@@ -39,6 +41,7 @@ HISTORY_START = date(2010, 1, 1)
 def _default_config(
     initial_reference_high: Optional[float],
     force_correction_at_date: Optional[date] = None,
+    spy_confirmations: Optional[dict] = None,
 ) -> EngineConfig:
     return EngineConfig(
         initial_reference_high=initial_reference_high,
@@ -53,7 +56,54 @@ def _default_config(
         # nullification.
         initial_ratchet_armed=True,
         force_correction_at_date=force_correction_at_date,
+        spy_confirmations=(spy_confirmations or {}),
     )
+
+
+def _precompute_spy_ftd_confirmations(as_of: date) -> dict[date, bool]:
+    """Precompute SPY's per-bar FTD-confirmation status from cutover forward.
+
+    Runs the same close-pct-gain + volume-up-vs-prev check the engine uses
+    on IXIC, against SPY history. Returns a dict keyed by trade_date:
+        True   → SPY closed ≥ FTD_PCT_THRESHOLD AND vol > prev-day vol
+        False  → SPY bar exists but didn't confirm (price or vol leg failed)
+        MISSING key → SPY data not in market_data for that date; the engine
+                     treats this as "refuse to fire" (waits for nightly SPY
+                     ingest to land rather than falling back to IXIC-only).
+
+    Returns empty {} when SPY has no rows at all in market_data — typical
+    on first deploy before the updater has run. Engine short-circuits on
+    the empty dict → no post-cutover FTDs fire until SPY lands, which is
+    the intended safe-default per the "refuse to fire" design choice.
+    """
+    spy = get_history("SPY", FTD_DUAL_INDEX_START, as_of)
+    if spy.empty:
+        return {}
+    spy = spy.sort_values("trade_date").reset_index(drop=True)
+    out: dict[date, bool] = {}
+    for i in range(len(spy)):
+        curr = spy.iloc[i]
+        bar_date = pd.Timestamp(curr["trade_date"]).date()
+        # First bar in the window has no prev to compare against — record it
+        # as False (bar exists, didn't confirm) so the engine sees SPY data
+        # is present but the volume-up leg is unknowable. This bar can never
+        # be a valid FTD by SPY-side confirmation anyway; IXIC-side may still
+        # fire independently.
+        if i == 0:
+            out[bar_date] = False
+            continue
+        prev = spy.iloc[i - 1]
+        prev_close = float(prev["close"])
+        if prev_close <= 0:
+            out[bar_date] = False
+            continue
+        pct_gain = (float(curr["close"]) - prev_close) / prev_close
+        prev_vol = prev.get("volume")
+        curr_vol = curr.get("volume")
+        vol_up = (pd.notna(prev_vol) and pd.notna(curr_vol)
+                  and int(curr_vol) > int(prev_vol))
+        out[bar_date] = bool(pct_gain >= FTD_PCT_THRESHOLD and vol_up)
+    return out
 
 
 def run_engine(
@@ -82,7 +132,15 @@ def run_engine(
         return EngineResult(bars=pd.DataFrame(), signals=[], final_state={})
 
     seed = float(history["high"].iloc[0])
-    return MCTEngine(_default_config(seed, force_correction_at_date)).run(history)
+    # SPY-side FTD confirmations power the dual-index rule from
+    # FTD_DUAL_INDEX_START forward. Only precompute when the engine is
+    # running on IXIC — SPY-side runs (e.g. debugging a SPY-native pass)
+    # don't need to compare against themselves.
+    spy_confirmations = (_precompute_spy_ftd_confirmations(as_of)
+                          if symbol == "^IXIC" else None)
+    return MCTEngine(
+        _default_config(seed, force_correction_at_date, spy_confirmations)
+    ).run(history)
 
 
 # ============================================================================
@@ -286,6 +344,35 @@ def _latest_ftd_date(
         if cycle_start is not None and sig_date < cycle_start:
             continue
         return _isodate(sig.trade_date)
+    return None
+
+
+def _latest_ftd_confirmed_by(
+    signals: list[SignalEvent],
+    cycle_start: Optional[date] = None,
+) -> Optional[str]:
+    """Same walk semantics as _latest_ftd_date, but returns the meta
+    `confirmed_by` field of the CURRENT-cycle FTD.
+
+    Possible values (see mct_engine._phase_rally_hunt STEP_1 block):
+      "ixic"          — post-cutover, IXIC volume + price confirmed alone
+      "spy"           — post-cutover, SPY volume + price confirmed alone
+      "both"          — post-cutover, both indexes confirmed independently
+      "ixic_legacy"   — pre-cutover FTD (legacy IXIC-price-only rule)
+      None            — pre-cutover signal written before the confirmed_by
+                        field existed; frontend renders as "—".
+    Frontend M Factor page reads this to render the divergence badge
+    (informational only — exposure is the same 40 regardless of source).
+    """
+    for sig in reversed(signals):
+        if sig.signal_type == "CORRECTION_DECLARED":
+            return None
+        if sig.signal_type != "STEP_1_FTD":
+            continue
+        sig_date = pd.Timestamp(sig.trade_date).date()
+        if cycle_start is not None and sig_date < cycle_start:
+            continue
+        return sig.meta.get("confirmed_by") if sig.meta else None
     return None
 
 
@@ -540,6 +627,12 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "stack_50_200": sma_50 > sma_200,
         "entry_ladder": _entry_ladder(state, result.signals, cycle_start_date_obj),
         "ftd_date": _latest_ftd_date(result.signals, cycle_start_date_obj),
+        # confirmed_by — which index(es) confirmed the current cycle's FTD
+        # under the dual-index gate (FTD_DUAL_INDEX_START). One of:
+        # "ixic" | "spy" | "both" | "ixic_legacy" | None.
+        # Purely informational — engine exposure is the same 40 regardless.
+        "ftd_confirmed_by": _latest_ftd_confirmed_by(
+            result.signals, cycle_start_date_obj),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),
         # V11 surfaces consume cap_at_100 to render the "capped at 100%"

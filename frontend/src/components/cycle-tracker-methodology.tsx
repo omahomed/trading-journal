@@ -204,10 +204,18 @@ export function CycleTrackerMethodology() {
             </div>
             <div className="rule-body">
               <div className="rule-conds">
-                <div className="cond"><span className="cond-label">Rally day window</span> current rally_count between 4 and 25 (<span className="mono">FTD_WINDOW_START</span>=4, <span className="mono">FTD_WINDOW_END</span>=25).</div>
-                <div className="cond"><span className="cond-label">Trigger</span> close &gt; prior close by ≥ 1% (<span className="mono">FTD_PCT_THRESHOLD</span>=0.01).</div>
+                <div className="cond"><span className="cond-label">Rally day window</span> IXIC rally_count between 4 and 25 (<span className="mono">FTD_WINDOW_START</span>=4, <span className="mono">FTD_WINDOW_END</span>=25).</div>
+                <div className="cond"><span className="cond-label">Pre-2026-07-31</span> IXIC close &gt; prior close by ≥ 1% (<span className="mono">FTD_PCT_THRESHOLD</span>=0.01). Volume not consulted.</div>
+                <div className="cond"><span className="cond-label">On/after 2026-07-31</span> (<span className="mono">FTD_DUAL_INDEX_START</span>) fires when <b>either</b>:
+                  <ul className="mt-1 ml-3 list-disc">
+                    <li>IXIC close ≥ +1% <b>and</b> IXIC volume &gt; prior-day volume, or</li>
+                    <li>SPY close ≥ +1% <b>and</b> SPY volume &gt; prior-day volume.</li>
+                  </ul>
+                </div>
+                <div className="cond"><span className="cond-label">Missing SPY data</span> refuses to fire — waits for the nightly SPY ingest to land rather than falling back to IXIC-only.</div>
               </div>
-              <div className="rule-effect">Fires STEP_1_FTD. Stores <span className="mono">ftd_close</span> and <span className="mono">ftd_low</span> as invalidation anchors. Exposure → 40 (step 0 + 1). FTD is a cycle event (banked; not retired by pullbacks).</div>
+              <div className="rule-effect">Fires STEP_1_FTD. Stores <span className="mono">ftd_close</span> and <span className="mono">ftd_low</span> as invalidation anchors (<b>always IXIC&apos;s</b> — IXIC stays state authority for the soft-fail check regardless of which index confirmed). Exposure → 40 (step 0 + 1). Meta carries <span className="mono">confirmed_by</span> (<span className="mono">ixic</span> / <span className="mono">spy</span> / <span className="mono">both</span> / <span className="mono">ixic_legacy</span>) rendered as a badge on the M Factor page.</div>
+              <div className="rule-note">FTD is a cycle event (banked; not retired by pullbacks).</div>
             </div>
           </div>
 
@@ -464,9 +472,10 @@ export function CycleTrackerMethodology() {
             <tbody>
               <tr><td className="mono">CORRECTION_DRAWDOWN</td><td className="mono">0.10</td><td>10% depth threshold for correction declaration (intraday low vs reference high).</td></tr>
               <tr><td className="mono">UNDERCUT</td><td className="mono">0.01</td><td>1% intraday undercut threshold for VIOLATION firing (both 21 EMA and 50 SMA).</td></tr>
-              <tr><td className="mono">FTD_PCT_THRESHOLD</td><td className="mono">0.01</td><td>Minimum close % gain (vs prior close) to confirm a Follow-Through Day.</td></tr>
+              <tr><td className="mono">FTD_PCT_THRESHOLD</td><td className="mono">0.01</td><td>Minimum close % gain (vs prior close) to confirm a Follow-Through Day (applied to IXIC and SPY under the dual-index gate).</td></tr>
               <tr><td className="mono">FTD_WINDOW_START</td><td className="mono">4</td><td>Earliest rally_count where FTD is eligible to fire.</td></tr>
               <tr><td className="mono">FTD_WINDOW_END</td><td className="mono">25</td><td>Latest rally_count where FTD is eligible.</td></tr>
+              <tr><td className="mono">FTD_DUAL_INDEX_START</td><td className="mono">2026-07-31</td><td>Cutover date: bars on/after require IXIC OR SPY to pass BOTH price ≥ +1% AND volume &gt; prior-day. Pre-cutover bars use the legacy IXIC-price-only rule.</td></tr>
               <tr><td className="mono">PT_ON_21_ABOVE_50_BARS</td><td className="mono">5</td><td>Bars of 21 EMA &gt; 50 SMA required to arm Power-Trend condition 1.</td></tr>
               <tr><td className="mono">PT_ON_LOW_ABOVE_21_BARS</td><td className="mono">10</td><td>Bars of low &gt; 21 EMA required to arm Power-Trend condition 2.</td></tr>
               <tr><td className="mono">PINK_RALLY_DAY_POS_IN_RANGE</td><td className="mono">0.5</td><td>Close ≥ midpoint of intraday range → &ldquo;pink&rdquo; label on a rally day.</td></tr>

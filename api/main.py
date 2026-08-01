@@ -5996,7 +5996,7 @@ def rebuild_mct_signals(request: Request):
         from datetime import date as _date
         from api.mct_engine import MCTEngine
         from api.market_data_repo import get_history, get_latest_date
-        from api.mct_endpoint_adapter import _default_config
+        from api.mct_endpoint_adapter import _default_config, _precompute_spy_ftd_confirmations
         from api.mct_signals_writer import rebuild_signals
 
         symbol = "^IXIC"
@@ -6008,7 +6008,12 @@ def rebuild_mct_signals(request: Request):
         if history.empty:
             return {"error": "empty history"}
 
-        config = _default_config(float(history["high"].iloc[0]))
+        # Pipe SPY confirmations through the rebuild path too, so a manual
+        # rebuild produces the same dual-index FTDs from cutover forward that
+        # the endpoint replay would.
+        spy_confirmations = _precompute_spy_ftd_confirmations(latest)
+        config = _default_config(float(history["high"].iloc[0]),
+                                 spy_confirmations=spy_confirmations)
         result = MCTEngine(config).run(history)
         summary = rebuild_signals(result.signals)
 

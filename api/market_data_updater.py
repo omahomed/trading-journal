@@ -22,6 +22,13 @@ from api.market_data_repo import get_latest_date
 
 
 SYMBOL = "^IXIC"
+# SPY is the companion index for the dual-index FTD gate (see mct_engine.py
+# FTD_DUAL_INDEX_START). Ingested alongside ^IXIC so the engine's SPY
+# side-channel (precomputed via _precompute_spy_ftd_confirmations) always
+# has same-day data by the time the FTD gate is checked. Kept in the same
+# market_data table under symbol="SPY" — no schema change needed.
+COMPANION_SYMBOL = "SPY"
+
 RECENT_WINDOW = 210  # enough lookback to keep sma_200 accurate at the right edge
 
 log = logging.getLogger(__name__)
@@ -37,7 +44,21 @@ def update_latest_bar(symbol: str = SYMBOL) -> dict:
 
     Returns: {"symbol", "trade_date", "rows_upserted", "action", "mct_signals"}.
         action is one of: "upsert" | "no-data".
+
+    Companion index: when the primary symbol is ^IXIC, SPY is also ingested
+    (no-op if already fresh) so the dual-index FTD gate (mct_engine.py
+    FTD_DUAL_INDEX_START) has same-day SPY data available before the engine
+    replay runs. SPY failures are logged but don't halt IXIC ingestion —
+    the engine's "refuse to fire if SPY missing" guard covers the fallback.
     """
+    if symbol == SYMBOL:
+        try:
+            _ingest_symbol_only(COMPANION_SYMBOL)
+        except Exception as e:
+            log.warning("[%s] companion ingest failed: %s (IXIC-only replay will "
+                        "refuse to fire post-cutover FTDs until SPY lands)",
+                        COMPANION_SYMBOL, e)
+
     df = _fetch_window(symbol, days=int(RECENT_WINDOW * 1.6))  # slack for weekends/holidays
     if df.empty:
         log.warning("yfinance returned no rows for %s", symbol)
@@ -61,6 +82,34 @@ def update_latest_bar(symbol: str = SYMBOL) -> dict:
         "action": "upsert",
         "mct_signals": mct_summary,
     }
+
+
+def _ingest_symbol_only(symbol: str) -> dict:
+    """Fetch + upsert bars for `symbol` without triggering the engine replay.
+
+    Used to keep companion indexes (currently: SPY) fresh alongside ^IXIC
+    without running the MCT engine on them (the engine only reads SPY as a
+    side-input via mct_endpoint_adapter._precompute_spy_ftd_confirmations —
+    it doesn't need per-SPY signals in market_signals). Same post-close
+    freshness gate as update_if_needed — no-ops if today's bar already
+    landed. Called by update_latest_bar for the companion symbol.
+    """
+    latest = get_latest_date(symbol)
+    target = _last_business_day()
+    if latest is not None and latest >= target:
+        return {"symbol": symbol, "trade_date": latest,
+                "rows_upserted": 0, "action": "no-op"}
+    df = _fetch_window(symbol, days=int(RECENT_WINDOW * 1.6))
+    if df.empty:
+        log.warning("yfinance returned no rows for %s", symbol)
+        return {"symbol": symbol, "trade_date": None,
+                "rows_upserted": 0, "action": "no-data"}
+    df = _compute_indicators(df).tail(RECENT_WINDOW)
+    with get_db_connection() as conn:
+        n = _upsert_rows(symbol, df, conn)
+    return {"symbol": symbol,
+            "trade_date": df["trade_date"].iloc[-1],
+            "rows_upserted": n, "action": "upsert"}
 
 
 def update_if_needed(symbol: str = SYMBOL) -> dict:
@@ -294,9 +343,15 @@ def _run_engine_and_write_signals(symbol: str = SYMBOL) -> dict:
         return {"events_emitted": 0, "rows_inserted": 0, "reason": "empty history"}
 
     # Use the same config as the production endpoint adapter — single source
-    # of truth for engine behavior across endpoints + daily updater.
-    from api.mct_endpoint_adapter import _default_config
-    config = _default_config(float(history["high"].iloc[0]))
+    # of truth for engine behavior across endpoints + daily updater. SPY-side
+    # FTD confirmations are precomputed once from cutover forward and passed
+    # into every replay, keeping engine behavior identical whether triggered
+    # from an endpoint request or the nightly update cycle.
+    from api.mct_endpoint_adapter import _default_config, _precompute_spy_ftd_confirmations
+    spy_confirmations = (_precompute_spy_ftd_confirmations(latest)
+                          if symbol == "^IXIC" else None)
+    config = _default_config(float(history["high"].iloc[0]),
+                             spy_confirmations=spy_confirmations)
     engine = MCTEngine(config)
     result = engine.run(history)
     inserted = write_signals(result.signals)
