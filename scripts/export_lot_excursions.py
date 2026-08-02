@@ -32,7 +32,15 @@ Output columns (research-friendly, superset of the campaign MAE columns):
     fill_date · fill_price · shares · window_end_date · days_held ·
     mae_pct · mae_atr_multiple · min_low · min_low_date · days_to_mae ·
     mfe_pct · mfe_atr_multiple · max_high · max_high_date · days_to_mfe ·
-    atr21_at_fill_pct · realized_pl · error
+    atr21_at_fill_pct · realized_pl ·
+    fund_extracted_at · fund_composite_rating · fund_eps_rating ·
+    fund_rs_rating · fund_group_rs_rating · fund_smr_rating ·
+    fund_acc_dis_rating · fund_timeliness_rating · fund_sponsorship_rating ·
+    fund_eps_growth_rate · fund_ud_vol_ratio ·
+    fund_mgmt_own_pct · fund_banks_own_pct · fund_funds_own_pct · fund_num_funds ·
+    fund_price_at_extract · fund_market_cap ·
+    fund_industry_group · fund_industry_group_rank ·
+    error
 
 Idempotent: multiple runs on the same day overwrite the same dated
 file (unless you pass --out). yfinance is called once per campaign
@@ -120,6 +128,21 @@ CSV_COLUMNS = [
     "mfe_pct", "mfe_atr_multiple", "max_high", "max_high_date", "days_to_mfe",
     "atr21_at_fill_pct",
     "realized_pl", "campaign_realized_pl",
+    # MarketSurge fundamentals (extracted at position entry via Claude Vision).
+    # Per-campaign, not per-lot — every lot of the same trade_id repeats the
+    # same B1-era snapshot. NULL columns when a campaign had no screenshot
+    # uploaded / no successful extraction. Sourced from trade_fundamentals
+    # via LATERAL join in api/lot_excursions.fetch_campaign_lots (most-
+    # recent extraction wins).
+    "fund_extracted_at",
+    "fund_composite_rating", "fund_eps_rating", "fund_rs_rating",
+    "fund_group_rs_rating", "fund_smr_rating", "fund_acc_dis_rating",
+    "fund_timeliness_rating", "fund_sponsorship_rating",
+    "fund_eps_growth_rate", "fund_ud_vol_ratio",
+    "fund_mgmt_own_pct", "fund_banks_own_pct",
+    "fund_funds_own_pct", "fund_num_funds",
+    "fund_price_at_extract", "fund_market_cap",
+    "fund_industry_group", "fund_industry_group_rank",
     "error",
 ]
 

@@ -160,7 +160,34 @@ def fetch_campaign_lots(
                 AND s.status = 'CLOSED'
                 AND s.closed_date IS NOT NULL
                 AND d.date::date = s.closed_date::date
-            ) AS close_day_high_exit_price
+            ) AS close_day_high_exit_price,
+            -- MarketSurge fundamentals extracted from screenshot uploads
+            -- (Claude Vision API — see db_layer.save_trade_fundamentals).
+            -- LATERAL picks the MOST RECENT extraction for this campaign;
+            -- ORDER BY extracted_at DESC + LIMIT 1 mirrors the DISTINCT ON
+            -- pattern in db_layer.get_trade_fundamentals. LEFT JOIN so lots
+            -- without a fundamentals row still return (all fund_* columns
+            -- NULL). Filtered to matching ticker so an options campaign
+            -- doesn't accidentally pick up its underlying's fundamentals.
+            tf.extracted_at             AS fund_extracted_at,
+            tf.composite_rating         AS fund_composite_rating,
+            tf.eps_rating               AS fund_eps_rating,
+            tf.rs_rating                AS fund_rs_rating,
+            tf.group_rs_rating          AS fund_group_rs_rating,
+            tf.smr_rating               AS fund_smr_rating,
+            tf.acc_dis_rating           AS fund_acc_dis_rating,
+            tf.timeliness_rating        AS fund_timeliness_rating,
+            tf.sponsorship_rating       AS fund_sponsorship_rating,
+            tf.eps_growth_rate          AS fund_eps_growth_rate,
+            tf.ud_vol_ratio             AS fund_ud_vol_ratio,
+            tf.mgmt_own_pct             AS fund_mgmt_own_pct,
+            tf.banks_own_pct            AS fund_banks_own_pct,
+            tf.funds_own_pct            AS fund_funds_own_pct,
+            tf.num_funds                AS fund_num_funds,
+            tf.price                    AS fund_price_at_extract,
+            tf.market_cap               AS fund_market_cap,
+            tf.industry_group           AS fund_industry_group,
+            tf.industry_group_rank      AS fund_industry_group_rank
         FROM trades_summary s
         JOIN portfolios p ON s.portfolio_id = p.id
         JOIN trades_details b
@@ -168,6 +195,15 @@ def fetch_campaign_lots(
          AND b.portfolio_id = s.portfolio_id
          AND b.action = 'BUY'
          AND b.deleted_at IS NULL
+        LEFT JOIN LATERAL (
+            SELECT *
+              FROM trade_fundamentals tf_inner
+             WHERE tf_inner.portfolio_id = s.portfolio_id
+               AND tf_inner.trade_id     = s.trade_id
+               AND tf_inner.ticker       = s.ticker
+             ORDER BY tf_inner.extracted_at DESC
+             LIMIT 1
+        ) tf ON TRUE
         WHERE s.deleted_at IS NULL
           AND COALESCE(s.instrument_type, 'STOCK') = 'STOCK'
     """
@@ -404,6 +440,31 @@ def _base_row(lot: dict, window_end_date: date) -> dict:
         "max_high_date":         None,
         "realized_pl":           float(lot["realized_pl"]) if lot.get("realized_pl") is not None else None,
         "campaign_realized_pl":  float(lot["campaign_realized_pl"]) if lot.get("campaign_realized_pl") is not None else None,
+        # MarketSurge fundamentals (latest extraction for this campaign's
+        # ticker; see fetch_campaign_lots' LATERAL join). All-None when the
+        # campaign has no extracted fundamentals row. Duplicated across every
+        # lot of a campaign — fundamentals are per-campaign, not per-lot, so
+        # A1/A2 carry the same B1-era snapshot. Kept on every row so the CSV
+        # is trivially filterable without a join step downstream.
+        "fund_extracted_at":       _iso(lot.get("fund_extracted_at")),
+        "fund_composite_rating":   _int_or_none(lot.get("fund_composite_rating")),
+        "fund_eps_rating":         _int_or_none(lot.get("fund_eps_rating")),
+        "fund_rs_rating":          _int_or_none(lot.get("fund_rs_rating")),
+        "fund_group_rs_rating":    lot.get("fund_group_rs_rating"),
+        "fund_smr_rating":         lot.get("fund_smr_rating"),
+        "fund_acc_dis_rating":     lot.get("fund_acc_dis_rating"),
+        "fund_timeliness_rating":  lot.get("fund_timeliness_rating"),
+        "fund_sponsorship_rating": lot.get("fund_sponsorship_rating"),
+        "fund_eps_growth_rate":    _float_or_none(lot.get("fund_eps_growth_rate")),
+        "fund_ud_vol_ratio":       _float_or_none(lot.get("fund_ud_vol_ratio")),
+        "fund_mgmt_own_pct":       _float_or_none(lot.get("fund_mgmt_own_pct")),
+        "fund_banks_own_pct":      _float_or_none(lot.get("fund_banks_own_pct")),
+        "fund_funds_own_pct":      _float_or_none(lot.get("fund_funds_own_pct")),
+        "fund_num_funds":          _int_or_none(lot.get("fund_num_funds")),
+        "fund_price_at_extract":   _float_or_none(lot.get("fund_price_at_extract")),
+        "fund_market_cap":         lot.get("fund_market_cap"),
+        "fund_industry_group":     lot.get("fund_industry_group"),
+        "fund_industry_group_rank": _int_or_none(lot.get("fund_industry_group_rank")),
         "error":                 None,
     }
 
@@ -417,6 +478,33 @@ def _error_row(lot: dict, error: str, window_end_date: date) -> dict:
 def _iso(value: Any) -> str | None:
     d = _as_date(value)
     return d.isoformat() if d else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    """Coerce NUMERIC/int/None from the DB to a Python int, preserving None.
+    Used for the MarketSurge fundamentals fields where the schema is
+    INTEGER but psycopg2 hands back int or None already; kept explicit
+    for symmetry with _float_or_none and to make future-format changes
+    (e.g. numeric strings from JSON) painless."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    """Coerce NUMERIC/Decimal/None from the DB to a Python float. Decimal
+    survives round-trip through DictWriter as e.g. Decimal('99.00'); this
+    normalizes to 99.0 so downstream pandas / spreadsheet consumers get
+    a clean numeric column."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────
