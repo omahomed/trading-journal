@@ -8,6 +8,7 @@ import { gradeColor } from "@/lib/grade-helpers";
 import { log } from "@/lib/log";
 import { TagPicker } from "./tag-picker";
 import { WeeklyThoughts } from "./weekly-thoughts";
+import { WatchList } from "./watch-list";
 import { WeeklySnapshot } from "./weekly-snapshot";
 import { SectionExpander } from "./section-expander";
 import { WeeklyInsightsTile } from "./weekly-insights-tile";
@@ -92,6 +93,10 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
   // Phase 3: HTML body of the Weekly Thoughts editor. Snake_case for wire
   // parity. Stored as HTML string; sanitized in the editor before send.
   const [weekly_thoughts, setWeeklyThoughts] = useState("");
+  // Migration 057: HTML body of the Watch List editor. Same shape as
+  // weekly_thoughts — separate column so the two rich-text bodies persist
+  // independently.
+  const [watch_list, setWatchList] = useState("");
   const [saveMsg, setSaveMsg] = useState("");
 
   // Phase 4: Weekly Snapshot count, lifted up so the SectionExpander
@@ -248,6 +253,7 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
       setRuleChange(existing.rule_change || false);
       setRuleChangeText(existing.rule_change_text || "");
       setWeeklyThoughts(existing.weekly_thoughts || "");
+      setWatchList(existing.watch_list || "");
       setTickerGrades(existing.ticker_grades || {});
       setExecutionGrade(existing.execution_grade || "");
       setProcessGrade(existing.process_grade || "");
@@ -257,7 +263,7 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
     } else {
       setWeekGrade(""); setBestDecision(""); setWorstDecision("");
       setRuleChange(false); setRuleChangeText("");
-      setWeeklyThoughts(""); setTickerGrades({});
+      setWeeklyThoughts(""); setWatchList(""); setTickerGrades({});
       setExecutionGrade(""); setProcessGrade(""); setPnlGrade("");
       setOverallOverride(false); setReviewedAt(null);
     }
@@ -342,6 +348,7 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
       rule_change,
       rule_change_text,
       weekly_thoughts,
+      watch_list,
       ticker_grades,
       // Phase 4.6 fields. Server is authoritative on the derived
       // overall (when overall_override is false AND all 3 axes are
@@ -368,7 +375,7 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
     refreshRail();
     return result;
   }, [portfolio, monStr, week_grade, best_decision, worst_decision,
-      rule_change, rule_change_text, weekly_thoughts, ticker_grades,
+      rule_change, rule_change_text, weekly_thoughts, watch_list, ticker_grades,
       execution_grade, process_grade, pnl_grade, overall_override,
       reviewed_at, refreshRail]);
 
@@ -383,7 +390,7 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
     }, 800);
     return () => clearTimeout(t);
   }, [week_grade, best_decision, worst_decision, rule_change, rule_change_text,
-      weekly_thoughts, ticker_grades,
+      weekly_thoughts, watch_list, ticker_grades,
       execution_grade, process_grade, pnl_grade, overall_override, reviewed_at,
       handleSave]);
 
@@ -779,6 +786,18 @@ export function WeeklyRetro({ navColor, initialWeek }: { navColor: string; initi
           <WeeklyThoughts
             value={weekly_thoughts}
             onChange={(next) => { dirtyRef.current = true; setWeeklyThoughts(next); }}
+            retroId={retros[monStr]?.id ?? null}
+            portfolio={portfolio}
+          />
+
+          {/* Watch List (Migration 057). Second rich-text editor for
+              weekend screen review — IBD 50 / Growth 250 / Big Cap 20 /
+              setups worth tracking. Same shape as WeeklyThoughts; inline
+              chart paste uses the same weekly_retros/{id}/thoughts/ R2
+              prefix (both editors are attachments of the same retro). */}
+          <WatchList
+            value={watch_list}
+            onChange={(next) => { dirtyRef.current = true; setWatchList(next); }}
             retroId={retros[monStr]?.id ?? null}
             portfolio={portfolio}
           />

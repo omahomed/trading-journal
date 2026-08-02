@@ -388,6 +388,9 @@ export interface WeeklyRetro {
   // before send). Backend column is NOT NULL DEFAULT '' so this is never
   // null on a row read from the API.
   weekly_thoughts: string;
+  // Migration 057: HTML body of the Watch List editor (weekend screen
+  // review). Same shape + sanitizer as weekly_thoughts.
+  watch_list: string;
   ticker_grades: Record<string, WeeklyRetroTickerGrade>;
   created_at: string;
   updated_at: string;

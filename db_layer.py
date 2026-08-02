@@ -3492,6 +3492,10 @@ def _serialize_weekly_retro(parent_row: dict, ticker_grades: dict) -> dict:
         # Phase 3: HTML-formatted reflection prose. NOT NULL DEFAULT '' on
         # the column means this is always a string, never None.
         "weekly_thoughts": parent_row.get("weekly_thoughts") or "",
+        # Migration 057: HTML-formatted weekend watch-list prose (IBD 50 /
+        # Growth 250 / Big Cap 20 + inline pasted charts). Same NOT NULL
+        # DEFAULT '' shape as weekly_thoughts.
+        "watch_list": parent_row.get("watch_list") or "",
         "ticker_grades": ticker_grades,
         "created_at": (
             parent_row["created_at"].isoformat()
@@ -3682,7 +3686,7 @@ _WEEKLY_RETRO_SELECT_COLS = (
     "r.execution_grade, r.process_grade, r.pnl_grade, "
     "r.overall_override, r.reviewed_at, "
     "r.best_decision, r.worst_decision, r.rule_change, "
-    "r.rule_change_text, r.weekly_thoughts, "
+    "r.rule_change_text, r.weekly_thoughts, r.watch_list, "
     "r.created_at, r.updated_at"
 )
 
@@ -3738,6 +3742,7 @@ def upsert_weekly_retro(
     rule_change: bool = False,
     rule_change_text: str = "",
     weekly_thoughts: str = "",
+    watch_list: str = "",
     ticker_grades: dict | None = None,
     # Phase 4.6: 3-axis grading + persisted review state.
     execution_grade: str | None = None,
@@ -3796,6 +3801,7 @@ def upsert_weekly_retro(
     worst_decision = worst_decision or ""
     rule_change_text = rule_change_text or ""
     weekly_thoughts = weekly_thoughts or ""
+    watch_list = watch_list or ""
     rule_change = bool(rule_change)
 
     with get_db_connection() as conn:
@@ -3841,14 +3847,14 @@ def upsert_weekly_retro(
                     "UPDATE weekly_retros SET "
                     "  week_grade = %s, best_decision = %s, worst_decision = %s, "
                     "  rule_change = %s, rule_change_text = %s, "
-                    "  weekly_thoughts = %s, "
+                    "  weekly_thoughts = %s, watch_list = %s, "
                     "  execution_grade = %s, process_grade = %s, pnl_grade = %s, "
                     "  overall_override = %s, reviewed_at = %s, "
                     "  deleted_at = NULL, updated_at = NOW() "
                     "WHERE id = %s "
                     "RETURNING id",
                     (week_grade_val, best_decision, worst_decision,
-                     rule_change, rule_change_text, weekly_thoughts,
+                     rule_change, rule_change_text, weekly_thoughts, watch_list,
                      execution_grade_val, process_grade_val, pnl_grade_val,
                      overall_override, reviewed_at,
                      existing["id"]),
@@ -3859,14 +3865,14 @@ def upsert_weekly_retro(
                     "INSERT INTO weekly_retros "
                     "  (portfolio_id, week_start, week_grade, best_decision, "
                     "   worst_decision, rule_change, rule_change_text, "
-                    "   weekly_thoughts, "
+                    "   weekly_thoughts, watch_list, "
                     "   execution_grade, process_grade, pnl_grade, "
                     "   overall_override, reviewed_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "RETURNING id",
                     (portfolio_id, week_start, week_grade_val, best_decision,
                      worst_decision, rule_change, rule_change_text,
-                     weekly_thoughts,
+                     weekly_thoughts, watch_list,
                      execution_grade_val, process_grade_val, pnl_grade_val,
                      overall_override, reviewed_at),
                 )
@@ -6781,6 +6787,7 @@ def _retro_has_content(retro: dict) -> bool:
         or (retro.get("worst_decision") or "").strip()
         or (retro.get("rule_change_text") or "").strip()
         or (retro.get("weekly_thoughts") or "").strip()
+        or (retro.get("watch_list") or "").strip()
         or retro.get("rule_change")
         or retro.get("ticker_grades")
     )

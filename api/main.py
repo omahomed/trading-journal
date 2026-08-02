@@ -2490,6 +2490,10 @@ def weekly_retro_upsert(request: Request, body: dict = Body(...)):
             # sanitizes via DOMPurify before sending; the column is plain
             # TEXT and accepts any string. Defaults to '' when absent.
             weekly_thoughts=str(body.get("weekly_thoughts") or ""),
+            # Migration 057: HTML body of the Watch List editor. Same
+            # sanitizer + storage shape as weekly_thoughts — routed to the
+            # same shared ThoughtsEditor on the frontend.
+            watch_list=str(body.get("watch_list") or ""),
             ticker_grades=tg_in or {},
             execution_grade=execution_grade,
             process_grade=process_grade,

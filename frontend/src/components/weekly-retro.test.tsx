@@ -259,6 +259,7 @@ describe("WeeklyRetro — Phase 0 server persistence swap", () => {
       rule_change: p.rule_change,
       rule_change_text: p.rule_change_text,
       weekly_thoughts: p.weekly_thoughts,
+      watch_list: p.watch_list ?? "",
       ticker_grades: p.ticker_grades,
       // Phase 4.6 echo fields
       execution_grade: p.execution_grade ?? null,
