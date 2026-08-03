@@ -40,10 +40,21 @@ function useAutocomplete(rows: TickerTaxonomy[]): { sectors: string[]; themes: s
 export function SectorMapping({ navColor }: Props) {
   const [mapped, setMapped] = useState<TickerTaxonomy[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
+  // ticker → portfolios currently holding it (from /api/taxonomy). Powers
+  // the "Held" badge + held-first sort + Held-only filter so the user can
+  // triage current holdings without wading through the full historical
+  // unmapped set (which grows into the hundreds over time).
+  const [held, setHeld] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
+  // Search + held-only filter. Search matches CONTAINS not just startsWith
+  // so partial tickers work ('sn' finds SNDK). heldOnly hides everything
+  // not in an OPEN campaign — the "give me only what matters right now"
+  // shortcut for the ACS "N unmapped — Fix" click-through.
+  const [search, setSearch] = useState("");
+  const [heldOnly, setHeldOnly] = useState(false);
   const { sectors: sectorSuggestions, themes: themeSuggestions } = useAutocomplete(mapped);
 
   const refresh = useCallback(async (opts?: { manual?: boolean }) => {
@@ -53,6 +64,7 @@ export function SectorMapping({ navColor }: Props) {
       const res = await api.taxonomyList();
       setMapped(res.mapped ?? []);
       setUnmapped(res.unmapped ?? []);
+      setHeld(res.held ?? {});
     } catch (e) {
       log.error("sector-mapping", "load failed", e);
       setLoadError(String(e));
@@ -129,6 +141,43 @@ export function SectorMapping({ navColor }: Props) {
     return m;
   }, [mapped]);
 
+  // Filtered/sorted views. Search is CONTAINS + case-insensitive so partial
+  // matches work ('sn' → SNDK, VIAV → 'via' matches too). Held-first sort
+  // keeps current holdings at the top of the Unmapped chip row so the
+  // ACS "N unmapped — Fix" click-through lands on the tickers that matter.
+  const searchLower = search.trim().toLowerCase();
+  const heldSet = useMemo(() => new Set(Object.keys(held)), [held]);
+  const unmappedHeldCount = useMemo(
+    () => unmapped.filter(t => heldSet.has(t)).length,
+    [unmapped, heldSet]
+  );
+
+  const visibleUnmapped = useMemo(() => {
+    let list = unmapped;
+    if (heldOnly) list = list.filter(t => heldSet.has(t));
+    if (searchLower) list = list.filter(t => t.toLowerCase().includes(searchLower));
+    // Held tickers first (alphabetical within each group).
+    return list.slice().sort((a, b) => {
+      const aHeld = heldSet.has(a) ? 0 : 1;
+      const bHeld = heldSet.has(b) ? 0 : 1;
+      if (aHeld !== bHeld) return aHeld - bHeld;
+      return a.localeCompare(b);
+    });
+  }, [unmapped, heldSet, heldOnly, searchLower]);
+
+  const visibleMapped = useMemo(() => {
+    let list = mapped;
+    if (heldOnly) list = list.filter(r => heldSet.has(r.ticker));
+    if (searchLower) {
+      list = list.filter(r =>
+        r.ticker.toLowerCase().includes(searchLower)
+        || (r.sector || "").toLowerCase().includes(searchLower)
+        || (r.theme || "").toLowerCase().includes(searchLower)
+      );
+    }
+    return list;
+  }, [mapped, heldSet, heldOnly, searchLower]);
+
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
       {/* Page header */}
@@ -175,7 +224,7 @@ export function SectorMapping({ navColor }: Props) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-[14px]">
+          <div className="grid grid-cols-4 gap-[14px]">
             <KPITile
               label="Tickers Classified"
               value={String(mapped.length)}
@@ -189,22 +238,65 @@ export function SectorMapping({ navColor }: Props) {
               gradient={TILE_GRADIENTS.blue}
             />
             <KPITile
-              label="Unmapped"
-              value={String(unmapped.length)}
-              sub={unmapped.length === 0 ? "everything classified" : "need attention"}
-              gradient={unmapped.length > 0 ? TILE_GRADIENTS.red : TILE_GRADIENTS.green}
+              label="Unmapped · Held now"
+              value={String(unmappedHeldCount)}
+              sub={unmappedHeldCount === 0 ? "no open holdings need mapping" : "current open positions unclassified"}
+              gradient={unmappedHeldCount > 0 ? TILE_GRADIENTS.red : TILE_GRADIENTS.green}
             />
+            <KPITile
+              label="Unmapped · Total"
+              value={String(unmapped.length)}
+              sub={unmapped.length === 0 ? "everything classified" : "includes closed campaigns"}
+              gradient={unmapped.length > 0 ? TILE_GRADIENTS.orange : TILE_GRADIENTS.green}
+            />
+          </div>
+
+          {/* Search + filter toolbar. Both filters compose (search inside
+              held-only, etc.). Held-only toggle defaults off so users
+              landing on the page still see the full set. */}
+          <div className="mt-6 flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[240px]">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search ticker, sector, or theme…"
+                className="w-full px-3 py-2 rounded-[10px] text-[13px]"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                         color: "var(--ink-1)", fontFamily: "var(--font-jetbrains), monospace" }}
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[12px] px-1.5 py-0.5 rounded"
+                  style={{ color: "var(--ink-4)" }}
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            <label className="flex items-center gap-2 text-[13px] cursor-pointer select-none px-3 py-2 rounded-[10px]"
+                   style={{ background: heldOnly ? navColor : "var(--surface)",
+                            border: "1px solid var(--border)",
+                            color: heldOnly ? "white" : "var(--ink-2)" }}>
+              <input type="checkbox" checked={heldOnly} onChange={(e) => setHeldOnly(e.target.checked)}
+                     className="sr-only" />
+              <span>{heldOnly ? "●" : "○"}</span>
+              <span>Held now only</span>
+            </label>
           </div>
 
           {/* ─── Unmapped section ─── */}
           <section className="mt-6">
             <div className="flex items-center gap-2 mb-3">
               <div className="text-[13px] font-semibold" style={{ color: unmapped.length > 0 ? "#e5484d" : "var(--ink-3)" }}>
-                {unmapped.length > 0 ? "⚠" : "✓"} Unmapped ({unmapped.length})
+                {unmapped.length > 0 ? "⚠" : "✓"} Unmapped ({visibleUnmapped.length}
+                {visibleUnmapped.length !== unmapped.length && ` of ${unmapped.length}`})
               </div>
-              {unmapped.length > 0 && (
+              {unmapped.length > 0 && visibleUnmapped.length > 0 && (
                 <span className="text-[12px]" style={{ color: "var(--ink-4)" }}>
-                  Every ticker you&apos;ve traded that isn&apos;t yet classified · click to open the editor
+                  Held-now tickers first · click to open the editor
                 </span>
               )}
             </div>
@@ -213,21 +305,39 @@ export function SectorMapping({ navColor }: Props) {
                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
                 Every ticker in your book is classified. Nice.
               </div>
+            ) : visibleUnmapped.length === 0 ? (
+              <div className="text-[13px] p-4 rounded-[14px] text-center"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+                No matches. {heldOnly ? "No open holdings need mapping — try turning off Held-now only." : "Clear the search to see the full list."}
+              </div>
             ) : (
               <div className="rounded-[14px] p-[18px] flex flex-wrap gap-2"
                    style={{ background: "var(--surface)", border: "1px solid var(--border)",
                             boxShadow: "var(--card-shadow)" }}>
-                {unmapped.map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => openEditor(t)}
-                    className="px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors hover:brightness-95"
-                    style={{ background: "var(--surface-2)", border: "1px dashed #e5484d",
-                             color: "var(--ink-2)", fontFamily: "var(--font-jetbrains), monospace" }}
-                  >
-                    {t}
-                  </button>
-                ))}
+                {visibleUnmapped.map((t) => {
+                  const ports = held[t];
+                  const isHeld = !!ports && ports.length > 0;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => openEditor(t)}
+                      title={isHeld ? `Currently held in: ${ports.join(", ")}` : undefined}
+                      className="px-3 py-1.5 rounded-[8px] text-[13px] font-medium transition-colors hover:brightness-95 flex items-center gap-1.5"
+                      style={{ background: isHeld ? "color-mix(in oklab, #e5484d 12%, var(--surface))" : "var(--surface-2)",
+                               border: isHeld ? "1px solid #e5484d" : "1px dashed #e5484d",
+                               color: "var(--ink-2)", fontFamily: "var(--font-jetbrains), monospace" }}
+                    >
+                      <span>{t}</span>
+                      {isHeld && (
+                        <span className="text-[9px] px-1 py-0.5 rounded font-bold uppercase tracking-wider"
+                              style={{ background: "#e5484d", color: "white",
+                                       fontFamily: "system-ui, sans-serif" }}>
+                          Held
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -236,13 +346,19 @@ export function SectorMapping({ navColor }: Props) {
           <section className="mt-6">
             <div className="flex items-center gap-2 mb-3">
               <div className="text-[13px] font-semibold" style={{ color: "var(--ink-2)" }}>
-                ✓ Mapped ({mapped.length})
+                ✓ Mapped ({visibleMapped.length}
+                {visibleMapped.length !== mapped.length && ` of ${mapped.length}`})
               </div>
             </div>
             {mapped.length === 0 ? (
               <div className="text-[13px] p-4 rounded-[14px] text-center"
                    style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
                 No mappings yet. Click an unmapped ticker above to start.
+              </div>
+            ) : visibleMapped.length === 0 ? (
+              <div className="text-[13px] p-4 rounded-[14px] text-center"
+                   style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-4)" }}>
+                No mappings match. {heldOnly ? "No open holdings match this search." : "Clear the search to see everything."}
               </div>
             ) : (
               <div className="rounded-[14px] overflow-hidden"
@@ -260,11 +376,24 @@ export function SectorMapping({ navColor }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {mapped.map((r) => (
+                    {visibleMapped.map((r) => {
+                      const ports = held[r.ticker];
+                      const isHeld = !!ports && ports.length > 0;
+                      return (
                       <tr key={r.ticker} style={{ borderTop: "1px solid var(--border)" }}>
                         <td className="px-3 py-2.5 font-semibold"
                             style={{ color: "var(--ink-1)", fontFamily: "var(--font-jetbrains), monospace" }}>
-                          {r.ticker}
+                          <span className="inline-flex items-center gap-1.5">
+                            {r.ticker}
+                            {isHeld && (
+                              <span title={`Held in: ${ports.join(", ")}`}
+                                    className="text-[9px] px-1 py-0.5 rounded font-bold uppercase tracking-wider"
+                                    style={{ background: navColor, color: "white",
+                                             fontFamily: "system-ui, sans-serif" }}>
+                                Held
+                              </span>
+                            )}
+                          </span>
                         </td>
                         <td className="px-3 py-2.5" style={{ color: "var(--ink-2)" }}>{r.sector}</td>
                         <td className="px-3 py-2.5" style={{ color: "var(--ink-2)" }}>{r.theme || "—"}</td>
@@ -291,7 +420,8 @@ export function SectorMapping({ navColor }: Props) {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

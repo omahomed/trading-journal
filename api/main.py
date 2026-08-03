@@ -9057,7 +9057,13 @@ def taxonomy_list(request: Request):
     Response:
       {
         "mapped":   [{ticker, sector, theme, notes, created_at, updated_at}],
-        "unmapped": [ticker, ...]   -- alphabetized
+        "unmapped": [ticker, ...],   -- alphabetized
+        "held":     {ticker: [portfolio_name, ...]}   -- tickers currently
+                    held in an OPEN campaign, grouped by portfolio. Same
+                    tickers ACS's "N unmapped — Fix" badge counts (open
+                    positions). Frontend uses this to sort held tickers to
+                    the top of the Unmapped list + render a "Held" badge
+                    so the user can focus on current holdings first.
       }
     """
     try:
@@ -9065,10 +9071,11 @@ def taxonomy_list(request: Request):
         traded = set(db.list_all_traded_tickers())
         seen = {row["ticker"] for row in mapped}
         unmapped = sorted(traded - seen)
-        return {"mapped": mapped, "unmapped": unmapped}
+        held = db.list_open_tickers_by_portfolio()
+        return {"mapped": mapped, "unmapped": unmapped, "held": held}
     except Exception as e:
         print(f"[taxonomy_list] handler failed: {e}")
-        return {"error": str(e), "mapped": [], "unmapped": []}
+        return {"error": str(e), "mapped": [], "unmapped": [], "held": {}}
 
 
 @app.put("/api/taxonomy/{ticker}")

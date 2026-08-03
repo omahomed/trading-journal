@@ -7709,3 +7709,40 @@ def list_all_traded_tickers() -> list[str]:
                 """
             )
             return [r[0] for r in cur.fetchall() if r[0]]
+
+
+def list_open_tickers_by_portfolio() -> dict[str, list[str]]:
+    """Every distinct equity ticker in an OPEN campaign, grouped by ticker
+    with the list of portfolios currently holding it.
+
+    Example return: {"MU": ["CanSlim", "Long-Term Growth"], "SNDK": ["Long-Term Growth"]}
+
+    Powers the Sector Mapping page's "these unmapped tickers are current
+    holdings" surfacing — matches what ACS's `unclassifiedCount` badge
+    counts, so the user has a direct path from "ACS says 3 unmapped" to
+    "here are those 3, held in these portfolios, do these first."
+
+    Options excluded via the same space-in-ticker filter as
+    list_all_traded_tickers (canonical option-symbol shape has spaces;
+    equities never do).
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT UPPER(s.ticker) AS ticker, p.name AS portfolio
+                  FROM trades_summary s
+                  JOIN portfolios p ON p.id = s.portfolio_id
+                 WHERE s.deleted_at IS NULL
+                   AND s.status = 'OPEN'
+                   AND s.ticker IS NOT NULL
+                   AND POSITION(' ' IN s.ticker) = 0
+                 ORDER BY 1, 2
+                """
+            )
+            out: dict[str, list[str]] = {}
+            for ticker, portfolio in cur.fetchall():
+                if not ticker:
+                    continue
+                out.setdefault(ticker, []).append(portfolio)
+            return out

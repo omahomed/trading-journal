@@ -1821,6 +1821,12 @@ export interface TickerTaxonomy {
 export interface TaxonomyListResponse {
   mapped: TickerTaxonomy[];
   unmapped: string[];
+  /** Tickers currently in an OPEN campaign, keyed by ticker → portfolio
+   *  names holding it. Same set ACS's "N unmapped — Fix" badge counts.
+   *  Sector Mapping page uses this to sort held tickers to the top of
+   *  the Unmapped chip row + render a "Held" pill. Optional for backward
+   *  compat with a pre-deploy backend. */
+  held?: Record<string, string[]>;
   error?: string;
 }
 
