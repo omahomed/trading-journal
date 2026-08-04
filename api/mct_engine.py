@@ -942,9 +942,21 @@ class MCTEngine:
                 and (up_day or pink_rally_day)):
             state["step0_done"] = True
             state["rally_active"] = True
-            state["rally_day_idx"] = state["running_min_idx"]
+            # O'Neil convention (2026-08-04): Day 1 = the STEP_0 bar itself
+            # (the first up-close off the low), NOT the low bar. Historically
+            # this used running_min_idx (the low bar), which produced an
+            # off-by-N rally_count when STEP_0 fired several sessions after
+            # the correction bottom — the FTD gate (rally_count ≥ 4) would
+            # then fire on the user's "Day 3." Anchoring on the STEP_0 bar
+            # here makes rally_count == the user-facing "Day N" the UI
+            # already displays. rally_day_low STAYS the correction low
+            # (running_min_low) — invalidation semantics are anchored on
+            # the low, not the STEP_0 bar. If STEP_0 fires on the same bar
+            # as the low (upside-reversal case), running_min_idx == i and
+            # this is a no-op.
+            state["rally_day_idx"] = i
             state["rally_day_low"] = state["running_min_low"]
-            state["rally_count"] = i - state["rally_day_idx"] + 1
+            state["rally_count"] = 1  # Day 1 by O'Neil count
             # cycle_start_idx anchors the user-facing "Day N" display to the
             # bar where STEP_0 fired. Survives V10 soft resets so the day
             # counter doesn't reset mid-cycle. ONLY re-anchored when a real

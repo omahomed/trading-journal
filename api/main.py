@@ -9260,6 +9260,124 @@ def concentration(request: Request, portfolio: str = ""):
 
 
 # ============================================================
+# M FACTOR — Actual Exposure endpoint (2026-08-04 hero-tile 5)
+# ============================================================
+# Powers the "Actual Exposure" hero tile on the M Factor page. Aggregates
+# open-position market value across every portfolio the caller owns (M
+# Factor is a market-state view, not portfolio-scoped, so global aggregate
+# is the correct read). Returns actual %, suggested % (mirroring the
+# rally-prefix number so the tile can render actual vs suggested in one
+# place), and the delta.
+
+
+def _fetch_current_price(ticker: str) -> float:
+    """Last close from yfinance for one ticker. Options excluded upstream
+    (yfinance can't serve OCC symbols); a fetch failure returns 0.0 and
+    the caller falls back to cost basis."""
+    import yfinance as yf
+    try:
+        df = yf.Ticker(ticker).history(period="5d")
+        if df.empty:
+            return 0.0
+        return float(df["Close"].iloc[-1])
+    except Exception:
+        return 0.0
+
+
+@app.get("/api/mfactor/actual-exposure")
+def mfactor_actual_exposure(request: Request):
+    """Sum of open-position market values across all caller portfolios,
+    divided by aggregate NLV. Returns:
+      {
+        "actual_pct": float,          # 0-N%, N can exceed 100 with margin
+        "suggested_pct": float,       # from current MCT state
+        "delta_pct": float,           # actual − suggested (+ = overexposed)
+        "market_value": float,        # aggregate MV
+        "nlv": float,                 # aggregate NLV
+        "portfolios": [{name, market_value, nlv, actual_pct}]
+      }
+    """
+    try:
+        # Suggested comes from the same MCT engine the rally-prefix uses.
+        # Sane fallback (0) when the engine hasn't produced state yet.
+        suggested = 0.0
+        try:
+            from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
+            result = run_engine("^IXIC")
+            payload = to_rally_prefix_response(result)
+            suggested = float(payload.get("entry_exposure") or 0)
+        except Exception as e:
+            print(f"[mfactor_actual_exposure] suggested lookup failed: {e}")
+
+        per_portfolio: list[dict] = []
+        total_mv = 0.0
+        total_nlv = 0.0
+
+        for p in db.list_portfolios():
+            name = p["name"]
+            # NLV — latest end_nlv-bearing row (same filter as journal_latest).
+            j = db.load_journal(name)
+            nlv = 0.0
+            if not j.empty:
+                j = _normalize_journal(j)
+                j["day"] = pd.to_datetime(j["day"], errors="coerce")
+                nlv_num = pd.to_numeric(j.get("end_nlv"), errors="coerce")
+                j = j[nlv_num.notna() & (nlv_num > 0)]
+                if not j.empty:
+                    j = j.sort_values("day", ascending=False)
+                    nlv = float(j.iloc[0].get("end_nlv", 0) or 0)
+
+            # Sum current market value of open positions.
+            summary_df = db.load_summary(name)
+            mv = 0.0
+            if not summary_df.empty:
+                summary_df = _normalize_trades(summary_df)
+                status_col = "status" if "status" in summary_df.columns else "Status"
+                open_df = summary_df[summary_df[status_col].astype(str).str.upper() == "OPEN"]
+                for _, row in open_df.iterrows():
+                    ticker = str(row.get("ticker", "")).strip()
+                    shares = float(row.get("shares", 0) or 0)
+                    total_cost = float(row.get("total_cost", 0) or 0)
+                    multiplier = float(row.get("multiplier", 1) or 1) or 1.0
+                    if not ticker or shares <= 0:
+                        continue
+                    # yfinance can't serve OCC option tickers; use cost basis
+                    # for options + as fallback for any equity fetch failure.
+                    if is_option_ticker(ticker):
+                        mv += total_cost
+                        continue
+                    px = _fetch_current_price(ticker)
+                    if px > 0:
+                        mv += shares * px * multiplier
+                    else:
+                        mv += total_cost  # fallback
+
+            per_portfolio.append({
+                "name": name,
+                "market_value": round(mv, 2),
+                "nlv": round(nlv, 2),
+                "actual_pct": round(mv / nlv * 100, 2) if nlv > 0 else 0.0,
+            })
+            total_mv += mv
+            total_nlv += nlv
+
+        actual_pct = round(total_mv / total_nlv * 100, 2) if total_nlv > 0 else 0.0
+        return {
+            "actual_pct": actual_pct,
+            "suggested_pct": suggested,
+            "delta_pct": round(actual_pct - suggested, 2),
+            "market_value": round(total_mv, 2),
+            "nlv": round(total_nlv, 2),
+            "portfolios": per_portfolio,
+        }
+    except Exception as e:
+        print(f"[mfactor_actual_exposure] handler failed: {e}")
+        return {"error": str(e), "actual_pct": 0.0, "suggested_pct": 0.0,
+                "delta_pct": 0.0, "market_value": 0.0, "nlv": 0.0,
+                "portfolios": []}
+
+
+# ============================================================
 # RECURRING CASH EVENTS (Migration 059)
 # ============================================================
 # Configurable recurring deposits (initial use case: 457B bi-weekly).

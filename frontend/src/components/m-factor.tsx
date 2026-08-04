@@ -54,6 +54,12 @@ function LockIcon({ size = 11 }: { size?: number }) {
 export function MFactor({ navColor }: { navColor: string }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Actual-exposure hero tile (2026-08-04). Loaded lazily so a slow
+  // yfinance sweep for the aggregate MV doesn't block the top of the
+  // page from rendering.
+  const [exposure, setExposure] = useState<{
+    actual_pct: number; suggested_pct: number; delta_pct: number;
+  } | null>(null);
   // Override modal state — controls the Force Correction dialog. Kept
   // local (single-use surface); no shared state store needed.
   const [overrideModalOpen, setOverrideModalOpen] = useState(false);
@@ -71,6 +77,19 @@ export function MFactor({ navColor }: { navColor: string }) {
   };
 
   useEffect(() => { loadData(); }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.mfactorActualExposure().then(r => {
+      if (cancelled || "error" in r) return;
+      setExposure({
+        actual_pct: r.actual_pct,
+        suggested_pct: r.suggested_pct,
+        delta_pct: r.delta_pct,
+      });
+    }).catch(err => log.debug.devOnly("m-factor", "actual-exposure fetch failed", err));
+    return () => { cancelled = true; };
+  }, []);
 
   const submitOverride = useCallback(async () => {
     const trimmed = overrideReason.trim();
@@ -374,24 +393,46 @@ export function MFactor({ navColor }: { navColor: string }) {
               </div>
             </div>
 
-            {/* Tile 5 — Reference High / Drawdown */}
+            {/* Tile 5 — Actual Exposure (2026-08-04 replaced Ref High / Drawdown
+                since row 2 already surfaces Ref High). Aggregate across all
+                portfolios, compared against the MCT engine's suggested
+                exposure so the operator can see "am I above / below what the
+                ladder recommends." Color banding tracks the delta:
+                  |delta| ≤ 10 → green (aligned)
+                  |delta| ≤ 25 → orange (drifting)
+                  |delta| > 25 → red (well off) */}
             <div className={tileBase}
-                 style={{ background: drawdownGradient(drawdown), ...tileShadow }}
-                 data-testid="mfactor-tile-drawdown">
+                 style={(() => {
+                   const delta = exposure ? Math.abs(exposure.delta_pct) : 0;
+                   const g = !exposure ? "linear-gradient(135deg, #6b7280, #9ca3af)"
+                           : delta <= 10 ? "linear-gradient(135deg, #10b981, #34d399)"
+                           : delta <= 25 ? "linear-gradient(135deg, #f97316, #fb923c)"
+                           : "linear-gradient(135deg, #e5484d, #f87171)";
+                   return { background: g, ...tileShadow };
+                 })()}
+                 data-testid="mfactor-tile-actual-exposure">
               {highlightOverlay}
               <div className="relative z-10">
-                <div className={labelCls}>Ref High · Drawdown</div>
-                <div className="text-[22px] font-semibold tracking-tight mt-1 privacy-mask"
+                <div className={labelCls}>Actual Exposure</div>
+                <div className="text-[28px] font-semibold tracking-tight mt-1 privacy-mask"
                      style={{ fontFamily: mono }}>
-                  {refHigh > 0 ? formatCurrency(refHigh, { decimals: 0 }) : "—"}
+                  {exposure ? `${exposure.actual_pct.toFixed(0)}%` : "…"}
                 </div>
-                <div className="text-[16px] font-semibold mt-0.5 privacy-mask"
-                     style={{ fontFamily: mono }}>
-                  {drawdown ? `${drawdown >= 0 ? "+" : ""}${drawdown.toFixed(2)}%` : "flat"}
-                </div>
+                {exposure && (
+                  <div className="text-[11px] mt-0.5 opacity-90 privacy-mask"
+                       style={{ fontFamily: mono }}>
+                    vs {exposure.suggested_pct}% suggested
+                    <span className="ml-1.5 opacity-80">
+                      ({exposure.delta_pct >= 0 ? "+" : ""}{exposure.delta_pct.toFixed(0)}%)
+                    </span>
+                  </div>
+                )}
               </div>
               <div className={subCls}>
-                {data.reference_high_date ? `peak ${data.reference_high_date}` : ""}
+                {!exposure ? "loading…"
+                  : Math.abs(exposure.delta_pct) <= 10 ? "aligned with ladder"
+                  : exposure.delta_pct > 0 ? "over recommended"
+                  : "under recommended"}
               </div>
             </div>
           </div>

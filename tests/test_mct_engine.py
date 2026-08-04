@@ -1158,6 +1158,63 @@ def test_force_correction_pending_when_date_after_history_end():
 
 
 # ---------------------------------------------------------------------------
+# O'Neil rally-count anchor (2026-08-04)
+# ---------------------------------------------------------------------------
+# rally_day_idx anchors on the STEP_0 bar (first up-close off the low), NOT
+# on the correction low. rally_day_low still tracks the low (used for
+# RALLY_INVALIDATED). When STEP_0 fires on the low bar itself (upside-reversal
+# case), rally_day_idx == running_min_idx and this is a no-op.
+
+def test_rally_count_starts_at_one_on_step0_bar_oneill_convention():
+    """STEP_0 fires with rally_count=1 regardless of how many bars back
+    the correction low is. Prevents the "FTD on Day 3" off-by-one that
+    the running-min anchor produced before 2026-08-04."""
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=0,
+                                     correction_ever_declared=True))
+    state = engine._init_state()
+    # Simulate 2 bars of "in correction, running_min tracking" preceding STEP_0.
+    # running_min set on bar 0, STEP_0 fires on bar 2 (two bars later).
+    state["in_correction"] = True
+    state["correction_active"] = True
+    state["running_min_low"] = 100.0
+    state["running_min_idx"] = 0        # low bar is bar 0
+    state["exposure"] = 0
+    # Give the engine a prev with a strictly-higher close so bar 2 is an up_day.
+    prev = pd.Series({
+        "trade_date": pd.Timestamp("2026-08-03"),
+        "close": 99.5, "low": 99.0, "high": 100.5, "open": 100.0,
+        "ema_21": 105.0, "ema_8": 104.0, "sma_50": 108.0, "sma_200": 110.0,
+        "volume": 1_000_000,
+    })
+    current = pd.Series({
+        "trade_date": pd.Timestamp("2026-08-04"),   # bar 2 — STEP_0 bar
+        "close": 101.5, "low": 100.5, "high": 102.0, "open": 100.0,
+        "ema_21": 105.0, "ema_8": 104.0, "sma_50": 108.0, "sma_200": 110.0,
+        "volume": 1_500_000,
+    })
+    bar_signals: list = []
+    engine._phase_rally_hunt(i=2, current=current, prev=prev,
+                              history=pd.DataFrame([prev, prev, current]),
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    step0 = next(s for s in bar_signals if s.signal_type == "STEP_0_RALLY_DAY")
+    # Under O'Neil (Day 1 = STEP_0 bar), rally_count is 1 here even though
+    # the running-min low is 2 bars back. Under the old low-anchor rule
+    # this would have been 3, and the FTD gate would fire one day too
+    # early.
+    assert state["rally_count"] == 1
+    assert step0.meta["rally_count"] == 1
+    # rally_day_idx anchors on STEP_0 bar (i=2), not the low bar (idx=0).
+    assert state["rally_day_idx"] == 2
+    # rally_day_low STAYS the correction low (invalidation anchor).
+    assert state["rally_day_low"] == 100.0
+
+
+# ---------------------------------------------------------------------------
 # FTD gate — Webby model (2026-08-04 rule replacement)
 # ---------------------------------------------------------------------------
 # The gate on/after FTD_DUAL_INDEX_START (2026-07-31) is PRICE-ONLY on

@@ -1803,6 +1803,22 @@ export const api = {
       `/api/concentration${portfolio ? `?portfolio=${encodeURIComponent(portfolio)}` : ""}`,
     ),
 
+  // ─── M Factor Actual Exposure (2026-08-04 hero tile 5) ───
+  // Aggregate open-position market value across every portfolio ÷ NLV.
+  // Powers the "Actual Exposure" tile: shows actual vs suggested +
+  // delta so the operator can see if they're above or below what the
+  // MCT engine's ladder recommends.
+  mfactorActualExposure: () =>
+    fetchJSON<{
+      actual_pct: number;
+      suggested_pct: number;
+      delta_pct: number;
+      market_value: number;
+      nlv: number;
+      portfolios: Array<{ name: string; market_value: number; nlv: number; actual_pct: number }>;
+      error?: string;
+    }>("/api/mfactor/actual-exposure"),
+
   // ─── Recurring cash events (migration 059) ───
   // Configurable recurring deposits (initial use case: 457B bi-weekly).
   // NLV Entry renders a reminder card when is_due=true; Post/Skip advances

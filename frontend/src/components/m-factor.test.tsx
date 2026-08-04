@@ -5,6 +5,13 @@ vi.mock("@/lib/api", () => ({
   api: {
     rallyPrefix: vi.fn(),
     marketSignals: vi.fn(),
+    // 2026-08-04 hero tile 5 (Actual Exposure). Default mock returns
+    // aligned exposure so the tile renders green; individual tests can
+    // override to exercise misalignment banding.
+    mfactorActualExposure: vi.fn().mockResolvedValue({
+      actual_pct: 80, suggested_pct: 80, delta_pct: 0,
+      market_value: 800000, nlv: 1000000, portfolios: [],
+    }),
   },
 }));
 
