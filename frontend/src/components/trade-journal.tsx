@@ -551,22 +551,42 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     amount: string;
     stop_loss: string;
     rule: string;
+    // Migration 047: confluence tags (buy-side only, excluding the primary).
+    // Backend persists `rules[]` (primary first) on trades_details; without
+    // this field, saveEdit only sent `rule` and the backend rebuilt
+    // `rules = [rule]` → confluence silently wiped on every edit.
+    rules: string[];
     notes: string;
-  }>({ date: "", shares: "", amount: "", stop_loss: "", rule: "", notes: "" });
+  }>({ date: "", shares: "", amount: "", stop_loss: "", rule: "", rules: [], notes: "" });
   const [editError, setEditError] = useState<string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // Confluence chip picker state (mirrors Log Buy's typeahead pattern).
+  // Reset on modal open/close so a previous edit's query doesn't leak in.
+  const [editConfQuery, setEditConfQuery] = useState("");
+  const [editConfDropdownOpen, setEditConfDropdownOpen] = useState(false);
 
   const openEditModal = useCallback((tx: TradeDetail) => {
     setEditingTxn(tx);
+    // Migration 047: hydrate the confluence array. Backend stores rules[]
+    // primary-first. Prefer the array when present; fall back to the scalar
+    // for legacy rows written before 047 (single-element array of `rule`).
+    const txRules = Array.isArray((tx as any).rules) ? ((tx as any).rules as string[]) : [];
+    const primary = tx.rule || txRules[0] || "";
+    const confluence = txRules.length > 1
+      ? txRules.slice(1).filter(r => r && r !== primary)
+      : [];
     setEditForm({
       date: String(tx.date || "").slice(0, 16),
       shares: String(tx.shares ?? ""),
       amount: String(tx.amount ?? ""),
       stop_loss: String((tx as any).stop_loss ?? ""),
-      rule: tx.rule || "",
+      rule: primary,
+      rules: confluence,
       notes: String((tx as any).notes ?? ""),
     });
+    setEditConfQuery("");
+    setEditConfDropdownOpen(false);
     setEditError(null);
     setConfirmingDelete(false);
     setEditLoading(false);
@@ -652,6 +672,10 @@ export function TradeJournal({ navColor }: { navColor: string }) {
     try {
       const shares = parseFloat(editForm.shares || "0") || 0;
       const amount = parseFloat(editForm.amount || "0") || 0;
+      // Migration 047: send `rules` (primary first, then confluence). Backend
+      // derives `rule = rules[0]`; sending both stays defensive against a
+      // future signature change. Empty primary → send [] (backend clears).
+      const rulesToSend = [editForm.rule, ...editForm.rules].filter(Boolean);
       const res = await api.editTransaction({
         detail_id: (editingTxn as any).detail_id as number,
         trade_id: editingTxn.trade_id,
@@ -665,6 +689,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
         // request shape. The field is required by the API client type.
         value: shares * amount,
         rule: editForm.rule,
+        rules: rulesToSend,
         notes: editForm.notes,
         stop_loss: parseFloat(editForm.stop_loss || "0") || 0,
         trx_id: String((editingTxn as any).trx_id || ""),
@@ -2154,6 +2179,81 @@ export function TradeJournal({ navColor }: { navColor: string }) {
                   </select>
                 </div>
               </div>
+              {/* Migration 047 — confluence chip picker for BUY rows.
+                  Mirrors Log Buy's typeahead pattern (log-buy.tsx:1212-1277).
+                  SELL rows skip this — sells carry a single-element rules[]
+                  and the confluence concept is buy-side only. */}
+              {String(editingTxn.action).toUpperCase() === "BUY" && (
+                <div>
+                  <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Confluence Rules (optional)</label>
+                  <div className="flex items-center gap-1.5 flex-wrap min-h-[38px] p-1 rounded-[8px]"
+                       style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    {editForm.rules.map(r => (
+                      <span key={r}
+                            className="inline-flex items-center gap-1 h-[26px] px-2 rounded-[6px] text-[11px] font-semibold"
+                            style={{
+                              background: "color-mix(in oklab, #6366f1 12%, transparent)",
+                              color: "#6366f1",
+                              border: "1px solid color-mix(in oklab, #6366f1 30%, var(--border))",
+                            }}>
+                        +{r}
+                        <button type="button"
+                                onClick={() => setEditForm(f => ({ ...f, rules: f.rules.filter(x => x !== r) }))}
+                                disabled={editLoading}
+                                className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
+                                style={{ background: "none", border: "none", padding: 0, lineHeight: 1, color: "inherit", fontSize: 13 }}>×</button>
+                      </span>
+                    ))}
+                    <div className="relative flex-1 min-w-[160px]">
+                      <input type="text"
+                             value={editConfQuery}
+                             disabled={editLoading}
+                             placeholder={editForm.rules.length > 0 ? "Add another…" : "Type to add confluence rules…"}
+                             onChange={e => { setEditConfQuery(e.target.value); setEditConfDropdownOpen(true); }}
+                             onFocus={() => setEditConfDropdownOpen(true)}
+                             onBlur={() => setTimeout(() => setEditConfDropdownOpen(false), 150)}
+                             onKeyDown={e => {
+                               if (e.key === "Backspace" && !editConfQuery && editForm.rules.length > 0) {
+                                 setEditForm(f => ({ ...f, rules: f.rules.slice(0, -1) }));
+                               }
+                             }}
+                             className="w-full h-[30px] px-2 rounded-[6px] text-[12px] outline-none"
+                             style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                                      fontFamily: "var(--font-jetbrains), monospace" }} />
+                      {editConfDropdownOpen && (() => {
+                        const q = editConfQuery.trim().toLowerCase();
+                        const available = BUY_RULES
+                          .filter(r => r !== editForm.rule && !editForm.rules.includes(r))
+                          .filter(r => !q || r.toLowerCase().includes(q));
+                        return available.length > 0 ? (
+                          <div className="absolute z-50 mt-1 w-[260px] rounded-[8px] overflow-hidden shadow-lg"
+                               style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                            <div className="overflow-y-auto" style={{ maxHeight: 220 }}>
+                              {available.slice(0, 30).map(r => (
+                                <button key={r} type="button"
+                                        onMouseDown={e => {
+                                          e.preventDefault();
+                                          setEditForm(f => ({ ...f, rules: [...f.rules, r] }));
+                                          setEditConfQuery("");
+                                          setEditConfDropdownOpen(false);
+                                        }}
+                                        className="w-full text-left px-3 py-1.5 text-[12px] transition-colors cursor-pointer"
+                                        onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                                  +{r}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
+                  </div>
+                  <div className="text-[10px] mt-1" style={{ color: "var(--ink-4)" }}>
+                    Primary drives analytics; confluence is display-only context.
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="block text-[10px] uppercase tracking-[0.10em] font-semibold mb-1.5" style={{ color: "var(--ink-4)" }}>Notes</label>
                 <textarea value={editForm.notes}

@@ -1536,7 +1536,7 @@ export const api = {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status?: string; error?: string; deleted?: number; trade_ids?: string[] }>,
 
-  editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
+  editTransaction: (body: { detail_id: number; trade_id: string; ticker: string; action: string; date: string; shares: number; amount: number; value: number; rule: string; rules?: string[]; notes: string; stop_loss: number; trx_id: string; portfolio?: string }) =>
     fetchWithAuth(`${API_BASE}/api/trades/edit-transaction`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ portfolio: getActivePortfolio(), ...body }),
