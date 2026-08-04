@@ -60,49 +60,61 @@ def _default_config(
     )
 
 
-def _precompute_spy_ftd_confirmations(as_of: date) -> dict[date, bool]:
-    """Precompute SPY's per-bar FTD-confirmation status from cutover forward.
+def _precompute_spy_ftd_confirmations(as_of: date) -> dict[date, dict]:
+    """Precompute SPY's per-bar price + volume signals from cutover forward.
 
-    Runs the same close-pct-gain + volume-up-vs-prev check the engine uses
-    on IXIC, against SPY history. Returns a dict keyed by trade_date:
-        True   → SPY closed ≥ FTD_PCT_THRESHOLD AND vol > prev-day vol
-        False  → SPY bar exists but didn't confirm (price or vol leg failed)
-        MISSING key → SPY data not in market_data for that date; the engine
-                     treats this as "refuse to fire" (waits for nightly SPY
-                     ingest to land rather than falling back to IXIC-only).
+    Under the Webby model (2026-08-04 rule replacement), FTD is a PRICE-ONLY
+    gate — volume is tracked as annotation but never gates the fire. This
+    function computes both signals per bar so the engine can use price_hit
+    for the gate and expose vol_up in the signal meta for downstream
+    annotation.
 
-    Returns empty {} when SPY has no rows at all in market_data — typical
-    on first deploy before the updater has run. Engine short-circuits on
-    the empty dict → no post-cutover FTDs fire until SPY lands, which is
-    the intended safe-default per the "refuse to fire" design choice.
+    Returns a dict keyed by trade_date:
+        {date: {"price_hit": bool, "vol_up": bool | None}}
+            price_hit — SPY close pct_gain ≥ FTD_PCT_THRESHOLD (drives the gate)
+            vol_up    — SPY current volume > prev-day volume (annotation only)
+                        None on the first bar (no prev) or when volume is missing
+        MISSING key → SPY data not in market_data for that date; engine falls
+                     back to IXIC-only (Webby-strict is index-agnostic; a
+                     missing SPY row shouldn't block an otherwise valid IXIC
+                     signal).
+
+    Returns empty {} when SPY has no rows at all in market_data — typical on
+    first deploy before the nightly updater has run. Engine's post-cutover
+    path treats missing SPY as "not present," proceeding on IXIC-only.
     """
     spy = get_history("SPY", FTD_DUAL_INDEX_START, as_of)
     if spy.empty:
         return {}
     spy = spy.sort_values("trade_date").reset_index(drop=True)
-    out: dict[date, bool] = {}
+    out: dict[date, dict] = {}
     for i in range(len(spy)):
         curr = spy.iloc[i]
         bar_date = pd.Timestamp(curr["trade_date"]).date()
-        # First bar in the window has no prev to compare against — record it
-        # as False (bar exists, didn't confirm) so the engine sees SPY data
-        # is present but the volume-up leg is unknowable. This bar can never
-        # be a valid FTD by SPY-side confirmation anyway; IXIC-side may still
-        # fire independently.
+        # First bar in the window has no prev to compute pct_gain from —
+        # emit price_hit=False, vol_up=None so the engine sees "SPY present
+        # but didn't hit" (never a valid SPY-side FTD) while IXIC can still
+        # fire independently on this bar.
         if i == 0:
-            out[bar_date] = False
+            out[bar_date] = {"price_hit": False, "vol_up": None}
             continue
         prev = spy.iloc[i - 1]
         prev_close = float(prev["close"])
         if prev_close <= 0:
-            out[bar_date] = False
+            out[bar_date] = {"price_hit": False, "vol_up": None}
             continue
         pct_gain = (float(curr["close"]) - prev_close) / prev_close
         prev_vol = prev.get("volume")
         curr_vol = curr.get("volume")
-        vol_up = (pd.notna(prev_vol) and pd.notna(curr_vol)
-                  and int(curr_vol) > int(prev_vol))
-        out[bar_date] = bool(pct_gain >= FTD_PCT_THRESHOLD and vol_up)
+        vol_up_val: bool | None
+        if pd.notna(prev_vol) and pd.notna(curr_vol):
+            vol_up_val = int(curr_vol) > int(prev_vol)
+        else:
+            vol_up_val = None
+        out[bar_date] = {
+            "price_hit": bool(pct_gain >= FTD_PCT_THRESHOLD),
+            "vol_up":    vol_up_val,
+        }
     return out
 
 
@@ -347,33 +359,34 @@ def _latest_ftd_date(
     return None
 
 
-def _latest_ftd_confirmed_by(
+def _latest_ftd_meta(
     signals: list[SignalEvent],
     cycle_start: Optional[date] = None,
-) -> Optional[str]:
-    """Same walk semantics as _latest_ftd_date, but returns the meta
-    `confirmed_by` field of the CURRENT-cycle FTD.
-
-    Possible values (see mct_engine._phase_rally_hunt STEP_1 block):
-      "ixic"          — post-cutover, IXIC volume + price confirmed alone
-      "spy"           — post-cutover, SPY volume + price confirmed alone
-      "both"          — post-cutover, both indexes confirmed independently
-      "ixic_legacy"   — pre-cutover FTD (legacy IXIC-price-only rule)
-      None            — pre-cutover signal written before the confirmed_by
-                        field existed; frontend renders as "—".
-    Frontend M Factor page reads this to render the divergence badge
-    (informational only — exposure is the same 40 regardless of source).
-    """
+) -> dict:
+    """Same walk semantics as _latest_ftd_date, but returns the meta dict
+    of the CURRENT-cycle FTD (or {} if there isn't one). Used to surface
+    `confirmed_by` + Webby-model volume annotations on the rally-prefix
+    response for the M Factor page badges."""
     for sig in reversed(signals):
         if sig.signal_type == "CORRECTION_DECLARED":
-            return None
+            return {}
         if sig.signal_type != "STEP_1_FTD":
             continue
         sig_date = pd.Timestamp(sig.trade_date).date()
         if cycle_start is not None and sig_date < cycle_start:
             continue
-        return sig.meta.get("confirmed_by") if sig.meta else None
-    return None
+        return dict(sig.meta or {})
+    return {}
+
+
+def _latest_ftd_confirmed_by(
+    signals: list[SignalEvent],
+    cycle_start: Optional[date] = None,
+) -> Optional[str]:
+    """Convenience wrapper — returns just `confirmed_by`. Kept for
+    callers that only need that one field (rally-prefix ships the full
+    meta separately)."""
+    return _latest_ftd_meta(signals, cycle_start).get("confirmed_by")
 
 
 # Lookback windows for the volatility-regime metrics. 200 bars matches the
@@ -627,12 +640,17 @@ def to_rally_prefix_response(result: EngineResult) -> dict[str, Any]:
         "stack_50_200": sma_50 > sma_200,
         "entry_ladder": _entry_ladder(state, result.signals, cycle_start_date_obj),
         "ftd_date": _latest_ftd_date(result.signals, cycle_start_date_obj),
-        # confirmed_by — which index(es) confirmed the current cycle's FTD
-        # under the dual-index gate (FTD_DUAL_INDEX_START). One of:
-        # "ixic" | "spy" | "both" | "ixic_legacy" | None.
-        # Purely informational — engine exposure is the same 40 regardless.
-        "ftd_confirmed_by": _latest_ftd_confirmed_by(
-            result.signals, cycle_start_date_obj),
+        # Current cycle's FTD meta — surfaced so the M Factor page renders
+        # the price-confirmation + volume-annotation badges without needing
+        # a separate signal-log fetch. Empty {} when no FTD in this cycle.
+        **(lambda m: {
+            "ftd_confirmed_by":    m.get("confirmed_by"),
+            "ftd_ixic_price_hit":  m.get("ixic_price_hit"),
+            "ftd_spy_price_hit":   m.get("spy_price_hit"),
+            "ftd_ixic_vol_up":     m.get("ixic_vol_up"),
+            "ftd_spy_vol_up":      m.get("spy_vol_up"),
+            "ftd_spy_data_missing": m.get("spy_data_missing"),
+        })(_latest_ftd_meta(result.signals, cycle_start_date_obj)),
         "data_as_of": _isodate(last["trade_date"]),
         "power_trend_on_since": _power_trend_on_since(bars),
         # V11 surfaces consume cap_at_100 to render the "capped at 100%"

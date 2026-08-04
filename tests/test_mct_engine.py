@@ -1158,11 +1158,17 @@ def test_force_correction_pending_when_date_after_history_end():
 
 
 # ---------------------------------------------------------------------------
-# Dual-index FTD gate (FTD_DUAL_INDEX_START, SPY confirmation side-channel)
+# FTD gate — Webby model (2026-08-04 rule replacement)
 # ---------------------------------------------------------------------------
-# The dual-index gate takes effect on bars whose trade_date >= 2026-07-31.
-# Bars before that date use the legacy IXIC-price-only rule so historical
-# replays reproduce pre-cutover signals unchanged.
+# The gate on/after FTD_DUAL_INDEX_START (2026-07-31) is PRICE-ONLY on
+# either IXIC or SPY. Volume is tracked in the signal meta as an
+# informational annotation (ixic_vol_up / spy_vol_up) but never gates
+# the fire. Missing SPY data falls back to IXIC-only rather than refusing.
+# Pre-cutover bars keep the legacy IXIC-price-only rule so historical
+# replays reproduce prior signals unchanged.
+#
+# spy_confirmations dict shape (new, post-Webby):
+#   {date: {"price_hit": bool, "vol_up": bool | None}}
 #
 # Tests drive _phase_rally_hunt directly with a pre-seeded state, mirroring
 # the pattern used by test_step4_ever_fired_persists_*. Full-engine replay
@@ -1233,15 +1239,15 @@ def test_ftd_pre_cutover_fires_ixic_price_only_no_volume_required():
     assert ftd.meta.get("confirmed_by") == "ixic_legacy"
 
 
-def test_ftd_post_cutover_ixic_price_and_volume_fires():
-    """On/after cutover: IXIC price ≥1% AND vol > prev → fires,
-    confirmed_by='ixic' when SPY did NOT confirm that day."""
+def test_ftd_post_cutover_ixic_price_hits_fires_and_annotates_volume():
+    """Webby model: IXIC price ≥1% fires regardless of volume. Volume is
+    tracked in meta (ixic_vol_up) as annotation only."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={date(2026, 8, 3): False},   # SPY present, didn't confirm
+        spy_confirmations={date(2026, 8, 3): {"price_hit": False, "vol_up": True}},
     ))
     state = _seed_pre_ftd_state(engine)
     prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
@@ -1253,23 +1259,27 @@ def test_ftd_post_cutover_ixic_price_and_volume_fires():
                               start_flags={"step3_done": False, "step4_done": False})
     ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
     assert ftd.meta.get("confirmed_by") == "ixic"
-    assert ftd.meta.get("ixic_confirms") is True
-    assert ftd.meta.get("spy_confirms") is False
+    assert ftd.meta.get("ixic_price_hit") is True
+    assert ftd.meta.get("spy_price_hit") is False
+    # Volume annotations — display-only under Webby.
+    assert ftd.meta.get("ixic_vol_up") is True
+    assert ftd.meta.get("spy_vol_up") is True
 
 
-def test_ftd_post_cutover_spy_only_fires_when_ixic_volume_flat():
-    """4/8/2026-style: IXIC price up ≥1% but volume DOWN vs prev; SPY
-    confirms → FTD fires with confirmed_by='spy'."""
+def test_ftd_post_cutover_fires_even_when_ixic_volume_flat():
+    """Webby model: volume never gates. IXIC price ≥1% with volume DOWN
+    still fires (this is where the old vol-gate would have failed —
+    4/8/2026 canonical case if SPY hadn't confirmed)."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={date(2026, 8, 3): True},
+        spy_confirmations={date(2026, 8, 3): {"price_hit": False, "vol_up": False}},
     ))
     state = _seed_pre_ftd_state(engine)
     prev = _ftd_prev_bar(date(2026, 7, 31), volume=5_000_000)
-    # IXIC price up 1.5% BUT volume DOWN vs prev → IXIC gate fails
+    # IXIC price up 1.5% BUT volume DOWN vs prev (old vol-gate would fail).
     current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_000_000)
     bar_signals: list = []
     history = pd.DataFrame([prev, current]).reset_index(drop=True)
@@ -1277,18 +1287,42 @@ def test_ftd_post_cutover_spy_only_fires_when_ixic_volume_flat():
                               state=state, bar_signals=bar_signals,
                               start_flags={"step3_done": False, "step4_done": False})
     ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
-    assert ftd.meta.get("confirmed_by") == "spy"
-    assert ftd.meta.get("ixic_confirms") is False
-    assert ftd.meta.get("spy_confirms") is True
+    assert ftd.meta.get("confirmed_by") == "ixic"
+    # Meta captures the "weak volume" annotation for downstream display.
+    assert ftd.meta.get("ixic_vol_up") is False
 
 
-def test_ftd_post_cutover_both_confirm_marks_confirmed_by_both():
+def test_ftd_post_cutover_spy_only_fires_when_ixic_price_flat():
+    """SPY price hits, IXIC doesn't → confirmed_by='spy'."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={date(2026, 8, 3): True},
+        spy_confirmations={date(2026, 8, 3): {"price_hit": True, "vol_up": True}},
+    ))
+    state = _seed_pre_ftd_state(engine)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    # IXIC only +0.3% — under threshold.
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=100.3, volume=1_500_000)
+    bar_signals: list = []
+    history = pd.DataFrame([prev, current]).reset_index(drop=True)
+    engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
+                              state=state, bar_signals=bar_signals,
+                              start_flags={"step3_done": False, "step4_done": False})
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "spy"
+    assert ftd.meta.get("ixic_price_hit") is False
+    assert ftd.meta.get("spy_price_hit") is True
+
+
+def test_ftd_post_cutover_both_price_hits_marks_confirmed_by_both():
+    from api.mct_engine import MCTEngine, EngineConfig
+
+    engine = MCTEngine(EngineConfig(
+        initial_reference_high=200.0, initial_power_trend=False,
+        initial_exposure=20,
+        spy_confirmations={date(2026, 8, 3): {"price_hit": True, "vol_up": True}},
     ))
     state = _seed_pre_ftd_state(engine)
     prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
@@ -1302,19 +1336,16 @@ def test_ftd_post_cutover_both_confirm_marks_confirmed_by_both():
     assert ftd.meta.get("confirmed_by") == "both"
 
 
-def test_ftd_post_cutover_missing_spy_data_refuses_to_fire():
-    """SPY bar not in confirmations dict (adapter didn't find it in
-    market_data) → engine refuses to fire even if IXIC would confirm.
-
-    Design choice: "wait for SPY to land" beats "fall back to IXIC-only"
-    so a stale nightly ingest doesn't silently produce a single-index FTD.
-    """
+def test_ftd_post_cutover_missing_spy_falls_back_to_ixic():
+    """Webby model: missing SPY data (dict has no entry for this bar) does
+    NOT block — IXIC can still fire on its own price. Meta flags
+    spy_data_missing=True for downstream display."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={},   # SPY missing for 2026-08-03
+        spy_confirmations={},   # SPY missing entirely
     ))
     state = _seed_pre_ftd_state(engine)
     prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
@@ -1324,25 +1355,25 @@ def test_ftd_post_cutover_missing_spy_data_refuses_to_fire():
     engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
                               state=state, bar_signals=bar_signals,
                               start_flags={"step3_done": False, "step4_done": False})
-    types = [s.signal_type for s in bar_signals]
-    assert "STEP_1_FTD" not in types, (
-        "SPY data missing must block STEP_1_FTD — no silent IXIC-only fallback"
-    )
-    assert state["step1_done"] is False
+    ftd = next(s for s in bar_signals if s.signal_type == "STEP_1_FTD")
+    assert ftd.meta.get("confirmed_by") == "ixic"
+    assert ftd.meta.get("spy_data_missing") is True
+    assert ftd.meta.get("spy_price_hit") is None
 
 
-def test_ftd_post_cutover_neither_confirms_no_fire():
-    """IXIC price up but no volume; SPY present but didn't confirm → no FTD."""
+def test_ftd_post_cutover_neither_price_hits_no_fire():
+    """IXIC below threshold + SPY below threshold → no FTD, even if
+    volume is strong on both. Volume is not a gate under Webby."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={date(2026, 8, 3): False},
+        spy_confirmations={date(2026, 8, 3): {"price_hit": False, "vol_up": True}},
     ))
     state = _seed_pre_ftd_state(engine)
-    prev = _ftd_prev_bar(date(2026, 7, 31), volume=5_000_000)
-    current = _ftd_candidate_bar(date(2026, 8, 3), close=101.5, volume=1_000_000)
+    prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
+    current = _ftd_candidate_bar(date(2026, 8, 3), close=100.3, volume=1_500_000)  # +0.3%
     bar_signals: list = []
     history = pd.DataFrame([prev, current]).reset_index(drop=True)
     engine._phase_rally_hunt(i=3, current=current, prev=prev, history=history,
@@ -1353,18 +1384,17 @@ def test_ftd_post_cutover_neither_confirms_no_fire():
 
 
 def test_ftd_post_cutover_price_below_threshold_never_fires():
-    """Even with volume up on both indexes, IXIC price gain < 1% + SPY
-    confirmations False → no FTD (price threshold is the primary gate)."""
+    """Sanity: even with SPY dict flagging price_hit False and volumes up,
+    an IXIC price gain < 1% doesn't fire."""
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(
         initial_reference_high=200.0, initial_power_trend=False,
         initial_exposure=20,
-        spy_confirmations={date(2026, 8, 3): False},
+        spy_confirmations={date(2026, 8, 3): {"price_hit": False, "vol_up": True}},
     ))
     state = _seed_pre_ftd_state(engine)
     prev = _ftd_prev_bar(date(2026, 7, 31), volume=1_000_000)
-    # Only +0.3% gain — under threshold.
     current = _ftd_candidate_bar(date(2026, 8, 3), close=100.3, volume=1_500_000)
     bar_signals: list = []
     history = pd.DataFrame([prev, current]).reset_index(drop=True)

@@ -976,14 +976,24 @@ class MCTEngine:
         # ----- Step 1: Follow-Through Day -----
         # Gate evolves at FTD_DUAL_INDEX_START (2026-07-31):
         #   Pre-cutover  → legacy rule: IXIC close pct_gain ≥ FTD_PCT_THRESHOLD.
-        #   Post-cutover → dual-index rule: fires when EITHER
-        #                    (a) IXIC price ≥ threshold AND IXIC vol > prev, OR
-        #                    (b) SPY  price ≥ threshold AND SPY  vol > prev
-        #                  If SPY data is missing for this bar (adapter didn't
-        #                  find a market_data row), fire is REFUSED — the engine
-        #                  waits for SPY to land rather than falling back to
-        #                  IXIC-only. See EngineConfig.spy_confirmations and
-        #                  FTD_DUAL_INDEX_START for rationale.
+        #                  Preserved verbatim so historical replays reproduce
+        #                  the signal log unchanged.
+        #   Post-cutover → Webby model (2026-08-04 replacement — see the
+        #                  git log): PRICE-ONLY, either index qualifies.
+        #                  Fires when EITHER
+        #                    (a) IXIC close pct_gain ≥ FTD_PCT_THRESHOLD, OR
+        #                    (b) SPY  close pct_gain ≥ FTD_PCT_THRESHOLD
+        #                  Volume is NEVER a gate — it's tracked in the signal
+        #                  meta as an informational annotation so the M Factor
+        #                  badge can render "Volume ✓ / —" alongside the FTD,
+        #                  and post-hoc analysis can bucket FTDs by
+        #                  volume-confirmation status without touching the
+        #                  gate.
+        #                  If SPY data is missing for a candidate bar, the
+        #                  engine falls back to IXIC-only (Webby-strict rule
+        #                  is index-agnostic; a missing SPY row shouldn't
+        #                  block a valid IXIC signal). Meta captures the
+        #                  missing-data status.
         # ftd_low ALWAYS anchors to IXIC's low on the firing bar regardless
         # of which index confirmed. The POST_FTD_SOFT_FAIL check runs IXIC's
         # close vs this anchor — keeping the soft-fail comparison purely
@@ -998,8 +1008,20 @@ class MCTEngine:
 
             fires = False
             confirmed_by: Optional[str] = None
-            ixic_confirms = False
-            spy_confirms: Optional[bool] = None
+            ixic_price_hit = False
+            spy_price_hit: Optional[bool] = None
+            # Volume annotations (metadata only under the Webby model).
+            prev_volume = (int(prev["volume"])
+                           if prev is not None and pd.notna(prev.get("volume"))
+                           else None)
+            current_volume = (int(current["volume"])
+                              if pd.notna(current.get("volume"))
+                              else None)
+            ixic_vol_up = (prev_volume is not None
+                           and current_volume is not None
+                           and current_volume > prev_volume)
+            spy_vol_up: Optional[bool] = None
+            spy_data_available = False
 
             if not dual_index_active:
                 # Legacy rule: IXIC price only. Preserved verbatim so historical
@@ -1007,34 +1029,33 @@ class MCTEngine:
                 if pct_gain >= FTD_PCT_THRESHOLD:
                     fires = True
                     confirmed_by = "ixic_legacy"
-                    ixic_confirms = True
+                    ixic_price_hit = True
             else:
-                spy_confirms = self.config.spy_confirmations.get(bar_date)
-                if spy_confirms is None:
-                    # SPY data missing → refuse to fire. Engine waits for the
-                    # nightly SPY ingest to land; the FTD will surface on the
-                    # next run once SPY row is in market_data for this bar.
-                    fires = False
-                else:
-                    prev_volume = (int(prev["volume"])
-                                   if prev is not None and pd.notna(prev.get("volume"))
-                                   else None)
-                    current_volume = (int(current["volume"])
-                                      if pd.notna(current.get("volume"))
-                                      else None)
-                    ixic_vol_up = (prev_volume is not None
-                                   and current_volume is not None
-                                   and current_volume > prev_volume)
-                    ixic_confirms = (pct_gain >= FTD_PCT_THRESHOLD and ixic_vol_up)
-                    if ixic_confirms and spy_confirms:
-                        fires = True
-                        confirmed_by = "both"
-                    elif ixic_confirms:
-                        fires = True
-                        confirmed_by = "ixic"
-                    elif spy_confirms:
-                        fires = True
-                        confirmed_by = "spy"
+                # Post-cutover Webby model: price-only gate on either index.
+                spy_data = self.config.spy_confirmations.get(bar_date)
+                spy_data_available = spy_data is not None
+                if spy_data_available:
+                    # New adapter shape: {"price_hit": bool, "vol_up": bool}.
+                    # Legacy bool shape (pre-Webby migration) → treat True as
+                    # price_hit=True with vol_up unknown, for defense against
+                    # a stale side-input dict.
+                    if isinstance(spy_data, dict):
+                        spy_price_hit = bool(spy_data.get("price_hit"))
+                        spy_vol_up = bool(spy_data.get("vol_up")) \
+                            if spy_data.get("vol_up") is not None else None
+                    else:
+                        spy_price_hit = bool(spy_data)
+                        spy_vol_up = None
+                ixic_price_hit = pct_gain >= FTD_PCT_THRESHOLD
+                if ixic_price_hit and spy_price_hit:
+                    fires = True
+                    confirmed_by = "both"
+                elif ixic_price_hit:
+                    fires = True
+                    confirmed_by = "ixic"
+                elif spy_price_hit:
+                    fires = True
+                    confirmed_by = "spy"
 
             if fires:
                 state["step1_done"] = True
@@ -1054,9 +1075,23 @@ class MCTEngine:
                               "pct_gain": pct_gain,
                               "ftd_close": close, "ftd_low": low,
                               "confirmed_by": confirmed_by,
-                              "ixic_confirms": bool(ixic_confirms),
-                              "spy_confirms": (None if spy_confirms is None
-                                               else bool(spy_confirms))},
+                              # Price-side gate outcomes (drove the fire).
+                              "ixic_price_hit": bool(ixic_price_hit),
+                              "spy_price_hit": (None if spy_price_hit is None
+                                                else bool(spy_price_hit)),
+                              # Volume annotations — display-only under
+                              # the Webby model. Never gates the fire.
+                              "ixic_vol_up": bool(ixic_vol_up),
+                              "spy_vol_up": (None if spy_vol_up is None
+                                             else bool(spy_vol_up)),
+                              "spy_data_missing":
+                                  (dual_index_active and not spy_data_available),
+                              # Kept for backward compatibility with any
+                              # downstream reader from the vol-gate era —
+                              # under Webby this equals ixic_price_hit.
+                              "ixic_confirms": bool(ixic_price_hit),
+                              "spy_confirms": (None if spy_price_hit is None
+                                               else bool(spy_price_hit))},
                     ))
 
         # ----- Step 2: close > 21 EMA (can fire same bar as Step 1) -----

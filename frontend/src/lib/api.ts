@@ -1314,11 +1314,27 @@ export const api = {
     drawdown_pct?: number;
     power_trend_on_since?: string | null;
     ftd_date?: string | null;
-    // Dual-index FTD confirmation source (from FTD_DUAL_INDEX_START forward):
-    // "ixic" | "spy" | "both" | "ixic_legacy" | null.
-    // Informational only — exposure is 40 for all values. Frontend suppresses
-    // the badge for "ixic_legacy" (pre-cutover FTDs never cross-checked SPY).
+    // Dual-index FTD confirmation source (from FTD_DUAL_INDEX_START forward,
+    // Webby model on/after 2026-08-04): "ixic" | "spy" | "both" |
+    // "ixic_legacy" | null. Reflects which index(es) had close ≥ +1%.
+    // Informational only — exposure is 40 for all values. Frontend
+    // suppresses the badge for "ixic_legacy" (pre-cutover FTDs never
+    // cross-checked SPY).
     ftd_confirmed_by?: "ixic" | "spy" | "both" | "ixic_legacy" | null;
+    /** Volume annotations — display-only under the Webby model (never
+     *  gates the FTD). True = volume > prev-day volume on that index for
+     *  the FTD bar. null when data unavailable / first-bar. */
+    ftd_ixic_vol_up?: boolean | null;
+    ftd_spy_vol_up?: boolean | null;
+    /** True when the SPY row for the FTD bar wasn't in market_data and
+     *  the engine fell back to IXIC-only. Badge surfaces this so the
+     *  operator knows the confirmation is partial. */
+    ftd_spy_data_missing?: boolean | null;
+    /** Price-hit booleans (mirror confirmed_by decomposition). Useful for
+     *  downstream consumers that want the raw signals rather than the
+     *  bucketed confirmed_by string. */
+    ftd_ixic_price_hit?: boolean | null;
+    ftd_spy_price_hit?: boolean | null;
     reference_high?: number;
     reference_high_date?: string | null;
     cycle_start_date?: string | null;

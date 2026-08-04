@@ -183,25 +183,59 @@ export function MFactor({ navColor }: { navColor: string }) {
           <div className="text-[15px] font-semibold mt-2">Trend Count: {trendCount > 0 ? `+${trendCount}` : trendCount}</div>
         )}
         <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
-        <div className="text-[12px] mt-1 opacity-70 flex items-center gap-1.5">
+        <div className="text-[12px] mt-1 opacity-70 flex items-center flex-wrap gap-1.5">
           <span>FTD: {data.ftd_date || "—"}</span>
           {data.ftd_date && data.ftd_confirmed_by && data.ftd_confirmed_by !== "ixic_legacy" && (() => {
-            // Dual-index confirmation badge — informational only (exposure is
-            // 40 regardless of which index confirmed). Palette matches the
-            // divergence taxonomy: both = green, single = amber (one leg
-            // dissented, worth flagging without alarming). Pre-cutover FTDs
-            // (confirmed_by = "ixic_legacy") render no badge — the legacy
-            // rule didn't cross-check SPY, so labeling one is misleading.
+            // Webby model (2026-08-04) badges — TWO pieces:
+            //   (1) Price confirmation — which index(es) had close ≥ +1%.
+            //       This is what fires the FTD.
+            //   (2) Volume annotation — informational only under Webby;
+            //       lets the operator see at a glance whether the fire
+            //       coincided with a volume-up day on either index.
+            // Pre-cutover FTDs (confirmed_by = "ixic_legacy") render no
+            // badge — the legacy rule didn't cross-check SPY.
             const cb = data.ftd_confirmed_by;
-            const label = cb === "both" ? "IXIC ✓ / SPY ✓"
-                        : cb === "ixic" ? "IXIC vol only"
-                        : cb === "spy"  ? "SPY vol only" : cb;
-            const color = cb === "both" ? "#08a86b" : "#d97706";
+            const priceLabel = cb === "both" ? "IXIC ✓ / SPY ✓"
+                             : cb === "ixic" ? "IXIC only"
+                             : cb === "spy"  ? "SPY only" : cb;
+            const priceColor = cb === "both" ? "#08a86b" : "#d97706";
+            // Volume chip is optional — only rendered when the backend
+            // supplied the annotations (rally-prefix response upgrade
+            // ships with the same commit as this rule change).
+            const ixicVol = data.ftd_ixic_vol_up;
+            const spyVol  = data.ftd_spy_vol_up;
+            const knownVol = [ixicVol, spyVol].filter(v => v === true || v === false);
+            const upCount  = knownVol.filter(v => v === true).length;
+            const volLabel = knownVol.length === 0 ? null
+                           : upCount === knownVol.length && upCount > 0 ? "Vol ✓" + (knownVol.length > 1 ? "✓" : "")
+                           : upCount > 0 ? "Vol ✓"
+                           : "Vol —";
+            const volColor = knownVol.length === 0 ? "#6b7280"
+                           : upCount === knownVol.length && upCount > 0 ? "#08a86b"
+                           : upCount > 0 ? "#d97706"
+                           : "#6b7280";
             return (
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                    style={{ background: `color-mix(in oklab, ${color} 18%, transparent)`, color }}>
-                {label}
-              </span>
+              <>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                      style={{ background: `color-mix(in oklab, ${priceColor} 18%, transparent)`, color: priceColor }}>
+                  {priceLabel}
+                </span>
+                {volLabel && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                        title={
+                          `IXIC vol: ${ixicVol === true ? "up" : ixicVol === false ? "flat/down" : "unknown"}` +
+                          ` · SPY vol: ${spyVol === true ? "up" : spyVol === false ? "flat/down" : "unknown"}`
+                        }
+                        style={{ background: `color-mix(in oklab, ${volColor} 18%, transparent)`, color: volColor }}>
+                    {volLabel}
+                  </span>
+                )}
+                {data.ftd_spy_data_missing && (
+                  <span className="text-[9px]" style={{ color: "var(--ink-4)" }}>
+                    (SPY data missing — IXIC fallback)
+                  </span>
+                )}
+              </>
             );
           })()}
         </div>
