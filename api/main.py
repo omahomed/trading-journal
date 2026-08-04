@@ -9259,6 +9259,164 @@ def concentration(request: Request, portfolio: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================
+# RECURRING CASH EVENTS (Migration 059)
+# ============================================================
+# Configurable recurring deposits (initial use case: 457B bi-weekly).
+# NLV Entry surfaces a reminder card when next_due_date <= today; Post
+# or Skip advances the cycle. Not a cron — state only advances on user
+# action.
+
+def _resolve_portfolio_id(name: str) -> int | None:
+    """Best-effort lookup of portfolios.id for a name. Returns None on
+    miss (endpoint handler surfaces 404). Kept local to this block so
+    it doesn't need to be exported / risk collision."""
+    if not name:
+        return None
+    try:
+        with db.get_db_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (name,))
+            row = cur.fetchone()
+            return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+@app.get("/api/recurring-cash")
+def recurring_cash_list(request: Request, portfolio: str = ""):
+    """List recurring-cash configs for the caller. Optional ?portfolio=X
+    filter narrows to one portfolio. Each row carries computed_amount
+    (base × percent / 100) and is_due (next_due_date <= today AND active)
+    so the frontend doesn't repeat the math."""
+    try:
+        pid: int | None = None
+        if portfolio:
+            pid = _resolve_portfolio_id(portfolio)
+            if pid is None:
+                return {"events": []}
+        events = db.list_recurring_cash_events(pid)
+        return {"events": events}
+    except Exception as e:
+        print(f"[recurring_cash_list] handler failed: {e}")
+        return {"error": str(e), "events": []}
+
+
+@app.post("/api/recurring-cash")
+def recurring_cash_create(request: Request, body: dict = Body(...)):
+    """Create a config. Body:
+        { portfolio: str (required, portfolio name),
+          anchor_date: 'YYYY-MM-DD' (required, first cycle's due date),
+          base_amount: float (required, ≥ 0),
+          percent: float (default 100, 0..200),
+          cadence_days: int (default 14, > 0),
+          note: str (default ''),
+          active: bool (default true) }
+    """
+    try:
+        portfolio = str(body.get("portfolio") or "").strip()
+        if not portfolio:
+            raise HTTPException(status_code=422, detail="portfolio is required")
+        pid = _resolve_portfolio_id(portfolio)
+        if pid is None:
+            raise HTTPException(status_code=404, detail=f"portfolio '{portfolio}' not found")
+        anchor = str(body.get("anchor_date") or "").strip()
+        if not anchor:
+            raise HTTPException(status_code=422, detail="anchor_date is required")
+        base = float(body.get("base_amount") or 0)
+        if base < 0:
+            raise HTTPException(status_code=422, detail="base_amount must be >= 0")
+        pct = float(body.get("percent", 100.0))
+        cadence = int(body.get("cadence_days", 14))
+        note = str(body.get("note") or "")
+        active = bool(body.get("active", True))
+        row = db.create_recurring_cash_event(
+            pid, anchor_date=anchor, base_amount=base, percent=pct,
+            cadence_days=cadence, note=note, active=active,
+        )
+        return {"event": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[recurring_cash_create] handler failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/recurring-cash/{event_id}")
+def recurring_cash_update(request: Request, event_id: int, body: dict = Body(...)):
+    """Partial update — only fields present in the body are written.
+    Accepts the same keys as create + next_due_date for manual cycle
+    reseeding. Returns 404 if the id is unknown or RLS denies."""
+    try:
+        kwargs: dict = {}
+        for k in ("anchor_date", "note", "next_due_date"):
+            if k in body:
+                kwargs[k] = body.get(k)
+        for k in ("base_amount", "percent", "cadence_days"):
+            if k in body:
+                v = body.get(k)
+                if v is not None:
+                    kwargs[k] = v
+        if "active" in body:
+            kwargs["active"] = bool(body.get("active"))
+        row = db.update_recurring_cash_event(event_id, **kwargs)
+        if row is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        return {"event": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[recurring_cash_update] {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/recurring-cash/{event_id}")
+def recurring_cash_delete(request: Request, event_id: int):
+    try:
+        removed = db.delete_recurring_cash_event(event_id)
+        return {"status": "ok" if removed else "not_found"}
+    except Exception as e:
+        print(f"[recurring_cash_delete] {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/recurring-cash/{event_id}/post")
+def recurring_cash_post(request: Request, event_id: int, body: dict = Body(...)):
+    """Fire the current cycle's deposit. Body:
+        { amount: float (optional — override the computed amount),
+          date: 'YYYY-MM-DD' (optional — override the tx date) }
+    Returns {event, cash} with the updated config + inserted cash row."""
+    try:
+        amount_override = body.get("amount")
+        if amount_override is not None:
+            amount_override = float(amount_override)
+        post_date = body.get("date") or None
+        result = db.post_recurring_cash_event(
+            event_id, amount_override=amount_override, post_date=post_date,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="event not found or inactive")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[recurring_cash_post] {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/recurring-cash/{event_id}/skip")
+def recurring_cash_skip(request: Request, event_id: int):
+    try:
+        row = db.skip_recurring_cash_event(event_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        return {"event": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[recurring_cash_skip] {event_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

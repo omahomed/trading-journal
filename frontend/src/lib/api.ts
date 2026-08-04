@@ -1787,6 +1787,69 @@ export const api = {
       `/api/concentration${portfolio ? `?portfolio=${encodeURIComponent(portfolio)}` : ""}`,
     ),
 
+  // ─── Recurring cash events (migration 059) ───
+  // Configurable recurring deposits (initial use case: 457B bi-weekly).
+  // NLV Entry renders a reminder card when is_due=true; Post/Skip advances
+  // the cycle. Not a cron — state only advances on user action.
+  recurringCashList: (portfolio = "") =>
+    fetchJSON<{ events: RecurringCashEvent[]; error?: string }>(
+      `/api/recurring-cash${portfolio ? `?portfolio=${encodeURIComponent(portfolio)}` : ""}`,
+    ),
+
+  recurringCashCreate: (body: {
+    portfolio: string;
+    anchor_date: string;
+    base_amount: number;
+    percent?: number;
+    cadence_days?: number;
+    note?: string;
+    active?: boolean;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/recurring-cash`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ event: RecurringCashEvent } | { error: string }>,
+
+  recurringCashUpdate: (id: number, body: Partial<{
+    anchor_date: string;
+    base_amount: number;
+    percent: number;
+    cadence_days: number;
+    note: string;
+    active: boolean;
+    next_due_date: string;
+  }>) =>
+    fetchWithAuth(`${API_BASE}/api/recurring-cash/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ event: RecurringCashEvent } | { error: string }>,
+
+  recurringCashDelete: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/recurring-cash/${id}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: "ok" | "not_found" } | { error: string }>,
+
+  /** Fire the current cycle. Optional `amount` overrides the computed value
+   *  for this one post (config unchanged); optional `date` overrides the tx
+   *  date (defaults to next_due_date). Returns the updated event + inserted
+   *  cash row so the caller can bump per-card cash_change and re-fetch. */
+  recurringCashPost: (id: number, body: { amount?: number; date?: string } = {}) =>
+    fetchWithAuth(`${API_BASE}/api/recurring-cash/${id}/post`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<
+      | { event: RecurringCashEvent; cash: { id: number; amount: number; date: string; source: string; note: string } }
+      | { error: string }
+    >,
+
+  recurringCashSkip: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/recurring-cash/${id}/skip`, {
+      method: "POST",
+    }).then(r => r.json()) as Promise<{ event: RecurringCashEvent } | { error: string }>,
+
   // Force-refresh SPY + NASDAQ closes for `day` across all portfolios.
   // Overwrites any stored value diverging from yfinance's raw close beyond
   // tolerance (SPY $0.10, NASDAQ $5). Idempotent — safe to re-run.
@@ -1816,6 +1879,25 @@ export interface TickerTaxonomy {
   notes: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Recurring cash event (Migration 059). One row per user-configured
+ *  recurring deposit. `computed_amount` = base × percent / 100 (server-
+ *  side derived, kept in sync with what Post will actually write).
+ *  `is_due` = next_due_date <= today AND active — frontend renders the
+ *  reminder card iff true. */
+export interface RecurringCashEvent {
+  id: number;
+  portfolio_id: number;
+  anchor_date: string;
+  cadence_days: number;
+  base_amount: number;
+  percent: number;
+  computed_amount: number;
+  note: string;
+  active: boolean;
+  next_due_date: string;
+  is_due: boolean;
 }
 
 export interface TaxonomyListResponse {

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { api } from "@/lib/api";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { api, type RecurringCashEvent } from "@/lib/api";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
@@ -128,12 +128,37 @@ function PortfolioCard({
   card,
   onChange,
   accentColor,
+  recurringEvent,
+  onRecurringPost,
+  onRecurringSkip,
+  onOpenManage,
 }: {
   card: PortfolioCardState;
   onChange: (patch: Partial<PortfolioCardState>) => void;
   accentColor: string;
+  /** null when no config exists for this portfolio yet. */
+  recurringEvent: RecurringCashEvent | null;
+  /** Fires the deposit + bumps card.cash_change. Returns the actually-
+   *  posted amount so the caller can flash a confirmation. */
+  onRecurringPost: (id: number, amount: number) => Promise<number | null>;
+  onRecurringSkip: (id: number) => Promise<void>;
+  /** Opens the Manage-recurring modal, either editing this portfolio's
+   *  existing event or creating a fresh one when recurringEvent is null. */
+  onOpenManage: () => void;
 }) {
   const m = deriveCardMetrics(card);
+
+  // Recurring-deposit reminder — inline editable amount so the user can
+  // override this cycle without touching the config. Local state seeds
+  // from computed_amount; resets whenever the event id / amount changes.
+  const [recurringAmount, setRecurringAmount] = useState<string>(
+    recurringEvent ? String(recurringEvent.computed_amount) : "",
+  );
+  const [recurringPosting, setRecurringPosting] = useState(false);
+  const [recurringMsg, setRecurringMsg] = useState<string>("");
+  useEffect(() => {
+    if (recurringEvent) setRecurringAmount(String(recurringEvent.computed_amount));
+  }, [recurringEvent?.id, recurringEvent?.computed_amount]);
 
   // Live Portfolio Heat preview — fires once per card mount. The backend
   // recomputes against the latest saved end_nlv, so this is
@@ -160,6 +185,94 @@ function PortfolioCard({
         <span className="text-[13px] font-semibold">{card.name}</span>
       </div>
       <div className="p-4 flex flex-col gap-3">
+        {/* Recurring-deposit reminder (Migration 059). Renders only when
+            this portfolio has an active config whose next_due_date has
+            arrived. Post writes a cash_transactions row AND bumps this
+            card's cash_change so the TWR-relevant journal row picks up
+            the deposit on save. Amount input is pre-filled but editable
+            (one-off override; config stays intact). */}
+        {recurringEvent?.is_due && (
+          <div className="rounded-[10px] p-3 flex flex-col gap-2"
+               style={{ background: "color-mix(in oklab, " + accentColor + " 10%, var(--surface))",
+                        border: "1px solid color-mix(in oklab, " + accentColor + " 30%, var(--border))" }}
+               data-testid={`recurring-reminder-${card.name}`}>
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-[12px] font-semibold" style={{ color: "var(--ink-1)" }}>
+                {recurringEvent.note || "Recurring deposit"} · due {recurringEvent.next_due_date}
+              </div>
+              <button type="button" onClick={onOpenManage}
+                      className="text-[10px] underline"
+                      style={{ color: "var(--ink-4)" }}>
+                Manage
+              </button>
+            </div>
+            <div className="text-[10px]" style={{ color: "var(--ink-3)" }}>
+              Base ${recurringEvent.base_amount.toFixed(2)} × {recurringEvent.percent.toFixed(0)}% ={" "}
+              <b>${recurringEvent.computed_amount.toFixed(2)}</b>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>$</span>
+              <input
+                type="number"
+                step="1"
+                value={recurringAmount}
+                onChange={e => setRecurringAmount(e.target.value)}
+                disabled={recurringPosting}
+                className="flex-1 h-[30px] px-2 rounded-[6px] text-[12px] outline-none"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                         color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }}
+                aria-label={`Recurring deposit amount for ${card.name}`}
+              />
+              <button type="button"
+                      disabled={recurringPosting}
+                      onClick={async () => {
+                        setRecurringPosting(true);
+                        setRecurringMsg("");
+                        try {
+                          await onRecurringSkip(recurringEvent.id);
+                          setRecurringMsg("Skipped");
+                        } catch (e) {
+                          setRecurringMsg(`Skip failed: ${e}`);
+                        } finally {
+                          setRecurringPosting(false);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-[6px] text-[11px]"
+                      style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                               color: "var(--ink-3)" }}>
+                Skip
+              </button>
+              <button type="button"
+                      disabled={recurringPosting}
+                      onClick={async () => {
+                        setRecurringPosting(true);
+                        setRecurringMsg("");
+                        try {
+                          const amt = parseFloat(recurringAmount || "0") || 0;
+                          const posted = await onRecurringPost(recurringEvent.id, amt);
+                          if (posted !== null) setRecurringMsg(`Posted $${posted.toFixed(2)}`);
+                        } catch (e) {
+                          setRecurringMsg(`Post failed: ${e}`);
+                        } finally {
+                          setRecurringPosting(false);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-[6px] text-[11px] font-semibold"
+                      style={{ background: accentColor, color: "white",
+                               opacity: recurringPosting ? 0.5 : 1 }}>
+                {recurringPosting ? "…" : "Post deposit"}
+              </button>
+            </div>
+            {recurringMsg && (
+              <div className="text-[10px]"
+                   style={{ color: recurringMsg.startsWith("Posted") ? "#0a8f5e"
+                                   : recurringMsg === "Skipped" ? "var(--ink-4)"
+                                   : "#b23a2b" }}>
+                {recurringMsg}
+              </div>
+            )}
+          </div>
+        )}
         <Field label="Closing NLV*" error={card.touched.end_nlv ? card.errors.end_nlv : undefined}>
           <input
             type="number"
@@ -216,6 +329,20 @@ function PortfolioCard({
             aria-label={`Actions for ${card.name}`}
           />
         </Field>
+        {/* Quiet always-visible link — the entry point to Manage-recurring
+            when the reminder isn't currently rendered. When not-due (or
+            no config exists) surfaces a one-line status + Manage. When due
+            it's redundant with the reminder card above, so hide. */}
+        {!recurringEvent?.is_due && (
+          <button type="button" onClick={onOpenManage}
+                  className="self-start text-[10px] underline"
+                  style={{ color: "var(--ink-4)" }}
+                  data-testid={`recurring-manage-link-${card.name}`}>
+            {recurringEvent
+              ? `Recurring: next $${recurringEvent.computed_amount.toFixed(0)} on ${recurringEvent.next_due_date} · Manage`
+              : "Add recurring deposit"}
+          </button>
+        )}
         {m.nlv > 0 && (
           <div className="grid grid-cols-2 gap-2 mt-1">
             {[
@@ -298,6 +425,27 @@ export function NLVEntry({ navColor }: { navColor: string }) {
   // Per-card state, derived from the portfolios context. Initialized empty
   // and populated by the per-entryDate effect below.
   const [cards, setCards] = useState<PortfolioCardState[]>([]);
+
+  // Recurring-cash configs keyed by portfolio name. Loaded once per
+  // portfolios-list change. Card renders the reminder / Manage link off
+  // the entry for its portfolio (null when none configured).
+  const [recurringByPortfolio, setRecurringByPortfolio] =
+    useState<Record<string, RecurringCashEvent | null>>({});
+  const [manageModalPortfolio, setManageModalPortfolio] = useState<string | null>(null);
+
+  const reloadRecurringFor = useCallback(async (portfolioName: string) => {
+    try {
+      const res = await api.recurringCashList(portfolioName);
+      if ("events" in res) {
+        setRecurringByPortfolio(prev => ({
+          ...prev,
+          [portfolioName]: res.events[0] || null,
+        }));
+      }
+    } catch (err) {
+      log.error("nlv-entry", `recurring-cash reload failed for ${portfolioName}`, err);
+    }
+  }, []);
 
   // Shared IBKR loading flag (dormant while IBKR_AUTOFILL_ENABLED=false).
   const [nlvLoading, setNlvLoading] = useState(true);
@@ -412,6 +560,47 @@ export function NLVEntry({ navColor }: { navColor: string }) {
     if (saveOk) setSaveOk("");
     if (saveError) setSaveError(null);
   };
+
+  // Load recurring configs for every portfolio (parallel). Re-runs when
+  // the portfolios list changes; date changes don't refetch since the
+  // config isn't date-scoped (is_due is computed against today).
+  useEffect(() => {
+    if (!portfolios.length) return;
+    let cancelled = false;
+    Promise.all(portfolios.map(p =>
+      api.recurringCashList(p.name).catch(err => {
+        log.debug.devOnly("nlv-entry", `recurringCashList failed for ${p.name}`, err);
+        return { events: [] as RecurringCashEvent[] };
+      }).then(r => [p.name, ("events" in r ? r.events[0] : null) || null] as const)
+    )).then(pairs => {
+      if (cancelled) return;
+      setRecurringByPortfolio(Object.fromEntries(pairs));
+    });
+    return () => { cancelled = true; };
+  }, [portfolios]);
+
+  // Post → writes cash_transactions + bumps this card's cash_change so
+  // the journal row (TWR consumer) picks up the deposit on save. Returns
+  // the posted amount for the reminder's inline confirmation.
+  const handleRecurringPost = useCallback(async (portfolioName: string, id: number, amount: number) => {
+    const res = await api.recurringCashPost(id, { amount });
+    if ("error" in res) throw new Error(res.error);
+    // Bump the card's cash_change by the posted amount (preserves any
+    // manual entry the user might already have made).
+    setCards(prev => prev.map(c => {
+      if (c.name !== portfolioName) return c;
+      const cur = parseFloat(c.cash_change || "0") || 0;
+      return { ...c, cash_change: String(cur + amount) };
+    }));
+    setRecurringByPortfolio(prev => ({ ...prev, [portfolioName]: res.event }));
+    return amount;
+  }, []);
+
+  const handleRecurringSkip = useCallback(async (portfolioName: string, id: number) => {
+    const res = await api.recurringCashSkip(id);
+    if ("error" in res) throw new Error(res.error);
+    setRecurringByPortfolio(prev => ({ ...prev, [portfolioName]: res.event }));
+  }, []);
 
   // Aggregate validation across all cards. Memoized so the disabled-state
   // calculation doesn't re-run validateCard on every render of children.
@@ -653,6 +842,10 @@ export function NLVEntry({ navColor }: { navColor: string }) {
             card={card}
             onChange={(patch) => updateCard(card.name, patch)}
             accentColor={cardAccents[i % cardAccents.length]}
+            recurringEvent={recurringByPortfolio[card.name] || null}
+            onRecurringPost={(id, amount) => handleRecurringPost(card.name, id, amount)}
+            onRecurringSkip={(id) => handleRecurringSkip(card.name, id)}
+            onOpenManage={() => setManageModalPortfolio(card.name)}
           />
         ))}
       </div>
@@ -763,6 +956,217 @@ export function NLVEntry({ navColor }: { navColor: string }) {
       >
         {saving ? "Saving..." : "Save NLV Entry"}
       </button>
+      {manageModalPortfolio && (
+        <ManageRecurringModal
+          portfolio={manageModalPortfolio}
+          event={recurringByPortfolio[manageModalPortfolio] || null}
+          onClose={() => setManageModalPortfolio(null)}
+          onSaved={async () => { await reloadRecurringFor(manageModalPortfolio); }}
+          navColor={navColor}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ManageRecurringModal — create/edit/pause/delete the recurring config for a
+// portfolio. Opened from the reminder card's "Manage" button or from the
+// always-visible "Add / Manage recurring" footer link on each PortfolioCard.
+// Single form; the backend accepts partial updates on PUT so unchanged
+// fields pass through.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ManageRecurringModal({
+  portfolio,
+  event,
+  onClose,
+  onSaved,
+  navColor,
+}: {
+  portfolio: string;
+  event: RecurringCashEvent | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+  navColor: string;
+}) {
+  const [baseAmount, setBaseAmount] = useState(
+    event ? String(event.base_amount) : "",
+  );
+  const [percent, setPercent] = useState(
+    event ? String(event.percent) : "100",
+  );
+  const [cadenceDays, setCadenceDays] = useState(
+    event ? String(event.cadence_days) : "14",
+  );
+  // For create: next fire is the anchor. For edit: showing next_due_date
+  // and letting the user reseed the cycle is more useful than exposing
+  // the historic anchor separately.
+  const [nextDueDate, setNextDueDate] = useState(
+    event?.next_due_date || event?.anchor_date || "",
+  );
+  const [note, setNote] = useState(event?.note || "");
+  const [active, setActive] = useState(event?.active ?? true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const base = parseFloat(baseAmount || "0") || 0;
+  const pct = parseFloat(percent || "0") || 0;
+  const computed = Math.round(base * pct) / 100;
+
+  const save = async () => {
+    setSaving(true); setErr("");
+    try {
+      if (event) {
+        const res = await api.recurringCashUpdate(event.id, {
+          base_amount: base,
+          percent: pct,
+          cadence_days: parseInt(cadenceDays, 10) || 14,
+          next_due_date: nextDueDate || undefined,
+          note,
+          active,
+        });
+        if ("error" in res) throw new Error(res.error);
+      } else {
+        if (!nextDueDate) { setErr("Anchor date is required."); setSaving(false); return; }
+        const res = await api.recurringCashCreate({
+          portfolio,
+          anchor_date: nextDueDate,
+          base_amount: base,
+          percent: pct,
+          cadence_days: parseInt(cadenceDays, 10) || 14,
+          note,
+          active,
+        });
+        if ("error" in res) throw new Error(res.error);
+      }
+      await onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally { setSaving(false); }
+  };
+
+  const remove = async () => {
+    if (!event) return;
+    if (!confirm(`Delete the recurring deposit config for ${portfolio}?`)) return;
+    setSaving(true); setErr("");
+    try {
+      const res = await api.recurringCashDelete(event.id);
+      if ("error" in res) throw new Error(res.error);
+      await onSaved();
+      onClose();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.4)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="rounded-[14px] p-6 max-w-md w-full"
+           style={{ background: "var(--surface)", border: "1px solid var(--border)",
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}
+           data-testid="recurring-manage-modal">
+        <div className="flex items-baseline justify-between mb-4">
+          <h3 className="font-normal text-[22px] tracking-tight m-0"
+              style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink-1)" }}>
+            {event ? "Edit recurring" : "Add recurring"}{" "}
+            <em className="italic" style={{ color: navColor }}>{portfolio}</em>
+          </h3>
+          <button onClick={onClose} className="text-[24px] leading-none"
+                  style={{ color: "var(--ink-4)" }}>×</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.10em] font-semibold block mb-1"
+                  style={{ color: "var(--ink-4)" }}>Base amount</span>
+            <input type="number" step="1" value={baseAmount}
+                   onChange={e => setBaseAmount(e.target.value)}
+                   className="w-full h-[36px] px-3 rounded-[8px] text-[13px] outline-none"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                            fontFamily: "var(--font-jetbrains), monospace" }} />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.10em] font-semibold block mb-1"
+                  style={{ color: "var(--ink-4)" }}>Percent</span>
+            <input type="number" step="1" value={percent}
+                   onChange={e => setPercent(e.target.value)}
+                   className="w-full h-[36px] px-3 rounded-[8px] text-[13px] outline-none"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                            fontFamily: "var(--font-jetbrains), monospace" }} />
+          </label>
+        </div>
+        <div className="text-[11px] mb-3" style={{ color: "var(--ink-3)" }}>
+          Post amount each cycle: <b>${computed.toFixed(2)}</b> ({percent || 0}% × ${baseAmount || 0})
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.10em] font-semibold block mb-1"
+                  style={{ color: "var(--ink-4)" }}>Cadence (days)</span>
+            <input type="number" step="1" value={cadenceDays}
+                   onChange={e => setCadenceDays(e.target.value)}
+                   className="w-full h-[36px] px-3 rounded-[8px] text-[13px] outline-none"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)",
+                            fontFamily: "var(--font-jetbrains), monospace" }} />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-[0.10em] font-semibold block mb-1"
+                  style={{ color: "var(--ink-4)" }}>{event ? "Next due" : "First due (anchor)"}</span>
+            <input type="date" value={nextDueDate}
+                   onChange={e => setNextDueDate(e.target.value)}
+                   className="w-full h-[36px] px-3 rounded-[8px] text-[13px] outline-none"
+                   style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+          </label>
+        </div>
+
+        <label className="block mb-3">
+          <span className="text-[10px] uppercase tracking-[0.10em] font-semibold block mb-1"
+                style={{ color: "var(--ink-4)" }}>Note</span>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)}
+                 placeholder="457B bi-weekly contribution"
+                 className="w-full h-[36px] px-3 rounded-[8px] text-[13px] outline-none"
+                 style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }} />
+        </label>
+
+        <label className="flex items-center gap-2 mb-4 cursor-pointer text-[12px]"
+               style={{ color: "var(--ink-2)" }}>
+          <input type="checkbox" checked={active}
+                 onChange={e => setActive(e.target.checked)} />
+          <span>Active — reminder card renders when due</span>
+        </label>
+
+        {err && <div className="mb-3 text-[12px]" style={{ color: "#e5484d" }}>{err}</div>}
+
+        <div className="flex justify-between items-center gap-2">
+          <div>
+            {event && (
+              <button onClick={remove} disabled={saving}
+                      className="px-3 py-2 rounded-[10px] text-[13px]"
+                      style={{ background: "transparent", border: "1px solid var(--border)", color: "#e5484d" }}>
+                Delete
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} disabled={saving}
+                    className="px-3 py-2 rounded-[10px] text-[13px]"
+                    style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+              Cancel
+            </button>
+            <button onClick={save} disabled={saving || base < 0}
+                    className="px-3 py-2 rounded-[10px] text-[13px] font-medium"
+                    style={{ background: navColor, color: "white", opacity: saving ? 0.5 : 1 }}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

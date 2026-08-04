@@ -7746,3 +7746,188 @@ def list_open_tickers_by_portfolio() -> dict[str, list[str]]:
                     continue
                 out.setdefault(ticker, []).append(portfolio)
             return out
+
+
+# ============================================
+# RECURRING CASH EVENTS (Migration 059)
+# ============================================
+# Set-and-forget recurring deposit configurator. NLV Entry surfaces a
+# reminder card when a config's next_due_date has arrived; Post writes
+# a cash_transactions row (source=deposit) and advances the cycle.
+# No cron / no history — the cash row IS the audit trail.
+
+def _recurring_row_dict(row: dict) -> dict:
+    """Normalize a DB row to the JSON shape. `computed_amount` derived so
+    the frontend never has to redo the math and both surfaces (card + modal)
+    stay in lockstep with what Post will actually write. `is_due` is
+    date-based today-comparison; the frontend renders the card only when
+    True and active."""
+    from datetime import date as _date
+    base = float(row.get("base_amount") or 0)
+    pct = float(row.get("percent") or 100.0)
+    computed = round(base * pct / 100.0, 2)
+    ndd = row.get("next_due_date")
+    is_due = bool(ndd and ndd <= _date.today() and row.get("active"))
+    return {
+        "id": row["id"],
+        "portfolio_id": row["portfolio_id"],
+        "anchor_date": ndd if isinstance(row.get("anchor_date"), str) else (
+            row["anchor_date"].isoformat() if row.get("anchor_date") else None
+        ),
+        "cadence_days": int(row["cadence_days"]),
+        "base_amount": base,
+        "percent": pct,
+        "computed_amount": computed,
+        "note": row.get("note") or "",
+        "active": bool(row.get("active")),
+        "next_due_date": ndd.isoformat() if ndd else None,
+        "is_due": is_due,
+    }
+
+
+def list_recurring_cash_events(portfolio_id: int | None = None) -> list[dict]:
+    """All configs for the caller (tenant-scoped via RLS). Optionally filter
+    to one portfolio. Empty list is normal — this feature is opt-in."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if portfolio_id is not None:
+                cur.execute(
+                    "SELECT * FROM recurring_cash_events "
+                    " WHERE portfolio_id = %s ORDER BY id ASC",
+                    (portfolio_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM recurring_cash_events ORDER BY portfolio_id, id ASC"
+                )
+            return [_recurring_row_dict(dict(r)) for r in cur.fetchall()]
+
+
+def create_recurring_cash_event(portfolio_id: int, *, anchor_date,
+                                base_amount: float, percent: float = 100.0,
+                                cadence_days: int = 14, note: str = "",
+                                active: bool = True) -> dict:
+    """Create a new config. next_due_date seeds to anchor_date (the first
+    cycle fires on the anchor)."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "INSERT INTO recurring_cash_events "
+                "  (portfolio_id, anchor_date, cadence_days, base_amount, "
+                "   percent, note, active, next_due_date) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING *",
+                (portfolio_id, anchor_date, int(cadence_days),
+                 float(base_amount), float(percent), note or "",
+                 bool(active), anchor_date),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _recurring_row_dict(dict(row))
+
+
+def update_recurring_cash_event(event_id: int, *, anchor_date=None,
+                                base_amount=None, percent=None,
+                                cadence_days=None, note=None, active=None,
+                                next_due_date=None) -> dict | None:
+    """Partial update — only fields passed as non-None are written.
+    Returns the updated row or None if the id doesn't exist / RLS denies."""
+    updates: list[str] = []
+    params: list = []
+    for col, val in (
+        ("anchor_date",   anchor_date),
+        ("base_amount",   None if base_amount is None else float(base_amount)),
+        ("percent",       None if percent is None else float(percent)),
+        ("cadence_days",  None if cadence_days is None else int(cadence_days)),
+        ("note",          note),
+        ("active",        None if active is None else bool(active)),
+        ("next_due_date", next_due_date),
+    ):
+        if val is not None:
+            updates.append(f"{col} = %s")
+            params.append(val)
+    if not updates:
+        # Nothing to change; return the current row.
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM recurring_cash_events WHERE id = %s",
+                            (event_id,))
+                row = cur.fetchone()
+                return _recurring_row_dict(dict(row)) if row else None
+    updates.append("updated_at = NOW()")
+    params.append(event_id)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"UPDATE recurring_cash_events SET {', '.join(updates)} "
+                " WHERE id = %s RETURNING *",
+                params,
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _recurring_row_dict(dict(row)) if row else None
+
+
+def delete_recurring_cash_event(event_id: int) -> bool:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM recurring_cash_events WHERE id = %s",
+                        (event_id,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+
+def _advance_recurring_next_due(event_id: int) -> dict | None:
+    """Bump next_due_date by cadence_days. Returns the updated row.
+    Shared by post + skip flows."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "UPDATE recurring_cash_events "
+                "  SET next_due_date = next_due_date + (cadence_days || ' days')::interval, "
+                "      updated_at = NOW() "
+                " WHERE id = %s RETURNING *",
+                (event_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _recurring_row_dict(dict(row)) if row else None
+
+
+def post_recurring_cash_event(event_id: int, *, amount_override: float | None = None,
+                              post_date=None) -> dict | None:
+    """Fire the deposit for the current cycle: insert a cash_transactions
+    row (source=deposit, amount = override or computed) dated at the
+    current next_due_date (or post_date override — e.g. if the user is
+    logging a payday-that-passed on a later day), then advance the cycle.
+
+    Returns {"event": <updated>, "cash": <inserted row>} or None if the
+    event doesn't exist / is inactive."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM recurring_cash_events WHERE id = %s",
+                        (event_id,))
+            row = cur.fetchone()
+    if not row:
+        return None
+    row = dict(row)
+    if not row.get("active"):
+        return None
+    base = float(row["base_amount"])
+    pct = float(row["percent"])
+    computed = round(base * pct / 100.0, 2)
+    amount = float(amount_override) if amount_override is not None else computed
+    tx_date = post_date if post_date is not None else row["next_due_date"]
+    cash = insert_cash_transaction(
+        row["portfolio_id"], amount, "deposit",
+        date=tx_date, note=row.get("note") or "Recurring deposit",
+    )
+    updated = _advance_recurring_next_due(event_id)
+    return {"event": updated, "cash": cash}
+
+
+def skip_recurring_cash_event(event_id: int) -> dict | None:
+    """Advance the cycle without writing a cash row. Returns the updated
+    event or None if it doesn't exist."""
+    return _advance_recurring_next_due(event_id)

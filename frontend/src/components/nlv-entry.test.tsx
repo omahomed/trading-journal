@@ -44,6 +44,15 @@ vi.mock("@/lib/api", () => ({
     journalEdit: vi.fn(),
     journalBatchEdit: vi.fn(),
     portfolioHeatPreview: vi.fn(),
+    // Migration 059 — recurring cash events. Default mock returns an
+    // empty list so cards render without the reminder; individual tests
+    // can override to exercise the reminder + post/skip flows.
+    recurringCashList: vi.fn(),
+    recurringCashCreate: vi.fn(),
+    recurringCashUpdate: vi.fn(),
+    recurringCashDelete: vi.fn(),
+    recurringCashPost: vi.fn(),
+    recurringCashSkip: vi.fn(),
   },
   getActivePortfolio: () => "CanSlim",
 }));
@@ -72,6 +81,9 @@ function setupDefaultMocks() {
   mockedPortfolioHeatPreview.mockResolvedValue({
     heat: 7.92, nlv_used: 100000, portfolio: "CanSlim",
   } as any);
+  // Migration 059 — default: no configured recurring events. Cards render
+  // the "Add recurring deposit" footer link but no reminder.
+  vi.mocked(api.recurringCashList).mockResolvedValue({ events: [] });
 }
 
 
