@@ -220,6 +220,21 @@ export function LogBuy({ navColor }: { navColor: string }) {
   // not a meaningful default. The user can reveal it via "Show stop loss".
   // Reset to true for stocks via the ticker-keyed effect below.
   const [showStopLoss, setShowStopLoss] = useState(true);
+  // Add-on convenience: on a scale-in, apply the new stop to every existing
+  // lot of the campaign too. Same DB call the Trade Manager bulk-edit uses
+  // (db.update_trade_stops → overwrites trades_details.stop_loss on every
+  // BUY row + clears stop_ladder + mirrors to trades_summary). Opt-in,
+  // localStorage-persisted, only surfaced in scale-in mode with non-ladder
+  // stop modes (ladders are inherently per-lot).
+  const [applyStopToAllLots, setApplyStopToAllLots] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try { return localStorage.getItem("mo-logbuy-apply-stop-all-lots") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("mo-logbuy-apply-stop-all-lots", applyStopToAllLots ? "1" : "0"); }
+    catch { /* private-mode / storage-disabled — ignore */ }
+  }, [applyStopToAllLots]);
   // Migration 055 — optional broker_stop_price for the two-stop model
   // (SR14). Stored as a string so the input can be empty ("nothing set")
   // vs "0" (which we treat as null). Position Sizer prefills this via
@@ -639,6 +654,29 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   const selectedCamp = openTrades.find(t => t.trade_id === selectedCampaign);
 
+  // Add-on "apply stop to all lots" derived values. Count of open BUY
+  // details on the selected campaign drives the checkbox label ("all N
+  // existing lots"). hasExistingLadder → surfaces a caption warning the
+  // user that update_trade_stops will clear the stop_ladder JSONB (same
+  // behavior Trade Manager has today; just want it visible in this flow).
+  const existingBuyCount = useMemo(() => {
+    if (actionType !== "scalein" || !selectedCamp) return 0;
+    return allDetails.filter(
+      d => d.trade_id === selectedCamp.trade_id
+        && String(d.action).toUpperCase() === "BUY"
+    ).length;
+  }, [actionType, selectedCamp, allDetails]);
+  const hasExistingLadder = useMemo(() => {
+    if (actionType !== "scalein" || !selectedCamp) return false;
+    return allDetails.some(
+      d => d.trade_id === selectedCamp.trade_id
+        && String(d.action).toUpperCase() === "BUY"
+        && d.stop_ladder
+        && Array.isArray(d.stop_ladder?.legs)
+        && d.stop_ladder.legs.length > 0
+    );
+  }, [actionType, selectedCamp, allDetails]);
+
   // Fetch live price + ATR when campaign is selected for scale-in. Mirrors
   // the new-campaign priceLookup effect (~lines 345-364): the same response
   // already carries atr_pct, so propagate it into atrPct (and flip
@@ -951,7 +989,38 @@ export function LogBuy({ navColor }: { navColor: string }) {
           for (const entry of entriesToFire) fireUpload(entry);
         }
 
-        setSubmitResult({ ok: true, msg: `Logged ${result.trx_id || "B1"}: ${shares} shs of ${ticker} @ $${price}` });
+        // Add-on convenience: propagate the new stop to every existing lot.
+        // Fired AFTER the add-on succeeds so the primary write is preserved
+        // if the bulk update fails (network hiccup, RLS glitch, whatever).
+        // Uses the same numeric stop we sent in the add-on body — mirrors
+        // Log Buy's own stop calculation so ATR/percent/price modes all
+        // resolve identically. Ladder mode is excluded upstream (the
+        // checkbox doesn't render). Partial-failure surfaces as a toast
+        // that points the user at Trade Manager.
+        let bulkStopMsg = "";
+        if (actionType === "scalein"
+            && applyStopToAllLots
+            && stopMode !== "ladder"
+            && showStopLoss
+            && body.stop_loss != null
+            && Number(body.stop_loss) > 0
+            && selectedCampaign) {
+          try {
+            const bulkRes = await api.updateTradeStops({
+              portfolio,
+              trade_id: selectedCampaign,
+              new_stop: Number(body.stop_loss),
+            });
+            if (bulkRes && "error" in bulkRes && bulkRes.error) {
+              bulkStopMsg = ` · stop-to-all failed: ${bulkRes.error} — apply in Trade Manager`;
+            } else if (bulkRes && "updated_lots" in bulkRes && bulkRes.updated_lots) {
+              bulkStopMsg = ` · stop applied to ${bulkRes.updated_lots} lot${bulkRes.updated_lots === 1 ? "" : "s"}`;
+            }
+          } catch (e: any) {
+            bulkStopMsg = ` · stop-to-all failed: ${e?.message || "network"} — apply in Trade Manager`;
+          }
+        }
+        setSubmitResult({ ok: true, msg: `Logged ${result.trx_id || "B1"}: ${shares} shs of ${ticker} @ $${price}${bulkStopMsg}` });
         // Reset form — file lists are cleared here, but the File refs are
         // already captured in uploadEntries so the background uploads are
         // unaffected.
@@ -1360,6 +1429,33 @@ export function LogBuy({ navColor }: { navColor: string }) {
                         ? ` · Risk if fully stopped ${formatCurrency(ladderRisk, { decimals: 0 })}`
                         : ""}
                   </div>
+                )}
+                {/* Add-on convenience: propagate this stop to every existing
+                    lot in one submit. Only in scale-in mode; hidden on
+                    ladder mode (per-lot by definition). Hidden also when
+                    there are no existing BUY lots (defensive — shouldn't
+                    happen for a scale-in but keeps the label honest). */}
+                {actionType === "scalein"
+                  && stopMode !== "ladder"
+                  && existingBuyCount > 0 && (
+                  <label className="flex items-start gap-2 mt-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={applyStopToAllLots}
+                      onChange={(e) => setApplyStopToAllLots(e.target.checked)}
+                      className="mt-0.5"
+                      data-testid="logbuy-apply-stop-all-lots"
+                    />
+                    <span className="text-[12px]" style={{ color: "var(--ink-3)" }}>
+                      Also apply this stop to all <b>{existingBuyCount}</b> existing lot
+                      {existingBuyCount === 1 ? "" : "s"}
+                      {hasExistingLadder && applyStopToAllLots && (
+                        <span className="block mt-0.5 text-[11px]" style={{ color: "#d97706" }}>
+                          Clears the existing stop ladder on this campaign.
+                        </span>
+                      )}
+                    </span>
+                  </label>
                 )}
               </div>
             ) : (
