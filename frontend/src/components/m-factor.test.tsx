@@ -60,37 +60,31 @@ describe("MFactor — V11 augmented surface", () => {
     mockedMarketSignals.mockResolvedValue({ signals: [] });
   });
 
-  test("renders POWERTREND state in the banner", async () => {
+  test("renders POWERTREND state + 200% exposure in the hero tiles", async () => {
     mockedRallyPrefix.mockResolvedValue(baseRallyPayload);
     render(<MFactor navColor="#8b5cf6" />);
-    // POWERTREND appears in both the state banner and the methodology table,
-    // so findAllByText is used instead of findByText.
-    const matches = await screen.findAllByText("POWERTREND");
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Suggested Exposure: 200%/)).toBeInTheDocument();
+    // Post 2026-08-04 redesign: hero is a 5-tile grid, not a single
+    // banner. State appears in the Status tile (data-testid=mfactor-tile-status);
+    // exposure is a discrete value inside its own tile.
+    const statusTile = await screen.findByTestId("mfactor-tile-status");
+    expect(statusTile).toHaveTextContent("POWERTREND");
+    const exposureTile = screen.getByTestId("mfactor-tile-exposure");
+    expect(exposureTile).toHaveTextContent("Suggested Exposure");
+    expect(exposureTile).toHaveTextContent("200%");
   });
 
-  test("UPTREND UNDER PRESSURE renders full text banner + day-count subtitle", async () => {
-    // 5th-state banner. Renders the FULL machine string at 52px on
-    // desktop (mobile applies an alias; desktop shows the full text
-    // and has room for it). Subtitle uses the day-count phrasing per
-    // spec: "Day ${dayNum} · post-Step-4 · 21e violated". Dormant
-    // this commit — no backend emits UUP yet.
+  test("UPTREND UNDER PRESSURE renders in Status tile with day-count sub", async () => {
+    // 5th-state tile. Under the 2026-08-04 tile redesign, the sub-line
+    // reads "Day N · cycle started YYYY-MM-DD" when both are present.
     mockedRallyPrefix.mockResolvedValue({
       ...baseRallyPayload,
       state: "UPTREND UNDER PRESSURE",
       day_num: 42,
     });
     render(<MFactor navColor="#8b5cf6" />);
-    // Banner text — full 22-char machine string. `findAllByText`
-    // (rather than `findByText`) because the state may appear in
-    // multiple methodology tables too.
-    const matches = await screen.findAllByText("UPTREND UNDER PRESSURE");
-    expect(matches.length).toBeGreaterThanOrEqual(1);
-    // Subtitle — day-count phrasing.
-    expect(
-      await screen.findByText(/Day 42 · post-Step-4 · 21e violated/),
-    ).toBeInTheDocument();
+    const statusTile = await screen.findByTestId("mfactor-tile-status");
+    expect(statusTile).toHaveTextContent("UPTREND UNDER PRESSURE");
+    expect(statusTile).toHaveTextContent(/Day 42/);
   });
 
   test("renders cap_at_100 indicator when active", async () => {
@@ -102,14 +96,17 @@ describe("MFactor — V11 augmented surface", () => {
   test("hides cap_at_100 indicator when not active", async () => {
     mockedRallyPrefix.mockResolvedValue({ ...baseRallyPayload, cap_at_100: false });
     render(<MFactor navColor="#8b5cf6" />);
-    await screen.findAllByText("POWERTREND");
+    await screen.findByTestId("mfactor-tile-status");
     expect(screen.queryByText("Capped at 100%")).not.toBeInTheDocument();
   });
 
-  test("renders cycle_start_date line when present and day_num > 0", async () => {
+  test("Status tile shows cycle_start_date + day_num when both present", async () => {
     mockedRallyPrefix.mockResolvedValue(baseRallyPayload);
     render(<MFactor navColor="#8b5cf6" />);
-    expect(await screen.findByText(/Cycle started 2026-03-31 \(Day 18\)/)).toBeInTheDocument();
+    const statusTile = await screen.findByTestId("mfactor-tile-status");
+    // 2026-08-04 tile-redesign format: "Day 18 · cycle started 2026-03-31"
+    expect(statusTile).toHaveTextContent(/Day 18/);
+    expect(statusTile).toHaveTextContent(/cycle started 2026-03-31/);
   });
 
   test("renders Recent Signals section header", async () => {
@@ -142,6 +139,6 @@ describe("MFactor — V11 augmented surface", () => {
     // "Power-Trend ON" appears in both the banner ("Power-Trend ON since …")
     // and the signal label cell, so use getAllByText.
     expect(screen.getAllByText("Power-Trend ON").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("160% → 200%")).toBeInTheDocument();
+    expect(await screen.findByText("160% → 200%")).toBeInTheDocument();
   });
 });

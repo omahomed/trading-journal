@@ -168,87 +168,235 @@ export function MFactor({ navColor }: { navColor: string }) {
         </button>
       </div>
 
-      {/* ═══ State Banner ═══ */}
-      <div className="rounded-[14px] p-6 text-center mb-6" style={{ background: sc.bg, color: sc.fg, boxShadow: "0 4px 12px rgba(0,0,0,0.15)" }}>
-        <div className="text-[12px] uppercase tracking-[0.15em] opacity-80 mb-1">NASDAQ M Factor</div>
-        <div className="text-[52px] font-extrabold tracking-tight" style={{ lineHeight: 1.1 }}>{state}</div>
-        {data.cap_at_100 && (
-          <div className="inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-[11px] font-semibold"
-               style={{ background: "rgba(0,0,0,0.2)" }}>
-            <LockIcon /> Capped at 100%
+      {/* ═══ Hero: 5 KPI tiles ═══ */}
+      {/*
+        Replaces the single centered banner (2026-08-04). Five tiles:
+          1. Current Status  — state name + Day N + cycle start (state-tinted)
+          2. Trend Count     — signed leg length + trend-cycle start (green up / red down)
+          3. Suggested Exposure — % + mini 0-200 progress bar
+          4. FTD             — date + days-since + price/vol confirmation badges
+          5. Reference High  — peak + drawdown % + peak date
+        Same KPITile visual language used across the app (rounded-[14px],
+        min-h 108, radial-highlight overlay, monospace value); inlined here
+        rather than importing so each tile can carry its own gradient logic
+        (state color, drawdown severity, exposure banding).
+      */}
+      {(() => {
+        // Gradient helpers scoped to this render pass.
+        const stateGradient = (s: string): string => {
+          const g: Record<string, string> = {
+            POWERTREND: "linear-gradient(135deg, #8A2BE2, #A855F7)",
+            UPTREND: "linear-gradient(135deg, #08a86b, #34d399)",
+            "UPTREND UNDER PRESSURE": "linear-gradient(135deg, #d97706, #f59f00)",
+            "RALLY MODE": "linear-gradient(135deg, #f59f00, #fbbf24)",
+            CORRECTION: "linear-gradient(135deg, #e5484d, #f87171)",
+          };
+          return g[s] || g.CORRECTION;
+        };
+        const trendGradient = (n: number | null): string =>
+          n === null || n === 0 ? "linear-gradient(135deg, #6b7280, #9ca3af)"
+          : n > 0 ? "linear-gradient(135deg, #10b981, #34d399)"
+          : "linear-gradient(135deg, #e5484d, #f87171)";
+        const exposureGradient = (pct: number): string =>
+          pct >= 100 ? "linear-gradient(135deg, #10b981, #34d399)"
+          : pct >= 40 ? "linear-gradient(135deg, #f97316, #fb923c)"
+          : "linear-gradient(135deg, #e5484d, #f87171)";
+        const drawdownGradient = (pct: number): string => {
+          const abs = Math.abs(pct);
+          return abs >= 10 ? "linear-gradient(135deg, #e5484d, #f87171)"
+               : abs >= 5 ? "linear-gradient(135deg, #f97316, #fb923c)"
+               : "linear-gradient(135deg, #10b981, #34d399)";
+        };
+        const ftdGradient = (present: boolean): string =>
+          present ? "linear-gradient(135deg, #6366f1, #818cf8)"
+                  : "linear-gradient(135deg, #6b7280, #9ca3af)";
+
+        const tileBase = "relative overflow-hidden rounded-[14px] p-[18px] text-white "
+                       + "flex flex-col justify-between min-h-[108px] transition-transform "
+                       + "duration-150 hover:scale-[1.01]";
+        const tileShadow = { boxShadow: "0 4px 14px rgba(0,0,0,0.08)" };
+        const highlightOverlay = (
+          <div className="absolute -right-5 -top-5 w-[100px] h-[100px] rounded-full"
+               style={{ background: "radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)" }} />
+        );
+        const labelCls = "text-[10px] font-semibold uppercase tracking-[0.12em] opacity-85";
+        const subCls   = "relative z-10 text-[11px] font-medium opacity-85 privacy-mask";
+
+        // Days-since-FTD helper — inclusive count from FTD date to today.
+        const daysSinceFtd: number | null = data.ftd_date ? (() => {
+          const ftd = new Date(data.ftd_date);
+          const today = new Date(data.data_as_of || new Date().toISOString().slice(0, 10));
+          return Math.max(0, Math.round((today.getTime() - ftd.getTime()) / 86400000));
+        })() : null;
+
+        const drawdown = Number(data.drawdown_pct || 0);
+        const refHigh  = Number(data.reference_high || 0);
+
+        return (
+          <div className="grid gap-[14px] mb-6"
+               style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+
+            {/* Tile 1 — Current Status */}
+            <div className={tileBase}
+                 style={{ background: stateGradient(state), ...tileShadow }}
+                 data-testid="mfactor-tile-status">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>Status</div>
+                <div className="text-[24px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono, lineHeight: 1.1 }}>
+                  {state}
+                </div>
+                {data.cap_at_100 && (
+                  <span className="inline-flex items-center gap-1 mt-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: "rgba(0,0,0,0.25)" }}>
+                    <LockIcon size={9} /> Capped at 100%
+                  </span>
+                )}
+              </div>
+              <div className={subCls}>
+                {dayNum > 0 && data.cycle_start_date
+                  ? `Day ${dayNum} · cycle started ${data.cycle_start_date}`
+                  : dayNum > 0
+                    ? `Day ${dayNum}`
+                    : state === "CORRECTION"
+                      ? `−${Math.abs(drawdown).toFixed(1)}% off high`
+                      : subtitles[state] || ""}
+              </div>
+            </div>
+
+            {/* Tile 2 — Trend Count */}
+            <div className={tileBase}
+                 style={{ background: trendGradient(trendCount), ...tileShadow }}
+                 data-testid="mfactor-tile-trend">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>Trend Count</div>
+                <div className="text-[28px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {trendCount === null ? "—" : trendCount > 0 ? `+${trendCount}` : String(trendCount)}
+                </div>
+              </div>
+              <div className={subCls}>
+                {data.trend_cycle_start_date
+                  ? `Cycle started ${data.trend_cycle_start_date}`
+                  : trendCount === null ? "No prior Step-4 arm" : ""}
+              </div>
+            </div>
+
+            {/* Tile 3 — Suggested Exposure (with 0-200 progress bar) */}
+            <div className={tileBase}
+                 style={{ background: exposureGradient(entryExp), ...tileShadow }}
+                 data-testid="mfactor-tile-exposure">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>Suggested Exposure</div>
+                <div className="text-[28px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {entryExp}%
+                </div>
+              </div>
+              <div className="relative z-10">
+                {/* Mini 0-200 progress bar. 100% marker as a subtle tick so
+                    the eye can gauge "am I above / below the normalized ceiling". */}
+                <div className="relative h-[6px] rounded-full mb-1"
+                     style={{ background: "rgba(0,0,0,0.25)" }}>
+                  <div className="absolute top-0 left-0 h-full rounded-full"
+                       style={{ width: `${Math.min(100, (entryExp / 200) * 100)}%`,
+                                background: "rgba(255,255,255,0.85)" }} />
+                  {/* 100% tick mark */}
+                  <div className="absolute top-[-2px] h-[10px] w-[1px]"
+                       style={{ left: "50%", background: "rgba(255,255,255,0.55)" }} />
+                </div>
+                <div className={subCls} style={{ opacity: 0.75 }}>
+                  0 · <span style={{ opacity: 0.9 }}>100</span> · 200
+                </div>
+              </div>
+            </div>
+
+            {/* Tile 4 — FTD */}
+            <div className={tileBase}
+                 style={{ background: ftdGradient(!!data.ftd_date), ...tileShadow }}
+                 data-testid="mfactor-tile-ftd">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>FTD</div>
+                <div className="text-[22px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {data.ftd_date || "—"}
+                </div>
+                {daysSinceFtd !== null && (
+                  <div className="text-[11px] mt-0.5 opacity-80">
+                    {daysSinceFtd === 0 ? "today" : `${daysSinceFtd}d ago`}
+                  </div>
+                )}
+              </div>
+              {/* Webby-model confirmation badges (moved from the old banner).
+                  Price chip + volume-annotation chip; hidden for pre-cutover
+                  ixic_legacy FTDs (legacy rule didn't cross-check SPY). */}
+              <div className="relative z-10 flex items-center flex-wrap gap-1">
+                {data.ftd_date && data.ftd_confirmed_by && data.ftd_confirmed_by !== "ixic_legacy" && (() => {
+                  const cb = data.ftd_confirmed_by;
+                  const priceLabel = cb === "both" ? "IXIC ✓ / SPY ✓"
+                                   : cb === "ixic" ? "IXIC only"
+                                   : cb === "spy"  ? "SPY only" : cb;
+                  const ixicVol = data.ftd_ixic_vol_up;
+                  const spyVol  = data.ftd_spy_vol_up;
+                  const known = [ixicVol, spyVol].filter(v => v === true || v === false);
+                  const upN   = known.filter(v => v === true).length;
+                  const volLabel = known.length === 0 ? null
+                                : upN === known.length && upN > 0 ? "Vol " + "✓".repeat(known.length)
+                                : upN > 0 ? "Vol ✓"
+                                : "Vol —";
+                  return (
+                    <>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                            style={{ background: "rgba(0,0,0,0.25)" }}>{priceLabel}</span>
+                      {volLabel && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                              title={
+                                `IXIC vol: ${ixicVol === true ? "up" : ixicVol === false ? "flat/down" : "unknown"}` +
+                                ` · SPY vol: ${spyVol === true ? "up" : spyVol === false ? "flat/down" : "unknown"}`
+                              }
+                              style={{ background: "rgba(0,0,0,0.25)" }}>{volLabel}</span>
+                      )}
+                      {data.ftd_spy_data_missing && (
+                        <span className="text-[9px] opacity-70">(SPY missing)</span>
+                      )}
+                    </>
+                  );
+                })()}
+                {!data.ftd_date && (
+                  <span className={subCls} style={{ opacity: 0.85 }}>
+                    Waiting for one
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Tile 5 — Reference High / Drawdown */}
+            <div className={tileBase}
+                 style={{ background: drawdownGradient(drawdown), ...tileShadow }}
+                 data-testid="mfactor-tile-drawdown">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>Ref High · Drawdown</div>
+                <div className="text-[22px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {refHigh > 0 ? formatCurrency(refHigh, { decimals: 0 }) : "—"}
+                </div>
+                <div className="text-[16px] font-semibold mt-0.5 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {drawdown ? `${drawdown >= 0 ? "+" : ""}${drawdown.toFixed(2)}%` : "flat"}
+                </div>
+              </div>
+              <div className={subCls}>
+                {data.reference_high_date ? `peak ${data.reference_high_date}` : ""}
+              </div>
+            </div>
           </div>
-        )}
-        <div className="text-[15px] mt-2 opacity-90">{subtitles[state] || ""}</div>
-        {trendCount !== null && (
-          <div className="text-[15px] font-semibold mt-2">Trend Count: {trendCount > 0 ? `+${trendCount}` : trendCount}</div>
-        )}
-        <div className="text-[18px] font-bold mt-2">Suggested Exposure: {entryExp}%</div>
-        <div className="text-[12px] mt-1 opacity-70 flex items-center flex-wrap gap-1.5">
-          <span>FTD: {data.ftd_date || "—"}</span>
-          {data.ftd_date && data.ftd_confirmed_by && data.ftd_confirmed_by !== "ixic_legacy" && (() => {
-            // Webby model (2026-08-04) badges — TWO pieces:
-            //   (1) Price confirmation — which index(es) had close ≥ +1%.
-            //       This is what fires the FTD.
-            //   (2) Volume annotation — informational only under Webby;
-            //       lets the operator see at a glance whether the fire
-            //       coincided with a volume-up day on either index.
-            // Pre-cutover FTDs (confirmed_by = "ixic_legacy") render no
-            // badge — the legacy rule didn't cross-check SPY.
-            const cb = data.ftd_confirmed_by;
-            const priceLabel = cb === "both" ? "IXIC ✓ / SPY ✓"
-                             : cb === "ixic" ? "IXIC only"
-                             : cb === "spy"  ? "SPY only" : cb;
-            const priceColor = cb === "both" ? "#08a86b" : "#d97706";
-            // Volume chip is optional — only rendered when the backend
-            // supplied the annotations (rally-prefix response upgrade
-            // ships with the same commit as this rule change).
-            const ixicVol = data.ftd_ixic_vol_up;
-            const spyVol  = data.ftd_spy_vol_up;
-            const knownVol = [ixicVol, spyVol].filter(v => v === true || v === false);
-            const upCount  = knownVol.filter(v => v === true).length;
-            const volLabel = knownVol.length === 0 ? null
-                           : upCount === knownVol.length && upCount > 0 ? "Vol ✓" + (knownVol.length > 1 ? "✓" : "")
-                           : upCount > 0 ? "Vol ✓"
-                           : "Vol —";
-            const volColor = knownVol.length === 0 ? "#6b7280"
-                           : upCount === knownVol.length && upCount > 0 ? "#08a86b"
-                           : upCount > 0 ? "#d97706"
-                           : "#6b7280";
-            return (
-              <>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                      style={{ background: `color-mix(in oklab, ${priceColor} 18%, transparent)`, color: priceColor }}>
-                  {priceLabel}
-                </span>
-                {volLabel && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-                        title={
-                          `IXIC vol: ${ixicVol === true ? "up" : ixicVol === false ? "flat/down" : "unknown"}` +
-                          ` · SPY vol: ${spyVol === true ? "up" : spyVol === false ? "flat/down" : "unknown"}`
-                        }
-                        style={{ background: `color-mix(in oklab, ${volColor} 18%, transparent)`, color: volColor }}>
-                    {volLabel}
-                  </span>
-                )}
-                {data.ftd_spy_data_missing && (
-                  <span className="text-[9px]" style={{ color: "var(--ink-4)" }}>
-                    (SPY data missing — IXIC fallback)
-                  </span>
-                )}
-              </>
-            );
-          })()}
-        </div>
-        {state === "POWERTREND" && data.power_trend_on_since && (
-          <div className="text-[12px] mt-1 opacity-70">Power-Trend ON since {data.power_trend_on_since}</div>
-        )}
-        {data.cycle_start_date && dayNum > 0 && (
-          <div className="text-[12px] mt-1 opacity-70">Cycle started {data.cycle_start_date} (Day {dayNum})</div>
-        )}
-        {data.trend_cycle_start_date && (
-          <div className="text-[12px] mt-1 opacity-70">Trend Cycle started {data.trend_cycle_start_date}</div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* ═══ Manual CORRECTION Override (Migration 053) ═══
           The systematic rule requires 2 closes < 50 SMA + ≥10% depth. When
