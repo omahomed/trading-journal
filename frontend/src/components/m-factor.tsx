@@ -303,37 +303,10 @@ export function MFactor({ navColor }: { navColor: string }) {
               </div>
             </div>
 
-            {/* Tile 3 — Suggested Exposure (with 0-200 progress bar) */}
-            <div className={tileBase}
-                 style={{ background: exposureGradient(entryExp), ...tileShadow }}
-                 data-testid="mfactor-tile-exposure">
-              {highlightOverlay}
-              <div className="relative z-10">
-                <div className={labelCls}>Suggested Exposure</div>
-                <div className="text-[28px] font-semibold tracking-tight mt-1 privacy-mask"
-                     style={{ fontFamily: mono }}>
-                  {entryExp}%
-                </div>
-              </div>
-              <div className="relative z-10">
-                {/* Mini 0-200 progress bar. 100% marker as a subtle tick so
-                    the eye can gauge "am I above / below the normalized ceiling". */}
-                <div className="relative h-[6px] rounded-full mb-1"
-                     style={{ background: "rgba(0,0,0,0.25)" }}>
-                  <div className="absolute top-0 left-0 h-full rounded-full"
-                       style={{ width: `${Math.min(100, (entryExp / 200) * 100)}%`,
-                                background: "rgba(255,255,255,0.85)" }} />
-                  {/* 100% tick mark */}
-                  <div className="absolute top-[-2px] h-[10px] w-[1px]"
-                       style={{ left: "50%", background: "rgba(255,255,255,0.55)" }} />
-                </div>
-                <div className={subCls} style={{ opacity: 0.75 }}>
-                  0 · <span style={{ opacity: 0.9 }}>100</span> · 200
-                </div>
-              </div>
-            </div>
-
-            {/* Tile 4 — FTD */}
+            {/* Tile 3 — FTD (reordered 2026-08-04: FTD sits right after
+                Trend Count so the two "cycle-state" tiles group together,
+                and the Suggested + Actual Exposure tiles pair up as the
+                two exposure readouts.) */}
             <div className={tileBase}
                  style={{ background: ftdGradient(!!data.ftd_date), ...tileShadow }}
                  data-testid="mfactor-tile-ftd">
@@ -390,6 +363,36 @@ export function MFactor({ navColor }: { navColor: string }) {
                     Waiting for one
                   </span>
                 )}
+              </div>
+            </div>
+
+            {/* Tile 4 — Suggested Exposure (with 0-200 progress bar) */}
+            <div className={tileBase}
+                 style={{ background: exposureGradient(entryExp), ...tileShadow }}
+                 data-testid="mfactor-tile-exposure">
+              {highlightOverlay}
+              <div className="relative z-10">
+                <div className={labelCls}>Suggested Exposure</div>
+                <div className="text-[28px] font-semibold tracking-tight mt-1 privacy-mask"
+                     style={{ fontFamily: mono }}>
+                  {entryExp}%
+                </div>
+              </div>
+              <div className="relative z-10">
+                {/* Mini 0-200 progress bar. 100% marker as a subtle tick so
+                    the eye can gauge "am I above / below the normalized ceiling". */}
+                <div className="relative h-[6px] rounded-full mb-1"
+                     style={{ background: "rgba(0,0,0,0.25)" }}>
+                  <div className="absolute top-0 left-0 h-full rounded-full"
+                       style={{ width: `${Math.min(100, (entryExp / 200) * 100)}%`,
+                                background: "rgba(255,255,255,0.85)" }} />
+                  {/* 100% tick mark */}
+                  <div className="absolute top-[-2px] h-[10px] w-[1px]"
+                       style={{ left: "50%", background: "rgba(255,255,255,0.55)" }} />
+                </div>
+                <div className={subCls} style={{ opacity: 0.75 }}>
+                  0 · <span style={{ opacity: 0.9 }}>100</span> · 200
+                </div>
               </div>
             </div>
 

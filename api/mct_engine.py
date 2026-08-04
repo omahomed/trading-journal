@@ -267,8 +267,15 @@ class MCTEngine:
 
             # Rally / FTD tracking
             "rally_active": False,
+            # THREE anchors, do NOT collapse (see memory:
+            # mct-engine-three-anchors). rally_day_* = correction low
+            # (invalidation floor). step0_bar_idx = STEP_0 bar (Day 1 anchor
+            # for FTD counting — the FTD gate checks
+            # `(i - step0_bar_idx + 1) >= FTD_WINDOW_START`, NOT rally_count).
+            # ftd_low set later on STEP_1 fire = POST_FTD_SOFT_FAIL floor.
             "rally_day_idx": None,
             "rally_day_low": None,
+            "step0_bar_idx": None,
             "running_min_low": None,
             "running_min_idx": None,
             "rally_count": 0,
@@ -682,6 +689,7 @@ class MCTEngine:
         state["rally_active"] = False
         state["rally_day_idx"] = None
         state["rally_day_low"] = None
+        state["step0_bar_idx"] = None    # FTD-day counter anchor
         state["running_min_low"] = None
         state["running_min_idx"] = None
         state["rally_count"] = 0
@@ -942,21 +950,28 @@ class MCTEngine:
                 and (up_day or pink_rally_day)):
             state["step0_done"] = True
             state["rally_active"] = True
-            # O'Neil convention (2026-08-04): Day 1 = the STEP_0 bar itself
-            # (the first up-close off the low), NOT the low bar. Historically
-            # this used running_min_idx (the low bar), which produced an
-            # off-by-N rally_count when STEP_0 fired several sessions after
-            # the correction bottom — the FTD gate (rally_count ≥ 4) would
-            # then fire on the user's "Day 3." Anchoring on the STEP_0 bar
-            # here makes rally_count == the user-facing "Day N" the UI
-            # already displays. rally_day_low STAYS the correction low
-            # (running_min_low) — invalidation semantics are anchored on
-            # the low, not the STEP_0 bar. If STEP_0 fires on the same bar
-            # as the low (upside-reversal case), running_min_idx == i and
-            # this is a no-op.
-            state["rally_day_idx"] = i
+            # THREE-ANCHOR MODEL (2026-08-04). Do NOT collapse these into one:
+            #   * rally_day_idx / rally_day_low ← running_min_* (the CORRECTION
+            #     LOW). "Day 1 of the RALLY" per the user's model. rally_day_low
+            #     is the invalidation floor: any intraday `low < rally_day_low`
+            #     fires RALLY_INVALIDATED. rally_count = i - rally_day_idx + 1
+            #     counts days since the rally low (7/29 = 1, 7/30 = 2, ...).
+            #   * step0_bar_idx ← i (the STEP_0 BAR itself, the rally day).
+            #     Day 1 anchor for FTD counting — NOT the rally low. The
+            #     FTD gate uses (i - step0_bar_idx + 1) ≥ FTD_WINDOW_START.
+            #     When STEP_0 fires the same bar as the low (upside-reversal
+            #     case), step0_bar_idx == running_min_idx and this collapses
+            #     to the trivial case.
+            #   * ftd_low (set when STEP_1 fires) — POST_FTD_SOFT_FAIL floor.
+            #     Different anchor still — the low of the STEP_1 bar.
+            # An earlier fix (committed as 069278b, before the user corrected
+            # me) collapsed rally_day_idx onto STEP_0's bar, destroying the
+            # "day of the rally" concept. See memory: mct-engine-three-anchors.
+            state["rally_day_idx"] = state["running_min_idx"]
             state["rally_day_low"] = state["running_min_low"]
-            state["rally_count"] = 1  # Day 1 by O'Neil count
+            state["rally_count"] = i - state["rally_day_idx"] + 1
+            # New anchor: Day 1 of FTD counting = the STEP_0 bar.
+            state["step0_bar_idx"] = i
             # cycle_start_idx anchors the user-facing "Day N" display to the
             # bar where STEP_0 fired. Survives V10 soft resets so the day
             # counter doesn't reset mid-cycle. ONLY re-anchored when a real
@@ -1010,9 +1025,17 @@ class MCTEngine:
         # of which index confirmed. The POST_FTD_SOFT_FAIL check runs IXIC's
         # close vs this anchor — keeping the soft-fail comparison purely
         # IXIC-vs-IXIC even when SPY drove the confirmation.
+        # FTD-day counter: Day 1 = STEP_0 bar (rally day), NOT rally low
+        # (see memory: mct-engine-three-anchors for why these differ).
+        # rally_count anchors on rally low and is "day of the rally"; the
+        # FTD gate uses this separate counter so Day 4 always means "4th
+        # session including STEP_0" regardless of how many bars back the
+        # low is.
+        ftd_day = (i - state["step0_bar_idx"] + 1
+                   if state.get("step0_bar_idx") is not None else None)
         if (state["step0_done"] and not state["step1_done"]
-                and state["rally_count"] is not None
-                and FTD_WINDOW_START <= state["rally_count"] <= FTD_WINDOW_END
+                and ftd_day is not None
+                and FTD_WINDOW_START <= ftd_day <= FTD_WINDOW_END
                 and prev is not None and prev_close > 0):
             pct_gain = (close - prev_close) / prev_close
             bar_date = _to_date(current["trade_date"])
@@ -1076,14 +1099,18 @@ class MCTEngine:
                 before = state["exposure"]
                 state["exposure"] = max(state["exposure"], STEP_LADDER_EXPOSURE[1])
                 if arm_emit:
-                    label = f"FTD on Day {state['rally_count']}, close +{pct_gain*100:.2f}%"
+                    # Label uses ftd_day (STEP_0-anchored, matches UI "Day N").
+                    # Meta carries both counters for auditability — rally_count
+                    # remains "day of the rally since the correction low."
+                    label = f"FTD on Day {ftd_day}, close +{pct_gain*100:.2f}%"
                     if dual_index_active and confirmed_by:
                         label = label + f" [{confirmed_by}]"
                     bar_signals.append(self._signal(
                         current, state, "STEP_1_FTD",
                         label,
                         exposure_before=before, exposure_after=state["exposure"],
-                        meta={"rally_count": state["rally_count"],
+                        meta={"ftd_day": ftd_day,            # Day 1 = STEP_0 bar
+                              "rally_count": state["rally_count"],  # Day 1 = rally low
                               "pct_gain": pct_gain,
                               "ftd_close": close, "ftd_low": low,
                               "confirmed_by": confirmed_by,
@@ -1198,6 +1225,7 @@ class MCTEngine:
         state["rally_active"] = False
         state["rally_day_idx"] = None
         state["rally_day_low"] = None
+        state["step0_bar_idx"] = None    # FTD-day counter anchor
         # Seed a fresh running min at THIS bar so a same-bar STEP_0 can re-fire
         # when close > prev_close (canonical 4/9/2025 fires both signals same bar)
         state["running_min_low"] = float(current["low"])
@@ -1538,10 +1566,19 @@ class MCTEngine:
         state["step5_done"] = False
         state["step6_done"] = False
         state["step7_done"] = False
-        # FTD count restarts: rally_day_idx → current bar
-        state["rally_day_idx"] = i
-        state["rally_count"] = 1
-        # rally_day_low PRESERVED per V11 spec
+        # FTD count restarts on V10 soft reset — the rally survives (low held
+        # above rally_day_low) but the FTD attempt failed. Under the two-anchor
+        # model (2026-08-04, see memory:mct-engine-three-anchors):
+        #   * rally_day_idx STAYS the rally-low bar (the RALLY didn't restart —
+        #     it's still the same rally cycle anchored on the same correction
+        #     low). Historically this was set to `i` under the pre-two-anchor
+        #     collapsed model; that would put the "day of the rally" anchor
+        #     on the current bar, wrong under the new semantics.
+        #   * rally_count STAYS ticking (days since the original rally low).
+        #   * step0_bar_idx RESETS to `i` — the FTD-day counter restarts at
+        #     Day 1 here so a fresh FTD attempt has its own 4-25 window.
+        state["step0_bar_idx"] = i
+        # rally_day_idx / rally_day_low / rally_count PRESERVED per V11 spec.
         # cap_at_100 PRESERVED
         state["ftd_close"] = None
         state["ftd_low"] = None
@@ -1575,6 +1612,7 @@ class MCTEngine:
         state["rally_active"] = False
         state["rally_day_idx"] = None
         state["rally_day_low"] = None
+        state["step0_bar_idx"] = None    # FTD-day counter anchor
         state["running_min_low"] = float(current["low"])
         state["running_min_idx"] = None
         state["rally_count"] = 0

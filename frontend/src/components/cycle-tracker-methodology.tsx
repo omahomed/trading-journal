@@ -192,7 +192,13 @@ export function CycleTrackerMethodology() {
                 <div className="cond"><span className="cond-label">Trigger</span> first up-close (or pink rally day) after the correction low. Fires STEP_0_RALLY_DAY.</div>
               </div>
               <div className="rule-effect">
-                Opens the cycle. Exposure → 20 (step 0 credit). Sets <span className="mono">rally_day_low</span> = the correction low (invalidation floor). <b>O&apos;Neil convention (2026-08-04):</b> the STEP_0 bar is <b>Day 1</b> of the rally count — not the low bar. If STEP_0 fires the day after the low, Day 1 is still STEP_0 day; the low remains the invalidation anchor. If STEP_0 fires the same bar as the low (upside-reversal), Day 1 and the low bar coincide.
+                Opens the cycle. Exposure → 20 (step 0 credit). <b>Two-anchor model (2026-08-04):</b>
+                <ul className="mt-1 ml-3 list-disc">
+                  <li><span className="mono">rally_day_low</span> = the correction low (invalidation floor). Any intraday <span className="mono">low &lt; rally_day_low</span> fires RALLY_INVALIDATED.</li>
+                  <li><span className="mono">rally_day_idx</span> = the correction-low bar; <span className="mono">rally_count</span> = days since the low (&quot;Day 1 of the rally = the low bar&quot;).</li>
+                  <li><span className="mono">step0_bar_idx</span> = the STEP_0 bar itself. This is the <b>Day 1 anchor for FTD counting</b>. The FTD gate checks <span className="mono">(i − step0_bar_idx + 1) ≥ 4</span>, so the earliest FTD is 4 sessions from STEP_0.</li>
+                </ul>
+                <div className="mt-1">If STEP_0 fires the same bar as the low (upside-reversal case), all three anchor on the same bar. Otherwise, the rally low is Day 1 of the rally but Day 0 of FTD counting; STEP_0 the next day starts the FTD clock.</div>
               </div>
               <div className="rule-note">Pink rally day = same day where close is in the upper half of the intraday range (<span className="mono">position_in_range &gt; 0.5</span>). Distinct label; same STEP_0 event.</div>
             </div>
@@ -493,8 +499,8 @@ export function CycleTrackerMethodology() {
             <dt>correction_active vs in_correction</dt>
             <dd>Two flags. <span className="mono">correction_active</span> = the current declared correction cycle. <span className="mono">in_correction</span> = broader &ldquo;we&rsquo;re inside a correction context&rdquo; that persists through soft resets. Nullification clears both.</dd>
 
-            <dt>rally_day_low / rally_day_idx</dt>
-            <dd><span className="mono">rally_day_low</span> = the correction low (invalidation floor — any subsequent intraday low below this invalidates the rally). <span className="mono">rally_day_idx</span> = the STEP_0 bar index (O&apos;Neil Day 1). When STEP_0 fires the same bar as the low, both anchor on the same bar.</dd>
+            <dt>rally_day_low / rally_day_idx / step0_bar_idx</dt>
+            <dd>Three anchors, do not conflate: <span className="mono">rally_day_low</span> = the correction low (invalidation floor — any subsequent intraday low below this invalidates the rally). <span className="mono">rally_day_idx</span> = the correction-low bar (drives <span className="mono">rally_count</span> = &quot;day of the rally&quot;). <span className="mono">step0_bar_idx</span> = the STEP_0 bar (drives the FTD gate: Day 1 of FTD counting starts here). When STEP_0 fires the same bar as the low, all three point at the same bar; otherwise the rally-low anchor lags STEP_0 by 1+ bars.</dd>
 
             <dt>ftd_close / ftd_low</dt>
             <dd>Close and intraday low of the STEP_1 bar. Close &lt; ftd_low fires POST_FTD_SOFT_FAIL.</dd>

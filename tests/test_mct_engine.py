@@ -1158,17 +1158,20 @@ def test_force_correction_pending_when_date_after_history_end():
 
 
 # ---------------------------------------------------------------------------
-# O'Neil rally-count anchor (2026-08-04)
+# Two-anchor model (2026-08-04) — see memory: mct-engine-three-anchors
 # ---------------------------------------------------------------------------
-# rally_day_idx anchors on the STEP_0 bar (first up-close off the low), NOT
-# on the correction low. rally_day_low still tracks the low (used for
-# RALLY_INVALIDATED). When STEP_0 fires on the low bar itself (upside-reversal
-# case), rally_day_idx == running_min_idx and this is a no-op.
+# rally_day_idx anchors on the CORRECTION LOW (running_min_idx). rally_count
+# = days since the rally low. step0_bar_idx anchors on the STEP_0 bar and
+# is the Day-1 counter for the FTD gate. rally_day_low (correction low) is
+# the invalidation floor. When STEP_0 fires the same bar as the low
+# (upside-reversal), all three collapse to the same bar — trivially correct.
 
-def test_rally_count_starts_at_one_on_step0_bar_oneill_convention():
-    """STEP_0 fires with rally_count=1 regardless of how many bars back
-    the correction low is. Prevents the "FTD on Day 3" off-by-one that
-    the running-min anchor produced before 2026-08-04."""
+def test_step0_sets_both_anchors_correctly():
+    """When STEP_0 fires 2 bars after the correction low:
+      * rally_day_idx = low bar (0) — rally_count = 3 ("Day 3 of the rally")
+      * step0_bar_idx = STEP_0 bar (2) — Day 1 of FTD counting starts here
+      * rally_day_low = the correction low price (invalidation floor)
+    """
     from api.mct_engine import MCTEngine, EngineConfig
 
     engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
@@ -1176,14 +1179,11 @@ def test_rally_count_starts_at_one_on_step0_bar_oneill_convention():
                                      initial_exposure=0,
                                      correction_ever_declared=True))
     state = engine._init_state()
-    # Simulate 2 bars of "in correction, running_min tracking" preceding STEP_0.
-    # running_min set on bar 0, STEP_0 fires on bar 2 (two bars later).
     state["in_correction"] = True
     state["correction_active"] = True
     state["running_min_low"] = 100.0
     state["running_min_idx"] = 0        # low bar is bar 0
     state["exposure"] = 0
-    # Give the engine a prev with a strictly-higher close so bar 2 is an up_day.
     prev = pd.Series({
         "trade_date": pd.Timestamp("2026-08-03"),
         "close": 99.5, "low": 99.0, "high": 100.5, "open": 100.0,
@@ -1201,16 +1201,14 @@ def test_rally_count_starts_at_one_on_step0_bar_oneill_convention():
                               history=pd.DataFrame([prev, prev, current]),
                               state=state, bar_signals=bar_signals,
                               start_flags={"step3_done": False, "step4_done": False})
-    step0 = next(s for s in bar_signals if s.signal_type == "STEP_0_RALLY_DAY")
-    # Under O'Neil (Day 1 = STEP_0 bar), rally_count is 1 here even though
-    # the running-min low is 2 bars back. Under the old low-anchor rule
-    # this would have been 3, and the FTD gate would fire one day too
-    # early.
-    assert state["rally_count"] == 1
-    assert step0.meta["rally_count"] == 1
-    # rally_day_idx anchors on STEP_0 bar (i=2), not the low bar (idx=0).
-    assert state["rally_day_idx"] == 2
-    # rally_day_low STAYS the correction low (invalidation anchor).
+    # rally_day_idx anchors on the LOW bar (0), giving rally_count = 3
+    # ("Day 3 of the rally" — the rally started 2 bars ago at the low).
+    assert state["rally_day_idx"] == 0
+    assert state["rally_count"] == 3
+    # step0_bar_idx anchors on the STEP_0 bar (2) — Day 1 of FTD counting.
+    # Any subsequent bar checks (i - step0_bar_idx + 1) ≥ 4 for FTD eligibility.
+    assert state["step0_bar_idx"] == 2
+    # rally_day_low stays the correction low price (invalidation floor).
     assert state["rally_day_low"] == 100.0
 
 
@@ -1244,8 +1242,12 @@ def _seed_pre_ftd_state(engine, rally_count: int = 4) -> dict:
     state["in_correction"] = True
     state["step0_done"] = True
     state["rally_active"] = True
+    # Two-anchor model: rally_day_idx = correction low bar (running_min);
+    # step0_bar_idx = STEP_0 bar (drives FTD gate). Seeded to the same bar
+    # here (upside-reversal case) so tests can pass i=3 and land at ftd_day=4.
     state["rally_day_idx"] = 0
     state["rally_day_low"] = 99.0
+    state["step0_bar_idx"] = 0
     state["running_min_low"] = 99.0
     state["running_min_idx"] = 0
     state["rally_count"] = rally_count
