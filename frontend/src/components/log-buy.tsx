@@ -654,6 +654,28 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   const selectedCamp = openTrades.find(t => t.trade_id === selectedCampaign);
 
+  // B1 setup reference — the primary + confluence rules on the earliest
+  // BUY row of the selected campaign. "Copy from B1" fills the current
+  // form's Rule + Confluence fields (opt-in; user picked this over auto-
+  // preload since add-ons occasionally use a different rule).
+  const b1Setup = useMemo(() => {
+    if (actionType !== "scalein" || !selectedCamp) return null;
+    const buys = allDetails
+      .filter(d => d.trade_id === selectedCamp.trade_id
+                && String(d.action).toUpperCase() === "BUY")
+      .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+    if (buys.length === 0) return null;
+    const b1 = buys[0];
+    const b1Rules = Array.isArray((b1 as { rules?: string[] }).rules)
+      ? ((b1 as { rules?: string[] }).rules as string[]).filter(r => r && r.trim())
+      : [];
+    const primary = b1.rule || b1Rules[0] || "";
+    const confluence = b1Rules.length > 1
+      ? b1Rules.slice(1).filter(r => r !== primary)
+      : [];
+    return { primary, confluence };
+  }, [actionType, selectedCamp, allDetails]);
+
   // Add-on "apply stop to all lots" derived values. Count of open BUY
   // details on the selected campaign drives the checkbox label ("all N
   // existing lots"). hasExistingLadder → surfaces a caption warning the
@@ -1198,6 +1220,51 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   </div>
                 )}
               </Field>
+            )}
+
+            {/* B1 setup reference (scale-in only). Read-only display of the
+                primary + confluence rules on B1 with a "Copy from B1" button
+                that fills the current form's Rule + Confluence fields. Opt-in
+                copy (not auto-preload) so add-ons with genuinely different
+                rules don't fight against a silent prefill. Hidden when B1 has
+                no rule recorded (legacy trades / programmatic syncs). */}
+            {actionType === "scalein" && b1Setup && b1Setup.primary && (
+              <div className="rounded-[10px] p-3 flex items-start gap-3"
+                   style={{ background: "var(--surface)", border: "1px dashed var(--border)" }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] uppercase tracking-[0.10em] font-semibold mb-1"
+                       style={{ color: "var(--ink-4)" }}>
+                    B1 Setup
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[12px] font-semibold"
+                          style={{ color: "var(--ink-1)" }}>
+                      {b1Setup.primary}
+                    </span>
+                    {b1Setup.confluence.map(r => (
+                      <span key={r}
+                            className="text-[11px] px-1.5 py-0.5 rounded font-medium"
+                            style={{ background: "color-mix(in oklab, #6366f1 12%, transparent)",
+                                     color: "#6366f1" }}>
+                        +{r}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRule(b1Setup.primary);
+                    setConfluenceRules(b1Setup.confluence);
+                  }}
+                  className="shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-[6px] whitespace-nowrap"
+                  style={{ background: "var(--surface-2)", border: "1px solid var(--border)",
+                           color: "var(--ink-2)" }}
+                  data-testid="logbuy-copy-from-b1"
+                >
+                  Copy from B1
+                </button>
+              </div>
             )}
 
             {/* Buy Rule (searchable) — primary drives all analytics. */}

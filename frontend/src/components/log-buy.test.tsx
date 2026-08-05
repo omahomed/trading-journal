@@ -242,11 +242,16 @@ function fillByLabel(labelText: string, value: string): void {
 async function selectBuyRule(rule: string): Promise<void> {
   // SearchSelect's trigger is the first <button> inside the Field. Open
   // the dropdown, then click the rule option (rendered as a button by
-  // its display text).
+  // its display text). Under scale-in mode the B1 setup reference card
+  // ALSO renders the rule text as a read-only <span>, so scope the click
+  // to a clickable BUTTON to avoid the collision.
   const ruleField = screen.getByText("Primary Buy Rule *");
   const trigger = ruleField.parentElement?.querySelector("button") as HTMLButtonElement;
   await act(async () => { fireEvent.click(trigger); });
-  await act(async () => { fireEvent.click(screen.getByText(rule)); });
+  const matches = screen.getAllByText(rule);
+  const optionButton = matches.find(el => el.tagName === "BUTTON"
+    || el.closest("button")?.textContent?.trim() === rule) as HTMLElement;
+  await act(async () => { fireEvent.click(optionButton); });
 }
 
 describe("LogBuy — options stop-loss visibility", () => {
