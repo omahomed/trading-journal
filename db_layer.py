@@ -7931,3 +7931,272 @@ def skip_recurring_cash_event(event_id: int) -> dict | None:
     """Advance the cycle without writing a cash row. Returns the updated
     event or None if it doesn't exist."""
     return _advance_recurring_next_due(event_id)
+
+
+# ============================================
+# SLICES / SLICE_HOLDINGS (Migration 060)
+# ============================================
+# M1-Finance-style thematic buckets. Nested via parent_id (NULL = implicit
+# root). Leaf-only holdings: a slice with children cannot also hold tickers.
+# Enforced here rather than in a SQL CHECK/trigger so bulk-load + re-parent
+# flows aren't fighting the database.
+
+def _slice_row_dict(row: dict) -> dict:
+    """Normalize a slice DB row to JSON shape (numeric target_pct as float)."""
+    return {
+        "id": row["id"],
+        "portfolio_id": row["portfolio_id"],
+        "parent_id": row.get("parent_id"),
+        "name": row["name"],
+        "target_pct": float(row.get("target_pct") or 0),
+        "sort_order": int(row.get("sort_order") or 0),
+        "color": row.get("color"),
+    }
+
+
+def _slice_holding_row_dict(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "portfolio_id": row["portfolio_id"],
+        "slice_id": row["slice_id"],
+        "ticker": row["ticker"],
+        "target_pct": float(row.get("target_pct") or 0),
+    }
+
+
+def list_slices(portfolio_id: int) -> list[dict]:
+    """Every slice in a portfolio, ordered by (parent_id NULLS FIRST,
+    sort_order, name). Consumers assemble the tree client-side."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, portfolio_id, parent_id, name, target_pct,
+                       sort_order, color, created_at, updated_at
+                  FROM slices
+                 WHERE portfolio_id = %s
+                 ORDER BY (parent_id IS NOT NULL), parent_id NULLS FIRST,
+                          sort_order, name
+                """,
+                (portfolio_id,),
+            )
+            return [_slice_row_dict(r) for r in cur.fetchall()]
+
+
+def list_slice_holdings(portfolio_id: int) -> list[dict]:
+    """Every ticker->leaf assignment in a portfolio."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, portfolio_id, slice_id, ticker, target_pct
+                  FROM slice_holdings
+                 WHERE portfolio_id = %s
+                 ORDER BY ticker
+                """,
+                (portfolio_id,),
+            )
+            return [_slice_holding_row_dict(r) for r in cur.fetchall()]
+
+
+def _slice_has_children(slice_id: int) -> bool:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM slices WHERE parent_id = %s LIMIT 1",
+                (slice_id,),
+            )
+            return cur.fetchone() is not None
+
+
+def _slice_has_holdings(slice_id: int) -> bool:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM slice_holdings WHERE slice_id = %s LIMIT 1",
+                (slice_id,),
+            )
+            return cur.fetchone() is not None
+
+
+def create_slice(
+    portfolio_id: int, parent_id: int | None, name: str,
+    target_pct: float = 0.0, color: str | None = None,
+    sort_order: int = 0,
+) -> dict:
+    """Create a slice. Rejects if parent already has ticker holdings
+    (leaf-only invariant). Rejects duplicate name under the same parent."""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("name is required")
+    if parent_id is not None and _slice_has_holdings(parent_id):
+        raise ValueError(
+            f"Parent slice {parent_id} already holds tickers; move them off "
+            "before adding child slices (leaf-only invariant)."
+        )
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO slices
+                    (portfolio_id, parent_id, name, target_pct, color, sort_order)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id, portfolio_id, parent_id, name, target_pct,
+                          sort_order, color, created_at, updated_at
+                """,
+                (portfolio_id, parent_id, name, target_pct, color, sort_order),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _slice_row_dict(row)
+
+
+def update_slice(
+    slice_id: int, name: str | None = None,
+    target_pct: float | None = None, color: str | None = None,
+    sort_order: int | None = None, parent_id: int | None = ...,
+) -> dict | None:
+    """PATCH-style update. Only supplied fields are changed. Sentinel
+    Ellipsis on parent_id preserves the ability to move a slice to root
+    (parent_id=None). Rejects a re-parent that would create a cycle."""
+    sets = []
+    vals: list = []
+    if name is not None:
+        n = str(name or "").strip()
+        if not n:
+            raise ValueError("name cannot be blank")
+        sets.append("name = %s"); vals.append(n)
+    if target_pct is not None:
+        sets.append("target_pct = %s"); vals.append(float(target_pct))
+    if color is not None:
+        sets.append("color = %s"); vals.append(color or None)
+    if sort_order is not None:
+        sets.append("sort_order = %s"); vals.append(int(sort_order))
+    if parent_id is not Ellipsis:
+        if parent_id == slice_id:
+            raise ValueError("A slice cannot be its own parent.")
+        if parent_id is not None and _slice_has_holdings(parent_id):
+            raise ValueError(
+                f"Parent slice {parent_id} already holds tickers; leaf-only "
+                "invariant blocks re-parenting under it."
+            )
+        sets.append("parent_id = %s"); vals.append(parent_id)
+    if not sets:
+        return get_slice(slice_id)
+    vals.append(slice_id)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                UPDATE slices SET {", ".join(sets)}
+                 WHERE id = %s
+                RETURNING id, portfolio_id, parent_id, name, target_pct,
+                          sort_order, color, created_at, updated_at
+                """,
+                tuple(vals),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            return _slice_row_dict(row) if row else None
+
+
+def get_slice(slice_id: int) -> dict | None:
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, portfolio_id, parent_id, name, target_pct,
+                       sort_order, color, created_at, updated_at
+                  FROM slices WHERE id = %s
+                """,
+                (slice_id,),
+            )
+            row = cur.fetchone()
+            return _slice_row_dict(row) if row else None
+
+
+def delete_slice(slice_id: int) -> bool:
+    """Delete a slice. Cascades to child slices; the FK on slice_holdings
+    is RESTRICT so this raises if the slice (or any descendant) still holds
+    tickers. Caller must move/remove holdings first."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM slices WHERE id = %s", (slice_id,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+
+def assign_slice_holding(
+    slice_id: int, ticker: str, target_pct: float = 0.0,
+) -> dict:
+    """Assign a ticker to a leaf slice. Rejects if the slice has children
+    (leaf-only invariant). If the ticker is already assigned to a different
+    slice in the same portfolio, the assignment is MOVED (UNIQUE(user_id,
+    portfolio_id, ticker) ensures at most one leaf per ticker)."""
+    ticker = str(ticker or "").strip().upper()
+    if not ticker:
+        raise ValueError("ticker is required")
+    if _slice_has_children(slice_id):
+        raise ValueError(
+            f"Slice {slice_id} has child slices; only leaf slices can hold "
+            "tickers (leaf-only invariant)."
+        )
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Look up portfolio_id from the slice up front so the ON CONFLICT
+            # target (user_id, portfolio_id, ticker) can match a prior
+            # assignment in the same portfolio even if it's under a different
+            # slice.
+            cur.execute(
+                "SELECT portfolio_id FROM slices WHERE id = %s",
+                (slice_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Slice {slice_id} not found")
+            portfolio_id = row["portfolio_id"]
+            cur.execute(
+                """
+                INSERT INTO slice_holdings
+                    (portfolio_id, slice_id, ticker, target_pct)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, portfolio_id, ticker) DO UPDATE
+                    SET slice_id   = EXCLUDED.slice_id,
+                        target_pct = EXCLUDED.target_pct
+                RETURNING id, portfolio_id, slice_id, ticker, target_pct
+                """,
+                (portfolio_id, slice_id, ticker, float(target_pct)),
+            )
+            hit = cur.fetchone()
+            conn.commit()
+            return _slice_holding_row_dict(hit)
+
+
+def remove_slice_holding(holding_id: int) -> bool:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM slice_holdings WHERE id = %s", (holding_id,))
+            deleted = cur.rowcount > 0
+            conn.commit()
+            return deleted
+
+
+def list_open_tickers_for_portfolio(portfolio_id: int) -> list[str]:
+    """Distinct OPEN equity tickers in the given portfolio. Feeds the
+    'unassigned' set — open tickers with no slice_holdings row."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT UPPER(ticker) FROM trades_summary
+                 WHERE portfolio_id = %s
+                   AND deleted_at IS NULL
+                   AND status = 'OPEN'
+                   AND ticker IS NOT NULL
+                   AND POSITION(' ' IN ticker) = 0
+                 ORDER BY 1
+                """,
+                (portfolio_id,),
+            )
+            return [r[0] for r in cur.fetchall() if r[0]]

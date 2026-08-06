@@ -9535,6 +9535,147 @@ def recurring_cash_skip(request: Request, event_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================
+# SLICES (Migration 060) — M1-Finance-style allocation buckets
+# ============================================================
+
+
+def _slice_positions_for_portfolio(portfolio: str) -> tuple[list[dict], float]:
+    """Load open positions for ONE portfolio with live prices layered in
+    (same helper Concentration Risk uses so slice weights always agree
+    with ACS/Portfolio Heat). Returns (positions, total_market_value)."""
+    positions = _concentration_positions_for(portfolio)
+    total = sum(p.get("market_value") or 0.0 for p in positions)
+    return positions, round(total, 2)
+
+
+@app.get("/api/slices")
+def slices_list(request: Request, portfolio: str = ""):
+    """Full slice tree + rollups + unassigned holdings for ONE portfolio.
+
+    Response:
+      {
+        portfolio, portfolio_id, total_market_value,
+        slices:   [{id, parent_id, name, target_pct, sort_order, color,
+                    subtree_value, subtree_pct}],
+        holdings: [{id, slice_id, ticker, target_pct,
+                    shares, avg_entry, current_price, multiplier,
+                    market_value, actual_pct_of_portfolio}],
+        unassigned: [{ticker, shares, avg_entry, current_price,
+                      market_value, actual_pct_of_portfolio}]
+      }
+
+    Frontend assembles the tree from `slices` (parent_id chain), attaches
+    `holdings` to leaves by slice_id, and sums via subtree_value which the
+    server has already rolled up per node."""
+    if not portfolio.strip():
+        raise HTTPException(status_code=422, detail="portfolio is required")
+    pid = _resolve_portfolio_id(portfolio)
+    if pid is None:
+        raise HTTPException(status_code=404, detail=f"portfolio not found: {portfolio}")
+    try:
+        positions, total_mv = _slice_positions_for_portfolio(portfolio)
+        slice_rows = db.list_slices(pid)
+        holding_rows = db.list_slice_holdings(pid)
+
+        # Index positions by ticker for O(1) enrichment lookups.
+        pos_by_ticker: dict[str, dict] = {
+            str(p.get("ticker") or "").upper(): p for p in positions
+            if p.get("ticker")
+        }
+        held_tickers = set(pos_by_ticker.keys())
+
+        # Enrich each holding row with live market value + %. A holding
+        # that references a ticker no longer in the OPEN set (e.g. user
+        # closed the campaign but hasn't cleaned up the mapping) shows
+        # zeros — surfaces the stale mapping without erroring.
+        enriched_holdings: list[dict] = []
+        for h in holding_rows:
+            t = h["ticker"]
+            pos = pos_by_ticker.get(t)
+            mv = float(pos.get("market_value") or 0) if pos else 0.0
+            enriched_holdings.append({
+                **h,
+                "shares": float(pos.get("shares") or 0) if pos else 0.0,
+                "avg_entry": float(pos.get("avg_entry") or 0) if pos else 0.0,
+                "current_price": float(pos.get("current_price") or 0) if pos else 0.0,
+                "multiplier": float(pos.get("multiplier") or 1) if pos else 1.0,
+                "market_value": round(mv, 2),
+                "actual_pct_of_portfolio":
+                    round(mv / total_mv * 100, 2) if total_mv > 0 else 0.0,
+                "held": pos is not None,
+            })
+
+        # Roll up subtree market value per slice.
+        # 1. Sum leaf-level holdings by slice_id.
+        leaf_mv: dict[int, float] = {}
+        for h in enriched_holdings:
+            leaf_mv[h["slice_id"]] = leaf_mv.get(h["slice_id"], 0.0) \
+                + float(h["market_value"] or 0)
+        # 2. Bottom-up propagation. Kahn-style: repeatedly emit slices
+        # whose descendants have already been summed. Two-pass approach:
+        # collect children per parent, then DFS.
+        children_by_parent: dict[int | None, list[dict]] = {}
+        by_id: dict[int, dict] = {}
+        for s in slice_rows:
+            children_by_parent.setdefault(s["parent_id"], []).append(s)
+            by_id[s["id"]] = s
+        subtree_mv: dict[int, float] = {}
+
+        def _sum_subtree(sid: int) -> float:
+            if sid in subtree_mv:
+                return subtree_mv[sid]
+            direct = leaf_mv.get(sid, 0.0)
+            for c in children_by_parent.get(sid, []):
+                direct += _sum_subtree(c["id"])
+            subtree_mv[sid] = direct
+            return direct
+
+        for s in slice_rows:
+            _sum_subtree(s["id"])
+
+        enriched_slices = [
+            {
+                **s,
+                "subtree_value": round(subtree_mv.get(s["id"], 0.0), 2),
+                "subtree_pct":
+                    round(subtree_mv.get(s["id"], 0.0) / total_mv * 100, 2)
+                    if total_mv > 0 else 0.0,
+            }
+            for s in slice_rows
+        ]
+
+        assigned_tickers = {h["ticker"] for h in holding_rows}
+        unassigned = []
+        for t in sorted(held_tickers - assigned_tickers):
+            pos = pos_by_ticker[t]
+            mv = float(pos.get("market_value") or 0)
+            unassigned.append({
+                "ticker": t,
+                "shares": float(pos.get("shares") or 0),
+                "avg_entry": float(pos.get("avg_entry") or 0),
+                "current_price": float(pos.get("current_price") or 0),
+                "multiplier": float(pos.get("multiplier") or 1),
+                "market_value": round(mv, 2),
+                "actual_pct_of_portfolio":
+                    round(mv / total_mv * 100, 2) if total_mv > 0 else 0.0,
+            })
+
+        return {
+            "portfolio": portfolio,
+            "portfolio_id": pid,
+            "total_market_value": total_mv,
+            "slices": enriched_slices,
+            "holdings": enriched_holdings,
+            "unassigned": unassigned,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[slices_list] {portfolio}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

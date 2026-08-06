@@ -1882,6 +1882,15 @@ export const api = {
       method: "POST",
     }).then(r => r.json()) as Promise<{ event: RecurringCashEvent } | { error: string }>,
 
+  // ─── Slices (Migration 060) — M1-Finance-style allocation buckets ───
+  // One tree per portfolio; every OPEN-position ticker should land in a
+  // leaf (strict-mode banner surfaces the misses). Reuses the Concentration
+  // price path so slice weights always agree with ACS / Portfolio Heat.
+  slicesList: (portfolio: string) =>
+    fetchJSON<SlicesResponse>(
+      `/api/slices?portfolio=${encodeURIComponent(portfolio)}`,
+    ),
+
   // Force-refresh SPY + NASDAQ closes for `day` across all portfolios.
   // Overwrites any stored value diverging from yfinance's raw close beyond
   // tolerance (SPY $0.10, NASDAQ $5). Idempotent — safe to re-run.
@@ -1979,6 +1988,62 @@ export interface ConcentrationResponse {
   sectors: ConcentrationBucket[];
   themes: ConcentrationBucket[];
   unclassified: ConcentrationUnclassified[];
+}
+
+// ── Slices (Migration 060) ───────────────────────────────────────
+/** One slice — a bucket in a portfolio's allocation tree. `parent_id`
+ *  null == root (implicit — no dedicated per-portfolio root row).
+ *  `subtree_value` and `subtree_pct` are server-rolled sums over every
+ *  descendant leaf's live market value; frontend just reads them. */
+export interface Slice {
+  id: number;
+  portfolio_id: number;
+  parent_id: number | null;
+  name: string;
+  target_pct: number;
+  sort_order: number;
+  color: string | null;
+  subtree_value: number;
+  subtree_pct: number;
+}
+
+/** Ticker→leaf-slice assignment enriched with the live position. `held`
+ *  goes false when the mapping references a ticker no longer in an OPEN
+ *  campaign — surfaces the stale mapping so the user can clean it up. */
+export interface SliceHolding {
+  id: number;
+  portfolio_id: number;
+  slice_id: number;
+  ticker: string;
+  target_pct: number;
+  shares: number;
+  avg_entry: number;
+  current_price: number;
+  multiplier: number;
+  market_value: number;
+  actual_pct_of_portfolio: number;
+  held: boolean;
+}
+
+/** An open-position ticker with no slice assignment — banner + Manage
+ *  Slices assign flow work off this list. */
+export interface SliceUnassigned {
+  ticker: string;
+  shares: number;
+  avg_entry: number;
+  current_price: number;
+  multiplier: number;
+  market_value: number;
+  actual_pct_of_portfolio: number;
+}
+
+export interface SlicesResponse {
+  portfolio: string;
+  portfolio_id: number;
+  total_market_value: number;
+  slices: Slice[];
+  holdings: SliceHolding[];
+  unassigned: SliceUnassigned[];
 }
 
 // ── Trading Checklist types ──────────────────────────────────────
