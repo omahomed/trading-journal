@@ -5707,7 +5707,7 @@ def test_connection():
 # ============================================
 # PORTFOLIO CRUD (multi-tenant)
 # ============================================
-_PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at"
+_PORTFOLIO_COLS = "id, name, starting_capital, reset_date, created_at, slices_enabled"
 
 
 def load_strategies(active_only: bool = True, portfolio_name: str | None = None) -> list[dict]:
@@ -5968,7 +5968,8 @@ def create_portfolio(name, starting_capital=None, reset_date=None):
                 raise ValueError(f"Portfolio '{name}' already exists")
 
 
-def update_portfolio(portfolio_id, *, name=None, starting_capital=None, reset_date=None):
+def update_portfolio(portfolio_id, *, name=None, starting_capital=None, reset_date=None,
+                     slices_enabled=None):
     """Update a portfolio the current user owns. Only passed fields change;
     pass `None` (or omit) to leave a column untouched.
 
@@ -5986,6 +5987,9 @@ def update_portfolio(portfolio_id, *, name=None, starting_capital=None, reset_da
     if reset_date is not None:
         updates.append("reset_date = %s")
         params.append(reset_date)
+    if slices_enabled is not None:
+        updates.append("slices_enabled = %s")
+        params.append(bool(slices_enabled))
 
     if not updates:
         # Nothing to do — return current row unchanged so callers get consistent shape.

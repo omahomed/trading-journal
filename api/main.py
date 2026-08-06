@@ -9573,6 +9573,24 @@ def slices_list(request: Request, portfolio: str = ""):
     pid = _resolve_portfolio_id(portfolio)
     if pid is None:
         raise HTTPException(status_code=404, detail=f"portfolio not found: {portfolio}")
+    # Per-portfolio opt-out. When slices_enabled is False, the frontend
+    # renders a "Slices disabled · [Enable]" empty state — cheaper than
+    # computing rollups the user is going to ignore.
+    enabled = True
+    for p in db.list_portfolios():
+        if p.get("id") == pid:
+            enabled = bool(p.get("slices_enabled", True))
+            break
+    if not enabled:
+        return {
+            "portfolio": portfolio,
+            "portfolio_id": pid,
+            "slices_enabled": False,
+            "total_market_value": 0.0,
+            "slices": [],
+            "holdings": [],
+            "unassigned": [],
+        }
     try:
         positions, total_mv = _slice_positions_for_portfolio(portfolio)
         slice_rows = db.list_slices(pid)
@@ -9664,6 +9682,7 @@ def slices_list(request: Request, portfolio: str = ""):
         return {
             "portfolio": portfolio,
             "portfolio_id": pid,
+            "slices_enabled": True,
             "total_market_value": total_mv,
             "slices": enriched_slices,
             "holdings": enriched_holdings,
@@ -9673,6 +9692,146 @@ def slices_list(request: Request, portfolio: str = ""):
         raise
     except Exception as e:
         print(f"[slices_list] {portfolio}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/slices")
+def slices_create(request: Request, body: dict = Body(...)):
+    """Create a slice. Body:
+        { portfolio: str (required),
+          parent_id: int | null,
+          name: str (required),
+          target_pct: float (default 0),
+          color: str | null,
+          sort_order: int (default 0) }"""
+    try:
+        portfolio = str(body.get("portfolio") or "").strip()
+        if not portfolio:
+            raise HTTPException(status_code=422, detail="portfolio is required")
+        pid = _resolve_portfolio_id(portfolio)
+        if pid is None:
+            raise HTTPException(status_code=404, detail=f"portfolio not found: {portfolio}")
+        row = db.create_slice(
+            pid,
+            body.get("parent_id"),
+            str(body.get("name") or ""),
+            float(body.get("target_pct") or 0),
+            body.get("color"),
+            int(body.get("sort_order") or 0),
+        )
+        return {"slice": row}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        print(f"[slices_create] handler failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/slices/toggle")
+def slices_toggle(request: Request, body: dict = Body(...)):
+    """Enable / disable slices for a portfolio. Body: {portfolio, enabled}.
+    Registered BEFORE the /api/slices/{slice_id} route so FastAPI matches
+    the static path first — otherwise "toggle" gets parsed as slice_id."""
+    try:
+        portfolio = str(body.get("portfolio") or "").strip()
+        if not portfolio:
+            raise HTTPException(status_code=422, detail="portfolio is required")
+        pid = _resolve_portfolio_id(portfolio)
+        if pid is None:
+            raise HTTPException(status_code=404, detail=f"portfolio not found: {portfolio}")
+        enabled = bool(body.get("enabled"))
+        row = db.update_portfolio(pid, slices_enabled=enabled)
+        if row is None:
+            raise HTTPException(status_code=404, detail="portfolio not found")
+        return {"portfolio": portfolio, "slices_enabled": bool(row.get("slices_enabled"))}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[slices_toggle] {portfolio if 'portfolio' in locals() else '?'}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/slices/{slice_id}")
+def slices_update(request: Request, slice_id: int, body: dict = Body(...)):
+    """Partial update. Any of {name, target_pct, color, sort_order,
+    parent_id}. Passing parent_id=null reparents to root; omitting it
+    leaves parent unchanged. Rejects re-parents that would create cycles
+    or violate the leaf-only invariant."""
+    try:
+        kwargs: dict = {}
+        for k in ("name", "color"):
+            if k in body:
+                kwargs[k] = body.get(k)
+        for k in ("target_pct", "sort_order"):
+            if k in body and body.get(k) is not None:
+                kwargs[k] = body.get(k)
+        # parent_id uses Ellipsis sentinel in the db layer; pass explicit
+        # value (including None) only when the key is present in the body.
+        if "parent_id" in body:
+            kwargs["parent_id"] = body.get("parent_id")
+        row = db.update_slice(slice_id, **kwargs)
+        if row is None:
+            raise HTTPException(status_code=404, detail="slice not found")
+        return {"slice": row}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        print(f"[slices_update] {slice_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/slices/{slice_id}")
+def slices_delete(request: Request, slice_id: int):
+    """Delete a slice + all its descendants (cascade). Blocked by DB
+    FK if the slice or any descendant still has ticker holdings —
+    caller must remove them first, then retry."""
+    try:
+        removed = db.delete_slice(slice_id)
+        return {"status": "ok" if removed else "not_found"}
+    except Exception as e:
+        msg = str(e).lower()
+        if "foreign key" in msg or "violates" in msg:
+            raise HTTPException(
+                status_code=409,
+                detail="Slice (or a descendant) still holds tickers. Unassign them first.",
+            )
+        print(f"[slices_delete] {slice_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/slices/{slice_id}/holdings")
+def slices_assign_holding(request: Request, slice_id: int, body: dict = Body(...)):
+    """Assign a ticker to a leaf slice. Body: {ticker, target_pct?}.
+    If the ticker is already assigned elsewhere in the same portfolio,
+    the assignment is moved (UNIQUE constraint on user + portfolio +
+    ticker enforces one-leaf-per-ticker)."""
+    try:
+        ticker = str(body.get("ticker") or "").strip()
+        if not ticker:
+            raise HTTPException(status_code=422, detail="ticker is required")
+        target_pct = float(body.get("target_pct") or 0)
+        row = db.assign_slice_holding(slice_id, ticker, target_pct)
+        return {"holding": row}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        print(f"[slices_assign_holding] {slice_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/slices/holdings/{holding_id}")
+def slices_remove_holding(request: Request, holding_id: int):
+    try:
+        removed = db.remove_slice_holding(holding_id)
+        return {"status": "ok" if removed else "not_found"}
+    except Exception as e:
+        print(f"[slices_remove_holding] {holding_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1891,6 +1891,50 @@ export const api = {
       `/api/slices?portfolio=${encodeURIComponent(portfolio)}`,
     ),
 
+  slicesToggle: (portfolio: string, enabled: boolean) =>
+    fetchWithAuth(`${API_BASE}/api/slices/toggle`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ portfolio, enabled }),
+    }).then(r => r.json()) as Promise<{ portfolio: string; slices_enabled: boolean } | { error: string; detail?: string }>,
+
+  slicesCreate: (body: {
+    portfolio: string; parent_id: number | null; name: string;
+    target_pct?: number; color?: string | null; sort_order?: number;
+  }) =>
+    fetchWithAuth(`${API_BASE}/api/slices`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ slice: Slice } | { detail: string }>,
+
+  slicesUpdate: (id: number, body: Partial<{
+    name: string; target_pct: number; color: string | null;
+    sort_order: number; parent_id: number | null;
+  }>) =>
+    fetchWithAuth(`${API_BASE}/api/slices/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ slice: Slice } | { detail: string }>,
+
+  slicesDelete: (id: number) =>
+    fetchWithAuth(`${API_BASE}/api/slices/${id}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: "ok" | "not_found" } | { detail: string }>,
+
+  slicesAssignHolding: (sliceId: number, body: { ticker: string; target_pct?: number }) =>
+    fetchWithAuth(`${API_BASE}/api/slices/${sliceId}/holdings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => r.json()) as Promise<{ holding: SliceHolding } | { detail: string }>,
+
+  slicesRemoveHolding: (holdingId: number) =>
+    fetchWithAuth(`${API_BASE}/api/slices/holdings/${holdingId}`, {
+      method: "DELETE",
+    }).then(r => r.json()) as Promise<{ status: "ok" | "not_found" } | { detail: string }>,
+
   // Force-refresh SPY + NASDAQ closes for `day` across all portfolios.
   // Overwrites any stored value diverging from yfinance's raw close beyond
   // tolerance (SPY $0.10, NASDAQ $5). Idempotent — safe to re-run.
@@ -2040,6 +2084,10 @@ export interface SliceUnassigned {
 export interface SlicesResponse {
   portfolio: string;
   portfolio_id: number;
+  /** false when the user has opted this portfolio out of Slices. When
+   *  false, the other collections are empty and the page renders a
+   *  "Slices disabled · [Enable]" empty state instead of the tree. */
+  slices_enabled: boolean;
   total_market_value: number;
   slices: Slice[];
   holdings: SliceHolding[];

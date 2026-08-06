@@ -1,0 +1,184 @@
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, test, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@/lib/portfolio-context", () => ({
+  usePortfolio: () => ({
+    activePortfolio: { id: 2, name: "Long-Term Growth" },
+    portfolios: [{ id: 2, name: "Long-Term Growth" }],
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
+    setActive: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  api: {
+    slicesList: vi.fn(),
+    slicesToggle: vi.fn(),
+    slicesCreate: vi.fn(),
+    slicesUpdate: vi.fn(),
+    slicesDelete: vi.fn(),
+    slicesAssignHolding: vi.fn(),
+    slicesRemoveHolding: vi.fn(),
+  },
+  getActivePortfolio: () => "Long-Term Growth",
+}));
+
+import { api } from "@/lib/api";
+import { Slices } from "./slices";
+
+const enabledEmptyResponse = {
+  portfolio: "Long-Term Growth",
+  portfolio_id: 2,
+  slices_enabled: true,
+  total_market_value: 1000,
+  slices: [],
+  holdings: [],
+  unassigned: [
+    { ticker: "AMD", shares: 10, avg_entry: 100, current_price: 100,
+      multiplier: 1, market_value: 1000, actual_pct_of_portfolio: 100 },
+  ],
+};
+
+const enabledWithTreeResponse = {
+  portfolio: "Long-Term Growth",
+  portfolio_id: 2,
+  slices_enabled: true,
+  total_market_value: 1000,
+  slices: [
+    { id: 10, portfolio_id: 2, parent_id: null, name: "AI Chips",
+      target_pct: 100, sort_order: 0, color: null,
+      subtree_value: 1000, subtree_pct: 100 },
+  ],
+  holdings: [
+    { id: 100, portfolio_id: 2, slice_id: 10, ticker: "AMD", target_pct: 100,
+      shares: 10, avg_entry: 100, current_price: 100, multiplier: 1,
+      market_value: 1000, actual_pct_of_portfolio: 100, held: true },
+  ],
+  unassigned: [],
+};
+
+const disabledResponse = {
+  portfolio: "Long-Term Growth",
+  portfolio_id: 2,
+  slices_enabled: false,
+  total_market_value: 0,
+  slices: [],
+  holdings: [],
+  unassigned: [],
+};
+
+describe("Slices page", () => {
+  beforeEach(() => {
+    vi.mocked(api.slicesList).mockReset();
+    vi.mocked(api.slicesToggle).mockReset();
+    vi.mocked(api.slicesCreate).mockReset();
+    vi.mocked(api.slicesUpdate).mockReset();
+    vi.mocked(api.slicesDelete).mockReset();
+    vi.mocked(api.slicesAssignHolding).mockReset();
+    vi.mocked(api.slicesRemoveHolding).mockReset();
+  });
+
+  test("shows the DisabledState when the API returns slices_enabled=false", async () => {
+    vi.mocked(api.slicesList).mockResolvedValue(disabledResponse);
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() =>
+      expect(screen.getByText(/Slices is off for Long-Term Growth\./)).toBeTruthy()
+    );
+    // Enable CTA is the only visible action.
+    expect(screen.getByRole("button", { name: /Enable Slices for/i })).toBeTruthy();
+    // KPI tiles + tree list are hidden while disabled.
+    expect(screen.queryByText(/Open positions market value/)).toBeNull();
+    // Manage button is present in the header but disabled.
+    const manage = screen.getByRole("button", { name: "Manage Slices" }) as HTMLButtonElement;
+    expect(manage.disabled).toBe(true);
+  });
+
+  test("clicking Enable calls slicesToggle and refetches", async () => {
+    vi.mocked(api.slicesList)
+      .mockResolvedValueOnce(disabledResponse)
+      .mockResolvedValueOnce(enabledEmptyResponse);
+    vi.mocked(api.slicesToggle).mockResolvedValue({
+      portfolio: "Long-Term Growth",
+      slices_enabled: true,
+    });
+
+    render(<Slices navColor="#0891b2" />);
+    const enableBtn = await screen.findByRole("button", {
+      name: /Enable Slices for/i,
+    });
+    fireEvent.click(enableBtn);
+    await waitFor(() =>
+      expect(api.slicesToggle).toHaveBeenCalledWith("Long-Term Growth", true)
+    );
+    // After the refetch, the empty-state (not the disabled-state) shows.
+    await waitFor(() =>
+      expect(screen.getByText(/No slices configured for Long-Term Growth/)).toBeTruthy()
+    );
+  });
+
+  test("enabled + empty tree surfaces the unassigned banner with Assign now", async () => {
+    vi.mocked(api.slicesList).mockResolvedValue(enabledEmptyResponse);
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() =>
+      expect(screen.getByText(/1 unassigned holding/)).toBeTruthy()
+    );
+    expect(screen.getByRole("button", { name: "Assign now" })).toBeTruthy();
+  });
+
+  test("clicking Manage opens the modal with the tree + unassigned", async () => {
+    // Mix: one slice + one unassigned so both modal sections render.
+    const mixed = {
+      ...enabledWithTreeResponse,
+      unassigned: [
+        { ticker: "NBIS", shares: 5, avg_entry: 200, current_price: 210,
+          multiplier: 1, market_value: 1050, actual_pct_of_portfolio: 50 },
+      ],
+    };
+    vi.mocked(api.slicesList).mockResolvedValue(mixed);
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("AI Chips")).toBeTruthy());
+
+    // Header Manage button (there are TWO manage-clickables — the header
+    // button labelled "Manage Slices" and the disabled placeholder — so
+    // scope to the button role.
+    fireEvent.click(screen.getByRole("button", { name: "Manage Slices" }));
+
+    // Modal renders with the tree ("AI Chips") + unassigned ("NBIS") sections.
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getAllByText("AI Chips").length).toBeGreaterThan(0);
+    // NBIS surfaces in both the unassigned list at the bottom of the page
+    // AND in the modal's unassigned tickers section, so getByText would
+    // multi-match; assert on the count instead.
+    expect(screen.getAllByText("NBIS").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Add root slice/i })).toBeTruthy();
+  });
+
+  test("adding a root slice from the modal calls slicesCreate and refetches", async () => {
+    vi.mocked(api.slicesList)
+      .mockResolvedValueOnce(enabledEmptyResponse)
+      .mockResolvedValueOnce(enabledWithTreeResponse);
+    vi.mocked(api.slicesCreate).mockResolvedValue({
+      slice: enabledWithTreeResponse.slices[0],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText(/No slices configured/)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Manage Slices" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Add root slice/i }));
+
+    const nameInput = await screen.findByPlaceholderText("New slice name");
+    fireEvent.change(nameInput, { target: { value: "AI Chips" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(api.slicesCreate).toHaveBeenCalledWith(expect.objectContaining({
+        portfolio: "Long-Term Growth",
+        parent_id: null,
+        name: "AI Chips",
+      }))
+    );
+    // Second slicesList call = the post-mutation refetch.
+    await waitFor(() => expect(api.slicesList).toHaveBeenCalledTimes(2));
+  });
+});
