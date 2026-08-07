@@ -136,35 +136,57 @@ describe("isCushionQualified", () => {
 });
 
 describe("needsSR15StopMove", () => {
+  // Anchor is B1 fill price (2nd arg) — not the blended avg_entry.
+  // Restricted to the SR15 band [20%, 50%) — sticky ratchet doctrine
+  // means once peak crosses 50 the +10% floor should already be parked
+  // and nagging is stale.
+
   test("false below the 20% threshold", () => {
     expect(needsSR15StopMove(0, 100, null)).toBe(false);
     expect(needsSR15StopMove(19.99, 100, null)).toBe(false);
   });
 
-  test("true when in SR15+ band with no broker stop parked", () => {
-    // Entry 100 → target 110. No stop = definitely below target.
+  test("false at or above the 50% ceiling (SR7 / SR8 territory)", () => {
+    // The DELL-at-166% case from 2026-08-07: declared SR8, must NOT
+    // appear on the SR15 nudge banner. The +10% floor was meant to be
+    // parked back when peak was 20-50; that ship has sailed.
+    expect(needsSR15StopMove(50, 100, null)).toBe(false);
+    expect(needsSR15StopMove(80, 100, null)).toBe(false);
+    expect(needsSR15StopMove(166.47, 176.21, null)).toBe(false);
+    expect(needsSR15StopMove(300, 100, null)).toBe(false);
+  });
+
+  test("true when in SR15 band with no broker stop parked", () => {
+    // B1 entry 100 → target 110. No stop = definitely below target.
     expect(needsSR15StopMove(20, 100, null)).toBe(true);
     expect(needsSR15StopMove(25, 100, 0)).toBe(true);
-    expect(needsSR15StopMove(80, 100, undefined)).toBe(true);
+    expect(needsSR15StopMove(49.99, 100, undefined)).toBe(true);
   });
 
-  test("true when broker stop parked but still below target", () => {
-    // Entry 100 → target 110. Stop at 105 = still needs a nudge.
+  test("true when broker stop parked but still below B1-based target", () => {
+    // B1 entry 100 → target 110. Stop at 105 = still needs a nudge.
     expect(needsSR15StopMove(30, 100, 105)).toBe(true);
-    expect(needsSR15StopMove(60, 100, 109.99)).toBe(true);
+    expect(needsSR15StopMove(45, 100, 109.99)).toBe(true);
   });
 
-  test("false when broker stop is at or above the target", () => {
-    // Entry 100 → target 110. Stop at 110 = target met.
+  test("false when broker stop is at or above the B1-based target", () => {
+    // B1 entry 100 → target 110. Stop at 110 = target met.
     expect(needsSR15StopMove(30, 100, 110)).toBe(false);
-    expect(needsSR15StopMove(60, 100, 115)).toBe(false);
-    // Even for a mature SR8-tier campaign, if the +10% floor is
-    // already parked, no nudge fires.
-    expect(needsSR15StopMove(200, 100, 111)).toBe(false);
+    expect(needsSR15StopMove(45, 100, 115)).toBe(false);
   });
 
-  test("false when entry price is missing/invalid", () => {
-    // Can't compute the target without a positive entry price.
+  test("target anchors on B1 fill even for a scaled-in campaign", () => {
+    // The pre-fix bug: passing blended avg_entry ($331 on DELL after
+    // add-ons) would make target = $364 when the correct target from
+    // B1 ($176) is $193.83. Nudge must fire ONLY when the stop is
+    // below the B1-derived target — so a stop of $200 clears the
+    // nudge on a campaign whose blended avg is way higher.
+    expect(needsSR15StopMove(30, 176.21, 200)).toBe(false);   // 200 > 193.83 target
+    expect(needsSR15StopMove(30, 176.21, 190)).toBe(true);    // 190 < 193.83
+  });
+
+  test("false when B1 entry price is missing/invalid", () => {
+    // Can't compute the target without a positive B1 fill price.
     expect(needsSR15StopMove(30, 0, null)).toBe(false);
     expect(needsSR15StopMove(30, -1, null)).toBe(false);
     expect(needsSR15StopMove(30, null, null)).toBe(false);

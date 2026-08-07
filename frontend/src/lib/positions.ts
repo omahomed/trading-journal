@@ -49,6 +49,13 @@ export interface EnrichedPosition {
   // sell_rule_tier classification; surfaced here so tooltips/diagnostics
   // can show the raw % alongside the tier badge if needed.
   b1_return_pct: number | null;
+  // B1 (first BUY) fill price — the cost-basis anchor for the campaign.
+  // Distinct from avg_entry which blends across every fill after scale-
+  // ins. SR15 nudge uses b1_entry_price × 1.10 as the +10% profit-lock
+  // target so that add-ons don't silently walk the target higher.
+  // Optional so pre-062 test fixtures don't have to spell it out (same
+  // discipline as broker_stop_price + is_declared_sr8).
+  b1_entry_price?: number | null;
   // Persistent peak B1 return ever observed for this campaign (migration
   // 036). Auto-promoted on observation, never auto-demoted. Sell Rule
   // tier derives from max(b1_return_pct, b1_max_return_pct) — see
@@ -256,6 +263,7 @@ export function computeEnrichedPositions(
       grade: typeof (trade as any).grade === "number" ? (trade as any).grade : null,
       strategy: trade.strategy ?? null,
       b1_return_pct: b1ReturnPct,
+      b1_entry_price: b1EntryPrice,
       b1_max_return_pct: b1MaxStored,
       // Migration 055 — surfaced for tooltips + edit UI. NaN normalized
       // to null so the type stays "number | null" not "number | NaN".

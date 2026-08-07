@@ -91,21 +91,36 @@ export function isCushionQualified(b1ReturnPct: number | null | undefined): bool
 }
 
 // SR15 nudge predicate — a position is "waiting for the +10% broker
-// stop" when the peak has entered the SR15 band (or above) but the
-// user's persisted `broker_stop_price` still sits below entry × 1.10.
-// Used by ACS + Risk Manager to render the persistent nudge banner.
+// stop" when peak sits IN the SR15 band [20%, 50%) and the user's
+// persisted `broker_stop_price` still sits below b1_entry × 1.10.
+//
+// Two guards that came out of the 2026-08-07 review:
+//
+//   1. Band-restricted, not band-and-above. Once peak crosses 50%,
+//      the position is SR7 / SR8 and the +10% floor should ALREADY be
+//      parked from the earlier band. Nagging at that point is stale
+//      doctrine (DELL @ 166% peak declared SR8 shouldn't nudge).
+//
+//   2. Anchor is B1 fill price, not the blended avg_entry. The "+10%
+//      profit lock" concept is denominated in the first-buy's cost
+//      basis — that's the true "cushion crossed +20%" origin. Using
+//      blended avg after add-ons would silently move the target price
+//      higher every time you scale in (DELL bug: $331 avg × 1.10 =
+//      $364 instead of $176 B1 × 1.10 = $193).
 export function needsSR15StopMove(
-  b1ReturnPct: number | null | undefined,
-  entryPrice: number | null | undefined,
+  b1PeakPct: number | null | undefined,
+  b1EntryPrice: number | null | undefined,
   brokerStopPrice: number | null | undefined,
 ): boolean {
-  if (b1ReturnPct == null || !Number.isFinite(b1ReturnPct) || b1ReturnPct < 20) return false;
-  if (entryPrice == null || !Number.isFinite(entryPrice) || entryPrice <= 0) return false;
-  const target = entryPrice * 1.10;
+  if (b1PeakPct == null || !Number.isFinite(b1PeakPct)) return false;
+  // Band-restricted to SR15 [20%, 50%). Sticky ratchet across tiers
+  // means once peak crosses 50 we're permanently past SR15's home.
+  if (b1PeakPct < 20 || b1PeakPct >= 50) return false;
+  if (b1EntryPrice == null || !Number.isFinite(b1EntryPrice) || b1EntryPrice <= 0) return false;
+  const target = b1EntryPrice * 1.10;
   const current = brokerStopPrice != null && Number.isFinite(brokerStopPrice) ? brokerStopPrice : 0;
-  // Half-a-penny tolerance to swallow floating-point round-off (e.g.
-  // 100 × 1.10 = 110.00000000000001 in JS). At real-money precision
-  // the nudge is meant to clear the instant the operator types the
+  // Half-a-penny tolerance for JS FP round-off (e.g. 100 × 1.10 =
+  // 110.00000000000001). Nudge clears when the operator types the
   // "+10%" round number into broker_stop_price.
   return current < target - 0.005;
 }

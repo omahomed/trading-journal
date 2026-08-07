@@ -41,14 +41,17 @@ export function SR15NudgeBanner({ positions, onTickerClick, className }: Props) 
     .filter(p =>
       needsSR15StopMove(
         p.b1_max_return_pct ?? p.b1_return_pct,
-        p.avg_entry,
+        p.b1_entry_price,
         p.broker_stop_price ?? null,
       )
     )
     .map(p => ({
       trade_id: p.trade_id,
       ticker: p.ticker,
-      target: p.avg_entry * 1.10,
+      // Target uses B1 fill × 1.10 — the "+10% profit lock" is
+      // denominated in the first-buy's cost basis so scale-ins don't
+      // silently walk the target higher. See sell-rule.ts guard #2.
+      target: (p.b1_entry_price ?? 0) * 1.10,
       current: p.broker_stop_price ?? null,
       pos: p,
     }));
