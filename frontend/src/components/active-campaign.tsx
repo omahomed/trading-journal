@@ -16,6 +16,9 @@ import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-f
 import { SellRuleBadge } from "./sell-rule-badge";
 import { BrokerStopEditor } from "./broker-stop-editor";
 import { SR8TrimCalculator } from "./sr8-trim-calculator";
+import { SR8DeclareModal } from "./sr8-declare-modal";
+import { SR15NudgeBanner } from "./sr15-nudge-banner";
+import { isCushionQualified } from "@/lib/sell-rule";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
 // changes. v3: signed_risk + multiplier-aware option Risk $ — old caches
@@ -209,6 +212,13 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // clear buttons that call api.updateBrokerStop. Closes and refreshes
   // the campaign list on success so the SR14 badge appears immediately.
   const [brokerStopModalPos, setBrokerStopModalPos] = useState<EnrichedPosition | null>(null);
+
+  // Migration 062 — SR8 declaration modal + demote handler.
+  // declareModalPos = position currently being declared (open modal).
+  // demotingTradeId = trade_id of a demotion currently in flight (disables
+  // the menu item during the fetch so double-clicks don't fire twice).
+  const [declareModalPos, setDeclareModalPos] = useState<EnrichedPosition | null>(null);
+  const [demotingTradeId, setDemotingTradeId] = useState<string | null>(null);
   // Phase 2 — list of active strategies for the right-click "Set strategy"
   // submenu. Loaded once on mount; refresh after a successful retag is
   // unnecessary because the source of truth (trades_summary.strategy) is
@@ -495,6 +505,38 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
       /* swallow — user can retry from the menu */
     }
   }, [loadData]);
+
+  // Migration 062 — SR8 declaration handlers.
+  // ctxOpenDeclare opens the declaration modal (user types core shares).
+  // ctxDemoteSR8 confirms + calls the delete endpoint; anchors persist
+  // as historical audit per Q4 of the design.
+  const ctxOpenDeclare = useCallback((p: EnrichedPosition) => {
+    setDeclareModalPos(p);
+    setCtxMenu(null);
+  }, []);
+
+  const ctxDemoteSR8 = useCallback(async (p: EnrichedPosition) => {
+    setCtxMenu(null);
+    const portfolio = activePortfolio?.name || getActivePortfolio();
+    if (!confirm(
+      `Demote ${p.ticker} from SR8 back to SR7?\n\n`
+      + `The activation anchors + core share count are preserved as `
+      + `historical audit — you can re-promote later without losing them.`
+    )) return;
+    setDemotingTradeId(p.trade_id);
+    try {
+      const r = await api.demoteSR8(p.trade_id, portfolio);
+      if ("detail" in r) {
+        log.error("active-campaign", "demote-sr8 failed", r.detail);
+      } else {
+        await loadData({ force: true });
+      }
+    } catch (e) {
+      log.error("active-campaign", "demote-sr8 exception", e);
+    } finally {
+      setDemotingTradeId(null);
+    }
+  }, [activePortfolio?.name, loadData]);
 
   // Exercise-option modal handlers.
   const ctxOpenExercise = useCallback((p: EnrichedPosition) => {
@@ -825,8 +867,39 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
               Active Campaign <em className="italic" style={{ color: navColor }}>Summary</em>
             </h1>
-            <div className="text-[13px] mt-1.5 flex items-center gap-2" style={{ color: "var(--ink-3)" }}>
+            <div className="text-[13px] mt-1.5 flex items-center gap-2 flex-wrap" style={{ color: "var(--ink-3)" }}>
               <span>{totalPositions} open · {equities.length} equit{equities.length === 1 ? "y" : "ies"} · {options.length} option{options.length === 1 ? "" : "s"}</span>
+              {/* Migration 062 — SR8 declaration counter. Informational chip
+                  (no cap enforced), so the user can see at a glance how
+                  many declared holds they carry vs cushion-qualified but
+                  undeclared names sitting on SR7. */}
+              {(() => {
+                const declared = positions.filter(p => p.sell_rule_tier === "sr8").length;
+                const qualifiedOnly = positions.filter(p => p.sell_rule_tier === "sr7").length;
+                if (declared === 0 && qualifiedOnly === 0) return null;
+                return (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold"
+                    style={{
+                      background: "color-mix(in oklab, #08a86b 12%, var(--surface))",
+                      color: "#15803d",
+                      border: "1px solid var(--border)",
+                    }}
+                    title={
+                      `SR8: ${declared} declared` +
+                      (qualifiedOnly > 0 ? ` · ${qualifiedOnly} qualified but undeclared (SR7)` : "")
+                    }
+                    data-testid="sr8-declaration-counter"
+                  >
+                    SR8: {declared}
+                    {qualifiedOnly > 0 && (
+                      <span style={{ color: "var(--ink-3)", fontWeight: 500 }}>
+                        · {qualifiedOnly} SR7
+                      </span>
+                    )}
+                  </span>
+                );
+              })()}
               {lastUpdateMs !== null && (() => {
                 const ageSec = Math.max(0, Math.floor((Date.now() - lastUpdateMs) / 1000));
                 let label: string;
@@ -868,6 +941,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
         </div>
       </div>
+
+      {/* Migration 062 — SR15 broker-stop nudge banner. Auto-clears
+          row-by-row as each stop lands at or above entry × 1.10.
+          Ticker chips open the broker-stop editor. Same component
+          renders on Risk Manager (non-clickable variant). */}
+      <SR15NudgeBanner positions={positions} onTickerClick={setBrokerStopModalPos} />
 
       {/* KPI tiles */}
       <div className="grid grid-cols-7 gap-3 mb-6">
@@ -1434,6 +1513,44 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <span style={{ color: "var(--ink-4)" }}>&#x2702;&#xFE0F;</span> Calculate SR8 Trim
             </button>
           )}
+          {/* Migration 062 — Declare SR8 (right-click Promote) is enabled
+              only on cushion-qualified rows (currently displaying SR7).
+              Non-qualified rows render the item disabled with an
+              actionable tooltip explaining the peak requirement — the
+              backend guards the same rule, so this is UX only. */}
+          {(() => {
+            const p = ctxMenu.position;
+            const qualified = isCushionQualified(p.b1_max_return_pct ?? p.b1_return_pct);
+            const alreadyDeclared = p.sell_rule_tier === "sr8";
+            if (alreadyDeclared) {
+              const inFlight = demotingTradeId === p.trade_id;
+              return (
+                <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                        style={{ color: inFlight ? "var(--ink-4)" : "var(--ink)", opacity: inFlight ? 0.6 : 1 }}
+                        disabled={inFlight}
+                        data-testid="ctx-sr8-demote"
+                        onMouseEnter={e => { if (!inFlight) e.currentTarget.style.background = "var(--surface-2)"; }}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                        onClick={e => { e.stopPropagation(); ctxDemoteSR8(p); }}>
+                  <span style={{ color: "var(--ink-4)" }}>&#x21A9;&#xFE0F;</span> {inFlight ? "Demoting…" : "Demote from SR8 → SR7"}
+                </button>
+              );
+            }
+            return (
+              <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
+                      style={{ color: qualified ? "var(--ink)" : "var(--ink-4)", opacity: qualified ? 1 : 0.5, cursor: qualified ? "pointer" : "not-allowed" }}
+                      disabled={!qualified}
+                      title={qualified
+                        ? undefined
+                        : "SR8 declaration requires cushion-qualified status (peak B1 return ≥ 50%). Not eligible yet."}
+                      data-testid="ctx-sr8-declare"
+                      onMouseEnter={e => { if (qualified) e.currentTarget.style.background = "var(--surface-2)"; }}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                      onClick={e => { e.stopPropagation(); if (qualified) ctxOpenDeclare(p); }}>
+                <span style={{ color: "var(--ink-4)" }}>&#x2B50;</span> Declare SR8
+              </button>
+            );
+          })()}
           {/* Migration 055 — Set/edit/clear broker_stop_price (SR14 flag).
               Available on every open position regardless of tier, since
               the user may want to backfill a forgotten flag OR clear one
@@ -1467,6 +1584,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
             setBrokerStopModalPos(null);
             void loadData({ force: true });
           }}
+        />
+      )}
+
+      {/* Migration 062 — SR8 declaration modal. Opens from the right-
+          click "Declare SR8" menu item on cushion-qualified rows.
+          Successful declaration refreshes the campaign list so the
+          badge, header counter, and Cascade Monitor visibility all
+          update in one round-trip. */}
+      {declareModalPos && (
+        <SR8DeclareModal
+          position={declareModalPos}
+          portfolio={activePortfolio?.name || getActivePortfolio()}
+          onSuccess={() => { void loadData({ force: true }); }}
+          onClose={() => setDeclareModalPos(null)}
         />
       )}
 

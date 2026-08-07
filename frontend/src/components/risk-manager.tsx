@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
+import { api, getActivePortfolio, type JournalHistoryPoint, type TradePosition, type TradeDetailsBundle } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import { SR15NudgeBanner } from "./sr15-nudge-banner";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -34,14 +36,46 @@ export function RiskManager({ navColor }: { navColor: string }) {
   const [loading, setLoading] = useState(true);
   const [chartRange, setChartRange] = useState<"3M" | "6M" | "YTD" | "1Y" | "All">("6M");
   const [heatRange, setHeatRange] = useState<"3M" | "6M" | "YTD" | "1Y" | "All">("6M");
+  // Migration 062 — positions loaded here so the SR15 nudge banner can
+  // render. Same fetch shape ACS uses; failure is silent (banner just
+  // won't render). Equity comes from journalHistory's latest end_nlv
+  // — no need for a second /nlv round-trip since the banner doesn't
+  // display % of NAV.
+  const [nudgePositions, setNudgePositions] = useState<EnrichedPosition[]>([]);
 
   useEffect(() => {
-    api.journalHistory(getActivePortfolio(), 0).then(h => {
+    const portfolio = getActivePortfolio();
+    api.journalHistory(portfolio, 0).then(h => {
       setHistory(h as JournalHistoryPoint[]);
       setLoading(false);
     }).catch((err) => {
       log.error("risk-manager", "journalHistory fetch failed", err);
       setLoading(false);
+    });
+    // Fire-and-forget positions load for the SR15 nudge. Errors are
+    // swallowed to a debug log; the banner just doesn't render.
+    Promise.all([
+      api.tradesOpen(portfolio).catch(() => []),
+      api.tradesOpenDetails(portfolio).catch(() => ({ details: [], lot_closures: [] })),
+    ]).then(async ([openTrades, detailsBundle]) => {
+      const trades = openTrades as TradePosition[];
+      if (trades.length === 0) return;
+      const tickers = trades.map(t => t.ticker).filter(Boolean);
+      let prices: Record<string, number> = {};
+      try {
+        const result = await api.batchPrices(tickers, portfolio);
+        if (result && !("error" in result)) prices = result;
+      } catch {
+        /* fall back to entry price */
+      }
+      // Equity isn't used by the nudge predicate — pass 0 (only affects
+      // pos_size_pct + risk_pct fields we don't read here).
+      const enriched = computeEnrichedPositions(
+        trades, (detailsBundle as TradeDetailsBundle).details, 0, prices,
+      );
+      setNudgePositions(enriched);
+    }).catch(err => {
+      log.error("risk-manager", "SR15 nudge positions fetch failed", err);
     });
   }, []);
 
@@ -169,6 +203,12 @@ export function RiskManager({ navColor }: { navColor: string }) {
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Drawdown tracking with hard deck enforcement</div>
       </div>
+
+      {/* Migration 062 — SR15 nudge (informational mirror of the ACS
+          banner). Chips are non-clickable here; the operator jumps back
+          to ACS or their broker to act. Auto-clears row-by-row as each
+          stop lands at or above target. */}
+      <SR15NudgeBanner positions={nudgePositions} />
 
       {/* KPI tiles */}
       <div className="grid grid-cols-3 gap-3.5 mb-6">

@@ -75,6 +75,12 @@ export interface EnrichedPosition {
   sr8_activation_date?: string | null;
   sr8_activation_nlv?: number | null;
   sr8_core_shares?: number | null;
+  // Migration 062 — user-declared SR8 flag. FALSE by default; TRUE only
+  // when the user explicitly promotes a cushion-qualified campaign via
+  // the ACS right-click menu. Splits SR7 (qualified but undeclared)
+  // from SR8 (declared). Optional so pre-062 test fixtures don't have
+  // to spell it out.
+  is_declared_sr8?: boolean;
 }
 
 export function computeEnrichedPositions(
@@ -196,7 +202,15 @@ export function computeEnrichedPositions(
     const brokerStopPrice = brokerStopRaw != null
       ? parseFloat(String(brokerStopRaw))
       : null;
-    const sellRuleTier = classifySellRuleTier(effectiveMax, brokerStopPrice);
+    // Migration 062 — is_declared_sr8 splits SR8 (declared) from SR7
+    // (qualified but undeclared). Passing the flag to the classifier
+    // keeps that split as the single source of truth; ACS + Risk
+    // Manager both read the same tier code downstream.
+    const isDeclaredSr8Raw = (trade as any).is_declared_sr8;
+    const isDeclaredSr8 = isDeclaredSr8Raw === true || isDeclaredSr8Raw === "true";
+    const sellRuleTier = classifySellRuleTier(
+      effectiveMax, brokerStopPrice, isDeclaredSr8,
+    );
 
     return {
       trade_id: trade.trade_id,
@@ -259,6 +273,7 @@ export function computeEnrichedPositions(
       sr8_activation_date: (trade as any).sr8_activation_date ?? null,
       sr8_activation_nlv:  _passThroughNum((trade as any).sr8_activation_nlv),
       sr8_core_shares:     _passThroughNum((trade as any).sr8_core_shares),
+      is_declared_sr8: isDeclaredSr8,
     };
   });
 }

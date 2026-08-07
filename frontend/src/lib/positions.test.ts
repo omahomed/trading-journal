@@ -120,16 +120,22 @@ describe("computeEnrichedPositions — Sell Rule tier (persistent b1_max_return_
     return computeEnrichedPositions([trade], details, 100_000, livePrices)[0];
   }
 
-  it("COHR pullback case: stored max 70%, current 30% → SR8 (no demote)", () => {
+  // Migration 062 (2026-08-07) reshaped the ladder: peak ≥ 50 now maps
+  // to SR7 by default (cushion-qualified but undeclared); SR8 requires
+  // an explicit is_declared_sr8 flag. The tests below use the derived
+  // TradePosition shape which passes is_declared_sr8 through, defaulting
+  // to false → SR7 for the peak-crossed cases.
+
+  it("COHR pullback case: stored max 70%, current 30% → SR7 (no demote, undeclared)", () => {
     const p = singleStock({ b1Entry: 100, b1Max: 70, livePrice: 130 });
     expect(p.b1_return_pct).toBeCloseTo(30);
     expect(p.b1_max_return_pct).toBeCloseTo(70);
-    expect(p.sell_rule_tier).toBe("sr8");
+    expect(p.sell_rule_tier).toBe("sr7");
   });
 
-  it("new peak: stored 30%, current 55% → SR8 (effective max = 55)", () => {
+  it("new peak: stored 30%, current 55% → SR7 (effective max = 55, undeclared)", () => {
     const p = singleStock({ b1Entry: 100, b1Max: 30, livePrice: 155 });
-    expect(p.sell_rule_tier).toBe("sr8");
+    expect(p.sell_rule_tier).toBe("sr7");
   });
 
   it("brand-new position post-deploy: stored null, current 5% → SR1", () => {
@@ -141,10 +147,11 @@ describe("computeEnrichedPositions — Sell Rule tier (persistent b1_max_return_
   it("only stored set (no current price data) → tier from stored", () => {
     // currentPrice falls back to summaryEntry (100) when livePrice missing;
     // that produces b1_return_pct=0 against b1_entry=100. The stored max
-    // of 60 wins via Math.max → effective 60 → SR8.
+    // of 60 wins via Math.max → effective 60 → SR7 (cushion-qualified
+    // but undeclared).
     const p = singleStock({ b1Entry: 100, b1Max: 60 });
     expect(p.b1_return_pct).toBeCloseTo(0);
-    expect(p.sell_rule_tier).toBe("sr8");
+    expect(p.sell_rule_tier).toBe("sr7");
   });
 
   it("both null → tier null (column renders dash)", () => {
@@ -161,13 +168,15 @@ describe("computeEnrichedPositions — Sell Rule tier (persistent b1_max_return_
     expect(p.sell_rule_tier).toBe("sr1");
   });
 
-  it("boundary: stored exactly at 50% → SR8 (≥ 50 ladder)", () => {
+  it("boundary: stored exactly at 50% → SR7 (cushion-qualified, undeclared)", () => {
     const p = singleStock({ b1Entry: 100, b1Max: 50, livePrice: 100 });
-    expect(p.sell_rule_tier).toBe("sr8");
+    expect(p.sell_rule_tier).toBe("sr7");
   });
 
-  it("boundary: stored 49.99%, current 49.99% → SR11 (still below 50)", () => {
+  it("boundary: stored 49.99%, current 49.99% → SR15 (20-50 band)", () => {
+    // Range shifted by migration 062: 10-20 = SR11, 20-50 = SR15
+    // (new tier, +10% profit-lock band).
     const p = singleStock({ b1Entry: 100, b1Max: 49.99, livePrice: 149.99 });
-    expect(p.sell_rule_tier).toBe("sr11");
+    expect(p.sell_rule_tier).toBe("sr15");
   });
 });

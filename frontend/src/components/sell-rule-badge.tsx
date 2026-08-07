@@ -5,13 +5,14 @@ type SellRuleBadgeProps = {
   tier: SellRuleTier | null;
 };
 
-// Tone matches the existing inline-style pill convention used by the
-// former Risk Status cell in active-campaign.tsx (color-mix tints over
-// surface). sr1 = warn red, sr14 = blue (physical stop parked but still
-// in the exposed <10% window), sr11 = amber (BE stop), sr8 = green (big
-// cushion). Blue for SR14 conveys "have physical protection but not
-// yet earned the BE step-up" — distinct hue from the red/amber/green
-// severity ladder so the eye can spot it at a glance in a mixed table.
+// Tone matches the existing inline-style pill convention (color-mix
+// tints over surface). Ladder is a defensive-progression gradient:
+//   sr1  = warn red (no floor)
+//   sr14 = blue (composite + broker stop parked in <10% band)
+//   sr11 = amber (BE stop at entry, 10%-20% band)
+//   sr15 = teal (broker stop at +10% profit, 20%-50% band, migration 062)
+//   sr7  = light green (qualified but undeclared, 21 EMA cascade)
+//   sr8  = emerald (declared monster hold, weekly MO RS ladder)
 const TONES: Record<SellRuleTier, { bg: string; fg: string }> = {
   sr1: {
     bg: "color-mix(in oklab, #e5484d 14%, var(--surface))",
@@ -25,9 +26,17 @@ const TONES: Record<SellRuleTier, { bg: string; fg: string }> = {
     bg: "color-mix(in oklab, #f59f00 12%, var(--surface))",
     fg: "#d97706",
   },
+  sr15: {
+    bg: "color-mix(in oklab, #0891b2 14%, var(--surface))",
+    fg: "#0e7490",
+  },
+  sr7: {
+    bg: "color-mix(in oklab, #34d399 14%, var(--surface))",
+    fg: "#15803d",
+  },
   sr8: {
-    bg: "color-mix(in oklab, #08a86b 12%, var(--surface))",
-    fg: "#16a34a",
+    bg: "color-mix(in oklab, #08a86b 18%, var(--surface))",
+    fg: "#15803d",
   },
 };
 
