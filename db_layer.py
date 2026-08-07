@@ -7765,13 +7765,18 @@ def _recurring_row_dict(row: dict) -> dict:
     the frontend never has to redo the math and both surfaces (card + modal)
     stay in lockstep with what Post will actually write. `is_due` is
     date-based today-comparison; the frontend renders the card only when
-    True and active."""
-    from datetime import date as _date
+    True and active.
+
+    Today is anchored to America/Chicago — the server runs UTC on Neon/
+    Vercel, and a naive `date.today()` would flip after 7 PM CT and fire
+    the reminder a day early. The rest of the app uses CT for user-facing
+    dates (per CLAUDE.md), so we do too."""
     base = float(row.get("base_amount") or 0)
     pct = float(row.get("percent") or 100.0)
     computed = round(base * pct / 100.0, 2)
     ndd = row.get("next_due_date")
-    is_due = bool(ndd and ndd <= _date.today() and row.get("active"))
+    today_ct = datetime.now(ZoneInfo("America/Chicago")).date()
+    is_due = bool(ndd and ndd <= today_ct and row.get("active"))
     return {
         "id": row["id"],
         "portfolio_id": row["portfolio_id"],
