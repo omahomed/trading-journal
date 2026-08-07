@@ -1935,6 +1935,46 @@ export const api = {
       method: "DELETE",
     }).then(r => r.json()) as Promise<{ status: "ok" | "not_found" } | { detail: string }>,
 
+  // ─── SR8 declaration (Migration 062) ─────────────────────────────
+  // Splits cushion-qualified (peak >= 50%) from user-declared SR8.
+  // Only declared campaigns run the SR8 weekly MO RS funnel ladder +
+  // are exempt from SR2 floors. See Phase A commit message on branch
+  // sr8-declaration-split for the full doctrine mapping.
+  declareSR8: (tradeId: string, portfolio: string, coreShares?: number) =>
+    fetchWithAuth(`${API_BASE}/api/trades/${encodeURIComponent(tradeId)}/declare-sr8`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        portfolio,
+        ...(coreShares != null ? { core_shares: coreShares } : {}),
+      }),
+    }).then(r => r.json()) as Promise<
+      | { ok: true; trade_id: string; portfolio: string; is_declared_sr8: boolean; sr8_core_shares: number | null }
+      | { detail: string }
+    >,
+
+  demoteSR8: (tradeId: string, portfolio: string) =>
+    fetchWithAuth(
+      `${API_BASE}/api/trades/${encodeURIComponent(tradeId)}/declare-sr8?portfolio=${encodeURIComponent(portfolio)}`,
+      { method: "DELETE" },
+    ).then(r => r.json()) as Promise<
+      | { ok: true; trade_id: string; portfolio: string; is_declared_sr8: boolean }
+      | { detail: string }
+    >,
+
+  listDeclaredSR8: () =>
+    fetchJSON<{
+      declared: Array<{
+        portfolio: string; trade_id: string; ticker: string;
+        b1_max_return_pct: number | string;
+        sr8_activation_date: string | null;
+        sr8_activation_nlv: number | string | null;
+        sr8_core_shares: number | string | null;
+      }>;
+      count: number;
+      error?: string;
+    }>("/api/sr8/declared"),
+
   // Force-refresh SPY + NASDAQ closes for `day` across all portfolios.
   // Overwrites any stored value diverging from yfinance's raw close beyond
   // tolerance (SPY $0.10, NASDAQ $5). Idempotent — safe to re-run.

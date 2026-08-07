@@ -2863,6 +2863,10 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         "Sr8_Activation_Date": "sr8_activation_date",
         "Sr8_Activation_Nlv": "sr8_activation_nlv",
         "Sr8_Core_Shares": "sr8_core_shares",
+        # Migration 062 — user-declared SR8 flag (splits from cushion-
+        # qualified). Same PascalCase → snake_case round-trip as the
+        # Broker_Stop_Price note above; frontend reads is_declared_sr8.
+        "Is_Declared_Sr8": "is_declared_sr8",
         # Migration 055 — SR14 two-stop flag. load_summary emits the
         # PascalCase alias; every downstream consumer (positions.ts,
         # sell-rule classifier, ACS badge) reads the snake_case name.
@@ -4540,6 +4544,125 @@ def patch_trade_strategy_endpoint(trade_id: str, request: Request, body: dict = 
         return {"error": str(e)}
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Declared-SR8 endpoints (Migration 062)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Doctrine v8.1 §1 governs SR8 as an EXPLICIT user promotion, not a
+# derived tier. Cushion-qualified (b1_max_return_pct >= 50) is a
+# prerequisite, not a trigger. Qualified-but-undeclared campaigns
+# behave as SR7 (21 EMA + cushion cascade); only declared campaigns
+# run the SR8 weekly MO RS funnel ladder + are exempt from SR2 floors.
+#
+# No hard cap. No cluster block. The user retains full flexibility
+# on how many to declare; ACS surfaces an informational counter chip.
+
+@app.post("/api/trades/{trade_id}/declare-sr8")
+@limiter.limit("30/minute")
+def declare_sr8_endpoint(trade_id: str, request: Request, body: dict = Body(...)):
+    """Promote a campaign to SR8. Body:
+        { portfolio: string (required),
+          core_shares: number (optional — Option C user-typed core count;
+                       defaults to the auto-stamped sr8_core_shares value
+                       when omitted). }
+
+    Guarded by the cushion-qualified prerequisite (peak >= 50%). Returns
+    422 with reason='not_qualified' when peak hasn't crossed.
+    """
+    portfolio = str(body.get("portfolio") or "").strip()
+    if not portfolio:
+        raise HTTPException(status_code=422, detail="portfolio is required")
+    core_override = body.get("core_shares")
+    if core_override is not None:
+        try:
+            core_override = float(core_override)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="core_shares must be numeric")
+        if core_override <= 0:
+            raise HTTPException(status_code=422, detail="core_shares must be > 0")
+    try:
+        result = db.set_declared_sr8(
+            portfolio, trade_id, True,
+            core_shares_override=core_override,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Trade {trade_id} not found in {portfolio}",
+            )
+        if result.get("reason") == "not_qualified":
+            raise HTTPException(
+                status_code=422,
+                detail="Campaign is not cushion-qualified (peak b1_return must be >= 50%).",
+            )
+        try:
+            db.log_audit(
+                portfolio, "SR8_DECLARE", trade_id, "",
+                f"promoted to SR8 (core_shares={result.get('sr8_core_shares')})",
+                username="web",
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True, "trade_id": trade_id, "portfolio": portfolio,
+            "is_declared_sr8": result["is_declared_sr8"],
+            "sr8_core_shares": result["sr8_core_shares"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[declare_sr8_endpoint] {trade_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/trades/{trade_id}/declare-sr8")
+@limiter.limit("30/minute")
+def demote_sr8_endpoint(trade_id: str, request: Request, portfolio: str = ""):
+    """Demote a campaign back to SR7. sr8_activation_date/nlv/core_shares
+    are PRESERVED as historical audit — re-promotion later doesn't need
+    a re-stamp. Query param `portfolio` scopes the lookup."""
+    portfolio = (portfolio or "").strip()
+    if not portfolio:
+        raise HTTPException(status_code=422, detail="portfolio is required")
+    try:
+        result = db.set_declared_sr8(portfolio, trade_id, False)
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Trade {trade_id} not found in {portfolio}",
+            )
+        try:
+            db.log_audit(
+                portfolio, "SR8_DEMOTE", trade_id, "",
+                "demoted from SR8 to SR7 (anchors preserved)",
+                username="web",
+            )
+        except Exception:
+            pass
+        return {
+            "ok": True, "trade_id": trade_id, "portfolio": portfolio,
+            "is_declared_sr8": result["is_declared_sr8"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[demote_sr8_endpoint] {trade_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sr8/declared")
+def list_declared_sr8_endpoint(request: Request):
+    """List every declared SR8 campaign across all caller portfolios.
+    Feeds the ACS 'SR8: N declared' counter chip + a future declarations
+    dashboard. RLS-scoped."""
+    try:
+        rows = db.list_declared_sr8()
+        return {"declared": rows, "count": len(rows)}
+    except Exception as e:
+        print(f"[list_declared_sr8_endpoint] failed: {e}")
+        return {"declared": [], "count": 0, "error": str(e)}
+
+
 @app.post("/api/trades/bulk-strategy")
 @limiter.limit("5/minute")
 def bulk_set_trade_strategy_endpoint(request: Request, body: dict = Body(...)):
@@ -5270,9 +5393,24 @@ def _sr8_load_db_positions(portfolio: str) -> list[dict[str, Any]]:
         return float("nan")
 
     candidate["_effective_max"] = candidate.apply(_effective_max, axis=1)
+
+    # Migration 062 — Cascade Monitor now filters on the user-declared flag,
+    # not just cushion-qualified peak. Doctrine v8.1 §1 mandates SR8 semantics
+    # (weekly MO RS cascade + funnel ladder) only run on explicitly-declared
+    # names; qualified-but-undeclared campaigns fall to SR7 (21 EMA + cushion
+    # cascade) which the monitor does NOT govern. This is the doctrine fix
+    # for the "app shows more SR8 names than doctrine permits" bug.
+    declared_col = candidate.get("is_declared_sr8")
+    if declared_col is None:
+        # Pre-migration-062 deploy path — no column, so nothing declared.
+        candidate["_is_declared_sr8"] = False
+    else:
+        candidate["_is_declared_sr8"] = declared_col.fillna(False).astype(bool)
+
     sr8_df = candidate[
         candidate["_effective_max"].notna()
         & (candidate["_effective_max"] >= _SR8_TIER_THRESHOLD)
+        & candidate["_is_declared_sr8"]
     ]
     if sr8_df.empty:
         return []
