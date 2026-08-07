@@ -435,6 +435,23 @@ def load_summary(portfolio_name, status=None):
                 'NULL::numeric AS "Sr8_Activation_Nlv",\n                    '
                 'NULL::numeric AS "Sr8_Core_Shares",\n                    '
             )
+            # Migration 062: is_declared_sr8 — user-declared SR8 flag. Split
+            # from cushion-qualified (b1_max_return_pct >= 50) which stays
+            # derived client-side. Same migration-tolerance dance.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'is_declared_sr8'"
+                )
+                has_declared_sr8 = cur.fetchone() is not None
+            except Exception:
+                has_declared_sr8 = False
+            declared_sr8_select = (
+                's.is_declared_sr8 AS "Is_Declared_Sr8",\n                    '
+                if has_declared_sr8 else
+                'FALSE AS "Is_Declared_Sr8",\n                    '
+            )
             # Migration-tolerance for migration 055 — broker_stop_price
             # (SR14 two-stop flag). Same detection pattern as sr8_activation.
             # NEVER put percent characters in SQL comments inside this
@@ -487,7 +504,7 @@ def load_summary(portfolio_name, status=None):
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
                     {b1_max_select}
-                    {mae_mfe_select}{sr8_activation_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {mae_mfe_select}{sr8_activation_select}{declared_sr8_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule
@@ -1138,6 +1155,141 @@ def snapshot_sr8_activation_if_null(
             # No write — either row missing, or anchor already set.
             return {"was_written": False, "activation_date": None,
                     "activation_nlv": None, "core_shares": core_shares}
+
+
+def set_declared_sr8(
+    portfolio_name: str,
+    trade_id: str,
+    declared: bool,
+    *,
+    core_shares_override: float | None = None,
+) -> dict | None:
+    """Flip the user-declared SR8 flag on a campaign (migration 062).
+
+    declared=True  → user is promoting the campaign to SR8. If
+                     `core_shares_override` is provided, it also updates
+                     sr8_core_shares (Option C from the design: user-typed
+                     core count at declaration time). Anchor date + NLV
+                     are NOT touched — they were stamped at the +50%
+                     crossing by capture_sr8_activation_anchors and
+                     preserve their original meaning.
+    declared=False → user is demoting the campaign back to SR7. The
+                     sr8_activation_* + sr8_core_shares columns are
+                     PRESERVED as historical audit — re-promotion later
+                     shouldn't require a fresh stamp.
+
+    Doctrine guard: promotion requires the campaign to be cushion-
+    qualified (b1_max_return_pct >= 50). Attempting to declare a sub-
+    qualified campaign returns {"was_written": False, "reason": "not_qualified"}.
+    Demotion has no threshold — you can demote at any time.
+
+    Returns:
+      {"was_written": bool, "is_declared_sr8": bool, "sr8_core_shares": float|None,
+       "reason": str|None} on success.
+      None when the trade_id isn't found in the portfolio.
+
+    RLS scopes to the calling user via the standard get_db_connection path.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            # Fetch current state to (a) confirm the row exists, (b) apply
+            # the cushion-qualified guard on promotion.
+            cur.execute(
+                """
+                SELECT is_declared_sr8, b1_max_return_pct, sr8_core_shares
+                  FROM trades_summary
+                 WHERE portfolio_id = %s AND trade_id = %s
+                   AND deleted_at IS NULL
+                """,
+                (portfolio_id, trade_id),
+            )
+            current = cur.fetchone()
+            if current is None:
+                return None
+
+            if declared:
+                peak = float(current.get("b1_max_return_pct") or 0)
+                if peak < 50.0:
+                    return {
+                        "was_written": False,
+                        "is_declared_sr8": bool(current["is_declared_sr8"]),
+                        "sr8_core_shares": (
+                            float(current["sr8_core_shares"])
+                            if current["sr8_core_shares"] is not None else None
+                        ),
+                        "reason": "not_qualified",
+                    }
+
+            # Build the SET clause. Core-shares override only applies on
+            # promotion (Option C at declaration time); on demotion the
+            # core value stays put as historical audit.
+            if declared and core_shares_override is not None:
+                cur.execute(
+                    """
+                    UPDATE trades_summary
+                       SET is_declared_sr8 = %s,
+                           sr8_core_shares = %s,
+                           last_updated    = CURRENT_TIMESTAMP
+                     WHERE portfolio_id = %s AND trade_id = %s
+                       AND deleted_at IS NULL
+                     RETURNING is_declared_sr8, sr8_core_shares
+                    """,
+                    (True, float(core_shares_override), portfolio_id, trade_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE trades_summary
+                       SET is_declared_sr8 = %s,
+                           last_updated    = CURRENT_TIMESTAMP
+                     WHERE portfolio_id = %s AND trade_id = %s
+                       AND deleted_at IS NULL
+                     RETURNING is_declared_sr8, sr8_core_shares
+                    """,
+                    (bool(declared), portfolio_id, trade_id),
+                )
+            updated = cur.fetchone()
+            conn.commit()
+            # Invalidate the 30 s ttl cache so downstream readers (SR8
+            # Cascade Monitor, ACS row list, sell-rule classifier) see
+            # the new is_declared_sr8 value on their next call.
+            load_summary.clear()
+            return {
+                "was_written": updated is not None,
+                "is_declared_sr8": bool(updated["is_declared_sr8"]) if updated else False,
+                "sr8_core_shares": (
+                    float(updated["sr8_core_shares"])
+                    if updated and updated["sr8_core_shares"] is not None else None
+                ),
+                "reason": None,
+            }
+
+
+def list_declared_sr8() -> list[dict]:
+    """Every user-declared SR8 campaign the caller owns, across all
+    portfolios. Feeds the informational "SR8: N declared" counter chip
+    in ACS. RLS-scoped."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT p.name AS portfolio, s.trade_id, s.ticker,
+                       s.b1_max_return_pct, s.sr8_activation_date,
+                       s.sr8_activation_nlv, s.sr8_core_shares
+                  FROM trades_summary s
+                  JOIN portfolios p ON p.id = s.portfolio_id
+                 WHERE s.is_declared_sr8 = TRUE
+                   AND s.deleted_at IS NULL
+                 ORDER BY p.name, s.trade_id
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
 
 
 # ============================================
