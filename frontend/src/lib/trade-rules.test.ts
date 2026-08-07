@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { SELL_RULES, SELL_RULE_LABELS, RULE_HIERARCHY, BUY_RULE_LABELS } from "./trade-rules";
+import {
+  SELL_RULES,
+  SELL_RULE_LABELS,
+  RULE_HIERARCHY,
+  BUY_RULE_LABELS,
+  SELL_RULE_FAMILIES,
+} from "./trade-rules";
 
 // Post-migration-063 (2026-08-07 cleanup): SR4, SR6, SR12, SR14 retired
 // per the canonical MOTrading Handoff review notes.
@@ -12,15 +18,15 @@ import { SELL_RULES, SELL_RULE_LABELS, RULE_HIERARCHY, BUY_RULE_LABELS } from ".
 //   - SR7 description shortened to "21e Violation".
 
 describe("SELL_RULES canonical taxonomy — post-063", () => {
-  it("has exactly 13 entries (17 pre-cleanup minus 4 retired)", () => {
-    expect(SELL_RULES.length).toBe(13);
+  it("has exactly 14 entries (17 pre-cleanup − 4 retired + SR15 added)", () => {
+    expect(SELL_RULES.length).toBe(14);
   });
 
-  it("uses the post-cleanup code sequence (SR4/SR6/SR12/SR14 removed)", () => {
+  it("uses the post-cleanup code sequence (SR4/SR6/SR12/SR14 removed, SR15 added)", () => {
     expect(SELL_RULES.map((r) => r.code)).toEqual([
       "sr1", "sr2", "sr3", "sr5", "sr7", "sr8",
       "sr8.1", "sr8.2", "sr8.3",
-      "sr9", "sr10", "sr11", "sr13",
+      "sr9", "sr10", "sr11", "sr13", "sr15",
     ]);
   });
 
@@ -39,6 +45,7 @@ describe("SELL_RULES canonical taxonomy — post-063", () => {
       "Earnings Exit",
       "BE Stop Out (moved at +10%)",
       "Change of Character",
+      "+10% Profit Lock",
     ]);
   });
 
@@ -63,7 +70,7 @@ describe("SELL_RULES canonical taxonomy — post-063", () => {
 describe("SELL_RULE_LABELS — DB string format", () => {
   it("formats each label as `${code} ${description}`", () => {
     expect(SELL_RULE_LABELS[0]).toBe("sr1 Capital Protection");
-    expect(SELL_RULE_LABELS[SELL_RULE_LABELS.length - 1]).toBe("sr13 Change of Character");
+    expect(SELL_RULE_LABELS[SELL_RULE_LABELS.length - 1]).toBe("sr15 +10% Profit Lock");
     expect(SELL_RULE_LABELS).toContain("sr8.1 SR8 Quick Trim");
     expect(SELL_RULE_LABELS).toContain("sr8.2 SR8 Quicksand Trim");
     expect(SELL_RULE_LABELS).toContain("sr8.3 SR8 Grateful Dead");
@@ -109,6 +116,48 @@ describe("SELL_RULES — glossary content fields", () => {
     expect(sr8!.mechanics).toContain("Quick");
     expect(sr8!.mechanics).toContain("Quicksand");
     expect(sr8!.mechanics).toContain("Grateful Dead");
+  });
+});
+
+describe("SELL_RULE_FAMILIES + rule.family — grouping metadata", () => {
+  it("defines six families in ladder order (defense → event)", () => {
+    expect(SELL_RULE_FAMILIES.map((f) => f.key)).toEqual([
+      "defense", "trend", "floor", "monster", "discretionary", "event",
+    ]);
+  });
+
+  it("every family has a label, color, and blurb", () => {
+    for (const f of SELL_RULE_FAMILIES) {
+      expect(f.label.length).toBeGreaterThan(0);
+      expect(f.color).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(f.blurb.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("every sell rule declares a family that exists in SELL_RULE_FAMILIES", () => {
+    const validKeys = new Set(SELL_RULE_FAMILIES.map((f) => f.key));
+    for (const rule of SELL_RULES) {
+      expect(validKeys.has(rule.family),
+        `rule ${rule.code} has unknown family ${rule.family}`).toBe(true);
+    }
+  });
+
+  it("locks the family assignments for each rule", () => {
+    const byCode = new Map(SELL_RULES.map((r) => [r.code, r.family]));
+    expect(byCode.get("sr1")).toBe("defense");
+    expect(byCode.get("sr2")).toBe("discretionary");
+    expect(byCode.get("sr3")).toBe("discretionary");
+    expect(byCode.get("sr5")).toBe("discretionary");
+    expect(byCode.get("sr7")).toBe("trend");
+    expect(byCode.get("sr8")).toBe("monster");
+    expect(byCode.get("sr8.1")).toBe("monster");
+    expect(byCode.get("sr8.2")).toBe("monster");
+    expect(byCode.get("sr8.3")).toBe("monster");
+    expect(byCode.get("sr9")).toBe("trend");
+    expect(byCode.get("sr10")).toBe("event");
+    expect(byCode.get("sr11")).toBe("floor");
+    expect(byCode.get("sr13")).toBe("event");
+    expect(byCode.get("sr15")).toBe("floor");
   });
 });
 

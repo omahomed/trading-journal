@@ -41,12 +41,14 @@ describe("SellRuleGlossary", () => {
   test("header caption reflects collapsed/expanded state", () => {
     render(<SellRuleGlossary />);
     const btn = screen.getByRole("button", { name: /Sell rule reference/i });
-    expect(btn).toHaveTextContent(/Show 13 rules/);
+    // 14 rules post-063 (13 remaining + SR15 promoted to a selectable
+    // rule alongside its tier existence).
+    expect(btn).toHaveTextContent(/Show 14 rules/);
     act(() => { fireEvent.click(btn); });
     expect(btn).toHaveTextContent(/Hide/);
   });
 
-  test("expanded: renders all 13 rule codes", () => {
+  test("expanded: renders all 14 rule codes", () => {
     render(<SellRuleGlossary />);
     act(() => { fireEvent.click(screen.getByRole("button", { name: /Sell rule reference/i })); });
 
@@ -99,6 +101,24 @@ describe("SellRuleGlossary", () => {
     for (const entry of RULE_HIERARCHY) {
       expect(screen.getByText(entry.conflict)).toBeInTheDocument();
     }
+  });
+
+  test("expanded: renders one header per family in canonical order", () => {
+    render(<SellRuleGlossary />);
+    act(() => { fireEvent.click(screen.getByRole("button", { name: /Sell rule reference/i })); });
+
+    // FamilyHeader emits data-testid="glossary-family-header" for each
+    // group. Six families in the ladder: defense, trend, floor,
+    // monster, discretionary, event.
+    const headers = screen.getAllByTestId("glossary-family-header");
+    expect(headers.map((h) => h.textContent)).toEqual([
+      "Capital defense",
+      "Trend break",
+      "Profit floor",
+      "Monster hold",
+      "Discretionary",
+      "Event",
+    ]);
   });
 
   test("collapsed state persists via the documented localStorage key", () => {

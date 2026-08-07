@@ -17,7 +17,9 @@ import remarkGfm from "remark-gfm";
 import {
   SELL_RULES,
   RULE_HIERARCHY,
+  SELL_RULE_FAMILIES,
   type SellRule,
+  type SellRuleFamily,
   type RuleHierarchyEntry,
 } from "@/lib/trade-rules";
 import { SectionExpander } from "./section-expander";
@@ -119,19 +121,64 @@ function HierarchyTable({ entries }: { entries: readonly RuleHierarchyEntry[] })
   );
 }
 
+function FamilyHeader({
+  label, color, blurb,
+}: { label: string; color: string; blurb: string }) {
+  return (
+    <div className="flex items-center gap-3 mt-2">
+      <span
+        aria-hidden="true"
+        className="inline-block"
+        style={{ width: 4, height: 20, background: color, borderRadius: 2 }}
+      />
+      <div>
+        <div
+          className="text-[13px] font-semibold uppercase tracking-wider"
+          style={{ color }}
+          data-testid="glossary-family-header"
+        >
+          {label}
+        </div>
+        <div className="text-[11px]" style={{ color: "var(--ink-3)" }}>
+          {blurb}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SellRuleGlossary() {
+  // Group rules by family; families appear in the canonical order
+  // defined by SELL_RULE_FAMILIES so the ladder reads defense → trend
+  // → floor → monster → discretionary → event top-to-bottom.
+  const rulesByFamily = new Map<SellRuleFamily, SellRule[]>();
+  for (const rule of SELL_RULES) {
+    if (!rulesByFamily.has(rule.family)) rulesByFamily.set(rule.family, []);
+    rulesByFamily.get(rule.family)!.push(rule);
+  }
+  const totalRules = SELL_RULES.length;
+
   return (
     <div className="mt-6">
       <SectionExpander
         title="Sell rule reference"
         defaultExpanded={false}
         localStorageKey="mo-log-sell-glossary-expanded"
-        headerCaption={(open) => (open ? "Hide" : "Show 13 rules + hierarchy")}
+        headerCaption={(open) => (open ? "Hide" : `Show ${totalRules} rules + hierarchy`)}
       >
         <div className="p-5 flex flex-col gap-3">
-          {SELL_RULES.map((rule) => (
-            <RuleCard key={rule.code} rule={rule} />
-          ))}
+          {SELL_RULE_FAMILIES.map((fam) => {
+            const rules = rulesByFamily.get(fam.key) ?? [];
+            if (rules.length === 0) return null;
+            return (
+              <div key={fam.key} className="flex flex-col gap-3">
+                <FamilyHeader label={fam.label} color={fam.color} blurb={fam.blurb} />
+                {rules.map((rule) => (
+                  <RuleCard key={rule.code} rule={rule} />
+                ))}
+              </div>
+            );
+          })}
           <HierarchyTable entries={RULE_HIERARCHY} />
         </div>
       </SectionExpander>

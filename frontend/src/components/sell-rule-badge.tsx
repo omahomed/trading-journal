@@ -1,4 +1,4 @@
-import { SELL_RULES } from "@/lib/trade-rules";
+import { SELL_RULES, SELL_RULE_FAMILIES } from "@/lib/trade-rules";
 import type { SellRuleTier } from "@/lib/sell-rule";
 
 type SellRuleBadgeProps = {
@@ -43,20 +43,40 @@ export function SellRuleBadge({ tier }: SellRuleBadgeProps) {
   }
 
   const rule = SELL_RULES.find((r) => r.code === tier);
+  // Family-colored stripe on the badge's left edge (2px vertical bar).
+  // Grouped at-a-glance without changing the "SR7" / "SR8" text.
+  // Falls back to the badge's own fg color if the tier isn't in
+  // SELL_RULES for any reason (won't happen in normal flow now that
+  // every tier code has a matching rule entry).
+  const family = rule?.family;
+  const familyMeta = family
+    ? SELL_RULE_FAMILIES.find((f) => f.key === family)
+    : undefined;
+  const stripe = familyMeta?.color;
+
   const label = tier.toUpperCase();
   const tooltip = rule
-    ? `${label} ${rule.description}\n\n${rule.oneLiner}`
+    ? `${label} ${rule.description} — ${familyMeta?.label ?? ""}\n\n${rule.oneLiner}`
     : label;
   const tone = TONES[tier];
 
   return (
     <span
-      className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap"
+      className="inline-flex items-center rounded-full text-[10px] font-semibold whitespace-nowrap overflow-hidden"
       style={{ background: tone.bg, color: tone.fg }}
       title={tooltip}
       data-tier={tier}
+      data-family={family ?? ""}
     >
-      {label}
+      {stripe && (
+        <span
+          aria-hidden="true"
+          data-testid="family-stripe"
+          className="self-stretch inline-block"
+          style={{ width: 2, background: stripe }}
+        />
+      )}
+      <span className="px-2 py-0.5">{label}</span>
     </span>
   );
 }

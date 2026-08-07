@@ -21,6 +21,21 @@
 //          stamps retagged to SR1. Slot is FREE (candidate for SR11-R
 //          / MCP when we build it).
 
+// Family = the functional group a sell rule belongs to. Drives the
+// colored stripe on SellRuleBadge and the group headers in
+// SellRuleGlossary. Purely presentational — the DB stamp is still
+// the code+description string.
+//
+// Groups (2026-08-07 taxonomy pass):
+//   defense       Capital defense on a losing thesis
+//   trend         Technical / structural violation of the trend
+//   floor         Profit-lock / BE stop nudges
+//   monster       Declared SR8 cushion management
+//   discretionary Judgment trims driven by extension / macro
+//   event         Non-price triggers (earnings, character change)
+export type SellRuleFamily =
+  | "defense" | "trend" | "floor" | "monster" | "discretionary" | "event";
+
 export type SellRule = {
   code: string;
   description: string;
@@ -28,7 +43,34 @@ export type SellRule = {
   oneLiner: string;
   /** Markdown body. May contain GFM tables. Optional. */
   mechanics?: string;
+  /** Functional group — drives the badge stripe + glossary grouping. */
+  family: SellRuleFamily;
 };
+
+/** Family metadata: display label + colored stripe. Colors reuse the
+ *  existing SellRuleBadge palette so the stripe on a "defense" rule
+ *  matches the sr1 red fill, "monster" matches sr8 emerald, etc. */
+export const SELL_RULE_FAMILIES: readonly {
+  key: SellRuleFamily;
+  label: string;
+  /** Solid color used for the badge stripe + glossary group divider. */
+  color: string;
+  /** One-liner shown under the group header in the glossary. */
+  blurb: string;
+}[] = [
+  { key: "defense",       label: "Capital defense",  color: "#dc2626",
+    blurb: "The thesis died fast — protect the initial risk." },
+  { key: "trend",         label: "Trend break",      color: "#4f46e5",
+    blurb: "Technical premise gave way — exit or trim." },
+  { key: "floor",         label: "Profit floor",     color: "#d97706",
+    blurb: "Lock in realized cushion as the position matures." },
+  { key: "monster",       label: "Monster hold",     color: "#15803d",
+    blurb: "SR8 declared — RS-based management of the core." },
+  { key: "discretionary", label: "Discretionary",    color: "#7c3aed",
+    blurb: "Judgment trims driven by extension or macro pressure." },
+  { key: "event",         label: "Event",            color: "#0e7490",
+    blurb: "Non-price triggers — earnings and character change." },
+] as const;
 
 export const SELL_RULES: readonly SellRule[] = [
   {
@@ -43,6 +85,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "  - Break of SL entry: low of the day before",
       "- Position sized so that distance-to-stop × shares = max acceptable capital risk",
     ].join("\n"),
+    family: "defense",
   },
   {
     code: "sr2",
@@ -55,6 +98,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- Exempts SR8 core — SR2 trims only from the ADDS layer; the 15% NAV core is untouched",
       "- Same thresholds apply to options positions",
     ].join("\n"),
+    family: "discretionary",
   },
   {
     code: "sr3",
@@ -69,6 +113,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "  - **L3** (−15% from ATH): out of the market",
       "- Core preservation: SR8 cores (15% NAV positions in proven leaders) are exempt from SR3 trims. SR3 reduces exposure by trimming non-leader positions and the ADDS layer of SR8 positions, but does not touch SR8 cores. Cores are only retired by SR8's own signals (Quick / Quicksand / Grateful Dead) or by SR13.",
     ].join("\n"),
+    family: "discretionary",
   },
   // SR4 (Time Stop) — retired 2026-08-07. SR3 covers portfolio-time trims.
   {
@@ -83,6 +128,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "  - Many consecutive up days without rest",
       "- Often a judgment call; sometimes multiple signals align",
     ].join("\n"),
+    family: "discretionary",
   },
   // SR6 (8e Momentum Trim) — retired 2026-08-07 (canonical handoff §2:
   // 0-for-5 fire quality; non-activating above ~6% ATR).
@@ -104,6 +150,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "",
       "- **Recursion on the remaining position**: SR7 stays armed after any partial trim. If the stock recovers (close back above 21 EMA), SR7 disarms and the remaining shares continue under normal governance. If it doesn't recover, SR7 re-arms on the next close below 21 EMA and the next fire re-evaluates cushion on what's left.",
     ].join("\n"),
+    family: "trend",
   },
   {
     code: "sr8",
@@ -120,9 +167,10 @@ export const SELL_RULES: readonly SellRule[] = [
       "| Signal | Trigger | Action | Reversible? |",
       "|---|---|---|---|",
       "| 🟡 Quick | RS breaks below 8w MA (orange) | Trim 5% NAV (15% → 10%) | YES — if RS reclaims, rebuild |",
-      "| 🟡 Quicksand | RS drifts further below 8w | Trim another 5% (10% → 5%) | YES — if RS reclaims, rebuild |",
+      "| 🟡 Quicksand | RS breaks below 13w MA (mid-trend) | Trim another 5% (10% → 5%) | YES — if RS reclaims, rebuild |",
       "| 🔴 Grateful Dead | RS breaks below 21w MA (blue) | Full exit | NO — one-way |",
     ].join("\n"),
+    family: "monster",
   },
   {
     code: "sr8.1",
@@ -137,6 +185,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- **Reversible**: if RS reclaims the 8w MA, cascade disarms and position can be rebuilt back toward the core level",
       "- **Purpose**: shave exposure on the FIRST sign of relative-strength weakness; leave the trade with a smaller but still-participating stake",
     ].join("\n"),
+    family: "monster",
   },
   {
     code: "sr8.2",
@@ -151,6 +200,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- **Reversible**: if RS reclaims the 13w MA, the state disarms and position can be rebuilt",
       "- **Purpose**: cut exposure further as weakness confirms into the mid-trend line — but leave a toehold in case RS turns back",
     ].join("\n"),
+    family: "monster",
   },
   {
     code: "sr8.3",
@@ -163,6 +213,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- **Not reversible**: this is the one-way signal. In `terminate` mode (default), the campaign is over. In `revert` mode, position closes and a fresh daily GREEN opens a new sub-entry.",
       "- **Named separately from SR8.1 / SR8.2** so realized outcomes can be analyzed independently — GD exits typically capture the full downside; the analytical question is whether the earlier QUICK/QS trims added or subtracted value.",
     ].join("\n"),
+    family: "monster",
   },
   {
     code: "sr9",
@@ -178,6 +229,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- Discretionary: if the stock is breaking down hard, exit intraday — no need to wait for the close",
       "- **Context**: A breakout failure usually means the stock is going down hard. The exit price may be above your initial entry — SR9 is profit protection during structural failure, not capital protection (SR1's job).",
     ].join("\n"),
+    family: "trend",
   },
   {
     code: "sr10",
@@ -188,6 +240,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- Run each pre-earnings position through the test",
       "- If it fails, exit before earnings rather than hold through",
     ].join("\n"),
+    family: "event",
   },
   {
     code: "sr11",
@@ -201,6 +254,7 @@ export const SELL_RULES: readonly SellRule[] = [
       "- **Disengagement**: Once the position qualifies for SR8 (up 50%+ AND market leader), the BE stop is removed. The core is no longer BE-defended — it transitions to RS-defended via SR8's weekly MO RS triggers. If price later returns near entry, that fact alone does not trigger an exit; SR8's signals govern instead.",
       "- Tracked as a distinct exit reason — pending analysis on whether maintaining the original risk level would have been the better long-run choice",
     ].join("\n"),
+    family: "floor",
   },
   // SR12 (TQQQ Strategy Exit) — retired 2026-08-07. Same 21 EMA violation
   // shape as SR7, just applied to the NDX index. Historical sells retagged
@@ -219,6 +273,25 @@ export const SELL_RULES: readonly SellRule[] = [
       "- **Action**: Full exit of the entire position, including any SR8 core. A true character change voids the SR8 premise (the stock is no longer a leader with strong fundamentals).",
       "- **Bar for triggering must be high**: Market-wide scares (Iran war, circuit breaker, generic selloff) are SR3 events, not SR13 events. SR13 requires a stock-specific structural break.",
     ].join("\n"),
+    family: "event",
+  },
+  // SR15 — +10% Profit Lock. Automatic tier promotion when peak
+  // crosses +20% (migration 062 nudge system). User-selectable here
+  // for cases where the sell reason IS the +10% broker stop firing.
+  {
+    code: "sr15",
+    description: "+10% Profit Lock",
+    oneLiner:
+      "Physical broker stop parked at entry × 1.10, activated once peak crosses +20% from B1. Firing = full exit like SR1 but at a locked +10% profit floor instead of a loss.",
+    mechanics: [
+      "- **Trigger**: peak b1_return crosses +20% → app nudges you to park a broker stop at entry × 1.10 (B1 fill, not blended avg)",
+      "- **Anchor**: B1 fill × 1.10 — scale-ins do NOT walk the target higher",
+      "- **Fire**: intraday break of the parked stop → full exit (same shape as SR1)",
+      "- **Auto-clears**: once broker_stop_price ≥ entry × 1.10 in the app, the SR15 nudge banner clears (ACS + Risk Manager)",
+      "- **Sticks through SR7 / SR8**: the +10% floor stays parked as the hard-price backstop even after tier ratchets higher. 21 EMA / weekly MO RS become the softer trailing tests above it.",
+      "- **Tier band**: 20% ≤ peak < 50%. Nudge banner only fires in-band; once peak crosses 50% the floor is expected to already be parked and nagging is stale.",
+    ].join("\n"),
+    family: "floor",
   },
   // SR14 (0.75× ATR Stop) — retired 2026-08-07. Collapsed into SR1
   // (Capital Protection). Broker-stop presence is now surfaced as a
