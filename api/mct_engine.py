@@ -1170,9 +1170,21 @@ class MCTEngine:
                     meta={"low": low, "ema_21": ema_21},
                 ))
 
-        # ----- Step 4: 3 consecutive bars low > 21 EMA -----
+        # ----- Step 4: 3 consecutive bars low > 21 EMA, up close on arm bar -----
+        # The up-close gate (close > prev close) matches the Trend Cycle ARM
+        # rule at line ~539 — both machineries now use the same "streak + up
+        # day" test. Without the gate STEP_4 would fire on a red 3rd bar and
+        # promote M Factor to UPTREND while the Trend Cycle stayed negative,
+        # producing the divergence surfaced on 2026-08-06 where a down close
+        # advanced the cascade but not the leg.
+        #
+        # The streak counter keeps ticking on down days — if the 3rd bar is
+        # red the fire just waits for the next up close (still with streak
+        # ≥ 3), mirroring the Trend Cycle's post-3rd-bar arm behavior.
         if (start_flags["step3_done"] and not state["step4_done"]
-                and state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21):
+                and state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21
+                and prev is not None
+                and float(current["close"]) > float(prev["close"])):
             state["step4_done"] = True
             state["step4_ever_fired"] = True  # UUP latch — outlives step4_done
             before = state["exposure"]
@@ -1180,7 +1192,7 @@ class MCTEngine:
             if arm_emit:
                 bar_signals.append(self._signal(
                     current, state, "STEP_4_LOW_ABOVE_21EMA_3BARS",
-                    f"low > 21 EMA for {state['consec_low_above_21']} consecutive bars",
+                    f"low > 21 EMA for {state['consec_low_above_21']} consecutive bars, up close",
                     exposure_before=before, exposure_after=state["exposure"],
                     meta={"consec_low_above_21": state["consec_low_above_21"]},
                 ))
