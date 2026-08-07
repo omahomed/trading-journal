@@ -504,7 +504,7 @@ class MCTEngine:
         # mid-bar invariants (cap_at_100 set inside violation phases, V10
         # cascade reads exposure_before for its signal meta, etc.) still
         # converge. A follow-up pass will excise those dead writes.
-        self._phase_exposure_recompute(current, state)
+        self._phase_exposure_recompute(current, prev, state)
 
         # Phase 11 — signed Trend Count edges. Runs AFTER all step
         # machinery has settled so we see the post-bar values of
@@ -1483,7 +1483,7 @@ class MCTEngine:
     # Phase 10 — end-of-bar exposure recompute (sum-of-valid-steps model)
     # ------------------------------------------------------------------------
 
-    def _phase_exposure_recompute(self, current, state) -> None:
+    def _phase_exposure_recompute(self, current, prev, state) -> None:
         """Overwrite state["exposure"] with the sum-of-valid-steps total.
 
         Contributions (see STEP_CONTRIBUTION):
@@ -1524,10 +1524,19 @@ class MCTEngine:
         # Conditions mirror the engine's existing one-shot checks at
         # mct_engine.py:759 (step 2), :782 (step 3), :796 (step 4),
         # :954 (step 5), :974 (step 6), :1001 (step 7).
+        #
+        # Step 4 mirrors STEP_4's firing gate exactly: streak >= 3 AND
+        # close > prev close. Without the up-close gate the ladder
+        # would render Step 4 as achieved (and its +20 exposure would
+        # kick in) on a red 3rd bar of the streak, disagreeing with
+        # the Status tile above which correctly waits for the up close
+        # to promote out of RALLY MODE (2026-08-06 regression).
+        prev_close = float(prev["close"]) if prev is not None else None
         live = {
             2: ema_21 is not None and close > ema_21,
             3: ema_21 is not None and low > ema_21,
-            4: state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21,
+            4: (state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21
+                and prev_close is not None and close > prev_close),
             5: state["consec_low_above_50"] >= 3,
             6: (ema_21 is not None and sma_50 is not None and sma_200 is not None
                 and ema_21 > sma_50 > sma_200),
