@@ -1,23 +1,21 @@
 // Active sell-rule tier classification — single source of truth for the
 // peak-return ladder that routes a position into a defensive posture.
 //
-// Migration 062 (2026-08-07) reshaped the ladder into a peak-based
-// one-way ratchet driven by two axes:
-//
-//   1. Peak B1 return (b1_max_return_pct)
-//   2. User-declared SR8 flag (is_declared_sr8, from trades_summary)
+// Post-migration-063 ladder (2026-08-07 cleanup — SR14 retired, folded
+// into SR1; broker-stop presence surfaced as a row chip instead of a
+// tier promotion):
 //
 //   Peak `b1_return`                | Tier  | Stop / defense
 //   --------------------------------|-------|--------------------------------
 //   < 10%                           | SR1   | Composite stop (Entry − 1×ATR,
 //                                   |       | structural low, key MA − max(
-//                                   |       | 0.5 ATR, 1%))
-//   < 10% AND broker_stop_price set | SR14  | Physical broker stop (two-stop
-//                                   |       | model; migration 055)
+//                                   |       | 0.5 ATR, 1%)). Broker stop, if
+//                                   |       | parked, shows as a 🛡 chip on
+//                                   |       | the row — no tier promotion.
 //   10% – 20%                       | SR11  | BE stop at entry price
 //   20% – 50%                       | SR15  | Physical broker stop at
 //                                   |       | entry × 1.10 (+10% profit lock)
-//   ≥ 50% AND is_declared_sr8=false | SR7   | 21 EMA + cushion cascade
+//   ≥ 50% AND is_declared_sr8=false | SR7   | 21 EMA + cushion posture
 //   ≥ 50% AND is_declared_sr8=true  | SR8   | Weekly MO RS + funnel ladder,
 //                                   |       | activation-anchored core
 //
@@ -25,11 +23,14 @@
 // (unless the user demotes SR8 → SR7 explicitly). A pullback doesn't
 // downgrade the tier — the peak is the anchor.
 
-export type SellRuleTier = "sr1" | "sr14" | "sr11" | "sr15" | "sr7" | "sr8";
+export type SellRuleTier = "sr1" | "sr11" | "sr15" | "sr7" | "sr8";
 
 export function classifySellRuleTier(
   b1ReturnPct: number | null | undefined,
-  brokerStopPrice?: number | null | undefined,
+  // brokerStopPrice retained in the signature for backwards-compat with
+  // callers that still pass it — no longer read (SR14 was retired in
+  // the 2026-08-07 cleanup; broker-stop presence is a row chip now).
+  _brokerStopPrice?: number | null | undefined,
   isDeclaredSr8?: boolean | null | undefined,
 ): SellRuleTier | null {
   if (b1ReturnPct == null || !Number.isFinite(b1ReturnPct)) return null;
@@ -45,36 +46,28 @@ export function classifySellRuleTier(
   // Early band: 10% – 20% is BE-stop territory.
   if (b1ReturnPct >= 10) return "sr11";
 
-  // Below 10% — composite stop only, unless a broker stop is already parked
-  // (SR14 two-stop model). Broker-stop presence is the flag; no separate bool.
-  const hasBrokerStop =
-    brokerStopPrice != null
-    && Number.isFinite(brokerStopPrice)
-    && brokerStopPrice > 0;
-  return hasBrokerStop ? "sr14" : "sr1";
+  // Below 10% — composite stop only. Broker-stop-parked state shows as
+  // a chip on the row (rendered in ACS), not a distinct tier.
+  return "sr1";
 }
 
 // Sort order used by the Sell Rule column header. Lower index sorts first.
 // null sorts last regardless of direction (see compareRows).
 //
 // Order matches the ladder's defensive progression: SR1 (no floor) sorts
-// earliest, SR8 (most-defended monster hold) sorts last. SR14 sits
-// between SR1 and SR11 — same B1-return bucket as SR1 but with an active
-// physical stop, so it's "one step further along in defense" than SR1.
+// earliest, SR8 (most-defended monster hold) sorts last.
 export const SELL_RULE_TIER_ORDER: Record<SellRuleTier, number> = {
   sr1: 0,
-  sr14: 1,
-  sr11: 2,
-  sr15: 3,
-  sr7: 4,
-  sr8: 5,
+  sr11: 1,
+  sr15: 2,
+  sr7: 3,
+  sr8: 4,
 };
 
 // Human-friendly display label. Sorts as the raw tier code; use this only
 // for tooltips and badge text.
 export const SELL_RULE_TIER_LABEL: Record<SellRuleTier, string> = {
   sr1: "SR1",
-  sr14: "SR14",
   sr11: "SR11",
   sr15: "SR15",
   sr7: "SR7",

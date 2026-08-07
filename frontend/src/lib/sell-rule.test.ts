@@ -65,50 +65,46 @@ describe("classifySellRuleTier — post-migration-062 ladder", () => {
     expect(classifySellRuleTier(30, null, true)).toBe("sr15");
   });
 
-  test("tier order ranks sr1 < sr14 < sr11 < sr15 < sr7 < sr8", () => {
+  test("tier order ranks sr1 < sr11 < sr15 < sr7 < sr8", () => {
     // Defensive-progression ladder — lower rank = closer to open risk,
-    // higher rank = more entrenched/defended.
-    expect(SELL_RULE_TIER_ORDER.sr1).toBeLessThan(SELL_RULE_TIER_ORDER.sr14);
-    expect(SELL_RULE_TIER_ORDER.sr14).toBeLessThan(SELL_RULE_TIER_ORDER.sr11);
+    // higher rank = more entrenched/defended. (SR14 retired 2026-08-07.)
+    expect(SELL_RULE_TIER_ORDER.sr1).toBeLessThan(SELL_RULE_TIER_ORDER.sr11);
     expect(SELL_RULE_TIER_ORDER.sr11).toBeLessThan(SELL_RULE_TIER_ORDER.sr15);
     expect(SELL_RULE_TIER_ORDER.sr15).toBeLessThan(SELL_RULE_TIER_ORDER.sr7);
     expect(SELL_RULE_TIER_ORDER.sr7).toBeLessThan(SELL_RULE_TIER_ORDER.sr8);
   });
 
-  // SR14 (migration 055) — same B1-return band as SR1 but promoted when
-  // the campaign has a physical broker_stop_price set. The <10% branch
-  // reads the flag; higher bands (SR11/SR15/SR7/SR8) are unaffected
-  // because higher-tier stops replace the broker stop bookkeeping.
+  // Post-migration-063 (2026-08-07 cleanup): SR14 was retired and
+  // collapsed into SR1. broker_stop_price no longer promotes a tier —
+  // it's surfaced as a 🛡 chip on the ACS row instead. Historical
+  // stamps were retagged via migration 063.
 
-  test("promotes to sr14 when broker_stop_price is set and return < 10%", () => {
-    expect(classifySellRuleTier(-5, 245.0)).toBe("sr14");
-    expect(classifySellRuleTier(0, 100.0)).toBe("sr14");
-    expect(classifySellRuleTier(9.99, 250.5)).toBe("sr14");
+  test("broker_stop_price no longer promotes to a distinct tier (post-063)", () => {
+    // Under the pre-063 model these all promoted to "sr14"; post-063
+    // they stay SR1. The row still shows a "broker stop parked" chip;
+    // the tier semantics were the redundant part.
+    expect(classifySellRuleTier(-5, 245.0)).toBe("sr1");
+    expect(classifySellRuleTier(0, 100.0)).toBe("sr1");
+    expect(classifySellRuleTier(9.99, 250.5)).toBe("sr1");
   });
 
-  test("stays sr1 when broker_stop_price is null/undefined/zero/negative", () => {
-    expect(classifySellRuleTier(5, null)).toBe("sr1");
-    expect(classifySellRuleTier(5, undefined)).toBe("sr1");
-    expect(classifySellRuleTier(5, 0)).toBe("sr1");
-    expect(classifySellRuleTier(5, -10)).toBe("sr1");
-    expect(classifySellRuleTier(5, NaN)).toBe("sr1");
-  });
-
-  test("broker_stop_price does NOT override higher tiers", () => {
-    // BE stop / SR15 stop / cascade take over as the campaign matures;
-    // the broker_stop field is stale bookkeeping at that point and the
-    // classifier ignores it.
+  test("broker_stop_price is ignored across every band (post-063)", () => {
+    // Same tier resolution regardless of whether a physical stop is
+    // parked — the row-chip visibility is orthogonal to the ladder.
     expect(classifySellRuleTier(15, 245.0)).toBe("sr11");
     expect(classifySellRuleTier(30, 245.0)).toBe("sr15");
     expect(classifySellRuleTier(55, 245.0, false)).toBe("sr7");
     expect(classifySellRuleTier(120, 245.0, true)).toBe("sr8");
   });
 
-  test("backwards-compat: single-arg call still returns sr1 for <10%", () => {
-    // Old callers that haven't been updated to pass broker_stop_price /
-    // is_declared_sr8 must keep working.
+  test("backwards-compat: single-arg + null/undefined broker_stop still work", () => {
+    // Old callers that haven't been updated to pass is_declared_sr8 must
+    // keep working; the broker_stop_price arg is retained for signature
+    // stability but ignored.
     expect(classifySellRuleTier(5)).toBe("sr1");
     expect(classifySellRuleTier(9.99)).toBe("sr1");
+    expect(classifySellRuleTier(5, null)).toBe("sr1");
+    expect(classifySellRuleTier(5, undefined)).toBe("sr1");
     expect(classifySellRuleTier(15)).toBe("sr11");
     expect(classifySellRuleTier(30)).toBe("sr15");
     expect(classifySellRuleTier(80)).toBe("sr7");

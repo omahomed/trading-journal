@@ -215,8 +215,12 @@ export function computeEnrichedPositions(
     // Manager both read the same tier code downstream.
     const isDeclaredSr8Raw = (trade as any).is_declared_sr8;
     const isDeclaredSr8 = isDeclaredSr8Raw === true || isDeclaredSr8Raw === "true";
+    // Post-migration-063: brokerStopPrice is no longer read by the
+    // classifier (SR14 retired). Retained on the row as a chip signal.
+    // The 2nd arg is passed as null so future readers of the call site
+    // aren't misled about whether it affects the tier.
     const sellRuleTier = classifySellRuleTier(
-      effectiveMax, brokerStopPrice, isDeclaredSr8,
+      effectiveMax, null, isDeclaredSr8,
     );
 
     return {

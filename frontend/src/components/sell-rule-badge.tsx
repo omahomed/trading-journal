@@ -7,20 +7,17 @@ type SellRuleBadgeProps = {
 
 // Tone matches the existing inline-style pill convention (color-mix
 // tints over surface). Ladder is a defensive-progression gradient:
-//   sr1  = warn red (no floor)
-//   sr14 = blue (composite + broker stop parked in <10% band)
+//   sr1  = warn red (no floor; broker stop, if parked, shows as a chip
+//                    on the row rather than a distinct tier — SR14 was
+//                    retired in the 2026-08-07 cleanup)
 //   sr11 = amber (BE stop at entry, 10%-20% band)
-//   sr15 = teal (broker stop at +10% profit, 20%-50% band, migration 062)
-//   sr7  = light green (qualified but undeclared, 21 EMA cascade)
+//   sr15 = teal (broker stop at +10% profit, 20%-50% band)
+//   sr7  = light green (qualified but undeclared, 21 EMA)
 //   sr8  = emerald (declared monster hold, weekly MO RS ladder)
 const TONES: Record<SellRuleTier, { bg: string; fg: string }> = {
   sr1: {
     bg: "color-mix(in oklab, #e5484d 14%, var(--surface))",
     fg: "#dc2626",
-  },
-  sr14: {
-    bg: "color-mix(in oklab, #3b82f6 14%, var(--surface))",
-    fg: "#1d4ed8",
   },
   sr11: {
     bg: "color-mix(in oklab, #f59f00 12%, var(--surface))",

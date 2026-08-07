@@ -1115,6 +1115,21 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           {p.strategy && (
                             <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
                           )}
+                          {/* Post-migration-063 (2026-08-07) — broker-stop
+                              presence is a row chip instead of the retired
+                              SR14 tier promotion. Same information ("physical
+                              stop is parked at the broker") without the tier
+                              proliferation. Right-click → edit broker stop. */}
+                          {p.broker_stop_price != null && p.broker_stop_price > 0 && (
+                            <span
+                              title={`Broker stop parked at ${formatCurrency(p.broker_stop_price)}`}
+                              className="inline-block text-[10px]"
+                              style={{ color: "#1d4ed8", cursor: "help" }}
+                              data-testid="broker-stop-chip"
+                            >
+                              {"\u{1F6E1}"}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, fontSize: 11, color: "var(--ink-4)" }}>
@@ -1318,6 +1333,21 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                           {p.ticker}
                           {p.strategy && (
                             <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                          )}
+                          {/* Post-migration-063 (2026-08-07) — broker-stop
+                              presence is a row chip instead of the retired
+                              SR14 tier promotion. Same information ("physical
+                              stop is parked at the broker") without the tier
+                              proliferation. Right-click → edit broker stop. */}
+                          {p.broker_stop_price != null && p.broker_stop_price > 0 && (
+                            <span
+                              title={`Broker stop parked at ${formatCurrency(p.broker_stop_price)}`}
+                              className="inline-block text-[10px]"
+                              style={{ color: "#1d4ed8", cursor: "help" }}
+                              data-testid="broker-stop-chip"
+                            >
+                              {"\u{1F6E1}"}
+                            </span>
                           )}
                         </span>
                       </td>
