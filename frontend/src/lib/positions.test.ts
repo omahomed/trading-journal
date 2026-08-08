@@ -62,10 +62,9 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.multiplier).toBe(100);
   });
 
-  it("open_risk WINNER (current > entry): (current − stop) × shares — DELL scenario", () => {
+  it("open_risk = (current − stop) × shares × mult (DELL winner scenario)", () => {
     // DELL: 225 sh @ avg $331.62, stop $359.44, current $453.77.
-    // Winner regime → anchor = current → open_risk = ($453.77 − $359.44) × 225
-    // = $21,224.25. The number the trader intuits from a Risk column.
+    // open_risk = ($453.77 − $359.44) × 225 = $21,224.25.
     const trade: TradePosition = {
       trade_id: "T-DELL", ticker: "DELL", status: "OPEN",
       shares: 225, avg_entry: 331.62, total_cost: 74615.19,
@@ -82,11 +81,13 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.open_risk_pct).toBeCloseTo((21224.25 / 589_400) * 100, 4);
   });
 
-  it("open_risk LOSER (current < entry): (entry − stop) × shares — MU scenario", () => {
-    // MU: entry $910.82, stop $847.84, current below entry (down 3.65%).
-    // Loser regime → anchor = entry → open_risk = ($910.82 − $847.84) × 80
-    // = $5,038.40 (the real cost-basis loss if stop fires, NOT the smaller
-    // current-to-stop number which understates the pain).
+  it("open_risk for a LOSER uses (current − stop), NOT (entry − stop) — MU scenario", () => {
+    // Regression: prior anchor-to-MAX(current, entry) implementation
+    // double-counted MU's paper loss (once in Overall P&L as unrealized,
+    // once in Open Risk as loss-still-to-come). Coach Claude audit
+    // 2026-08-08. Correct value: ($877.57 − $847.84) × 80 = $2,378.40.
+    // Buggy value under old formula: $5,038.40. Preserves the invariant
+    // Overall P&L − Open Risk = Projected P&L.
     const trade: TradePosition = {
       trade_id: "T-MU", ticker: "MU", status: "OPEN",
       shares: 80, avg_entry: 910.82, total_cost: 72865.60,
@@ -97,14 +98,12 @@ describe("computeEnrichedPositions", () => {
       { trade_id: "T-MU", action: "BUY", date: "2026-08-05",
         shares: 80, amount: 910.82, stop_loss: 847.84 } as any,
     ];
-    // current 878 < entry 910.82 → loser regime, anchor = entry.
-    const [enriched] = computeEnrichedPositions([trade], details, 589_400, { MU: 878 });
-    expect(enriched.open_risk).toBeCloseTo(5038.40, 2);
+    const [enriched] = computeEnrichedPositions([trade], details, 589_400, { MU: 877.57 });
+    expect(enriched.open_risk).toBeCloseTo(2378.40, 1);
   });
 
-  it("open_risk FRESH (current ≈ entry): (entry − stop) × shares = Trade Risk $", () => {
-    // Fresh position, current at entry — anchor = entry (tie goes to entry
-    // via MAX). open_risk = (entry − stop) × shares = classic Trade Risk $.
+  it("open_risk for a FRESH position ≈ Trade Risk $ (current = entry)", () => {
+    // Current equals entry → open_risk = (entry − stop) × shares.
     const trade: TradePosition = {
       trade_id: "T-FRESH", ticker: "X", status: "OPEN",
       shares: 100, avg_entry: 100, total_cost: 10000,
@@ -119,10 +118,9 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.open_risk).toBeCloseTo(500, 2);
   });
 
-  it("open_risk floors at 0 when stop is above the anchor (rare edge case)", () => {
-    // Anomaly: stop $110 above BOTH current $105 AND entry $100. In
-    // practice the stop should have fired. Floor at 0 to prevent a
-    // negative rendering in the column.
+  it("open_risk floors at 0 when stop is at or above current price", () => {
+    // Anomaly: stop above current. In practice the stop should have
+    // fired. Floor at 0 to keep the display non-negative.
     const trade: TradePosition = {
       trade_id: "T-ANOMALY", ticker: "X", status: "OPEN",
       shares: 100, avg_entry: 100, total_cost: 10000,
@@ -138,10 +136,8 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.open_risk_pct).toBe(0);
   });
 
-  it("open_risk for a long option = MAX(current, entry) × shares × 100 (premium loss)", () => {
-    // Long option worst case = full premium loss. effective stop = 0.
-    // Winner (current > entry): open_risk = current × shares × 100.
-    // Loser (current < entry): open_risk = entry × shares × 100.
+  it("open_risk for a long option = current × shares × 100 (worst case = premium loss)", () => {
+    // Long option: effective stop = 0. open_risk = current × shares × mult.
     const trade: TradePosition = {
       trade_id: "O-OPT", ticker: "AAPL  260117C00150000", status: "OPEN",
       shares: 5, avg_entry: 2.0, total_cost: 1000,
@@ -152,10 +148,42 @@ describe("computeEnrichedPositions", () => {
       { trade_id: "O-OPT", action: "BUY", date: "2026-01-01",
         shares: 5, amount: 2.0, stop_loss: 1.0 } as any,
     ];
-    // current $3 > entry $2 → anchor $3 → open_risk = $3 × 5 × 100 = $1,500.
     const [enriched] = computeEnrichedPositions([trade], details, 100_000, { "AAPL  260117C00150000": 3.0 });
+    // current $3 × 5 contracts × 100 = $1,500 (worst case = full premium loss).
     expect(enriched.open_risk).toBeCloseTo(1500);
     expect(enriched.current_value).toBeCloseTo(1500);
+  });
+
+  it("invariant: Overall P&L − Open Risk = Projected P&L (winner and loser)", () => {
+    // Coach Claude's cross-check. The three fleet numbers must
+    // reconcile per position AND in the header. Broke under the
+    // 2026-08-08 MAX(current, entry) anchor on losers; this test
+    // locks the correct formula in place going forward.
+    const winner: TradePosition = {
+      trade_id: "T-W", ticker: "W", status: "OPEN",
+      shares: 100, avg_entry: 100, total_cost: 10000, realized_pl: 0,
+      stop_loss: 105, rule: "", instrument_type: "STOCK", multiplier: 1,
+      open_date: "2026-01-01",
+    } as any;
+    const wDetails: TradeDetail[] = [
+      { trade_id: "T-W", action: "BUY", date: "2026-01-01",
+        shares: 100, amount: 100, stop_loss: 105 } as any,
+    ];
+    const [w] = computeEnrichedPositions([winner], wDetails, 100_000, { W: 120 });
+    expect(w.overall_pl - w.open_risk).toBeCloseTo(w.projected_pl, 4);
+
+    const loser: TradePosition = {
+      trade_id: "T-L", ticker: "L", status: "OPEN",
+      shares: 100, avg_entry: 100, total_cost: 10000, realized_pl: 0,
+      stop_loss: 85, rule: "", instrument_type: "STOCK", multiplier: 1,
+      open_date: "2026-01-01",
+    } as any;
+    const lDetails: TradeDetail[] = [
+      { trade_id: "T-L", action: "BUY", date: "2026-01-01",
+        shares: 100, amount: 100, stop_loss: 85 } as any,
+    ];
+    const [l] = computeEnrichedPositions([loser], lDetails, 100_000, { L: 90 });
+    expect(l.overall_pl - l.open_risk).toBeCloseTo(l.projected_pl, 4);
   });
 
   it("falls back to summary avg_entry as currentPrice when livePrices missing", () => {
