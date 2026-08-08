@@ -1,14 +1,18 @@
-// SR12 Ratcheting Profit Floor nudge banner (Migration 064).
+// SR12 Ratcheting Profit Floor nudge banner (Migration 064 + 065).
 //
 // The disaster backstop for gap-down mornings that beat SR7/SR8 to a
 // worse price. Once a campaign's peak b1_return crosses +50%, the
-// b1_reconcile loop ratchets sr12_floor_pct up to peak / 2 and it never
-// moves down. This banner nudges until the physical broker_stop_price
-// lands at or above b1_entry × (1 + sr12_floor_pct / 100).
+// b1_reconcile loop ratchets peak_total_pl up to the max total P&L
+// ever observed. This banner nudges until the physical broker_stop_price
+// is high enough that a fire would lock in >= half of that peak P&L.
+//
+// Post-migration-065 anchor rewrite: target derives from avg_entry +
+// (peak_total_pl/2 − realized_pl) / shares — the price at which firing
+// realizes exactly half of the peak observed. Method-invariant on
+// aggregate P&L.
 //
 // Clean handoff with SR15: SR15's predicate is band-restricted [20, 50);
-// this one takes over from 50 up. A single campaign never appears in
-// both banners.
+// SR12 takes over from 50 up. A single campaign never appears in both.
 //
 // Same structural pattern as SR15NudgeBanner — clickable ticker chips
 // on ACS (open the broker-stop editor), inert chips on Risk Manager.
@@ -39,19 +43,21 @@ export function SR12FloorNudgeBanner({ positions, onTickerClick, className }: Pr
   const nudges: Nudge[] = positions
     .filter(p =>
       needsSR12FloorMove(
-        p.b1_max_return_pct ?? p.b1_return_pct,
-        p.b1_entry_price,
+        p.peak_total_pl,
+        p.realized_pl,
+        p.shares,
+        p.avg_entry,
         p.broker_stop_price ?? null,
-        p.sr12_floor_pct,
       )
     )
     .map(p => ({
       trade_id: p.trade_id,
       ticker: p.ticker,
       target: computeSR12FloorTarget(
-        p.b1_max_return_pct ?? p.b1_return_pct,
-        p.b1_entry_price,
-        p.sr12_floor_pct,
+        p.peak_total_pl,
+        p.realized_pl,
+        p.shares,
+        p.avg_entry,
       ) ?? 0,
       current: p.broker_stop_price ?? null,
       pos: p,
