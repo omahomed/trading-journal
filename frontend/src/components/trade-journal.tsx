@@ -2081,7 +2081,7 @@ export function TradeJournal({ navColor }: { navColor: string }) {
           onSaved={() => {
             setBrokerStopTrade(null);
             // Re-fetch open trades so the updated broker_stop_price
-            // flows back into the card display + downstream SR14 badges.
+            // flows back into the card display + the ACS 🛡 chip.
             void api.tradesOpen(getActivePortfolio())
               .then(fresh => setOpenTrades(fresh as TradePosition[]))
               .catch(err => log.error("trade-journal", "refetch after broker-stop save failed", err));

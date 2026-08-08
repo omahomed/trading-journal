@@ -235,8 +235,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
     try { localStorage.setItem("mo-logbuy-apply-stop-all-lots", applyStopToAllLots ? "1" : "0"); }
     catch { /* private-mode / storage-disabled — ignore */ }
   }, [applyStopToAllLots]);
-  // Migration 055 — optional broker_stop_price for the two-stop model
-  // (SR14). Stored as a string so the input can be empty ("nothing set")
+  // Migration 055 — optional broker_stop_price for the two-stop
+  // model. Post-063 the presence lands as a 🛡 chip on the ACS row
+  // (no tier promotion). Stored as a string so the input can be
+  // empty ("nothing set")
   // vs "0" (which we treat as null). Position Sizer prefills this via
   // the send-to-log-buy handoff when the two-stop model was used; the
   // user can also enter it manually or leave blank for single-stop.
@@ -466,8 +468,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setAddExemptReason(data.add_exempt_reason);
       }
       // Migration 055 — Position Sizer's two-stop send passes the
-      // resolved 0.75× ATR dollar level. Prefill the Broker Stop input
-      // so the SR14 flag rides along with this trade automatically.
+      // resolved 0.75× ATR dollar level. Prefill the Broker Stop
+      // input so the broker-stop chip rides along with this trade
+      // automatically.
       if (typeof data.broker_stop_price === "number" && data.broker_stop_price > 0) {
         setBrokerStopPrice(String(data.broker_stop_price.toFixed(2)));
       }
@@ -620,15 +623,15 @@ export function LogBuy({ navColor }: { navColor: string }) {
   const stopDist = priceNum > 0 && stopPrice > 0 ? priceNum - stopPrice : 0;
   const stopPct = priceNum > 0 && stopPrice > 0 ? ((priceNum - stopPrice) / priceNum) * 100 : 0;
 
-  // Migration 055 — derived broker_stop_price (SR14 two-stop flag).
-  // Rule: if the effective stop was resolved via the 0.75× ATR mode
-  // (Position Sizer's default handoff for the two-stop model), it IS
-  // the broker stop. Any other stop mode → single-stop model → null.
+  // Migration 055 — derived broker_stop_price. Rule: if the effective
+  // stop was resolved via the 0.75× ATR mode (Position Sizer's
+  // default handoff for the two-stop model), it IS the broker stop.
+  // Any other stop mode → single-stop model → null.
   //
   // The `brokerStopPrice` state (populated by the PS prefill effect)
   // wins when set explicitly. Falls back to auto-derive from stopMode
-  // so a manual "ATR 0.75×" pick also flags SR14 without any extra
-  // input from the trader.
+  // so a manual "ATR 0.75×" pick also carries the broker-stop chip
+  // without any extra input from the trader.
   const brokerStopPriceEffective: number | null = (() => {
     if (actionType !== "new") return null;
     // Explicit prefill from Position Sizer's send-off wins.
@@ -869,8 +872,8 @@ export function LogBuy({ navColor }: { navColor: string }) {
     // doesn't translate to premium-based stops.
     if (showStopLoss && stopPrice > 0 && stopPrice >= priceNum) e.push("Stop must be below entry price");
     if (!isOption && stopPct > 10) w.push(`Stop is ${stopPct.toFixed(1)}% wide — recommend < 8%`);
-    // Migration 055 — SR14 derived-value sanity check. The effective
-    // broker stop is auto-derived from stopMode + prefill (see
+    // Migration 055 — broker-stop derived-value sanity check. The
+    // effective broker stop is auto-derived from stopMode + prefill (see
     // brokerStopPriceEffective above). Only assert the below-entry
     // invariant here — modes that produce values >= entry are already
     // rejected by the "Stop must be below entry price" check.
@@ -956,7 +959,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         // both trades_details (this transaction) and trades_summary
         // (denormalized from B1 on new campaigns).
         rules: [rule, ...confluenceRules].filter(Boolean),
-        // Migration 055 — SR14 two-stop flag. Derived from the stop
+        // Migration 055 — broker_stop_price. Derived from the stop
         // mode (0.75× ATR pick → broker stop) or from Position Sizer's
         // explicit prefill; see brokerStopPriceEffective. Only sent
         // for new-campaign buys — scale-ins inherit from B1's row.
@@ -1051,7 +1054,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
         setStrategy("CanSlim");
         setEntryCharts([]); setPositionCharts([]); setMsScreenshot(null);
         setOverrideSizeCap(false);
-        setBrokerStopPrice("");  // Migration 055 — fresh trade = fresh SR14 opt-in
+        setBrokerStopPrice("");  // Migration 055 — fresh trade = fresh broker-stop opt-in
 
         // Refresh server-derived state so a same-page second submit reads
         // fresh data. Without this, openTrades + allDetails stay at the
@@ -1533,13 +1536,14 @@ export function LogBuy({ navColor }: { navColor: string }) {
               </button>
             )}
 
-            {/* SR14 indicator (migration 055). No manual input — the
-                flag is derived: when stopMode=atr with 0.75× multiplier
-                OR Position Sizer prefilled a broker_stop_price directly,
-                the position is stamped SR14. Below shows what will land
-                so the trader knows before submit. For backfill on
-                existing positions, use ACS right-click or Trade Journal
-                right-click → "Set broker stop..." */}
+            {/* Broker-stop chip indicator (migration 055 + 063). No
+                manual input here — the value is derived: when
+                stopMode=atr with 0.75× multiplier OR Position Sizer
+                prefilled a broker_stop_price directly, the position
+                will carry a 🛡 chip on ACS. Below shows what will
+                land so the trader knows before submit. For backfill
+                on existing positions, use ACS right-click or Trade
+                Journal right-click → "Set broker stop..." */}
             {actionType === "new" && brokerStopPriceEffective !== null && (
               <div
                 className="text-[11px] px-3 py-2 rounded-[8px]"
@@ -1549,12 +1553,11 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   border: "1px solid color-mix(in oklab, #3b82f6 24%, var(--border))",
                 }}
               >
-                <span className="font-semibold">SR14</span> will be flagged —
-                broker stop {formatCurrency(brokerStopPriceEffective)} (
+                <span className="font-semibold">Broker stop</span> {formatCurrency(brokerStopPriceEffective)} (
                 {priceNum > 0
                   ? `${(((priceNum - brokerStopPriceEffective) / priceNum) * 100).toFixed(2)}% below entry`
                   : "0.75× ATR21"}
-                ). Physical order to park at the broker; SR14 tier will show on ACS.
+                ) will be parked. Physical order at your broker; ACS shows a 🛡 chip while active.
               </div>
             )}
 
