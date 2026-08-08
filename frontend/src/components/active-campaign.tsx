@@ -18,6 +18,7 @@ import { BrokerStopEditor } from "./broker-stop-editor";
 import { SR8TrimCalculator } from "./sr8-trim-calculator";
 import { SR8DeclareModal } from "./sr8-declare-modal";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
+import { SR12FloorNudgeBanner } from "./sr12-floor-nudge-banner";
 import { isCushionQualified } from "@/lib/sell-rule";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
@@ -947,6 +948,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           Ticker chips open the broker-stop editor. Same component
           renders on Risk Manager (non-clickable variant). */}
       <SR15NudgeBanner positions={positions} onTickerClick={setBrokerStopModalPos} />
+
+      {/* Migration 064 — SR12 Ratcheting Profit Floor nudge. Takes over
+          from SR15 at the +50% band edge; target price walks up as the
+          floor ratchets. Same clickable-ticker → broker-stop-editor
+          pattern as SR15's banner. */}
+      <SR12FloorNudgeBanner positions={positions} onTickerClick={setBrokerStopModalPos} />
 
       {/* KPI tiles */}
       <div className="grid grid-cols-7 gap-3 mb-6">

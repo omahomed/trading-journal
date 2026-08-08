@@ -472,6 +472,24 @@ def load_summary(portfolio_name, status=None):
                 if has_broker_stop else
                 'NULL::numeric AS "Broker_Stop_Price",\n                    '
             )
+            # Migration-tolerance for migration 064 — sr12_floor_pct
+            # (Ratcheting Profit Floor / MCP). Same detection pattern as
+            # broker_stop_price. Absent → NULL fallback keeps the SELECT
+            # stable during the code-before-migration deploy window.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'sr12_floor_pct'"
+                )
+                has_sr12_floor = cur.fetchone() is not None
+            except Exception:
+                has_sr12_floor = False
+            sr12_floor_select = (
+                's.sr12_floor_pct AS "Sr12_Floor_Pct",\n                    '
+                if has_sr12_floor else
+                'NULL::numeric AS "Sr12_Floor_Pct",\n                    '
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -504,7 +522,7 @@ def load_summary(portfolio_name, status=None):
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
                     {b1_max_select}
-                    {mae_mfe_select}{sr8_activation_select}{declared_sr8_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {mae_mfe_select}{sr8_activation_select}{declared_sr8_select}{sr12_floor_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule
@@ -1155,6 +1173,77 @@ def snapshot_sr8_activation_if_null(
             # No write — either row missing, or anchor already set.
             return {"was_written": False, "activation_date": None,
                     "activation_nlv": None, "core_shares": core_shares}
+
+
+def update_sr12_floor_pct(portfolio_name, trade_id, new_floor_pct):
+    """Idempotent ratchet for the SR12 (Ratcheting Profit Floor) column.
+
+    UPDATEs trades_summary.sr12_floor_pct only if the stored value is NULL
+    or strictly less than new_floor_pct. Same monotonic guard as
+    update_b1_max_return_pct — floors only ratchet UP, never down.
+
+    Called from b1_reconcile after b1_max_return_pct is raised past +50%.
+    The floor formula is `peak_pct / 2`; the reconcile pass computes it
+    and passes it in.
+
+    Returns:
+      {"stored_floor_pct": float | None, "was_updated": bool}
+      None when the trade_id isn't found in the given portfolio.
+
+    Migration-tolerance: if the sr12_floor_pct column doesn't exist yet
+    (deploy raced migration 064), returns {"stored_floor_pct": None,
+    "was_updated": False} so callers degrade gracefully instead of 500ing.
+    Mirrors the pattern used in update_b1_max_return_pct.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'trades_summary' "
+                "AND column_name = 'sr12_floor_pct'"
+            )
+            if cur.fetchone() is None:
+                return {"stored_floor_pct": None, "was_updated": False}
+
+            cur.execute(
+                "SELECT id FROM portfolios WHERE name = %s", (portfolio_name,)
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            cur.execute(
+                "UPDATE trades_summary "
+                "SET sr12_floor_pct = %s "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL "
+                "  AND (sr12_floor_pct IS NULL OR sr12_floor_pct < %s) "
+                "RETURNING sr12_floor_pct",
+                (new_floor_pct, portfolio_id, trade_id, new_floor_pct),
+            )
+            updated = cur.fetchone()
+            conn.commit()
+            if updated is not None:
+                return {
+                    "stored_floor_pct": float(updated["sr12_floor_pct"]),
+                    "was_updated": True,
+                }
+
+            cur.execute(
+                "SELECT sr12_floor_pct FROM trades_summary "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL",
+                (portfolio_id, trade_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            stored = row["sr12_floor_pct"]
+            return {
+                "stored_floor_pct": float(stored) if stored is not None else None,
+                "was_updated": False,
+            }
 
 
 def set_declared_sr8(

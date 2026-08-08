@@ -88,6 +88,12 @@ export interface EnrichedPosition {
   // from SR8 (declared). Optional so pre-062 test fixtures don't have
   // to spell it out.
   is_declared_sr8?: boolean;
+  // Migration 064 — SR12 Ratcheting Profit Floor (MCP). Persisted
+  // floor as a % of B1 entry. Ratcheted up on every new peak by the
+  // b1_reconcile loop; never moves down. Present when the campaign
+  // has ever crossed +50% peak (persistence beats current-peak's
+  // "am I still up 50" question). NULL = never armed.
+  sr12_floor_pct?: number | null;
 }
 
 export function computeEnrichedPositions(
@@ -286,6 +292,10 @@ export function computeEnrichedPositions(
       sr8_activation_nlv:  _passThroughNum((trade as any).sr8_activation_nlv),
       sr8_core_shares:     _passThroughNum((trade as any).sr8_core_shares),
       is_declared_sr8: isDeclaredSr8,
+      // Migration 064 — persisted SR12 floor pct. _passThroughNum handles
+      // the psycopg2 NUMERIC-as-string quirk that already bites the other
+      // decimal fields on this row.
+      sr12_floor_pct: _passThroughNum((trade as any).sr12_floor_pct),
     };
   });
 }

@@ -7,26 +7,28 @@ import {
   SELL_RULE_FAMILIES,
 } from "./trade-rules";
 
-// Post-migration-063 (2026-08-07 cleanup): SR4, SR6, SR12, SR14 retired
+// Post-migration-063 (2026-08-07 cleanup): SR4, SR6, SR14 retired
 // per the canonical MOTrading Handoff review notes.
 //   - SR4 (Time Stop): SR3 covers portfolio-time trims.
 //   - SR6 (8e Momentum Trim): 0-for-5 fire quality.
-//   - SR12 (TQQQ Strategy Exit): same 21 EMA shape as SR7 on NDX;
-//     historical stamps retagged to SR7.
 //   - SR14 (0.75× ATR Stop): folded into SR1; broker-stop presence is
 //     a chip on the row, not a tier.
 //   - SR7 description shortened to "21e Violation".
+//
+// Post-migration-064 (2026-08-07 MCP): SR12 slot re-assigned. Original
+// meaning (TQQQ Strategy Exit) was retired in 063 and folded into SR7;
+// the freed slot now hosts Ratcheting Profit Floor. See migration 064.
 
-describe("SELL_RULES canonical taxonomy — post-063", () => {
-  it("has exactly 14 entries (17 pre-cleanup − 4 retired + SR15 added)", () => {
-    expect(SELL_RULES.length).toBe(14);
+describe("SELL_RULES canonical taxonomy — post-064", () => {
+  it("has exactly 15 entries (17 pre-063 − 4 retired + SR15 + SR12-MCP)", () => {
+    expect(SELL_RULES.length).toBe(15);
   });
 
-  it("uses the post-cleanup code sequence (SR4/SR6/SR12/SR14 removed, SR15 added)", () => {
+  it("uses the post-cleanup code sequence (SR4/SR6/SR14 removed; SR12 MCP + SR15 added)", () => {
     expect(SELL_RULES.map((r) => r.code)).toEqual([
       "sr1", "sr2", "sr3", "sr5", "sr7", "sr8",
       "sr8.1", "sr8.2", "sr8.3",
-      "sr9", "sr10", "sr11", "sr13", "sr15",
+      "sr9", "sr10", "sr11", "sr12", "sr13", "sr15",
     ]);
   });
 
@@ -44,16 +46,19 @@ describe("SELL_RULES canonical taxonomy — post-063", () => {
       "Failed Breakout",
       "Earnings Exit",
       "BE Stop Out (moved at +10%)",
+      "Ratcheting Profit Floor",
       "Change of Character",
       "+10% Profit Lock",
     ]);
   });
 
-  it("no longer contains any retired codes", () => {
+  it("no longer contains SR4/SR6/SR14 (SR12 re-assigned, not retired)", () => {
     const codes = SELL_RULES.map((r) => r.code);
-    for (const retired of ["sr4", "sr6", "sr12", "sr14"]) {
+    for (const retired of ["sr4", "sr6", "sr14"]) {
       expect(codes).not.toContain(retired);
     }
+    // SR12 is present again — re-assigned by migration 064.
+    expect(codes).toContain("sr12");
   });
 
   it("SR8.2 mechanics reference the 13w MA (Fibonacci mid line)", () => {
@@ -81,11 +86,12 @@ describe("SELL_RULE_LABELS — DB string format", () => {
     expect(SELL_RULE_LABELS.length).toBe(SELL_RULES.length);
   });
 
-  it("does not include any retired-code labels", () => {
-    for (const retired of ["sr4", "sr6", "sr12", "sr14"]) {
+  it("does not include SR4/SR6/SR14 labels (SR12 present, re-assigned)", () => {
+    for (const retired of ["sr4", "sr6", "sr14"]) {
       const hit = SELL_RULE_LABELS.find((l) => l.startsWith(retired + " "));
       expect(hit, `retired code ${retired} leaked into SELL_RULE_LABELS`).toBeUndefined();
     }
+    expect(SELL_RULE_LABELS).toContain("sr12 Ratcheting Profit Floor");
   });
 });
 
@@ -156,6 +162,7 @@ describe("SELL_RULE_FAMILIES + rule.family — grouping metadata", () => {
     expect(byCode.get("sr9")).toBe("trend");
     expect(byCode.get("sr10")).toBe("event");
     expect(byCode.get("sr11")).toBe("floor");
+    expect(byCode.get("sr12")).toBe("floor");
     expect(byCode.get("sr13")).toBe("event");
     expect(byCode.get("sr15")).toBe("floor");
   });

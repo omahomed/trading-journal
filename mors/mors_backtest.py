@@ -233,7 +233,8 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         mode="terminate", refresh=False, cascade=DEFAULT_CASCADE, quiet=False,
         entry_px_override=None, sr7=True, sr7_arm_bars=2, atr_trim=None,
         weekly_variant="default", phase2_daily=False,
-        sr6=False, sr6_activate_bars=10, force_weekly=False):
+        sr6=False, sr6_activate_bars=10, force_weekly=False,
+        sr12=True, sr12_arm_pct=50.0):
     # `force_weekly=True` starts the position in Phase 2 (weekly governance)
     # from the entry bar instead of waiting for the +50% cushion to latch.
     # Used by the SR8 Monitor: positions tagged SR8 (peak >= 50%) are the
@@ -321,6 +322,13 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
     sr6_consec_above = 0
     sr6_arming_low = None
     sr6_trigger = None
+    # SR12 Ratcheting Profit Floor (MCP) — disaster backstop under SR7/SR8.
+    # Armed when peak b1_return >= sr12_arm_pct (50%); floor ratchets up on
+    # every new peak (floor = peak / 2 as % of B1). Full exit if intraday
+    # low breaks the parked floor price. Resets on sub-entry so a new
+    # campaign anchors on its own B1.
+    sr12_floor_pct = None
+    sr12_anchor_px = b1_entry_px
     log = []
 
     def cur_shares():
@@ -525,6 +533,55 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         if float(r.High) > peak:
             peak = float(r.High)
             peak_date = r.Date
+            # SR12 ratchet — arms + steps up on every new peak. Floor is
+            # peak / 2 as % of the current sub-campaign's anchor. Sticky:
+            # never moves down within a sub-campaign.
+            if sr12 and sr12_anchor_px > 0:
+                peak_return_pct = (peak / sr12_anchor_px - 1.0) * 100.0
+                if peak_return_pct >= sr12_arm_pct:
+                    new_floor_pct = peak_return_pct / 2.0
+                    if sr12_floor_pct is None or new_floor_pct > sr12_floor_pct:
+                        sr12_floor_pct = new_floor_pct
+
+        # SR12 FIRE — evaluated BEFORE SR7 so a gap-through-floor bar
+        # exits at the parked stop price (idealized fill) rather than
+        # SR7 trimming to core first. On a slower decline, SR7 usually
+        # fires above the floor and SR12 never binds (the design
+        # invariant per the doctrine handoff).
+        if (sr12 and sr12_floor_pct is not None and cur_shares() > 1e-9
+                and sr12_anchor_px > 0):
+            floor_px = sr12_anchor_px * (1.0 + sr12_floor_pct / 100.0)
+            if float(r.Low) < floor_px:
+                # Fill at the floor price (the parked stop). Full exit —
+                # SR12 is a disaster backstop, not a trim.
+                target_to(0.0, floor_px, r.Date,
+                          f"SR12 FIRE (floor {sr12_floor_pct:.1f}%)",
+                          "daily", r)
+                # In terminate mode this ends the campaign, mirroring
+                # the weekly-GD behavior — nothing "reverts" from a
+                # disaster-backstop exit.
+                if mode == "terminate":
+                    log.append({
+                        "Date": r.Date.date(), "Phase": phase, "TF": "—",
+                        "Signal": "TERMINATED",
+                        "Action": "(SR12 floor -> campaign ends, no re-entry)",
+                        "SharesDelta": 0.0,
+                        "Price": round(floor_px, 4),
+                        "TradeVal$": 0.0,
+                        "SharesHeld": 0.0,
+                        "Position$": 0.0,
+                        "Unit%": 0.0,
+                        "%NLV": 0.0,
+                        "RS": round(r.RS, 5),
+                        "RealBar$": 0.0,
+                        "CumReal$": round(realized, 0),
+                        "CumReal%": round(realized / unit * 100, 2),
+                    })
+                    last_idx = i
+                    break
+                # revert / legacy: floor resets on next sub-entry.
+                # Anchor + floor_pct reset there; nothing to do here.
+                continue
 
         # ATR-extension trim — Phase 2 only. Fires when Close > 50 SMA + N * ATR(14).
         # Re-arms when extension drops back below threshold (so it doesn't fire
@@ -630,6 +687,11 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
                     entry_px = float(r.Close)
                     awaiting_new_entry = False
                     peak = float(r.High)
+                    # SR12 anchors on the sub-entry's B1, not the original
+                    # B1. Reset floor so the ratchet arms fresh from this
+                    # campaign's peak. Realized bank still compounds.
+                    sr12_anchor_px = entry_px
+                    sr12_floor_pct = None
                     target_to(daily_target_frac[sig], float(r.Close), r.Date,
                               "GREEN(sub-entry)", "daily", r)
                 else:
@@ -717,6 +779,7 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         "legacy":    "LEGACY (Phase 2 stays latched, re-enter on weekly GREEN)",
     }
     sr7_label = "  +SR7" if sr7 else ""
+    sr12_label = "  +SR12" if sr12 else ""
     sr6_label = "  +SR6" if sr6 else ""
     atr_label = f"  +ATR{atr_trim:g}" if atr_trim is not None else ""
     wv_label = f"  weekly={weekly_variant}({'/'.join(str(x) for x in weekly_emas)})" if weekly_variant != "default" else ""
@@ -724,7 +787,7 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
     ldf = pd.DataFrame(log)
     if not quiet:
         print("=" * 78)
-        print(f"MO RS 2.0 SHADOW BACKTEST — {ticker}  [{mode_labels[mode]}{sr7_label}{sr6_label}{atr_label}{wv_label}{p2d_label}]")
+        print(f"MO RS 2.0 SHADOW BACKTEST — {ticker}  [{mode_labels[mode]}{sr7_label}{sr12_label}{sr6_label}{atr_label}{wv_label}{p2d_label}]")
         print("=" * 78)
         print(f"Start req: {start_ts.date()}   Entry: {entry.Date.date()} @ {b1_entry_px:.4f}"
               f"   End: {last.Date.date()} @ {float(last.Close):.4f}")
@@ -749,6 +812,7 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         os.makedirs(out_dir, exist_ok=True)
         suffix = (f"_{mode}"
                   + ("_sr7" if sr7 else "")
+                  + ("_sr12" if sr12 else "")
                   + ("_sr6" if sr6 else "")
                   + (f"_atr{atr_trim:g}" if atr_trim is not None else "")
                   + (f"_{weekly_variant}" if weekly_variant != "default" else "")
@@ -836,6 +900,14 @@ if __name__ == "__main__":
                          "8 EMA violation (after N consec closes above 8 EMA activate)")
     ap.add_argument("--sr6-activate-bars", type=int, default=10,
                     help="consecutive closes above 8 EMA needed to activate SR6 (default 10)")
+    ap.add_argument("--sr12", dest="sr12", action="store_true", default=True,
+                    help="enable SR12 Ratcheting Profit Floor (MCP) (default ON): full "
+                         "exit at floor price if intraday low breaks it. Floor arms at "
+                         "peak %% >= 50, ratchets up to peak/2 on every new peak")
+    ap.add_argument("--no-sr12", dest="sr12", action="store_false",
+                    help="disable SR12 floor (use for A/B comparison vs SR7/SR8 alone)")
+    ap.add_argument("--sr12-arm-pct", type=float, default=50.0,
+                    help="peak %% (from B1) at which SR12 arms (default 50)")
     a = ap.parse_args()
     tkr_path = f"{a.data}/{a.ticker}_price_data.csv"
     cascade = tuple(float(x) for x in a.cascade.split(","))
@@ -845,4 +917,5 @@ if __name__ == "__main__":
         out_dir=(a.out or None), mode=a.mode, refresh=a.refresh, cascade=cascade,
         sr7=a.sr7, sr7_arm_bars=a.sr7_bars, atr_trim=a.atr_trim,
         weekly_variant=a.weekly_variant, phase2_daily=a.phase2_daily,
-        sr6=a.sr6, sr6_activate_bars=a.sr6_activate_bars)
+        sr6=a.sr6, sr6_activate_bars=a.sr6_activate_bars,
+        sr12=a.sr12, sr12_arm_pct=a.sr12_arm_pct)

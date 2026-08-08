@@ -41,14 +41,14 @@ describe("SellRuleGlossary", () => {
   test("header caption reflects collapsed/expanded state", () => {
     render(<SellRuleGlossary />);
     const btn = screen.getByRole("button", { name: /Sell rule reference/i });
-    // 14 rules post-063 (13 remaining + SR15 promoted to a selectable
-    // rule alongside its tier existence).
-    expect(btn).toHaveTextContent(/Show 14 rules/);
+    // 15 rules post-064 (13 remaining after 063 + SR15 + SR12 MCP
+    // re-assigned into the freed SR12 slot).
+    expect(btn).toHaveTextContent(/Show 15 rules/);
     act(() => { fireEvent.click(btn); });
     expect(btn).toHaveTextContent(/Hide/);
   });
 
-  test("expanded: renders all 14 rule codes", () => {
+  test("expanded: renders all 15 rule codes", () => {
     render(<SellRuleGlossary />);
     act(() => { fireEvent.click(screen.getByRole("button", { name: /Sell rule reference/i })); });
 

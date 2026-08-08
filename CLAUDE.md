@@ -527,6 +527,12 @@ diverge because both call `api/lot_excursions.py:compute_all_lot_excursions`.
   trigger, SR7 fires and trims the position back to 20% NLV core. Disarms on any single close
   back above the 21 EMA. Empirically helpful on most tickers in the basket; SNDK was the
   notable exception (parabolic shake-out at $194 cost ~$547k of upside).
+- **SR12 ON (Ratcheting Profit Floor / MCP)**: disaster backstop under SR7/SR8. Once peak
+  b1_return crosses +50%, arm a floor at 50% of the peak; ratchets up on every new peak;
+  never moves down. If intraday low breaks the floor price, full exit at floor (`target_to 0`).
+  In `terminate` mode this also ends the campaign — same behavior as weekly GD. Rarely fires
+  on orderly trends (SR7/weekly cascade exit above the floor); binds only when a gap or
+  crater beats them to a worse price (the June-5-style overnight -22% case).
 
 ## Alternate `--mode` options:
 - `revert` — weekly GD reverts to Phase 1, awaits a daily GREEN, then opens a
@@ -537,6 +543,8 @@ diverge because both call `api/lot_excursions.py:compute_all_lot_excursions`.
 **Other flags:**
 - `--no-sr7` disables SR7 (for A/B comparison vs MO RS alone)
 - `--sr7-bars N` changes the consecutive-closes count to arm SR7 (default 2)
+- `--no-sr12` disables the SR12 Ratcheting Profit Floor (A/B vs the trend-only exits)
+- `--sr12-arm-pct N` changes the peak %% at which the floor arms (default 50)
 - `--end YYYY-MM-DD` caps the test window
 - `--refresh` forces yfinance re-download for an existing ticker
 - `--out ""` skips the CSV write (results land in [mors/results/](mors/results/) by default)

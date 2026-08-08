@@ -437,68 +437,12 @@ def test_load_summary_select_template_has_no_stray_percent_chars():
 # Invariant #4a — SR14 tier flips ONLY when broker_stop_price is set
 # ============================================================================
 #
-# Motivating design (2026-07-29 rollout): Position Sizer's two-stop model
-# parks a physical broker stop at −0.75× ATR21 from B1 fill. Presence of
-# `trades_summary.broker_stop_price` is the flag that promotes the ACS
-# Sell Rule tier from SR1 → SR14 when B1 return < 10%. Above +10%, the
-# BE stop replaces the broker stop, so the flag becomes stale bookkeeping
-# and the classifier ignores it (tier moves to SR11 / SR8 as usual).
-#
-# Static test: grep the sell-rule classifier's source to confirm the
-# <10% branch reads broker_stop_price. Cheap regression guard — a future
-# refactor that drops the check silently reverts everyone with a broker
-# stop parked back to SR1 without any test failing on unit level.
-
-
-def test_sell_rule_classifier_reads_broker_stop_price_in_sub_10_branch():
-    """The classifier's <10% branch must read broker_stop_price and
-    promote to SR14 when set. Regression: if a refactor collapses the
-    classifier signature back to just b1ReturnPct, every SR14 position
-    silently downgrades to SR1 and the operator loses the flag distinction
-    without any per-page test surfacing the drift."""
-    src = (_REPO_ROOT / "frontend" / "src" / "lib" / "sell-rule.ts").read_text()
-
-    # Signature must accept brokerStopPrice as an optional second arg.
-    assert "brokerStopPrice" in src, (
-        "sell-rule.ts::classifySellRuleTier no longer references "
-        "brokerStopPrice — the <10% branch will always return SR1, "
-        "silently retiring the SR14 tier for every two-stop-model "
-        "position."
-    )
-    # sr14 literal must appear in the tier union + returned by the
-    # promotion path — cheap grep guards against a rename that
-    # doesn't update every callsite.
-    assert '"sr14"' in src, (
-        "sr14 literal missing from sell-rule.ts — the SellRuleTier "
-        "union or classifier's return path was changed without "
-        "updating this contract test."
-    )
-
-
-def test_sell_rule_tier_order_places_sr14_between_sr1_and_sr11():
-    """The tier order matters for the ACS Sell Rule column's sort UX.
-    SR14 sits between SR1 (no physical stop) and SR11 (BE stop) because
-    it's 'one step further along in defense' than SR1 but not yet promoted
-    to the BE step-up. A reshuffle here breaks the intended sort order."""
-    src = (_REPO_ROOT / "frontend" / "src" / "lib" / "sell-rule.ts").read_text()
-    # Extract the SELL_RULE_TIER_ORDER block.
-    import re
-    m = re.search(
-        r"SELL_RULE_TIER_ORDER[^{]*\{([^}]+)\}",
-        src, re.DOTALL,
-    )
-    assert m, "SELL_RULE_TIER_ORDER block not found in sell-rule.ts"
-    block = m.group(1)
-    # Parse rank per tier (naive but sufficient: sr1: 0, sr14: 1, ...).
-    ranks = {}
-    for tier in ("sr1", "sr14", "sr11", "sr8"):
-        tm = re.search(rf"{tier}\s*:\s*(\d+)", block)
-        assert tm, f"tier {tier!r} missing from SELL_RULE_TIER_ORDER"
-        ranks[tier] = int(tm.group(1))
-    assert ranks["sr1"] < ranks["sr14"] < ranks["sr11"] < ranks["sr8"], (
-        f"SR14 must rank between SR1 and SR11, but ranks were: {ranks}. "
-        "Sort order in the ACS Sell Rule column depends on this ladder."
-    )
+# SR14 (0.75× ATR Stop) was retired by migration 063 — broker_stop_price
+# is no longer read by the classifier and no longer promotes a tier.
+# Broker-stop presence is a row chip now, not a tier promotion. The two
+# tests that lived here previously guarded the pre-063 semantics and
+# were retired alongside SR14. Frontend coverage for the new ladder
+# lives in frontend/src/lib/sell-rule.test.ts.
 
 
 # ============================================================================
