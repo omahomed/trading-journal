@@ -2874,13 +2874,9 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         # in the JSON response and every frontend read is undefined →
         # tier silently downgrades to SR1.
         "Broker_Stop_Price": "broker_stop_price",
-        # Migration 064 — SR12 Ratcheting Profit Floor (MCP). Same
-        # PascalCase → snake_case round-trip as Broker_Stop_Price above;
-        # frontend reads sr12_floor_pct off the row.
-        "Sr12_Floor_Pct": "sr12_floor_pct",
-        # Migration 065 — peak_total_pl (SR12 MCP anchor rewrite).
-        # Supersedes sr12_floor_pct as the input to the frontend nudge
-        # predicate. Kept alongside so mid-cutover reads don't 500.
+        # Migration 065 — peak_total_pl (SR12 MCP anchor). Frontend
+        # nudge predicate reads this to derive the target broker stop.
+        # (Predecessor sr12_floor_pct was dropped in migration 066.)
         "Peak_Total_Pl": "peak_total_pl",
         # Backfill: three older aliases load_summary has been emitting
         # for a while without matching entries here. Frontend readers

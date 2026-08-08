@@ -88,16 +88,6 @@ export interface EnrichedPosition {
   // from SR8 (declared). Optional so pre-062 test fixtures don't have
   // to spell it out.
   is_declared_sr8?: boolean;
-  // Migration 064 — SR12 Ratcheting Profit Floor (MCP). Persisted
-  // floor as a % of B1 entry. Ratcheted up on every new peak by the
-  // b1_reconcile loop; never moves down. Present when the campaign
-  // has ever crossed +50% peak (persistence beats current-peak's
-  // "am I still up 50" question). NULL = never armed.
-  //
-  // DEPRECATED post-migration-065 — superseded by peak_total_pl as the
-  // SR12 anchor. Left on the row for a graceful cutover; no consumer
-  // reads it after this migration.
-  sr12_floor_pct?: number | null;
   // Migration 065 — the max total P&L this campaign ever showed
   // (realized_bank + shares × (day_high − avg_cost) using end-of-day
   // state per bar). Backfilled by scripts/backfill_peak_total_pl.py;
@@ -305,9 +295,7 @@ export function computeEnrichedPositions(
       sr8_activation_nlv:  _passThroughNum((trade as any).sr8_activation_nlv),
       sr8_core_shares:     _passThroughNum((trade as any).sr8_core_shares),
       is_declared_sr8: isDeclaredSr8,
-      // Migration 064 — persisted SR12 floor pct (DEPRECATED post-065).
-      sr12_floor_pct: _passThroughNum((trade as any).sr12_floor_pct),
-      // Migration 065 — peak_total_pl (new SR12 MCP anchor). Read the
+      // Migration 065 — peak_total_pl (SR12 MCP anchor). Read the
       // snake_case name emitted by _normalize_trades — see the COL_MAP
       // entry `Peak_Total_Pl` → `peak_total_pl` in api/main.py.
       peak_total_pl: _passThroughNum((trade as any).peak_total_pl),

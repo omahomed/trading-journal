@@ -34,7 +34,6 @@ from db_layer import (
     get_db_connection,
     update_b1_max_return_pct,
     snapshot_sr8_activation_if_null,
-    update_sr12_floor_pct,
     update_peak_total_pl,
 )
 
@@ -381,31 +380,8 @@ def reconcile_open_positions(
                                 "SR8 anchor snapshot skipped for %s/%s: %s",
                                 portfolio_name, trade_id, anchor_exc,
                             )
-                    # Ratchet the SR12 profit floor (migration 064). Only
-                    # runs when b1_max_return_pct was actually raised; the
-                    # initial +50% backfill is handled by the migration.
-                    # DB helper's monotonic guard means this is a no-op if
-                    # the floor is already at or above peak/2.
-                    if pct >= SR8_THRESHOLD:
-                        try:
-                            floor_pct = round(pct / 2.0, 4)
-                            floor_result = update_sr12_floor_pct(
-                                portfolio_name, trade_id, floor_pct,
-                            )
-                            if floor_result and floor_result.get("was_updated"):
-                                log.info(
-                                    "SR12 floor ratcheted %s (%s): %.2f%% "
-                                    "(from peak %.2f%%)",
-                                    ticker, trade_id, floor_pct, pct,
-                                )
-                        except Exception as floor_exc:
-                            # Same non-fatal policy as the SR8 anchor block.
-                            log.warning(
-                                "SR12 floor ratchet skipped for %s/%s: %s",
-                                portfolio_name, trade_id, floor_exc,
-                            )
-                    # Ratchet peak_total_pl (migration 065) — the new
-                    # SR12 anchor. Runs whenever a cushion-qualified
+                    # Ratchet peak_total_pl (migration 065) — the SR12
+                    # MCP anchor. Runs whenever a cushion-qualified
                     # position has a new close-basis peak; the compute
                     # walks the day-high sequence so a peak driven by
                     # intraday range still lands on the right bar. Same
