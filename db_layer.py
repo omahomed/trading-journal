@@ -2717,9 +2717,10 @@ def _generate_unique_trx_id_in_txn(cur, portfolio_id, trade_id, prefix):
 
 
 def update_trade_stops(portfolio_name, trade_id, new_stop,
-                       be_applied=False, be_cleared=False):
+                       be_applied=False, be_cleared=False,
+                       open_lot_trx_ids=None):
     """
-    Apply a new stop loss to every open lot of a trade and mirror it on the
+    Apply a new stop loss to open BUY lots of a trade and mirror it on the
     summary row. Optionally set or clear the BE rule flag.
 
     Args:
@@ -2728,6 +2729,15 @@ def update_trade_stops(portfolio_name, trade_id, new_stop,
         new_stop: New stop price (> 0)
         be_applied: If True, stamp be_stop_moved_at = NOW() on the summary
         be_cleared: If True, clear be_stop_moved_at (stop moved off BE)
+        open_lot_trx_ids: Iterable of trx_ids (e.g. ["B1", "A12", "A13"])
+            that still have remaining shares under LIFO. When provided,
+            only these BUY rows get their stop_loss updated — closed
+            lots keep their historical stops as an audit-trail record
+            of what the stop was when the lot was held. When None,
+            falls back to updating every BUY row (legacy behavior);
+            callers on the /api/trades/update-stops path always pass a
+            concrete list. See scripts/backfill_peak_total_pl for the
+            LIFO walker if a caller needs to compute the set itself.
 
     Returns:
         Number of detail rows updated
@@ -2740,21 +2750,51 @@ def update_trade_stops(portfolio_name, trade_id, new_stop,
                 raise ValueError(f"Portfolio '{portfolio_name}' not found")
             portfolio_id = result[0]
 
-            # Update all detail rows for open lots of this trade. Also
-            # clear stop_ladder on every BUY row (Phase 3): when the user
-            # sets a manual single stop, they're promoting the ladder
-            # plan to a global stop — the ladder is over. Clearing on all
-            # BUY rows is defensive (Phase 1 only writes ladder to B1)
-            # and idempotent for non-laddered trades (SET to NULL is a
+            # Update BUY detail rows for the open lots of this trade. Also
+            # clear stop_ladder on every touched BUY row (Phase 3): when
+            # the user sets a manual single stop, they're promoting the
+            # ladder plan to a global stop — the ladder is over. Clearing
+            # is idempotent for non-laddered trades (SET to NULL is a
             # no-op when already NULL).
-            cur.execute("""
-                UPDATE trades_details
-                SET stop_loss = %s,
-                    stop_ladder = NULL
-                WHERE portfolio_id = %s AND trade_id = %s
-                  AND action = 'BUY' AND deleted_at IS NULL
-            """, (new_stop, portfolio_id, trade_id))
-            updated = cur.rowcount
+            #
+            # Historical bug (fixed 2026-08-07): the WHERE clause used to
+            # match every BUY row, so a fully-LIFO-consumed B1 lot from
+            # months ago would silently get its historical stop_loss
+            # overwritten. That trashed the per-lot audit trail and
+            # corrupted downstream calcs that walk the details (LIFO
+            # inventoryProjPl, per-lot MAE/MFE) into reflecting a stop
+            # that was never actually in effect for the closed lots.
+            # `open_lot_trx_ids` scopes the write to lots that still
+            # have inventory.
+            if open_lot_trx_ids is not None:
+                trx_ids = [str(t) for t in open_lot_trx_ids if t]
+                if not trx_ids:
+                    # No open lots — nothing to update on the detail side.
+                    # (Summary mirror below still runs; caller may want
+                    # to reset the mirror stop on a fully-closed trade.)
+                    updated = 0
+                else:
+                    cur.execute("""
+                        UPDATE trades_details
+                        SET stop_loss = %s,
+                            stop_ladder = NULL
+                        WHERE portfolio_id = %s AND trade_id = %s
+                          AND action = 'BUY' AND deleted_at IS NULL
+                          AND trx_id = ANY(%s)
+                    """, (new_stop, portfolio_id, trade_id, trx_ids))
+                    updated = cur.rowcount
+            else:
+                # Legacy branch retained for callers that don't pass an
+                # open-lot filter. Not currently reached from any active
+                # code path; delete once verified safe.
+                cur.execute("""
+                    UPDATE trades_details
+                    SET stop_loss = %s,
+                        stop_ladder = NULL
+                    WHERE portfolio_id = %s AND trade_id = %s
+                      AND action = 'BUY' AND deleted_at IS NULL
+                """, (new_stop, portfolio_id, trade_id))
+                updated = cur.rowcount
 
             # Mirror to summary + optional BE flag update
             if be_applied:

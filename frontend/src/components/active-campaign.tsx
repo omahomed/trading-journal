@@ -67,16 +67,18 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
     av = a.total_cost;
     bv = b.total_cost;
   } else if (key === "signed_risk") {
-    // Risk $ column displays projected_pl (total exposure including realized
-    // losses on closed lots). Sort by the displayed value, not the legacy
-    // open-only signed_risk that the column key still references.
-    av = a.projected_pl;
-    bv = b.projected_pl;
+    // Risk $ column displays cushion_at_risk (money you'd give up if
+    // the stop fires from the current market price). Rewired 2026-08-07
+    // from projected_pl, which was projecting a total-P&L floor rather
+    // than the "cushion at risk" a Risk column implies. Column key kept
+    // as `signed_risk` for backwards compat with saved sort prefs.
+    av = a.cushion_at_risk;
+    bv = b.cushion_at_risk;
   } else if (key === "risk_pct") {
-    // Risk % column displays projected_pct. Mirror the cell's value so sort
-    // order matches what the user sees.
-    av = a.projected_pct;
-    bv = b.projected_pct;
+    // Risk % column displays cushion_at_risk_pct — same rewire as
+    // the $ column above.
+    av = a.cushion_at_risk_pct;
+    bv = b.cushion_at_risk_pct;
   } else if (key === "sell_rule_tier") {
     // Sort by tier order (sr1 < sr11 < sr8). null tiers sort last in both
     // directions — null handling below treats null as "missing", so flip
@@ -1052,10 +1054,16 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               <tbody>
                 {sortedEquities.map((p, i) => {
                   const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
-                  // Current Risk $ / Current Risk % columns show total exposure
-                  // (projected_pl) — realized losses on closed lots + open-to-stop
-                  // risk — so coloring tracks projected_pl, not signed_risk.
-                  const riskColor = p.projected_pl > 0 ? "#08a86b" : p.projected_pl < 0 ? "#e5484d" : "var(--ink-3)";
+                  // Current Risk $ / Current Risk % columns display
+                  // cushion_at_risk — money you'd give up if the stop
+                  // fires from the current market price. Rewired
+                  // 2026-08-07 from projected_pl (which was projecting
+                  // a total-P&L floor). Positive value = cushion at
+                  // risk → amber tint. Zero → neutral (stop already at
+                  // or above price / no shares open).
+                  const riskColor = p.cushion_at_risk > 0
+                    ? "#b45309"
+                    : "var(--ink-3)";
                   // Group 7-2: divergence flag — current open-only risk exceeds
                   // the historical Trade Risk $ by more than $5. Same trigger as
                   // the Risk Monitor warning at line ~657 so they fire together.
@@ -1094,21 +1102,22 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     currentVsB1Pct: p.b1_return_pct,
                   });
 
-                  // Tooltip "Current" mirrors the Current Risk $ cell value: the
-                  // magnitude of projected_pl (total exposure — realized losses on
-                  // closed lots plus open-to-stop on the rest). "De-risked %" —
-                  // fraction of Trade Risk $ (locked at buy events) that current
-                  // stops have eliminated — is only meaningful for fresh opens;
-                  // for partially-closed trades, realized losses aren't de-risked,
-                  // they're locked in, so we drop that component rather than show
-                  // a misleading number.
+                  // Tooltip surfaces the cell value's meaning (Cushion at
+                  // Risk) alongside the traditional trade-risk context and
+                  // the projected-P&L floor number the cell USED to show
+                  // pre-2026-08-07. Keeping projected_pl in the tooltip
+                  // preserves the "worst-case realized if stop fires" datum
+                  // for anyone who still finds it useful.
                   const isPartiallyClosed = p.realized_bank !== 0;
                   const dRiskedPct = p.risk_budget > 0
                     ? Math.max(0, Math.min(100, (1 - Math.abs(p.signed_risk) / p.risk_budget) * 100))
                     : 0;
+                  const cushionLabel = `Cushion at Risk: ${formatCurrency(p.cushion_at_risk)}`;
+                  const floorLabel = `Projected floor: ${formatCurrency(p.projected_pl, { showSign: true })}`;
+                  const budgetLabel = `Trade Risk $: ${formatCurrency(p.risk_budget)}`;
                   const riskTooltip = isPartiallyClosed
-                    ? `Trade Risk $: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))}`
-                    : `Trade Risk $: ${formatCurrency(p.risk_budget)} · Current: ${formatCurrency(Math.abs(p.projected_pl))} · De-risked: ${dRiskedPct.toFixed(1)}%`;
+                    ? `${cushionLabel} · ${floorLabel} · ${budgetLabel}`
+                    : `${cushionLabel} · ${floorLabel} · ${budgetLabel} · De-risked: ${dRiskedPct.toFixed(1)}%`;
 
                   return (
                     <tr key={p.trade_id} className="transition-colors"
@@ -1220,10 +1229,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                       <td className="px-2.5 py-2.5 text-right privacy-mask"
                           style={{ fontFamily: mono, color: riskColor, fontWeight: 600, background: riskCellBg }}
                           title={riskTooltip}>
-                        {formatCurrency(p.projected_pl, { showSign: true, signGlyph: "unicode" })}
+                        {formatCurrency(p.cushion_at_risk)}
                       </td>
                       <td className="px-2.5 py-2.5 text-right" style={{ fontFamily: mono, color: riskColor }}>
-                        {p.projected_pct >= 0 ? "+" : ""}{p.projected_pct.toFixed(2)}%
+                        {p.cushion_at_risk_pct.toFixed(2)}%
                       </td>
                       <td className="px-2.5 py-2.5 text-right privacy-mask" style={{ fontFamily: mono, fontWeight: 700, color: plColor }}>
                         {formatCurrency(p.overall_pl, { showSign: true, signGlyph: "unicode" })}

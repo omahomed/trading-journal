@@ -62,6 +62,93 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.multiplier).toBe(100);
   });
 
+  it("cushion_at_risk = max(0, (current − avg_stop) × shares × multiplier) for stocks", () => {
+    // DELL-inspired scenario: 225 sh @ avg $331.62, avg_stop $359.44,
+    // current $453.77. Expected cushion at risk = 225 × ($453.77 − $359.44)
+    // = $21,224.25. That's the number a trader intuits from a "Risk"
+    // column against a stop — replaces projected_pl in the ACS cell.
+    const trade: TradePosition = {
+      trade_id: "T-DELL",
+      ticker: "DELL",
+      status: "OPEN",
+      shares: 225,
+      avg_entry: 331.62,
+      total_cost: 74615.19,
+      realized_pl: 36349.21,
+      stop_loss: 359.44,
+      rule: "",
+      instrument_type: "STOCK",
+      multiplier: 1,
+      open_date: "2026-04-06",
+    } as any;
+    // Single BUY lot at avg to keep the LIFO weighted-stop equal to 359.44.
+    const details: TradeDetail[] = [
+      { trade_id: "T-DELL", action: "BUY", date: "2026-04-06",
+        shares: 225, amount: 331.62, stop_loss: 359.44 } as any,
+    ];
+    const [enriched] = computeEnrichedPositions([trade], details, 589_400, { DELL: 453.77 });
+    expect(enriched.avg_stop).toBeCloseTo(359.44, 2);
+    expect(enriched.cushion_at_risk).toBeCloseTo(21224.25, 2);
+    expect(enriched.cushion_at_risk_pct).toBeCloseTo((21224.25 / 589_400) * 100, 4);
+  });
+
+  it("cushion_at_risk floors at 0 when current price is at or below stop", () => {
+    // If price has already broken the stop line (edge case), no cushion
+    // is at risk from the current mark — the stop should already have
+    // fired. Prevents rendering negative "risk" in the column.
+    const trade: TradePosition = {
+      trade_id: "T-BELOWSTOP",
+      ticker: "X",
+      status: "OPEN",
+      shares: 100,
+      avg_entry: 100,
+      total_cost: 10000,
+      realized_pl: 0,
+      stop_loss: 110,
+      rule: "",
+      instrument_type: "STOCK",
+      multiplier: 1,
+      open_date: "2026-01-01",
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "T-BELOWSTOP", action: "BUY", date: "2026-01-01",
+        shares: 100, amount: 100, stop_loss: 110 } as any,
+    ];
+    // Current price 105 is BELOW stop 110 — cushion floored at 0.
+    const [enriched] = computeEnrichedPositions([trade], details, 100_000, { X: 105 });
+    expect(enriched.cushion_at_risk).toBe(0);
+    expect(enriched.cushion_at_risk_pct).toBe(0);
+  });
+
+  it("cushion_at_risk for an option = current market value (worst case = premium loss)", () => {
+    // Long option: effective stop = 0 in the cushion calc (mirrors
+    // lifo.ts's isOption branch — max loss on a long option is the
+    // premium paid regardless of any parked stop). So cushion equals
+    // the position's current market value.
+    const trade: TradePosition = {
+      trade_id: "O-CUSHION",
+      ticker: "AAPL  260117C00150000",
+      status: "OPEN",
+      shares: 5,
+      avg_entry: 2.0,
+      total_cost: 1000,
+      realized_pl: 0,
+      stop_loss: 1.0,
+      rule: "",
+      instrument_type: "OPTION",
+      multiplier: 100,
+      open_date: "2026-01-01",
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "O-CUSHION", action: "BUY", date: "2026-01-01",
+        shares: 5, amount: 2.0, stop_loss: 1.0 } as any,
+    ];
+    // Current premium $3 × 5 contracts × 100 = $1,500 = current market value.
+    const [enriched] = computeEnrichedPositions([trade], details, 100_000, { "AAPL  260117C00150000": 3.0 });
+    expect(enriched.cushion_at_risk).toBeCloseTo(1500);
+    expect(enriched.current_value).toBeCloseTo(1500);
+  });
+
   it("falls back to summary avg_entry as currentPrice when livePrices missing", () => {
     const trade: TradePosition = {
       trade_id: "T2",
