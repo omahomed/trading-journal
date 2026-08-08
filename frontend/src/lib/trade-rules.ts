@@ -13,9 +13,10 @@
 //          trims. Slot is FREE for future assignment.
 //   SR6  — 8e Momentum Trim. Doctrinally retired per the canonical
 //          handoff (0-for-5 fire quality). Slot is FREE.
-//   SR12 — TQQQ Strategy Exit. Same 21 EMA violation shape as SR7,
-//          just on the NDX index. Historical stamps retagged to SR7.
-//          Slot is FREE.
+//   SR12 — TQQQ Strategy Exit (original meaning). Same 21 EMA violation
+//          shape as SR7, just on the NDX index. Historical stamps
+//          retagged to SR7 via migration 063. Slot RE-ASSIGNED to
+//          Ratcheting Profit Floor (MCP) by migration 064.
 //   SR14 — 0.75× ATR Stop. Collapsed into SR1 — broker-stop presence
 //          is now a chip on the row, not a tier promotion. Historical
 //          stamps retagged to SR1. Slot is FREE (candidate for SR11-R
@@ -256,9 +257,28 @@ export const SELL_RULES: readonly SellRule[] = [
     ].join("\n"),
     family: "floor",
   },
-  // SR12 (TQQQ Strategy Exit) — retired 2026-08-07. Same 21 EMA violation
-  // shape as SR7, just applied to the NDX index. Historical sells retagged
-  // to SR7 via migration 063.
+  // SR12 — Ratcheting Profit Floor (MCP). Slot re-assigned by
+  // migration 064; the original TQQQ Strategy Exit was collapsed into
+  // SR7. Orthogonal to the tier ladder — a position can be SR7-armed
+  // and SR12-armed simultaneously. Rendered as a floor chip + amber
+  // nudge banner (not a badge stripe promotion).
+  {
+    code: "sr12",
+    description: "Ratcheting Profit Floor",
+    oneLiner:
+      "MCP disaster backstop. Once peak b1_return crosses +50%, arm a floor at 50% of the peak. Ratchets up on every new peak, never moves down. Intraday break of the floor = mechanical exit.",
+    mechanics: [
+      "- **Arm**: peak b1_return crosses +50% → sr12_floor_pct set to peak / 2. Auto-seeded by migration 064 backfill; ratcheted daily by the b1_reconcile loop.",
+      "- **Ratchet rule**: floor = peak / 2, continuous. Every new peak lifts the floor by half of the delta. Floor never moves down (sticky).",
+      "- **Target price**: b1_entry × (1 + sr12_floor_pct / 100). Same B1-anchored discipline as SR15.",
+      "- **Nudge**: amber banner + ⚓ chip on the ACS row when broker_stop_price < target. Clears when you park the stop at/above target.",
+      "- **Fire**: intraday break of the parked stop = full exit. Same execution shape as SR1 / SR15.",
+      "- **Handoff with SR15**: SR15's nudge is band-restricted [20%, 50%). SR12 takes over from 50% up. No overlap.",
+      "- **Orthogonal to SR7 / SR8**: a declared SR8 monster hold is *also* SR12-armed. The floor is the disaster backstop for gap-down mornings that beat the trend exits to a worse price. On an orderly SR7 break, SR7 exits first and this never fires.",
+      "- **Doctrine**: past +50%, never give back more than half the peak gain. Named after LifeCycle Trade's MCP (Mental Capital Preservation).",
+    ].join("\n"),
+    family: "floor",
+  },
   {
     code: "sr13",
     description: "Change of Character",

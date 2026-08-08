@@ -4,6 +4,8 @@ import {
   SELL_RULE_TIER_ORDER,
   isCushionQualified,
   needsSR15StopMove,
+  needsSR12FloorMove,
+  computeSR12FloorTarget,
 } from "./sell-rule";
 
 describe("classifySellRuleTier — post-migration-062 ladder", () => {
@@ -187,5 +189,108 @@ describe("needsSR15StopMove", () => {
     expect(needsSR15StopMove(30, -1, null)).toBe(false);
     expect(needsSR15StopMove(30, null, null)).toBe(false);
     expect(needsSR15StopMove(30, NaN, null)).toBe(false);
+  });
+});
+
+describe("needsSR12FloorMove", () => {
+  // Ratcheting Profit Floor nudge. Fires when the persisted (or
+  // derived-from-peak) sr12_floor_pct puts the target broker stop above
+  // the currently parked broker_stop_price. Takes over from SR15 at
+  // the 50% band edge — clean handoff, no overlap.
+
+  test("false when B1 entry price is missing/invalid", () => {
+    expect(needsSR12FloorMove(80, 0, null, null)).toBe(false);
+    expect(needsSR12FloorMove(80, -1, null, null)).toBe(false);
+    expect(needsSR12FloorMove(80, null, null, null)).toBe(false);
+    expect(needsSR12FloorMove(80, NaN, null, null)).toBe(false);
+  });
+
+  test("false when neither persisted floor nor cushion-qualified peak", () => {
+    // Peak below 50 and no persisted floor → not armed.
+    expect(needsSR12FloorMove(0, 100, null, null)).toBe(false);
+    expect(needsSR12FloorMove(49.99, 100, null, null)).toBe(false);
+    expect(needsSR12FloorMove(null, 100, null, null)).toBe(false);
+  });
+
+  test("armed via persisted sr12_floor_pct with no broker stop", () => {
+    // Persisted floor of 50% on a $100 B1 → target $150. No stop = below.
+    expect(needsSR12FloorMove(null, 100, null, 50)).toBe(true);
+    expect(needsSR12FloorMove(null, 100, 0, 50)).toBe(true);
+  });
+
+  test("armed via derived floor when persisted is null and peak >= 50", () => {
+    // Not-yet-reconciled row: peak 100 → derived floor 50 → target $150.
+    expect(needsSR12FloorMove(100, 100, null, null)).toBe(true);
+    expect(needsSR12FloorMove(100, 100, 140, null)).toBe(true);
+  });
+
+  test("persisted floor wins over derived even when peak is lower", () => {
+    // Sticky ratchet doctrine: persisted floor persists even if peak was
+    // recomputed downward (e.g. B1 lot got split-adjusted). Target is
+    // driven by persisted, not by the current peak/2.
+    // B1 $100, persisted floor 80 → target $180. Peak 60 would yield
+    // $130 if we used derived — MUST NOT.
+    expect(needsSR12FloorMove(60, 100, 150, 80)).toBe(true);   // 150 < 180
+    expect(needsSR12FloorMove(60, 100, 185, 80)).toBe(false);  // 185 > 180
+  });
+
+  test("false when broker stop is at or above target", () => {
+    // B1 $100, floor 50% → target $150.
+    expect(needsSR12FloorMove(null, 100, 150, 50)).toBe(false);
+    expect(needsSR12FloorMove(null, 100, 200, 50)).toBe(false);
+  });
+
+  test("DELL-style scenario (b1_entry $176.21, peak 166%)", () => {
+    // Persisted floor should be 83; target = 176.21 * (1 + 0.83) = 322.4643.
+    const target = 176.21 * 1.83;
+    expect(needsSR12FloorMove(166, 176.21, target - 1, 83)).toBe(true);
+    expect(needsSR12FloorMove(166, 176.21, target, 83)).toBe(false);
+    // Broker stop just below target (half-a-penny tolerance edge).
+    expect(needsSR12FloorMove(166, 176.21, target - 0.004, 83)).toBe(false);
+    expect(needsSR12FloorMove(166, 176.21, target - 0.006, 83)).toBe(true);
+  });
+
+  test("handoff from SR15: peak = 50% exact", () => {
+    // SR15 goes quiet at peak >= 50; SR12 takes over. Derived floor is
+    // 25% at peak 50 → target = B1 * 1.25.
+    // B1 $100, target $125.
+    expect(needsSR12FloorMove(50, 100, 120, null)).toBe(true);
+    expect(needsSR12FloorMove(50, 100, 125, null)).toBe(false);
+  });
+
+  test("zero/negative persisted floor is ignored", () => {
+    // Backfill misfire safety — a rogue 0 or negative persisted value
+    // must not disarm the nudge. Derived path still fires when the peak
+    // qualifies. When neither exists, no nudge.
+    expect(needsSR12FloorMove(80, 100, 130, 0)).toBe(true);     // falls back to peak/2 → target $140
+    expect(needsSR12FloorMove(80, 100, 145, 0)).toBe(false);    // 145 > $140 target
+    expect(needsSR12FloorMove(80, 100, 130, -5)).toBe(true);
+    expect(needsSR12FloorMove(40, 100, 130, 0)).toBe(false);    // peak sub-50, no persisted → not armed
+  });
+});
+
+describe("computeSR12FloorTarget", () => {
+  test("null when unarmed / missing B1", () => {
+    expect(computeSR12FloorTarget(30, 100, null)).toBeNull();
+    expect(computeSR12FloorTarget(null, 100, null)).toBeNull();
+    expect(computeSR12FloorTarget(80, null, null)).toBeNull();
+    expect(computeSR12FloorTarget(80, 0, null)).toBeNull();
+    expect(computeSR12FloorTarget(80, -1, null)).toBeNull();
+  });
+
+  test("derived from peak when persisted is null", () => {
+    // Peak 100 on B1 $100 → target = 100 * 1.5 = 150.
+    expect(computeSR12FloorTarget(100, 100, null)).toBeCloseTo(150, 6);
+    expect(computeSR12FloorTarget(200, 100, null)).toBeCloseTo(200, 6);
+  });
+
+  test("persisted floor wins over derived", () => {
+    // Persisted 80 on B1 $100 → target = 100 * 1.8 = 180.
+    // Peak (60) would derive 130 — must NOT show up.
+    expect(computeSR12FloorTarget(60, 100, 80)).toBeCloseTo(180, 6);
+  });
+
+  test("DELL: b1_entry $176.21, floor 83% → $322.4643", () => {
+    expect(computeSR12FloorTarget(166, 176.21, 83)).toBeCloseTo(176.21 * 1.83, 6);
   });
 });

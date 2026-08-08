@@ -2874,6 +2874,10 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         # in the JSON response and every frontend read is undefined →
         # tier silently downgrades to SR1.
         "Broker_Stop_Price": "broker_stop_price",
+        # Migration 064 — SR12 Ratcheting Profit Floor (MCP). Same
+        # PascalCase → snake_case round-trip as Broker_Stop_Price above;
+        # frontend reads sr12_floor_pct off the row.
+        "Sr12_Floor_Pct": "sr12_floor_pct",
         # Backfill: three older aliases load_summary has been emitting
         # for a while without matching entries here. Frontend readers
         # (positions.ts::manual_price, ...) had been getting undefined

@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
+import { SR12FloorNudgeBanner } from "./sr12-floor-nudge-banner";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -209,6 +210,12 @@ export function RiskManager({ navColor }: { navColor: string }) {
           to ACS or their broker to act. Auto-clears row-by-row as each
           stop lands at or above target. */}
       <SR15NudgeBanner positions={nudgePositions} />
+
+      {/* Migration 064 — SR12 Ratcheting Profit Floor nudge (same
+          informational-mirror rule as SR15 above). Takes over above the
+          50% peak band; DELL et al. show here until the broker stop
+          catches up to the ratchet. */}
+      <SR12FloorNudgeBanner positions={nudgePositions} />
 
       {/* KPI tiles */}
       <div className="grid grid-cols-3 gap-3.5 mb-6">
