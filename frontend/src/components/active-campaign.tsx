@@ -67,15 +67,13 @@ function compareRows(a: EnrichedPosition, b: EnrichedPosition, key: string, dir:
     av = a.total_cost;
     bv = b.total_cost;
   } else if (key === "signed_risk") {
-    // "Open Risk $" column displays open_risk — regime-aware:
-    // cushion above stop from current for winners, cost-basis distance
-    // to stop for losers, entry-to-stop for fresh positions. Column
-    // key kept as `signed_risk` for backwards compat with saved sort prefs.
+    // "Open Risk $" column displays open_risk — money you'd lose
+    // from current mark if the stop fires. Column key kept as
+    // `signed_risk` for backwards compat with saved sort prefs.
     av = a.open_risk;
     bv = b.open_risk;
   } else if (key === "risk_pct") {
-    // "Open Risk %" column displays open_risk_pct — same rewire as
-    // the $ column above.
+    // "Open Risk %" column displays open_risk_pct — same as $ / NLV.
     av = a.open_risk_pct;
     bv = b.open_risk_pct;
   } else if (key === "projected_pl") {
@@ -743,10 +741,12 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // Capital at Risk (unchanged): sum of losses if every stop fires
   // today. Winners with stops above cost contribute 0.
   //
-  // Open Risk (Heat): fleet-wide sum of the new Open Risk column.
-  // Uses the regime-aware formula (max(current, entry) − stop) so
-  // losers anchor to entry, matching what each row displays. The
-  // KPI now equals the column sum.
+  // Open Risk (Heat): fleet-wide sum of the Open Risk column
+  // ((current − stop) × shares × mult, floored). Matches each row's
+  // displayed value; KPI equals column sum. Invariant across the
+  // fleet: TOTAL P&L − OPEN RISK = PROJECTED P&L exactly (each row
+  // and header). Anchoring open_risk to MAX(current, entry) breaks
+  // this on losers — Coach Claude audit 2026-08-08.
   //
   // Projected P&L: fleet-wide sum of the projected_pl column
   // (realized + inventory-at-stop per position). Answers "if every
@@ -1092,12 +1092,10 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                 {sortedEquities.map((p, i) => {
                   const plColor = p.overall_pl >= 0 ? "#08a86b" : "#e5484d";
                   // "Open Risk $" / "Open Risk %" columns display
-                  // p.open_risk (regime-aware: cushion above stop for
-                  // winners, cost-basis-to-stop for losers, entry-to-
-                  // stop for fresh positions). Positive → amber tint
-                  // (money at risk). Zero → neutral (rare edge case
-                  // where stop is above the anchor — stop should have
-                  // already fired).
+                  // p.open_risk = (current − stop) × shares × mult.
+                  // Positive → amber tint (money at risk). Zero →
+                  // neutral (edge case where stop is at or above
+                  // current — stop should have already fired).
                   const riskColor = p.open_risk > 0
                     ? "#b45309"
                     : "var(--ink-3)";
@@ -1145,21 +1143,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                     currentVsB1Pct: p.b1_return_pct,
                   });
 
-                  // Tooltip surfaces the regime (winner/loser/fresh)
-                  // that drove Open Risk, plus the raw anchor number
-                  // so a curious reader can retrace the math. The
-                  // original Trade Risk $ (initial risk_budget at buy
-                  // time) is preserved here since it's no longer a
-                  // dedicated column post-2026-08-08.
-                  const anchor = Math.max(p.current_price, p.avg_entry);
-                  const regime = p.current_price > p.avg_entry
-                    ? `Winner (anchor: current ${formatCurrency(p.current_price)})`
-                    : p.current_price < p.avg_entry
-                    ? `Loser (anchor: entry ${formatCurrency(p.avg_entry)})`
-                    : `Fresh (anchor: entry ${formatCurrency(p.avg_entry)})`;
+                  // Tooltip: literal formula + initial Trade Risk $
+                  // (risk_budget) for reference — it lost its own
+                  // column in the 2026-08-08 redesign. One number,
+                  // one formula: (current − stop) × shares × mult,
+                  // floored at 0.
+                  const stopForTip = p.avg_stop > 0 ? p.avg_stop : p.avg_entry;
                   const riskTooltip =
-                    `Open Risk ${formatCurrency(p.open_risk)} · ${regime} · Trade Risk $ ${formatCurrency(p.risk_budget)}`;
-                  void anchor;
+                    `Open Risk = (${formatCurrency(p.current_price)} − ${formatCurrency(stopForTip)}) × ${p.shares} = ${formatCurrency(p.open_risk)} · Trade Risk $ ${formatCurrency(p.risk_budget)}`;
 
                   return (
                     <tr key={p.trade_id} className="transition-colors"

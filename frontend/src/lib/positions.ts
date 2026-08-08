@@ -40,22 +40,22 @@ export interface EnrichedPosition {
   // projected_pl / equity × 100. Same total-exposure shape as projected_pl,
   // bound to the Risk % column so it tracks realized losses on closed lots.
   projected_pct: number;
-  // Open Risk $ — money you'd lose if the stop fires. Regime-aware:
-  //   MAX(0, (MAX(current_price, avg_entry) − avg_stop) × open_shares × mult)
-  // Three regimes fall out of the single expression:
-  //   * Fresh (current ≈ entry) → open_risk = entry − stop = Trade Risk $
-  //   * Winner (current > entry) → open_risk = current − stop (paper
-  //     cushion above stop; profits you'd give back)
-  //   * Loser (current < entry) → open_risk = entry − stop (cost-basis
-  //     distance to stop; the real loss from your entry — not the
-  //     smaller current-to-stop number, which understates the pain)
-  // Long options: effective stop = 0 (worst case = premium loss;
-  // mirrors lifo.ts isOption branch). So option open_risk =
-  // MAX(current, entry) × shares × multiplier.
+  // Open Risk $ — money you'd lose from the CURRENT mark if the stop
+  // fires:
+  //   MAX(0, (current_price − avg_stop) × open_shares × multiplier)
   //
-  // 2026-08-08 rewrite: replaces the earlier cushion_at_risk field
-  // that anchored only to current price — that under-reported risk
-  // on losers (used current, not entry). See ACS "Open Risk $" column.
+  // Preserves the invariant `Overall P&L − Open Risk = Projected P&L`
+  // on every row and in the header (algebraic: overall_pl includes
+  // the paper loss on losers as unrealized; open_risk must NOT count
+  // that same paper loss again). The 2026-08-08 MAX(current, entry)
+  // anchor variant broke this on losers by double-counting the paper
+  // loss — reverted after Coach Claude's audit surfaced the
+  // reconciliation gap.
+  //
+  // Long options: effective stop = 0 (worst case = premium loss;
+  // mirrors lifo.ts isOption branch). So option open_risk = current
+  // × shares × 100. When current is below stop the floor keeps
+  // the display non-negative (edge case; stop should have fired).
   open_risk: number;
   // open_risk / equity × 100 — same convention as risk_pct.
   open_risk_pct: number;
@@ -164,17 +164,16 @@ export function computeEnrichedPositions(
     const signedRisk = (stopForRisk - avgEntry) * shares * multiplier;
     const riskPct = equity > 0 ? (signedRisk / equity) * 100 : 0;
 
-    // Open Risk $ — regime-aware "money you'd lose if the stop fires."
-    // Anchors to MAX(current_price, avg_entry) so losers use their
-    // cost-basis distance to stop (bigger, more honest number) and
-    // winners use current-to-stop (paper cushion at risk).
-    // Long options: effective stop = 0 (worst case = premium loss;
-    // mirrors lifo.ts's isOption branch). Floored at 0.
-    const anchor = Math.max(currentPrice, avgEntry);
+    // Open Risk $ — money you'd lose from the CURRENT mark if the
+    // stop fires. Simple (current − stop) × shares × multiplier,
+    // floored at 0. Paper losses on losers are already captured in
+    // Overall P&L as unrealized; counting them again here would
+    // double-count and break `Overall P&L − Open Risk = Projected P&L`.
+    // Long options use effective stop = 0 (worst case = premium loss).
     const effectiveStopForOpen = isOption ? 0 : stopForRisk;
     const openRisk = Math.max(
       0,
-      (anchor - effectiveStopForOpen) * shares * multiplier,
+      (currentPrice - effectiveStopForOpen) * shares * multiplier,
     );
     const openRiskPct = equity > 0 ? (openRisk / equity) * 100 : 0;
 
