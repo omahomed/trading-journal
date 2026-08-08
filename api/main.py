@@ -8289,14 +8289,22 @@ def update_trade_stops(body: dict):
 def update_broker_stop_price(body: dict):
     """Set or clear the broker_stop_price on an existing campaign.
 
-    Two-stop model flag (migration 055). Small dedicated endpoint so
-    Trade Manager / Trade Journal / ACS right-click all backfill a
-    forgotten SR14 tag without going through the heavy update_trade_stops
-    flow (which also touches per-lot stop_loss + BE detection).
+    Small dedicated endpoint (migration 055) so Trade Manager / Trade
+    Journal / ACS right-click all set/clear the value without going
+    through the heavy update_trade_stops flow (which also touches
+    per-lot stop_loss + BE detection). Post-063 the value renders as
+    a 🛡 chip on the ACS row (no tier promotion).
 
     Body: {portfolio, trade_id, broker_stop_price: number | null}
-    Passing 0, null, or omitting the field clears the flag → position
-    drops back to SR1 tier while B1 return < 10%.
+    Passing 0, null, or omitting the field clears the chip.
+
+    Validation is deliberately loose: only checks price > 0. Above-
+    cost stops are legitimate (SR15 +10% profit lock, SR12 MCP
+    ratcheting floor). Above-current-price stops would fire
+    immediately — the frontend enforces that; the backend doesn't
+    know today's current price without a yfinance round-trip and
+    the trader can always update-through the fire on the next tick
+    if that ever happens.
     """
     try:
         portfolio = body.get("portfolio", "CanSlim")
@@ -8315,10 +8323,7 @@ def update_broker_stop_price(body: dict):
         if price is not None and price <= 0:
             price = None
 
-        # Sanity: block a broker stop set ABOVE current avg entry — a
-        # broker stop at or above your fill price would trigger immediately
-        # and can't be what the user meant. Frontend also checks, but the
-        # backend enforces regardless.
+        # Existence check — need a real trade to update.
         df_s = db.load_summary(portfolio)
         if df_s is None or df_s.empty:
             return {"error": "No trades found"}
@@ -8326,16 +8331,6 @@ def update_broker_stop_price(body: dict):
         match = df_s[df_s["trade_id"] == trade_id]
         if match.empty:
             return {"error": f"Trade {trade_id} not found"}
-        avg_entry = float(match.iloc[0].get("avg_entry", 0) or 0)
-        if price is not None and avg_entry > 0 and price >= avg_entry:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"broker_stop_price ({price}) must be BELOW avg_entry "
-                    f"({avg_entry}) — a stop at or above fill fires "
-                    "immediately."
-                ),
-            )
 
         # save_summary_row does an UPSERT; passing None sets the column to
         # NULL (explicit-None handling in _build_summary_update_set_clauses).
