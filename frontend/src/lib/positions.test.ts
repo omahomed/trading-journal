@@ -62,90 +62,99 @@ describe("computeEnrichedPositions", () => {
     expect(enriched.multiplier).toBe(100);
   });
 
-  it("cushion_at_risk = max(0, (current − avg_stop) × shares × multiplier) for stocks", () => {
-    // DELL-inspired scenario: 225 sh @ avg $331.62, avg_stop $359.44,
-    // current $453.77. Expected cushion at risk = 225 × ($453.77 − $359.44)
-    // = $21,224.25. That's the number a trader intuits from a "Risk"
-    // column against a stop — replaces projected_pl in the ACS cell.
+  it("open_risk WINNER (current > entry): (current − stop) × shares — DELL scenario", () => {
+    // DELL: 225 sh @ avg $331.62, stop $359.44, current $453.77.
+    // Winner regime → anchor = current → open_risk = ($453.77 − $359.44) × 225
+    // = $21,224.25. The number the trader intuits from a Risk column.
     const trade: TradePosition = {
-      trade_id: "T-DELL",
-      ticker: "DELL",
-      status: "OPEN",
-      shares: 225,
-      avg_entry: 331.62,
-      total_cost: 74615.19,
-      realized_pl: 36349.21,
-      stop_loss: 359.44,
-      rule: "",
-      instrument_type: "STOCK",
-      multiplier: 1,
-      open_date: "2026-04-06",
+      trade_id: "T-DELL", ticker: "DELL", status: "OPEN",
+      shares: 225, avg_entry: 331.62, total_cost: 74615.19,
+      realized_pl: 36349.21, stop_loss: 359.44, rule: "",
+      instrument_type: "STOCK", multiplier: 1, open_date: "2026-04-06",
     } as any;
-    // Single BUY lot at avg to keep the LIFO weighted-stop equal to 359.44.
     const details: TradeDetail[] = [
       { trade_id: "T-DELL", action: "BUY", date: "2026-04-06",
         shares: 225, amount: 331.62, stop_loss: 359.44 } as any,
     ];
     const [enriched] = computeEnrichedPositions([trade], details, 589_400, { DELL: 453.77 });
     expect(enriched.avg_stop).toBeCloseTo(359.44, 2);
-    expect(enriched.cushion_at_risk).toBeCloseTo(21224.25, 2);
-    expect(enriched.cushion_at_risk_pct).toBeCloseTo((21224.25 / 589_400) * 100, 4);
+    expect(enriched.open_risk).toBeCloseTo(21224.25, 2);
+    expect(enriched.open_risk_pct).toBeCloseTo((21224.25 / 589_400) * 100, 4);
   });
 
-  it("cushion_at_risk floors at 0 when current price is at or below stop", () => {
-    // If price has already broken the stop line (edge case), no cushion
-    // is at risk from the current mark — the stop should already have
-    // fired. Prevents rendering negative "risk" in the column.
+  it("open_risk LOSER (current < entry): (entry − stop) × shares — MU scenario", () => {
+    // MU: entry $910.82, stop $847.84, current below entry (down 3.65%).
+    // Loser regime → anchor = entry → open_risk = ($910.82 − $847.84) × 80
+    // = $5,038.40 (the real cost-basis loss if stop fires, NOT the smaller
+    // current-to-stop number which understates the pain).
     const trade: TradePosition = {
-      trade_id: "T-BELOWSTOP",
-      ticker: "X",
-      status: "OPEN",
-      shares: 100,
-      avg_entry: 100,
-      total_cost: 10000,
-      realized_pl: 0,
-      stop_loss: 110,
-      rule: "",
-      instrument_type: "STOCK",
-      multiplier: 1,
-      open_date: "2026-01-01",
+      trade_id: "T-MU", ticker: "MU", status: "OPEN",
+      shares: 80, avg_entry: 910.82, total_cost: 72865.60,
+      realized_pl: 0, stop_loss: 847.84, rule: "",
+      instrument_type: "STOCK", multiplier: 1, open_date: "2026-08-05",
     } as any;
     const details: TradeDetail[] = [
-      { trade_id: "T-BELOWSTOP", action: "BUY", date: "2026-01-01",
+      { trade_id: "T-MU", action: "BUY", date: "2026-08-05",
+        shares: 80, amount: 910.82, stop_loss: 847.84 } as any,
+    ];
+    // current 878 < entry 910.82 → loser regime, anchor = entry.
+    const [enriched] = computeEnrichedPositions([trade], details, 589_400, { MU: 878 });
+    expect(enriched.open_risk).toBeCloseTo(5038.40, 2);
+  });
+
+  it("open_risk FRESH (current ≈ entry): (entry − stop) × shares = Trade Risk $", () => {
+    // Fresh position, current at entry — anchor = entry (tie goes to entry
+    // via MAX). open_risk = (entry − stop) × shares = classic Trade Risk $.
+    const trade: TradePosition = {
+      trade_id: "T-FRESH", ticker: "X", status: "OPEN",
+      shares: 100, avg_entry: 100, total_cost: 10000,
+      realized_pl: 0, stop_loss: 95, rule: "",
+      instrument_type: "STOCK", multiplier: 1, open_date: "2026-01-01",
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "T-FRESH", action: "BUY", date: "2026-01-01",
+        shares: 100, amount: 100, stop_loss: 95 } as any,
+    ];
+    const [enriched] = computeEnrichedPositions([trade], details, 100_000, { X: 100 });
+    expect(enriched.open_risk).toBeCloseTo(500, 2);
+  });
+
+  it("open_risk floors at 0 when stop is above the anchor (rare edge case)", () => {
+    // Anomaly: stop $110 above BOTH current $105 AND entry $100. In
+    // practice the stop should have fired. Floor at 0 to prevent a
+    // negative rendering in the column.
+    const trade: TradePosition = {
+      trade_id: "T-ANOMALY", ticker: "X", status: "OPEN",
+      shares: 100, avg_entry: 100, total_cost: 10000,
+      realized_pl: 0, stop_loss: 110, rule: "",
+      instrument_type: "STOCK", multiplier: 1, open_date: "2026-01-01",
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "T-ANOMALY", action: "BUY", date: "2026-01-01",
         shares: 100, amount: 100, stop_loss: 110 } as any,
     ];
-    // Current price 105 is BELOW stop 110 — cushion floored at 0.
     const [enriched] = computeEnrichedPositions([trade], details, 100_000, { X: 105 });
-    expect(enriched.cushion_at_risk).toBe(0);
-    expect(enriched.cushion_at_risk_pct).toBe(0);
+    expect(enriched.open_risk).toBe(0);
+    expect(enriched.open_risk_pct).toBe(0);
   });
 
-  it("cushion_at_risk for an option = current market value (worst case = premium loss)", () => {
-    // Long option: effective stop = 0 in the cushion calc (mirrors
-    // lifo.ts's isOption branch — max loss on a long option is the
-    // premium paid regardless of any parked stop). So cushion equals
-    // the position's current market value.
+  it("open_risk for a long option = MAX(current, entry) × shares × 100 (premium loss)", () => {
+    // Long option worst case = full premium loss. effective stop = 0.
+    // Winner (current > entry): open_risk = current × shares × 100.
+    // Loser (current < entry): open_risk = entry × shares × 100.
     const trade: TradePosition = {
-      trade_id: "O-CUSHION",
-      ticker: "AAPL  260117C00150000",
-      status: "OPEN",
-      shares: 5,
-      avg_entry: 2.0,
-      total_cost: 1000,
-      realized_pl: 0,
-      stop_loss: 1.0,
-      rule: "",
-      instrument_type: "OPTION",
-      multiplier: 100,
-      open_date: "2026-01-01",
+      trade_id: "O-OPT", ticker: "AAPL  260117C00150000", status: "OPEN",
+      shares: 5, avg_entry: 2.0, total_cost: 1000,
+      realized_pl: 0, stop_loss: 1.0, rule: "",
+      instrument_type: "OPTION", multiplier: 100, open_date: "2026-01-01",
     } as any;
     const details: TradeDetail[] = [
-      { trade_id: "O-CUSHION", action: "BUY", date: "2026-01-01",
+      { trade_id: "O-OPT", action: "BUY", date: "2026-01-01",
         shares: 5, amount: 2.0, stop_loss: 1.0 } as any,
     ];
-    // Current premium $3 × 5 contracts × 100 = $1,500 = current market value.
+    // current $3 > entry $2 → anchor $3 → open_risk = $3 × 5 × 100 = $1,500.
     const [enriched] = computeEnrichedPositions([trade], details, 100_000, { "AAPL  260117C00150000": 3.0 });
-    expect(enriched.cushion_at_risk).toBeCloseTo(1500);
+    expect(enriched.open_risk).toBeCloseTo(1500);
     expect(enriched.current_value).toBeCloseTo(1500);
   });
 

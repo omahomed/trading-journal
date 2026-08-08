@@ -40,22 +40,25 @@ export interface EnrichedPosition {
   // projected_pl / equity × 100. Same total-exposure shape as projected_pl,
   // bound to the Risk % column so it tracks realized losses on closed lots.
   projected_pct: number;
-  // Cushion at Risk $ — money you'd give up if the stop fires from the
-  // CURRENT market price (not from cost basis). Computed as:
-  //   MAX(0, current_price − avg_stop) × open_shares × multiplier
-  // Positive = paper cushion at risk. Zero when price already at/below
-  // stop (stop should have fired). For long options (multiplier > 1)
-  // effective stop = 0 because worst case is premium loss (mirrors
-  // lifo.ts isOption branch) — so cushion equals current position value.
+  // Open Risk $ — money you'd lose if the stop fires. Regime-aware:
+  //   MAX(0, (MAX(current_price, avg_entry) − avg_stop) × open_shares × mult)
+  // Three regimes fall out of the single expression:
+  //   * Fresh (current ≈ entry) → open_risk = entry − stop = Trade Risk $
+  //   * Winner (current > entry) → open_risk = current − stop (paper
+  //     cushion above stop; profits you'd give back)
+  //   * Loser (current < entry) → open_risk = entry − stop (cost-basis
+  //     distance to stop; the real loss from your entry — not the
+  //     smaller current-to-stop number, which understates the pain)
+  // Long options: effective stop = 0 (worst case = premium loss;
+  // mirrors lifo.ts isOption branch). So option open_risk =
+  // MAX(current, entry) × shares × multiplier.
   //
-  // Introduced 2026-08-07 to replace projected_pl as the ACS "Current
-  // Risk $" cell display, which was showing projected-P&L-floor and
-  // being misread as risk. DELL walkthrough: 225 sh × ($453.77 −
-  // $359.44) = $21,224.25 — the number a trader intuits when looking
-  // at a Risk column against a stop.
-  cushion_at_risk: number;
-  // cushion_at_risk / equity × 100 — same convention as risk_pct.
-  cushion_at_risk_pct: number;
+  // 2026-08-08 rewrite: replaces the earlier cushion_at_risk field
+  // that anchored only to current price — that under-reported risk
+  // on losers (used current, not entry). See ACS "Open Risk $" column.
+  open_risk: number;
+  // open_risk / equity × 100 — same convention as risk_pct.
+  open_risk_pct: number;
   realized_bank: number;
   expiration: Date | null;
   manual_price: number | null;
@@ -161,19 +164,19 @@ export function computeEnrichedPositions(
     const signedRisk = (stopForRisk - avgEntry) * shares * multiplier;
     const riskPct = equity > 0 ? (signedRisk / equity) * 100 : 0;
 
-    // Cushion at Risk $ — the number the ACS "Current Risk $" column
-    // shows post-2026-08-07. Interpretation: "if the stop fires from the
-    // CURRENT market price, this much paper cushion evaporates." For
-    // long options, effectiveStop = 0 (worst case = premium loss),
-    // mirroring lifo.ts's isOption branch. Floored at 0 — a stop above
-    // the current price means the stop already breached (should have
-    // fired) and there's no more cushion to give up.
-    const effectiveStopForCushion = isOption ? 0 : stopForRisk;
-    const cushionAtRisk = Math.max(
+    // Open Risk $ — regime-aware "money you'd lose if the stop fires."
+    // Anchors to MAX(current_price, avg_entry) so losers use their
+    // cost-basis distance to stop (bigger, more honest number) and
+    // winners use current-to-stop (paper cushion at risk).
+    // Long options: effective stop = 0 (worst case = premium loss;
+    // mirrors lifo.ts's isOption branch). Floored at 0.
+    const anchor = Math.max(currentPrice, avgEntry);
+    const effectiveStopForOpen = isOption ? 0 : stopForRisk;
+    const openRisk = Math.max(
       0,
-      (currentPrice - effectiveStopForCushion) * shares * multiplier,
+      (anchor - effectiveStopForOpen) * shares * multiplier,
     );
-    const cushionAtRiskPct = equity > 0 ? (cushionAtRisk / equity) * 100 : 0;
+    const openRiskPct = equity > 0 ? (openRisk / equity) * 100 : 0;
 
     const riskBudget = parseFloat(String(trade.risk_budget || 0));
 
@@ -295,8 +298,8 @@ export function computeEnrichedPositions(
       risk_status: riskStatus,
       projected_pl: lifo.projectedPl,
       projected_pct: equity > 0 ? (lifo.projectedPl / equity) * 100 : 0,
-      cushion_at_risk: cushionAtRisk,
-      cushion_at_risk_pct: cushionAtRiskPct,
+      open_risk: openRisk,
+      open_risk_pct: openRiskPct,
       realized_bank: lifo.realizedBank,
       expiration,
       manual_price: (() => {
