@@ -323,12 +323,20 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
     sr6_arming_low = None
     sr6_trigger = None
     # SR12 Ratcheting Profit Floor (MCP) — disaster backstop under SR7/SR8.
-    # Armed when peak b1_return >= sr12_arm_pct (50%); floor ratchets up on
-    # every new peak (floor = peak / 2 as % of B1). Full exit if intraday
-    # low breaks the parked floor price. Resets on sub-entry so a new
-    # campaign anchors on its own B1.
-    sr12_floor_pct = None
-    sr12_anchor_px = b1_entry_px
+    # Post-migration-065 anchor: peak_total_pl (running max of
+    # realized + shares × (day_high − avg_cost) using end-of-day state).
+    # Fires as a FULL EXIT at the price where realized_at_stop =
+    # peak_total_pl / 2. Reads sim's live `realized` / `lots` / cur_shares()
+    # each bar — total P&L is method-invariant so LIFO realized == avg-cost
+    # realized at any aggregate.
+    #
+    # Arm gate: `sr12_armed` flips True once the B1 peak return crosses
+    # `sr12_arm_pct` (default 50%) — the original doctrine's
+    # "cushion-qualified" threshold. Prevents fires on early wobbles
+    # when the campaign hasn't proven itself yet. Sticky (never re-armed
+    # False within a sub-campaign).
+    sr12_peak_total_pl = 0.0
+    sr12_armed = False
     log = []
 
     def cur_shares():
@@ -533,29 +541,53 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
         if float(r.High) > peak:
             peak = float(r.High)
             peak_date = r.Date
-            # SR12 ratchet — arms + steps up on every new peak. Floor is
-            # peak / 2 as % of the current sub-campaign's anchor. Sticky:
-            # never moves down within a sub-campaign.
-            if sr12 and sr12_anchor_px > 0:
-                peak_return_pct = (peak / sr12_anchor_px - 1.0) * 100.0
-                if peak_return_pct >= sr12_arm_pct:
-                    new_floor_pct = peak_return_pct / 2.0
-                    if sr12_floor_pct is None or new_floor_pct > sr12_floor_pct:
-                        sr12_floor_pct = new_floor_pct
+
+        # SR12 arm gate — original doctrine threshold. Once B1's peak
+        # return crosses sr12_arm_pct (default 50%), the position is
+        # cushion-qualified and MCP becomes active. Sticky within the
+        # sub-campaign.
+        if sr12 and not sr12_armed and b1_entry_px > 0:
+            peak_return_pct = (peak / b1_entry_px - 1.0) * 100.0
+            if peak_return_pct >= sr12_arm_pct:
+                sr12_armed = True
+
+        # SR12 peak_total_pl ratchet — evaluated every bar once armed
+        # (not just on new highs) because a change in shares/realized
+        # can lift total_pl even without a new price high. Sticky: never
+        # moves down.
+        if sr12 and sr12_armed and cur_shares() > 1e-9:
+            held_ptp = cur_shares()
+            total_cost_ptp = sum(s * c for s, c in lots)
+            unrealized_at_high = held_ptp * float(r.High) - total_cost_ptp
+            total_pl_at_high = realized + unrealized_at_high
+            if total_pl_at_high > sr12_peak_total_pl:
+                sr12_peak_total_pl = total_pl_at_high
 
         # SR12 FIRE — evaluated BEFORE SR7 so a gap-through-floor bar
         # exits at the parked stop price (idealized fill) rather than
         # SR7 trimming to core first. On a slower decline, SR7 usually
         # fires above the floor and SR12 never binds (the design
         # invariant per the doctrine handoff).
-        if (sr12 and sr12_floor_pct is not None and cur_shares() > 1e-9
-                and sr12_anchor_px > 0):
-            floor_px = sr12_anchor_px * (1.0 + sr12_floor_pct / 100.0)
-            if float(r.Low) < floor_px:
+        #
+        # Fire threshold: the price where realized + shares × (P - avg_cost)
+        # would land at peak_total_pl / 2. If already-realized bank
+        # exceeds the target, no fire — the campaign has locked in
+        # more than half already.
+        if sr12 and sr12_armed and sr12_peak_total_pl > 0 and cur_shares() > 1e-9:
+            held_fire = cur_shares()
+            total_cost_fire = sum(s * c for s, c in lots)
+            avg_cost_fire = total_cost_fire / held_fire
+            target_realized = sr12_peak_total_pl / 2.0
+            delta_needed = target_realized - realized
+            if delta_needed > 0:
+                floor_px = avg_cost_fire + delta_needed / held_fire
+            else:
+                floor_px = 0.0  # already banked half; nothing to enforce
+            if floor_px > 0 and float(r.Low) < floor_px:
                 # Fill at the floor price (the parked stop). Full exit —
                 # SR12 is a disaster backstop, not a trim.
                 target_to(0.0, floor_px, r.Date,
-                          f"SR12 FIRE (floor {sr12_floor_pct:.1f}%)",
+                          f"SR12 FIRE (peak PL ${sr12_peak_total_pl:,.0f})",
                           "daily", r)
                 # In terminate mode this ends the campaign, mirroring
                 # the weekly-GD behavior — nothing "reverts" from a
@@ -687,11 +719,12 @@ def run(spy_path, tkr_path, ticker, start, end, nav=DEFAULT_NAV, out_dir=None,
                     entry_px = float(r.Close)
                     awaiting_new_entry = False
                     peak = float(r.High)
-                    # SR12 anchors on the sub-entry's B1, not the original
-                    # B1. Reset floor so the ratchet arms fresh from this
-                    # campaign's peak. Realized bank still compounds.
-                    sr12_anchor_px = entry_px
-                    sr12_floor_pct = None
+                    # SR12 anchor + arm reset on sub-entry — peak_total_pl
+                    # walks fresh from the new campaign, and the +50% arm
+                    # gate must be re-crossed. Realized bank compounds
+                    # (bank from the prior sub still counts in the total).
+                    sr12_peak_total_pl = 0.0
+                    sr12_armed = False
                     target_to(daily_target_frac[sig], float(r.Close), r.Date,
                               "GREEN(sub-entry)", "daily", r)
                 else:

@@ -119,63 +119,59 @@ export function needsSR15StopMove(
 }
 
 // SR12 Ratcheting Profit Floor (MCP) — the "give back no more than half
-// the peak gain" doctrine. Migration 064 introduced sr12_floor_pct as the
-// authoritative persisted floor; this predicate returns TRUE when the
-// physical broker_stop_price still lags the price implied by that floor.
+// what I've earned" doctrine. Migration 065 rewrote the anchor from
+// sr12_floor_pct (B1-based) to peak_total_pl (the max total P&L the
+// campaign ever showed). The 2026-08-07 DELL walkthrough exposed why
+// the B1 anchor was wrong on scaled-in positions: a "half of B1 peak
+// gain" stop can fire at a NET LOSS on the aggregate.
 //
-// Orthogonal to the SR15 nudge (which caps at 50%). SR12 takes over from
-// 50% up — same "clean handoff at the band edge" structure as SR7/SR8's
-// tier split. A single campaign never triggers both at once.
+// Target broker stop derives from:
+//   target = avg_entry + (peak_total_pl/2 − realized_bank) / shares
 //
-// Formula:
-//   target_price = b1_entry × (1 + sr12_floor_pct / 100)
-// The floor is stored as a percent of B1 entry (not an absolute price)
-// so the frontend can render the target for any campaign without
-// re-computing it. The DB persists exactly what the ratchet produced;
-// this function just compares it to the broker stop.
+// The invariant that stops firing at `target` is
+//   realized_bank + shares × (target − avg_entry) = peak_total_pl / 2
+// i.e. "if this fires, my total P&L across the whole campaign lands at
+// exactly half of its historical peak." Method-invariant on total P&L
+// (avg-cost vs LIFO don't change the sum).
 //
-// Prefers persisted `sr12FloorPct` when present. If the row hasn't been
-// touched by the reconcile loop yet (rare — happens between deploy and
-// first reconcile run), derives a fallback floor from `b1PeakPct / 2`
-// so DELL et al. still nudge on first render.
+// Auto-clears when current realized_bank already exceeds peak_total_pl/2
+// — you've locked in more than half by prior trims and there's nothing
+// left for MCP to protect.
 export function needsSR12FloorMove(
-  b1PeakPct: number | null | undefined,
-  b1EntryPrice: number | null | undefined,
+  peakTotalPl: number | null | undefined,
+  realizedBank: number | null | undefined,
+  shares: number | null | undefined,
+  avgEntry: number | null | undefined,
   brokerStopPrice: number | null | undefined,
-  sr12FloorPct: number | null | undefined,
 ): boolean {
-  if (b1EntryPrice == null || !Number.isFinite(b1EntryPrice) || b1EntryPrice <= 0) return false;
-  // Resolve the effective floor pct: persisted wins; fall back to peak/2
-  // when the reconcile hasn't seeded it yet.
-  let floorPct: number | null = null;
-  if (sr12FloorPct != null && Number.isFinite(sr12FloorPct) && sr12FloorPct > 0) {
-    floorPct = sr12FloorPct;
-  } else if (b1PeakPct != null && Number.isFinite(b1PeakPct) && b1PeakPct >= 50) {
-    floorPct = b1PeakPct / 2;
-  }
-  if (floorPct == null) return false;
-  const target = b1EntryPrice * (1 + floorPct / 100);
+  if (peakTotalPl == null || !Number.isFinite(peakTotalPl) || peakTotalPl <= 0) return false;
+  if (shares == null || !Number.isFinite(shares) || shares <= 0) return false;
+  if (avgEntry == null || !Number.isFinite(avgEntry) || avgEntry <= 0) return false;
+  const realized = realizedBank != null && Number.isFinite(realizedBank) ? realizedBank : 0;
+  const targetRealized = peakTotalPl / 2;
+  // Auto-clear: you've already banked more than half. Nothing to
+  // enforce — a further stop would only take back cushion you own.
+  if (realized >= targetRealized) return false;
+  const target = avgEntry + (targetRealized - realized) / shares;
   const current = brokerStopPrice != null && Number.isFinite(brokerStopPrice) ? brokerStopPrice : 0;
-  // Same half-a-penny tolerance as needsSR15StopMove — nudge clears when
-  // the operator types the rounded target price into broker_stop_price.
+  // Half-a-penny tolerance for JS FP round-off (same as needsSR15StopMove).
   return current < target - 0.005;
 }
 
-// Convenience: the exact broker-stop target that clears the nudge. Same
-// resolution logic as needsSR12FloorMove — persisted wins, derived falls
-// back. Returns null when not armed (peak < 50 and no persisted floor).
+// Convenience: the exact broker-stop target that clears the nudge.
+// Returns null when the campaign isn't armed (no peak_total_pl / no
+// shares / already-banked past target).
 export function computeSR12FloorTarget(
-  b1PeakPct: number | null | undefined,
-  b1EntryPrice: number | null | undefined,
-  sr12FloorPct: number | null | undefined,
+  peakTotalPl: number | null | undefined,
+  realizedBank: number | null | undefined,
+  shares: number | null | undefined,
+  avgEntry: number | null | undefined,
 ): number | null {
-  if (b1EntryPrice == null || !Number.isFinite(b1EntryPrice) || b1EntryPrice <= 0) return null;
-  let floorPct: number | null = null;
-  if (sr12FloorPct != null && Number.isFinite(sr12FloorPct) && sr12FloorPct > 0) {
-    floorPct = sr12FloorPct;
-  } else if (b1PeakPct != null && Number.isFinite(b1PeakPct) && b1PeakPct >= 50) {
-    floorPct = b1PeakPct / 2;
-  }
-  if (floorPct == null) return null;
-  return b1EntryPrice * (1 + floorPct / 100);
+  if (peakTotalPl == null || !Number.isFinite(peakTotalPl) || peakTotalPl <= 0) return null;
+  if (shares == null || !Number.isFinite(shares) || shares <= 0) return null;
+  if (avgEntry == null || !Number.isFinite(avgEntry) || avgEntry <= 0) return null;
+  const realized = realizedBank != null && Number.isFinite(realizedBank) ? realizedBank : 0;
+  const targetRealized = peakTotalPl / 2;
+  if (realized >= targetRealized) return null;
+  return avgEntry + (targetRealized - realized) / shares;
 }

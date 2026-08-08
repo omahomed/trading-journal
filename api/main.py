@@ -2878,6 +2878,10 @@ def _normalize_trades(df: pd.DataFrame) -> pd.DataFrame:
         # PascalCase → snake_case round-trip as Broker_Stop_Price above;
         # frontend reads sr12_floor_pct off the row.
         "Sr12_Floor_Pct": "sr12_floor_pct",
+        # Migration 065 — peak_total_pl (SR12 MCP anchor rewrite).
+        # Supersedes sr12_floor_pct as the input to the frontend nudge
+        # predicate. Kept alongside so mid-cutover reads don't 500.
+        "Peak_Total_Pl": "peak_total_pl",
         # Backfill: three older aliases load_summary has been emitting
         # for a while without matching entries here. Frontend readers
         # (positions.ts::manual_price, ...) had been getting undefined

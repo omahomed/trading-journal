@@ -93,7 +93,20 @@ export interface EnrichedPosition {
   // b1_reconcile loop; never moves down. Present when the campaign
   // has ever crossed +50% peak (persistence beats current-peak's
   // "am I still up 50" question). NULL = never armed.
+  //
+  // DEPRECATED post-migration-065 — superseded by peak_total_pl as the
+  // SR12 anchor. Left on the row for a graceful cutover; no consumer
+  // reads it after this migration.
   sr12_floor_pct?: number | null;
+  // Migration 065 — the max total P&L this campaign ever showed
+  // (realized_bank + shares × (day_high − avg_cost) using end-of-day
+  // state per bar). Backfilled by scripts/backfill_peak_total_pl.py;
+  // ratcheted forward daily by b1_reconcile. Frontend derives the
+  // SR12 target broker stop as avg_entry + (peak_total_pl/2 −
+  // realized_pl) / shares — the price at which firing locks in
+  // exactly half of the peak observed. NULL = not yet backfilled
+  // or never cushion-qualified.
+  peak_total_pl?: number | null;
 }
 
 export function computeEnrichedPositions(
@@ -292,10 +305,12 @@ export function computeEnrichedPositions(
       sr8_activation_nlv:  _passThroughNum((trade as any).sr8_activation_nlv),
       sr8_core_shares:     _passThroughNum((trade as any).sr8_core_shares),
       is_declared_sr8: isDeclaredSr8,
-      // Migration 064 — persisted SR12 floor pct. _passThroughNum handles
-      // the psycopg2 NUMERIC-as-string quirk that already bites the other
-      // decimal fields on this row.
+      // Migration 064 — persisted SR12 floor pct (DEPRECATED post-065).
       sr12_floor_pct: _passThroughNum((trade as any).sr12_floor_pct),
+      // Migration 065 — peak_total_pl (new SR12 MCP anchor). Read the
+      // snake_case name emitted by _normalize_trades — see the COL_MAP
+      // entry `Peak_Total_Pl` → `peak_total_pl` in api/main.py.
+      peak_total_pl: _passThroughNum((trade as any).peak_total_pl),
     };
   });
 }

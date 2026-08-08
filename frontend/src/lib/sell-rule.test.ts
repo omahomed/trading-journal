@@ -192,105 +192,106 @@ describe("needsSR15StopMove", () => {
   });
 });
 
-describe("needsSR12FloorMove", () => {
-  // Ratcheting Profit Floor nudge. Fires when the persisted (or
-  // derived-from-peak) sr12_floor_pct puts the target broker stop above
-  // the currently parked broker_stop_price. Takes over from SR15 at
-  // the 50% band edge — clean handoff, no overlap.
+describe("needsSR12FloorMove — peak_total_pl anchor (post-065)", () => {
+  // New signature: (peak_total_pl, realized_bank, shares, avg_entry, broker_stop_price).
+  // Target broker stop = avg_entry + (peak_total_pl/2 − realized_bank) / shares.
+  // If realized_bank already >= peak_total_pl/2, auto-clears (nothing left to protect).
 
-  test("false when B1 entry price is missing/invalid", () => {
-    expect(needsSR12FloorMove(80, 0, null, null)).toBe(false);
-    expect(needsSR12FloorMove(80, -1, null, null)).toBe(false);
-    expect(needsSR12FloorMove(80, null, null, null)).toBe(false);
-    expect(needsSR12FloorMove(80, NaN, null, null)).toBe(false);
+  test("false when peak_total_pl is missing / non-positive", () => {
+    expect(needsSR12FloorMove(null, 0, 100, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(0, 0, 100, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(-100, 0, 100, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(NaN, 0, 100, 50, null)).toBe(false);
   });
 
-  test("false when neither persisted floor nor cushion-qualified peak", () => {
-    // Peak below 50 and no persisted floor → not armed.
-    expect(needsSR12FloorMove(0, 100, null, null)).toBe(false);
-    expect(needsSR12FloorMove(49.99, 100, null, null)).toBe(false);
-    expect(needsSR12FloorMove(null, 100, null, null)).toBe(false);
+  test("false when shares or avg_entry are missing / non-positive", () => {
+    expect(needsSR12FloorMove(10000, 0, 0, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, -5, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, null, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, 100, 0, null)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, 100, null, null)).toBe(false);
   });
 
-  test("armed via persisted sr12_floor_pct with no broker stop", () => {
-    // Persisted floor of 50% on a $100 B1 → target $150. No stop = below.
-    expect(needsSR12FloorMove(null, 100, null, 50)).toBe(true);
-    expect(needsSR12FloorMove(null, 100, 0, 50)).toBe(true);
+  test("auto-clears when realized_bank already exceeds peak/2", () => {
+    // Peak $20k, already realized $12k > $10k target → nothing left to protect.
+    expect(needsSR12FloorMove(20000, 12000, 100, 50, null)).toBe(false);
+    expect(needsSR12FloorMove(20000, 10000, 100, 50, null)).toBe(false);
+    // Just under target still fires.
+    expect(needsSR12FloorMove(20000, 9999, 100, 50, null)).toBe(true);
   });
 
-  test("armed via derived floor when persisted is null and peak >= 50", () => {
-    // Not-yet-reconciled row: peak 100 → derived floor 50 → target $150.
-    expect(needsSR12FloorMove(100, 100, null, null)).toBe(true);
-    expect(needsSR12FloorMove(100, 100, 140, null)).toBe(true);
+  test("fires when broker_stop_price is below target", () => {
+    // Peak $10k, realized $0, 100 sh @ avg $50 → target realized $5k
+    // → target stop = 50 + 5000/100 = $100. No broker stop = below.
+    expect(needsSR12FloorMove(10000, 0, 100, 50, null)).toBe(true);
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 0)).toBe(true);
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 99)).toBe(true);
   });
 
-  test("persisted floor wins over derived even when peak is lower", () => {
-    // Sticky ratchet doctrine: persisted floor persists even if peak was
-    // recomputed downward (e.g. B1 lot got split-adjusted). Target is
-    // driven by persisted, not by the current peak/2.
-    // B1 $100, persisted floor 80 → target $180. Peak 60 would yield
-    // $130 if we used derived — MUST NOT.
-    expect(needsSR12FloorMove(60, 100, 150, 80)).toBe(true);   // 150 < 180
-    expect(needsSR12FloorMove(60, 100, 185, 80)).toBe(false);  // 185 > 180
+  test("clears when broker_stop_price meets target", () => {
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 100)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 105)).toBe(false);
   });
 
-  test("false when broker stop is at or above target", () => {
-    // B1 $100, floor 50% → target $150.
-    expect(needsSR12FloorMove(null, 100, 150, 50)).toBe(false);
-    expect(needsSR12FloorMove(null, 100, 200, 50)).toBe(false);
+  test("half-a-penny tolerance on the target boundary", () => {
+    // Target $100 exactly. Nudge clears at 99.995+; fires below that.
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 99.996)).toBe(false);
+    expect(needsSR12FloorMove(10000, 0, 100, 50, 99.994)).toBe(true);
   });
 
-  test("DELL-style scenario (b1_entry $176.21, peak 166%)", () => {
-    // Persisted floor should be 83; target = 176.21 * (1 + 0.83) = 322.4643.
-    const target = 176.21 * 1.83;
-    expect(needsSR12FloorMove(166, 176.21, target - 1, 83)).toBe(true);
-    expect(needsSR12FloorMove(166, 176.21, target, 83)).toBe(false);
-    // Broker stop just below target (half-a-penny tolerance edge).
-    expect(needsSR12FloorMove(166, 176.21, target - 0.004, 83)).toBe(false);
-    expect(needsSR12FloorMove(166, 176.21, target - 0.006, 83)).toBe(true);
+  test("DELL scenario — post-065 corrected math", () => {
+    // avg_entry $331.62, shares 225, realized $36,349.21, peak $85,214.70.
+    // target realized = $42,607.35; delta = $6,258.14;
+    // target stop = 331.62 + 6258.14/225 = $359.43.
+    const dellArgs = [85214.70, 36349.21, 225, 331.62] as const;
+    // No stop = below target — fires.
+    expect(needsSR12FloorMove(...dellArgs, null)).toBe(true);
+    // Old (buggy) B1-anchored target $322.90 — still below correct target, fires.
+    expect(needsSR12FloorMove(...dellArgs, 322.90)).toBe(true);
+    // Correct target $359.43 — clears.
+    expect(needsSR12FloorMove(...dellArgs, 359.43)).toBe(false);
+    // Just above the tolerance edge — clears.
+    expect(needsSR12FloorMove(...dellArgs, 359.42)).toBe(true);
   });
 
-  test("handoff from SR15: peak = 50% exact", () => {
-    // SR15 goes quiet at peak >= 50; SR12 takes over. Derived floor is
-    // 25% at peak 50 → target = B1 * 1.25.
-    // B1 $100, target $125.
-    expect(needsSR12FloorMove(50, 100, 120, null)).toBe(true);
-    expect(needsSR12FloorMove(50, 100, 125, null)).toBe(false);
-  });
-
-  test("zero/negative persisted floor is ignored", () => {
-    // Backfill misfire safety — a rogue 0 or negative persisted value
-    // must not disarm the nudge. Derived path still fires when the peak
-    // qualifies. When neither exists, no nudge.
-    expect(needsSR12FloorMove(80, 100, 130, 0)).toBe(true);     // falls back to peak/2 → target $140
-    expect(needsSR12FloorMove(80, 100, 145, 0)).toBe(false);    // 145 > $140 target
-    expect(needsSR12FloorMove(80, 100, 130, -5)).toBe(true);
-    expect(needsSR12FloorMove(40, 100, 130, 0)).toBe(false);    // peak sub-50, no persisted → not armed
+  test("SNDK-style already-locked-in scenario auto-clears", () => {
+    // SNDK peak_total_pl $113,604. If the operator had trimmed enough to
+    // realize $60k, the nudge should clear (>$56,802 target).
+    expect(needsSR12FloorMove(113604.55, 60000, 50, 275, null)).toBe(false);
+    // With less realized, still nudges.
+    expect(needsSR12FloorMove(113604.55, 40000, 50, 275, null)).toBe(true);
   });
 });
 
-describe("computeSR12FloorTarget", () => {
-  test("null when unarmed / missing B1", () => {
-    expect(computeSR12FloorTarget(30, 100, null)).toBeNull();
-    expect(computeSR12FloorTarget(null, 100, null)).toBeNull();
-    expect(computeSR12FloorTarget(80, null, null)).toBeNull();
-    expect(computeSR12FloorTarget(80, 0, null)).toBeNull();
-    expect(computeSR12FloorTarget(80, -1, null)).toBeNull();
+describe("computeSR12FloorTarget — peak_total_pl anchor (post-065)", () => {
+  test("null when peak_total_pl / shares / avg_entry missing", () => {
+    expect(computeSR12FloorTarget(null, 0, 100, 50)).toBeNull();
+    expect(computeSR12FloorTarget(0, 0, 100, 50)).toBeNull();
+    expect(computeSR12FloorTarget(10000, 0, 0, 50)).toBeNull();
+    expect(computeSR12FloorTarget(10000, 0, 100, 0)).toBeNull();
   });
 
-  test("derived from peak when persisted is null", () => {
-    // Peak 100 on B1 $100 → target = 100 * 1.5 = 150.
-    expect(computeSR12FloorTarget(100, 100, null)).toBeCloseTo(150, 6);
-    expect(computeSR12FloorTarget(200, 100, null)).toBeCloseTo(200, 6);
+  test("null when realized_bank already exceeds peak/2", () => {
+    // Already locked in more than half — no target to render.
+    expect(computeSR12FloorTarget(20000, 15000, 100, 50)).toBeNull();
+    expect(computeSR12FloorTarget(20000, 10000, 100, 50)).toBeNull();
   });
 
-  test("persisted floor wins over derived", () => {
-    // Persisted 80 on B1 $100 → target = 100 * 1.8 = 180.
-    // Peak (60) would derive 130 — must NOT show up.
-    expect(computeSR12FloorTarget(60, 100, 80)).toBeCloseTo(180, 6);
+  test("returns target = avg_entry + (peak/2 − realized) / shares", () => {
+    // Peak $10k, realized $0, 100 sh @ $50 → target $100.
+    expect(computeSR12FloorTarget(10000, 0, 100, 50)).toBeCloseTo(100, 6);
+    // With realized $2k, target = 50 + 3000/100 = $80.
+    expect(computeSR12FloorTarget(10000, 2000, 100, 50)).toBeCloseTo(80, 6);
   });
 
-  test("DELL: b1_entry $176.21, floor 83% → $322.4643", () => {
-    expect(computeSR12FloorTarget(166, 176.21, 83)).toBeCloseTo(176.21 * 1.83, 6);
+  test("DELL: peak $85,214.70, realized $36,349.21, 225 sh @ $331.62 → $359.43", () => {
+    expect(computeSR12FloorTarget(85214.70, 36349.21, 225, 331.62))
+      .toBeCloseTo(359.43, 2);
+  });
+
+  test("null realized_bank treated as zero (fresh armed campaign)", () => {
+    // Peak $10k, no realized, 100 sh @ $50 → target $100.
+    expect(computeSR12FloorTarget(10000, null, 100, 50)).toBeCloseTo(100, 6);
+    expect(computeSR12FloorTarget(10000, undefined, 100, 50)).toBeCloseTo(100, 6);
   });
 });

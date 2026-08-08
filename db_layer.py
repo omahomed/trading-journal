@@ -490,6 +490,22 @@ def load_summary(portfolio_name, status=None):
                 if has_sr12_floor else
                 'NULL::numeric AS "Sr12_Floor_Pct",\n                    '
             )
+            # Migration-tolerance for migration 065 — peak_total_pl
+            # (SR12 MCP anchor, post-rewrite). Same detection pattern.
+            try:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'trades_summary' "
+                    "AND column_name = 'peak_total_pl'"
+                )
+                has_peak_total_pl = cur.fetchone() is not None
+            except Exception:
+                has_peak_total_pl = False
+            peak_total_pl_select = (
+                's.peak_total_pl AS "Peak_Total_Pl",\n                    '
+                if has_peak_total_pl else
+                'NULL::numeric AS "Peak_Total_Pl",\n                    '
+            )
             query = f"""
                 SELECT
                     s.trade_id AS "Trade_ID",
@@ -522,7 +538,7 @@ def load_summary(portfolio_name, status=None):
                     s.multiplier AS "Multiplier",
                     s.strategy AS "Strategy",
                     {b1_max_select}
-                    {mae_mfe_select}{sr8_activation_select}{declared_sr8_select}{sr12_floor_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
+                    {mae_mfe_select}{sr8_activation_select}{declared_sr8_select}{sr12_floor_select}{peak_total_pl_select}{manual_price_select}s.be_stop_moved_at AS "BE_Stop_Moved_At",
                     s.last_updated AS "Last_Updated",
                     COALESCE(
                         (SELECT d.rule
@@ -1173,6 +1189,77 @@ def snapshot_sr8_activation_if_null(
             # No write — either row missing, or anchor already set.
             return {"was_written": False, "activation_date": None,
                     "activation_nlv": None, "core_shares": core_shares}
+
+
+def update_peak_total_pl(portfolio_name, trade_id, new_peak_pl):
+    """Idempotent ratchet for the SR12 anchor column (migration 065).
+
+    UPDATEs trades_summary.peak_total_pl only if the stored value is
+    NULL or strictly less than new_peak_pl. Same monotonic-up guard as
+    update_b1_max_return_pct / update_sr12_floor_pct — the peak-of-total-
+    P&L only ratchets UP, never down.
+
+    Called from b1_reconcile with today's total_pl_at_high computed
+    against the current end-of-day position state. Historical peaks are
+    seeded by scripts/backfill_peak_total_pl.py; this helper just keeps
+    the seed ratcheted forward.
+
+    Returns:
+      {"stored_peak_total_pl": float | None, "was_updated": bool}
+      None when the trade_id isn't found in the given portfolio.
+
+    Migration-tolerance: if the peak_total_pl column doesn't exist yet
+    (deploy raced migration 065), returns {"stored_peak_total_pl": None,
+    "was_updated": False} so callers degrade gracefully. Mirrors the
+    pattern used in update_b1_max_return_pct.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'trades_summary' "
+                "AND column_name = 'peak_total_pl'"
+            )
+            if cur.fetchone() is None:
+                return {"stored_peak_total_pl": None, "was_updated": False}
+
+            cur.execute("SELECT id FROM portfolios WHERE name = %s", (portfolio_name,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            portfolio_id = row["id"]
+
+            cur.execute(
+                "UPDATE trades_summary "
+                "SET peak_total_pl = %s "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL "
+                "  AND (peak_total_pl IS NULL OR peak_total_pl < %s) "
+                "RETURNING peak_total_pl",
+                (new_peak_pl, portfolio_id, trade_id, new_peak_pl),
+            )
+            updated = cur.fetchone()
+            conn.commit()
+            if updated is not None:
+                return {
+                    "stored_peak_total_pl": float(updated["peak_total_pl"]),
+                    "was_updated": True,
+                }
+
+            cur.execute(
+                "SELECT peak_total_pl FROM trades_summary "
+                "WHERE portfolio_id = %s AND trade_id = %s "
+                "  AND deleted_at IS NULL",
+                (portfolio_id, trade_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            stored = row["peak_total_pl"]
+            return {
+                "stored_peak_total_pl": float(stored) if stored is not None else None,
+                "was_updated": False,
+            }
 
 
 def update_sr12_floor_pct(portfolio_name, trade_id, new_floor_pct):

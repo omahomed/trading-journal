@@ -30,7 +30,13 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import yfinance as yf
 
-from db_layer import get_db_connection, update_b1_max_return_pct, snapshot_sr8_activation_if_null, update_sr12_floor_pct
+from db_layer import (
+    get_db_connection,
+    update_b1_max_return_pct,
+    snapshot_sr8_activation_if_null,
+    update_sr12_floor_pct,
+    update_peak_total_pl,
+)
 
 log = logging.getLogger("b1_reconcile")
 
@@ -158,6 +164,97 @@ def classify_tier(pct: float) -> str:
     if pct < SR8_THRESHOLD:
         return "SR11"
     return "SR8"
+
+
+def compute_peak_total_pl_since_b1(
+    ticker: str, details: list[dict], since: date,
+) -> tuple[float | None, date | None]:
+    """Walk daily bars from `since` to today; return the max
+    (realized_bank + shares × (day_high − avg_cost)) using end-of-day
+    state per bar. Same math + method-invariant avg-cost accounting as
+    scripts/backfill_peak_total_pl.py — hoisted here so the b1_reconcile
+    loop can raise peak_total_pl on the same daily sweep it already runs.
+
+    `details` is the list of {action, shares, amount, date} rows for the
+    campaign, sorted ascending by date + trx_id.
+
+    Returns (peak_pl, peak_date). (None, None) when yfinance has no
+    data or `details` is empty.
+    """
+    if not details:
+        return None, None
+    end = date.today() + timedelta(days=1)
+    try:
+        raw = yf.download(
+            ticker, start=since.isoformat(), end=end.isoformat(),
+            progress=False, auto_adjust=False,
+        )
+    except Exception:
+        return None, None
+    if raw is None or raw.empty:
+        return None, None
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+    bars = raw[["High"]].reset_index()
+    bars["Date"] = pd.to_datetime(bars["Date"]).dt.date
+
+    # Group details by day.
+    by_day: dict[date, list[dict]] = {}
+    for d in details:
+        raw_dt = d.get("date")
+        day = raw_dt.date() if hasattr(raw_dt, "date") else raw_dt
+        by_day.setdefault(day, []).append(d)
+
+    shares = 0.0
+    avg_cost = 0.0
+    realized_bank = 0.0
+    peak_pl = 0.0
+    peak_date: date | None = None
+    for _, row in bars.iterrows():
+        day = row["Date"]
+        for d in by_day.get(day, []):
+            qty = float(d.get("shares") or 0)
+            price = float(d.get("amount") or 0)
+            action = str(d.get("action") or "").upper()
+            if qty <= 0:
+                continue
+            if action == "BUY":
+                new_shares = shares + qty
+                if new_shares > 0:
+                    avg_cost = (shares * avg_cost + qty * price) / new_shares
+                shares = new_shares
+            elif action == "SELL":
+                realized_bank += qty * (price - avg_cost)
+                shares -= qty
+                if shares <= 1e-9:
+                    shares = 0.0
+                    avg_cost = 0.0
+        day_high = float(row["High"])
+        unrealized_at_high = shares * (day_high - avg_cost) if shares > 0 else 0.0
+        total_pl = realized_bank + unrealized_at_high
+        if total_pl > peak_pl:
+            peak_pl = total_pl
+            peak_date = day
+    return peak_pl, peak_date
+
+
+def _load_details_for_campaign(portfolio_name: str, trade_id: str) -> list[dict]:
+    """BUY + SELL rows for a campaign, sorted by (date, trx_id). Used by
+    the peak_total_pl compute above."""
+    with get_db_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT d.action, d.shares, d.amount, d.date, d.trx_id
+              FROM trades_details d
+              JOIN portfolios p ON p.id = d.portfolio_id
+             WHERE p.name = %s AND d.trade_id = %s
+               AND d.deleted_at IS NULL
+             ORDER BY d.date, d.trx_id
+            """,
+            (portfolio_name, trade_id),
+        )
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
 def reconcile_open_positions(
@@ -306,6 +403,46 @@ def reconcile_open_positions(
                             log.warning(
                                 "SR12 floor ratchet skipped for %s/%s: %s",
                                 portfolio_name, trade_id, floor_exc,
+                            )
+                    # Ratchet peak_total_pl (migration 065) — the new
+                    # SR12 anchor. Runs whenever a cushion-qualified
+                    # position has a new close-basis peak; the compute
+                    # walks the day-high sequence so a peak driven by
+                    # intraday range still lands on the right bar. Same
+                    # non-fatal policy as the SR12/SR8 blocks above.
+                    if pct >= SR8_THRESHOLD:
+                        try:
+                            details = _load_details_for_campaign(
+                                portfolio_name, trade_id,
+                            )
+                            if details:
+                                first_day = min(
+                                    (
+                                        d["date"].date()
+                                        if hasattr(d["date"], "date")
+                                        else d["date"]
+                                    )
+                                    for d in details
+                                )
+                                new_peak_pl, peak_date = (
+                                    compute_peak_total_pl_since_b1(
+                                        ticker, details, first_day,
+                                    )
+                                )
+                                if new_peak_pl is not None:
+                                    ptp_result = update_peak_total_pl(
+                                        portfolio_name, trade_id, new_peak_pl,
+                                    )
+                                    if ptp_result and ptp_result.get("was_updated"):
+                                        log.info(
+                                            "peak_total_pl ratcheted %s (%s): "
+                                            "$%.2f (peak_date=%s)",
+                                            ticker, trade_id, new_peak_pl, peak_date,
+                                        )
+                        except Exception as ptp_exc:
+                            log.warning(
+                                "peak_total_pl ratchet skipped for %s/%s: %s",
+                                portfolio_name, trade_id, ptp_exc,
                             )
                 else:
                     counters["unchanged"] += 1
