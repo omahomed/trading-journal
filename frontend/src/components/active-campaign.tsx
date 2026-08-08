@@ -801,9 +801,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
     {
       label: "TOTAL EXPOSURE",
       value: `${totalExposurePct.toFixed(1)}%`,
-      sub: optionsExposureDollar > 0
-        ? `Equity ${equityExposurePct.toFixed(1)}% · Options ${optionsExposurePct.toFixed(1)}%`
-        : formatCurrency(totalExposureDollar, { decimals: 0 }),
+      // Always show the equity/options split, even when options are
+      // zero — consistency + discoverability. The top-line percentage
+      // already carries the dollar amount (as % of NLV), so nothing
+      // useful is lost by dropping the raw $ from the sub-line.
+      sub: `Equity ${equityExposurePct.toFixed(1)}% · Options ${optionsExposurePct.toFixed(1)}%`,
       gradient: optionsExposurePct > 10
         ? "linear-gradient(135deg, #e5484d, #f87171)"
         : "linear-gradient(135deg, #1e40af, #3b82f6)",
