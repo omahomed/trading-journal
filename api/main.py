@@ -8247,11 +8247,29 @@ def update_trade_stops(body: dict):
             # value outside the tolerance), clear any prior BE flag.
             be_cleared = not stop_near_be
 
-        # Update all open-lot stop_loss values in trades_details + the
-        # trades_summary.stop_loss mirror, plus the BE flag.
+        # Compute the set of open-lot trx_ids via the canonical LIFO
+        # walker (compute_open_inventory) — the SAME machinery the
+        # frontend uses. Fully-consumed lots aren't in the returned
+        # inventory, so their stop_loss stays on the historical audit
+        # trail instead of getting overwritten. Regression fixed
+        # 2026-08-07 (Trade Manager Stop Loss Adjustment bug).
+        from trade_calc import compute_open_inventory
+        df_d = db.load_details(portfolio)
+        campaign_txns = df_d[df_d["Trade_ID"] == trade_id] if not df_d.empty else df_d
+        campaign_txns = _normalize_trades(campaign_txns) if not campaign_txns.empty else campaign_txns
+        open_inventory = compute_open_inventory(campaign_txns) if not campaign_txns.empty else []
+        open_lot_trx_ids = [
+            str(lot.get("trx_id") or "") for lot in open_inventory
+            if float(lot.get("shares") or 0) > 0
+        ]
+        open_lot_trx_ids = [t for t in open_lot_trx_ids if t]
+
+        # Update per-lot stop_loss on open lots only, mirror to summary,
+        # apply/clear the BE flag as detected above.
         updated_lots = db.update_trade_stops(portfolio, trade_id, new_stop,
                                              be_applied=be_applied,
-                                             be_cleared=be_cleared)
+                                             be_cleared=be_cleared,
+                                             open_lot_trx_ids=open_lot_trx_ids)
         try:
             db.log_audit(portfolio, "STOP_UPDATE", trade_id, ticker,
                          f"Stop → ${new_stop:.2f} across {updated_lots} lot(s)" +
