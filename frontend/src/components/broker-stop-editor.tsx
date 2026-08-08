@@ -1,15 +1,15 @@
 "use client";
 
-// Shared broker_stop_price editor modal (migration 055 — SR14 flag).
+// Shared broker_stop_price editor modal (migration 055 + 063).
 // Used by:
 //   * active-campaign.tsx — right-click context menu ("Set broker stop...")
 //   * trade-manager.tsx — Edit Transaction sidecar (broker_stop_price row)
 //   * trade-journal.tsx — inline card action (backfill after the fact)
 //
 // One source of truth for the input UX, validation, and save call so all
-// three edit surfaces agree. See ARCHITECTURE.md §1 (trading_journal) for
-// the broker_stop_price contract: presence promotes tier from SR1 → SR14
-// in the <10% B1-return window; NULL means classic single-stop model.
+// three edit surfaces agree. Post-063: broker_stop_price presence renders
+// as a 🛡 chip on the ACS row (no tier promotion — that mechanism was
+// retired). NULL means no physical broker stop parked.
 
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
@@ -33,7 +33,7 @@ interface BrokerStopEditorProps {
   portfolio: string;
   onClose: () => void;
   /** Fired after a successful save OR clear. Parent typically triggers
-   *  a data refresh here so the SR14 badge updates immediately. */
+   *  a data refresh here so the 🛡 chip updates immediately. */
   onSaved: () => void;
 }
 
@@ -59,7 +59,7 @@ export function BrokerStopEditor({ position, portfolio, onClose, onSaved }: Brok
   const parsedOk = value.trim() === "" || (Number.isFinite(parsed) && parsed > 0);
   const belowEntry = value.trim() === "" || (parsedOk && (avgEntry <= 0 || parsed < avgEntry));
   const canSave = parsedOk && belowEntry && !saving;
-  // Empty value → clearing the flag (SR14 → SR1). Non-empty → setting/updating.
+  // Empty value → clears the broker stop (chip disappears from the row). Non-empty → setting/updating.
   const willClear = value.trim() === "";
   // Distance display — % from avg entry to the proposed broker stop.
   const distPct = parsedOk && !willClear && avgEntry > 0
@@ -153,8 +153,8 @@ export function BrokerStopEditor({ position, portfolio, onClose, onSaved }: Brok
 
         <div className="mt-4 text-[11px]" style={{ color: "var(--ink-4)" }}>
           {willClear
-            ? "Clearing removes the SR14 flag — the tier drops back to SR1 while B1 return < 10%."
-            : "Setting flags the position as SR14 (0.75× ATR Stop) in the ACS Sell Rule column."}
+            ? "Clearing removes the broker-stop chip from the ACS row."
+            : "Setting parks a physical broker stop; the ACS row shows a 🛡 chip while it's active."}
         </div>
 
         <div className="mt-5 flex items-center gap-2 justify-end">

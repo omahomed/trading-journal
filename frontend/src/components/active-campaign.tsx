@@ -217,7 +217,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // Migration 055 — Broker Stop editor modal. Opened via right-click
   // "Set broker stop..." action; wraps a simple numeric input + save/
   // clear buttons that call api.updateBrokerStop. Closes and refreshes
-  // the campaign list on success so the SR14 badge appears immediately.
+  // the campaign list on success so the 🛡 chip updates immediately.
   const [brokerStopModalPos, setBrokerStopModalPos] = useState<EnrichedPosition | null>(null);
 
   // Migration 062 — SR8 declaration modal + demote handler.
@@ -1165,10 +1165,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                             <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
-                              presence is a row chip instead of the retired
-                              SR14 tier promotion. Same information ("physical
-                              stop is parked at the broker") without the tier
-                              proliferation. Right-click → edit broker stop. */}
+                              presence is a row chip; the earlier tier-
+                              promotion approach was retired. Same
+                              information ("physical stop is parked at
+                              the broker") without extra tier entries.
+                              Right-click → edit broker stop. */}
                           {p.broker_stop_price != null && p.broker_stop_price > 0 && (
                             <span
                               title={`Broker stop parked at ${formatCurrency(p.broker_stop_price)}`}
@@ -1384,10 +1385,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                             <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
-                              presence is a row chip instead of the retired
-                              SR14 tier promotion. Same information ("physical
-                              stop is parked at the broker") without the tier
-                              proliferation. Right-click → edit broker stop. */}
+                              presence is a row chip; the earlier tier-
+                              promotion approach was retired. Same
+                              information ("physical stop is parked at
+                              the broker") without extra tier entries.
+                              Right-click → edit broker stop. */}
                           {p.broker_stop_price != null && p.broker_stop_price > 0 && (
                             <span
                               title={`Broker stop parked at ${formatCurrency(p.broker_stop_price)}`}
@@ -1634,13 +1636,14 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
               </button>
             );
           })()}
-          {/* Migration 055 — Set/edit/clear broker_stop_price (SR14 flag).
-              Available on every open position regardless of tier, since
-              the user may want to backfill a forgotten flag OR clear one
-              that no longer applies. The Sell Rule column reads
-              broker_stop_price to show SR14 vs SR1 for <10% campaigns;
-              at +10%+ the BE stop replaces broker stop and this field
-              becomes stale bookkeeping the classifier ignores. */}
+          {/* Migration 055 — Set/edit/clear broker_stop_price.
+              Available on every open position regardless of tier;
+              the user may want to backfill a forgotten value OR
+              clear one that no longer applies. Post-063 the value
+              renders as a 🛡 chip on the ACS row (no tier
+              promotion). At +10%+ the BE stop replaces broker stop
+              and this field becomes stale bookkeeping the tier
+              classifier ignores. */}
           <button className="w-full text-left px-3 py-2 text-[12px] font-medium flex items-center gap-2 transition-colors hover:brightness-95"
                   style={{ color: "var(--ink)" }}
                   data-testid="ctx-broker-stop"
@@ -1657,7 +1660,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
 
       {/* Broker Stop editor modal (migration 055). Simple numeric input +
           save / clear buttons. On success, force-reloads the campaign
-          list so the SR14 badge updates immediately. */}
+          list so the 🛡 chip updates immediately. */}
       {brokerStopModalPos && (
         <BrokerStopEditor
           position={brokerStopModalPos}

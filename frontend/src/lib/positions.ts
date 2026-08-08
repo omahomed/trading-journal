@@ -80,12 +80,12 @@ export interface EnrichedPosition {
   // tier derives from max(b1_return_pct, b1_max_return_pct) — see
   // computeEnrichedPositions. NULL pre-backfill; falls back to current.
   b1_max_return_pct: number | null;
-  // Migration 055 — physical broker stop price parked at −0.75× ATR21 from
-  // B1 fill. Presence promotes tier from SR1 → SR14 in the <10% B1-return
-  // window; null means single-stop campaign (classic SR1). Surfaced so
-  // tooltips + edit modals + right-click quick-tag can render/mutate it.
-  // Optional so pre-migration test fixtures don't have to spell it out;
-  // matches the same discipline as mae_pct / sr8_activation_* fields.
+  // Migration 055 — physical broker stop price parked at −0.75× ATR21
+  // from B1 fill. Post-063: presence renders as a 🛡 chip on the ACS
+  // row (no tier promotion). Null means no broker stop parked.
+  // Surfaced so tooltips + edit modals + right-click quick-tag can
+  // render/mutate it. Optional so pre-migration test fixtures don't
+  // have to spell it out; same discipline as mae_pct / sr8_activation_*.
   broker_stop_price?: number | null;
   sell_rule_tier: SellRuleTier | null;
   // Migration 046 — excursion metrics passed through from the summary
@@ -241,11 +241,11 @@ export function computeEnrichedPositions(
     const effectiveMax = b1ReturnPct !== null && b1MaxStored !== null
       ? Math.max(b1ReturnPct, b1MaxStored)
       : (b1ReturnPct ?? b1MaxStored);
-    // Migration 055 — broker_stop_price is the SR14 two-stop flag.
-    // Presence of a positive value promotes tier from SR1 → SR14 while
-    // B1 return < 10%. Backend returns the column as-is; parseFloat is
-    // enough since NULL becomes NaN which classifier reads as "no
-    // broker stop set."
+    // Migration 055 — broker_stop_price. Post-063 the presence just
+    // adds a 🛡 chip on the ACS row (no tier promotion — the earlier
+    // SR14 tier was retired). Backend returns the column as-is;
+    // parseFloat is enough since NULL becomes NaN which downstream
+    // reads as "no broker stop set."
     const brokerStopRaw = (trade as any).broker_stop_price;
     const brokerStopPrice = brokerStopRaw != null
       ? parseFloat(String(brokerStopRaw))
