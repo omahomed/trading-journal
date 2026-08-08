@@ -57,13 +57,24 @@ export function BrokerStopEditor({ position, portfolio, onClose, onSaved }: Brok
 
   const parsed = parseFloat(value);
   const parsedOk = value.trim() === "" || (Number.isFinite(parsed) && parsed > 0);
-  const belowEntry = value.trim() === "" || (parsedOk && (avgEntry <= 0 || parsed < avgEntry));
-  const canSave = parsedOk && belowEntry && !saving;
+  // Real validation: stop must be BELOW current price, otherwise the
+  // stop fires immediately on the next tick. Above avg entry is fine
+  // (locked-profit stop, exactly what SR15/SR12 doctrine parks). The
+  // earlier "below avg entry" restriction predated SR12 and blocked
+  // the ratcheting-profit-floor workflow entirely.
+  const belowCurrent = value.trim() === "" || (parsedOk && (currentPrice <= 0 || parsed < currentPrice));
+  const canSave = parsedOk && belowCurrent && !saving;
   // Empty value → clears the broker stop (chip disappears from the row). Non-empty → setting/updating.
   const willClear = value.trim() === "";
-  // Distance display — % from avg entry to the proposed broker stop.
-  const distPct = parsedOk && !willClear && avgEntry > 0
-    ? ((avgEntry - parsed) / avgEntry) * 100
+  // Distance display — % from CURRENT price to the proposed broker stop.
+  // Answers "how much room does this stop give from where price is now?"
+  // Signed: negative when stop is below entry (loss floor), positive
+  // when stop is above entry (locked profit floor).
+  const distFromCurrent = parsedOk && !willClear && currentPrice > 0
+    ? ((currentPrice - parsed) / currentPrice) * 100
+    : null;
+  const distFromEntry = parsedOk && !willClear && avgEntry > 0
+    ? ((parsed - avgEntry) / avgEntry) * 100
     : null;
 
   const handleSave = async () => {
@@ -133,15 +144,18 @@ export function BrokerStopEditor({ position, portfolio, onClose, onSaved }: Brok
           }}
         />
 
-        {distPct !== null && (
+        {distFromCurrent !== null && (
           <div className="text-[11px] mt-1.5" style={{ color: "var(--ink-4)" }}>
-            {distPct.toFixed(2)}% below avg entry
+            {distFromCurrent.toFixed(2)}% below current
+            {distFromEntry !== null && (
+              <> · {distFromEntry >= 0 ? "+" : ""}{distFromEntry.toFixed(2)}% {distFromEntry >= 0 ? "above" : "below"} avg entry</>
+            )}
           </div>
         )}
 
-        {!belowEntry && parsedOk && !willClear && (
+        {!belowCurrent && parsedOk && !willClear && (
           <div className="text-[12px] mt-2" style={{ color: "#dc2626" }}>
-            Broker stop must be below avg entry ({formatCurrency(avgEntry)}) — a stop at or above fill fires immediately.
+            Broker stop must be below current price ({formatCurrency(currentPrice)}) — a stop at or above the current mark fires immediately.
           </div>
         )}
 
