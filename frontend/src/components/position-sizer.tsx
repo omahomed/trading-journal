@@ -29,7 +29,7 @@ import {
   type ExitAlert,
   type SizingModeIndex,
 } from "@/lib/sizing-mode";
-import { computeVolatilitySizing, type VolSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
+import { computeVolatilitySizing, computeScaleInSizing, type VolSizerResults, type ScaleInSizerResults, type ScaleOutStops, SCALE_OUT_ATR_MULTIPLIERS } from "@/lib/vol-sizer";
 import { computePyramidSizing, type PyramidSizerResults, PYRAMID_ADD_CAP_PCT, PYRAMID_CAMPAIGN_CEILING_PCT, PYRAMID_FULL_SIZE_TRIGGER_PCT } from "@/lib/pyramid-sizer";
 
 // Local view shape — keeps the component-internal usage of
@@ -230,13 +230,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   const [activeExits, setActiveExits] = useState<readonly { signal: string; severity?: string }[]>([]);
   const [sizingModeManual, setSizingModeManual] = useState(false);
   const [entryPrice, setEntryPrice] = useState("");
-  // maLevel + buffer are used by the LEGACY MA-tech-stop path
-  // (Scale-In tab). The Volatility tab moved to the composite-stop
+  // Volatility / Pyramid / Scale-In tabs all share the composite-stop
   // model — user types a single Key Level and the sizer applies its
-  // own buffer of max(0.5 ATR, 1%). See @/lib/vol-sizer.
-  const [maLevel, setMaLevel] = useState("");
-  const [buffer, setBuffer] = useState("1.00");
-  // Volatility tab inputs (composite-stop model).
+  // own buffer of max(0.5 ATR, 1%). See @/lib/vol-sizer. The legacy
+  // MA-buffer path used to live on the Scale-In tab; retired 2026-08-07.
   const [keyLevelStr, setKeyLevelStr] = useState("");
   const [youngIpo, setYoungIpo] = useState(false);
   const [atrPct, setAtrPct] = useState("5.0");
@@ -388,15 +385,10 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
 
   // --- Derived Values ---
   const entry = parseFloat(entryPrice) || 0;
-  const ma = parseFloat(maLevel) || 0;
-  const buf = parseFloat(buffer) || 1;
   const atr = parseFloat(atrPct) || 5;
   const riskPct = SIZING_MODES[sizingMode].pct;
   const riskBudget = equity * (riskPct / 100);
-  const calcStop = ma > 0 ? ma * (1 - buf / 100) : 0;
-  const stopDist = entry > 0 && calcStop > 0 ? entry - calcStop : 0;
-  const stopDistPct = entry > 0 && stopDist > 0 ? (stopDist / entry) * 100 : 0;
-  // Volatility tab uses Key Level (composite-stop model).
+  // Volatility / Pyramid / Scale-In all use Key Level (composite-stop model).
   const keyLevel = parseFloat(keyLevelStr) || 0;
 
   // Holding data
@@ -430,17 +422,18 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
       // Key Level that's degenerately high just makes the ATR floor
       // win the MIN — no error here.
     } else if (tab === "scalein") {
-      if (ma <= 0) {
-        setErrorMsg("Enter a Key MA Level to calculate your global stop.");
-        return;
-      }
-      const stop = ma * (1 - buf / 100);
-      if (stop >= entry) {
-        setErrorMsg(`Stop (${formatCurrency(stop)}) is at or above current price (${formatCurrency(entry)}).`);
-        return;
-      }
+      // 2026-08-07 retrofit: composite-stop model, same inputs as
+      // Volatility / Pyramid tabs. Old MA + Buffer path removed.
       if (!holdingData) {
         setErrorMsg("Select a holding first.");
+        return;
+      }
+      if (entry <= 0 || atr <= 0) {
+        setErrorMsg("Please ensure Current Price and ATR are entered.");
+        return;
+      }
+      if (keyLevel <= 0) {
+        setErrorMsg("Please enter a Key Level — structural low or key MA from the chart. The composite stop needs it.");
         return;
       }
     } else if (tab === "pyramid") {
@@ -493,65 +486,31 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
     }
   }, [calculated, tab, entry, atr, keyLevel, sizingMode, equity, youngIpo]);
 
-  // ━━━ Scale-In Results ━━━
-  const scaleResults = useMemo(() => {
+  // ━━━ Scale-In Results (composite-stop model, 2026-08-07 retrofit) ━━━
+  // Delegates to computeScaleInSizing (see @/lib/vol-sizer). Same
+  // composite-stop shape as Volatility / Pyramid. `computeScaleInSizing`
+  // returns a verdict object with a full mode-bump preview when the
+  // current mode's headroom won't cover the target fill.
+  const scaleResults: ScaleInSizerResults | null = useMemo(() => {
     if (!calculated || tab !== "scalein" || !holdingData) return null;
-    const stop = ma * (1 - buf / 100);
-    const newAddRiskPerShare = entry - stop;
-    if (newAddRiskPerShare <= 0) return null;
-
-    const currShares = holdingData.shares || 0;
-    const avgEntry = holdingData.avg_entry || 0;
-    // Contract multiplier — 100 for options, 1 for equities. Required to
-    // dollarize per-share risk into notional risk; previously omitted, which
-    // understated option risk by 100× and let the budget guard mis-fire.
-    const multiplier = holdingData.multiplier || 1;
-    const currValue = currShares * entry;
-
-    // Real-money risk on existing shares is only the portion of cost basis
-    // that sits above the stop. When stop ≥ avg_entry the position is
-    // "risk-free" — worst case is locking in profit, not losing capital —
-    // so existing shares contribute zero to the risk budget. This lets the
-    // user pyramid into a winner that has moved above its stop instead of
-    // being blocked by an open-risk calculation that double-counts gains
-    // already protected by the trailing stop.
-    const existingRiskPerShare = Math.max(0, avgEntry - stop);
-    const existingRisk = currShares * existingRiskPerShare * multiplier;
-    const isRiskFree = existingRiskPerShare === 0 && currShares > 0;
-
-    const targetValue = equity * (targetSize / 100);
-    const targetTotalShares = Math.ceil(targetValue / entry);
-    const targetAdd = targetTotalShares - currShares;
-
-    const maxRisk = SIZING_MODES[sizingMode].pct;
-    const maxRiskDol = equity * (maxRisk / 100);
-    const remainingBudget = maxRiskDol - existingRisk;
-    const affordableAdd = remainingBudget > 0
-      ? Math.floor(remainingBudget / (newAddRiskPerShare * multiplier))
-      : 0;
-
-    if (targetAdd <= 0) return { error: `You are already at or above the target weight! (Current: ${formatCurrency(currValue, { decimals: 0 })} vs Target: ${formatCurrency(targetValue, { decimals: 0 })})` };
-    if (affordableAdd <= 0) {
-      return { error: `NO ADD - Existing ${currShares} shares risk ${formatCurrency(existingRisk, { decimals: 0 })} of capital below stop, exhausting the ${formatCurrency(maxRiskDol, { decimals: 0 })} budget. Tighten your stop above your ${formatCurrency(avgEntry)} avg cost or reduce position.` };
+    try {
+      return computeScaleInSizing({
+        equity,
+        entry,
+        atrPct: atr,
+        keyLevel,
+        tolPct: SIZING_MODES[sizingMode].pct,
+        currentShares: holdingData.shares || 0,
+        currentAvgEntry: holdingAvgCost,
+        targetPctNlv: targetSize,
+        multiplier: holdingData.multiplier || 1,
+      });
+    } catch (err) {
+      log.error("position-sizer", "scale-in compute failed", err);
+      return null;
     }
-
-    const recommendedAdd = Math.min(targetAdd, affordableAdd);
-    const newTotal = currShares + recommendedAdd;
-    const newAvgCost = newTotal > 0 ? (currShares * avgEntry + recommendedAdd * entry) / newTotal : 0;
-    const costOfAdd = recommendedAdd * entry;
-    // Total real-money risk after the add: locked-in risk on existing
-    // shares (zero when risk-free) plus the new shares' risk-to-stop.
-    const newAddRisk = recommendedAdd * newAddRiskPerShare * multiplier;
-    const totalRiskAtNew = existingRisk + newAddRisk;
-    const newWeight = equity > 0 ? (newTotal * entry / equity) * 100 : 0;
-    const verdict = affordableAdd >= targetAdd ? "success" : "partial";
-
-    return {
-      recommendedAdd, newTotal, newAvgCost, costOfAdd, totalRiskAtNew, newWeight,
-      stop, riskPerShare: newAddRiskPerShare, maxRiskDol, maxRisk, targetAdd,
-      avgEntry, currShares, verdict, isRiskFree, existingRisk, newAddRisk,
-    };
-  }, [calculated, tab, holdingData, ma, buf, entry, equity, targetSize, sizingMode]);
+  }, [calculated, tab, holdingData, holdingAvgCost, entry, atr, keyLevel,
+      equity, targetSize, sizingMode]);
 
   // ━━━ Pyramid Results ━━━
   // Delegates to computePyramidSizing (v6 seven-rule model): rules 1-7 with
@@ -695,12 +654,11 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
   }, [calculated, tab, costPerContract, equity, riskBudget, optMode, entryPrice, sizingMode]);
 
   const needsHolding = ["scalein", "pyramid", "trim"].includes(tab);
-  // Volatility tab moved to composite-stop model (Key Level input); the
-  // MA + Buffer pair is now only relevant for Scale-In.
-  const needsMaBuffer = tab === "scalein";
-  // Pyramid tab also uses Key Level + the 21EMA/50SMA Use → shortcuts;
-  // its composite-stop calc is imported from the same vol-sizer helper.
-  const needsKeyLevel = tab === "volatility" || tab === "pyramid";
+  // Volatility / Pyramid / Scale-In all use Key Level + the 21EMA/50SMA
+  // Use → shortcuts; the composite-stop calc is imported from the same
+  // vol-sizer helper across all three tabs. (The legacy MA-buffer path
+  // on Scale-In was retired 2026-08-07 in favor of the composite model.)
+  const needsKeyLevel = tab === "volatility" || tab === "pyramid" || tab === "scalein";
   // Volatility tab derives its ceiling from policy (15% / 5% young-IPO),
   // no user-picked target from the ladder — so it's excluded here.
   const needsTarget = tab === "trim" || tab === "scalein" || (tab === "options" && optMode === "equivalent");
@@ -752,7 +710,7 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </div>
         ) : (
           <div className="text-[13px] mt-1" style={{ color: "var(--ink-4)" }}>
-            {tab === "scalein" && "Scale up to target weight while respecting global stop and risk budget."}
+            {tab === "scalein" && "Top a position up to target weight using the composite-stop model. Reuses New Entry's stop math anchored on the CURRENT price — protects the incoming lot at its own 0.75× ATR line, not the old B1 line. Bump the sizing mode below if headroom won't cover the target."}
             {tab === "pyramid" && "Per-lot risk-accounted add sizing (v6). Gated by 7 rules: location (≤ 21EMA + 1 ATR), window (≤ +15% above B1, exempt via SR8-rebuild or fresh-base), progress (last buy up ≥ 5%), budget (mode% × NAV − Σ lot risks), size math (composite stop), trailing stop, 25% NAV campaign ceiling."}
             {tab === "trim" && "Calculate shares to sell to reach a desired weight, with LIFO P&L estimation."}
             {tab === "options" && "Size option positions using risk budget. Premium = max risk."}
@@ -794,6 +752,28 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             </ol>
             <p className="mb-1"><strong>Per-lot risk accounting:</strong> each held BUY row's stored stop_loss drives its risk contribution. A lot with stop ≥ its cost basis reads as risk-free and releases full headroom for new adds. Trailing stops on winners auto-compound the budget.</p>
             <p className="mb-1"><strong>Broker setup:</strong> every filled add carries its own trailing stop (21 EMA − 0.5 ATR, rising only). The output card includes a pinned callout with the exact stop price to set at your broker — the sizer's per-lot accounting only stays honest if the trailing stops are actually placed.</p>
+          </div>
+        </details>
+      )}
+
+      {/* Scale-In Sizer Rules Expander — composite-stop model (2026-08-07 retrofit). */}
+      {tab === "scalein" && (
+        <details className="mb-4 rounded-[10px] overflow-hidden" style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+          <summary className="px-4 py-2.5 text-[12px] font-semibold cursor-pointer" style={{ color: "var(--ink-3)" }}>
+            View Scale-In Rules
+          </summary>
+          <div className="px-4 pb-3 text-[12px] leading-relaxed" style={{ color: "var(--ink-3)" }}>
+            <p className="mb-1"><strong>The formula, five steps:</strong></p>
+            <ol className="list-decimal ml-4 mb-2 flex flex-col gap-0.5">
+              <li><strong>Composite Stop</strong> = MIN(Current Price − 1 ATR, Key Level − max(0.5 ATR, 1%) of Key Level). Same shape as New Entry — protects the incoming lot at its own 0.75× ATR line.</li>
+              <li><strong>Existing risk</strong> = current shares × max(0, avg cost − composite stop) × multiplier. Free-roll (stop ≥ avg) contributes zero.</li>
+              <li><strong>Headroom</strong> = (Mode% × NLV) − existing risk.</li>
+              <li><strong>Target add</strong> = ceil(target% × NLV ÷ current price) − current shares.</li>
+              <li><strong>Recommended add</strong> = min(target add, floor(headroom ÷ composite-distance × multiplier)).</li>
+            </ol>
+            <p className="mb-1"><strong>Sizing Mode is bidirectional here.</strong> Defaults from M Factor state like the other tabs, but scale-ins are conscious decisions — you can push up (Normal → Offense → Max) to unlock more headroom. The verdict card previews what each higher mode would afford so you can pick with numbers.</p>
+            <p className="mb-1"><strong>Why not the old MA − buffer model?</strong> That path anchored the stop on a moving average and applied a fixed % buffer. It ignored ATR entirely and left the scale-in lot under-protected (bought at higher price but stopped at the same level as B1). The composite-stop model recomputes the stop for the current lot's fill price, so every scale-in walks the effective floor up to defend the new capital.</p>
+            <p className="mb-1"><strong>Broker stop</strong> — after execution, move the physical broker stop to the composite stop this sizer computed. Send to Log Buy fills the stop field for you.</p>
           </div>
         </details>
       )}
@@ -958,28 +938,6 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </div>
         )}
 
-        {/* MA Level + Buffer — Scale-In tab only. Volatility tab moved
-            to the composite-stop model (Key Level input below). */}
-        {needsMaBuffer && (
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Key MA Level ($)">
-              <input type="number" value={maLevel} onChange={e => { setMaLevel(e.target.value); resetCalc(); }}
-                     step="0.01" placeholder="0.00" className={inputCls} style={inputStyle} />
-            </Field>
-            <Field label="Buffer (%)">
-              <input type="number" value={buffer} onChange={e => { setBuffer(e.target.value); resetCalc(); }}
-                     step="0.1" placeholder="1.00" className={inputCls} style={inputStyle} />
-            </Field>
-          </div>
-        )}
-
-        {/* Scale-In calculated-stop info banner. */}
-        {needsMaBuffer && calcStop > 0 && entry > 0 && (
-          <Banner type="info">
-            Calculated Stop: <strong>{formatCurrency(calcStop)}</strong> (MA ${ma.toFixed(2)} - {buf.toFixed(1)}% buffer) — {stopDistPct.toFixed(1)}% below entry
-          </Banner>
-        )}
-
         {/* Key Level + Young-IPO clamp — Volatility tab only. Key Level
             is the user-typed structural low OR key MA from the chart;
             the sizer applies its own buffer of max(0.5 ATR, 1%) and
@@ -1053,8 +1011,9 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
           </>
         )}
 
-        {/* ATR (volatility, pyramid) */}
-        {(tab === "volatility" || tab === "pyramid") && (
+        {/* ATR — needed by every composite-stop tab (volatility, pyramid,
+            and now scale-in post-2026-08-07 retrofit). */}
+        {(tab === "volatility" || tab === "pyramid" || tab === "scalein") && (
           <Field label="ATR % (21-Day)">
             <input type="number" value={atrPct} onChange={e => { setAtrPct(e.target.value); resetCalc(); }}
                    step="0.1" placeholder="5.0" className={inputCls} style={inputStyle} />
@@ -1204,70 +1163,138 @@ export function PositionSizer({ navColor, onNavigate, initialTab, onTabConsumed,
             />
           )}
 
-          {/* ── SCALE IN ── */}
-          {tab === "scalein" && scaleResults && (
-            <>
-              {"error" in scaleResults ? (
-                <Banner type="error">{scaleResults.error}</Banner>
-              ) : (
-                <>
-                  {scaleResults.isRiskFree && (
-                    <div className="mb-4 px-3 py-2 rounded-[8px] text-[12px]"
-                         style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
-                                  color: "#08a86b",
-                                  border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
-                      ✓ Position is risk-free — stop {formatCurrency(scaleResults.stop)} sits above your {formatCurrency(scaleResults.avgEntry)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
+          {/* ── SCALE IN (composite-stop retrofit, 2026-08-07) ── */}
+          {tab === "scalein" && scaleResults && (() => {
+            const s = scaleResults;
+            const currShares = holdingData?.shares || 0;
+            const stopPrice = s.composite.price;
+            const stopDistPct = entry > 0 ? (s.composite.distance / entry) * 100 : 0;
+            const currValue = currShares * entry;
+            const targetValue = equity * (targetSize / 100);
+            const currentModePct = SIZING_MODES[sizingMode].pct;
+            return (
+              <>
+                {s.verdict === "at_target" && (
+                  <Banner type="info">
+                    Already at or above target weight ({formatCurrency(currValue, { decimals: 0 })} vs target {formatCurrency(targetValue, { decimals: 0 })}). No add needed.
+                  </Banner>
+                )}
+
+                {s.verdict === "blocked" && (
+                  <Banner type="error">
+                    NO ADD — existing {currShares} shares risk {formatCurrency(s.existingRisk, { decimals: 0 })}
+                    {" "}of capital below the composite stop ({formatCurrency(stopPrice)}), exhausting the
+                    {" "}{formatCurrency(s.riskBudget, { decimals: 0 })} {currentModePct}% budget.
+                    {s.modeHints.length > 0 && " Bump the sizing mode below to unlock budget."}
+                  </Banner>
+                )}
+
+                {s.isRiskFree && s.verdict !== "at_target" && (
+                  <div className="mb-4 px-3 py-2 rounded-[8px] text-[12px]"
+                       style={{ background: "color-mix(in oklab, #08a86b 10%, var(--surface))",
+                                color: "#08a86b",
+                                border: "1px solid color-mix(in oklab, #08a86b 30%, var(--border))" }}>
+                    ✓ Position is risk-free — composite stop {formatCurrency(stopPrice)} sits above your {formatCurrency(holdingAvgCost)} avg cost. Existing shares contribute $0 to the risk budget; only new-add risk counts.
+                  </div>
+                )}
+
+                {s.warnings.length > 0 && (
+                  <Banner type="warning">{s.warnings.join(" · ")}</Banner>
+                )}
+
+                {(s.verdict === "success" || s.verdict === "partial") && (
+                  <>
+                    <h3 className="text-[15px] font-semibold mb-4">SCALE TICKET</h3>
+                    <div className="grid grid-cols-4 gap-3 mb-4">
+                      <MetricCard label="ADD SHARES" value={`+${s.recommendedAdd}`}
+                                  accent="#08a86b" color="#08a86b" />
+                      <MetricCard label="EST. COST" value={formatCurrency(s.costOfAdd)}
+                                  accent="#6366f1" />
+                      <MetricCard label="NEW TOTAL" value={`${s.newTotal} shs`}
+                                  sub={`${s.newWeight.toFixed(1)}% Weight`}
+                                  accent="#3b82f6" />
+                      <MetricCard label="NEW AVG COST" value={formatCurrency(s.newAvgCost)}
+                                  sub={`From ${formatCurrency(holdingAvgCost)}`}
+                                  accent="#f59f00" />
                     </div>
-                  )}
-                  <h3 className="text-[15px] font-semibold mb-4">SCALE TICKET</h3>
-                  <div className="grid grid-cols-4 gap-3 mb-4">
-                    <MetricCard label="ADD SHARES" value={`+${scaleResults.recommendedAdd}`}
-                                accent="#08a86b" color="#08a86b" />
-                    <MetricCard label="EST. COST" value={formatCurrency(scaleResults.costOfAdd)}
-                                accent="#6366f1" />
-                    <MetricCard label="NEW TOTAL" value={`${scaleResults.newTotal} shs`}
-                                sub={`${scaleResults.newWeight.toFixed(1)}% Weight`}
-                                accent="#3b82f6" />
-                    <MetricCard label="NEW AVG COST" value={formatCurrency(scaleResults.newAvgCost)}
-                                sub={`From ${formatCurrency(scaleResults.avgEntry)}`}
-                                accent="#f59f00" />
-                  </div>
 
-                  <h3 className="text-[15px] font-semibold mb-4">RISK MANAGEMENT</h3>
-                  <div className="grid grid-cols-3 gap-3 mb-6">
-                    <MetricCard label="Global Stop" value={formatCurrency(scaleResults.stop)}
-                                sub={`-${(scaleResults.riskPerShare / entry * 100).toFixed(1)}% from price`}
-                                accent="#e5484d" />
-                    <MetricCard label="Total Risk at New Size" value={formatCurrency(scaleResults.totalRiskAtNew, { decimals: 0 })}
-                                sub={`${(scaleResults.totalRiskAtNew / equity * 100).toFixed(2)}% of NLV`}
-                                accent="#f59f00" />
-                    <MetricCard label="Risk Budget" value={formatCurrency(scaleResults.maxRiskDol, { decimals: 0 })}
-                                sub={`${scaleResults.maxRisk}% of Equity`}
-                                accent="#6366f1" />
-                  </div>
+                    <h3 className="text-[15px] font-semibold mb-4">RISK MANAGEMENT</h3>
+                    <div className="grid grid-cols-3 gap-3 mb-6">
+                      <MetricCard label="Composite Stop" value={formatCurrency(stopPrice)}
+                                  sub={`-${stopDistPct.toFixed(1)}% from price · ${s.composite.winnerLabel}`}
+                                  accent="#e5484d" />
+                      <MetricCard label="Total Risk at New Size" value={formatCurrency(s.totalRiskAtNew, { decimals: 0 })}
+                                  sub={`${(s.totalRiskAtNew / equity * 100).toFixed(2)}% of NLV`}
+                                  accent="#f59f00" />
+                      <MetricCard label="Risk Budget" value={formatCurrency(s.riskBudget, { decimals: 0 })}
+                                  sub={`${currentModePct}% of Equity`}
+                                  accent="#6366f1" />
+                    </div>
+                  </>
+                )}
 
-                  <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
-                  {scaleResults.verdict === "success" ? (
-                    <Banner type="success">
-                      ADD {scaleResults.recommendedAdd} shares to reach {scaleResults.newWeight.toFixed(1)}% — Total risk {formatCurrency(scaleResults.totalRiskAtNew, { decimals: 0 })} within {formatCurrency(scaleResults.maxRiskDol, { decimals: 0 })} budget.
-                    </Banner>
-                  ) : (
-                    <Banner type="warning">
-                      RISK LIMIT: Full target ({scaleResults.targetAdd} shares) would exceed budget. Safe add: {scaleResults.recommendedAdd} shares ({scaleResults.newWeight.toFixed(1)}% weight). Scale up on next pullback to MA.
-                    </Banner>
-                  )}
-
-                  <div className="mt-4">
-                    <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: scaleResults.recommendedAdd, price: entry, stop: scaleResults.stop, stopMode: "price", trade_id: holdingData?.trade_id, action: "scale_in" })}
-                            className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
-                            style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
-                      📝 Send to Log Buy — {holdingData?.ticker} (+{scaleResults.recommendedAdd} shs @ {formatCurrency(entry)})
-                    </button>
+                {/* Mode-bump preview — renders when current mode partially
+                    or fully blocks the target fill AND at least one higher
+                    mode would help. User can consciously push up. */}
+                {s.modeHints.length > 0 && (
+                  <div className="mb-4 p-3 rounded-[10px]"
+                       data-testid="scale-in-mode-hints"
+                       style={{ background: "var(--bg)", border: "1px solid var(--border)" }}>
+                    <div className="text-[11px] uppercase tracking-wider mb-2 font-semibold"
+                         style={{ color: "var(--ink-4)" }}>
+                      Bump sizing mode for more headroom
+                    </div>
+                    <div className="text-[12px] mb-2" style={{ color: "var(--ink-3)" }}>
+                      Full target = {s.targetAdd} shares. At {currentModePct}% you can afford {s.affordableAdd}.
+                      Bumping up unlocks:
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {s.modeHints.map(h => (
+                        <span key={h.tolPct}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-[8px] text-[11px]"
+                              style={{
+                                background: h.coversTarget
+                                  ? "color-mix(in oklab, #08a86b 12%, var(--surface))"
+                                  : "var(--surface)",
+                                color: h.coversTarget ? "#08a86b" : "var(--ink-2)",
+                                border: "1px solid var(--border)",
+                                fontFamily: "var(--font-jetbrains), monospace",
+                              }}>
+                          {h.tolPct.toFixed(2)}% → +{h.affordableAdd} sh {h.coversTarget ? "✓" : ""}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </>
-              )}
-            </>
-          )}
+                )}
+
+                {(s.verdict === "success" || s.verdict === "partial") && (
+                  <>
+                    <h3 className="text-[14px] font-semibold mb-2">The Verdict</h3>
+                    {s.verdict === "success" ? (
+                      <Banner type="success">
+                        ADD {s.recommendedAdd} shares to reach {s.newWeight.toFixed(1)}% — Total risk {formatCurrency(s.totalRiskAtNew, { decimals: 0 })} within {formatCurrency(s.riskBudget, { decimals: 0 })} budget.
+                      </Banner>
+                    ) : (
+                      <Banner type="warning">
+                        RISK LIMIT: Full target ({s.targetAdd} shares) would exceed the {currentModePct}% budget. Safe add: {s.recommendedAdd} shares ({s.newWeight.toFixed(1)}% weight).
+                        {s.modeHints.some(h => h.coversTarget)
+                          ? " Bump the sizing mode above to reach the full target."
+                          : ""}
+                      </Banner>
+                    )}
+
+                    <div className="mt-4">
+                      <button onClick={() => sendToLogBuy({ ticker: holdingData?.ticker || "", shares: s.recommendedAdd, price: entry, stop: stopPrice, stopMode: "price", trade_id: holdingData?.trade_id, action: "scale_in" })}
+                              className="w-full h-[48px] rounded-[12px] text-[13px] font-semibold transition-all hover:brightness-95 cursor-pointer"
+                              style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)" }}>
+                        📝 Send to Log Buy — {holdingData?.ticker} (+{s.recommendedAdd} shs @ {formatCurrency(entry)})
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
 
           {/* ── PYRAMID SIZER (v6 seven-rule model) ── */}
           {tab === "pyramid" && pyramidResults && (

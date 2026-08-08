@@ -252,6 +252,212 @@ export function computeScaleOutStops(entry: number, atrPct: number, totalShares:
   return { entry, totalShares: shares, legs, totalLoss, totalLossPctNlv, avgExitPrice, avgExitPct };
 }
 
+// ══════════════════════════════════════════════════════════════════
+// Scale-In sizing (composite-stop retrofit, 2026-08-07)
+// ══════════════════════════════════════════════════════════════════
+//
+// The Scale-In tab used to size against a MA-minus-percent-buffer
+// stop with no ATR component. That silently under-protected the newly-
+// added lot (bought higher, but stopped at the same level as B1) and
+// diverged from the composite-stop math the New Entry + Pyramid tabs
+// use. The retrofit reuses computeCompositeStop so all three tabs
+// share the same "give the trade room" defensive placement.
+//
+// The user workflow: pilot fills, position runs up, user opens Scale-
+// In to top off to target %. Sizer computes:
+//   * Composite stop for the NEW entry price (protects the incoming
+//     lot at 0.75× ATR / structural low — same rule as any fresh entry)
+//   * Existing lot's contribution to the risk budget (shares × distance
+//     from avg cost to new composite stop, floored at 0)
+//   * Headroom = mode risk budget − existing risk
+//   * Add math: minimum of (target-fill shares, affordable shares)
+//   * Mode-bump hints: if the current mode's headroom won't cover the
+//     target fill, preview what the next mode(s) would unlock — user
+//     can consciously push up to Normal / Offense / Max instead of
+//     silently under-filling.
+//
+// Same helper that powers the New Entry tab handles the composite —
+// no divergence possible.
+
+export interface ScaleInSizerInputs {
+  /** Portfolio equity / NLV. */
+  equity: number;
+  /** Current price / target fill price for the scale-in lot. */
+  entry: number;
+  /** ATR21 as percentage (e.g. 4.5 for 4.5%). */
+  atrPct: number;
+  /** Structural low OR key MA anchor for the composite. */
+  keyLevel: number;
+  /** Sizing-mode risk tolerance percentage. Same three-tier ladder
+   *  as the New Entry sizer (Pilot 0.25 / Normal 0.50 / Offense 0.75)
+   *  plus Max (1.00) as a manual conviction upshift. */
+  tolPct: number;
+  /** Shares currently held on the campaign (net of any prior sells). */
+  currentShares: number;
+  /** Weighted-average cost basis of the current holding. Drives the
+   *  "existing risk" calculation — shares that sit above the composite
+   *  stop contribute (avg − stop) × shares to the budget usage. */
+  currentAvgEntry: number;
+  /** Target position weight as a percentage of NLV (e.g. 10 for 10%). */
+  targetPctNlv: number;
+  /** Contract multiplier — 100 for options, 1 for equities. */
+  multiplier?: number;
+}
+
+/** Bump-hint entry: "if you moved to Normal, you'd get N more shares." */
+export interface ScaleInModeHint {
+  tolPct: number;
+  /** Shares affordable at this higher mode's budget. */
+  affordableAdd: number;
+  /** True when this mode's affordable covers the full target fill. */
+  coversTarget: boolean;
+}
+
+export type ScaleInVerdict = "at_target" | "success" | "partial" | "blocked";
+
+export interface ScaleInSizerResults {
+  /** Same composite stop shape the New Entry / Pyramid tabs return. */
+  composite: CompositeStop;
+  /** Risk budget dollars at the current mode. */
+  riskBudget: number;
+  /** Dollars of budget already claimed by the existing holding
+   *  (shares × max(0, avg − compositeStop) × multiplier). Free-roll
+   *  positions (stop ≥ avg) contribute zero. */
+  existingRisk: number;
+  /** Dollars of budget available for the add. */
+  headroom: number;
+  /** Shares needed to top the position up to targetPctNlv. */
+  targetAdd: number;
+  /** Shares affordable at the current mode's headroom. */
+  affordableAdd: number;
+  /** min(targetAdd, affordableAdd). */
+  recommendedAdd: number;
+  /** shares after the recommended add. */
+  newTotal: number;
+  /** Weighted-avg cost after the recommended add. */
+  newAvgCost: number;
+  /** Recommended add × entry × multiplier. */
+  costOfAdd: number;
+  /** Recommended add × composite.distance × multiplier. */
+  newAddRisk: number;
+  /** existingRisk + newAddRisk. */
+  totalRiskAtNew: number;
+  /** New position weight as % of NLV after the recommended add. */
+  newWeight: number;
+  verdict: ScaleInVerdict;
+  /** True when the existing position is fully above the composite
+   *  stop (no capital at risk from the prior lot). */
+  isRiskFree: boolean;
+  /** Mode bump previews. Present when verdict is "partial" or
+   *  "blocked" AND at least one higher mode would improve headroom;
+   *  empty otherwise. */
+  modeHints: ScaleInModeHint[];
+  warnings: string[];
+}
+
+export function computeScaleInSizing(input: ScaleInSizerInputs): ScaleInSizerResults {
+  const {
+    equity, entry, atrPct, keyLevel, tolPct,
+    currentShares, currentAvgEntry, targetPctNlv,
+  } = input;
+  const multiplier = input.multiplier ?? 1;
+
+  if (!(equity > 0)) throw new VolSizerError("equity must be > 0");
+  if (!(entry > 0)) throw new VolSizerError("entry must be > 0");
+  if (!(atrPct > 0)) throw new VolSizerError("atrPct must be > 0");
+  if (!(keyLevel > 0)) throw new VolSizerError("keyLevel must be > 0");
+  if (!(tolPct > 0)) throw new VolSizerError("tolPct must be > 0");
+  if (!(currentShares >= 0)) throw new VolSizerError("currentShares must be >= 0");
+  if (!(targetPctNlv > 0)) throw new VolSizerError("targetPctNlv must be > 0");
+
+  const composite = computeCompositeStop({ entry, atrPct, keyLevel });
+  const warnings: string[] = [];
+
+  const riskBudget = (equity * tolPct) / 100;
+
+  // Existing risk: shares × distance from avg cost to composite stop,
+  // multiplier-correct. Free-roll (stop >= avg) contributes zero.
+  const existingRiskPerShare = Math.max(0, currentAvgEntry - composite.price);
+  const existingRisk = currentShares * existingRiskPerShare * multiplier;
+  const isRiskFree = existingRiskPerShare === 0 && currentShares > 0;
+
+  const targetTotalShares = Math.ceil((equity * targetPctNlv) / 100 / entry);
+  const targetAdd = Math.max(0, targetTotalShares - currentShares);
+
+  const headroom = Math.max(0, riskBudget - existingRisk);
+  const newAddRiskPerShare = composite.distance;
+  const affordableAdd = newAddRiskPerShare > 0
+    ? Math.floor(headroom / (newAddRiskPerShare * multiplier))
+    : 0;
+
+  let verdict: ScaleInVerdict;
+  if (targetAdd <= 0) verdict = "at_target";
+  else if (affordableAdd <= 0) verdict = "blocked";
+  else if (affordableAdd >= targetAdd) verdict = "success";
+  else verdict = "partial";
+
+  const recommendedAdd = Math.min(targetAdd, affordableAdd);
+  const newTotal = currentShares + recommendedAdd;
+  const newAvgCost = newTotal > 0
+    ? (currentShares * currentAvgEntry + recommendedAdd * entry) / newTotal
+    : 0;
+  const costOfAdd = recommendedAdd * entry * multiplier;
+  const newAddRisk = recommendedAdd * newAddRiskPerShare * multiplier;
+  const totalRiskAtNew = existingRisk + newAddRisk;
+  const newWeight = equity > 0 ? (newTotal * entry * multiplier / equity) * 100 : 0;
+
+  // Mode bump hints — only compute when the current mode wouldn't fill
+  // the target. Preview each higher tier's affordable count so the user
+  // can consciously bump the mode rather than silently under-filling.
+  const modeHints: ScaleInModeHint[] = [];
+  if ((verdict === "partial" || verdict === "blocked") && newAddRiskPerShare > 0) {
+    const higher = SIZING_MODE_LADDER.filter(p => p > tolPct);
+    for (const p of higher) {
+      const budget = (equity * p) / 100;
+      const room = Math.max(0, budget - existingRisk);
+      const shares = Math.floor(room / (newAddRiskPerShare * multiplier));
+      modeHints.push({
+        tolPct: p,
+        affordableAdd: shares,
+        coversTarget: shares >= targetAdd,
+      });
+    }
+  }
+
+  if (composite.distance <= 0) {
+    warnings.push(
+      `Composite stop (${composite.price.toFixed(2)}) is at or above the entry (${entry.toFixed(2)}) — Key Level too high or ATR is degenerate. Recommended add is 0.`,
+    );
+  }
+
+  return {
+    composite,
+    riskBudget,
+    existingRisk,
+    headroom,
+    targetAdd,
+    affordableAdd,
+    recommendedAdd,
+    newTotal,
+    newAvgCost,
+    costOfAdd,
+    newAddRisk,
+    totalRiskAtNew,
+    newWeight,
+    verdict,
+    isRiskFree,
+    modeHints,
+    warnings,
+  };
+}
+
+/** The full sizing-mode ladder in tolPct order. Duplicated here (vs.
+ *  imported from `sizing-mode.ts`) to keep vol-sizer.ts a pure lib
+ *  with no cross-file cycle. Mirrors SIZING_MODES exactly. If either
+ *  gets edited without the other, the test in vol-sizer.test.ts fails. */
+const SIZING_MODE_LADDER: readonly number[] = [0.25, 0.50, 0.75, 1.00];
+
+
 /** Compute the whole volatility sizer result — risk budget, composite
  *  stop, final shares, scale-out ladder — from user inputs. Pure. */
 export function computeVolatilitySizing(input: VolSizerInputs): VolSizerResults {
