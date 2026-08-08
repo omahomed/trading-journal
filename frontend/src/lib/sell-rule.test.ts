@@ -4,6 +4,9 @@ import {
   SELL_RULE_TIER_ORDER,
   isCushionQualified,
   needsSR15StopMove,
+  needsSR1StopMove,
+  computeSR1StopTarget,
+  SR1_ATR_STOP_MULT,
 } from "./sell-rule";
 
 describe("classifySellRuleTier — post-migration-062 ladder", () => {
@@ -187,5 +190,83 @@ describe("needsSR15StopMove", () => {
     expect(needsSR15StopMove(30, -1, null)).toBe(false);
     expect(needsSR15StopMove(30, null, null)).toBe(false);
     expect(needsSR15StopMove(30, NaN, null)).toBe(false);
+  });
+});
+
+describe("computeSR1StopTarget", () => {
+  test("returns B1 × (1 − 0.75 × ATR%)", () => {
+    // B1=100, ATR%=8 → target = 100 × (1 − 0.06) = 94.00
+    expect(computeSR1StopTarget(100, 8)).toBeCloseTo(94, 5);
+    // B1=176.21, ATR%=4.5 → target = 176.21 × (1 − 0.03375) = 170.26...
+    expect(computeSR1StopTarget(176.21, 4.5)).toBeCloseTo(176.21 * (1 - 0.75 * 0.045), 5);
+  });
+
+  test("multiplier constant lives at SR1_ATR_STOP_MULT (0.75)", () => {
+    // Lock the doctrinal 0.75× multiplier so a future retune touches
+    // exactly one line + the tests here.
+    expect(SR1_ATR_STOP_MULT).toBe(0.75);
+  });
+
+  test("returns null when B1 or ATR is missing/invalid", () => {
+    expect(computeSR1StopTarget(null, 8)).toBeNull();
+    expect(computeSR1StopTarget(0, 8)).toBeNull();
+    expect(computeSR1StopTarget(-1, 8)).toBeNull();
+    expect(computeSR1StopTarget(100, null)).toBeNull();
+    expect(computeSR1StopTarget(100, 0)).toBeNull();
+    expect(computeSR1StopTarget(100, -1)).toBeNull();
+    expect(computeSR1StopTarget(NaN, 8)).toBeNull();
+    expect(computeSR1StopTarget(100, NaN)).toBeNull();
+  });
+});
+
+describe("needsSR1StopMove", () => {
+  // Band-restricted to SR1 [peak < 10%]. Fires when stop is unset or
+  // sits below B1 − 0.75 × ATR21 (the doctrinal minimum). A tighter
+  // stop (higher price, closer to entry) clears the nudge — user has
+  // opted for MORE protection than doctrine requires.
+
+  test("false at or above the 10% SR1 ceiling", () => {
+    // Once peak crosses 10%, SR11 / SR15 / SR7 / SR8 take over.
+    expect(needsSR1StopMove(10, 100, 8, null)).toBe(false);
+    expect(needsSR1StopMove(15, 100, 8, null)).toBe(false);
+    expect(needsSR1StopMove(60, 100, 8, null)).toBe(false);
+  });
+
+  test("true when in SR1 band with no broker stop parked", () => {
+    // Peak 0 (or negative), B1=100, ATR%=8 → target=$94.
+    expect(needsSR1StopMove(0, 100, 8, null)).toBe(true);
+    expect(needsSR1StopMove(-5, 100, 8, undefined)).toBe(true);
+    expect(needsSR1StopMove(9.99, 100, 8, 0)).toBe(true);
+  });
+
+  test("true when broker stop is DEEPER than target (below doctrine minimum)", () => {
+    // Target $94; a $92 stop waits longer to exit → violates doctrine → nudge.
+    expect(needsSR1StopMove(5, 100, 8, 92)).toBe(true);
+    expect(needsSR1StopMove(5, 100, 8, 93.99)).toBe(true);
+  });
+
+  test("false when broker stop is AT target (doctrine minimum)", () => {
+    expect(needsSR1StopMove(5, 100, 8, 94)).toBe(false);
+  });
+
+  test("false when broker stop is TIGHTER than target (extra protection)", () => {
+    // A stop closer to entry means user exits sooner — that's more
+    // protection than doctrine requires. No nudge.
+    expect(needsSR1StopMove(5, 100, 8, 96)).toBe(false);
+    expect(needsSR1StopMove(5, 100, 8, 100)).toBe(false);
+  });
+
+  test("false when ATR is missing (can't compute the target)", () => {
+    // Pre-migration-046 campaigns have no atr21_entry_pct; nudge can't
+    // recommend a specific level so it stays silent.
+    expect(needsSR1StopMove(5, 100, null, null)).toBe(false);
+    expect(needsSR1StopMove(5, 100, 0, null)).toBe(false);
+    expect(needsSR1StopMove(5, 100, undefined, null)).toBe(false);
+  });
+
+  test("false when B1 entry price is missing", () => {
+    expect(needsSR1StopMove(5, null, 8, null)).toBe(false);
+    expect(needsSR1StopMove(5, 0, 8, null)).toBe(false);
+    expect(needsSR1StopMove(5, -1, 8, null)).toBe(false);
   });
 });

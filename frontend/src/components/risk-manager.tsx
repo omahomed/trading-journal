@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
+import { SR1NudgeBanner } from "./sr1-nudge-banner";
 import {
   ResponsiveContainer, ComposedChart, Line, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine,
@@ -203,6 +204,10 @@ export function RiskManager({ navColor }: { navColor: string }) {
         </h1>
         <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>Drawdown tracking with hard deck enforcement</div>
       </div>
+
+      {/* 2026-08-07 — SR1 nudge (informational mirror of the ACS banner).
+          Same non-clickable variant as the SR15 banner below. */}
+      <SR1NudgeBanner positions={nudgePositions} />
 
       {/* Migration 062 — SR15 nudge (informational mirror of the ACS
           banner). Chips are non-clickable here; the operator jumps back

@@ -117,3 +117,53 @@ export function needsSR15StopMove(
   // "+10%" round number into broker_stop_price.
   return current < target - 0.005;
 }
+
+
+// SR1 broker-stop multiplier — 0.75× ATR21 below B1 fill. Doctrinal
+// premise (retired SR14 doctrine, now the SR1 physical-stop
+// calibration): trades breaching this line intraday post-fill show
+// ~0% win rate. Constant lives here so a future backtested retune
+// (0.5×, 1.0×, etc.) touches exactly one line + its tests.
+export const SR1_ATR_STOP_MULT = 0.75;
+
+/** SR1's calibrated broker-stop price: B1 fill − 0.75 × ATR21_at_fill.
+ *  Returns null when the inputs aren't sufficient to compute a target
+ *  (missing B1 fill or missing ATR21). Frontend renders "—" instead of
+ *  a bogus number in that case. */
+export function computeSR1StopTarget(
+  b1EntryPrice: number | null | undefined,
+  atr21EntryPct: number | null | undefined,
+): number | null {
+  if (b1EntryPrice == null || !Number.isFinite(b1EntryPrice) || b1EntryPrice <= 0) return null;
+  if (atr21EntryPct == null || !Number.isFinite(atr21EntryPct) || atr21EntryPct <= 0) return null;
+  // atr21EntryPct is stored as percent-of-price (e.g. 4.5 = 4.5% ATR).
+  return b1EntryPrice * (1 - SR1_ATR_STOP_MULT * (atr21EntryPct / 100));
+}
+
+// SR1 nudge predicate — a position sitting on SR1 (peak b1_return
+// < 10%) needs a physical broker stop parked at B1 − 0.75 × ATR21.
+// Mirrors the SR15 nudge shape: fires while stop is unset or below
+// the doctrine target, clears when broker_stop_price ≥ target.
+//
+// Band-restricted to peak < 10% (SR1 territory). Once peak crosses
+// 10%, SR11 / SR15 / SR7 / SR8 take over the defensive posture and
+// this specific broker-stop calibration doesn't apply — the BE stop,
+// +10% floor, or EMA-based tests are the layer above.
+//
+// A broker stop TIGHTER than the target (higher price, closer to
+// entry) also clears — that's "extra protection," doctrine floor is
+// a minimum, not a strict target.
+export function needsSR1StopMove(
+  b1PeakPct: number | null | undefined,
+  b1EntryPrice: number | null | undefined,
+  atr21EntryPct: number | null | undefined,
+  brokerStopPrice: number | null | undefined,
+): boolean {
+  if (b1PeakPct == null || !Number.isFinite(b1PeakPct)) return false;
+  // Band-restricted to SR1 [< 10%].
+  if (b1PeakPct >= 10) return false;
+  const target = computeSR1StopTarget(b1EntryPrice, atr21EntryPct);
+  if (target == null) return false;
+  const current = brokerStopPrice != null && Number.isFinite(brokerStopPrice) ? brokerStopPrice : 0;
+  return current < target - 0.005;
+}

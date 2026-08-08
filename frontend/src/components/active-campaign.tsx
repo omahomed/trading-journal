@@ -18,6 +18,7 @@ import { BrokerStopEditor } from "./broker-stop-editor";
 import { SR8TrimCalculator } from "./sr8-trim-calculator";
 import { SR8DeclareModal } from "./sr8-declare-modal";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
+import { SR1NudgeBanner } from "./sr1-nudge-banner";
 import { isCushionQualified } from "@/lib/sell-rule";
 
 // Bump whenever the cached payload shape (or its derived EnrichedPosition)
@@ -941,6 +942,11 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
           </div>
         </div>
       </div>
+
+      {/* 2026-08-07 — SR1 broker-stop nudge. Fires on SR1 rows that
+          lack a physical broker stop parked at B1 − 0.75 × ATR21.
+          Same click-through UX as the SR15 banner below. */}
+      <SR1NudgeBanner positions={positions} onTickerClick={setBrokerStopModalPos} />
 
       {/* Migration 062 — SR15 broker-stop nudge banner. Auto-clears
           row-by-row as each stop lands at or above entry × 1.10.
