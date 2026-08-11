@@ -462,6 +462,98 @@ def test_step4_ever_fired_latches_true_on_step4_arm():
     assert "step4_ever_fired" in result.bars.columns
 
 
+def test_live_step4_stays_true_on_red_day_after_arm_regression_2026_08_10():
+    """Regression for the 2026-08-10 Entry Ladder Step 4 display bug.
+
+    The `_phase_exposure_recompute` live evaluator had the same
+    up-close gate as the FIRING check, causing Step 4 to flicker OFF
+    on any red day AFTER it had already armed with an up close —
+    even though the streak (consec_low_above_21) was still intact.
+    User saw this on IXIC when the streak was 5 days and Step 4 kept
+    unchecking on down closes.
+
+    The correct semantic: once armed (step4_ever_fired=True), Step 4
+    stays live-valid as long as the streak is intact. The up-close
+    gate belongs on the ARM (signal emission), not on the ongoing
+    display.
+
+    Test drives _phase_exposure_recompute directly with:
+      - step4_ever_fired = True (already armed in a prior bar)
+      - consec_low_above_21 = 5 (streak still intact)
+      - current bar close < prev close (red day)
+    and asserts live_step_valid[4] is True (Step 4 stays checked).
+    """
+    from api.mct_engine import MCTEngine, EngineConfig
+    import pandas as pd
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    # Simulate mid-cycle state: Step 4 armed on a prior bar, streak
+    # still intact, ladder should stay on.
+    state["step0_done"] = True
+    state["step1_done"] = True
+    state["step2_done"] = True
+    state["step3_done"] = True
+    state["step4_done"] = True
+    state["step4_ever_fired"] = True
+    state["consec_low_above_21"] = 5   # streak intact
+    state["consec_low_above_50"] = 5
+
+    # Current bar: RED close (close < prev close), but low still above
+    # 21 EMA and 50 SMA so the streak counters remain untouched.
+    prev = pd.Series({
+        "close": 100.0, "low": 99.5, "high": 100.5, "open": 100.0,
+        "ema_8": 99.0, "ema_21": 98.5, "sma_50": 96.0, "sma_200": 90.0,
+    })
+    current = pd.Series({
+        "close": 99.0,  # RED — down from 100
+        "low": 98.7,    # still > ema_21 (98.5)
+        "high": 100.2, "open": 99.5,
+        "ema_8": 99.0, "ema_21": 98.5, "sma_50": 96.0, "sma_200": 90.0,
+    })
+    engine._phase_exposure_recompute(current, prev, state)
+    assert state["live_step_valid"][4] is True, (
+        "Step 4 must stay live-valid on a red day when step4_ever_fired "
+        "is True AND streak >= 3 (pre-2026-08-10 the up-close gate in "
+        "the live check was flipping Step 4 off on every red day post-arm)"
+    )
+
+
+def test_live_step4_goes_false_when_streak_breaks_regression_2026_08_10():
+    """Sister test to the up-close-gate fix. When the streak of low >
+    21 EMA breaks (low drops below 21 EMA), Step 4 must go live-False
+    even if step4_ever_fired is still True. Confirms the streak-still-
+    intact half of the fix is honored."""
+    from api.mct_engine import MCTEngine, EngineConfig
+    import pandas as pd
+
+    engine = MCTEngine(EngineConfig(initial_reference_high=200.0,
+                                     initial_power_trend=False,
+                                     initial_exposure=100))
+    state = engine._init_state()
+    state["step0_done"] = True
+    state["step1_done"] = True
+    state["step4_ever_fired"] = True
+    state["consec_low_above_21"] = 0   # streak just broke
+    state["consec_low_above_50"] = 0
+
+    prev = pd.Series({
+        "close": 100.0, "low": 99.5, "high": 100.5, "open": 100.0,
+        "ema_8": 99.0, "ema_21": 98.5, "sma_50": 96.0, "sma_200": 90.0,
+    })
+    current = pd.Series({
+        "close": 97.0, "low": 96.0, "high": 98.0, "open": 97.5,
+        "ema_8": 99.0, "ema_21": 98.5, "sma_50": 96.0, "sma_200": 90.0,
+    })
+    engine._phase_exposure_recompute(current, prev, state)
+    assert state["live_step_valid"][4] is False, (
+        "Step 4 must go live-False when the streak breaks — the "
+        "step4_ever_fired latch alone is not enough."
+    )
+
+
 def test_step4_ever_fired_persists_through_v10_soft_reset():
     """V10_SOFT_RESET clears step4_done but MUST NOT clear
     step4_ever_fired. This is the load-bearing invariant for the

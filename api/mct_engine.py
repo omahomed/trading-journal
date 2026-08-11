@@ -1525,18 +1525,20 @@ class MCTEngine:
         # mct_engine.py:759 (step 2), :782 (step 3), :796 (step 4),
         # :954 (step 5), :974 (step 6), :1001 (step 7).
         #
-        # Step 4 mirrors STEP_4's firing gate exactly: streak >= 3 AND
-        # close > prev close. Without the up-close gate the ladder
-        # would render Step 4 as achieved (and its +20 exposure would
-        # kick in) on a red 3rd bar of the streak, disagreeing with
-        # the Status tile above which correctly waits for the up close
-        # to promote out of RALLY MODE (2026-08-06 regression).
-        prev_close = float(prev["close"]) if prev is not None else None
+        # Step 4 uses step4_ever_fired (per-cycle latch set at the ARM
+        # site, line ~1189) + streak-still-intact. The FIRING check
+        # (line ~1184) requires close > prev close to arm; the LIVE
+        # display should NOT re-apply that gate every bar — a single
+        # red day mid-uptrend would otherwise flip Step 4 off (and
+        # drop MCT exposure by 20) even though the streak persisted.
+        # 2026-08-10 fix: prior implementation had the up-close gate
+        # in both places, causing Step 4 to flicker off on any red
+        # close after it had already armed.
         live = {
             2: ema_21 is not None and close > ema_21,
             3: ema_21 is not None and low > ema_21,
-            4: (state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21
-                and prev_close is not None and close > prev_close),
+            4: (state.get("step4_ever_fired", False)
+                and state["consec_low_above_21"] >= RECOVERY_BARS_LOW_ABOVE_21),
             5: state["consec_low_above_50"] >= 3,
             6: (ema_21 is not None and sma_50 is not None and sma_200 is not None
                 and ema_21 > sma_50 > sma_200),
