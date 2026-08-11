@@ -9850,6 +9850,57 @@ def slices_list(request: Request, portfolio: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _sibling_target_pct_sum(
+    portfolio_id: int,
+    parent_id: int | None,
+    exclude_slice_id: int | None = None,
+) -> float:
+    """Sum of target_pct across a parent's direct children (roots when
+    parent_id is None), optionally excluding one slice by id (used on
+    updates so the moving row doesn't double-count itself).
+
+    Runs inline SQL rather than filtering db.list_slices in Python so
+    the cap check on write paths doesn't drag the full tree through
+    RLS + row-dict wrapping on every call. Read-only, no commit.
+    """
+    with db.get_db_connection() as conn:
+        with conn.cursor() as cur:
+            if parent_id is None:
+                sql = ("SELECT COALESCE(SUM(target_pct), 0) FROM slices "
+                       "WHERE portfolio_id = %s AND parent_id IS NULL")
+                params: tuple = (portfolio_id,)
+            else:
+                sql = ("SELECT COALESCE(SUM(target_pct), 0) FROM slices "
+                       "WHERE portfolio_id = %s AND parent_id = %s")
+                params = (portfolio_id, parent_id)
+            if exclude_slice_id is not None:
+                sql += " AND id <> %s"
+                params = params + (exclude_slice_id,)
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            return float(row[0] or 0)
+
+
+# Hard cap on per-parent children target_pct sums. Frontend enforces
+# the same rule; backend enforcement here is defense in depth so a
+# direct API call (or a client bypassing the modal) can't drive a
+# portfolio past 100% allocation.
+_SLICE_CAP_PCT = 100.0
+_SLICE_CAP_EPS = 1e-6  # float-noise tolerance on the comparison
+
+
+def _reject_if_over_cap(new_sum: float, parent_label: str) -> None:
+    if new_sum > _SLICE_CAP_PCT + _SLICE_CAP_EPS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"target_pct sum for {parent_label} would be "
+                f"{new_sum:.2f}% — over the 100% cap. Trim a sibling "
+                f"slice first, then retry."
+            ),
+        )
+
+
 @app.post("/api/slices")
 def slices_create(request: Request, body: dict = Body(...)):
     """Create a slice. Body:
@@ -9866,11 +9917,19 @@ def slices_create(request: Request, body: dict = Body(...)):
         pid = _resolve_portfolio_id(portfolio)
         if pid is None:
             raise HTTPException(status_code=404, detail=f"portfolio not found: {portfolio}")
+        parent_id = body.get("parent_id")
+        target_pct = float(body.get("target_pct") or 0)
+        # 100% cap enforcement (defense in depth — frontend also checks).
+        # New slice adds its full target_pct to the parent's children
+        # sum; refuse if the result would exceed 100.
+        current_sum = _sibling_target_pct_sum(pid, parent_id)
+        parent_label = "roots" if parent_id is None else f"parent slice {parent_id}"
+        _reject_if_over_cap(current_sum + target_pct, parent_label)
         row = db.create_slice(
             pid,
-            body.get("parent_id"),
+            parent_id,
             str(body.get("name") or ""),
-            float(body.get("target_pct") or 0),
+            target_pct,
             body.get("color"),
             int(body.get("sort_order") or 0),
         )
@@ -9926,6 +9985,46 @@ def slices_update(request: Request, slice_id: int, body: dict = Body(...)):
         # value (including None) only when the key is present in the body.
         if "parent_id" in body:
             kwargs["parent_id"] = body.get("parent_id")
+
+        # 100% cap enforcement (defense in depth — frontend also checks).
+        # We validate BEFORE calling update_slice so the row stays in a
+        # legal state on failure. Two possible triggers:
+        #   1. target_pct is being changed (may push its parent's
+        #      children sum over 100)
+        #   2. parent_id is being changed (moves the current target_pct
+        #      contribution to a new parent, which may push THAT parent
+        #      over 100)
+        # Decreases from an over-cap state are ALWAYS allowed — needed
+        # to trim a portfolio back into cap.
+        if "target_pct" in kwargs or "parent_id" in kwargs:
+            existing = db.get_slice(slice_id)
+            if existing is not None:
+                new_target = float(kwargs.get("target_pct", existing["target_pct"]))
+                new_parent = kwargs["parent_id"] if "parent_id" in kwargs else existing["parent_id"]
+                old_target = float(existing["target_pct"])
+                old_parent = existing["parent_id"]
+                pid = int(existing["portfolio_id"])
+                # Case A: staying under the same parent — new sum is
+                # current-siblings-sum + delta. Skip when target isn't
+                # changing (no move risk on same-parent).
+                if new_parent == old_parent:
+                    if new_target > old_target:
+                        current_sum = _sibling_target_pct_sum(
+                            pid, new_parent, exclude_slice_id=slice_id,
+                        )
+                        parent_label = "roots" if new_parent is None else f"parent slice {new_parent}"
+                        _reject_if_over_cap(current_sum + new_target, parent_label)
+                    # else: decrease or no-op — always allowed
+                else:
+                    # Case B: reparenting — check the NEW parent's sum.
+                    # (Old parent's sum can only go down when this slice
+                    # leaves it, so no cap risk on that side.)
+                    current_sum = _sibling_target_pct_sum(
+                        pid, new_parent, exclude_slice_id=slice_id,
+                    )
+                    parent_label = "roots" if new_parent is None else f"parent slice {new_parent}"
+                    _reject_if_over_cap(current_sum + new_target, parent_label)
+
         row = db.update_slice(slice_id, **kwargs)
         if row is None:
             raise HTTPException(status_code=404, detail="slice not found")
