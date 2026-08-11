@@ -155,6 +155,77 @@ describe("Slices page", () => {
     expect(screen.getByRole("button", { name: /Add root slice/i })).toBeTruthy();
   });
 
+  test("shows Roots total pill on the main page (under cap → green)", async () => {
+    vi.mocked(api.slicesList).mockResolvedValue({
+      ...enabledWithTreeResponse,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "A",
+          target_pct: 40, sort_order: 0, color: null,
+          subtree_value: 400, subtree_pct: 40 },
+        { id: 11, portfolio_id: 2, parent_id: null, name: "B",
+          target_pct: 35, sort_order: 1, color: null,
+          subtree_value: 350, subtree_pct: 35 },
+      ],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    // 40 + 35 = 75% total; under cap → no "over by" suffix.
+    expect(screen.getByText(/Roots total: 75\.0% \/ 100%/)).toBeTruthy();
+    expect(screen.queryByText(/over by/)).toBeNull();
+  });
+
+  test("shows Roots total pill over cap when sum > 100%", async () => {
+    // 60 + 55 = 115% — matches the DELL-style user report.
+    vi.mocked(api.slicesList).mockResolvedValue({
+      ...enabledWithTreeResponse,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "A",
+          target_pct: 60, sort_order: 0, color: null,
+          subtree_value: 600, subtree_pct: 60 },
+        { id: 11, portfolio_id: 2, parent_id: null, name: "B",
+          target_pct: 55, sort_order: 1, color: null,
+          subtree_value: 400, subtree_pct: 40 },
+      ],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    expect(screen.getByText(/Roots total: 115\.0% \/ 100%/)).toBeTruthy();
+    expect(screen.getByText(/over by 15\.0pp/)).toBeTruthy();
+  });
+
+  test("blocks adding a root slice that would push roots total over 100%", async () => {
+    // Existing roots sum 90%; try adding a 15% slice → 105% (blocked).
+    const overCapResponse = {
+      ...enabledWithTreeResponse,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "A",
+          target_pct: 90, sort_order: 0, color: null,
+          subtree_value: 900, subtree_pct: 90 },
+      ],
+      holdings: [],
+      unassigned: [],
+    };
+    vi.mocked(api.slicesList).mockResolvedValue(overCapResponse);
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("A")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Manage Slices" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Add root slice/i }));
+
+    const nameInput = await screen.findByPlaceholderText("New slice name");
+    fireEvent.change(nameInput, { target: { value: "TooBig" } });
+    // Fill target too — the AddSliceRow uses "0" as placeholder for
+    // the numeric target% input.
+    const targetInput = screen.getByPlaceholderText("0");
+    fireEvent.change(targetInput, { target: { value: "15" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    // Refuses locally — slicesCreate is NOT called, and an error appears.
+    await waitFor(() =>
+      expect(screen.getByText(/over 100% cap|would push roots total to 105/i)).toBeTruthy()
+    );
+    expect(api.slicesCreate).not.toHaveBeenCalled();
+  });
+
   test("adding a root slice from the modal calls slicesCreate and refetches", async () => {
     vi.mocked(api.slicesList)
       .mockResolvedValueOnce(enabledEmptyResponse)
