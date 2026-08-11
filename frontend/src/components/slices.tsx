@@ -28,6 +28,24 @@ function computeTargetPctOfPortfolio(
   return pct;
 }
 
+/** Sum of children's target_pct per parent, keyed by parent_id (null =
+ *  root). Used for the 100% cap display + validation — root slices'
+ *  target_pct sums to portfolio %; children of any inner slice sum to
+ *  parent %. Enforced at ≤ 100 per parent. */
+function computeParentTargetSums(slices: Slice[]): Map<number | null, number> {
+  const m = new Map<number | null, number>();
+  for (const s of slices) {
+    const key = s.parent_id;
+    m.set(key, (m.get(key) ?? 0) + s.target_pct);
+  }
+  return m;
+}
+
+/** Rounded-two-decimal comparison to avoid float noise on the cap. */
+function overCap(sum: number): boolean {
+  return sum > 100 + 1e-6;
+}
+
 const mono = "var(--font-jetbrains), monospace";
 
 function fmtMoney(n: number, precision = 2): string {
@@ -65,6 +83,42 @@ function pickColor(seed: string, override?: string | null): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
   return AUTO_PALETTE[Math.abs(h) % AUTO_PALETTE.length];
+}
+
+/** Small pill that shows the running target-% sum of a parent's
+ *  children. Green when within cap (≤ 100), red-tinted when over.
+ *  Displayed on the main Slices page (roots total) and inside the
+ *  Manage Slices modal (per-parent totals) so the user can always
+ *  see the running allocation as they edit. */
+function TargetTotalPill({
+  total, overCap: over, label,
+}: {
+  total: number;
+  overCap: boolean;
+  label: string;
+}) {
+  const overBy = over ? total - 100 : 0;
+  const bg = over
+    ? "color-mix(in oklab, #e5484d 12%, var(--surface))"
+    : "color-mix(in oklab, #08a86b 10%, var(--surface))";
+  const fg = over ? "#dc2626" : "#08a86b";
+  const border = over
+    ? "1px solid color-mix(in oklab, #e5484d 30%, var(--border))"
+    : "1px solid color-mix(in oklab, #08a86b 26%, var(--border))";
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-1 rounded-[8px] text-[11px] font-semibold whitespace-nowrap"
+      style={{ background: bg, color: fg, border, fontFamily: mono }}
+      title={
+        over
+          ? `${label} exceeds 100% by ${overBy.toFixed(1)}pp — trim slices to fit.`
+          : `${label} within 100% cap.`
+      }
+    >
+      {label}: {total.toFixed(1)}% / 100%
+      {over && <span>· over by {overBy.toFixed(1)}pp</span>}
+    </span>
+  );
 }
 
 export function Slices({ navColor }: Props) {
@@ -212,6 +266,14 @@ export function Slices({ navColor }: Props) {
   const leafCount = (data?.slices ?? []).filter(
     s => (childrenByParent.get(s.id) ?? []).length === 0,
   ).length;
+  // Per-parent target% sums for the 100% cap display + validation.
+  // parentSums[null] = roots total (must be ≤ 100 of portfolio).
+  const parentSums = useMemo(
+    () => computeParentTargetSums(data?.slices ?? []),
+    [data],
+  );
+  const rootsTotal = parentSums.get(null) ?? 0;
+  const rootsOverCap = overCap(rootsTotal);
 
   // ─── Row shape helpers ────────────────────────────────────────────
   interface Row {
@@ -440,34 +502,55 @@ export function Slices({ navColor }: Props) {
         </div>
       )}
 
-      {/* Breadcrumb */}
-      <div className="mb-[12px] flex items-center gap-2 text-[13px]"
+      {/* Breadcrumb + roots-total cap pill */}
+      <div className="mb-[12px] flex items-center justify-between gap-4 text-[13px]"
            style={{ color: "var(--ink-2)" }}>
-        <button
-          onClick={() => setFocusedSliceId(null)}
-          className="hover:underline"
-          style={{
-            color: focusedSliceId == null ? "var(--ink-1)" : "var(--ink-3)",
-            fontWeight: focusedSliceId == null ? 600 : 400,
-          }}
-        >
-          All Slices
-        </button>
-        {trail.map((s, i) => (
-          <span key={s.id} className="flex items-center gap-2">
-            <span style={{ color: "var(--ink-3)" }}>›</span>
-            <button
-              onClick={() => setFocusedSliceId(s.id)}
-              className="hover:underline"
-              style={{
-                color: i === trail.length - 1 ? "var(--ink-1)" : "var(--ink-3)",
-                fontWeight: i === trail.length - 1 ? 600 : 400,
-              }}
-            >
-              {s.name}
-            </button>
-          </span>
-        ))}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setFocusedSliceId(null)}
+            className="hover:underline"
+            style={{
+              color: focusedSliceId == null ? "var(--ink-1)" : "var(--ink-3)",
+              fontWeight: focusedSliceId == null ? 600 : 400,
+            }}
+          >
+            All Slices
+          </button>
+          {trail.map((s, i) => (
+            <span key={s.id} className="flex items-center gap-2">
+              <span style={{ color: "var(--ink-3)" }}>›</span>
+              <button
+                onClick={() => setFocusedSliceId(s.id)}
+                className="hover:underline"
+                style={{
+                  color: i === trail.length - 1 ? "var(--ink-1)" : "var(--ink-3)",
+                  fontWeight: i === trail.length - 1 ? 600 : 400,
+                }}
+              >
+                {s.name}
+              </button>
+            </span>
+          ))}
+        </div>
+        {(data?.slices?.length ?? 0) > 0 && (() => {
+          // Show the running target-% sum of whatever's currently
+          // displayed. At the root breadcrumb → roots total. Inside a
+          // nested slice → that slice's children total.
+          const displayedSum = parentSums.get(focusedSliceId) ?? 0;
+          const displayedOver = overCap(displayedSum);
+          const label = focusedSliceId == null
+            ? "Roots total"
+            : `${focused?.name ?? "Slice"} children`;
+          // Skip the pill on a leaf (no children — nothing to sum).
+          if (focusedSliceId != null && focusedChildren.length === 0) return null;
+          return (
+            <TargetTotalPill
+              total={displayedSum}
+              overCap={displayedOver}
+              label={label}
+            />
+          );
+        })()}
       </div>
 
       {/* Content */}
@@ -833,10 +916,33 @@ function ManageSlicesModal({
     return parts.join(" › ");
   };
 
+  // Per-parent target-% sums (roots keyed by null). Drives both the
+  // total display and the 100%-cap validation on add/retarget.
+  const parentSums = useMemo(
+    () => computeParentTargetSums(data.slices),
+    [data.slices],
+  );
+
   const addSlice = async (parentId: number | null) => {
     const name = newSliceName.trim();
     const targetPct = parseFloat(newSliceTarget) || 0;
     if (!name) { setError("Name is required"); return; }
+    // 100% cap enforcement: a new slice adds its full target_pct to
+    // the parent's children sum. Refuse if the resulting sum would
+    // exceed 100. Trims (decreases) on existing slices are still
+    // allowed even from an over-cap starting point — see retargetSlice.
+    const currentSum = parentSums.get(parentId) ?? 0;
+    if (overCap(currentSum + targetPct)) {
+      const parentLabel = parentId === null
+        ? "roots"
+        : `"${slicesById.get(parentId)?.name ?? "parent"}" children`;
+      setError(
+        `Adding ${name} at ${targetPct}% would push ${parentLabel} total to ` +
+        `${(currentSum + targetPct).toFixed(1)}% (over 100% cap). ` +
+        `Available room: ${Math.max(0, 100 - currentSum).toFixed(1)}%.`
+      );
+      return;
+    }
     await doWithBusy(`add:${parentId ?? "root"}`, async () => {
       const res = await api.slicesCreate({
         portfolio: data.portfolio,
@@ -861,6 +967,24 @@ function ManageSlicesModal({
 
   const retargetSlice = async (s: Slice, newPct: number) => {
     if (newPct === s.target_pct) return;
+    // 100% cap enforcement: allow any DECREASE (helps trim an already-
+    // over-cap state); block increases that would push parent's children
+    // sum past 100%.
+    if (newPct > s.target_pct) {
+      const currentSum = parentSums.get(s.parent_id) ?? 0;
+      const newSum = currentSum - s.target_pct + newPct;
+      if (overCap(newSum)) {
+        const parentLabel = s.parent_id === null
+          ? "roots"
+          : `"${slicesById.get(s.parent_id)?.name ?? "parent"}" children`;
+        setError(
+          `Raising "${s.name}" from ${s.target_pct}% to ${newPct}% would push ` +
+          `${parentLabel} total to ${newSum.toFixed(1)}% (over 100% cap). ` +
+          `Trim another slice first, or set at most ${(newPct - (newSum - 100)).toFixed(1)}%.`
+        );
+        return;
+      }
+    }
     await doWithBusy(`retarget:${s.id}`, async () => {
       const res = await api.slicesUpdate(s.id, { target_pct: newPct });
       if ("detail" in res) throw new Error(detailFromResp(res));
@@ -1015,9 +1139,18 @@ function ManageSlicesModal({
             </div>
           )}
 
-          <div className="text-[11px] uppercase tracking-wider mb-2"
-               style={{ color: "var(--ink-3)" }}>
-            Slice tree — {data.portfolio}
+          <div className="flex items-center justify-between mb-2 gap-3">
+            <div className="text-[11px] uppercase tracking-wider"
+                 style={{ color: "var(--ink-3)" }}>
+              Slice tree — {data.portfolio}
+            </div>
+            {(data.slices?.length ?? 0) > 0 && (
+              <TargetTotalPill
+                total={parentSums.get(null) ?? 0}
+                overCap={overCap(parentSums.get(null) ?? 0)}
+                label="Roots total"
+              />
+            )}
           </div>
           {roots.length === 0 && addingUnder !== "root" && (
             <div className="text-[13px] py-4" style={{ color: "var(--ink-3)" }}>
