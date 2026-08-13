@@ -357,6 +357,15 @@ export const BUY_RULE_LABELS: readonly string[] = [
   "br11.1 Shorting",
   "br12.1 Option Play",
   "br13.1 MO RS Green — Initial Entry", "br13.2 MO RS Green — Reset Entry",
+  // br20 — LT Anchor. Token 1%-of-NAV position tagged as long-term
+  // hold. Same-ticker swing buys later still book under the same
+  // campaign; LIFO protects the LT lot from swing sells as long as
+  // sell size doesn't exceed the swing layer. No sell-rule tier
+  // change — the tier ladder still runs on the campaign, but the
+  // 1% sizing keeps risk trivial. Revisit after ~90 days of use;
+  // if the concept holds, upgrade to a per-lot is_long_term flag on
+  // trades_details so LIFO can skip the LT layer automatically.
+  "br20 LT Anchor",
 ] as const;
 
 // Rule Interaction Hierarchy — which rule governs when two could
