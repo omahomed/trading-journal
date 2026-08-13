@@ -5,6 +5,7 @@ import { api, getActivePortfolio, type JournalHistoryPoint, type TradePosition, 
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
+import { HARD_DECKS } from "@/lib/deck-levels";
 import { SR15NudgeBanner } from "./sr15-nudge-banner";
 import { SR12FloorNudgeBanner } from "./sr12-floor-nudge-banner";
 import {
@@ -25,12 +26,6 @@ function KPITile({ label, value, sub, gradient }: { label: string; value: string
     </div>
   );
 }
-
-const HARD_DECKS = [
-  { key: "L1", pct: 7.5, action: "Remove margin", color: "#f59f00" },
-  { key: "L2", pct: 12.5, action: "Max 30% invested", color: "#f97316" },
-  { key: "L3", pct: 15.0, action: "Go to cash", color: "#dc2626" },
-];
 
 export function RiskManager({ navColor }: { navColor: string }) {
   const [history, setHistory] = useState<JournalHistoryPoint[]>([]);

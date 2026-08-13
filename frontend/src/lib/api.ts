@@ -1696,6 +1696,11 @@ export const api = {
   dashboardMetrics: (id: number) =>
     fetchJSON<DashboardMetrics>(`/api/portfolios/${id}/dashboard-metrics`),
 
+  // Command Center — cross-portfolio landing page (one row per portfolio
+  // the caller owns). Server-side scoping via db.list_portfolios RLS.
+  commandCenter: () =>
+    fetchJSON<{ rows: CommandCenterRow[] } | { error: string }>(`/api/command-center`),
+
   // Cash transactions — deposits, withdrawals, reconcile. Buy/sell rows
   // are emitted automatically by the trade logging backend; the UI never
   // creates those directly.
@@ -2249,4 +2254,30 @@ export interface DashboardMetrics {
   ytd_pl_dollar: number | null;
   ytd_available: boolean;
   as_of: string;
+}
+
+// Command Center — cross-portfolio row (one per portfolio the caller owns).
+// Same field-level contract as DashboardMetrics plus portfolio identity and
+// open-position count. Deck classification is done client-side via
+// classifyDeck(drawdown_current_pct) so this page and Risk Manager share one
+// source of truth for the L1/L2/L3 thresholds.
+export interface CommandCenterRow {
+  portfolio_id: number;
+  portfolio_name: string;
+  journal_available: boolean;
+  as_of_date: string | null;
+  nlv: number | null;
+  nlv_delta_dollar: number | null;
+  nlv_delta_pct: number | null;
+  ltd_pct: number | null;
+  ltd_pl_dollar: number | null;
+  ytd_pct: number | null;
+  ytd_pl_dollar: number | null;
+  ytd_available: boolean;
+  exposure_pct: number | null;
+  open_position_count: number;
+  cash: number | null;
+  drawdown_current_pct: number | null;
+  drawdown_peak_nlv: number | null;
+  drawdown_peak_date: string | null;
 }

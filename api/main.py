@@ -4860,6 +4860,67 @@ def get_dashboard_metrics(portfolio_id: int, request: Request):
         return {"error": str(e)}
 
 
+@app.get("/api/command-center")
+@limiter.limit("30/minute")
+def get_command_center(request: Request):
+    """Cross-portfolio risk-at-a-glance. Returns one row per portfolio
+    the caller owns with the same journal-derived KPIs the main Dashboard
+    tiles show (NLV, day change, LTD/YTD, exposure, drawdown, peak) plus
+    an open-position count. Deck-level classification (L0/L1/L2/L3) is
+    intentionally done client-side so this page and Risk Manager share
+    one source of truth for the thresholds — see
+    frontend/src/lib/deck-levels.ts.
+
+    Tenant scoping falls out of db.list_portfolios(), which filters by
+    the RLS-scoped app.user_id — no extra check needed here.
+    """
+    try:
+        portfolios = db.list_portfolios()
+        rows = []
+        for p in portfolios:
+            try:
+                metrics = nlv_service.dashboard_metrics(p["id"], p["name"])
+            except Exception as e:
+                print(f"[get_command_center] metrics failed for {p['name']}: {e}")
+                metrics = {}
+
+            open_count = 0
+            try:
+                summary_df = db.load_summary(p["name"])
+                if summary_df is not None and not summary_df.empty:
+                    normalized = _normalize_trades(summary_df)
+                    status_col = "status" if "status" in normalized.columns else "Status"
+                    if status_col in normalized.columns:
+                        open_count = int((normalized[status_col].astype(str).str.upper() == "OPEN").sum())
+            except Exception as e:
+                print(f"[get_command_center] open-count failed for {p['name']}: {e}")
+
+            rows.append({
+                "portfolio_id": p["id"],
+                "portfolio_name": p["name"],
+                "journal_available": metrics.get("journal_available", False),
+                "as_of_date": metrics.get("as_of_date"),
+                "nlv": metrics.get("nlv"),
+                "nlv_delta_dollar": metrics.get("nlv_delta_dollar"),
+                "nlv_delta_pct": metrics.get("nlv_delta_pct"),
+                "ltd_pct": metrics.get("ltd_pct"),
+                "ltd_pl_dollar": metrics.get("ltd_pl_dollar"),
+                "ytd_pct": metrics.get("ytd_pct"),
+                "ytd_pl_dollar": metrics.get("ytd_pl_dollar"),
+                "ytd_available": metrics.get("ytd_available", False),
+                "exposure_pct": metrics.get("exposure_pct"),
+                "open_position_count": open_count,
+                "cash": metrics.get("cash"),
+                "drawdown_current_pct": metrics.get("drawdown_current_pct"),
+                "drawdown_peak_nlv": metrics.get("drawdown_peak_nlv"),
+                "drawdown_peak_date": metrics.get("drawdown_peak_date"),
+            })
+        return {"rows": rows}
+    except Exception as e:
+        print(f"[get_command_center] handler failed: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/api/analytics/weekly-metrics")
 @limiter.limit("30/minute")
 def get_weekly_metrics(request: Request,
