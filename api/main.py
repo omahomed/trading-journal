@@ -9332,6 +9332,17 @@ def _concentration_positions_for(portfolio: str | None) -> list[dict]:
         # shows up in concentration rather than silently disappearing.
         px = current if current > 0 else avg_entry
         mv = shares * px * multiplier
+        # P&L primitives for slice-level rollup (2026-08-12).
+        # cost_basis = remaining cost basis of currently-held shares
+        #   (shares × avg_entry × multiplier). avg_entry is updated
+        #   post-sell under LIFO, so this reflects TODAY's carry-cost.
+        # realized_pl = campaign lifetime realized (from prior sells).
+        # unrealized_pl = mv − cost_basis (mark-to-market on current lot).
+        # overall_pl = unrealized + realized. Matches ACS Overall P&L.
+        cost_basis = shares * avg_entry * multiplier
+        realized_pl = float(row.get("realized_pl") or 0)
+        unrealized_pl = mv - cost_basis
+        overall_pl = unrealized_pl + realized_pl
         positions.append({
             "ticker": ticker,
             "portfolio": row.get("portfolio") or portfolio or "",
@@ -9341,6 +9352,10 @@ def _concentration_positions_for(portfolio: str | None) -> list[dict]:
             "current_price": current,
             "multiplier": multiplier,
             "market_value": mv,
+            "cost_basis": cost_basis,
+            "realized_pl": realized_pl,
+            "unrealized_pl": unrealized_pl,
+            "overall_pl": overall_pl,
             "instrument_type": row.get("instrument_type") or "STOCK",
         })
     return positions
@@ -9712,17 +9727,24 @@ def slices_list(request: Request, portfolio: str = ""):
       {
         portfolio, portfolio_id, total_market_value,
         slices:   [{id, parent_id, name, target_pct, sort_order, color,
-                    subtree_value, subtree_pct}],
+                    subtree_value, subtree_pct,
+                    subtree_pl, subtree_cost, subtree_return_pct}],
         holdings: [{id, slice_id, ticker, target_pct,
                     shares, avg_entry, current_price, multiplier,
-                    market_value, actual_pct_of_portfolio}],
+                    market_value, cost_basis, overall_pl,
+                    actual_pct_of_portfolio}],
         unassigned: [{ticker, shares, avg_entry, current_price,
                       market_value, actual_pct_of_portfolio}]
       }
 
     Frontend assembles the tree from `slices` (parent_id chain), attaches
-    `holdings` to leaves by slice_id, and sums via subtree_value which the
-    server has already rolled up per node."""
+    `holdings` to leaves by slice_id, and reads subtree_value / subtree_pl
+    which the server has already rolled up per node.
+
+    P&L primitives (2026-08-12): subtree_pl = sum of overall_pl (unrealized
+    + realized) across the subtree's holdings. subtree_cost = sum of
+    remaining cost basis (shares × avg_entry × multiplier). Return % is
+    derived at rollup time via subtree_pl / subtree_cost × 100."""
     if not portfolio.strip():
         raise HTTPException(status_code=422, detail="portfolio is required")
     pid = _resolve_portfolio_id(portfolio)
@@ -9767,6 +9789,11 @@ def slices_list(request: Request, portfolio: str = ""):
             t = h["ticker"]
             pos = pos_by_ticker.get(t)
             mv = float(pos.get("market_value") or 0) if pos else 0.0
+            # P&L primitives per holding (2026-08-12) — supplied by
+            # _concentration_positions_for and passed through so
+            # frontend sees the same numbers as ACS Overall P&L.
+            cost = float(pos.get("cost_basis") or 0) if pos else 0.0
+            pl = float(pos.get("overall_pl") or 0) if pos else 0.0
             enriched_holdings.append({
                 **h,
                 "shares": float(pos.get("shares") or 0) if pos else 0.0,
@@ -9774,35 +9801,48 @@ def slices_list(request: Request, portfolio: str = ""):
                 "current_price": float(pos.get("current_price") or 0) if pos else 0.0,
                 "multiplier": float(pos.get("multiplier") or 1) if pos else 1.0,
                 "market_value": round(mv, 2),
+                "cost_basis": round(cost, 2),
+                "overall_pl": round(pl, 2),
                 "actual_pct_of_portfolio":
                     round(mv / total_mv * 100, 2) if total_mv > 0 else 0.0,
                 "held": pos is not None,
             })
 
-        # Roll up subtree market value per slice.
-        # 1. Sum leaf-level holdings by slice_id.
+        # Roll up subtree market value + P&L per slice.
+        # 1. Sum leaf-level holdings by slice_id (three parallel sums).
         leaf_mv: dict[int, float] = {}
+        leaf_pl: dict[int, float] = {}
+        leaf_cost: dict[int, float] = {}
         for h in enriched_holdings:
-            leaf_mv[h["slice_id"]] = leaf_mv.get(h["slice_id"], 0.0) \
-                + float(h["market_value"] or 0)
-        # 2. Bottom-up propagation. Kahn-style: repeatedly emit slices
-        # whose descendants have already been summed. Two-pass approach:
-        # collect children per parent, then DFS.
+            sid = h["slice_id"]
+            leaf_mv[sid] = leaf_mv.get(sid, 0.0) + float(h["market_value"] or 0)
+            leaf_pl[sid] = leaf_pl.get(sid, 0.0) + float(h["overall_pl"] or 0)
+            leaf_cost[sid] = leaf_cost.get(sid, 0.0) + float(h["cost_basis"] or 0)
+        # 2. Bottom-up propagation. DFS with memo — the three totals
+        # share a walk so we don't traverse the tree three times.
         children_by_parent: dict[int | None, list[dict]] = {}
         by_id: dict[int, dict] = {}
         for s in slice_rows:
             children_by_parent.setdefault(s["parent_id"], []).append(s)
             by_id[s["id"]] = s
         subtree_mv: dict[int, float] = {}
+        subtree_pl: dict[int, float] = {}
+        subtree_cost: dict[int, float] = {}
 
-        def _sum_subtree(sid: int) -> float:
+        def _sum_subtree(sid: int) -> None:
             if sid in subtree_mv:
-                return subtree_mv[sid]
-            direct = leaf_mv.get(sid, 0.0)
+                return
+            mv = leaf_mv.get(sid, 0.0)
+            pl = leaf_pl.get(sid, 0.0)
+            cost = leaf_cost.get(sid, 0.0)
             for c in children_by_parent.get(sid, []):
-                direct += _sum_subtree(c["id"])
-            subtree_mv[sid] = direct
-            return direct
+                _sum_subtree(c["id"])
+                mv += subtree_mv[c["id"]]
+                pl += subtree_pl[c["id"]]
+                cost += subtree_cost[c["id"]]
+            subtree_mv[sid] = mv
+            subtree_pl[sid] = pl
+            subtree_cost[sid] = cost
 
         for s in slice_rows:
             _sum_subtree(s["id"])
@@ -9814,6 +9854,16 @@ def slices_list(request: Request, portfolio: str = ""):
                 "subtree_pct":
                     round(subtree_mv.get(s["id"], 0.0) / total_mv * 100, 2)
                     if total_mv > 0 else 0.0,
+                # 2026-08-12 P&L rollups — added for the Slice Allocation
+                # page's Total P&L + Return % columns. Return % denominator
+                # is cost_basis of currently-held shares (mirrors ACS
+                # Return % convention for individual positions).
+                "subtree_pl": round(subtree_pl.get(s["id"], 0.0), 2),
+                "subtree_cost": round(subtree_cost.get(s["id"], 0.0), 2),
+                "subtree_return_pct":
+                    round(subtree_pl.get(s["id"], 0.0)
+                          / subtree_cost.get(s["id"], 0.0) * 100, 2)
+                    if subtree_cost.get(s["id"], 0.0) > 0 else 0.0,
             }
             for s in slice_rows
         ]

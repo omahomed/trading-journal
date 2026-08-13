@@ -247,7 +247,9 @@ export function Slices({ navColor }: Props) {
   const totalMV = data?.total_market_value ?? 0;
   const unassignedCount = data?.unassigned?.length ?? 0;
   const unassignedValue = (data?.unassigned ?? []).reduce((s, u) => s + u.market_value, 0);
-  const assignedPct = totalMV > 0 ? ((totalMV - unassignedValue) / totalMV) * 100 : 0;
+  // (assignedPct was previously wired into the KPI tile; retired
+  // 2026-08-12 alongside the tile rebuild — the unassigned banner
+  // below carries the same info more actionably.)
 
   // Max drift across leaves — a leaf is any slice with no children.
   const maxDrift = useMemo(() => {
@@ -261,6 +263,37 @@ export function Slices({ navColor }: Props) {
     }
     return max;
   }, [data, byId, childrenByParent]);
+
+  // Fleet-wide P&L rollup — sum of subtree_pl across ROOT slices
+  // (roots partition the portfolio; summing them = total slice P&L
+  // without double-counting nested contributions). Cost basis from
+  // the same slice roll-up drives the header return %.
+  const totalPl = useMemo(() => {
+    if (!data) return 0;
+    return (childrenByParent.get(null) ?? []).reduce(
+      (sum, s) => sum + (s.subtree_pl ?? 0), 0);
+  }, [data, childrenByParent]);
+  const totalCost = useMemo(() => {
+    if (!data) return 0;
+    return (childrenByParent.get(null) ?? []).reduce(
+      (sum, s) => sum + (s.subtree_cost ?? 0), 0);
+  }, [data, childrenByParent]);
+  const totalReturnPct = totalCost > 0 ? (totalPl / totalCost) * 100 : 0;
+
+  // Best / worst ROOT slice by return_pct. Skips empty slices (return
+  // undefined). Ranked at root level so the tile answers "which of my
+  // buckets is winning / losing the most?" — nested drill-down still
+  // exposes per-child P&L in the table.
+  const bestWorst = useMemo(() => {
+    if (!data) return { best: null as { name: string; ret: number } | null,
+                         worst: null as { name: string; ret: number } | null };
+    const roots = (childrenByParent.get(null) ?? [])
+      .filter(s => s.subtree_return_pct != null && (s.subtree_cost ?? 0) > 0)
+      .map(s => ({ name: s.name, ret: s.subtree_return_pct as number }));
+    if (roots.length === 0) return { best: null, worst: null };
+    const sorted = [...roots].sort((a, b) => b.ret - a.ret);
+    return { best: sorted[0], worst: sorted[sorted.length - 1] };
+  }, [data, childrenByParent]);
 
   const rootCount = (childrenByParent.get(null) ?? []).length;
   const leafCount = (data?.slices ?? []).filter(
@@ -288,6 +321,10 @@ export function Slices({ navColor }: Props) {
     onOpen?: () => void;
     rebalanceUsd?: number;
     isChildLeaf?: boolean;
+    // 2026-08-12 performance columns. Both undefined when the row's
+    // subtree has zero held positions (empty slice) — cells render "—".
+    pl?: number;
+    returnPct?: number;
   }
 
   const sliceRows: Row[] = focusedChildren.map(s => {
@@ -305,6 +342,8 @@ export function Slices({ navColor }: Props) {
       rebalanceUsd: targetUsd - s.subtree_value,
       onOpen: () => setFocusedSliceId(s.id),
       isChildLeaf: !hasChildren,
+      pl: s.subtree_pl,
+      returnPct: s.subtree_return_pct,
     };
   });
 
@@ -314,6 +353,9 @@ export function Slices({ navColor }: Props) {
     const leafPortfolioTargetPct = leaf ? computeTargetPctOfPortfolio(leaf, byId) : 0;
     const holdingTargetPct = (leafPortfolioTargetPct * h.target_pct) / 100;
     const holdingTargetUsd = (holdingTargetPct / 100) * totalMV;
+    const holdReturnPct = h.held && h.cost_basis && h.cost_basis > 0 && h.overall_pl != null
+      ? (h.overall_pl / h.cost_basis) * 100
+      : undefined;
     return {
       key: `hold:${h.id}`,
       kind: "holding",
@@ -326,6 +368,8 @@ export function Slices({ navColor }: Props) {
       actualPct: h.actual_pct_of_portfolio,
       targetPct: holdingTargetPct,
       rebalanceUsd: h.held ? holdingTargetUsd - h.market_value : 0,
+      pl: h.held ? h.overall_pl : undefined,
+      returnPct: holdReturnPct,
     };
   });
 
@@ -436,25 +480,42 @@ export function Slices({ navColor }: Props) {
         />
       ) : <>
 
-      {/* KPI tiles */}
+      {/* KPI tiles — 2026-08-12 rebuild: dropped "Assigned" (redundant
+          with the unassigned banner below) and "Slices" (mostly static
+          metadata). Added Total P&L + Best/Worst so performance sits
+          alongside size as first-class signals. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-[14px] mb-[18px]">
         <KPITile
           label={activePortfolio?.name ?? "Portfolio"}
           value={fmtMoney(totalMV, 0)}
-          sub="Open positions market value"
+          sub={`Open positions · ${rootCount} root · ${leafCount} leaves`}
           gradient={TILE_GRADIENTS.indigo}
         />
         <KPITile
-          label="Assigned"
-          value={fmtPct(assignedPct, 1)}
-          sub={
-            unassignedCount === 0
-              ? "All open tickers slotted"
-              : `${unassignedCount} unassigned · ${fmtMoney(unassignedValue, 0)}`
-          }
-          gradient={
-            unassignedCount === 0 ? TILE_GRADIENTS.green : TILE_GRADIENTS.orange
-          }
+          label="Total P&L"
+          value={totalCost > 0
+            ? `${totalPl >= 0 ? "+" : ""}${fmtMoney(totalPl, 0)}`
+            : "—"}
+          sub={totalCost > 0
+            ? `${totalReturnPct >= 0 ? "+" : ""}${totalReturnPct.toFixed(2)}% vs cost`
+            : "No held positions"}
+          gradient={totalCost === 0
+            ? TILE_GRADIENTS.blue
+            : totalPl >= 0
+            ? TILE_GRADIENTS.green
+            : TILE_GRADIENTS.red}
+        />
+        <KPITile
+          label="Best / Worst Slice"
+          value={bestWorst.best && bestWorst.worst
+            ? `${bestWorst.best.ret >= 0 ? "+" : ""}${bestWorst.best.ret.toFixed(1)}% / ${bestWorst.worst.ret >= 0 ? "+" : ""}${bestWorst.worst.ret.toFixed(1)}%`
+            : "—"}
+          sub={bestWorst.best && bestWorst.worst
+            ? `${bestWorst.best.name} · ${bestWorst.worst.name}`
+            : "No performance data"}
+          gradient={bestWorst.best && bestWorst.best.ret >= 0
+            ? TILE_GRADIENTS.green
+            : TILE_GRADIENTS.blue}
         />
         <KPITile
           label="Max Drift"
@@ -465,12 +526,6 @@ export function Slices({ navColor }: Props) {
               : Math.abs(maxDrift) >= 2 ? TILE_GRADIENTS.orange
               : TILE_GRADIENTS.blue
           }
-        />
-        <KPITile
-          label="Slices"
-          value={`${leafCount}`}
-          sub={`${rootCount} root · ${leafCount} leaves`}
-          gradient={TILE_GRADIENTS.pink}
         />
       </div>
 
@@ -574,16 +629,19 @@ export function Slices({ navColor }: Props) {
           />
         ) : (
           <>
-            {/* Column headers — match the M1 look */}
+            {/* Column headers — expanded 2026-08-12 to add P&L + Return %
+                as co-equal signals alongside size. */}
             <div className="px-4 py-3 grid items-center gap-3 text-[11px] uppercase tracking-wider"
                  style={{
-                   gridTemplateColumns: "auto 1fr 140px 150px 130px 32px",
+                   gridTemplateColumns: "auto 1fr 130px 130px 90px 150px 130px 32px",
                    color: "var(--ink-3)",
                    borderBottom: "1px solid var(--border)",
                  }}>
               <div></div>
               <div>Name</div>
               <div className="text-right">Value</div>
+              <div className="text-right">P&L</div>
+              <div className="text-right">Return %</div>
               <div className="text-right">Actual / Target</div>
               <div className="text-right">Rebalance</div>
               <div></div>
@@ -659,10 +717,21 @@ function SliceRow({ row }: {
     color: string; value: number;
     actualPct: number; targetPct: number;
     rebalanceUsd?: number; onOpen?: () => void; isChildLeaf?: boolean;
+    pl?: number; returnPct?: number;
   };
 }) {
   const drift = row.actualPct - row.targetPct;
   const rebalance = row.rebalanceUsd ?? 0;
+  // Sign-based coloring for the P&L pair — green when net positive,
+  // red when net negative, neutral when zero or unavailable.
+  const plColor = row.pl == null
+    ? "var(--ink-3)"
+    : row.pl > 0
+    ? "#08a86b"
+    : row.pl < 0
+    ? "#e5484d"
+    : "var(--ink-2)";
+  const plSign = row.pl != null && row.pl > 0 ? "+" : "";
 
   return (
     <button
@@ -670,7 +739,7 @@ function SliceRow({ row }: {
       disabled={!row.onOpen}
       className="w-full px-4 py-3 grid items-center gap-3 text-[13px] text-left transition-colors"
       style={{
-        gridTemplateColumns: "auto 1fr 140px 150px 130px 32px",
+        gridTemplateColumns: "auto 1fr 130px 130px 90px 150px 130px 32px",
         borderBottom: "1px solid var(--border)",
         cursor: row.onOpen ? "pointer" : "default",
         background: "transparent",
@@ -697,6 +766,16 @@ function SliceRow({ row }: {
       </div>
       <div className="text-right" style={{ fontFamily: mono, color: "var(--ink-1)" }}>
         {fmtMoney(row.value, 2)}
+      </div>
+      <div className="text-right" style={{ fontFamily: mono, color: plColor, fontWeight: 600 }}>
+        {row.pl == null
+          ? "—"
+          : `${plSign}${fmtMoney(row.pl, 0)}`}
+      </div>
+      <div className="text-right" style={{ fontFamily: mono, color: plColor }}>
+        {row.returnPct == null
+          ? "—"
+          : `${row.returnPct >= 0 ? "+" : ""}${row.returnPct.toFixed(1)}%`}
       </div>
       <div className="text-right">
         <div style={{ fontFamily: mono, fontWeight: 600, color: "var(--ink-1)" }}>

@@ -2077,8 +2077,9 @@ export interface ConcentrationResponse {
 // ── Slices (Migration 060) ───────────────────────────────────────
 /** One slice — a bucket in a portfolio's allocation tree. `parent_id`
  *  null == root (implicit — no dedicated per-portfolio root row).
- *  `subtree_value` and `subtree_pct` are server-rolled sums over every
- *  descendant leaf's live market value; frontend just reads them. */
+ *  `subtree_value` / `subtree_pct` / `subtree_pl` / `subtree_cost` /
+ *  `subtree_return_pct` are server-rolled sums over every descendant
+ *  leaf's live market value + P&L; frontend just reads them. */
 export interface Slice {
   id: number;
   portfolio_id: number;
@@ -2089,6 +2090,17 @@ export interface Slice {
   color: string | null;
   subtree_value: number;
   subtree_pct: number;
+  // P&L rollups (2026-08-12 — Slice Allocation performance columns).
+  // subtree_pl = sum of overall_pl (unrealized + realized) across the
+  //   subtree's holdings. Green when > 0, red when < 0 in the UI.
+  // subtree_cost = sum of remaining cost basis (shares × avg_entry ×
+  //   multiplier) — the denominator for return_pct.
+  // subtree_return_pct = subtree_pl / subtree_cost × 100. Undefined
+  //   when the subtree has no held positions (denominator 0) → 0.
+  // Optional so pre-endpoint-upgrade payloads don't hard-fail the UI.
+  subtree_pl?: number;
+  subtree_cost?: number;
+  subtree_return_pct?: number;
 }
 
 /** Ticker→leaf-slice assignment enriched with the live position. `held`
@@ -2107,6 +2119,12 @@ export interface SliceHolding {
   market_value: number;
   actual_pct_of_portfolio: number;
   held: boolean;
+  // P&L per holding (2026-08-12). Optional so pre-upgrade payloads
+  // don't hard-fail. cost_basis = shares × avg_entry × multiplier
+  // (remaining cost basis of held shares; matches ACS convention).
+  // overall_pl = unrealized + realized.
+  cost_basis?: number;
+  overall_pl?: number;
 }
 
 /** An open-position ticker with no slice assignment — banner + Manage

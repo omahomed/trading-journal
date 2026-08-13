@@ -252,4 +252,95 @@ describe("Slices page", () => {
     // Second slicesList call = the post-mutation refetch.
     await waitFor(() => expect(api.slicesList).toHaveBeenCalledTimes(2));
   });
+
+  test("renders P&L + Return % columns per slice (2026-08-12 perf columns)", async () => {
+    // Two roots — one winner, one loser — so the color / sign paths
+    // both render. Server pre-rolls subtree_pl / subtree_return_pct.
+    vi.mocked(api.slicesList).mockResolvedValue({
+      portfolio: "Long-Term Growth",
+      portfolio_id: 2,
+      slices_enabled: true,
+      total_market_value: 10_000,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "Winners",
+          target_pct: 60, sort_order: 0, color: null,
+          subtree_value: 6000, subtree_pct: 60,
+          subtree_pl: 1200, subtree_cost: 4800, subtree_return_pct: 25 },
+        { id: 11, portfolio_id: 2, parent_id: null, name: "Losers",
+          target_pct: 40, sort_order: 1, color: null,
+          subtree_value: 4000, subtree_pct: 40,
+          subtree_pl: -600, subtree_cost: 4600, subtree_return_pct: -13.04 },
+      ],
+      holdings: [],
+      unassigned: [],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("Winners")).toBeTruthy());
+    // P&L $ cells (colored green / red respectively).
+    expect(screen.getByText("+$1,200")).toBeTruthy();
+    expect(screen.getByText("-$600")).toBeTruthy();
+    // Return % cells.
+    expect(screen.getByText("+25.0%")).toBeTruthy();
+    expect(screen.getByText("-13.0%")).toBeTruthy();
+    // Column header exists.
+    expect(screen.getAllByText("P&L").length).toBeGreaterThan(0);
+    expect(screen.getByText("Return %")).toBeTruthy();
+  });
+
+  test("renders Total P&L + Best/Worst KPI tiles", async () => {
+    vi.mocked(api.slicesList).mockResolvedValue({
+      portfolio: "Long-Term Growth",
+      portfolio_id: 2,
+      slices_enabled: true,
+      total_market_value: 10_000,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "AI Chips",
+          target_pct: 60, sort_order: 0, color: null,
+          subtree_value: 6000, subtree_pct: 60,
+          subtree_pl: 1200, subtree_cost: 4800, subtree_return_pct: 25 },
+        { id: 11, portfolio_id: 2, parent_id: null, name: "Healthcare",
+          target_pct: 40, sort_order: 1, color: null,
+          subtree_value: 4000, subtree_pct: 40,
+          subtree_pl: -600, subtree_cost: 4600, subtree_return_pct: -13.04 },
+      ],
+      holdings: [],
+      unassigned: [],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("AI Chips")).toBeTruthy());
+    // Total P&L tile: sum of subtree_pl across roots = 1200 + (-600) = 600.
+    // Cost basis: 4800 + 4600 = 9400. Return: 600/9400 = 6.38%.
+    expect(screen.getByText("Total P&L")).toBeTruthy();
+    expect(screen.getByText("+$600")).toBeTruthy();
+    expect(screen.getByText("+6.38% vs cost")).toBeTruthy();
+    // Best/Worst tile: winner 25%, loser -13.04% → shows both.
+    expect(screen.getByText("Best / Worst Slice")).toBeTruthy();
+    expect(screen.getByText("+25.0% / -13.0%")).toBeTruthy();
+    expect(screen.getByText("AI Chips · Healthcare")).toBeTruthy();
+  });
+
+  test("KPI tiles handle empty/no-cost state gracefully", async () => {
+    // Slice exists but has no held positions → subtree_cost = 0 →
+    // Total P&L shows "—" without a divide-by-zero.
+    vi.mocked(api.slicesList).mockResolvedValue({
+      portfolio: "Long-Term Growth",
+      portfolio_id: 2,
+      slices_enabled: true,
+      total_market_value: 0,
+      slices: [
+        { id: 10, portfolio_id: 2, parent_id: null, name: "Empty",
+          target_pct: 100, sort_order: 0, color: null,
+          subtree_value: 0, subtree_pct: 0,
+          subtree_pl: 0, subtree_cost: 0, subtree_return_pct: 0 },
+      ],
+      holdings: [],
+      unassigned: [],
+    });
+    render(<Slices navColor="#0891b2" />);
+    await waitFor(() => expect(screen.getByText("Empty")).toBeTruthy());
+    // Total P&L tile: "—" (both value and default sub).
+    expect(screen.getByText("No held positions")).toBeTruthy();
+    // Best/Worst tile: "—" too.
+    expect(screen.getByText("No performance data")).toBeTruthy();
+  });
 });
