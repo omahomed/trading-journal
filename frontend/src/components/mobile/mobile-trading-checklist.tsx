@@ -109,11 +109,11 @@ export function MobileTradingChecklist({ navColor }: { navColor: string }) {
       {items === null ? (
         <div className="px-5 flex flex-col gap-3">
           {[0, 1, 2].map(i => (
-            <div key={i} className="rounded-[14px] animate-pulse h-[120px]" style={{ background: "var(--bg-2)" }} />
+            <div key={i} className="rounded-[14px] animate-pulse h-[120px]" style={{ background: "var(--m-surface-2)" }} />
           ))}
         </div>
       ) : groups.length === 0 ? (
-        <div className="text-center py-10 px-5 text-[13px]" style={{ color: "var(--ink-3)" }}>
+        <div className="text-center py-10 px-5 text-[13px]" style={{ color: "var(--m-text-muted)" }}>
           No items yet. Add one on the desktop app.
         </div>
       ) : (
@@ -133,7 +133,7 @@ export function MobileTradingChecklist({ navColor }: { navColor: string }) {
             <>
               <button type="button" onClick={() => setLongerOpen(o => !o)}
                       className="mt-2 mx-1 px-3 py-2 rounded-[10px] text-[12px] font-semibold uppercase tracking-[0.06em] flex items-center justify-between"
-                      style={{ background: "var(--bg-2)", color: "var(--ink-3)" }}>
+                      style={{ background: "var(--m-surface-2)", color: "var(--m-text-muted)" }}>
                 <span>Longer horizon · {monthlyQuarterly.reduce((n, g) => n + g.items.length, 0)}</span>
                 <span>{longerOpen ? "▾" : "▸"}</span>
               </button>
@@ -169,10 +169,10 @@ function GroupCard(props: {
   const { label, items, busyId, rowError, onTick, onUntick, navColor } = props;
   return (
     <div className="rounded-[14px] overflow-hidden"
-         style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+         style={{ background: "var(--m-surface)", border: "1px solid var(--m-border)" }}>
       <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em]"
-           style={{ color: "var(--ink-3)", borderBottom: "1px solid var(--border)" }}>
-        {label} <span style={{ color: "var(--ink-4)" }}>· {items.length}</span>
+           style={{ color: "var(--m-text-muted)", borderBottom: "1px solid var(--m-border)" }}>
+        {label} <span style={{ color: "var(--m-text-faint)" }}>· {items.length}</span>
       </div>
       <div>
         {items.map((item, idx) => (
@@ -212,7 +212,7 @@ function MobileItemRow(props: {
   };
   return (
     <div className="px-3"
-         style={{ borderBottom: isLast ? "none" : "1px solid var(--border)" }}
+         style={{ borderBottom: isLast ? "none" : "1px solid var(--m-border)" }}
          data-testid={`mobile-routine-item-${item.id}`}>
       <button type="button" onClick={handleToggle} disabled={isBusy}
               className="w-full flex items-center gap-3 py-2.5 text-left disabled:opacity-60"
@@ -224,7 +224,7 @@ function MobileItemRow(props: {
           <span className="w-[28px] h-[28px] rounded-[8px] flex items-center justify-center shrink-0"
                 style={{
                   background: checked ? navColor : "transparent",
-                  border: `1.5px solid ${checked ? navColor : "var(--border)"}`,
+                  border: `1.5px solid ${checked ? navColor : "var(--m-border)"}`,
                   color: checked ? "white" : "transparent",
                   fontSize: 16,
                   lineHeight: 1,
@@ -234,9 +234,9 @@ function MobileItemRow(props: {
         ) : (
           <span className="w-[28px] h-[28px] rounded-full flex items-center justify-center shrink-0"
                 style={{
-                  background: item.ticked_today ? "color-mix(in oklab, #e5484d 22%, var(--bg-2))" : "var(--bg-2)",
-                  border: "1.5px solid var(--border)",
-                  color: item.ticked_today ? "#e5484d" : "var(--ink-3)",
+                  background: item.ticked_today ? "color-mix(in oklab, #e5484d 22%, var(--m-surface-2))" : "var(--m-surface-2)",
+                  border: "1.5px solid var(--m-border)",
+                  color: item.ticked_today ? "#e5484d" : "var(--m-text-muted)",
                   fontSize: 14,
                   lineHeight: 1,
                 }}>
@@ -245,10 +245,10 @@ function MobileItemRow(props: {
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[14px] truncate" style={{ color: "var(--ink-1)" }}>{item.name}</span>
+            <span className="text-[14px] truncate" style={{ color: "var(--m-text)" }}>{item.name}</span>
             {item.is_system && (
               <span className="text-[9px] px-1.5 py-0.5 rounded-[4px] uppercase tracking-[0.05em] shrink-0"
-                    style={{ background: "var(--bg-2)", color: "var(--ink-4)" }}>sys</span>
+                    style={{ background: "var(--m-surface-2)", color: "var(--m-text-faint)" }}>sys</span>
             )}
           </div>
           <div className="mt-0.5 text-[11px]">
@@ -257,7 +257,7 @@ function MobileItemRow(props: {
             ) : chip.kind === "today" ? (
               <span style={{ color: navColor }}>{chip.text}</span>
             ) : (
-              <span style={{ color: "var(--ink-4)" }}>{chip.text}</span>
+              <span style={{ color: "var(--m-text-faint)" }}>{chip.text}</span>
             )}
           </div>
         </div>
@@ -265,7 +265,7 @@ function MobileItemRow(props: {
           <a href={item.link} target="_blank" rel="noopener noreferrer"
              onClick={(e) => e.stopPropagation()}
              className="shrink-0 text-[13px] px-2 py-1 rounded-[6px]"
-             style={{ color: "var(--ink-3)" }}
+             style={{ color: "var(--m-text-muted)" }}
              aria-label={`Open link for ${item.name}`}>
             ↗
           </a>
@@ -273,7 +273,7 @@ function MobileItemRow(props: {
           <Link href={internalLinkForItem(item)!}
                 onClick={(e) => e.stopPropagation()}
                 className="shrink-0 text-[13px] px-2 py-1 rounded-[6px]"
-                style={{ color: "var(--ink-3)" }}
+                style={{ color: "var(--m-text-muted)" }}
                 aria-label={`Open capture page for ${item.name}`}>
             ↗
           </Link>

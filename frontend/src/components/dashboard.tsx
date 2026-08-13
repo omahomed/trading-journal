@@ -917,7 +917,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
                             <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
                               <div className="h-full rounded-full" style={{ width: `${Math.min(100, s.weight_pct)}%`, background: navColor }} />
                             </div>
-                            <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink-1)" }}>
+                            <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink)" }}>
                               {s.weight_pct.toFixed(0)}%
                             </div>
                           </div>
@@ -934,7 +934,7 @@ export function Dashboard({ navColor }: { navColor: string }) {
                               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
                                 <div className="h-full rounded-full" style={{ width: `${Math.min(100, t.weight_pct)}%`, background: "#8b5cf6" }} />
                               </div>
-                              <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink-1)" }}>
+                              <div className="text-[11px] font-semibold tabular-nums w-[42px] text-right" style={{ color: "var(--ink)" }}>
                                 {t.weight_pct.toFixed(0)}%
                               </div>
                             </div>

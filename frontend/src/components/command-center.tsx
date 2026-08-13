@@ -73,11 +73,11 @@ export function CommandCenter({ navColor }: { navColor: string }) {
       <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
            style={{ borderBottom: "1px solid var(--border)" }}>
         <div>
-          <h1 className="font-normal text-[32px] tracking-tight m-0"
+          <h1 className="font-normal text-[22px] md:text-[32px] tracking-tight m-0"
               style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
             Command <em className="italic" style={{ color: navColor }}>Center</em>
           </h1>
-          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+          <div className="text-[12px] md:text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
             Risk across every portfolio at a glance · sorted worst-drawdown-first
             {lastUpdatedLabel ? ` · as of ${lastUpdatedLabel}` : ""}
           </div>

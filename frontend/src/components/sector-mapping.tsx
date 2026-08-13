@@ -263,7 +263,7 @@ export function SectorMapping({ navColor }: Props) {
                 placeholder="Search ticker, sector, or theme…"
                 className="w-full px-3 py-2 rounded-[10px] text-[13px]"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)",
-                         color: "var(--ink-1)", fontFamily: "var(--font-jetbrains), monospace" }}
+                         color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }}
               />
               {search && (
                 <button
@@ -382,7 +382,7 @@ export function SectorMapping({ navColor }: Props) {
                       return (
                       <tr key={r.ticker} style={{ borderTop: "1px solid var(--border)" }}>
                         <td className="px-3 py-2.5 font-semibold"
-                            style={{ color: "var(--ink-1)", fontFamily: "var(--font-jetbrains), monospace" }}>
+                            style={{ color: "var(--ink)", fontFamily: "var(--font-jetbrains), monospace" }}>
                           <span className="inline-flex items-center gap-1.5">
                             {r.ticker}
                             {isHeld && (
@@ -442,7 +442,7 @@ export function SectorMapping({ navColor }: Props) {
                         boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
             <div className="flex items-baseline justify-between mb-4">
               <h3 className="font-normal text-[22px] tracking-tight m-0"
-                  style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink-1)" }}>
+                  style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink)" }}>
                 {mappedByTicker.has(edit.ticker) ? "Edit" : "Classify"}{" "}
                 <em className="italic" style={{ color: navColor, fontFamily: "var(--font-jetbrains), monospace" }}>
                   {edit.ticker}
@@ -469,7 +469,7 @@ export function SectorMapping({ navColor }: Props) {
                 onChange={(e) => setEdit({ ...edit, sector: e.target.value })}
                 placeholder="Technology"
                 className="w-full px-3 py-2 rounded-[8px] text-[13px]"
-                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink)" }}
                 autoFocus
               />
               <datalist id="sector-suggestions">
@@ -485,7 +485,7 @@ export function SectorMapping({ navColor }: Props) {
                 onChange={(e) => setEdit({ ...edit, theme: e.target.value })}
                 placeholder="Memory, Semis, AI Infra, Leveraged Index…"
                 className="w-full px-3 py-2 rounded-[8px] text-[13px]"
-                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink)" }}
               />
               <datalist id="theme-suggestions">
                 {themeSuggestions.map((t) => <option key={t} value={t} />)}
@@ -500,7 +500,7 @@ export function SectorMapping({ navColor }: Props) {
                 rows={2}
                 placeholder="Optional — e.g. 'NAND competitor to MU, moves with memory cycle'"
                 className="w-full px-3 py-2 rounded-[8px] text-[13px]"
-                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}
+                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--ink)" }}
               />
             </label>
 

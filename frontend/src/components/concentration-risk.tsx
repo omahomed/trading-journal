@@ -98,9 +98,9 @@ function BucketTable({
                   <td className="px-3 py-2.5">
                     <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: hashColor(b.name) }} />
                   </td>
-                  <td className="px-3 py-2.5 font-medium" style={{ color: "var(--ink-1)" }}>{b.name}</td>
+                  <td className="px-3 py-2.5 font-medium" style={{ color: "var(--ink)" }}>{b.name}</td>
                   <td className="px-3 py-2.5 text-right font-semibold"
-                      style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink-1)" }}>
+                      style={{ fontFamily: "var(--font-jetbrains), monospace", color: "var(--ink)" }}>
                     {b.weight_pct.toFixed(1)}%
                   </td>
                   <td className="px-3 py-2.5 text-right"
