@@ -304,3 +304,83 @@ describe("computeEnrichedPositions — Sell Rule tier (persistent b1_max_return_
     expect(p.sell_rule_tier).toBe("sr15");
   });
 });
+
+describe("computeEnrichedPositions — strategy-based tier override (br7.1 → SR7)", () => {
+  // 2026-08-12: TQQQ Strategy positions (br7.1) are managed via 21EMA
+  // violation cascade regardless of b1_return band. Encoded as a buy-
+  // rule-prefix override on the classifier. Scope: PRIMARY rule of B1
+  // only; confluence rules don't trigger the override.
+
+  function tqqqPosition(opts: {
+    buyRule?: string | null;
+    b1Max?: number | null;
+    livePrice?: number;
+    isDeclaredSr8?: boolean;
+  }) {
+    const trade = {
+      trade_id: "T-TQQQ", ticker: "TQQQ", status: "OPEN",
+      shares: 100, avg_entry: 70, total_cost: 7000, realized_pl: 0,
+      rule: opts.buyRule === undefined ? "br7.1 TQQQ Strategy" : opts.buyRule,
+      buy_rule: opts.buyRule === undefined ? "br7.1 TQQQ Strategy" : opts.buyRule,
+      instrument_type: "STOCK", multiplier: 1, open_date: "2026-07-29",
+      b1_entry_price: 70,
+      b1_max_return_pct: opts.b1Max === undefined ? null : opts.b1Max,
+      is_declared_sr8: opts.isDeclaredSr8 ?? false,
+    } as any;
+    const details: TradeDetail[] = [
+      { trade_id: "T-TQQQ", action: "BUY", date: "2026-07-29",
+        shares: 100, amount: 70, rule: trade.rule } as any,
+    ];
+    const livePrices: Record<string, number> =
+      opts.livePrice !== undefined ? { TQQQ: opts.livePrice } : {};
+    return computeEnrichedPositions([trade], details, 100_000, livePrices)[0];
+  }
+
+  it("br7.1 forces SR7 even at 1% peak (would default to SR1 without override)", () => {
+    // The user's live CanSlim TQQQ scenario: peak ~1%, would land in SR1
+    // band by the ladder; TQQQ Strategy doctrine overrides to SR7.
+    const p = tqqqPosition({ b1Max: 1, livePrice: 70.7 });
+    expect(p.sell_rule_tier).toBe("sr7");
+  });
+
+  it("br7.1 forces SR7 in the SR11 band (10-20%)", () => {
+    const p = tqqqPosition({ b1Max: 15, livePrice: 80.5 });
+    expect(p.sell_rule_tier).toBe("sr7");
+  });
+
+  it("br7.1 forces SR7 in the SR15 band (20-50%)", () => {
+    const p = tqqqPosition({ b1Max: 35, livePrice: 94.5 });
+    expect(p.sell_rule_tier).toBe("sr7");
+  });
+
+  it("br7.1 at 60% → SR7 (already what the ladder would say; override is a no-op)", () => {
+    const p = tqqqPosition({ b1Max: 60, livePrice: 112 });
+    expect(p.sell_rule_tier).toBe("sr7");
+  });
+
+  it("br7.1 + declared SR8 → SR8 wins (explicit doctrine beats implicit override)", () => {
+    // Rare (leveraged ETF isn't typical monster) but the invariant matters:
+    // explicit user declaration always wins over strategy defaults.
+    const p = tqqqPosition({ b1Max: 60, livePrice: 112, isDeclaredSr8: true });
+    expect(p.sell_rule_tier).toBe("sr8");
+  });
+
+  it("no buy rule (rule='') → normal ladder applies, no override", () => {
+    // LTG-style TQQQ without a strategy tag: peak 25% → SR15 (unchanged).
+    const p = tqqqPosition({ buyRule: "", b1Max: 25, livePrice: 87.5 });
+    expect(p.sell_rule_tier).toBe("sr15");
+  });
+
+  it("different buy rule (br1.2 Cup w Handle) → normal ladder applies", () => {
+    // Only br7.1 is in STRATEGY_TIER_OVERRIDES; other rules don't force
+    // a tier. Same peak that produced SR15 above stays SR15.
+    const p = tqqqPosition({ buyRule: "br1.2 Cup w Handle", b1Max: 25, livePrice: 87.5 });
+    expect(p.sell_rule_tier).toBe("sr15");
+  });
+
+  it("case + whitespace tolerance on the prefix match", () => {
+    // "  BR7.1   TQQQ Strategy" — leading/trailing whitespace + uppercase.
+    const p = tqqqPosition({ buyRule: "  BR7.1   TQQQ Strategy", b1Max: 5, livePrice: 73.5 });
+    expect(p.sell_rule_tier).toBe("sr7");
+  });
+});

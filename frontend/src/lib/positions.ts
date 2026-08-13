@@ -5,6 +5,37 @@ import { runLifoEngine } from "./lifo";
 import { parseOptionTicker } from "./options";
 import { classifySellRuleTier, type SellRuleTier } from "./sell-rule";
 
+/** Strategy-based Sell Rule tier overrides. When a campaign's B1
+ *  primary buy rule matches one of these prefixes, the ladder's
+ *  default b1_return-based tier (SR1/SR11/SR15) is overridden with
+ *  the mapped tier. IGNORED when the user has explicitly declared
+ *  SR8 — explicit declaration always wins.
+ *
+ *  Rationale: some buy rules encode strategies with their own exit
+ *  doctrine that doesn't map to the loss/BE/profit-lock ladder.
+ *  Example: br7.1 (TQQQ Strategy) is managed via the 21EMA
+ *  violation cascade (exactly SR7 doctrine) regardless of b1_return
+ *  band; the retired SR14 → SR12 lineage of "TQQQ Strategy Exit"
+ *  traces the same conclusion. Frontend override lets the ACS Sell
+ *  Rule column reflect the operating playbook without needing a
+ *  separate stamp column on trades_summary.
+ *
+ *  Scope: PRIMARY rule of B1 only. Confluence rules (rules[1..])
+ *  don't trigger the override — they're secondary context, not the
+ *  campaign's active playbook. Per user directive 2026-08-12.
+ */
+export const STRATEGY_TIER_OVERRIDES: Readonly<Record<string, SellRuleTier>> = {
+  "br7.1": "sr7",   // TQQQ Strategy → 21EMA violation cascade
+};
+
+/** Extract the buy-rule prefix (e.g. "br7.1") from a rule string
+ *  like "br7.1 TQQQ Strategy". Whitespace-tolerant, case-normalized.
+ *  Returns "" when the rule is empty / missing. */
+function _buyRulePrefix(rule: string | null | undefined): string {
+  if (!rule) return "";
+  return rule.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+}
+
 export interface EnrichedPosition {
   trade_id: string;
   ticker: string;
@@ -260,9 +291,21 @@ export function computeEnrichedPositions(
     // classifier (SR14 retired). Retained on the row as a chip signal.
     // The 2nd arg is passed as null so future readers of the call site
     // aren't misled about whether it affects the tier.
-    const sellRuleTier = classifySellRuleTier(
-      effectiveMax, null, isDeclaredSr8,
+    //
+    // Strategy override (2026-08-12): B1's primary buy rule can force
+    // a specific tier that overrides the b1_return ladder (e.g.
+    // br7.1 TQQQ Strategy → SR7). Prefer `buy_rule` (backend-computed
+    // from B1's rule field) over the summary's denormalized `rule`.
+    // Falls back to `rule` when buy_rule isn't populated (older rows).
+    // Declared SR8 always wins over the override — explicit doctrine
+    // beats implicit strategy default.
+    const b1PrimaryRule = String(
+      (trade as any).buy_rule ?? (trade as any).rule ?? "",
     );
+    const forcedTier = STRATEGY_TIER_OVERRIDES[_buyRulePrefix(b1PrimaryRule)] ?? null;
+    const sellRuleTier = (forcedTier && !isDeclaredSr8)
+      ? forcedTier
+      : classifySellRuleTier(effectiveMax, null, isDeclaredSr8);
 
     return {
       trade_id: trade.trade_id,
