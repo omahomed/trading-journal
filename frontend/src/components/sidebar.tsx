@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { NAV, getNavItemForHref, getGroupForHref, type NavItem } from "@/lib/nav";
+import { NAV, TOP_LEVEL_ITEMS, TOP_LEVEL_COLOR, getNavItemForHref, getGroupForHref, type NavItem } from "@/lib/nav";
 import { Icons, NAV_ICONS } from "@/components/icons";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { api, type Portfolio } from "@/lib/api";
@@ -286,6 +286,40 @@ export function Sidebar({ rail = false, onToggleRail, privacy = false, onToggleP
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1 scrollbar-thin">
+        {/* Top-level items — first-class links that live above every
+            group + the Pinned section. Hub landing surfaces (Command
+            Center today) that shouldn't sit inside a NavGroup because
+            they don't belong to any working section. Uses renderNavLink
+            so styling stays identical to grouped items. Rail mode
+            renders each as a colored dot so the row stays legible when
+            collapsed. */}
+        {TOP_LEVEL_ITEMS.length > 0 && (
+          <div className={rail ? "mb-2 flex flex-col items-center gap-1" : "mb-2 pl-5 pr-1.5"}
+               data-testid="sidebar-top-level">
+            {TOP_LEVEL_ITEMS.map((item) => {
+              const isActive = activePage === item.id;
+              if (rail) {
+                return (
+                  <Link key={item.id} href={item.href!}
+                        data-testid="sidebar-top-level-rail"
+                        title={item.label}
+                        className="w-8 h-8 grid place-items-center rounded-lg transition-colors">
+                    <span className="rounded-full transition-all"
+                          style={{
+                            width: isActive ? 10 : 7,
+                            height: isActive ? 10 : 7,
+                            background: TOP_LEVEL_COLOR,
+                            opacity: isActive ? 1 : 0.8,
+                            boxShadow: isActive ? `0 0 0 3px color-mix(in oklab, ${TOP_LEVEL_COLOR} 20%, transparent)` : "none",
+                          }} />
+                  </Link>
+                );
+              }
+              return renderNavLink(item, TOP_LEVEL_COLOR, isActive, pinnedPaths.includes(item.href!), togglePin);
+            })}
+          </div>
+        )}
+
         {/* Pinned section — Migration 042 / Commit 2. Renders only when
             the user has pins AND we're not in rail mode (rail collapses
             nav to colored dots; a "Pinned" dot has no natural single-

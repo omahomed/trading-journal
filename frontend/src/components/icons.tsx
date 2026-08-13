@@ -88,6 +88,7 @@ export const Icons = {
 
 // Map nav item IDs to icons
 export const NAV_ICONS: Record<string, (p?: any) => React.ReactElement> = {
+  cmdcenter: Icons.gauge,
   dashboard: Icons.grid,
   overview: Icons.chart,
   realized: Icons.trending,

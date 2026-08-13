@@ -17,6 +17,21 @@ export interface NavGroup {
   items: NavItem[];
 }
 
+// Top-level items — first-class nav links that render ABOVE the Pinned
+// section in the sidebar. Not part of any NavGroup; they're the sidebar's
+// "hub" landing surfaces. Add sparingly — every entry here pays for itself
+// in permanent sidebar real estate. Item ids must be unique across
+// TOP_LEVEL_ITEMS and NAV combined.
+export const TOP_LEVEL_ITEMS: NavItem[] = [
+  { id: "cmdcenter", label: "Command Center", href: "/command-center" },
+];
+
+// Accent color for top-level items — same slot in the visual language
+// getGroupForHref() returns for grouped items. Slate reads as "hub /
+// operations HQ" and doesn't collide with any existing group hue.
+export const TOP_LEVEL_COLOR = "#334155";
+export const TOP_LEVEL_SOFT = "#e2e8f0";
+
 export const NAV: NavGroup[] = [
   {
     id: "dashboards", label: "Dashboards", color: "#6366f1", softColor: "#eef0ff",
@@ -120,15 +135,29 @@ export const NAV: NavGroup[] = [
   },
 ];
 
+// Synthetic group returned by getGroupForHref for top-level items so
+// page components can pull a navColor uniformly (the components don't
+// need to know whether the current page is grouped or top-level).
+const TOP_LEVEL_GROUP: NavGroup = {
+  id: "top", label: "Overview",
+  color: TOP_LEVEL_COLOR, softColor: TOP_LEVEL_SOFT,
+  items: TOP_LEVEL_ITEMS,
+};
+
 // Flatten for command palette
 export function getAllPages() {
-  return NAV.flatMap((g) =>
+  const top = TOP_LEVEL_ITEMS.map((i) => ({
+    ...i, group: TOP_LEVEL_GROUP.label, color: TOP_LEVEL_COLOR,
+  }));
+  const grouped = NAV.flatMap((g) =>
     g.items.map((i) => ({ ...i, group: g.label, color: g.color }))
   );
+  return [...top, ...grouped];
 }
 
 // Find which group a page belongs to (by id OR by href)
 export function getGroupForPage(pageId: string): NavGroup | undefined {
+  if (TOP_LEVEL_ITEMS.some((i) => i.id === pageId)) return TOP_LEVEL_GROUP;
   return NAV.find((g) => g.items.some((i) => i.id === pageId));
 }
 
@@ -136,12 +165,15 @@ export function getGroupForPage(pageId: string): NavGroup | undefined {
 export function getGroupForHref(href: string): NavGroup | undefined {
   // Trim trailing slash and query string for matching.
   const clean = href.split("?")[0].replace(/\/$/, "") || "/";
+  if (TOP_LEVEL_ITEMS.some((i) => i.href === clean)) return TOP_LEVEL_GROUP;
   return NAV.find((g) => g.items.some((i) => i.href === clean));
 }
 
 // Find the nav item matching a pathname (top-level page, not sub-tab).
 export function getNavItemForHref(href: string): NavItem | undefined {
   const clean = href.split("?")[0].replace(/\/$/, "") || "/";
+  const topHit = TOP_LEVEL_ITEMS.find((i) => i.href === clean);
+  if (topHit) return topHit;
   for (const g of NAV) {
     const hit = g.items.find((i) => i.href === clean);
     if (hit) return hit;
@@ -151,6 +183,8 @@ export function getNavItemForHref(href: string): NavItem | undefined {
 
 // Look up the URL for a nav id (used by cross-page router.push).
 export function hrefForId(id: string): string | undefined {
+  const topHit = TOP_LEVEL_ITEMS.find((i) => i.id === id);
+  if (topHit?.href) return topHit.href;
   for (const g of NAV) {
     const hit = g.items.find((i) => i.id === id);
     if (hit?.href) return hit.href;
