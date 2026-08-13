@@ -15,6 +15,7 @@ const FOCUS_MODE_KEY = "mo-focus-mode";
 // Green chip signals "safe to use on your phone". Update when a new mobile
 // port lands.
 const MOBILE_NATIVE_ROUTES = new Set<string>([
+  "/command-center",
   "/dashboard",
   "/daily-journal",
   "/journal-log",
@@ -22,6 +23,10 @@ const MOBILE_NATIVE_ROUTES = new Set<string>([
   "/weekly-retro",
   "/trade-journal",
   "/position-sizer",
+  "/active-campaign",
+  "/overview",
+  "/earnings",
+  "/period-review",
 ]);
 
 // Rows whose desktop component is meaningfully hard to use on mobile.

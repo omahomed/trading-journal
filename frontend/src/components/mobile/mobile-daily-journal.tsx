@@ -405,14 +405,23 @@ export function MobileDailyJournal({ initialDate, navColor = "#f59f00" }: Props)
   // it. The header chevron does the same for consistency.
   const goToJournalList = () => router.push("/journal-log");
 
-  // Phase 2 merger: MobileTradingChecklist always renders at the top,
-  // regardless of loading / disabled / loaded state below. The checklist
-  // is the first thing the user interacts with each day; it doesn't
-  // depend on the journal entry existing yet.
+  // Section order matches the desktop app: Page statistics + header →
+  // Checklist → Daily Thoughts → Daily Recap → Captures. When the
+  // journal row for the requested date exists, LoadedReport owns the
+  // checklist placement (renders it between Positions Closed and the
+  // Thoughts/Recap block). Loading / disabled states keep the checklist
+  // at the top so it stays tickable before an NLV lands for the day —
+  // dropping it there would prevent same-day workflow ticking.
   const body = loading
-    ? <LoadingSkeleton date={date} portfolio={portfolio} onBack={goToJournalList} />
+    ? <>
+        <MobileTradingChecklist navColor={navColor} />
+        <LoadingSkeleton date={date} portfolio={portfolio} onBack={goToJournalList} />
+      </>
     : !journalRow
-      ? <DisabledState date={date} portfolio={portfolio} onBack={goToJournalList} />
+      ? <>
+          <MobileTradingChecklist navColor={navColor} />
+          <DisabledState date={date} portfolio={portfolio} onBack={goToJournalList} />
+        </>
       : <LoadedReport
           date={date}
           portfolio={portfolio}
@@ -428,14 +437,10 @@ export function MobileDailyJournal({ initialDate, navColor = "#f59f00" }: Props)
           tradesDetails={tradesDetails}
           tradesClosed={tradesClosed}
           onBack={goToJournalList}
+          navColor={navColor}
         />;
 
-  return (
-    <>
-      <MobileTradingChecklist navColor={navColor} />
-      {body}
-    </>
-  );
+  return body;
 }
 
 // ── Loaded report (split out so the disabled/loading paths stay tight) ──
@@ -455,6 +460,7 @@ function LoadedReport({
   tradesDetails,
   tradesClosed,
   onBack,
+  navColor,
 }: {
   date: string;
   portfolio: string;
@@ -470,6 +476,7 @@ function LoadedReport({
   tradesDetails: TradeDetail[];
   tradesClosed: TradePosition[];
   onBack: () => void;
+  navColor: string;
 }) {
   const journalId = journalRow.id ?? null;
 
@@ -764,14 +771,22 @@ function LoadedReport({
         rows={positionsClosed}
       />
 
-      <DailyRecapSection
-        html={recap.value}
-        onEdit={recap.openSheet}
-      />
+      {/* Order matches desktop (daily-journal.tsx:888-1170):
+          Positions → Checklist → Game Plan → Daily Scorecard → Thoughts →
+          Recap → Captures. Game Plan + Scorecard don't have mobile-native
+          sections yet (deferred — read/edit both on desktop for now); the
+          "desktop" chip on the /daily-journal More entry signals the
+          full-fidelity workflow lives on the larger surface. */}
+      <MobileTradingChecklist navColor={navColor} />
 
       <DailyThoughtsSection
         html={thoughts.value}
         onEdit={thoughts.openSheet}
+      />
+
+      <DailyRecapSection
+        html={recap.value}
+        onEdit={recap.openSheet}
       />
 
       <CapturesGallerySection
