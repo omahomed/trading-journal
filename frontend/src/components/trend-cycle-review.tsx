@@ -13,6 +13,7 @@ import { api, getActivePortfolio, type JournalHistoryPoint } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { getGroupForHref } from "@/lib/nav";
 import { computeTrendCycles, type TrendCycleLeg } from "@/lib/trend-cycles";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -205,6 +206,7 @@ export function TrendCycleReview() {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Wide trend-cycle table. Best on desktop." />
       {/* Header */}
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>

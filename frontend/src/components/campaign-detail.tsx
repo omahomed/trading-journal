@@ -30,6 +30,7 @@ const mono = "var(--font-jetbrains), monospace";
 // BUY_RULES hoisted to @/lib/trade-rules alongside SELL_RULE_LABELS.
 // Local alias keeps existing call sites untouched.
 import { BUY_RULE_LABELS as BUY_RULES } from "@/lib/trade-rules";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 export const TILE_GRADIENTS = {
   indigo: "linear-gradient(135deg, #6366f1, #818cf8)",
@@ -669,6 +670,7 @@ export function CampaignDetail({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="campaign-detail-root">
+      <MobileDesktopOnlyBanner reason="Wide detail view with charts and per-lot tables. Best on a larger screen." />
       {/* Page header */}
       <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
            style={{ borderBottom: "1px solid var(--border)" }}>

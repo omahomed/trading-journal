@@ -6,6 +6,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { SELL_RULE_LABELS as SELL_RULES } from "@/lib/trade-rules";
 import { RobinhoodImport } from "./robinhood-import";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 const BUY_RULES = [
   "br1.1 Consolidation", "br1.2 Cup w Handle", "br1.3 Cup w/o Handle", "br1.4 Double Bottom",
@@ -303,6 +304,7 @@ export function ImportTrades({ navColor, onNavigate }: { navColor: string; onNav
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="CSV upload, preview, and commit flow. Best on desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Import <em className="italic" style={{ color: navColor }}>Trades</em>

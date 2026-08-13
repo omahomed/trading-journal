@@ -38,6 +38,7 @@ import { log } from "@/lib/log";
 import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
 import { KPITile, TILE_GRADIENTS, SegmentedControl } from "./campaign-detail";
 import { TradeOverviewSidecar } from "./trade-overview-sidecar";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 const mono = "var(--font-jetbrains), monospace";
 
@@ -1096,6 +1097,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="campaign-review-root">
+      <MobileDesktopOnlyBanner reason="Per-campaign ledger with cross-lens rollups. Best on desktop." />
       {/* Page header */}
       <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
            style={{ borderBottom: "1px solid var(--border)" }}>

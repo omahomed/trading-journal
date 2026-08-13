@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api, getActivePortfolio, type TradePosition } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 // Canonical option-row predicate, matching perf-heatmap.tsx:73-75 and the
 // instrument_type column (Migration 016). Used to keep Portfolio Heat as a
@@ -227,6 +228,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
   if (nlvMissing) {
     return (
       <div style={{ animation: "slide-up 0.18s ease-out" }}>
+        <MobileDesktopOnlyBanner reason="Per-position ATR inputs and heat math grid. Best on desktop." />
         <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
           <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
             Portfolio <em className="italic" style={{ color: navColor }}>Heat</em>
@@ -272,6 +274,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Per-position ATR inputs and heat math grid. Best on desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Portfolio <em className="italic" style={{ color: navColor }}>Heat</em>
