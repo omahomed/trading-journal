@@ -368,6 +368,23 @@ export const BUY_RULE_LABELS: readonly string[] = [
   "br20 LT Anchor",
 ] as const;
 
+/**
+ * True when the given rule string tags a campaign as a `br20 LT Anchor`
+ * long-term hold. Whitespace-tolerant + case-normalized so it matches
+ * variants like "br20 LT Anchor", " BR20 lt anchor", "br20", etc. Reads
+ * the primary buy rule the frontend stores on positions (`p.rule`),
+ * with fallback to the backend-computed `buy_rule` if callers pass it.
+ *
+ * Used by ACS + MobileACS to render a distinct "LT" badge next to the
+ * ticker. Keyed off the rule itself so the badge doesn't depend on
+ * whether the user has also tagged the campaign with a "Long Term
+ * Hold" strategy — one setup step (the buy rule) is enough.
+ */
+export function isLtAnchor(rule: string | null | undefined): boolean {
+  if (!rule) return false;
+  return rule.trim().toLowerCase().startsWith("br20");
+}
+
 // Rule Interaction Hierarchy — which rule governs when two could
 // fire on the same position. Rendered as a structured table by
 // SellRuleGlossary (not markdown).

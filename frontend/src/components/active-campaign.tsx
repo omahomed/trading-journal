@@ -11,6 +11,7 @@ import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions
 import { formatCurrency } from "@/lib/format";
 import { SELL_RULE_TIER_ORDER } from "@/lib/sell-rule";
 import { classifyPyramidScreener, type PyramidScreenerState } from "@/lib/pyramid-sizer";
+import { isLtAnchor } from "@/lib/trade-rules";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { SellRuleBadge } from "./sell-rule-badge";
@@ -399,6 +400,20 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
   // a low-mutation lookup.
   useEffect(() => {
     api.listStrategies({ active: true, portfolio: getActivePortfolio() }).then(setStrategies).catch(() => setStrategies([]));
+  }, []);
+
+  // Refresh strategies + open the row context menu. Called by every
+  // onContextMenu handler in the equity + option tables so a newly-
+  // created strategy (added in Admin during this session) shows up in
+  // the "Set strategy" submenu without needing a page reload. The
+  // original mount-only fetch left the list stale.
+  const openCtxMenu = useCallback((e: React.MouseEvent, position: EnrichedPosition, stopPropagation = false) => {
+    e.preventDefault();
+    if (stopPropagation) e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY, position });
+    api.listStrategies({ active: true, portfolio: getActivePortfolio() })
+      .then(setStrategies)
+      .catch(() => { /* keep existing list if refetch fails */ });
   }, []);
 
   useEffect(() => {
@@ -1157,12 +1172,31 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         style={{ borderBottom: i < sortedEquities.length - 1 ? "1px solid var(--border)" : "none" }}
                         onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                        onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
+                        onContextMenu={e => openCtxMenu(e, p)}>
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
                         <span className="inline-flex items-center" style={{ gap: 6 }}>
                           {p.ticker}
                           {p.strategy && (
-                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={true} variant="filled" />
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                          )}
+                          {/* LT Anchor badge (br20 buy rule). Keyed off
+                              the rule itself, not the strategy tag, so
+                              it doesn't depend on a separate Admin step.
+                              Renders on ACS + MobileACS via the shared
+                              isLtAnchor(rule) helper in lib/trade-rules. */}
+                          {isLtAnchor(p.rule) && (
+                            <span
+                              title="LT Anchor — long-term hold (br20)"
+                              data-testid="lt-anchor-badge"
+                              className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase tracking-[0.06em]"
+                              style={{
+                                background: "color-mix(in oklab, #8b5cf6 14%, transparent)",
+                                color: "#8b5cf6",
+                                border: "1px solid color-mix(in oklab, #8b5cf6 28%, var(--border))",
+                              }}
+                            >
+                              LT
+                            </span>
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
                               presence is a row chip; the earlier tier-
@@ -1189,7 +1223,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         <SellRuleBadge tier={p.sell_rule_tier} />
                       </td>
                       <td className="px-2.5 py-2.5 text-center"
-                          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}
+                          onContextMenu={e => openCtxMenu(e, p, true)}
                           data-testid="acs-pyramid-cell"
                           title={(() => {
                             if (pyramidState.level === "full") return `Rule 3 (Progress) satisfied — last held buy up ${pyramidState.profitPct.toFixed(1)}%. Rules 1/2/4/7 verified in the sizer.`;
@@ -1376,13 +1410,32 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         style={{ borderBottom: i < sortedOptions.length - 1 ? "1px solid var(--border)" : "none" }}
                         onMouseEnter={e => (e.currentTarget.style.background = "var(--surface-2)")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                        onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, position: p }); }}>
+                        onContextMenu={e => openCtxMenu(e, p)}>
                       {/* Contract */}
                       <td className="px-2.5 py-2.5 font-semibold whitespace-nowrap" style={{ fontFamily: mono }} title={`Trade ID: ${p.trade_id}`}>
                         <span className="inline-flex items-center" style={{ gap: 6 }}>
                           {p.ticker}
                           {p.strategy && (
-                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={true} variant="filled" />
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                          )}
+                          {/* LT Anchor badge (br20 buy rule). Keyed off
+                              the rule itself, not the strategy tag, so
+                              it doesn't depend on a separate Admin step.
+                              Renders on ACS + MobileACS via the shared
+                              isLtAnchor(rule) helper in lib/trade-rules. */}
+                          {isLtAnchor(p.rule) && (
+                            <span
+                              title="LT Anchor — long-term hold (br20)"
+                              data-testid="lt-anchor-badge"
+                              className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase tracking-[0.06em]"
+                              style={{
+                                background: "color-mix(in oklab, #8b5cf6 14%, transparent)",
+                                color: "#8b5cf6",
+                                border: "1px solid color-mix(in oklab, #8b5cf6 28%, var(--border))",
+                              }}
+                            >
+                              LT
+                            </span>
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
                               presence is a row chip; the earlier tier-

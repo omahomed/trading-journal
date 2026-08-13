@@ -9,6 +9,7 @@ import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
 import { StrategyChip } from "../strategy-chip";
+import { isLtAnchor } from "@/lib/trade-rules";
 
 /**
  * Mobile-native Active Campaign Summary. Read-first surface: shows
@@ -319,7 +320,7 @@ function PositionCard({
         minHeight: 44,
       }}
     >
-      {/* Header: ticker + strategy chip + tier chip */}
+      {/* Header: ticker + strategy dot + LT badge + tier chip */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -332,9 +333,22 @@ function PositionCard({
                 name={p.strategy}
                 color={strategyByName.get(p.strategy)?.color ?? "var(--m-text-faint)"}
                 size="sm"
-                showName={true}
-                variant="filled"
+                showName={false}
               />
+            )}
+            {isLtAnchor(p.rule) && (
+              <span
+                title="LT Anchor — long-term hold (br20)"
+                data-testid="lt-anchor-badge"
+                className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase tracking-[0.06em]"
+                style={{
+                  background: "color-mix(in oklab, #8b5cf6 16%, var(--m-surface))",
+                  color: "#8b5cf6",
+                  border: "1px solid color-mix(in oklab, #8b5cf6 30%, var(--m-border))",
+                }}
+              >
+                LT
+              </span>
             )}
           </div>
           <div className="mt-0.5 text-[11px] text-m-text-dim">
