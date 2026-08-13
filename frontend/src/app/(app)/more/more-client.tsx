@@ -11,6 +11,43 @@ import { MobileToggleSwitch } from "@/components/mobile/mobile-toggle-switch";
 
 const FOCUS_MODE_KEY = "mo-focus-mode";
 
+// Rows that render a mobile-native component (frontend/src/components/mobile/*).
+// Green chip signals "safe to use on your phone". Update when a new mobile
+// port lands.
+const MOBILE_NATIVE_ROUTES = new Set<string>([
+  "/dashboard",
+  "/daily-journal",
+  "/journal-log",
+  "/nlv-entry",
+  "/weekly-retro",
+  "/trade-journal",
+  "/position-sizer",
+]);
+
+// Rows whose desktop component is meaningfully hard to use on mobile.
+// Amber chip signals "open on desktop for the full experience". Kept in
+// lockstep with MobileDesktopOnlyBanner insertions across the codebase.
+const DESKTOP_ONLY_ROUTES = new Set<string>([
+  "/log-buy",
+  "/log-sell",
+  "/import-trades",
+  "/trade-manager",
+  "/campaign-detail",
+  "/portfolio-heat",
+  "/rally-context",
+  "/analytics",
+  "/campaign-review",
+  "/trend-cycle-review",
+  "/performance-heatmap",
+]);
+
+type MobileStatus = "mobile" | "desktop" | null;
+function mobileStatusForHref(href: string): MobileStatus {
+  if (MOBILE_NATIVE_ROUTES.has(href)) return "mobile";
+  if (DESKTOP_ONLY_ROUTES.has(href)) return "desktop";
+  return null;
+}
+
 /**
  * The fifth bottom-nav destination on mobile. Lists the routes that
  * don't have a dedicated bottom-nav slot. Desktop users have the
@@ -105,13 +142,41 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function NavRow({ href, label }: { href: string; label: string }) {
+  const status = mobileStatusForHref(href);
   return (
     <Link
       href={href}
+      data-mobile-status={status ?? "neutral"}
       className="flex items-center justify-between border-b-[0.5px] border-m-border px-4 py-3 text-[14px] text-m-text last:border-b-0"
     >
-      <span>{label}</span>
+      <span className="flex items-center gap-2">
+        <span>{label}</span>
+        {status ? <MobileStatusChip status={status} /> : null}
+      </span>
       <ChevronRight size={16} strokeWidth={1.5} className="text-m-text-faint" aria-hidden="true" />
     </Link>
+  );
+}
+
+/**
+ * Tiny status chip that tells the user, at nav time, whether a
+ * destination has a real mobile UX or is a desktop-first surface.
+ * Kept intentionally small and low-chroma so it doesn't compete with
+ * the row label — it's a hint, not a badge of honor.
+ */
+function MobileStatusChip({ status }: { status: "mobile" | "desktop" }) {
+  const isMobile = status === "mobile";
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-[1px] rounded text-[9px] font-semibold uppercase tracking-[0.06em]"
+      style={{
+        background: isMobile
+          ? "color-mix(in oklab, var(--m-accent) 14%, transparent)"
+          : "color-mix(in oklab, var(--m-warn) 14%, transparent)",
+        color: isMobile ? "var(--m-accent)" : "var(--m-warn)",
+      }}
+    >
+      {isMobile ? "mobile" : "desktop"}
+    </span>
   );
 }

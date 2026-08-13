@@ -8,6 +8,7 @@ import { StrategyChip } from "./strategy-chip";
 import { SearchSelect } from "./search-select";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 // BUY_RULES hoisted to @/lib/trade-rules alongside SELL_RULE_LABELS.
 // Local alias keeps existing call sites untouched.
@@ -1081,6 +1082,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Trade-entry form with 12+ fields, chart embed, and stop-loss editor. Save actions mis-key easily on a touch keyboard — log new positions from desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Log a <em className="italic" style={{ color: navColor }}>Buy</em>

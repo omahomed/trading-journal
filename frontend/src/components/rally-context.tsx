@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { api, API_BASE, fetchWithAuth } from "@/lib/api";
 import { formatCurrency } from "@/lib/format";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ReferenceLine, Legend,
@@ -93,6 +94,7 @@ export function RallyContext({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Full rally-cycle context — dense tables. Best on desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Rally <em className="italic" style={{ color: navColor }}>Context</em>

@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, type RoutineItem } from "@/lib/api";
 import { groupRoutineItems, itemStatusChip } from "@/lib/trading-checklist";
-import { MobilePageHeader } from "./mobile-page-header";
 import { log } from "@/lib/log";
 
 // Kept in sync with the desktop trading-checklist.tsx map. If a new
@@ -96,8 +95,19 @@ export function MobileTradingChecklist({ navColor }: { navColor: string }) {
   }, [load]);
 
   return (
-    <div className="pb-24" data-testid="mobile-trading-checklist-root">
-      <MobilePageHeader title="Trading" italicWord="Checklist" />
+    <div className="pb-4" data-testid="mobile-trading-checklist-root">
+      {/* Section header — small caps, matches "PORTFOLIO STATS" / "PERFORMANCE"
+          / "POSITIONS OPENED" section labels elsewhere in MobileDailyJournal.
+          Deliberately NOT a MobilePageHeader — the page title is "Daily
+          Journal" (owned by the shell/AdaptiveShell); the checklist is one
+          section within it. Rendering another page-scale wordmark here
+          made the checklist read like its own page. */}
+      <div className="px-1 mb-2 flex items-center justify-between">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+             style={{ color: "var(--m-text-muted)" }}>
+          Trading Checklist
+        </div>
+      </div>
 
       {loadError && (
         <div className="mx-5 mb-3 px-3 py-2 rounded-[10px] text-[13px]"

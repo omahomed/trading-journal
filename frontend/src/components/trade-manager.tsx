@@ -12,6 +12,7 @@ import { SR8TrimCalculator } from "./sr8-trim-calculator";
 // list. Local alias keeps existing call sites unchanged.
 // (SELL_RULE_LABELS as SELL_RULES already imported above.)
 import { BUY_RULE_LABELS as BUY_RULES } from "@/lib/trade-rules";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 type Tab = "stops" | "edit" | "delete" | "export" | "sr8-trim";
 
@@ -213,6 +214,7 @@ export function TradeManager({ navColor, initialTab, onTabConsumed }: { navColor
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Bulk price refresh, edits, and deletes. Best on desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Trade <em className="italic" style={{ color: navColor }}>Manager</em>

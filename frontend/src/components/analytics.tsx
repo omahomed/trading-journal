@@ -10,6 +10,7 @@ import { log } from "@/lib/log";
 import { StrategyChip } from "./strategy-chip";
 import { StrategyFlyout, StrategyFlatList, useCoarsePointer } from "./strategy-flyout";
 import { SearchSelect } from "./search-select";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 import {
   computeWinRate,
   computeProfitFactor,
@@ -589,6 +590,7 @@ export function Analytics({ navColor, initialTab, initialTradeId, onTabConsumed,
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Multi-tab deep-dive with dense tables. Best on desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Edge <em className="italic" style={{ color: navColor }}>Report</em>

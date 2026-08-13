@@ -7,13 +7,23 @@ export const MOBILE_BREAKPOINT_PX = 1024;
 
 const QUERY = `(max-width: ${MOBILE_BREAKPOINT_PX - 1}px)`;
 
+// Defensive against jsdom (some test environments) and any exotic
+// SSR/edge runtime where `window.matchMedia` is absent: fall back to
+// "desktop" and no-op the subscription. The full desktop tree still
+// renders in that path; only the mobile-specific branches are skipped.
 function subscribe(callback: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => { /* noop */ };
+  }
   const mql = window.matchMedia(QUERY);
   mql.addEventListener("change", callback);
   return () => mql.removeEventListener("change", callback);
 }
 
 function getSnapshot(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
   return window.matchMedia(QUERY).matches;
 }
 

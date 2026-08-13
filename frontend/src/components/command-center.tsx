@@ -69,15 +69,19 @@ export function CommandCenter({ navColor }: { navColor: string }) {
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }} data-testid="command-center-root">
       {/* Page header — Fraunces + italicized last word matches every
-          other page under (app)/*. See CLAUDE.md standing rule. */}
-      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
+          other page under (app)/*. See CLAUDE.md standing rule.
+          Hidden on mobile since MobileShell renders its own "Command
+          Center" wordmark via AdaptiveShell → rendering both created a
+          double title. Refresh moves to the top-right of the card body
+          on mobile so the affordance is preserved. */}
+      <div className="hidden md:flex mb-[22px] pb-[14px] items-end justify-between gap-4"
            style={{ borderBottom: "1px solid var(--border)" }}>
         <div>
-          <h1 className="font-normal text-[22px] md:text-[32px] tracking-tight m-0"
+          <h1 className="font-normal text-[32px] tracking-tight m-0"
               style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
             Command <em className="italic" style={{ color: navColor }}>Center</em>
           </h1>
-          <div className="text-[12px] md:text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
             Risk across every portfolio at a glance · sorted worst-drawdown-first
             {lastUpdatedLabel ? ` · as of ${lastUpdatedLabel}` : ""}
           </div>
@@ -90,6 +94,20 @@ export function CommandCenter({ navColor }: { navColor: string }) {
             ⟳ {refreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
+      </div>
+
+      {/* Mobile-only refresh + subtitle strip — the desktop header is
+          hidden above, so surface those two affordances here. */}
+      <div className="md:hidden mb-3 flex items-center justify-between gap-3">
+        <div className="text-[12px] leading-snug" style={{ color: "var(--ink-3)" }}>
+          Sorted worst-drawdown-first{lastUpdatedLabel ? ` · as of ${lastUpdatedLabel}` : ""}
+        </div>
+        <button type="button" onClick={() => load(true)} disabled={refreshing}
+                data-testid="command-center-refresh-mobile"
+                className="px-3 py-2 rounded-[10px] text-[13px] flex items-center gap-1.5 transition-colors shrink-0"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: refreshing ? "var(--ink-4)" : "var(--ink-2)" }}>
+          ⟳ {refreshing ? "…" : "Refresh"}
+        </button>
       </div>
 
       {error && (

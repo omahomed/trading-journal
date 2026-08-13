@@ -10,6 +10,7 @@ import { SearchSelect } from "./search-select";
 import { uploadWithTimeout } from "@/lib/upload-with-timeout";
 import { UploadTracker, type UploadEntry, type UploadKind } from "./upload-tracker";
 import { LESSON_CATEGORIES, CAT_COLORS, CAT_FALLBACK } from "@/lib/lesson-categories";
+import { MobileDesktopOnlyBanner } from "./mobile/mobile-desktop-only-banner";
 
 function FormField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -373,6 +374,7 @@ export function LogSell({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
+      <MobileDesktopOnlyBanner reason="Trade-exit form with lot picker and audit fields. Save actions mis-key on a touch keyboard — exit positions from desktop." />
       <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Log <em className="italic" style={{ color: navColor }}>Sell</em>

@@ -128,7 +128,10 @@ export function EarningsPlanner({ navColor }: { navColor: string }) {
 
   return (
     <div style={{ animation: "slide-up 0.18s ease-out" }}>
-      <div className="mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
+      {/* Hidden on mobile — MobileShell already renders the "Earnings
+          Planner" wordmark via AdaptiveShell. Full mobile-optimized
+          layout is queued as a Phase 3 rebuild. */}
+      <div className="hidden md:block mb-[22px] pb-[14px]" style={{ borderBottom: "1px solid var(--border)" }}>
         <h1 className="font-normal text-[32px] tracking-tight m-0" style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
           Earnings <em className="italic" style={{ color: navColor }}>Planner</em>
         </h1>
