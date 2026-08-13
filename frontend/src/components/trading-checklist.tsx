@@ -254,14 +254,14 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
                    onChange={(e) => setAddForm(f => ({ ...f, name: e.target.value }))}
                    placeholder="e.g. Review IBD 50"
                    className="h-[36px] px-2.5 rounded-[10px] text-[13px]"
-                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }} />
+                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-[11px]" style={{ color: "var(--ink-4)" }}>Frequency</span>
             <select value={addForm.frequency}
                     onChange={(e) => setAddForm(f => ({ ...f, frequency: e.target.value as RoutineFrequency }))}
                     className="h-[36px] px-2 rounded-[10px] text-[13px]"
-                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}>
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
               {FREQUENCY_ORDER.map(f => (
                 <option key={f} value={f}>{FREQUENCY_LABELS[f]}</option>
               ))}
@@ -272,7 +272,7 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
             <select value={addForm.slot}
                     onChange={(e) => setAddForm(f => ({ ...f, slot: e.target.value as RoutineSlot | "" }))}
                     className="h-[36px] px-2 rounded-[10px] text-[13px]"
-                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}>
+                    style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
               <option value="">— none —</option>
               {SLOT_ORDER.map(s => (
                 <option key={s} value={s}>{SLOT_LABELS[s]}</option>
@@ -285,7 +285,7 @@ export function TradingChecklist({ navColor }: { navColor: string }) {
                    onChange={(e) => setAddForm(f => ({ ...f, link: e.target.value }))}
                    placeholder="https://marketsmith.com/…"
                    className="h-[36px] px-2.5 rounded-[10px] text-[13px]"
-                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }} />
+                   style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }} />
           </label>
           <button type="submit" disabled={addSubmitting || !addForm.name.trim()}
                   className="h-[36px] px-4 rounded-[10px] text-[13px] font-medium transition-colors disabled:opacity-50"
@@ -440,7 +440,7 @@ function ItemRow(props: {
                 return (
                   <a href={item.link} target="_blank" rel="noopener noreferrer"
                      className="text-[13px] hover:underline truncate"
-                     style={{ color: "var(--ink-1)" }}>
+                     style={{ color: "var(--ink)" }}>
                     {item.name}
                   </a>
                 );
@@ -449,13 +449,13 @@ function ItemRow(props: {
                 return (
                   <Link href={internalHref}
                         className="text-[13px] hover:underline truncate"
-                        style={{ color: "var(--ink-1)" }}>
+                        style={{ color: "var(--ink)" }}>
                     {item.name}
                   </Link>
                 );
               }
               return (
-                <span className="text-[13px] truncate" style={{ color: "var(--ink-1)" }}>{item.name}</span>
+                <span className="text-[13px] truncate" style={{ color: "var(--ink)" }}>{item.name}</span>
               );
             })()}
             {item.is_system && (
@@ -592,22 +592,22 @@ function EditRow(props: {
     <div className="flex flex-wrap items-center gap-2">
       <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120}
              className="h-[30px] px-2 rounded-[8px] text-[13px] flex-1 min-w-[160px]"
-             style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }} />
+             style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }} />
       <select value={frequency} onChange={(e) => setFrequency(e.target.value as RoutineFrequency)}
               className="h-[30px] px-1 rounded-[8px] text-[12px]"
-              style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}>
+              style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
         {FREQUENCY_ORDER.map(f => <option key={f} value={f}>{FREQUENCY_LABELS[f]}</option>)}
       </select>
       <select value={slot} onChange={(e) => setSlot(e.target.value as RoutineSlot | "")}
               className="h-[30px] px-1 rounded-[8px] text-[12px]"
-              style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }}>
+              style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }}>
         <option value="">— none —</option>
         {SLOT_ORDER.map(s => <option key={s} value={s}>{SLOT_LABELS[s]}</option>)}
       </select>
       <input type="url" value={link} onChange={(e) => setLink(e.target.value)}
              placeholder="https://…"
              className="h-[30px] px-2 rounded-[8px] text-[12px] flex-1 min-w-[140px]"
-             style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink-1)" }} />
+             style={{ background: "var(--bg-2)", border: "1px solid var(--border)", color: "var(--ink)" }} />
       <button type="button" onClick={() => void submit()} disabled={saving || !name.trim()}
               className="h-[30px] px-3 rounded-[8px] text-[12px] font-medium disabled:opacity-50"
               style={{ background: navColor, color: "white" }}>

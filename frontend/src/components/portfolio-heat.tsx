@@ -233,7 +233,7 @@ export function PortfolioHeat({ navColor }: { navColor: string }) {
           </h1>
         </div>
         <div className="rounded-[14px] p-8 text-center" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
-          <div className="text-[15px] font-medium mb-2" style={{ color: "var(--ink-1)" }}>
+          <div className="text-[15px] font-medium mb-2" style={{ color: "var(--ink)" }}>
             No NLV history for {activePortfolio || "this portfolio"}
           </div>
           <div className="text-[13px] mb-4" style={{ color: "var(--ink-3)" }}>

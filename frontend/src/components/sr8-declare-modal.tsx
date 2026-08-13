@@ -177,7 +177,7 @@ export function SR8DeclareModal({ position, portfolio, onSuccess, onClose }: Pro
                 <div style={{ color: "var(--ink-3)" }}>Current holding</div>
                 <div
                   className="text-[16px] font-semibold mt-1"
-                  style={{ fontFamily: mono, color: "var(--ink-1)" }}
+                  style={{ fontFamily: mono, color: "var(--ink)" }}
                 >
                   {fmtShares(currentShares)} sh
                 </div>
@@ -188,7 +188,7 @@ export function SR8DeclareModal({ position, portfolio, onSuccess, onClose }: Pro
                 </div>
                 <div
                   className="text-[16px] font-semibold mt-1"
-                  style={{ fontFamily: mono, color: "var(--ink-1)" }}
+                  style={{ fontFamily: mono, color: "var(--ink)" }}
                 >
                   {doctrineCore != null
                     ? `${fmtShares(doctrineCore)} sh`
@@ -230,7 +230,7 @@ export function SR8DeclareModal({ position, portfolio, onSuccess, onClose }: Pro
                 fontFamily: mono,
                 background: "var(--bg)",
                 border: "1px solid var(--border)",
-                color: "var(--ink-1)",
+                color: "var(--ink)",
               }}
             />
             <div

@@ -50,6 +50,7 @@ export default function MoreClient() {
         />
       </Section>
       <Section title="Dashboards">
+        <NavRow href="/command-center" label="Command Center" />
         <NavRow href="/dashboard" label="Dashboard" />
         <NavRow href="/overview" label="Trading Overview" />
       </Section>

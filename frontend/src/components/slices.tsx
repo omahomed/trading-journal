@@ -565,7 +565,7 @@ export function Slices({ navColor }: Props) {
             onClick={() => setFocusedSliceId(null)}
             className="hover:underline"
             style={{
-              color: focusedSliceId == null ? "var(--ink-1)" : "var(--ink-3)",
+              color: focusedSliceId == null ? "var(--ink)" : "var(--ink-3)",
               fontWeight: focusedSliceId == null ? 600 : 400,
             }}
           >
@@ -578,7 +578,7 @@ export function Slices({ navColor }: Props) {
                 onClick={() => setFocusedSliceId(s.id)}
                 className="hover:underline"
                 style={{
-                  color: i === trail.length - 1 ? "var(--ink-1)" : "var(--ink-3)",
+                  color: i === trail.length - 1 ? "var(--ink)" : "var(--ink-3)",
                   fontWeight: i === trail.length - 1 ? 600 : 400,
                 }}
               >
@@ -754,7 +754,7 @@ function SliceRow({ row }: {
         <div style={{
           fontFamily: row.kind === "holding" ? mono : undefined,
           fontWeight: row.kind === "slice" ? 500 : 400,
-          color: "var(--ink-1)",
+          color: "var(--ink)",
         }}>
           {row.name}
         </div>
@@ -764,7 +764,7 @@ function SliceRow({ row }: {
           </div>
         )}
       </div>
-      <div className="text-right" style={{ fontFamily: mono, color: "var(--ink-1)" }}>
+      <div className="text-right" style={{ fontFamily: mono, color: "var(--ink)" }}>
         {fmtMoney(row.value, 2)}
       </div>
       <div className="text-right" style={{ fontFamily: mono, color: plColor, fontWeight: 600 }}>
@@ -778,7 +778,7 @@ function SliceRow({ row }: {
           : `${row.returnPct >= 0 ? "+" : ""}${row.returnPct.toFixed(1)}%`}
       </div>
       <div className="text-right">
-        <div style={{ fontFamily: mono, fontWeight: 600, color: "var(--ink-1)" }}>
+        <div style={{ fontFamily: mono, fontWeight: 600, color: "var(--ink)" }}>
           {fmtPct(row.actualPct, 1)}
         </div>
         <div className="text-[11px]" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
@@ -828,7 +828,7 @@ function EmptyState({
 }) {
   return (
     <div className="p-8 text-[13px]" style={{ color: "var(--ink-2)" }}>
-      <div className="text-[16px] font-semibold mb-2" style={{ color: "var(--ink-1)" }}>
+      <div className="text-[16px] font-semibold mb-2" style={{ color: "var(--ink)" }}>
         No slices configured for {portfolioName || "this portfolio"}.
       </div>
       <div className="max-w-[560px]" style={{ color: "var(--ink-3)" }}>
@@ -865,7 +865,7 @@ function DisabledState({
            border: "1px solid var(--border)",
            boxShadow: "var(--card-shadow)",
          }}>
-      <div className="text-[16px] font-semibold mb-2" style={{ color: "var(--ink-1)" }}>
+      <div className="text-[16px] font-semibold mb-2" style={{ color: "var(--ink)" }}>
         Slices is off for {portfolioName || "this portfolio"}.
       </div>
       <div className="text-[13px] max-w-[560px]" style={{ color: "var(--ink-3)" }}>
@@ -1358,14 +1358,14 @@ function SliceEditRow({
           style={{
             background: "var(--surface)",
             border: "1px solid var(--border)",
-            color: "var(--ink-1)",
+            color: "var(--ink)",
           }}
         />
       ) : (
         <button
           onClick={() => { setNameDraft(slice.name); setEditingName(true); }}
           className="text-left hover:underline"
-          style={{ color: "var(--ink-1)", fontWeight: 500, background: "transparent" }}
+          style={{ color: "var(--ink)", fontWeight: 500, background: "transparent" }}
         >
           {slice.name}
         </button>
@@ -1390,7 +1390,7 @@ function SliceEditRow({
             fontFamily: mono,
             background: "var(--surface)",
             border: "1px solid var(--border)",
-            color: "var(--ink-1)",
+            color: "var(--ink)",
           }}
         />
       ) : (
@@ -1463,7 +1463,7 @@ function AddSliceRow({
         style={{
           background: "var(--surface)",
           border: "1px solid var(--border)",
-          color: "var(--ink-1)",
+          color: "var(--ink)",
         }}
       />
       <input
@@ -1480,7 +1480,7 @@ function AddSliceRow({
           fontFamily: mono,
           background: "var(--surface)",
           border: "1px solid var(--border)",
-          color: "var(--ink-1)",
+          color: "var(--ink)",
         }}
       />
       <div className="flex gap-1 justify-end text-[11px]">
@@ -1564,7 +1564,7 @@ function HoldingEditRow({
             fontFamily: mono,
             background: "var(--surface)",
             border: "1px solid var(--border)",
-            color: "var(--ink-1)",
+            color: "var(--ink)",
           }}
         />
       ) : (
@@ -1632,7 +1632,7 @@ function UnassignedRow({
          }}>
       <div className="w-[3px] h-[22px] rounded-[2px]" style={{ background: "#94a3b8" }} />
       <div>
-        <div style={{ fontFamily: mono, color: "var(--ink-1)" }}>{ticker}</div>
+        <div style={{ fontFamily: mono, color: "var(--ink)" }}>{ticker}</div>
         <div className="text-[11px]" style={{ color: "var(--ink-3)" }}>
           {fmtMoney(marketValue, 2)}
         </div>

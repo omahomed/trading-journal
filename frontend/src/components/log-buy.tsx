@@ -1151,10 +1151,10 @@ export function LogBuy({ navColor }: { navColor: string }) {
                       <div className="text-[12px] px-3 py-2 rounded-[8px] flex items-center gap-2"
                            style={{ background: "var(--surface-2)", color: "var(--ink-3)" }}>
                         <span className="font-medium">Sector:</span>
-                        <span style={{ color: "var(--ink-1)" }}>{mapped.sector}</span>
+                        <span style={{ color: "var(--ink)" }}>{mapped.sector}</span>
                         {mapped.theme && (<>
                           <span style={{ color: "var(--ink-4)" }}>·</span>
-                          <span style={{ color: "var(--ink-1)" }}>{mapped.theme}</span>
+                          <span style={{ color: "var(--ink)" }}>{mapped.theme}</span>
                         </>)}
                         <a href="/sector-mapping" className="ml-auto text-[11px]"
                            style={{ color: "var(--accent)" }}>Edit on Sector Mapping</a>
@@ -1241,7 +1241,7 @@ export function LogBuy({ navColor }: { navColor: string }) {
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-[12px] font-semibold"
-                          style={{ color: "var(--ink-1)" }}>
+                          style={{ color: "var(--ink)" }}>
                       {b1Setup.primary}
                     </span>
                     {b1Setup.confluence.map(r => (
@@ -1455,9 +1455,9 @@ export function LogBuy({ navColor }: { navColor: string }) {
                                     aria-label={`${m}× ATR`}
                                     className="px-3 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                                     style={{
-                                      background: selected ? "var(--ink-1)" : "var(--bg)",
+                                      background: selected ? "var(--ink)" : "var(--bg)",
                                       color: selected ? "var(--surface)" : "var(--ink-2)",
-                                      border: `1px solid ${selected ? "var(--ink-1)" : "var(--border)"}`,
+                                      border: `1px solid ${selected ? "var(--ink)" : "var(--border)"}`,
                                       cursor: disabled ? "not-allowed" : "pointer",
                                     }}>
                               {m}×

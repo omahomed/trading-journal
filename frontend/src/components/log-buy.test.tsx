@@ -892,7 +892,7 @@ describe("LogBuy — ATR Live Sizer info row + pill rendering", () => {
     expect(buttons[2].textContent).toContain("1.5×");
 
     // Visual distinction: selected pill (index 0 = 0.75× broker-stop
-    // default) gets background = var(--ink-1) (filled) and color =
+    // default) gets background = var(--ink) (filled) and color =
     // var(--surface) (inverted text). Inactive pills get background =
     // var(--bg) with border-only treatment. aria-pressed exposes the
     // selection state for screen readers and tests.

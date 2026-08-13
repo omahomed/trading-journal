@@ -197,7 +197,7 @@ function PortfolioCard({
                         border: "1px solid color-mix(in oklab, " + accentColor + " 30%, var(--border))" }}
                data-testid={`recurring-reminder-${card.name}`}>
             <div className="flex items-baseline justify-between gap-2">
-              <div className="text-[12px] font-semibold" style={{ color: "var(--ink-1)" }}>
+              <div className="text-[12px] font-semibold" style={{ color: "var(--ink)" }}>
                 {recurringEvent.note || "Recurring deposit"} · due {recurringEvent.next_due_date}
               </div>
               <button type="button" onClick={onOpenManage}
@@ -1073,7 +1073,7 @@ function ManageRecurringModal({
            data-testid="recurring-manage-modal">
         <div className="flex items-baseline justify-between mb-4">
           <h3 className="font-normal text-[22px] tracking-tight m-0"
-              style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink-1)" }}>
+              style={{ fontFamily: "var(--font-fraunces), Georgia, serif", color: "var(--ink)" }}>
             {event ? "Edit recurring" : "Add recurring"}{" "}
             <em className="italic" style={{ color: navColor }}>{portfolio}</em>
           </h3>

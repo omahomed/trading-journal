@@ -460,7 +460,7 @@ export function MFactor({ navColor }: { navColor: string }) {
             Override
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
               You forced CORRECTION on {data.override.activated_date_ct}
               {data.systematic_state && data.systematic_state !== "CORRECTION" && (
                 <span className="text-[11px] font-medium ml-2" style={{ color: "var(--ink-3)" }}>
@@ -497,7 +497,7 @@ export function MFactor({ navColor }: { navColor: string }) {
             Pending
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
               Override declared for {data.override_pending.activated_date_ct} · waiting for market data
             </div>
             <div className="text-[12px] mt-1" style={{ color: "var(--ink-2)" }}>
@@ -524,7 +524,7 @@ export function MFactor({ navColor }: { navColor: string }) {
         <div className="rounded-[14px] p-4 mb-6 flex items-center justify-between gap-3"
              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold" style={{ color: "var(--ink-1)" }}>
+            <div className="text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
               Force CORRECTION
             </div>
             <div className="text-[11px] mt-0.5" style={{ color: "var(--ink-4)" }}>
@@ -562,7 +562,7 @@ export function MFactor({ navColor }: { navColor: string }) {
             style={{ background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "0 20px 40px rgba(0,0,0,0.3)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="text-[16px] font-semibold mb-1" style={{ color: "var(--ink-1)" }}>
+            <div className="text-[16px] font-semibold mb-1" style={{ color: "var(--ink)" }}>
               Force CORRECTION state
             </div>
             <div className="text-[12px] mb-4" style={{ color: "var(--ink-3)" }}>
