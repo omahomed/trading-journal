@@ -26,6 +26,7 @@ const MOBILE_NATIVE_ROUTES = new Set<string>([
   "/active-campaign",
   "/overview",
   "/earnings",
+  "/period-review",
 ]);
 
 // Rows whose desktop component is meaningfully hard to use on mobile.
