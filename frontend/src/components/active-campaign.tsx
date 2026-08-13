@@ -1162,7 +1162,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         <span className="inline-flex items-center" style={{ gap: 6 }}>
                           {p.ticker}
                           {p.strategy && (
-                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={true} variant="filled" />
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
                               presence is a row chip; the earlier tier-
@@ -1382,7 +1382,7 @@ export function ActiveCampaign({ navColor, onNavigate }: { navColor: string; onN
                         <span className="inline-flex items-center" style={{ gap: 6 }}>
                           {p.ticker}
                           {p.strategy && (
-                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={false} />
+                            <StrategyChip name={p.strategy} color={strategyByName.get(p.strategy)?.color ?? "var(--ink-4)"} size="sm" showName={true} variant="filled" />
                           )}
                           {/* Post-migration-063 (2026-08-07) — broker-stop
                               presence is a row chip; the earlier tier-

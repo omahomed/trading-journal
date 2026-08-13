@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle } from "@/lib/api";
+import { api, getActivePortfolio, type TradePosition, type TradeDetail, type TradeDetailsBundle, type Strategy } from "@/lib/api";
 import { computeEnrichedPositions, type EnrichedPosition } from "@/lib/positions";
 import { classifySellRuleTier, SELL_RULE_TIER_ORDER, type SellRuleTier } from "@/lib/sell-rule";
 import { formatCurrency } from "@/lib/format";
 import { log } from "@/lib/log";
 import { usePortfolio } from "@/lib/portfolio-context";
+import { StrategyChip } from "../strategy-chip";
 
 /**
  * Mobile-native Active Campaign Summary. Read-first surface: shows
@@ -36,6 +37,22 @@ export function MobileActiveCampaign({ navColor }: { navColor: string }) {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("pos_size");
   const [expandedTradeIds, setExpandedTradeIds] = useState<Set<string>>(new Set());
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+
+  // O(1) name → color/full-strategy lookup for the per-row strategy chip.
+  // Mirrors ACS's strategyByName pattern; keeps color consistent across
+  // desktop + mobile surfaces.
+  const strategyByName = useMemo(() => {
+    const m = new Map<string, Strategy>();
+    for (const s of strategies) m.set(s.name, s);
+    return m;
+  }, [strategies]);
+
+  useEffect(() => {
+    api.listStrategies({ active: true, portfolio })
+      .then(setStrategies)
+      .catch(() => setStrategies([]));
+  }, [portfolio]);
 
   const load = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -185,6 +202,7 @@ export function MobileActiveCampaign({ navColor }: { navColor: string }) {
             position={p}
             expanded={expandedTradeIds.has(p.trade_id)}
             onToggle={() => toggle(p.trade_id)}
+            strategyByName={strategyByName}
           />
         ))
       )}
@@ -273,10 +291,12 @@ function PositionCard({
   position: p,
   expanded,
   onToggle,
+  strategyByName,
 }: {
   position: EnrichedPosition;
   expanded: boolean;
   onToggle: () => void;
+  strategyByName: Map<string, Strategy>;
 }) {
   const tier = getTier(p);
   const tierMeta = tierChipMeta(tier);
@@ -299,12 +319,23 @@ function PositionCard({
         minHeight: 44,
       }}
     >
-      {/* Header: ticker + tier chip */}
+      {/* Header: ticker + strategy chip + tier chip */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[16px] font-semibold text-m-text truncate"
-               style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
-            {p.ticker}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[16px] font-semibold text-m-text"
+                  style={{ fontFamily: "var(--font-jetbrains), monospace" }}>
+              {p.ticker}
+            </span>
+            {p.strategy && (
+              <StrategyChip
+                name={p.strategy}
+                color={strategyByName.get(p.strategy)?.color ?? "var(--m-text-faint)"}
+                size="sm"
+                showName={true}
+                variant="filled"
+              />
+            )}
           </div>
           <div className="mt-0.5 text-[11px] text-m-text-dim">
             {p.shares} sh · {p.rule || "no rule"}
