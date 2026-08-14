@@ -719,6 +719,20 @@ export function DailyJournal({ navColor, initialDate }: { navColor: string; init
                 </div>
                 <div className="px-4 py-2.5 text-[12px]" style={{ color: "var(--ink-3)" }}>
                   <strong>Drawdown:</strong> {ddPct.toFixed(2)}% · <strong>Invested:</strong> {(day.pct_invested || 0).toFixed(0)}%
+                  {/* Migration 067 — MCT suggested exposure inline. Only
+                      renders on rows with a stamped value; pre-067 rows
+                      show nothing after "Invested". Arrow signals whether
+                      actual is above (↑ amber) / below (↓ cyan) target. */}
+                  {(() => {
+                    const s = (day as any).suggested_exposure_pct;
+                    if (s == null) return null;
+                    const target = Number(s);
+                    const actual = Number(day.pct_invested || 0);
+                    const delta = actual - target;
+                    const arrow = delta > 0.5 ? " ↑" : delta < -0.5 ? " ↓" : "";
+                    const color = delta > 0.5 ? "#f59f00" : delta < -0.5 ? "#0891b2" : "var(--ink-3)";
+                    return <> · <strong>Target:</strong> <span style={{ color }}>{target.toFixed(0)}%{arrow}</span></>;
+                  })()}
                 </div>
               </div>
 

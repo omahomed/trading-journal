@@ -814,6 +814,17 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                 except Exception:
                     has_game_plan = False
                 game_plan_select = 'j.game_plan AS "game_plan",\n                        ' if has_game_plan else ''
+                # Migration 067 suggested_exposure_pct — detection-gated so
+                # a DB still on pre-067 doesn't 500 the journal_history call.
+                try:
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = 'trading_journal' AND column_name = 'suggested_exposure_pct'"
+                    )
+                    has_suggested_exposure = cur.fetchone() is not None
+                except Exception:
+                    has_suggested_exposure = False
+                suggested_exposure_select = 'j.suggested_exposure_pct AS "suggested_exposure_pct",\n                        ' if has_suggested_exposure else ''
                 # j.id is required by the Phase 7 rail/tag/capture mounts in
                 # daily-report-card.tsx (TagPicker.entity_id, capture parent
                 # FK, NotesRail row id). Snake-case alias passes through
@@ -824,7 +835,7 @@ def load_journal(portfolio_name, start_date=None, end_date=None):
                         j.day AS "Day",
                         j.status AS "Status",
                         j.market_window AS "Market Window",
-                        {cycle_select}{day_num_select}{trend_count_select}{daily_thoughts_select}{game_plan_select}j.above_21ema AS "> 21e",
+                        {cycle_select}{day_num_select}{trend_count_select}{daily_thoughts_select}{game_plan_select}{suggested_exposure_select}j.above_21ema AS "> 21e",
                         j.cash_change AS "Cash -/+",
                         j.beg_nlv AS "Beg NLV",
                         j.end_nlv AS "End NLV",
@@ -3183,6 +3194,11 @@ def save_journal_entry(journal_entry):
             # value here — 0 is a legit Step-4 arm bar, so we can't use
             # `.get(..., 0)` as a default and later distinguish "not set."
             trend_count = journal_entry.get('trend_count')
+            # Migration 067 — MCT engine entry_exposure at save time.
+            # NULL is first-class: engine no-bar / failure stamps NULL and
+            # the Journal Log renders "—". Never overwritten by the
+            # NULL-only healer (see _heal_recent_mct_stamps).
+            suggested_exposure_pct = journal_entry.get('suggested_exposure_pct')
             above_21ema = journal_entry.get('above_21ema', 0.0)
             cash_change = journal_entry.get('cash_flow', 0.0)
             beg_nlv = journal_entry.get('beginning_nlv', 0.0)
@@ -3248,7 +3264,8 @@ def save_journal_entry(journal_entry):
                             highlights = %s, lowlights = %s, mistakes = %s,
                             top_lesson = %s,
                             nlv_source = %s, holdings_source = %s,
-                            daily_thoughts = %s
+                            daily_thoughts = %s,
+                            suggested_exposure_pct = COALESCE(%s, suggested_exposure_pct)
                         WHERE id = %s
                         RETURNING id
                     """
@@ -3266,6 +3283,7 @@ def save_journal_entry(journal_entry):
                         top_lesson,
                         nlv_source, holdings_source,
                         daily_thoughts,
+                        suggested_exposure_pct,
                         existing[0]
                     ))
                 except Exception:
@@ -3338,11 +3356,12 @@ def save_journal_entry(journal_entry):
                             market_notes, market_action, portfolio_heat,
                             spy_atr, nasdaq_atr, score,
                             highlights, lowlights, mistakes, top_lesson,
-                            nlv_source, holdings_source, daily_thoughts
+                            nlv_source, holdings_source, daily_thoughts,
+                            suggested_exposure_pct
                         ) VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                     """
@@ -3355,7 +3374,8 @@ def save_journal_entry(journal_entry):
                         market_notes, market_action, portfolio_heat,
                         spy_atr, nasdaq_atr, score,
                         highlights, lowlights, mistakes, top_lesson,
-                        nlv_source, holdings_source, daily_thoughts
+                        nlv_source, holdings_source, daily_thoughts,
+                        suggested_exposure_pct
                     ))
                 except Exception:
                     conn.rollback()

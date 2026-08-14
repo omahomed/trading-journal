@@ -313,7 +313,19 @@ export function Dashboard({ navColor }: { navColor: string }) {
     {
       label: "EOD EXPOSURE",
       value: journalAvailable ? `${exposure.toFixed(1)}%` : "—",
+      // Sub: "N/M Pos | Risk: X%" — always. Suggested exposure (migration
+      // 067) surfaces as extraSub when the row has a stamped value; falls
+      // back to just position count + heat when the row predates the
+      // stamp (pre-067) or the engine had no bar at save time.
       sub: `${openCount}/${15} Pos | Risk: ${portfolioHeat.toFixed(2)}%`,
+      extraSub: (latest?.suggested_exposure_pct != null)
+        ? (() => {
+            const target = Number(latest!.suggested_exposure_pct);
+            const delta = exposure - target;
+            const arrow = delta > 0.5 ? " ↑" : delta < -0.5 ? " ↓" : "";
+            return `Target ${target.toFixed(0)}%${arrow}`;
+          })()
+        : undefined,
       gradient: "linear-gradient(135deg, #f97316, #fb923c)",
     },
     {

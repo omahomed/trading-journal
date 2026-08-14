@@ -78,7 +78,8 @@ function exportCsv(rows: JournalHistoryPoint[]) {
   // consumers that may parse this format. The UI table displays "MCT
   // State" instead — see Phase 4 journal-log column swap.
   const headers = [
-    "Day", "Window", "Cash Flow", "End NLV", "Score", "Daily %", "LTD %", "% Inv", "Heat",
+    "Day", "Window", "Cash Flow", "End NLV", "Score", "Daily %", "LTD %",
+    "Suggest %", "% Inv", "Heat",
     "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes",
     "Plan", "Stops", "Sized", "FOMO", "Grade Notes",
   ];
@@ -93,6 +94,7 @@ function exportCsv(rows: JournalHistoryPoint[]) {
       h.score ?? "",
       h.daily_pct_change ?? "",
       h.portfolio_ltd ?? "",
+      (h as any).suggested_exposure_pct ?? "",
       h.pct_invested ?? "",
       h.portfolio_heat ?? "",
       (h as any).spy_daily_pct ?? "",
@@ -273,7 +275,7 @@ export function JournalLog({ navColor }: { navColor: string }) {
               <table className="w-full text-[11px]" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
                 <thead>
                   <tr>
-                    {["Day", "MCT State", "Trend", "Cash Flow", "End NLV", "Grade", "Daily %", "LTD %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
+                    {["Day", "MCT State", "Trend", "Cash Flow", "End NLV", "Grade", "Daily %", "LTD %", "Suggest %", "% Inv", "Heat", "SPY %", "SPY ATR", "NDX %", "NDX ATR", "Mkt Notes", "Plan", "Stops", "Sized", "FOMO", "Grade Notes"].map(h => (
                       <th key={h} className="text-left text-[9px] uppercase tracking-[0.06em] font-semibold px-2.5 py-2 whitespace-nowrap sticky top-0"
                           style={{ color: "var(--ink-4)", background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
                         {h}
@@ -358,6 +360,22 @@ export function JournalLog({ navColor }: { navColor: string }) {
                                 {dailyPct >= 0 ? "+" : ""}{dailyPct.toFixed(2)}%
                               </td>
                               <td className="px-2.5 py-2" style={{ fontFamily: mono }}>{(h.portfolio_ltd || 0).toFixed(2)}%</td>
+                              {/* Migration 067 — MCT engine's entry_exposure at
+                                  save time. Pre-067 rows show "—". Small
+                                  delta arrow highlights whether actual is
+                                  above / below target. */}
+                              <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
+                                {(() => {
+                                  const s = (h as any).suggested_exposure_pct;
+                                  if (s == null) return <span style={{ color: "var(--ink-5)" }}>—</span>;
+                                  const target = Number(s);
+                                  const actual = Number(h.pct_invested || 0);
+                                  const delta = actual - target;
+                                  const arrow = delta > 0.5 ? " ↑" : delta < -0.5 ? " ↓" : "";
+                                  const color = delta > 0.5 ? "#f59f00" : delta < -0.5 ? "#0891b2" : "var(--ink-3)";
+                                  return <span style={{ color }}>{target.toFixed(0)}%{arrow}</span>;
+                                })()}
+                              </td>
                               <td className="px-2.5 py-2" style={{ fontFamily: mono, color: "var(--ink-3)" }}>
                                 {(h.pct_invested || 0).toFixed(1)}%
                               </td>
