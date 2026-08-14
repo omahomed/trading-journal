@@ -519,6 +519,35 @@ export function PeriodReview({ navColor, initialTab, onTabConsumed }: { navColor
 
   return (
     <div>
+      {/* Header — Fraunces title + Print button. Period Review shipped
+          without a page-level header; adding one gives the printed
+          output an anchor at the top and matches the other pages'
+          chrome. Print button hides itself via .no-print. */}
+      <div className="mb-[22px] pb-[14px] flex items-end justify-between gap-4"
+           style={{ borderBottom: "1px solid var(--border)" }}>
+        <div>
+          <h1 className="font-normal text-[32px] tracking-tight m-0"
+              style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}>
+            Period <em className="italic" style={{ color: navColor }}>Review</em>
+          </h1>
+          <div className="text-[13px] mt-1.5" style={{ color: "var(--ink-3)" }}>
+            Weekly, monthly, and annual performance with TWR linking, capital
+            deployed history, and benchmark alpha.
+          </div>
+        </div>
+        <button onClick={() => window.print()}
+                data-testid="pr-print"
+                className="no-print shrink-0 flex items-center gap-1.5 h-[32px] px-3.5 rounded-[10px] text-xs font-medium transition-colors hover:brightness-95"
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink-2)" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 6 2 18 2 18 9"/>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+            <rect x="6" y="14" width="12" height="8"/>
+          </svg>
+          Print
+        </button>
+      </div>
+
       {/* Capital Deployed */}
       <CapitalDeployed data={data} />
 
