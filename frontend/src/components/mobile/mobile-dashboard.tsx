@@ -143,6 +143,11 @@ export function MobileDashboard() {
         history={history}
         openCount={openTrades.length}
         portfolioHeat={latest?.portfolio_heat ?? 0}
+        suggestedExposurePct={
+          latest?.suggested_exposure_pct != null
+            ? Number(latest.suggested_exposure_pct)
+            : null
+        }
       />
       <EquityCurveCard history={history} range={ecRange} setRange={setEcRange} />
       <Last10Strip trades={closedTrades} />
@@ -218,11 +223,13 @@ function KpiGrid({
   history,
   openCount,
   portfolioHeat,
+  suggestedExposurePct,
 }: {
   metrics: DashboardMetrics | null;
   history: JournalHistoryPoint[];
   openCount: number;
   portfolioHeat: number;
+  suggestedExposurePct: number | null;
 }) {
   const journalAvailable = metrics?.journal_available ?? false;
   const ltdPct = metrics?.ltd_pct ?? null;
@@ -277,9 +284,18 @@ function KpiGrid({
           journalAvailable && exposure != null ? `${exposure.toFixed(1)}%` : "—"
         }
         valueTone={exposure != null && exposure > 100 ? "warn" : "text"}
-        sub={
+        subLines={
           journalAvailable
-            ? `${openCount} pos · risk ${portfolioHeat.toFixed(1)}%`
+            ? [
+                `${openCount} pos · risk ${portfolioHeat.toFixed(1)}%`,
+                ...(suggestedExposurePct != null && exposure != null
+                  ? [(() => {
+                      const delta = exposure - suggestedExposurePct;
+                      const arrow = delta > 0.5 ? " ↑" : delta < -0.5 ? " ↓" : "";
+                      return `target ${suggestedExposurePct.toFixed(0)}%${arrow}`;
+                    })()]
+                  : []),
+              ]
             : undefined
         }
       />

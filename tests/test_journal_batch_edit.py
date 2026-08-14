@@ -73,10 +73,10 @@ class _FakeCursor:
         # free-text fields (daily_thoughts, lowlights, top_lesson) +
         # above_21ema at [7]-[10] so an UPDATE from NLV Entry preserves
         # what other paths wrote instead of clobbering with defaults.
-        if ("SELECT id, portfolio_heat, spy_atr, nasdaq_atr,"
-                " market_cycle, mct_display_day_num, trend_count,"
-                " daily_thoughts, lowlights, top_lesson, above_21ema"
-                " FROM trading_journal" in sql_norm):
+        # Migration 067 added suggested_exposure_pct at [11].
+        if ("SELECT id, portfolio_heat, spy_atr, nasdaq_atr" in sql_norm
+                and "FROM trading_journal" in sql_norm
+                and "portfolio_id = %s AND day = %s" in sql_norm):
             pid, day = params
             for r in self.state["journal_rows"]:
                 if r["portfolio_id"] == pid and r["day"] == day:
@@ -92,6 +92,7 @@ class _FakeCursor:
                         r.get("lowlights", ""),
                         r.get("top_lesson", ""),
                         r.get("above_21ema", 0),
+                        r.get("suggested_exposure_pct"),
                     )
                     return
             self._last_returned = None
@@ -158,6 +159,10 @@ class _FakeCursor:
                 "nlv_source": params[27],
                 "holdings_source": params[28],
                 "daily_thoughts": params[29],
+                # Migration 067 — suggested_exposure_pct at the tail of the
+                # INSERT column list. May be None when the engine returned
+                # NULL (no bar / failure).
+                "suggested_exposure_pct": params[30] if len(params) > 30 else None,
             }
             self.state["_next_id"] += 1
             # Atomicity: the test owns rollback; the endpoint commits.
@@ -277,6 +282,11 @@ def batch_stubs(monkeypatch):
                         lambda *a, **kw: (_AUTO_CYCLE, _AUTO_DAY_NUM))
     monkeypatch.setattr(main, "_compute_trend_count",
                         lambda *a, **kw: _AUTO_TREND_COUNT)
+    # Migration 067 — MCT engine suggested exposure. Stubbed to a
+    # deterministic value so the test doesn't invoke the real run_engine
+    # (which reads market_data through the fake connection and fails).
+    monkeypatch.setattr(main, "_compute_suggested_exposure",
+                        lambda *a, **kw: 100.0)
     monkeypatch.setattr(main, "_compute_portfolio_heat",
                         lambda *a, **kw: _AUTO_HEAT)
 

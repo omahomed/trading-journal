@@ -913,6 +913,10 @@ def journal_history(portfolio: str = "CanSlim", days: int = 365):
             "spy", "nasdaq", "portfolio_heat", "score", "cash_change",
             "market_window", "market_cycle", "mct_display_day_num",
             "trend_count",
+            # Migration 067 — MCT engine's entry_exposure at save time.
+            # Journal Log renders as "SUGGEST %" column; Daily Journal
+            # inlines it next to actual % Invested. NULL for pre-067 rows.
+            "suggested_exposure_pct",
             "market_notes", "market_action",
             "spy_atr", "nasdaq_atr",
             "highlights", "lowlights", "mistakes", "top_lesson",
@@ -1510,6 +1514,59 @@ def _compute_trend_count(as_of_date: str = "") -> int | None:
         return None
 
 
+def _compute_suggested_exposure(as_of_date: str = "") -> float | None:
+    """Compute suggested exposure % for a given date, snapshot-style.
+
+    Wraps run_engine → to_rally_prefix_response and returns the same
+    `entry_exposure` value the M Factor page renders. This is the MCT
+    engine's current-cycle exposure ceiling after all ratchets, cuts,
+    and step-ladder progression have been applied.
+
+    Mirrors the strict-bar-match discipline of _compute_mct_state_with_day_num
+    and _compute_trend_count: same yfinance top-up, same Force Correction
+    override, same "empty on failure" contract. NULL beats stamping
+    yesterday's number on today's row.
+
+    Stamped at save time on every trading_journal insert (migration 067)
+    alongside market_cycle / mct_display_day_num / trend_count so the
+    Journal Log can show actual `% invested` vs. suggested exposure per
+    row without replaying the engine on every visit.
+    """
+    try:
+        from datetime import datetime as _dt
+        from api.mct_endpoint_adapter import run_engine, to_rally_prefix_response
+
+        as_of = None
+        if as_of_date:
+            try:
+                as_of = _dt.strptime(as_of_date.strip()[:10], "%Y-%m-%d").date()
+            except (ValueError, AttributeError):
+                as_of = None
+
+        try:
+            from api.market_data_updater import update_if_needed
+            update_if_needed("^IXIC")
+        except Exception:
+            pass
+
+        result = run_engine("^IXIC", as_of=as_of,
+                            force_correction_at_date=_current_override_date())
+        if result.bars.empty:
+            return None
+
+        if as_of is not None:
+            trade_dates = pd.to_datetime(result.bars["trade_date"]).dt.date
+            if not (trade_dates == as_of).any():
+                return None
+
+        payload = to_rally_prefix_response(result)
+        raw = payload.get("entry_exposure")
+        return float(raw) if raw is not None else None
+    except Exception as e:
+        print(f"[suggested_exposure] compute failed: {e}")
+        return None
+
+
 def _heal_recent_mct_stamps(portfolio: str, df: pd.DataFrame, lookback_days: int = 14) -> None:
     """Backfill NULL market_cycle / mct_display_day_num / trend_count on
     recent journal rows.
@@ -1796,6 +1853,12 @@ def journal_edit(entry: dict):
             # whatever's already in the row (backfill handled offline).
             if journal_entry.get("trend_count") is None:
                 journal_entry["trend_count"] = _compute_trend_count(day_str)
+            # Suggested Exposure % (migration 067) — MCT engine's
+            # entry_exposure at save time. Same snapshot discipline: only
+            # stamps when the field is None; preserves any pre-existing
+            # value on edits.
+            if journal_entry.get("suggested_exposure_pct") is None:
+                journal_entry["suggested_exposure_pct"] = _compute_suggested_exposure(day_str)
             if not journal_entry["spy_atr"]:
                 journal_entry["spy_atr"] = _compute_ticker_atr_pct("SPY", day_str)
             if not journal_entry["nasdaq_atr"]:
@@ -1923,11 +1986,13 @@ _BATCH_EDIT_INSERT_SQL = """
         market_notes, market_action, portfolio_heat,
         spy_atr, nasdaq_atr, score,
         highlights, lowlights, mistakes, top_lesson,
-        nlv_source, holdings_source, daily_thoughts
+        nlv_source, holdings_source, daily_thoughts,
+        suggested_exposure_pct
     ) VALUES (
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s
     )
     RETURNING id
 """
@@ -1942,7 +2007,8 @@ _BATCH_EDIT_UPDATE_SQL = """
            market_notes = %s, market_action = %s, portfolio_heat = %s,
            spy_atr = %s, nasdaq_atr = %s, score = %s,
            highlights = %s, lowlights = %s, mistakes = %s, top_lesson = %s,
-           nlv_source = %s, holdings_source = %s, daily_thoughts = %s
+           nlv_source = %s, holdings_source = %s, daily_thoughts = %s,
+           suggested_exposure_pct = %s
      WHERE id = %s
      RETURNING id
 """
@@ -2114,7 +2180,8 @@ def journal_batch_edit(body: dict = Body(...)):
                     cur.execute(
                         "SELECT id, portfolio_heat, spy_atr, nasdaq_atr, "
                         "       market_cycle, mct_display_day_num, trend_count, "
-                        "       daily_thoughts, lowlights, top_lesson, above_21ema "
+                        "       daily_thoughts, lowlights, top_lesson, above_21ema, "
+                        "       suggested_exposure_pct "
                         "  FROM trading_journal "
                         " WHERE portfolio_id = %s AND day = %s "
                         "   AND deleted_at IS NULL",
@@ -2140,6 +2207,7 @@ def journal_batch_edit(body: dict = Body(...)):
                         market_cycle = existing_row[4] or ""
                         mct_display_day_num = existing_row[5]
                         trend_count = existing_row[6]
+                        suggested_exposure_pct = existing_row[11]
                     else:
                         market_cycle, mct_display_day_num = (
                             _compute_mct_state_with_day_num(day_str))
@@ -2148,6 +2216,9 @@ def journal_batch_edit(body: dict = Body(...)):
                         # int) — mirrors the MCT snapshot discipline right
                         # above it. NULL on failure / no-bar (matches backfill).
                         trend_count = _compute_trend_count(day_str)
+                        # suggested_exposure_pct (migration 067) — engine's
+                        # entry_exposure at save time; same snapshot rule.
+                        suggested_exposure_pct = _compute_suggested_exposure(day_str)
                         spy_atr = _compute_ticker_atr_pct("SPY", day_str)
                         nasdaq_atr = _compute_ticker_atr_pct(
                             "^IXIC", day_str)
@@ -2189,6 +2260,7 @@ def journal_batch_edit(body: dict = Body(...)):
                             shared_highlights, lowlights, shared_mistakes,
                             top_lesson, shared_nlv_source,
                             shared_holdings_source, daily_thoughts,
+                            suggested_exposure_pct,
                             existing_row[0],
                         ))
                     else:
@@ -2204,6 +2276,7 @@ def journal_batch_edit(body: dict = Body(...)):
                             shared_highlights, lowlights, shared_mistakes,
                             top_lesson, shared_nlv_source,
                             shared_holdings_source, daily_thoughts,
+                            suggested_exposure_pct,
                         ))
 
                     written.append(name)

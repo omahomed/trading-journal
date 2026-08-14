@@ -51,6 +51,9 @@ export interface JournalEntry {
   nasdaq: number;
   portfolio_heat: number;
   score: number;
+  // Migration 067 — MCT engine's entry_exposure at save time. Journal
+  // rows saved before 067 are NULL and callers render "—".
+  suggested_exposure_pct?: number | null;
   // market_window (V10 vocabulary) was removed from this interface when
   // the M Factor page was deleted; the column still exists in the
   // trading_journal table for historical preservation, and CSV export
@@ -521,6 +524,9 @@ export interface JournalHistoryPoint {
   // on the Daily Journal shell; the historical Journal Log ignores this
   // field. Optional for the migration window.
   game_plan?: string | null;
+  // Migration 067 — MCT engine's entry_exposure at save time. Rendered as
+  // the "SUGGEST %" column on Journal Log; null for pre-067 rows.
+  suggested_exposure_pct?: number | null;
   [key: string]: any;
 }
 
