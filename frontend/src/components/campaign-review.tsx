@@ -210,14 +210,25 @@ function seriesPrefix(trxId: string): "B" | "A" | "" {
 // appear in "This Week".
 function dateFilterPasses(dateStr: string, f: Filters): boolean {
   if (f.dateRange === "all") return true;
+  // Today compares the raw YYYY-MM-DD string against the local calendar
+  // day. Using `new Date("YYYY-MM-DD")` parses as UTC midnight, which in
+  // Central Time is the *prior* day's late evening — every row's Date
+  // object then reports getDate() = today − 1 and the day-precision
+  // match fails silently. Week/Month/YTD tolerate this because they
+  // compare at year/month resolution, but the today case must not
+  // round-trip through the JS Date parser.
+  if (f.dateRange === "today") {
+    if (!dateStr) return false;
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+    const todayIso = `${y}-${m}-${day}`;
+    return dateStr.slice(0, 10) === todayIso;
+  }
   const d = dateStr ? new Date(dateStr) : null;
   if (!d || isNaN(d.getTime())) return f.dateRange === "custom";
   const now = new Date();
-  if (f.dateRange === "today") {
-    return d.getFullYear() === now.getFullYear()
-        && d.getMonth() === now.getMonth()
-        && d.getDate() === now.getDate();
-  }
   if (f.dateRange === "ytd") return d.getFullYear() === now.getFullYear();
   if (f.dateRange === "month") {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
