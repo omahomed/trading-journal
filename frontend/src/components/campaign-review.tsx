@@ -763,30 +763,38 @@ export function CampaignReview({ navColor }: { navColor: string }) {
         const cats = r.lesson_category.split("|").map(s => s.trim()).filter(Boolean);
         if (!cats.includes(filters.lesson)) return false;
       }
-      // Date-preset filter. `date_basis` picks which column the
-      // range applies to — "close" (default) matches the review
-      // framing; "open" filters on entry date and keeps open
-      // positions visible under a filtered view; "all" passes if
-      // EITHER date matches (surfaces campaigns that opened OR
-      // closed inside the range — e.g. "everything active today").
-      // When the chosen field is missing and a filter is active,
-      // the row is excluded — the honest read for basis="close"
-      // is "this hasn't closed yet, so it can't match a close-date
-      // filter". For basis="all" a row with at least one date
-      // still gets its shot.
+      // Basis + Date filter. Basis gates on status AND picks the date
+      // column the range applies to:
+      //   "close" → CLOSED-status only, Date filter (if active) tests close_date
+      //   "open"  → OPEN-status only,   Date filter (if active) tests open_date
+      //   "all"   → both statuses,       Date filter (if active) passes if
+      //                                  EITHER open OR close date matches
+      // Rationale: "Basis=Open" reading as "still open" matches the
+      // trader's mental model (the earlier date-column-only semantic
+      // was ambiguous — a Closed campaign with an open_date-in-range
+      // used to show up under Basis=Open, which read wrong). Under the
+      // new model Basis=All is the escape hatch to see everything.
       const filterActive = filters.dateRange !== "all";
-      if (filters.date_basis === "all") {
-        if (!filterActive) return true;
-        const openStr = (r.open_date || "").slice(0, 10);
-        const closeStr = (r.closed_date || "").slice(0, 10);
-        const openMatch = !!openStr && dateFilterPasses(openStr, filters);
-        const closeMatch = !!closeStr && dateFilterPasses(closeStr, filters);
-        if (!openMatch && !closeMatch) return false;
-      } else {
-        const dateField = filters.date_basis === "open" ? r.open_date : r.closed_date;
-        if (filterActive && !dateField) return false;
-        const d = (dateField || "").slice(0, 10);
+      if (filters.date_basis === "close") {
+        if (r.status !== "Closed") return false;
+        if (filterActive && !r.closed_date) return false;
+        const d = (r.closed_date || "").slice(0, 10);
         if (!dateFilterPasses(d, filters)) return false;
+      } else if (filters.date_basis === "open") {
+        if (r.status !== "Open") return false;
+        if (filterActive && !r.open_date) return false;
+        const d = (r.open_date || "").slice(0, 10);
+        if (!dateFilterPasses(d, filters)) return false;
+      } else {
+        // "all": both statuses; if the date filter is active require
+        // that at least one date sits in the range.
+        if (filterActive) {
+          const openStr = (r.open_date || "").slice(0, 10);
+          const closeStr = (r.closed_date || "").slice(0, 10);
+          const openMatch = !!openStr && dateFilterPasses(openStr, filters);
+          const closeMatch = !!closeStr && dateFilterPasses(closeStr, filters);
+          if (!openMatch && !closeMatch) return false;
+        }
       }
       return true;
     });
@@ -1457,14 +1465,14 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             <SegmentedControl label="Basis"
               value={filters.date_basis}
               onChange={v => setFilters(f => ({ ...f, date_basis: v as "close" | "open" | "all" }))}
-              tip="Which date column the Date filter operates on. This is not a status filter — a Closed campaign still passes when Basis=Open if its OPEN date sits in the range."
+              tip="Campaign lifecycle gate. Close = closed campaigns only (Date filter tests close date). Open = still-open campaigns only (Date tests open date). All = both statuses; Date passes if either date is in range."
               options={[
                 { v: "close", l: "Close",
-                  tip: "Filter by CLOSED date. Open campaigns (no close date) drop out when the Date filter is active." },
+                  tip: "CLOSED campaigns only. Date filter (when active) tests the close date." },
                 { v: "open",  l: "Open",
-                  tip: "Filter by OPEN date. Closed campaigns still show if they opened inside the range." },
+                  tip: "OPEN (still-active) campaigns only. Date filter (when active) tests the open date." },
                 { v: "all",   l: "All",
-                  tip: "Pass if EITHER open OR close date matches the range. Useful for 'every campaign active today' — opened today OR closed today." },
+                  tip: "Both statuses. Date filter (when active) passes if EITHER open OR close date matches — e.g. 'every campaign active today'." },
               ]}
               testId="filter-date-basis"
             />
