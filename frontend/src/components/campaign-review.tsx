@@ -126,7 +126,7 @@ type ColKey =
 // Trend Cycle Review page so filter UX stays consistent across the
 // Deep Dive group. "All" is the everything-since-forever default.
 // Custom pairs with the from/to inputs which only render when picked.
-type DateRangeKey = "all" | "week" | "month" | "ytd" | "custom";
+type DateRangeKey = "all" | "today" | "week" | "month" | "ytd" | "custom";
 
 type InstrumentKey = "all" | "stocks" | "options";
 // Rank filter — direction + absolute Top/Bottom N buckets. N is a
@@ -202,16 +202,22 @@ function seriesPrefix(trxId: string): "B" | "A" | "" {
   return "";
 }
 
-// Date-preset predicate. YTD = current-year rows onward, Month =
-// current calendar month, Week = Monday-anchored current week. Custom
-// hands off to the from/to inputs. "all" always passes. Invalid date
-// input passes for all/custom, fails for date-bounded presets so a
-// row missing dates doesn't spuriously appear in "This Week".
+// Date-preset predicate. Today = local-calendar current day, YTD =
+// current-year rows onward, Month = current calendar month, Week =
+// Monday-anchored current week. Custom hands off to the from/to inputs.
+// "all" always passes. Invalid date input passes for all/custom, fails
+// for date-bounded presets so a row missing dates doesn't spuriously
+// appear in "This Week".
 function dateFilterPasses(dateStr: string, f: Filters): boolean {
   if (f.dateRange === "all") return true;
   const d = dateStr ? new Date(dateStr) : null;
   if (!d || isNaN(d.getTime())) return f.dateRange === "custom";
   const now = new Date();
+  if (f.dateRange === "today") {
+    return d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+  }
   if (f.dateRange === "ytd") return d.getFullYear() === now.getFullYear();
   if (f.dateRange === "month") {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
@@ -1415,6 +1421,7 @@ export function CampaignReview({ navColor }: { navColor: string }) {
               onChange={v => setFilters(f => ({ ...f, dateRange: v as DateRangeKey }))}
               options={[
                 { v: "all", l: "All" },
+                { v: "today", l: "Today" },
                 { v: "week", l: "Week" },
                 { v: "month", l: "Month" },
                 { v: "ytd", l: "YTD" },
