@@ -1,9 +1,10 @@
 import { describe, test, expect } from "vitest";
 import { computeTrim, type TrimInput } from "./sr8-trim-calc";
 
-// Default scenario for an SR8 position with comfortable ADDS:
-//   NAV 600k, 15% core = 90k. Stock @ 100 → core target 900 sh.
-//   Position 1500 sh @ 100 = 150k = 25% NAV → ADDS = 600 shares.
+// Default scenario for an SR8 position with comfortable ADDS under the
+// 2026-08-13 doctrine (7.5% core seed, 2.5% cascade steps):
+//   NAV 600k, 7.5% core = 45k. Stock @ 100 → core target 450 sh.
+//   Position 1500 sh @ 100 = 150k = 25% NAV → ADDS = 1050 shares.
 //   B1 return 60% (well past the SR8 50% threshold).
 function baseInput(overrides: Partial<TrimInput> = {}): TrimInput {
   return {
@@ -17,18 +18,19 @@ function baseInput(overrides: Partial<TrimInput> = {}): TrimInput {
 }
 
 describe("computeTrim — position state derivation", () => {
-  test("core target = floor(NAV*0.15 / price), adds = total - core", () => {
+  test("core target = floor(NAV*0.075 / price), adds = total - core", () => {
     const r = computeTrim(baseInput());
-    expect(r.coreTargetValue).toBeCloseTo(90_000);
-    expect(r.coreTargetShares).toBe(900);
-    expect(r.addsShares).toBe(600);
+    expect(r.coreTargetValue).toBeCloseTo(45_000);
+    expect(r.coreTargetShares).toBe(450);
+    expect(r.addsShares).toBe(1050);
     expect(r.totalValue).toBeCloseTo(150_000);
     expect(r.totalNavPct).toBeCloseTo(25);
   });
 
   test("position below core: adds clamps to 0", () => {
-    const r = computeTrim(baseInput({ totalShares: 500 }));
-    expect(r.coreTargetShares).toBe(900);
+    // 200 sh @ 100 = 20k; core target is 450 → position sits below core.
+    const r = computeTrim(baseInput({ totalShares: 200 }));
+    expect(r.coreTargetShares).toBe(450);
     expect(r.addsShares).toBe(0);
   });
 
@@ -61,20 +63,24 @@ describe("computeTrim — SR2 (25% trim, ADDS-bound)", () => {
   });
 
   test("ADDS smaller than 25% — core floor binds", () => {
-    // 1000 sh @ 100 = 100k. Core 900 sh. ADDS = 100. 25% of 1000 = 250.
-    const r = computeTrim(baseInput({ rule: "sr2", totalShares: 1000 }));
+    // Force a scenario where core is inflated relative to totalShares so
+    // ADDS is small: NAV 12M → core = 7.5% × 12M / 100 = 9000 sh. 1000
+    // total sh → ADDS = 0 (position sits below core), no room to trim.
+    // 25% of 1000 = 250 intended, 0 available.
+    const r = computeTrim(baseInput({
+      rule: "sr2", totalShares: 1000, nav: 12_000_000,
+    }));
+    expect(r.coreTargetShares).toBe(9000);
     expect(r.intendedTrimShares).toBe(250);
-    expect(r.trimShares).toBe(100); // capped at ADDS
+    expect(r.trimShares).toBe(0);  // capped at ADDS = 0
     expect(r.coreFloorBinds).toBe(true);
-    expect(r.resultingShares).toBe(900);
-    expect(r.resultingState).toBe("core-only");
   });
 
   test("already at core: addsShares=0, trim=0", () => {
-    const r = computeTrim(baseInput({ rule: "sr2", totalShares: 900 }));
+    const r = computeTrim(baseInput({ rule: "sr2", totalShares: 450 }));
     expect(r.addsShares).toBe(0);
     expect(r.trimShares).toBe(0);
-    expect(r.resultingShares).toBe(900);
+    expect(r.resultingShares).toBe(450);
   });
 });
 
@@ -82,33 +88,34 @@ describe("computeTrim — SR7 (cushion-tiered, ADDS-bound)", () => {
   test("cushion >50%: trim entire ADDS", () => {
     const r = computeTrim(baseInput({ rule: "sr7", b1ReturnPct: 71 }));
     expect(r.sr7CushionTier).toBe("gt50");
-    expect(r.trimShares).toBe(600); // = addsShares
+    expect(r.trimShares).toBe(1050); // = addsShares
     expect(r.resultingState).toBe("core-only");
   });
 
   test("cushion 25–50%: trim 50% of total, capped at ADDS", () => {
-    // 1500 sh, 50% = 750. ADDS=600. Should cap to 600.
+    // 1500 sh, 50% = 750. ADDS = 1050 (default fixture). Not capped.
     const r = computeTrim(baseInput({ rule: "sr7", b1ReturnPct: 30 }));
     expect(r.sr7CushionTier).toBe("25to50");
-    expect(r.intendedTrimShares).toBe(750);
-    expect(r.trimShares).toBe(600);
-    expect(r.coreFloorBinds).toBe(true);
-  });
-
-  test("cushion 25–50% with intended ≤ ADDS: not capped", () => {
-    // 1500 sh, 50% = 750. ADDS huge (push core small via tiny NAV).
-    // NAV=10k → core 1500, ADDS=0... that's the wrong way. Instead:
-    // NAV=60k → 9k core, 90 sh. ADDS = 1410. Intended 750 < 1410.
-    const r = computeTrim(baseInput({ rule: "sr7", b1ReturnPct: 30, nav: 60_000 }));
     expect(r.intendedTrimShares).toBe(750);
     expect(r.trimShares).toBe(750);
     expect(r.coreFloorBinds).toBe(false);
   });
 
+  test("cushion 25–50% capped at ADDS when intended > ADDS", () => {
+    // Push core large so ADDS < intended. NAV 15M → core=11_250 sh. But
+    // totalShares=1500 → below core → ADDS=0. Intended = 750; capped 0.
+    const r = computeTrim(baseInput({
+      rule: "sr7", b1ReturnPct: 30, nav: 15_000_000,
+    }));
+    expect(r.intendedTrimShares).toBe(750);
+    expect(r.trimShares).toBe(0);
+    expect(r.coreFloorBinds).toBe(true);
+  });
+
   test("cushion <25% (heavy pullback on SR8 position): full ADDS exit", () => {
     const r = computeTrim(baseInput({ rule: "sr7", b1ReturnPct: 10 }));
     expect(r.sr7CushionTier).toBe("lt25");
-    expect(r.trimShares).toBe(600); // = addsShares
+    expect(r.trimShares).toBe(1050); // = addsShares
     expect(r.resultingState).toBe("core-only");
   });
 
@@ -119,57 +126,57 @@ describe("computeTrim — SR7 (cushion-tiered, ADDS-bound)", () => {
 });
 
 describe("computeTrim — SR8 Quick / Quicksand (target-based)", () => {
-  test("Quick reduces position to 10% NAV target", () => {
-    // NAV 600k, 10% = 60k. Px=100 → target 600 sh. Start at 1500 sh.
-    const r = computeTrim(baseInput({ rule: "sr8-quick" }));
-    expect(r.intendedTrimShares).toBe(900);
-    expect(r.trimShares).toBe(900);
-    expect(r.resultingShares).toBe(600);
-    expect(r.resultingNavPct).toBeCloseTo(10.0);
-  });
-
-  test("Quicksand reduces position to 5% NAV target", () => {
+  test("Quick reduces position to 5% NAV target (2026-08-13 doctrine)", () => {
     // NAV 600k, 5% = 30k. Px=100 → target 300 sh. Start at 1500 sh.
-    const r = computeTrim(baseInput({ rule: "sr8-quicksand" }));
+    const r = computeTrim(baseInput({ rule: "sr8-quick" }));
     expect(r.intendedTrimShares).toBe(1200);
     expect(r.trimShares).toBe(1200);
     expect(r.resultingShares).toBe(300);
     expect(r.resultingNavPct).toBeCloseTo(5.0);
   });
 
+  test("Quicksand reduces position to 2.5% NAV target", () => {
+    // NAV 600k, 2.5% = 15k. Px=100 → target 150 sh. Start at 1500 sh.
+    const r = computeTrim(baseInput({ rule: "sr8-quicksand" }));
+    expect(r.intendedTrimShares).toBe(1350);
+    expect(r.trimShares).toBe(1350);
+    expect(r.resultingShares).toBe(150);
+    expect(r.resultingNavPct).toBeCloseTo(2.5);
+  });
+
   test("Quick + Quicksand from same start produce different trims", () => {
-    // COHR-style scenario from the bug report: NAV $600k, 302 sh @ $358.50.
-    // 302 sh × $358.50 = $108,267 ≈ 18.0% NAV.
-    //   Quick target  → floor(0.10 × 600000 / 358.50) = floor(167.4) = 167
-    //   Quicksand     → floor(0.05 × 600000 / 358.50) = floor( 83.7) =  83
-    //   Quick trim    = 302 - 167 = 135
-    //   Quicksand trim= 302 -  83 = 219
+    // COHR-style scenario reworked for the new cascade: NAV $600k, 302 sh
+    // @ $358.50 = $108,267 ≈ 18.0% NAV.
+    //   Quick target  → floor(0.05  × 600000 / 358.50) = floor( 83.7) =  83
+    //   Quicksand     → floor(0.025 × 600000 / 358.50) = floor( 41.8) =  41
+    //   Quick trim    = 302 -  83 = 219
+    //   Quicksand trim= 302 -  41 = 261
     const cohr = { totalShares: 302, currentPrice: 358.50, nav: 600_000 };
     const quick = computeTrim(baseInput({ rule: "sr8-quick", ...cohr }));
     const sand = computeTrim(baseInput({ rule: "sr8-quicksand", ...cohr }));
-    expect(quick.trimShares).toBe(135);
-    expect(sand.trimShares).toBe(219);
+    expect(quick.trimShares).toBe(219);
+    expect(sand.trimShares).toBe(261);
     expect(quick.trimShares).not.toBe(sand.trimShares);
   });
 
   test("position already at/below target: trim is 0", () => {
-    // 100 sh @ $358.50 = $35,850 ≈ 6.0% NAV. Below Quick's 10% target.
+    // 50 sh @ $358.50 = $17,925 ≈ 3.0% NAV. Below Quick's 5% target.
     const r = computeTrim(baseInput({
-      rule: "sr8-quick", totalShares: 100, currentPrice: 358.50, nav: 600_000,
+      rule: "sr8-quick", totalShares: 50, currentPrice: 358.50, nav: 600_000,
     }));
     expect(r.trimShares).toBe(0);
-    expect(r.resultingShares).toBe(100);
-    // Still below the 15% NAV core, so state is below-core (not core-only).
+    expect(r.resultingShares).toBe(50);
+    // Still below the 7.5% NAV core, so state is below-core.
     expect(r.resultingState).toBe("below-core");
   });
 
-  test("Quicksand sequential after Quick: targets 5% NAV from 10% start", () => {
-    // After Quick the position is at 10% NAV. Quicksand drives to 5%.
-    // 600 sh @ 100 = 60k = 10% NAV. Quicksand target 300 sh → trim 300.
-    const r = computeTrim(baseInput({ rule: "sr8-quicksand", totalShares: 600 }));
-    expect(r.trimShares).toBe(300);
-    expect(r.resultingShares).toBe(300);
-    expect(r.resultingNavPct).toBeCloseTo(5.0);
+  test("Quicksand sequential after Quick: 2.5% NAV from 5% start", () => {
+    // After Quick the position is at 5% NAV. Quicksand drives to 2.5%.
+    // 300 sh @ 100 = 30k = 5% NAV. Quicksand target 150 sh → trim 150.
+    const r = computeTrim(baseInput({ rule: "sr8-quicksand", totalShares: 300 }));
+    expect(r.trimShares).toBe(150);
+    expect(r.resultingShares).toBe(150);
+    expect(r.resultingNavPct).toBeCloseTo(2.5);
   });
 
   test("NAV=0: trim=0 (target undefined)", () => {
@@ -196,7 +203,7 @@ describe("computeTrim — SR8 Grateful Dead / SR13 (full exit)", () => {
 // ─────────────────────────────────────────────────────────────────
 // Regression tests for the SR8 activation-anchor fix (2026-07-18)
 //
-// The bug: SR8 Quick/QS targets computed 10% × LIVE NAV / price.
+// The bug: SR8 Quick/QS targets computed (target_pct) × LIVE NAV / price.
 // When NAV grew past activation NAV, target shares > held → no-op
 // trims on valid signals → cores undefended.
 //
@@ -205,27 +212,23 @@ describe("computeTrim — SR8 Grateful Dead / SR13 (full exit)", () => {
 // exposes anchorSource='activation' vs 'live_fallback' so the UI can
 // flag legacy positions.
 //
-// BE case (from the spec):
-//   activation 4/29 NAV=$430,249, core=224 shs
-//   Quick fires 6/26 at NAV=$805,679, current price ~ $288
-//   OLD formula: 10% × 805679 / 288 = 280 shs  → BE held 224 → 0 trim
-//   NEW formula: 10% × 430249 / 288 = 149 shs  → trim 75 shs ✓
-//
-// MU case (adjacent):
-//   activation 5/5 NAV=$551,423 (backfill matches exactly).
+// Post 2026-08-13 doctrine: Quick target = 5% × activation_NLV,
+// Quicksand = 2.5%. Regression fixtures below re-anchor to the new
+// cascade destinations.
 // ─────────────────────────────────────────────────────────────────
 
 describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
-  test("BE regression: Quick target 149 shs (anchored) vs 279 (live-nav bug)", () => {
+  test("BE regression: Quick target from activation NAV (anchored) vs live-nav bug", () => {
     // NAV grew from activation $430K to live $805K — 87% appreciation.
-    // Under old formula, target = 0.10 × 805679 / 288 ≈ 279 shs;
-    // under new formula (anchored), target = 0.10 × 430249 / 288 ≈ 149 shs.
+    // Post-2026-08-13 doctrine (5% Quick):
+    //   OLD live-nav formula: 0.05 × 805679 / 288 ≈ 139 shs
+    //   NEW anchored:         0.05 × 430249 / 288 ≈  74 shs
+    // BE held 224 shs. Anchored trim = 224 − 74 = 150 shs.
     const priceOnSignalDay = 288;
     const activationNlv = 430_249;
     const liveNav = 805_679;
     const coreShares = 224;
 
-    // Anchored — this is the fix's contract.
     const anchored = computeTrim({
       totalShares: 224,
       currentPrice: priceOnSignalDay,
@@ -235,16 +238,17 @@ describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
       coreShares,
       rule: "sr8-quick",
     });
-    // 0.10 × 430249 / 288 = 149.39 → floor to 149.
-    expect(anchored.trimShares).toBeGreaterThanOrEqual(74);
-    expect(anchored.trimShares).toBeLessThanOrEqual(76);
+    // 0.05 × 430249 / 288 = 74.69 → floor to 74. Trim = 224 − 74 = 150.
+    expect(anchored.trimShares).toBeGreaterThanOrEqual(149);
+    expect(anchored.trimShares).toBeLessThanOrEqual(151);
     expect(anchored.anchorSource).toBe("activation");
-    // Resulting position = 224 − 75 = 149 shs (= 10% × activation / px).
-    expect(anchored.resultingShares).toBeGreaterThanOrEqual(148);
-    expect(anchored.resultingShares).toBeLessThanOrEqual(150);
+    // Resulting position ≈ 74 shs (= 5% × activation / px).
+    expect(anchored.resultingShares).toBeGreaterThanOrEqual(73);
+    expect(anchored.resultingShares).toBeLessThanOrEqual(75);
 
-    // Live-nav fallback (what the old formula produced) — target >= held
-    // → NO trim → the bug we're eliminating.
+    // Live-nav fallback still fires the trim (5% × 805k = 139 < 224 held),
+    // but the target is inflated relative to activation. Sanity-check
+    // that the flag surfaces.
     const buggy = computeTrim({
       totalShares: 224,
       currentPrice: priceOnSignalDay,
@@ -254,13 +258,19 @@ describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
       rule: "sr8-quick",
     });
     expect(buggy.anchorSource).toBe("live_fallback");
-    expect(buggy.trimShares).toBe(0); // pre-fix behavior: silent no-op
+    // 5% × 805679 / 288 = 139.87 → 139. Trim = 224 − 139 = 85.
+    expect(buggy.trimShares).toBeGreaterThanOrEqual(84);
+    expect(buggy.trimShares).toBeLessThanOrEqual(86);
+    // The critical property: anchored trims MORE than live-nav (which is
+    // the point of the anchor — it corrects the under-defended core).
+    expect(anchored.trimShares).toBeGreaterThan(buggy.trimShares);
   });
 
-  test("Quicksand: 5% of activation NAV drives the destination too", () => {
-    // Same BE fixture, QS target = 0.05 × 430249 / 288 ≈ 74.69 → 74.
+  test("Quicksand: 2.5% of activation NAV drives the destination", () => {
+    // Same BE fixture, QS target = 0.025 × 430249 / 288 ≈ 37.34 → 37.
+    // Held 74 (post-Quick) → trim = 74 − 37 = 37.
     const r = computeTrim({
-      totalShares: 149,
+      totalShares: 74,
       currentPrice: 288,
       b1ReturnPct: 75,
       nav: 805_679,
@@ -268,9 +278,8 @@ describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
       coreShares: 224,
       rule: "sr8-quicksand",
     });
-    // 149 − 74 = 75 trim (or +/- 1 for floor rounding).
-    expect(r.trimShares).toBeGreaterThanOrEqual(74);
-    expect(r.trimShares).toBeLessThanOrEqual(76);
+    expect(r.trimShares).toBeGreaterThanOrEqual(36);
+    expect(r.trimShares).toBeLessThanOrEqual(38);
     expect(r.anchorSource).toBe("activation");
   });
 
@@ -298,16 +307,15 @@ describe("computeTrim — SR8 activation anchor (2026-07-18 fix)", () => {
       nav: liveNav,
       rule: "sr8-quick",
     });
-    // Anchored target = 61.27 → 61; live-nav target = 61.44 → 61.
-    // Delta of trim should be ≤ 1 share.
+    // Delta of trim should be ≤ 1 share under the small-drift case.
     expect(Math.abs(anchored.trimShares - liveFallback.trimShares)).toBeLessThanOrEqual(1);
   });
 
   test("coreShares directly wins over derived core (fixed count preserved)", () => {
     // When both activationNlv and coreShares are passed, coreShares is
     // the source of truth for the core count (used in ADDS calcs).
-    // Test: coreShares=224 → adds = 300 − 224 = 76, ignoring what
-    // (nav × 15%) would have produced.
+    // Grandfathering: a position declared under the old 15% doctrine
+    // keeps its typed coreShares regardless of the new 7.5% seed.
     const r = computeTrim({
       totalShares: 300,
       currentPrice: 288,
@@ -348,11 +356,11 @@ describe("computeTrim — resultingState transitions", () => {
   test("resulting < core: 'below-core'", () => {
     // SR13 forces full exit → resulting=0 → 'closed' takes priority.
     // To land 'below-core' (resulting > 0 but < core): SR8 Quick on a
-    // position above its 10% target. Base scenario: 1500 sh, core 900,
-    // Quick targets 600 → trim 900, resulting 600 < core 900.
+    // position above its 5% target. Base scenario: 1500 sh, core 450,
+    // Quick targets 300 → trim 1200, resulting 300 < core 450.
     const r = computeTrim(baseInput({ rule: "sr8-quick" }));
-    expect(r.trimShares).toBe(900);
-    expect(r.resultingShares).toBe(600);
+    expect(r.trimShares).toBe(1200);
+    expect(r.resultingShares).toBe(300);
     expect(r.resultingState).toBe("below-core");
   });
 });

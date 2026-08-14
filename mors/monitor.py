@@ -10,8 +10,8 @@ Anchoring invariant (2026-07-18 fix):
   SR8 trim TARGETS (Quick/Quicksand destination share count) are anchored to
   the campaign's activation-day NLV, NOT live NLV. Formula:
 
-    quick_target_dollars = 0.10 × sr8_activation_nlv
-    qs_target_dollars    = 0.05 × sr8_activation_nlv
+    quick_target_dollars = 0.05  × sr8_activation_nlv
+    qs_target_dollars    = 0.025 × sr8_activation_nlv
     gd_target_dollars    = 0
 
   Live NLV is used ONLY for:
@@ -30,11 +30,20 @@ Add-ons: allowed on SR8-tagged positions but belong to the "trim-first
 cohort" — any shares above core_shares are trimmed before the cascade dips
 into core toward the anchored target.
 
-Cascade tier percentages (unchanged, applied to activation_nlv):
-  GREEN     15%   (rebuild target only — GREEN never sells)
-  QUICK     10%   trim floor
-  QUICKSAND  5%   trim floor
-  GD         0%   full exit
+Cascade tier percentages (doctrine 2026-08-13, applied to activation_nlv):
+  GREEN     7.5%   (rebuild target only — GREEN never sells)
+  QUICK      5%    trim floor
+  QUICKSAND  2.5%  trim floor
+  GD         0%    full exit
+
+  Ladder shape: 7.5% → 5% → 2.5% → 0%, reducing in 2.5% steps. Prior
+  doctrine (through 2026-08-13) ran 15% → 10% → 5% → 0% with 5% steps —
+  the halved seed makes L4 (Risk Manager cap 20%) workable: two SR8
+  holds at 7.5% = 15%, comfortably inside 20%. See migration 068 /
+  Risk Manager L-series for the exposure-governor context.
+  Existing declared-SR8 campaigns keep their fixed sr8_core_shares as
+  written at activation time (grandfathered); only NEW declarations
+  and the fallback path use the new 7.5% seed.
 
 Usage:
   cd mors && python3 monitor.py --nlv 826486
@@ -49,19 +58,19 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mors_backtest import run
 
-# Single % NLV floor schedule, keyed by live cascade tier label. The 20-cas /
-# 15-cas variant selection (audit: monitor.py:31-34 / 80-87) is gone — SR8
-# positions get one schedule. Quick / QS / GD are TRIM floors (sell down to
-# this %); GREEN's 15% is a REBUILD target, not a trim floor — Green never
-# sells (a Green position above 15% is held by design; SR7 owns the excess).
+# Single % NLV floor schedule, keyed by live cascade tier label. Quick /
+# QS / GD are TRIM floors (sell down to this %); GREEN's 7.5% is a REBUILD
+# target, not a trim floor — Green never sells (a Green position above
+# 7.5% is held by design; SR7 owns the excess). Cascade reduces in 2.5%
+# steps — see module docstring for the 2026-08-13 doctrine change.
 TIER_NLV_FLOORS = {
-    "GREEN":      15.00,
-    "QUICK":      10.00,
-    "QUICKSAND":   5.00,
-    "GD":          0.00,
+    "GREEN":      7.50,
+    "QUICK":      5.00,
+    "QUICKSAND":  2.50,
+    "GD":         0.00,
     # Aliases the engine may emit. Sub-entry / TERMINATED both terminal-ish;
     # mapping them keeps lookups defensive.
-    "GREEN(sub-entry)": 15.00,
+    "GREEN(sub-entry)": 7.50,
     "TERMINATED":  0.00,
 }
 
@@ -225,8 +234,8 @@ def fmt_hold_row(r):
     # inflation bug this rewrite fixes.
     px = r["current_price"] or 0
     if r.get("activation_nlv") and px > 0:
-        q_shs = int(round(0.10 * r["activation_nlv"] / px))
-        qs_shs = int(round(0.05 * r["activation_nlv"] / px))
+        q_shs = int(round(0.05  * r["activation_nlv"] / px))
+        qs_shs = int(round(0.025 * r["activation_nlv"] / px))
         anchor_tag = (
             f" | anchor ${r['activation_nlv']:>10,.0f} "
             f"(Q→{q_shs}sh  QS→{qs_shs}sh)"

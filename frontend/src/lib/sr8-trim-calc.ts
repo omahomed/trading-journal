@@ -4,31 +4,44 @@
 //   CORE  = fixed share count locked at SR8 activation (2026-07-18)
 //   ADDS  = whatever's above the core (managed by SR7)
 //
-// ANCHORING INVARIANT (2026-07-18 fix). Prior to this rewrite, "core"
-// was defined as 15% × LIVE NAV / current_price — a share count that
-// grew with portfolio appreciation. When live NAV grew past activation
-// NAV, SR8 Quick/Quicksand targets computed as (10% × live NAV / px)
-// exceeded the fixed core share count → trim signals no-op'd → cores
-// went undefended on valid signals. See BE regression (6/26): core
-// 224 shs, old formula gave Quick target 319 shs (target > held →
-// zero trim). New formula uses activation-day NLV → target 149 shs
-// (valid 75-shs trim).
+// ANCHORING INVARIANT (2026-07-18 fix). Prior to that rewrite, "core"
+// was defined as (core_pct) × LIVE NAV / current_price — a share count
+// that grew with portfolio appreciation. When live NAV grew past
+// activation NAV, SR8 Quick/Quicksand targets exceeded the fixed core
+// share count → trim signals no-op'd → cores went undefended on valid
+// signals. See BE regression (6/26): core 224 shs, old formula gave
+// Quick target 319 shs (target > held → zero trim). New formula uses
+// activation-day NLV → target 149 shs (valid 75-shs trim).
 //
-// The new contract:
+// Cascade doctrine (2026-08-13): core seed 7.5%, cascade reduces in
+// 2.5% steps. Prior doctrine (through 2026-08-12) ran 15/10/5/0 in 5%
+// steps; the halved seed makes the Risk Manager L4 cap (20% gross —
+// SR8 holds only) workable at two names inside the ceiling. See
+// migration 068.
+//
+//   Core (SR8 seed)   → 7.5%  × activationNlv / price
+//   SR8 Quick target  →  5%   × activationNlv / price
+//   SR8 Quicksand     →  2.5% × activationNlv / price
+//   SR8 Grateful Dead →  0    (full exit of core)
+//
+// The contract:
 //   activationNlv → the campaign's SR8_activation_nlv (fixed at the
 //     moment cushion first crossed +50% from B1). Anchors Quick/QS
-//     targets: quick_target = 0.10 × activationNlv / price.
-//   coreShares → the fixed share count from activation. Directly
-//     drives the ADDS math (adds = held − coreShares) so SR7 tiers
-//     honor the anchor too.
+//     targets: quick_target = 0.05 × activationNlv / price.
+//   coreShares → the fixed share count from activation. GRANDFATHERED:
+//     positions declared under the prior doctrine keep their originally-
+//     typed core_shares. New declarations use the 7.5% seed. Either way,
+//     coreShares drives the ADDS math (adds = held − coreShares) so
+//     SR7 tiers honor the fixed anchor.
 //   nav (live) — kept for display metrics only (`totalNavPct`,
 //     `resultingNavPct`). Never enters a trim-target computation.
 //
 // Legacy fallback: when activationNlv or coreShares is null (position
 // pre-dates backfill or hasn't hit +50% cushion yet), the calc falls
-// back to computing core as 15% × live nav — the OLD (buggy) formula.
-// The result carries `anchorSource: 'live_fallback'` so the UI can
-// flag it. Positions with a legit anchor are `'activation'`.
+// back to computing core as 7.5% × live nav — the OLD-style formula
+// using LIVE nav instead of activation. Result carries
+// `anchorSource: 'live_fallback'` so the UI can flag it. Positions
+// with a legit anchor are `'activation'`.
 //
 // All inputs are pure numbers; all share counts are integers via
 // Math.floor. Never round up: floor avoids the trim dipping into the
@@ -160,20 +173,24 @@ export function computeTrim(input: TrimInput): TrimResult {
 
   // ────────────────────────────── Position state ──────────────────────────────
   // Core preference order:
-  //   1. `coreShares` passed explicitly (canonical — fixed at activation)
-  //   2. Derived from `activationNlv × 15% / price` (activation-anchored)
-  //   3. Legacy `live nav × 15% / price` (bug-prone; only when neither
-  //      anchor field is present).
+  //   1. `coreShares` passed explicitly (canonical — fixed at activation;
+  //      grandfathered positions declared under the 15% doctrine keep
+  //      whatever was written at activation time).
+  //   2. Derived from `activationNlv × 7.5% / price` (activation-anchored,
+  //      current doctrine).
+  //   3. Legacy `live nav × 7.5% / price` (only when neither anchor field
+  //      is present; still bug-prone re NAV inflation but harmless when
+  //      no anchor was ever recorded).
   let coreTargetShares: number;
   let coreTargetValue: number;
   if (anchorSharesValid) {
     coreTargetShares = Math.floor(anchorSharesRaw as number);
     coreTargetValue = coreTargetShares * currentPrice;
   } else if (anchorNlvValid) {
-    coreTargetValue = anchorNlv * 0.15;
+    coreTargetValue = anchorNlv * 0.075;
     coreTargetShares = Math.floor(coreTargetValue / currentPrice);
   } else if (navValid) {
-    coreTargetValue = nav * 0.15;
+    coreTargetValue = nav * 0.075;
     coreTargetShares = Math.floor(coreTargetValue / currentPrice);
   } else {
     coreTargetValue = 0;
@@ -221,11 +238,12 @@ export function computeTrim(input: TrimInput): TrimResult {
     case "sr8-quicksand": {
       // TARGET-based (fixed anchor share count). Prior to 2026-07-18
       // this computed against live NAV, which inflated the target
-      // count when NAV grew and let the trim no-op silently. The new
-      // formula uses activation-day NLV (via anchorNlv):
+      // count when NAV grew and let the trim no-op silently. The
+      // current formula uses activation-day NLV (via anchorNlv) and
+      // the 2026-08-13 cascade doctrine (7.5% seed, 2.5% steps):
       //
-      //   Quick      → reduce to 10% × activation_NLV / current_price
-      //   Quicksand  → reduce to  5% × activation_NLV / current_price
+      //   Quick      → reduce to  5%  × activation_NLV / current_price
+      //   Quicksand  → reduce to  2.5% × activation_NLV / current_price
       //   Grateful   → 0 (unchanged; handled in the sr13/GD branch)
       //
       // If totalShares <= targetShares, trim is 0 (nothing to do —
@@ -235,7 +253,7 @@ export function computeTrim(input: TrimInput): TrimResult {
         intendedTrimShares = 0;
         trimShares = 0;
       } else {
-        const targetPct = rule === "sr8-quick" ? 0.10 : 0.05;
+        const targetPct = rule === "sr8-quick" ? 0.05 : 0.025;
         const targetValue = anchorNlv * targetPct;
         const targetShares = Math.floor(targetValue / currentPrice);
         const trim = Math.max(0, totalShares - targetShares);
@@ -294,8 +312,8 @@ export function computeTrim(input: TrimInput): TrimResult {
 export const RULE_OPTIONS: readonly { value: TrimRule; label: string; hint: string }[] = [
   { value: "sr2", label: "SR2 — Selling into Strength", hint: "Trim 25%, capped at ADDS" },
   { value: "sr7", label: "SR7 — 21e Violation", hint: "Cushion-tiered (auto)" },
-  { value: "sr8-quick", label: "SR8 Quick — RS breaks 8w MA", hint: "Reduce to 10% NAV" },
-  { value: "sr8-quicksand", label: "SR8 Quicksand — RS drifts further", hint: "Reduce to 5% NAV" },
+  { value: "sr8-quick", label: "SR8 Quick — RS breaks 8w MA", hint: "Reduce to 5% NAV" },
+  { value: "sr8-quicksand", label: "SR8 Quicksand — RS drifts further", hint: "Reduce to 2.5% NAV" },
   { value: "sr8-grateful-dead", label: "SR8 Grateful Dead — RS breaks 21w MA", hint: "Full exit" },
   { value: "sr13", label: "SR13 — Change of Character", hint: "Full exit including core" },
 ] as const;

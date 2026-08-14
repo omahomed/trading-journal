@@ -37,17 +37,20 @@ def _mock_backtest_result(current_tier: str, current_price: float, log_signal: s
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# BE regression (from the spec):
+# BE regression (from the spec, adapted to 2026-08-13 SR8 doctrine):
 #   activation 4/29 NAV=$430,249, core=224 shs
 #   Quick fires 6/26, NAV=$805,679 (up 87%), price ~$288
-#   OLD formula: 10% × 805679 / 288 ≈ 279 shs target → 224 held → no trim
-#   NEW formula: 10% × 430249 / 288 ≈ 149 shs target → 75 shs trim ✓
+#   Post-2026-08-13 (5% Quick target):
+#     ANCHORED : 5% × 430249 / 288 ≈  74 shs target → trim 224−74 = 150 shs
+#     LIVE-NAV : 5% × 805679 / 288 ≈ 139 shs target → trim 224−139 =  85 shs
+#   The critical property: anchored trims MORE than live-nav (the fix's
+#   whole point). Under the old 10% doctrine live-nav gave 279 target
+#   → 0 trim; under 5% the fallback trims a smaller-but-nonzero count.
 # ─────────────────────────────────────────────────────────────────────────
 
 def test_be_case_anchored_target_produces_valid_trim():
-    """The exact case the spec cited. Verifies the fix produces a
-    non-zero trim on a Quick signal that the pre-fix formula silently
-    ignored."""
+    """The BE spec fixture under the 2026-08-13 5% Quick doctrine.
+    Verifies the anchored target drives a substantial trim."""
     from mors.monitor import analyze
 
     pos = {
@@ -66,23 +69,26 @@ def test_be_case_anchored_target_produces_valid_trim():
     )):
         r = analyze(pos, nlv=live_nlv, refresh=False, activation_nlv=activation_nlv)
 
-    # target_dollars = activation_nlv × 10% = $43,024.90
-    assert r["target_dollars"] == pytest.approx(43_024.9, abs=0.01)
-    # delta_dollars = held$ − target$ = 224*288 − 43024.9 = 64,512 − 43,024.9 = 21,487
-    assert r["delta_dollars"] > 20_000
-    # delta_shares ≈ 21487 / 288 = 74.6 → rounds to 75 (or 74/75 in floor/round)
-    assert r["delta_shares"] in (74, 75)
+    # target_dollars = activation_nlv × 5% = $21,512.45
+    assert r["target_dollars"] == pytest.approx(21_512.45, abs=0.01)
+    # delta_dollars = held$ − target$ = 224*288 − 21512.45 = 42,999.55
+    assert r["delta_dollars"] == pytest.approx(42_999.55, abs=0.01)
+    # delta_shares ≈ 42999.55 / 288 = 149.30 (round to 149 or 150)
+    assert r["delta_shares"] in (149, 150)
     # Anchor source badge
     assert r["anchor_source"] == "activation"
     assert r["activation_nlv"] == activation_nlv
 
 
-def test_be_case_live_nav_fallback_shows_the_bug_it_used_to_hide():
+def test_be_case_live_nav_fallback_still_trims_less_than_anchored():
     """When activation_nlv is NOT provided, the formula falls back to live
-    NAV — reproducing the pre-fix behavior. This test locks in the fallback
-    contract: fallback rows are visibly worse (target > held → 0 trim) and
-    labeled anchor_source='live_fallback' so operators can spot legacy
-    positions still in need of backfill."""
+    NAV — reproducing the pre-fix behavior. Under the 2026-08-13 5% Quick
+    target the fallback still fires a trim (unlike the old 10% doctrine
+    where target > held → silent no-op), but its trim quantity is smaller
+    than the anchored answer. The important properties: anchor_source=
+    'live_fallback' surfaces the flag, and the fallback trims LESS than
+    the anchored path — showing the anchor's teeth even under smaller
+    cascade destinations."""
     from mors.monitor import analyze
 
     pos = {
@@ -94,19 +100,27 @@ def test_be_case_live_nav_fallback_shows_the_bug_it_used_to_hide():
     }
     live_nlv = 805_679.0
     current_price = 288.0
+    activation_nlv = 430_249.0
 
     with patch("mors.monitor.run", return_value=_mock_backtest_result(
         current_tier="QUICK", current_price=current_price, log_signal="QUICK",
     )):
-        r = analyze(pos, nlv=live_nlv, refresh=False, activation_nlv=None)
+        r_fallback = analyze(pos, nlv=live_nlv, refresh=False, activation_nlv=None)
+        r_anchored = analyze(pos, nlv=live_nlv, refresh=False,
+                             activation_nlv=activation_nlv)
 
-    # Live-NAV target = 805679 × 10% = $80,567.90 → 279 shs at $288.
-    # Held = 224 → target > held → held_value < target_dollars → delta_dollars = 0.
-    assert r["target_dollars"] == pytest.approx(80_567.9, abs=0.01)
-    # 224 × 288 = 64,512 < 80,567.90 → delta clamps at 0.
-    assert r["delta_dollars"] == 0
-    assert r["delta_shares"] == 0
-    assert r["anchor_source"] == "live_fallback"
+    # Live-NAV target = 805679 × 5% = $40,283.95 → 139 shs at $288.
+    assert r_fallback["target_dollars"] == pytest.approx(40_283.95, abs=0.01)
+    # Held = 224 → delta = 224*288 − 40283.95 = 24,228.05
+    assert r_fallback["delta_dollars"] == pytest.approx(24_228.05, abs=0.01)
+    # delta_shares ≈ 84 (24228.05 / 288)
+    assert r_fallback["delta_shares"] in (84, 85)
+    assert r_fallback["anchor_source"] == "live_fallback"
+
+    # The fix's teeth: anchored trims MORE than the live-NAV fallback,
+    # correcting the under-defended core.
+    assert r_anchored["delta_dollars"] > r_fallback["delta_dollars"]
+    assert r_anchored["delta_shares"] > r_fallback["delta_shares"]
 
 
 def test_mu_case_small_nav_drift_targets_close_to_live_answer():
@@ -138,8 +152,9 @@ def test_mu_case_small_nav_drift_targets_close_to_live_answer():
     assert abs(r_anchored["delta_shares"] - r_fallback["delta_shares"]) <= 2
 
 
-def test_quicksand_uses_5_pct_of_activation_nlv():
-    """Same anchor logic for Quicksand — the 5% NAV target destination."""
+def test_quicksand_uses_2_5_pct_of_activation_nlv():
+    """Same anchor logic for Quicksand — the 2.5% NAV target destination
+    under the 2026-08-13 cascade doctrine."""
     from mors.monitor import analyze
 
     pos = {
@@ -155,12 +170,12 @@ def test_quicksand_uses_5_pct_of_activation_nlv():
     )):
         r = analyze(pos, nlv=805_679.0, refresh=False, activation_nlv=430_249.0)
 
-    # target = 430249 × 5% = $21,512.45
-    assert r["target_dollars"] == pytest.approx(21_512.45, abs=0.01)
-    # held$ = 149 × 288 = 42,912 → delta = 42912 − 21512.45 = 21,399.55
-    assert r["delta_dollars"] == pytest.approx(21_399.55, abs=0.01)
-    # delta_shares ≈ 74 (21399.55 / 288)
-    assert r["delta_shares"] in (74, 75)
+    # target = 430249 × 2.5% = $10,756.225
+    assert r["target_dollars"] == pytest.approx(10_756.225, abs=0.01)
+    # held$ = 149 × 288 = 42,912 → delta = 42912 − 10756.225 = 32,155.775
+    assert r["delta_dollars"] == pytest.approx(32_155.775, abs=0.01)
+    # delta_shares ≈ 111.65 (32155.775 / 288) → 112 rounded
+    assert r["delta_shares"] in (111, 112)
 
 
 def test_grateful_dead_target_is_zero_regardless_of_anchor():
