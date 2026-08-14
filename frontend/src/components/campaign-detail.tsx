@@ -1205,21 +1205,33 @@ function EditModal({ editingTxn, editForm, editError, editLoading, confirmingDel
   );
 }
 
-export function SegmentedControl<T extends string>({ label, value, onChange, options, testId }: {
+export function SegmentedControl<T extends string>({ label, value, onChange, options, testId, tip }: {
   label: string;
   value: T;
   onChange: (v: T) => void;
-  options: { v: T; l: string }[];
+  /** Per-option `tip` renders as the button's native title attribute so
+   *  ambiguous labels (e.g. "Close" / "Open" on a Date-Field picker that
+   *  reads like a Status picker) get a hover-clarification without
+   *  restructuring the control. */
+  options: { v: T; l: string; tip?: string }[];
   testId: string;
+  /** Optional tooltip on the group label — useful when the label itself
+   *  is ambiguous (e.g. "Basis" doesn't self-explain what it drives). */
+  tip?: string;
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>{label}</span>
+      <span className="text-[9px] font-bold uppercase tracking-[0.08em]"
+            style={{ color: "var(--ink-4)" }}
+            title={tip}>
+        {label}
+      </span>
       <div className="flex p-0.5 rounded-[10px] gap-0.5 h-[34px]" style={{ background: "var(--bg-2)", border: "1px solid var(--border)" }}>
         {options.map(o => (
           <button key={o.v} type="button"
                   onClick={() => onChange(o.v)}
                   data-testid={`${testId}-${o.v}`}
+                  title={o.tip}
                   className="px-3 rounded-[8px] text-[11px] font-medium transition-all"
                   style={{
                     background: value === o.v ? "var(--surface)" : "transparent",

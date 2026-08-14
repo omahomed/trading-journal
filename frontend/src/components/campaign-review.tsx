@@ -1457,10 +1457,14 @@ export function CampaignReview({ navColor }: { navColor: string }) {
             <SegmentedControl label="Basis"
               value={filters.date_basis}
               onChange={v => setFilters(f => ({ ...f, date_basis: v as "close" | "open" | "all" }))}
+              tip="Which date column the Date filter operates on. This is not a status filter — a Closed campaign still passes when Basis=Open if its OPEN date sits in the range."
               options={[
-                { v: "close", l: "Close" },
-                { v: "open",  l: "Open"  },
-                { v: "all",   l: "All"   },
+                { v: "close", l: "Close",
+                  tip: "Filter by CLOSED date. Open campaigns (no close date) drop out when the Date filter is active." },
+                { v: "open",  l: "Open",
+                  tip: "Filter by OPEN date. Closed campaigns still show if they opened inside the range." },
+                { v: "all",   l: "All",
+                  tip: "Pass if EITHER open OR close date matches the range. Useful for 'every campaign active today' — opened today OR closed today." },
               ]}
               testId="filter-date-basis"
             />
